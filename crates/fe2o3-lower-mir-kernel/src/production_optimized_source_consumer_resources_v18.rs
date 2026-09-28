@@ -101,6 +101,10 @@ pub(super) fn optimizer_entry_headers_typed<T, E, F, C, O>() -> Result<usize, Ar
 }
 
 pub(super) fn retained_entry_headers<T, E, F>(_: &F) -> Result<usize, ArgumentResourceV1> {
+    retained_entry_headers_typed::<T, E, F, fe2o3_pliron::CheckedNeutralKernelIrOwnerV18>()
+}
+
+pub(super) fn retained_entry_headers_typed<T, E, F, C>() -> Result<usize, ArgumentResourceV1> {
     type Capture<'a, 'work, F> = (
         &'a ProductionSourceOwnedViewV18<'a>,
         &'a mut ArgumentBudgetV1<'work>,
@@ -108,15 +112,11 @@ pub(super) fn retained_entry_headers<T, E, F>(_: &F) -> Result<usize, ArgumentRe
         &'a std::cell::Cell<usize>,
         F,
     );
-    type Output<T> = (
-        fe2o3_pliron::CheckedNeutralKernelIrOwnerV18,
-        T,
-        fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
-    );
-    type Settled<T, E> =
-        Result<Output<T>, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>;
+    type Output<C, T> = (C, T, fe2o3_pliron::KirNeutralOwnedOriginStorageV1);
+    type Settled<C, T, E> =
+        Result<Output<C, T>, SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>>;
     argument_sum_v1(&[
-        optimizer_transfer_headers::<T, E>(size_of::<Capture<'_, '_, F>>())?,
+        optimizer_transfer_headers_typed::<T, E, C>(size_of::<Capture<'_, '_, F>>())?,
         size_of::<Capture<'_, '_, F>>(),
         argument_product_v1(2, std::mem::align_of::<Capture<'_, '_, F>>())?,
         size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>(),
@@ -124,9 +124,9 @@ pub(super) fn retained_entry_headers<T, E, F>(_: &F) -> Result<usize, ArgumentRe
         argument_product_v1(2, size_of::<usize>())?,
         size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>(),
         size_of::<SourceOwnedResultV18<()>>(),
-        size_of::<Settled<T, E>>(),
-        size_of::<std::thread::Result<Settled<T, E>>>(),
-        size_of::<std::panic::AssertUnwindSafe<Settled<T, E>>>(),
+        size_of::<Settled<C, T, E>>(),
+        size_of::<std::thread::Result<Settled<C, T, E>>>(),
+        size_of::<std::panic::AssertUnwindSafe<Settled<C, T, E>>>(),
     ])
 }
 
@@ -182,19 +182,24 @@ pub(super) fn analysis_headers<T, E, F>(_: &F) -> Result<usize, ArgumentResource
 pub(super) fn optimizer_transfer_headers<T, E>(
     closure_bytes: usize,
 ) -> Result<usize, ArgumentResourceV1> {
-    type Output<T> = (
-        fe2o3_pliron::CheckedNeutralKernelIrOwnerV18,
-        T,
-        fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
-    );
-    type Result<T, E> = std::result::Result<Output<T>, ProductionSourceOptimizationErrorV18<E>>;
+    optimizer_transfer_headers_typed::<T, E, fe2o3_pliron::CheckedNeutralKernelIrOwnerV18>(
+        closure_bytes,
+    )
+}
+
+fn optimizer_transfer_headers_typed<T, E, C>(
+    closure_bytes: usize,
+) -> Result<usize, ArgumentResourceV1> {
+    type Output<C, T> = (C, T, fe2o3_pliron::KirNeutralOwnedOriginStorageV1);
+    type Result<C, T, E> =
+        std::result::Result<Output<C, T>, ProductionSourceOptimizationErrorV18<E>>;
     argument_sum_v1(&[
         closure_bytes,
         size_of::<std::cell::Cell<usize>>(),
-        size_of::<Output<T>>(),
-        size_of::<Result<T, E>>(),
-        size_of::<std::thread::Result<Result<T, E>>>(),
-        size_of::<std::panic::AssertUnwindSafe<Output<T>>>(),
+        size_of::<Output<C, T>>(),
+        size_of::<Result<C, T, E>>(),
+        size_of::<std::thread::Result<Result<C, T, E>>>(),
+        size_of::<std::panic::AssertUnwindSafe<Output<C, T>>>(),
         size_of::<ProductionSourceOptimizationErrorV18<E>>(),
         source_reference_cleanup_headers_v29()?,
     ])

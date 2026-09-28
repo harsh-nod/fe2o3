@@ -496,3 +496,308 @@ fn source_integer_owned_callback_error_keeps_residual_and_first_source_refusal()
         assert_eq!(budget.failed_work(), first_refusal.then_some(usize::MAX));
     }
 }
+fn integer_handoff_noop_source_v18() -> ProductionSemanticSsaOwnerV1 {
+    use super::super::closed_scalar_handoff_tests::{ClosedCaseV1760, closed_owner_v1760};
+    closed_owner_v1760(ClosedCaseV1760::Noop)
+}
+
+#[test]
+fn integer_handoff_exact_noop_keeps_distinct_policy_and_requires_owned_disposal() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let (prepared, fixture) =
+        integer_handoff_prepared_v18(integer_handoff_noop_source_v18, &mut budget);
+    let roots = fixture.roots();
+    prepared
+        .with_source_consumer_v18(&mut budget, |source, budget| {
+            let floor = budget.storage();
+            let handoff = source.unqualified_integer_output_v18(
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                budget,
+            )?;
+            let output = handoff.output(budget)?;
+            assert_eq!(output.input_audit_bytes(), output.owner().canonical_bytes());
+            assert_eq!(
+                &output.execution().canonical_bytes()[..8],
+                &[6, 0, 1, 0, 2, 0, 18, 0]
+            );
+            assert!(output.report().passes().iter().all(|pass| !pass.changed()));
+            let retained = handoff.retained_storage(budget)?;
+            let paid = budget.storage();
+            drop(handoff);
+            assert_eq!(
+                budget.storage(),
+                paid,
+                "ordinary Drop must not refund the ledger"
+            );
+            budget.release_storage(retained)?;
+            assert_eq!(budget.storage(), floor);
+            Ok::<_, ProductionUnqualifiedIntegerHandoffErrorV18>(())
+        })
+        .unwrap();
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
+#[test]
+fn integer_handoff_early_header_refusal_stays_selected_after_padding_release() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let (prepared, fixture) = integer_handoff_prepared_v18(integer_add_source_v18, &mut budget);
+    let roots = fixture.roots();
+    let result = prepared.with_source_consumer_v18(&mut budget, |source, budget| {
+        let floor = budget.storage();
+        let padding = budget.storage_limit() - floor;
+        budget.reserve_storage(padding).unwrap();
+        let error = source
+            .unqualified_integer_output_v18(
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                budget,
+            )
+            .err()
+            .unwrap();
+        let ProductionUnqualifiedIntegerHandoffErrorV18::Source(
+            ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(refusal)),
+        ) = &error
+        else {
+            panic!("not an original header refusal: {error:?}");
+        };
+        assert!(refusal.actual() > refusal.limit());
+        assert_eq!(refusal.limit(), MODULE_LIMIT);
+        let selected = error.to_string();
+        budget.release_storage(padding).unwrap();
+        let retry = source
+            .unqualified_integer_output_v18(
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                budget,
+            )
+            .err()
+            .unwrap();
+        assert_eq!(retry.to_string(), selected);
+        assert_eq!(budget.storage(), floor);
+        Err::<(), _>(error)
+    });
+    assert!(result.is_err());
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
+fn integer_handoff_prepared_v18(
+    factory: fn() -> ProductionSemanticSsaOwnerV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> (ProductionPreparedSourceV18, OriginalKernelAbiFixtureV18) {
+    with_pending_api_owner_v18(
+        ModuleFixture::Ordinary,
+        false,
+        budget,
+        factory,
+        |owner, launch, input, _, budget| {
+            let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
+            let roots = fixture.roots();
+            let prepared =
+                ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
+                    owner,
+                    launch,
+                    input,
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                )
+                .unwrap();
+            (prepared, fixture)
+        },
+    )
+}
+
+#[test]
+fn integer_handoff_owns_actual_memory_outputs_with_neutral_and_unsupported_rules() {
+    for (factory, changed) in [
+        (integer_add_source_v18 as fn() -> _, true),
+        (integer_non_neutral_source_v18, false),
+        (integer_divide_source_v18, false),
+    ] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let (prepared, fixture) = integer_handoff_prepared_v18(factory, &mut budget);
+        let roots = fixture.roots();
+        prepared
+            .with_source_consumer_v18(&mut budget, |source, budget| {
+                let floor = budget.storage();
+                let handoff = source.unqualified_integer_output_v18(
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    budget,
+                )?;
+                handoff.check_original_source(source.source_ssa(budget)?, budget)?;
+                let output = handoff.output(budget)?;
+                assert_eq!(
+                    output.input_audit_bytes(),
+                    source.canonical(budget)?.canonical_bytes()
+                );
+                assert_eq!(output.report().passes()[0].changed(), changed);
+                if changed {
+                    assert_ne!(output.owner().canonical_bytes(), output.input_audit_bytes());
+                }
+                assert_eq!(output.report().passes().len(), 2);
+                let operations = |owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18| {
+                    owner
+                        .module()
+                        .functions
+                        .iter()
+                        .filter_map(|f| f.body.as_ref())
+                        .flat_map(|body| &body.blocks)
+                        .flat_map(|block| &block.operations)
+                        .filter(|operation| {
+                            matches!(
+                                operation.kind,
+                                OperationKind::Load { .. } | OperationKind::Store { .. }
+                            )
+                        })
+                        .count()
+                };
+                let memory = operations(source.canonical(budget)?);
+                assert!(memory > 0);
+                assert_eq!(operations(output.owner()), memory);
+                let header = size_of::<ProductionUnqualifiedIntegerOutputHandoffV18<'_, '_>>()
+                    - size_of::<fe2o3_pliron::CheckedNeutralKernelIrOwnerIntegerContinuationV18>()
+                    + std::mem::align_of::<ProductionUnqualifiedIntegerOutputHandoffV18<'_, '_>>();
+                let retained = output.storage().retained_storage() + header;
+                assert_eq!(handoff.retained_storage(budget)?, retained);
+                assert_eq!(budget.storage(), floor + retained);
+                handoff.discard(budget)?;
+                assert_eq!(budget.storage(), floor);
+                Ok::<_, ProductionUnqualifiedIntegerHandoffErrorV18>(())
+            })
+            .unwrap();
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+    }
+}
+
+#[test]
+fn integer_handoff_rejects_foreign_original_and_keeps_first_refusal_after_discard() {
+    let foreign = integer_add_source_v18();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let (prepared, fixture) = integer_handoff_prepared_v18(integer_add_source_v18, &mut budget);
+    let roots = fixture.roots();
+    let result = prepared.with_source_consumer_v18(&mut budget, |source, budget| {
+        let floor = budget.storage();
+        let handoff = source.unqualified_integer_output_v18(
+            ProductionKernelArgumentAbiInputV18 { roots: &roots },
+            budget,
+        )?;
+        assert_eq!(source.source_ssa(budget)?.identity(), foreign.identity());
+        assert!(!std::ptr::eq(source.source_ssa(budget)?, &foreign));
+        let first = handoff.check_original_source(&foreign, budget).unwrap_err();
+        assert!(matches!(
+            first,
+            ProductionSourceOwnedViewErrorV18::Binding(_)
+        ));
+        let selected = first.to_string();
+        assert_eq!(handoff.output(budget).err().unwrap().to_string(), selected);
+        assert_eq!(handoff.discard(budget).unwrap_err().to_string(), selected);
+        assert_eq!(budget.storage(), floor);
+        let retry = source
+            .unqualified_integer_output_v18(
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                budget,
+            )
+            .err()
+            .unwrap();
+        assert!(matches!(
+            retry,
+            ProductionUnqualifiedIntegerHandoffErrorV18::Source(_)
+        ));
+        assert_eq!(retry.to_string(), selected);
+        Err::<(), _>(ProductionUnqualifiedIntegerHandoffErrorV18::from(first))
+    });
+    assert!(result.is_err());
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
+#[test]
+fn integer_handoff_undercut_or_foreign_custody_never_refunds_original_credit() {
+    for foreign_account in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let (prepared, fixture) = integer_handoff_prepared_v18(integer_add_source_v18, &mut budget);
+        let roots = fixture.roots();
+        let result = prepared.with_source_consumer_v18(&mut budget, |source, budget| {
+            let handoff = source.unqualified_integer_output_v18(
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                budget,
+            )?;
+            let first = if foreign_account {
+                let mut foreign_work =
+                    CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+                let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
+                foreign.reserve_storage(budget.storage()).unwrap();
+                let first = handoff.output(&foreign).err().unwrap();
+                assert_eq!(foreign.storage(), budget.storage());
+                first
+            } else {
+                budget.release_storage(1).unwrap();
+                handoff.output(budget).err().unwrap()
+            };
+            assert!(matches!(
+                first,
+                ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting)
+            ));
+            let paid = budget.storage();
+            assert!(handoff.discard(budget).is_err());
+            assert_eq!(budget.storage(), paid);
+            Err::<(), _>(ProductionUnqualifiedIntegerHandoffErrorV18::from(first))
+        });
+        assert!(result.is_err());
+        assert!(budget.storage() > MODULE_FLOOR);
+    }
+}
+
+#[test]
+fn integer_handoff_requires_full_original_abi_before_optimization_and_on_retry() {
+    for missing in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let (prepared, fixture) = integer_handoff_prepared_v18(integer_add_source_v18, &mut budget);
+        let mut roots = fixture.roots();
+        if !missing {
+            roots[0].kernel_binding = roots[1].kernel_binding;
+        }
+        let result = prepared.with_source_consumer_v18(&mut budget, |source, budget| {
+            let floor = budget.storage();
+            let first = source
+                .unqualified_integer_output_v18(
+                    ProductionKernelArgumentAbiInputV18 {
+                        roots: if missing { &[] } else { &roots },
+                    },
+                    budget,
+                )
+                .err()
+                .unwrap();
+            assert!(matches!(
+                first,
+                ProductionUnqualifiedIntegerHandoffErrorV18::Source(
+                    ProductionSourceOwnedViewErrorV18::Binding(_)
+                )
+            ));
+            assert_eq!(budget.storage(), floor);
+            let original_roots = fixture.roots();
+            let retry = source
+                .unqualified_integer_output_v18(
+                    ProductionKernelArgumentAbiInputV18 {
+                        roots: &original_roots,
+                    },
+                    budget,
+                )
+                .err()
+                .unwrap();
+            assert_eq!(first.to_string(), retry.to_string());
+            Err::<(), _>(first)
+        });
+        assert!(result.is_err());
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+    }
+}

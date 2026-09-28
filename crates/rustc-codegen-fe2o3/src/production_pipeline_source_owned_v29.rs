@@ -1,4 +1,4 @@
-//! Fixed live-rustc MIR29 import and lexical V18 closed scalar continuation.
+//! Fixed live-rustc MIR29 import and nominal lexical V18 output continuations.
 //! This is not the default compiler route or final ranked/formal/target authority.
 use super::*;
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as TargetProfile;
@@ -13,9 +13,14 @@ use fe2o3_lower_mir_kernel::{
     ProductionKernelArgumentAbiRootV18 as AbiRoot,
     ProductionPendingScopedSourceOwnerV29 as Pending, ProductionScopeCallableCandidateV29 as Class,
     ProductionSourceOwnedViewErrorV18, ProductionSourceOwnedViewV18 as Source,
+    ProductionUnqualifiedIntegerHandoffErrorV18,
+    ProductionUnqualifiedIntegerOutputHandoffV18 as IntegerHandoff,
 };
 use std::mem::{align_of, size_of};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+#[path = "production_pipeline_original_source_v18.rs"]
+mod original_source_v18;
 
 pub(super) enum ImportProfile {
     Current,
@@ -29,6 +34,7 @@ pub(crate) enum Error {
     Descriptor(crate::compiler_descriptor::CompilerDescriptorError),
     Source(ProductionSourceOwnedViewErrorV18),
     Handoff(ProductionClosedScalarHandoffErrorV18),
+    IntegerHandoff(ProductionUnqualifiedIntegerHandoffErrorV18),
     TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
     Resource(Resource),
     Unsupported(&'static str),
@@ -45,6 +51,7 @@ impl std::error::Error for Error {
             Self::Descriptor(error) => Some(error),
             Self::Source(error) => Some(error),
             Self::Handoff(error) => Some(error),
+            Self::IntegerHandoff(error) => Some(error),
             Self::TargetLlvm(error) => Some(error),
             Self::Resource(error) => Some(error),
             Self::Unsupported(_) => None,
@@ -74,6 +81,11 @@ impl From<ProductionClosedScalarHandoffErrorV18> for Error {
 impl From<Resource> for Error {
     fn from(error: Resource) -> Self {
         Self::Resource(error)
+    }
+}
+impl From<ProductionUnqualifiedIntegerHandoffErrorV18> for Error {
+    fn from(error: ProductionUnqualifiedIntegerHandoffErrorV18) -> Self {
+        Self::IntegerHandoff(error)
     }
 }
 impl From<target_result::ClosedScalarTargetLlvmErrorV29> for Error {
@@ -140,10 +152,14 @@ pub(crate) fn paid_vec<T>(count: usize, budget: &mut Budget<'_>) -> Result<Vec<T
 }
 
 fn entry_headers<R, F>() -> Result<usize, Resource> {
-    type Invoke<'a, 'source, 'work, F> = (
+    entry_headers_for_handoff::<R, F, Handoff<'static, 'static>>()
+}
+
+fn entry_headers_for_handoff<R, F, H>() -> Result<usize, Resource> {
+    type Invoke<'a, 'source, 'work, F, H> = (
         F,
         &'a Source<'source>,
-        &'a Handoff<'a, 'source>,
+        &'a H,
         &'a [AbiRoot<'a>],
         TargetProfile,
         &'a mut Budget<'work>,
@@ -152,9 +168,9 @@ fn entry_headers<R, F>() -> Result<usize, Resource> {
         size_of::<F>(),
         align_of::<F>(),
         size_of::<AssertUnwindSafe<F>>(),
-        size_of::<Invoke<'_, '_, '_, F>>(),
-        align_of::<Invoke<'_, '_, '_, F>>(),
-        size_of::<AssertUnwindSafe<Invoke<'_, '_, '_, F>>>(),
+        size_of::<Invoke<'_, '_, '_, F, H>>(),
+        align_of::<Invoke<'_, '_, '_, F, H>>(),
+        size_of::<AssertUnwindSafe<Invoke<'_, '_, '_, F, H>>>(),
         size_of::<Result<R, Error>>(),
         align_of::<Result<R, Error>>(),
         size_of::<std::thread::Result<Result<R, Error>>>(),
@@ -177,6 +193,59 @@ fn entry_headers<R, F>() -> Result<usize, Resource> {
         sum.checked_add(value).ok_or(Resource::Arithmetic)
     })
 }
+
+trait SourceHandoffPolicyV29 {
+    type Handoff<'view, 'source: 'view>;
+    fn prepare<'view, 'source>(
+        source: &'view Source<'source>,
+        abi: ProductionKernelArgumentAbiInputV18<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self::Handoff<'view, 'source>, Error>;
+    fn check_original(
+        handoff: &Self::Handoff<'_, '_>,
+        original: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Error>;
+    fn discard(handoff: Self::Handoff<'_, '_>, budget: &mut Budget<'_>) -> Result<(), Error>;
+}
+
+macro_rules! source_handoff_policy_v29 {
+    ($policy:ident, $handoff:ident, $prepare:ident) => {
+        struct $policy;
+        impl SourceHandoffPolicyV29 for $policy {
+            type Handoff<'view, 'source: 'view> = $handoff<'view, 'source>;
+            fn prepare<'view, 'source>(
+                source: &'view Source<'source>,
+                abi: ProductionKernelArgumentAbiInputV18<'_>,
+                budget: &mut Budget<'_>,
+            ) -> Result<Self::Handoff<'view, 'source>, Error> {
+                source.$prepare(abi, budget).map_err(Into::into)
+            }
+            fn check_original(
+                handoff: &Self::Handoff<'_, '_>,
+                original: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+                budget: &mut Budget<'_>,
+            ) -> Result<(), Error> {
+                handoff
+                    .check_original_source(original, budget)
+                    .map_err(Into::into)
+            }
+            fn discard(
+                handoff: Self::Handoff<'_, '_>,
+                budget: &mut Budget<'_>,
+            ) -> Result<(), Error> {
+                handoff.discard(budget).map_err(Into::into)
+            }
+        }
+    };
+}
+
+source_handoff_policy_v29!(ClosedScalar, Handoff, checked_closed_scalar_output_v18);
+source_handoff_policy_v29!(
+    UnqualifiedInteger,
+    IntegerHandoff,
+    unqualified_integer_output_v18
+);
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// The fixed source profile is selected before any semantic admission.
@@ -248,8 +317,70 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &mut Budget<'work>,
         ) -> Result<R, Error>,
     {
+        self.with_source_owned_custody_policy_v29::<ClosedScalar, R, F>(
+            ImportProfile::SourceOwnedV29,
+            work_limit,
+            storage_limit,
+            consume,
+        )
+    }
+
+    /// Consumes the actual integer output lexically while original source and
+    /// compiler bindings remain alive. It cannot authorize later reconstruction.
+    pub(crate) fn with_source_owned_integer_handoff_v29<R, F>(self, consume: F) -> Result<R, Error>
+    where
+        F: for<'view, 'source, 'work> FnOnce(
+            &'view Source<'source>,
+            &IntegerHandoff<'view, 'source>,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    {
+        self.with_source_owned_custody_policy_v29::<UnqualifiedInteger, R, _>(
+            ImportProfile::SourceOwnedV29,
+            WORK_LIMIT,
+            STORAGE_LIMIT,
+            move |source, handoff, _, _, budget| consume(source, handoff, budget),
+        )
+        .map(SourceOwnedCompilationContinuationV29::into_observation)
+    }
+
+    /// A concrete live-rustc pre-finalization consumer. The real optimized owner
+    /// must exist before this refusal. No native session, receipt, descriptor,
+    /// proof, or publication authority is manufactured to bypass later gates.
+    pub(crate) fn source_owned_integer_finalizer_refusal_v29(self) -> Error {
+        let result = self.with_source_owned_integer_handoff_v29::<std::convert::Infallible, _>(
+            |source, handoff, budget| {
+                handoff.check_original_source(source.source_ssa(budget)?, budget)?;
+                handoff.output(budget)?;
+                Err(Error::Unsupported(
+                    "source-owned integer final admission required",
+                ))
+            },
+        );
+        match result {
+            Ok(never) => match never {},
+            Err(error) => error,
+        }
+    }
+
+    fn with_source_owned_custody_policy_v29<P: SourceHandoffPolicyV29, R, F>(
+        self,
+        import_profile: ImportProfile,
+        work_limit: usize,
+        storage_limit: usize,
+        consume: F,
+    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error>
+    where
+        F: for<'view, 'source, 'abi, 'work> FnOnce(
+            &'view Source<'source>,
+            &P::Handoff<'view, 'source>,
+            &[AbiRoot<'abi>],
+            TargetProfile,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    {
         let ssa = self
-            .import_semantic_mir_with_profile_v29(ImportProfile::SourceOwnedV29)?
+            .import_semantic_mir_with_profile_v29(import_profile)?
             .construct_semantic_middle_end()?
             .construct_semantic_ssa()?;
         if ssa
@@ -283,7 +414,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         })?;
         let mut work = Work::new(work_limit);
         let mut budget = Budget::new(&mut work, storage_limit);
-        let headers = entry_headers::<R, F>()?;
+        let headers = entry_headers_for_handoff::<R, F, P::Handoff<'static, 'static>>()?;
         budget.charge_work(headers)?;
         budget.reserve_storage(headers)?;
         // Root-phase storage is not refunded across a callback. All actual
@@ -343,11 +474,12 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             }
             #[cfg(test)]
             tests::observe_materialized_source_v29();
-            let handoff = source.checked_closed_scalar_output_v18(
+            let handoff = P::prepare(
+                source,
                 ProductionKernelArgumentAbiInputV18 { roots: &roots },
                 budget,
             )?;
-            handoff.check_original_source(source.source_ssa(budget)?, budget)?;
+            P::check_original(&handoff, source.source_ssa(budget)?, budget)?;
             let borrowed = &handoff;
             let callback_budget = &mut *budget;
             // The actual F is owned by this catch, including its destructor.
@@ -355,7 +487,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             let result = catch_unwind(AssertUnwindSafe(move || {
                 consume(source, borrowed, original_roots, target, callback_budget)
             }));
-            let settled = handoff.discard(budget).map_err(Error::from);
+            let settled = P::discard(handoff, budget);
             match result {
                 Ok(Ok(value)) => {
                     settled?;

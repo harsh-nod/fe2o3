@@ -112,15 +112,19 @@ impl From<ArgumentResourceV1> for ProductionClosedScalarHandoffErrorV18 {
 /// ```
 #[must_use = "keep the paid output live or discard it on its original ledger"]
 pub struct ProductionClosedScalarOutputHandoffV18<'view, 'source> {
+    owned: SourceOutputHandoffV18<'view, 'source, ScalarSourceOptimizerV18>,
+}
+
+struct SourceOutputHandoffV18<'view, 'source, P: SourceOptimizerPolicyV18> {
     source: &'view ProductionSourceOwnedViewV18<'source>,
-    output: fe2o3_pliron::CheckedNeutralKernelIrOwnerV18,
+    output: P::Output,
     receipt: fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
     required: usize,
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
 }
 
-impl ProductionClosedScalarOutputHandoffV18<'_, '_> {
+impl<P: SourceOptimizerPolicyV18> SourceOutputHandoffV18<'_, '_, P> {
     fn custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()
@@ -146,10 +150,7 @@ impl ProductionClosedScalarOutputHandoffV18<'_, '_> {
     /// Borrows the exact adopted output while its source and credit remain live.
     ///
     /// This method is separate from cleanup-only custody observation.
-    pub fn output(
-        &self,
-        budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&fe2o3_pliron::CheckedNeutralKernelIrOwnerV18> {
+    fn output(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<&P::Output> {
         self.check(budget)?;
         Ok(&self.output)
     }
@@ -162,7 +163,7 @@ impl ProductionClosedScalarOutputHandoffV18<'_, '_> {
     /// This lends no source/output validity or retained-credit authority.
     /// Consumers must separately check ordinary queries and own the exact
     /// accepted receipt and destruction of any additional allocation.
-    pub fn observe_retained_storage_v18(
+    fn observe_retained_storage_v18(
         &self,
         required_floor: usize,
         budget: &ArgumentBudgetV1<'_>,
@@ -177,7 +178,7 @@ impl ProductionClosedScalarOutputHandoffV18<'_, '_> {
     }
 
     /// Requires the same original SSA owner, not equal source bytes.
-    pub fn check_original_source(
+    fn check_original_source(
         &self,
         source: &ProductionSemanticSsaOwnerV1,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -187,17 +188,17 @@ impl ProductionClosedScalarOutputHandoffV18<'_, '_> {
     }
 
     /// The exact graph and handoff credit retained on the continuing ledger.
-    pub fn retained_storage(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<usize> {
+    fn retained_storage(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<usize> {
         self.check(budget)?;
         // The retained entrance checked this sum before its atomic reservation.
-        Ok(self.output.storage().retained_storage() + self.receipt.retained_storage())
+        Ok(P::checked_storage(&self.output) + self.receipt.retained_storage())
     }
 
     /// Drops the actual graph before refund; foreign or undercut custody refunds nothing.
-    pub fn discard(self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
+    fn discard(self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         let result = self.check(budget);
         let custody = self.custody(budget);
-        let retained = self.output.storage().retained_storage() + self.receipt.retained_storage();
+        let retained = P::checked_storage(&self.output) + self.receipt.retained_storage();
         let Self { source, output, .. } = self;
         drop(output);
         let settlement = custody.and_then(|()| {
@@ -208,19 +209,202 @@ impl ProductionClosedScalarOutputHandoffV18<'_, '_> {
     }
 }
 
+macro_rules! source_output_handoff_queries_v18 {
+    ($handoff:ident, $output:ident) => {
+        impl $handoff<'_, '_> {
+            /// Borrows the actual adopted owner under original source custody.
+            pub fn output(
+                &self,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<&fe2o3_pliron::$output> {
+                self.owned.output(budget)
+            }
+
+            /// Observes original cleanup custody without granting final authority.
+            /// The caller cannot weaken the original slot, ledger, or floor.
+            /// Observed loss denies linked refunds even after an earlier query
+            /// refusal; an earlier refusal alone does not invalidate intact
+            /// cleanup custody. This lends neither ordinary query validity nor
+            /// an additional storage receipt or disposal authority.
+            pub fn observe_retained_storage_v18(
+                &self,
+                required_floor: usize,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<()> {
+                self.owned
+                    .observe_retained_storage_v18(required_floor, budget)
+            }
+
+            /// Requires the actual original SSA owner, not equal encoded bytes.
+            pub fn check_original_source(
+                &self,
+                source: &ProductionSemanticSsaOwnerV1,
+                budget: &mut ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<()> {
+                self.owned.check_original_source(source, budget)
+            }
+
+            /// Returns the exact paid output and containing handoff credit.
+            pub fn retained_storage(
+                &self,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<usize> {
+                self.owned.retained_storage(budget)
+            }
+
+            /// Destroys the actual output before refunding intact original custody.
+            pub fn discard(self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
+                self.owned.discard(budget)
+            }
+        }
+    };
+}
+
+source_output_handoff_queries_v18!(
+    ProductionClosedScalarOutputHandoffV18,
+    CheckedNeutralKernelIrOwnerV18
+);
+
 fn closed_scalar_handoff_credit_v18() -> Result<usize, ArgumentResourceV1> {
+    source_output_handoff_credit_v18::<ScalarSourceOptimizerV18>()
+}
+
+fn source_output_handoff_credit_v18<P: SourceOptimizerPolicyV18>()
+-> Result<usize, ArgumentResourceV1> {
     // Stage A pays the checked owner's inline value and the live origin receipt.
     // Pay the containing handoff's additional fields/padding and alignment.
-    let extra = size_of::<ProductionClosedScalarOutputHandoffV18<'_, '_>>()
-        .checked_sub(size_of::<fe2o3_pliron::CheckedNeutralKernelIrOwnerV18>())
+    let extra = size_of::<SourceOutputHandoffV18<'_, '_, P>>()
+        .checked_sub(size_of::<P::Output>())
         .and_then(|bytes| {
             bytes.checked_sub(size_of::<fe2o3_pliron::KirNeutralOwnedOriginStorageV1>())
         })
         .ok_or(ArgumentResourceV1::Arithmetic)?;
     argument_sum_v1(&[
         extra,
-        std::mem::align_of::<ProductionClosedScalarOutputHandoffV18<'_, '_>>(),
+        std::mem::align_of::<SourceOutputHandoffV18<'_, '_, P>>(),
     ])
+}
+
+/// Refusal before or during actual unqualified integer output adoption.
+#[derive(Debug)]
+pub enum ProductionUnqualifiedIntegerHandoffErrorV18 {
+    /// Original source, full ABI, or continuing custody refused preparation.
+    Source(ProductionSourceOwnedViewErrorV18),
+    /// The fixed integer executor or independently checked adoption refused.
+    Optimization(ProductionSourceOptimizationErrorV18<ProductionSourceOwnedViewErrorV18>),
+}
+
+impl fmt::Display for ProductionUnqualifiedIntegerHandoffErrorV18 {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source(error) => error.fmt(out),
+            Self::Optimization(error) => error.fmt(out),
+        }
+    }
+}
+
+impl std::error::Error for ProductionUnqualifiedIntegerHandoffErrorV18 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Source(error) => Some(error),
+            Self::Optimization(error) => Some(error),
+        }
+    }
+}
+
+impl From<ProductionSourceOwnedViewErrorV18> for ProductionUnqualifiedIntegerHandoffErrorV18 {
+    fn from(error: ProductionSourceOwnedViewErrorV18) -> Self {
+        Self::Source(error)
+    }
+}
+
+impl From<ArgumentResourceV1> for ProductionUnqualifiedIntegerHandoffErrorV18 {
+    fn from(error: ArgumentResourceV1) -> Self {
+        Self::Source(error.into())
+    }
+}
+
+/// Actual V18 integer-neutral/DCE output retained beside its authentic source.
+///
+/// This nominal owner preserves full original ABI, transition occurrence/map
+/// correspondence, and source-memory currentness. It deliberately has no final
+/// ranked, native, formal, target, publication, or launch authority. In
+/// particular it is neither the closed scalar handoff nor a V12 Policy6 owner.
+/// It cannot escape the original source visit, and ordinary Drop refunds nothing.
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::{ProductionClosedScalarOutputHandoffV18, ProductionUnqualifiedIntegerOutputHandoffV18};
+/// fn relabel<'a, 's>(v: ProductionUnqualifiedIntegerOutputHandoffV18<'a, 's>) -> ProductionClosedScalarOutputHandoffV18<'a, 's> { v }
+/// ```
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::ProductionUnqualifiedIntegerOutputHandoffV18;
+/// fn duplicate(v: ProductionUnqualifiedIntegerOutputHandoffV18<'_, '_>) { let _ = v.clone(); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::{ProductionPreparedSourceV18, ProductionKernelArgumentAbiInputV18};
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn escape(source: ProductionPreparedSourceV18, abi: ProductionKernelArgumentAbiInputV18<'_>, budget: &mut Budget<'_>) {
+///     let _escaped = source.with_source_consumer_v18(budget, |view, budget| {
+///         view.unqualified_integer_output_v18(abi, budget)
+///     });
+/// }
+/// ```
+#[must_use = "keep the actual unqualified output live or discard it on its original ledger"]
+pub struct ProductionUnqualifiedIntegerOutputHandoffV18<'view, 'source> {
+    owned: SourceOutputHandoffV18<'view, 'source, IntegerSourceOptimizerV18>,
+}
+
+source_output_handoff_queries_v18!(
+    ProductionUnqualifiedIntegerOutputHandoffV18,
+    CheckedNeutralKernelIrOwnerIntegerContinuationV18
+);
+
+impl<'source> ProductionSourceOwnedViewV18<'source> {
+    /// Owns the actual fixed integer continuation during this source visit.
+    /// The complete independent ABI must match its originally captured profile.
+    /// Missing later obligations remain unqualified, not silently discharged.
+    pub fn unqualified_integer_output_v18<'view>(
+        &'view self,
+        abi: ProductionKernelArgumentAbiInputV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<
+        ProductionUnqualifiedIntegerOutputHandoffV18<'view, 'source>,
+        ProductionUnqualifiedIntegerHandoffErrorV18,
+    > {
+        self.query(budget)?;
+        let floor = budget.storage();
+        let (output, (), receipt) = scoped_source_attempt_v29(self.cleanup, budget, floor, |budget| {
+            self.require_kernel_argument_abi_v18(abi, budget)?;
+            let credit = source_output_handoff_credit_v18::<IntegerSourceOptimizerV18>()?;
+            let output = self.with_retained_checked_optimization_policy_v18::<IntegerSourceOptimizerV18, (), ProductionSourceOwnedViewErrorV18, _>(
+                budget,
+                |original, optimized, budget| {
+                    optimized_source_endpoints_v18(original, optimized, budget)?;
+                    source_output_correspondence_checks_v18(original, optimized, budget)?;
+                    original.retain_query(budget.reserve_storage(credit).map_err(Into::into))?;
+                    original.retain_query(budget.release_storage(credit).map_err(Into::into))?;
+                    Ok(((), credit))
+                },
+            ).map_err(ProductionUnqualifiedIntegerHandoffErrorV18::Optimization)?;
+            self.guard.check(self.owner, self.cleanup, budget)?;
+            Ok(output)
+        }).map_err(|error| {
+            if let ProductionUnqualifiedIntegerHandoffErrorV18::Source(ProductionSourceOwnedViewErrorV18::Resource(resource)) = &error {
+                let _ = self.retain_query_resource_error_v18(*resource);
+            }
+            error
+        })?;
+        Ok(ProductionUnqualifiedIntegerOutputHandoffV18 {
+            owned: SourceOutputHandoffV18 {
+                source: self,
+                output,
+                receipt,
+                required: budget.storage(),
+                slot: std::ptr::from_ref(budget) as usize,
+                ledger: budget.work_ledger_identity_v1(),
+            },
+        })
+    }
 }
 
 impl<'source> ProductionSourceOwnedViewV18<'source> {
@@ -281,12 +465,14 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
         // No fallible operation or controlled allocation between the already
         // paid transfer and this move. The receipt sums were checked by entry.
         Ok(ProductionClosedScalarOutputHandoffV18 {
-            source: self,
-            output,
-            receipt,
-            required: budget.storage(),
-            slot: std::ptr::from_ref(budget) as usize,
-            ledger: budget.work_ledger_identity_v1(),
+            owned: SourceOutputHandoffV18 {
+                source: self,
+                output,
+                receipt,
+                required: budget.storage(),
+                slot: std::ptr::from_ref(budget) as usize,
+                ledger: budget.work_ledger_identity_v1(),
+            },
         })
     }
 }
@@ -467,6 +653,22 @@ fn closed_scalar_native_envelopes_v18() -> Result<usize, ArgumentResourceV1> {
     ])
 }
 
+fn source_output_correspondence_checks_v18(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<()> {
+    for root in 0..original.source.root_count(budget)? {
+        original.with_root_argument_data_v18(root, budget, |data, budget| {
+            data.visit_nodes_scoped(budget, |_, _| Ok(()))
+        })?;
+        optimized_source_root_function_v18(original, optimized, root, budget)?;
+    }
+    original
+        .check_optimized_source_currentness_v18(optimized, budget)
+        .map(|_| ())
+}
+
 fn closed_scalar_final_checks_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
@@ -483,15 +685,7 @@ fn closed_scalar_final_checks_v18(
         optimized_source_endpoints_v18(original, optimized, budget)?;
         closed_scalar_graph_v18(original.source.canonical(budget)?, budget)?;
         closed_scalar_graph_v18(optimized.output_inventory(budget)?.owner(), budget)?;
-        for root in 0..original.source.root_count(budget)? {
-            original.with_root_argument_data_v18(root, budget, |data, budget| {
-                data.visit_nodes_scoped(budget, |_, _| Ok(()))
-            })?;
-            // The actual transition preserves complete signatures; join each
-            // original ABI root to its exact indexed output declaration too.
-            optimized_source_root_function_v18(original, optimized, root, budget)?;
-        }
-        original.check_optimized_source_currentness_v18(optimized, budget)?;
+        source_output_correspondence_checks_v18(original, optimized, budget)?;
         let output = optimized.output_inventory(budget)?;
         let metadata = CanonicalRankedMetadataV18::new(output.owner(), &[]);
         let metadata_storage = metadata.storage_extent(budget).map_err(Error::Ranked)?;

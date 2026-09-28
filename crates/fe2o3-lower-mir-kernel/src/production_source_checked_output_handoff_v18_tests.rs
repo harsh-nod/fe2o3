@@ -1,5 +1,5 @@
 #[derive(Clone, Copy)]
-enum ClosedCaseV1760 {
+pub(super) enum ClosedCaseV1760 {
     Noop,
     Changed,
     Assertion,
@@ -7,7 +7,7 @@ enum ClosedCaseV1760 {
     Call,
 }
 
-fn closed_owner_v1760(case: ClosedCaseV1760) -> ProductionSemanticSsaOwnerV1 {
+pub(super) fn closed_owner_v1760(case: ClosedCaseV1760) -> ProductionSemanticSsaOwnerV1 {
     if matches!(case, ClosedCaseV1760::Assertion) {
         return original_kernel_abi_owner_v18();
     }

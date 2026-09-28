@@ -14,6 +14,12 @@ mod target_llvm_tests;
 #[path = "production_rustc_driver_source_preparation_v29_tests.rs"]
 mod preparation_tests;
 
+#[path = "production_rustc_driver_source_integer_handoff_v29_tests.rs"]
+mod integer_handoff_tests;
+
+#[path = "production_rustc_driver_original_source_v18_tests.rs"]
+mod original_source_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ScalarResult {
     source: [u8; 32],
