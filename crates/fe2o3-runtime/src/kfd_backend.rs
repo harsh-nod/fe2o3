@@ -1334,7 +1334,7 @@ pub struct KfdRuntimeBackendV1 {
     admitted_device: Option<CheckedGfx942XnackMinusDevice>,
     queue: Option<ComputeAqlQueueSessionV1>,
     #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
-    cpu_queue: Option<ordinary_queue_io::CpuOrdinaryQueueV1>,
+    cpu_queue: Option<Box<ordinary_queue_io::CpuOrdinaryQueueV1>>,
     primary_teardown: Option<Box<PrimaryQueueReleaseCustodyV1>>,
     terminal_memory: Option<SharedGttMemorySessionV1>,
     terminal_sdma_custody: Option<KfdRuntimeTerminalSdmaCustodyV1>,

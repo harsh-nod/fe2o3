@@ -142,12 +142,12 @@ impl Fixture {
         let fixture = CpuFixedDispatchFixtureV1::new().unwrap();
         backend.native_compute_lanes[0] = Some(fixture.primary_lane());
         backend.native_compute_lanes[1] = Some(fixture.auxiliary_lane());
-        backend.cpu_queue = Some(CpuOrdinaryQueueV1 {
+        backend.cpu_queue = Some(Box::new(CpuOrdinaryQueueV1 {
             fixture,
             next_outer_fault: None,
             last_submitted_identity: None,
             before_outer_fault: None,
-        });
+        }));
         backend.native_available = true;
         backend.require_cpu_provider_v1().unwrap();
         let predecessor = launch(&mut backend, streams[0], kernel, hosts[0], &[]);

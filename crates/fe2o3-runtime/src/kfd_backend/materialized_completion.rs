@@ -292,7 +292,7 @@ impl KfdRuntimeBackendV1 {
             let result = OrdinaryQueueIoV1::new(
                 self.queue.as_mut(),
                 #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
-                self.cpu_queue.as_mut(),
+                self.cpu_queue.as_deref_mut(),
             )
             .and_then(|queue| {
                 queue.with_lane(native_lane, |queue| {
