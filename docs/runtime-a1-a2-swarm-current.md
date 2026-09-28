@@ -24,6 +24,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Scalar persistent-completion custody development (2026-09-28 UTC): Active now
+stays indexed through consuming poll/wait, recycle, detach, retirement, storage
+restoration and completion reporting. The root reuses bind-recovery boxes and
+reserves only missing native replay storage before binding. The
+[development packet](evidence/dev-scalar-completion-custody-2026-09-28/README.md)
+distinguishes counted scripted completion and 81 fault subprocesses from native
+receipt execution, lower-call unwind, formal correspondence and GPU performance.
+Three-binding completion remains separate work; accepted checkpoints and A1/A2
+status are unchanged.
+
 Single persistent-bind recovery development (2026-09-28 UTC): rejection now
 consumes an origin-bound restoration ticket and reuses the original H2D/replay
 box, eliminating the measured one-allocation restore tail. Initialized storage

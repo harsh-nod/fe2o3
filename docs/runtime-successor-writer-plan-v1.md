@@ -231,6 +231,13 @@ Counted CPU round trips and public scripted refusal with queued successors cover
 that adapter. Native bind execution, initialized-storage allocation-failure
 injection and allocation-free completion restoration remain separate open gates.
 
+[Scalar completion custody](evidence/dev-scalar-completion-custody-2026-09-28/README.md)
+now keeps Active indexed through lower consuming calls, typed restoration and
+settlement. Pre-bind reservations and original bind boxes avoid replacement
+allocation in the shared completion restore body. Scripted CPU controls qualify
+that adapter; coupled native execution/unwind, three-binding completion,
+Context reconciliation, formal correspondence and performance remain open.
+
 ### Unknown Group Disposal
 
 Rejecting disposal while a co-owner exists is safe but cannot finish cleanup:
