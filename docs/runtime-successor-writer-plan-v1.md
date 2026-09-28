@@ -216,13 +216,23 @@ not close those gates or the complete Context composition.
 now retains the indexed descriptor across consuming publication, exact retry,
 terminal return and unwind, installing Published before profiling. Native and
 scripted paths share the receipt transition.
-[Initial publication](evidence/dev-initial-compute-publication-2026-09-28/README.md)
+[Initial persistent publication](evidence/dev-initial-compute-publication-2026-09-28/README.md)
 now indexes Armed immediately after successful binding, before queue profiling
 and first submit, and gives returned errors the same one-time pending-owner
 handoff as unwind. CPU fault tests preserve a trailing queued successor and
 exact shared dependency retains. Native bind failure recovery, coupled GPU
 qualification and executable refinement remain open; this does not close the
 Context composition.
+
+[Ordinary prepared cancellation](evidence/dev-materialized-cancellation-2026-09-28/README.md)
+now distinguishes newly bound cancelled-only history from reused attached
+recycled history. Public scripted admission tests retain ordered and explicit
+success successors through cancellation on primary/AUX lanes; only the cancelled
+owner's allocation/module retains and reservation are released. Lower fixtures
+separately qualify prior-generation detach and detached rebind followed by another
+retry/cancel. This is not coupled GPU or formal correspondence evidence. Initial
+ordinary bind/reuse and first-submit indexing remain open: a confirmed retry
+owner must not be used to represent a recipe that has not yet reserved/cancelled.
 
 [Single bind rejection](evidence/dev-single-bind-recovery-2026-09-28/README.md)
 now carries the exact original target/source/submission and empty input box

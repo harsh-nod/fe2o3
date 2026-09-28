@@ -24,6 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Ordinary materialized retry cancellation development (2026-09-28 UTC): explicit
+provenance now selects cancelled-only abort or exact prior-generation recycled
+detach, with indexed Active custody through native retirement and logical
+settlement on primary/AUX lanes. The
+[development packet](evidence/dev-materialized-cancellation-2026-09-28/README.md)
+separates runtime cancellation/successor/fault scripts from genuine lower
+reserve/cancel, detach and rebind CPU fixtures. It records the qualification
+results and unresolved socket-inspection failures. Initial ordinary bind/first-
+submit custody, coupled native execution, formal correspondence and matched
+performance remain open. Accepted checkpoints and A1/A2 status are unchanged.
+
+The preceding [generated retry/Stop repair](evidence/dev-generated-retry-stop-2026-09-28/README.md)
+introduced distinct cancelled-only retirement without weakening pristine abort.
+It likewise does not close protected Worker application or hardware gates.
+
 Exact-three native receipt recovery development (2026-09-28 UTC): registered-
 memory tests now exercise genuine returned published/recycled receipts after
 foreign-session rejection, rightful-session continuation and atomic retirement

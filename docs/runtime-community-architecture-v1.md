@@ -116,6 +116,16 @@ native-dirty extents remain authoritative until facade readback or a later
 host-authority requirement. Staging-budget or host-allocation exhaustion is a
 pre-publication `Capacity` rejection.
 
+Ordinary compute retries retain explicit newly bound or recycled-attached
+provenance. Cancellation keeps Active indexed while the selected primary/AUX
+lane retires the exact recipe and returns DATA; only then does it settle logical
+custody. Returned buffers may remain cached, and cancellation never applies
+unpublished writebacks. The separate
+[cancellation packet](evidence/dev-materialized-cancellation-2026-09-28/README.md)
+distinguishes runtime scripts, lower cleanup fixtures and remaining native/formal
+qualification. Initial ordinary binding and first submission still need indexed
+ownership before their first mutating native action.
+
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can
 withdraw only work still waiting before publication, and a published copy is

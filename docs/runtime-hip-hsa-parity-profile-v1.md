@@ -81,9 +81,24 @@ Dependency count and transitive unpublished depth are capped at 256.
 Prepublication cancellation removes owned work and restores the prior stream
 tail; published work remains too late to cancel.
 
-Poll remains observation-only and never performs deferred compute preparation.
-Submit may publish immediately ready work. `wait` is likewise observation-only
-and does not publish deferred work. The additive in-process `flush_stream`
+Ordinary `MaterializedPrepared` retries can also be cancelled on the selected
+primary or auxiliary lane. Explicit provenance selects cancelled-only abort for
+a newly bound recipe, or detach of the authenticated prior recycled generation
+for a reused attached recipe. Returned initialized DATA is rooted before the
+lane loan closes and may remain in the resident cache. Only successful retirement
+settles the exact allocation/module retains, completion reservation and lane
+lease; queued successors keep their own retains. Cancellation applies no
+writebacks and emits no dispatch publication/completion events. `Cancelled` is
+the explicit cancellation result; the later `Failed(-2)` status alone grants no
+initialization or NoEffect authority. A nonempty pipeline prevents recipe
+retirement, and published work remains `TooLate`. The
+[development evidence](evidence/dev-materialized-cancellation-2026-09-28/README.md)
+is CPU qualification, not native execution or formal refinement. Initial
+ordinary binding and first-submit ownership remain separate open work.
+
+Poll and `wait` never perform deferred compute preparation, but can retry
+publication of an already bound Prepared recipe. Submit may publish immediately
+ready work. The additive in-process `flush_stream`
 operation may drive a dependency-ready FIFO head through potentially blocking
 dirty-buffer reconciliation and native publication. Frozen Runtime Worker V1
 has no flush request and is not a conforming KFD deployment; negotiated Runtime
