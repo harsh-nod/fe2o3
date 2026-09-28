@@ -245,7 +245,7 @@ fn spawn_fixture(command: &mut Command) -> std::process::Child {
     crate::executor::spawn_artifact_coordinated_child(command).unwrap()
 }
 
-fn run_domain(case: &str) {
+pub(super) fn run_domain(case: &str) {
     let mut slot = DIAGNOSTIC_DOMAIN.lock().unwrap_or_else(|p| p.into_inner());
     publish_domain(
         &mut slot,
@@ -394,6 +394,10 @@ fn quarantine_domain_fixture() {
     assert_eq!(unsafe { prctl(36, 1_usize, 0_usize, 0_usize, 0_usize) }, 0);
     let case = std::env::var(CASE).unwrap();
     let mut command = private_command("quarantine_driver_fixture", &case);
+    let scratch = super::spawn_lease_tests::prepare_directory(&case);
+    if let Some(path) = &scratch {
+        command.env(super::spawn_lease_tests::DIRECTORY_ENV, path);
+    }
     command.process_group(0);
     let mut slot = DIAGNOSTIC_DOMAIN.lock().unwrap_or_else(|p| p.into_inner());
     publish_domain(&mut slot, &mut command);
@@ -455,6 +459,10 @@ fn quarantine_domain_fixture() {
         }
     }
     let domain = slot.take().expect("terminal diagnostic domain");
+    if let Some(path) = scratch {
+        // The exact owned domain is terminal, including any blocked lock releaser.
+        std::fs::remove_dir_all(path).unwrap();
+    }
     assert_eq!(kill_result, 0);
     let observed = observation.unwrap_or_else(|_| {
         panic!(
@@ -502,7 +510,7 @@ fn refuse_on_all_threads() {
     assert_eq!(FORKS.load(Ordering::SeqCst), forks);
 }
 
-fn exercise(case: &str) -> Vec<i32> {
+pub(super) fn exercise(case: &str) -> Vec<i32> {
     let mode = match case {
         "deadline" | "refusal" | "thread-exit" => 1,
         "birth" => 2,
@@ -796,7 +804,9 @@ fn exercise_protected() -> Vec<i32> {
 #[ignore = "private quarantine driver, never a standalone positive"]
 fn quarantine_driver_fixture() {
     let case = std::env::var(CASE).unwrap();
-    let pids = if case == "gate" {
+    let pids = if case.starts_with("lease-") {
+        super::spawn_lease_tests::exercise(&case)
+    } else if case == "gate" {
         exercise_gate();
         Vec::new()
     } else if matches!(case.as_str(), "kill-eperm" | "kill-esrch") {

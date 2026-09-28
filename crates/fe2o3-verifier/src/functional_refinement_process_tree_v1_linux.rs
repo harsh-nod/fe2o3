@@ -333,6 +333,9 @@ use custody::{Run, Tracees};
 
 #[path = "functional_refinement_process_tree_v1_spawn.rs"]
 mod seized_spawn;
+#[cfg(test)]
+#[path = "functional_refinement_process_tree_v1_spawn_lease_tests.rs"]
+mod spawn_lease_tests;
 #[path = "functional_refinement_process_tree_v1_stable.rs"]
 mod stable;
 
@@ -736,9 +739,38 @@ fn supervise(
 {
     let run = attempt.run()?;
     run.check_thread()?;
+    let result = supervise_run(
+        run,
+        bindings,
+        verifier_identity,
+        solver_identity,
+        allowed_mappings,
+        validate_mappings,
+        require_auxiliary_verifier,
+        deadline,
+        output_limit,
+    );
+    run.release_spawn_after_terminal();
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn supervise_run(
+    run: &mut Run,
+    bindings: &[DescriptorBinding],
+    verifier_identity: ObjectIdentityV2,
+    solver_identity: ObjectIdentityV2,
+    allowed_mappings: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+    require_auxiliary_verifier: bool,
+    deadline: Instant,
+    output_limit: usize,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
     let Run {
         tracees,
         child,
+        spawn_lease,
         stdout_capture,
         stderr_capture,
         ..
@@ -763,18 +795,7 @@ fn supervise(
         return Err(reject_and_reap(tracees, error));
     }
     let execution = (|| {
-        let status = wait_for_specific(verifier, deadline)?;
-        let initial = tracees.get_mut(&verifier).expect("retained verifier");
-        initial.current_stop = TraceeStop::observed(status);
-        initial.terminal_consumed = !stopped(status);
-        if !stopped(status) {
-            initial.queued_status = Some(status);
-        }
-        if !stopped(status) || (status as u32) >> 16 != PTRACE_EVENT_EXEC {
-            return Err(process_failure(
-                "verifier did not stop at its initial exec boundary",
-            ));
-        }
+        seized_spawn::wait_initial_exec(tracees, verifier, spawn_lease, deadline)?;
         set_trace_options(verifier)?;
         validate_executable(verifier, verifier_identity, "rust_verify")?;
         validate_initial_descriptor_closure(verifier, bindings)?;
@@ -1679,6 +1700,7 @@ fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinem
                         stable_tests::record_cleanup_stop(process, status);
                     } else {
                         stable_tests::record_cleanup_terminal(process, status);
+                        spawn_lease_tests::record_terminal(process, status);
                     }
                 }
                 _ if io::Error::last_os_error().raw_os_error() == Some(4) => {}

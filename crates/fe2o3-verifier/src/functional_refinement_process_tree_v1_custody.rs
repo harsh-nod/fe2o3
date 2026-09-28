@@ -133,11 +133,7 @@ impl AttemptV1 {
 
     pub(crate) fn complete(&self) -> Result<()> {
         self.check()?;
-        if self
-            .slot
-            .as_ref()
-            .is_some_and(|run| run.tracees.unresolved())
-        {
+        if self.slot.as_ref().is_some_and(|run| run.unresolved()) {
             poison();
             return Err(quarantined());
         }
@@ -173,13 +169,10 @@ pub(super) fn inherited_process_refused() -> bool {
 
 impl Drop for AttemptV1 {
     fn drop(&mut self) {
-        // No allocation, wait, syscall cleanup, reaper or second lock on unwind.
-        // Static storage is intentionally not destroyed while quarantined.
-        if self
-            .slot
-            .as_ref()
-            .is_some_and(|run| run.tracees.unresolved())
-        {
+        // Unresolved custody is passive: no resource Drop, allocation, wait,
+        // cleanup or second lock. A resolved Run may drop a spawn lease; that
+        // existing coordinator mutex acquisition is not time-bounded.
+        if self.slot.as_ref().is_some_and(|run| run.unresolved()) {
             poison();
         }
         if !POISONED.load(Ordering::Acquire) {
@@ -203,6 +196,48 @@ mod test_inspection {
         assert!(POISONED.load(Ordering::Acquire));
         inspect(slot.as_deref().expect("quarantined owner retained"))
     }
+
+    #[test]
+    fn spawn_lease_state_retains_missing_and_unresolved_root_obligations() {
+        // Inert inventory controls only: no child, Attempt, ptrace, wait or
+        // cleanup. These records cannot establish actual exec/terminal credit.
+        for case in [
+            "missing",
+            "terminal",
+            "pending",
+            "birth",
+            "uncertain",
+            "removed",
+        ] {
+            let mut run = Run::new(0, 0, thread::current().id()).unwrap();
+            run.spawn_lease = Some(
+                fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1().unwrap(),
+            );
+            let pid = 101;
+            run.root = Some(pid);
+            if case != "missing" {
+                let mut task = Tracee::pending(TraceeRole::Verifier, pid, true);
+                task.terminal_consumed = true;
+                task.pending_creation = case == "pending";
+                if case == "birth" {
+                    task.current_stop = Some(TraceeStop {
+                        status: ((PTRACE_EVENT_FORK << 16) | ((SIGTRAP as u32) << 8) | 0x7f) as i32,
+                        birth_registered: false,
+                    });
+                }
+                run.tracees.insert(pid, task).unwrap();
+            }
+            if case == "uncertain" {
+                run.tracees.uncertain(pid);
+            } else if case == "removed" {
+                run.tracees.remove_terminal(&pid).unwrap();
+            }
+            let unresolved = case != "terminal";
+            assert_eq!(run.unresolved(), unresolved, "{case}");
+            run.release_spawn_after_terminal();
+            assert_eq!(run.spawn_lease.is_some(), unresolved, "{case}");
+        }
+    }
 }
 
 pub(super) struct Run {
@@ -212,6 +247,7 @@ pub(super) struct Run {
     pub seized: bool,
     pub child: seized_spawn::SeizedChild,
     pub prepared: Option<seized_spawn::PreparedSpawn>,
+    pub spawn_lease: Option<fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1>,
     pub backing: Option<Arc<RetainedRuntimeClosureV2>>,
     pub sealed: Option<SealedGeneratedProofSourceV3>,
     pub descriptors: Vec<std::os::fd::OwnedFd>,
@@ -228,6 +264,7 @@ impl Run {
             seized: false,
             child: seized_spawn::SeizedChild::empty(),
             prepared: None,
+            spawn_lease: None,
             backing: None,
             sealed: None,
             descriptors: Vec::new(),
@@ -240,6 +277,31 @@ impl Run {
                 eof: false,
             },
         })
+    }
+
+    fn unresolved(&self) -> bool {
+        self.tracees.unresolved()
+            || (self.spawn_lease.is_some()
+                && self.root.is_some_and(|pid| {
+                    !self
+                        .tracees
+                        .get(&pid)
+                        .is_some_and(|task| task.terminal_consumed)
+                }))
+    }
+
+    pub(super) fn release_spawn_after_terminal(&mut self) {
+        // Neither absence nor a signal request establishes terminal disposal.
+        // Retain on any uncertainty, including an unregistered creation.
+        if !self.tracees.unresolved()
+            && self.root.is_some_and(|pid| {
+                self.tracees
+                    .get(&pid)
+                    .is_some_and(|task| task.terminal_consumed)
+            })
+        {
+            drop(self.spawn_lease.take());
+        }
     }
 
     pub(super) fn check_thread(&self) -> Result<()> {

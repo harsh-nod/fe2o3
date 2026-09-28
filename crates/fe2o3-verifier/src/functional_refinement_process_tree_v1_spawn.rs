@@ -151,8 +151,15 @@ pub(super) fn spawn_in(
         bindings,
     });
     let owner_pid = std::process::id() as i32;
-    fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
+    // Acquisition and eventual Drop can wait for the shared coordinator mutex.
+    // Publish before fork; returning from this launcher is NOT exec evidence.
+    run.spawn_lease = Some(
+        fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1()
+            .map_err(|error| process_failure(format!("acquire proof spawn custody: {error}")))?,
+    );
+    {
         if Instant::now() >= deadline {
+            drop(run.spawn_lease.take()); // No child was created.
             return Err(controller_error(
                 RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
                 "seized spawn deadline elapsed before fork",
@@ -190,6 +197,7 @@ pub(super) fn spawn_in(
         }
         let pid = fork_result as i32;
         if pid < 0 {
+            drop(run.spawn_lease.take()); // The kernel refused creation.
             return Err(process_failure(format!(
                 "fork gated proof child: {}",
                 io::Error::from_raw_os_error(-pid)
@@ -237,13 +245,14 @@ pub(super) fn spawn_in(
             .insert(pid, Tracee::pending(TraceeRole::Verifier, pid, true))?;
         #[cfg(test)]
         quarantine_tests::after_fork();
-        Ok(())
-    })?;
+    }
     let prepared = run.prepared.as_mut().expect("published spawn");
     prepared.stdout_write.take();
     prepared.stderr_write.take();
     let pid = run.child.pid;
     let attachment = (|| {
+        #[cfg(test)]
+        super::spawn_lease_tests::gated_child(run)?;
         #[cfg(test)]
         quarantine_tests::before_attach()?;
         ptrace(PTRACE_SEIZE, pid, trace_options())?;
@@ -262,6 +271,7 @@ pub(super) fn spawn_in(
             ));
         }
         let token = 1_u8;
+        let prepared = run.prepared.as_ref().expect("published spawn");
         // SAFETY: one byte goes to an empty retained gate with a stopped reader.
         if unsafe {
             write(
@@ -278,7 +288,9 @@ pub(super) fn spawn_in(
     })();
     if let Err(error) = attachment {
         if run.seized {
-            return Err(reject_and_reap(&mut run.tracees, error));
+            let error = reject_and_reap(&mut run.tracees, error);
+            run.release_spawn_after_terminal();
+            return Err(error);
         }
         // Before SEIZE the sole child is held on the exact retained gate and
         // cannot create descendants. Failure leaves it in permanent custody.
@@ -302,6 +314,8 @@ pub(super) fn spawn_in(
                     .get_mut(&pid)
                     .expect("published child")
                     .terminal_consumed = true;
+                #[cfg(test)]
+                super::spawn_lease_tests::record_terminal(pid, terminal);
             }
             Ok::<_, RetainedFunctionalRefinementRuntimeErrorV1>(())
         })();
@@ -311,7 +325,44 @@ pub(super) fn spawn_in(
                 "{error}; gated child cleanup unresolved: {cleanup}"
             )));
         }
+        run.release_spawn_after_terminal();
         return Err(error);
     }
+    Ok(())
+}
+
+pub(super) fn wait_initial_exec(
+    tracees: &mut Tracees,
+    pid: i32,
+    spawn_lease: &mut Option<fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1>,
+    deadline: Instant,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    let task = tracees
+        .get_mut(&pid)
+        .ok_or_else(|| process_failure("missing initial child custody"))?;
+    if task.terminal_consumed || task.current_stop.is_some() || task.queued_status.is_some() {
+        return Err(process_failure(
+            "initial child wait already consumed or not resumed",
+        ));
+    }
+    let status = wait_for_specific(pid, deadline)?;
+    task.current_stop = TraceeStop::observed(status);
+    task.terminal_consumed = !stopped(status);
+    if !stopped(status) {
+        task.queued_status = Some(status);
+        #[cfg(test)]
+        super::spawn_lease_tests::record_terminal(pid, status);
+    }
+    if !stopped(status)
+        || stop_signal(status) != SIGTRAP
+        || (status as u32) >> 16 != PTRACE_EVENT_EXEC
+    {
+        return Err(process_failure(
+            "verifier did not stop at its initial exec boundary",
+        ));
+    }
+    // This exact owned wait authenticates successful exec/CLOEXEC. SEIZE,
+    // gate release, logical spawn return and signal delivery cannot do so.
+    drop(spawn_lease.take());
     Ok(())
 }
