@@ -621,3 +621,10 @@ pub(super) fn resolve_constant_iterative_with_resources_v1(
 mod retained_scalar_inventory;
 #[allow(unused_imports)]
 pub(super) use retained_scalar_inventory::{RetainedScalarInventoryV1, retained_scalar_frame_v1};
+
+#[path = "bf16_nominal_retained_origin_worklist_v1.rs"]
+mod retained_origin_worklist;
+#[allow(unused_imports)]
+pub(super) use retained_origin_worklist::{
+    RetainedExactOriginWorklistV1, retained_origin_worklist_frame_v1,
+};

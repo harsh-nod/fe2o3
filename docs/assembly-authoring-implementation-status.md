@@ -1585,3 +1585,15 @@ See [qualification and limits](retained-scalar-inventory-qualification-20260928.
 This component is not yet wired into the genuine continuation. FIFO, carrier,
 provenance, capability preparation, argument writers and production admission
 remain open. Broad accepted exits remain 6/18; no public activation is implied.
+
+## Retained exact-origin FIFO component — 2026-09-28
+
+The origin-propagation scratch queue now remains attached across errors and
+unwinding while preserving original FIFO and successor order. All 11 new
+controls and full 356-model / 3,233-backend regressions passed (197 ignored),
+with backend and extractor builds.
+See [qualification and limits](retained-origin-worklist-qualification-20260928.md).
+
+Origins and edges are still caller-owned. This component is not an authenticated
+provenance checkpoint or production route; carrier/provenance and genuine
+continuation work remain open. Broad accepted exits remain 6/18.
