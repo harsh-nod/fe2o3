@@ -4280,6 +4280,7 @@ mod tests {
             TrustedDeviceItem::Gfx942Wave64ReduceSum,
             TrustedDeviceItem::Gfx942Wave64InclusiveScanSum,
             TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum,
+            TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper,
             TrustedDeviceItem::Gfx942WorkgroupReduceSum,
             TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum,
             TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
@@ -4381,6 +4382,21 @@ mod tests {
 
         let paths = items.map(TrustedDeviceItem::canonical_path);
         assert_eq!(paths.len(), super::TRUSTED_ITEMS.len());
+        for item in items {
+            let matching = super::TRUSTED_ITEMS
+                .iter()
+                .filter(|(registered, _, _)| *registered == item)
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "registered identity {item:?}");
+            assert_eq!(matching[0].2, item.canonical_path());
+        }
+        for (item, _, path) in super::TRUSTED_ITEMS {
+            assert!(
+                items.contains(item),
+                "missing independent registry item {item:?}"
+            );
+            assert_eq!(*path, item.canonical_path());
+        }
         for (index, path) in paths.iter().enumerate() {
             assert!(!path.is_empty());
             assert!(!paths[..index].contains(path));
