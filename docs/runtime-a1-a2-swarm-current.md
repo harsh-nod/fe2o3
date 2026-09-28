@@ -24,6 +24,17 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [generated-only composed startup](evidence/dev-generated-composed-startup-2026-09-28/README.md)
+now exposes mandatory Context-request/N1/N2 accounting through both checked-device
+and open constructors and the authenticated current-thread application helper.
+It retains generated-only launch authority and never falls back after admission
+failure. Qualification passes 1818 runtime tests, 186 host tests, 83 doctests,
+strict Clippy and formatting. One MI300X checked-device test passes domain/request
+pressure, immutable budgets, policy retention and bootstrap refund, with three
+strict endpoints and owned cleanup. It creates no VM/queue or native allocation
+and supplies no protected Worker execution, new formal proof or performance
+result. Production providers/proof artifacts and A1/A2 exit gates remain open.
+
 The corrected [native depth-budget campaign](evidence/dev-native-depth-budget-2026-09-28/README.md)
 passes all seven exact MI300X cells and complete replay: isolated Short/Long,
 out-of-order owner progress, timeout recovery, dropped-observer progress,
@@ -2385,8 +2396,8 @@ resource credits and native budgets must be extended, not replaced.
 | Q3: matched performance | Freeze comparable kernels, complete-output oracles, residency/copy semantics, sizes, in-flight depth, warmup and thresholds before tuning KFD/HIP/HSA producers | Report workload-scoped latency, throughput, bandwidth, CPU/memory and tails with raw repetitions; device timelines establish physical overlap, not host queue depth |
 
 Worker V3/compiler ownership is a separate production gate, not a fourth
-background worker. The generated preparation path still supplies no production
-adoption hooks, and the host admission module ships no concrete semantic-to-machine
+background worker. Generated preparation/adoption hooks and composed startup are
+implemented, but the host admission module ships no concrete semantic-to-machine
 refinement backend or owned proof artifacts. Primary coordinates that dependency
 with the owning teams; a fabricated receipt or passing fixture cannot enable
 protected execution. Later A3-A7 and the external issue handoffs below retain

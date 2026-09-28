@@ -1,0 +1,18 @@
+{
+  "test_passes": 1,
+  "strict_endpoints": 3,
+  "closed_groups": 4,
+  "elf_sha256": "5b234ccb735c25e6a6512d2a4125fba755747b28d77120987d2392cf54b5174f",
+  "vram_bytes": [
+    312930304,
+    312930304,
+    312930304,
+    312930304,
+    312930304,
+    312930304,
+    312930304,
+    312930304,
+    312930304
+  ],
+  "scope": "record consistency and admission/accounting assertions; no protected execution or formal native refinement"
+}
