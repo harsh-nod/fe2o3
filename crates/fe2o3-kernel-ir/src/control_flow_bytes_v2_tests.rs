@@ -298,7 +298,7 @@ mod byte_accounting_v2 {
             input_bytes + radix_frame::<Row>() + bytes::<Row>(3) + size_of::<[usize; 256]>();
         let total_work = 3 + 4 * (3 * 3 + 2 * 256) + 3;
         for mode in 0..3 {
-            let mut input = vec![(9, 0), (1, 1), (1, 2)];
+            let mut input: Vec<Row> = vec![(9, 0), (1, 1), (1, 2)];
             let mut work = CanonicalKernelIrWorkBudgetV1::new(total_work - usize::from(mode == 1));
             let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(
                 &mut work,

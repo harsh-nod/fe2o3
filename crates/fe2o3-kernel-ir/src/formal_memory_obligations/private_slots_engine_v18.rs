@@ -1,5 +1,6 @@
 //! One private-slot eligibility and reaching-store algorithm for both owners.
 use super::*;
+use crate::Terminator;
 
 #[derive(Clone, Copy)]
 pub(in crate::formal_memory_obligations) struct Slot {
