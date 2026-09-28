@@ -66,6 +66,25 @@ impl Meter<'_, '_> {
     }
 }
 
+impl super::super::holder_availability_v1::Meter for Meter<'_, '_> {
+    type Error = CaptureError;
+    fn work(&mut self, units: usize) -> CaptureResult<()> {
+        self.work(units)
+    }
+    fn reserve(&mut self, bytes: usize) -> CaptureResult<()> {
+        self.reserve(bytes)
+    }
+    fn release(&mut self, bytes: usize) -> CaptureResult<()> {
+        let retained = self
+            .retained
+            .checked_sub(bytes)
+            .ok_or(Resource::Accounting)?;
+        self.budget.release_storage(bytes)?;
+        self.retained = retained;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
 struct Counts {
     blocks: usize,
@@ -145,11 +164,18 @@ impl ReplayDriver for CaptureDriver<'_, '_> {
 
     fn input(
         &mut self,
+        _function_id: SemanticFunctionIdV1,
         function: &SemanticFunctionDeclV1,
         types: Option<&[SemanticTypeDeclV1]>,
         callables: &[SemanticCallableDeclV1],
         transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
-    ) -> CaptureResult<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize)> {
+        limits: ProductionSemanticSsaLimitsV1,
+    ) -> CaptureResult<(
+        SsaConstructionInputV1,
+        Vec<SsaVariableIdV1>,
+        usize,
+        Option<SemanticSsaAuxiliaryResourcesV1>,
+    )> {
         self.meter.work(2)?;
         if self.current.is_some() || self.functions.len() >= self.expected_functions {
             return Err(Resource::Accounting.into());
@@ -174,10 +200,22 @@ impl ReplayDriver for CaptureDriver<'_, '_> {
             .emit_blocks(&mut CountBlocks::default(), &mut count)
             .map_err(flatten)?;
         let block_counts = count.finish()?;
+        let mut holder = if prepared.field_update_count() == 0 {
+            None
+        } else {
+            let mut account = super::super::holder_availability_v1::Account::new(id, limits);
+            let markers = account.markers(
+                prepared.field_update_count(),
+                prepared.field_update_recording_work(),
+                &mut self.meter,
+            )?;
+            Some((account, markers))
+        };
         let mut rows = FunctionRows::allocate(id, block_counts, &mut self.meter)?;
-        let entries = {
+        let mut entries = {
             let mut fill = Observer::new(&mut self.meter, id, Some(&mut rows));
-            let entries = prepared.into_entries(&mut fill)?;
+            let entries = prepared
+                .into_entries_recording(&mut fill, holder.as_mut().map(|(_, markers)| markers))?;
             let actual = fill.finish()?;
             self.meter.require(7, id, None, || actual == block_counts)?;
             entries
@@ -188,15 +226,22 @@ impl ReplayDriver for CaptureDriver<'_, '_> {
             .map_err(flatten)?;
         let entry_counts = count.finish()?;
         rows.entries = self.meter.array(entry_counts.entries)?;
-        let input = {
+        let values = {
             let mut fill = Observer::new(&mut self.meter, id, Some(&mut rows));
-            let input = entries.finish(&mut fill)?;
+            let values = entries.entry_values(&mut fill)?;
             let actual = fill.finish()?;
             self.meter.require(7, id, None, || actual == entry_counts)?;
-            input
+            values
         };
+        let holder_resources = if let Some((mut account, markers)) = holder {
+            entries.refine_holders(&values, &markers, &mut account, &mut self.meter)?;
+            Some(account.finish(markers, &mut self.meter)?)
+        } else {
+            None
+        };
+        let (input, implicit, work) = entries.finish_prebuilt(values);
         self.current = Some(rows);
-        Ok(input)
+        Ok((input, implicit, work, holder_resources))
     }
 
     fn join(

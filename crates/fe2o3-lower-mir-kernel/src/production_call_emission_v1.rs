@@ -234,13 +234,18 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         continue;
                     }
                 }
-                execution_call_argument_shape_v29(
+                execution_call_argument_shape_with_representation_v29(
                     self.types,
                     *ty,
                     index as u32,
                     binding,
                     signature.projections,
                     &signature.parameter_types,
+                    if references.is_some() {
+                        ExecutionCfgRepresentationV29::OriginalSource
+                    } else {
+                        ExecutionCfgRepresentationV29::LegacyAbi
+                    },
                     budget,
                 )?;
             }

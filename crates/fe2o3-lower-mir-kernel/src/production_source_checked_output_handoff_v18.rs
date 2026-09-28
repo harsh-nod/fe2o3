@@ -144,12 +144,36 @@ impl ProductionClosedScalarOutputHandoffV18<'_, '_> {
     }
 
     /// Borrows the exact adopted output while its source and credit remain live.
+    ///
+    /// This method is separate from cleanup-only custody observation.
     pub fn output(
         &self,
         budget: &ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<&fe2o3_pliron::CheckedNeutralKernelIrOwnerV18> {
         self.check(budget)?;
         Ok(&self.output)
+    }
+
+    /// Observes cleanup custody at this handoff's floor or a stronger caller
+    /// floor. A caller cannot weaken the handoff's original slot/ledger/floor.
+    /// Actual loss denies every linked refund, even after a selected query
+    /// error. An earlier error alone does not invalidate intact cleanup custody.
+    ///
+    /// This lends no source/output validity or retained-credit authority.
+    /// Consumers must separately check ordinary queries and own the exact
+    /// accepted receipt and destruction of any additional allocation.
+    pub fn observe_retained_storage_v18(
+        &self,
+        required_floor: usize,
+        budget: &ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
+        if budget.storage() < required_floor.max(self.required) {
+            self.source.cleanup.deny_refund();
+            return self
+                .source
+                .retain_query(Err(ArgumentResourceV1::Accounting.into()));
+        }
+        self.custody(budget)
     }
 
     /// Requires the same original SSA owner, not equal source bytes.
@@ -359,7 +383,16 @@ fn closed_scalar_source_v18(
                                 ()
                             }
                             SemanticOperandV1::Constant(value)
-                                if matches!(value.value(), SemanticConstantValueV1::Scalar(_)) =>
+                                if matches!(value.value(), SemanticConstantValueV1::Scalar(_))
+                                    || (matches!(
+                                        value.value(),
+                                        SemanticConstantValueV1::ZeroSized
+                                    ) && semantic
+                                        .types()
+                                        .get(value.ty().index() as usize)
+                                        .is_some_and(|ty| {
+                                            matches!(ty.shape(), SemanticTypeShapeV1::Unit)
+                                        })) =>
                             {
                                 ()
                             }

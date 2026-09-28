@@ -4,6 +4,7 @@
 enum SemanticAnchorInputV1<'a> {
     Historical(ProductionSemanticAnchorKirIdentityV1),
     Native(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12),
+    NativeV18(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18),
 }
 
 impl ProductionSemanticAnchorKirIdentityV1 {
@@ -38,9 +39,21 @@ impl SemanticAnchorInputV1<'_> {
                 }
                 Ok(ProductionSemanticAnchorKirIdentityV1::from_v12(owner))
             }
+            Self::NativeV18(owner) => {
+                if !std::ptr::eq(module, owner.module()) {
+                    return Err(LoweringErrors::one(
+                        LoweringLocation::module(module),
+                        LoweringDiagnosticCode::SemanticAnchorIdentityMismatch,
+                        "native semantic anchors require the actual borrowed V18 executable owner",
+                    ));
+                }
+                Ok(ProductionSemanticAnchorKirIdentityV1::from_v18(owner))
+            }
         }
     }
 }
+
+include!("lowering_native_v18.rs");
 
 /// Lowers the actual admitted V12 module for exact gfx942:xnack- with anchors.
 /// No replacement executable, legacy canonicalization or optimizer is run.

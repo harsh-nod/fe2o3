@@ -107,8 +107,8 @@ pub(super) fn validate_partial_moves_v1(
     auxiliary_resources: SemanticSsaAuxiliaryResourcesV1,
     limits: ProductionSemanticSsaLimitsV1,
 ) -> Result<ProductionSemanticPartialMoveCertificateV1, ProductionSemanticSsaErrorV1> {
-    let (projected_moves, _) = projected_local_move_metrics_v1(function)?;
-    if projected_moves == 0 {
+    let (projected_moves, deinitializations, _) = projected_local_move_metrics_v1(function)?;
+    if projected_moves == 0 && deinitializations == 0 {
         return Ok(ProductionSemanticPartialMoveCertificateV1::default());
     }
 
@@ -223,9 +223,11 @@ pub(super) fn validate_partial_moves_v1(
 
 pub(super) fn projected_local_move_metrics_v1(
     function: &SemanticFunctionDeclV1,
-) -> Result<(usize, usize), ProductionSemanticSsaErrorV1> {
+) -> Result<(usize, usize, usize), ProductionSemanticSsaErrorV1> {
     let mut count = 0_usize;
     let mut maximum_depth = 0_usize;
+    let mut deinitializations = 0_usize;
+    let mut deinitialize_depth = 0_usize;
     let mut visit = |operand: &SemanticOperandV1| {
         if let SemanticOperandV1::Move(place) = operand
             && !place.projections().is_empty()
@@ -257,6 +259,14 @@ pub(super) fn projected_local_move_metrics_v1(
                     visit(operation.replacement())?;
                 }
                 SemanticStatementKindV1::Assume(condition) => visit(condition)?,
+                SemanticStatementKindV1::Deinitialize(place)
+                    if is_static_local_deinitialize_v1(place) =>
+                {
+                    deinitializations = deinitializations
+                        .checked_add(1)
+                        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+                    deinitialize_depth = deinitialize_depth.max(place.projections().len());
+                }
                 SemanticStatementKindV1::SetDiscriminant { .. }
                 | SemanticStatementKindV1::Deinitialize(_)
                 | SemanticStatementKindV1::StorageLive(_)
@@ -292,7 +302,18 @@ pub(super) fn projected_local_move_metrics_v1(
             | SemanticTerminatorKindV1::Unreachable => {}
         }
     }
-    Ok((count, maximum_depth))
+    Ok((
+        count,
+        deinitializations,
+        maximum_depth.max(deinitialize_depth),
+    ))
+}
+
+pub(super) fn is_static_local_deinitialize_v1(place: &SemanticPlaceV1) -> bool {
+    place
+        .projections()
+        .iter()
+        .all(|projection| matches!(projection.kind(), SemanticProjectionKindV1::Field(_)))
 }
 
 pub(super) fn visit_assert_operands_v1<E>(
@@ -351,18 +372,20 @@ fn validate_partial_move_statement_v1(
             )
         }
         SemanticStatementKindV1::Store(store) => {
-            validate_partial_move_place_read_v1(
-                function,
-                types,
-                store.destination(),
-                location,
-                state,
-                budget,
-            )?;
             validate_partial_move_operand_v1(
                 function,
                 types,
                 store.value(),
+                location,
+                state,
+                budget,
+            )?;
+            // A store evaluates its value before initializing its destination.
+            // Indirect destinations still require their original pointer holder.
+            validate_partial_move_destination_v1(
+                function,
+                types,
+                store.destination(),
                 location,
                 state,
                 budget,
@@ -433,7 +456,13 @@ fn validate_partial_move_statement_v1(
         }
         SemanticStatementKindV1::Deinitialize(place) => {
             validate_partial_move_place_read_v1(function, types, place, location, state, budget)?;
-            mark_partial_move_v1(place.local().index(), Vec::new(), state, budget)
+            let path = if is_static_local_deinitialize_v1(place) {
+                canonical_partial_move_path_v1(function, types, place, location)?
+                    .ok_or(ProductionSemanticSsaErrorV1::ReplayMismatch)?
+            } else {
+                Vec::new()
+            };
+            mark_partial_move_v1(place.local().index(), path, state, budget)
         }
         SemanticStatementKindV1::StorageLive(local) => {
             state.remove(&local.index());
@@ -677,7 +706,10 @@ fn apply_partial_move_destination_write_v1(
         Err(error) => return Err(error),
     };
     let Some(path) = path else {
-        return Ok(());
+        // An indirect store does not initialize the local pointer holder.
+        // Its address still needs an available holder, including after a
+        // projected move from a wrapper containing the pointer.
+        return validate_partial_move_call_address_v1(destination, location, state, budget);
     };
     if let Some(moved) = state.get_mut(&local) {
         for prefix_length in 0..path.len() {
@@ -988,8 +1020,10 @@ fn canonical_partial_move_path_v1(
                 }
                 SemanticMovePathElementV1::Downcast(variant)
             }
-            SemanticProjectionKindV1::Dereference
-            | SemanticProjectionKindV1::Index(_)
+            // Moving the referent is not a move from the local holder, even
+            // when that holder is reached through a checked static prefix.
+            SemanticProjectionKindV1::Dereference => return Ok(None),
+            SemanticProjectionKindV1::Index(_)
             | SemanticProjectionKindV1::Subslice { .. }
             | SemanticProjectionKindV1::OpaqueCast
             | SemanticProjectionKindV1::Subtype => {

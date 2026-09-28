@@ -1,6 +1,86 @@
 use super::*;
 
 #[test]
+fn aggregate_value_reconstruction_keeps_selected_pointer_representation() {
+    for (space, source_space, legacy_space) in [
+        (0, AddressSpace::Generic, AddressSpace::Global),
+        (1, AddressSpace::Global, AddressSpace::Global),
+        (3, AddressSpace::Workgroup, AddressSpace::Workgroup),
+        (4, AddressSpace::Constant, AddressSpace::Constant),
+        (5, AddressSpace::Private, AddressSpace::Private),
+    ] {
+        let types = types(space);
+        for (representation, expected) in [
+            (ExecutionCfgRepresentationV29::OriginalSource, source_space),
+            (ExecutionCfgRepresentationV29::LegacyAbi, legacy_space),
+        ] {
+            let actual = values(expected);
+            let rebuilt = binding_from_value_defs_with_representation_v29(
+                &types,
+                PAIR,
+                &actual,
+                representation,
+            )
+            .unwrap();
+            let SemanticValueBindingV1::Aggregate(fields) = rebuilt else {
+                panic!("expected aggregate");
+            };
+            assert_eq!(fields.len(), 2);
+            assert!(
+                matches!(&fields[0], SemanticValueBindingV1::Value { id, ty }
+                if *id == ValueId(7) && *ty == pointer(expected))
+            );
+            assert!(
+                matches!(&fields[1], SemanticValueBindingV1::Value { id, ty }
+                if *id == ValueId(8) && *ty == Type::Scalar(ScalarType::U32))
+            );
+            for wrong in [
+                Type::pointer(
+                    Type::Scalar(ScalarType::U32),
+                    expected,
+                    AccessMode::ReadWrite,
+                ),
+                Type::pointer(
+                    Type::Scalar(ScalarType::U64),
+                    expected,
+                    AccessMode::ReadOnly,
+                ),
+                pointer(if expected == AddressSpace::Global {
+                    AddressSpace::Generic
+                } else {
+                    AddressSpace::Global
+                }),
+            ] {
+                let values = [
+                    ValueDef::new(ValueId(7), wrong),
+                    ValueDef::new(ValueId(8), Type::Scalar(ScalarType::U32)),
+                ];
+                assert!(matches!(
+                    binding_from_value_defs_with_representation_v29(
+                        &types,
+                        PAIR,
+                        &values,
+                        representation,
+                    ),
+                    Err(ProductionSemanticKirErrorV1::Unsupported {
+                        detail: "aggregate SSA pointer component type changed",
+                        ..
+                    })
+                ));
+            }
+        }
+        assert!(binding_from_value_defs(&types, PAIR, &values(legacy_space)).is_ok());
+    }
+    assert!(matches!(
+        binding_from_value_defs(&types(0), PAIR, &values(AddressSpace::Generic)),
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            detail: "aggregate SSA pointer component type changed",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn ordinary_carrier_representation_survives_paid_and_unpaid_round_trip() {
     let types = types(0);
     for representation in [

@@ -93,7 +93,18 @@ pub fn analyze_interprocedural_effects_v1(
 pub fn analyze_interprocedural_effects_from_verified_v1(
     verified: VerifiedKernelIrModuleV1<'_>,
 ) -> Result<InterproceduralEffectAnalysisV1, VerificationErrors> {
-    let module = verified.module();
+    analyze_verified_effects_v1(verified.module())
+}
+
+pub(crate) fn analyze_interprocedural_effects_from_storage_v18(
+    verified: crate::VerifiedStorageKernelIrModuleV1<'_>,
+) -> Result<InterproceduralEffectAnalysisV1, VerificationErrors> {
+    analyze_verified_effects_v1(verified.module())
+}
+
+fn analyze_verified_effects_v1(
+    module: &Module,
+) -> Result<InterproceduralEffectAnalysisV1, VerificationErrors> {
     let mut analysis = EffectSummaryBuilderV1 {
         module,
         decisions: BTreeMap::new(),

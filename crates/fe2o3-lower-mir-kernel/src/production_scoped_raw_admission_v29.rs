@@ -1297,6 +1297,7 @@ where
     correspondence.query(budget)?;
     let floor = budget.storage();
     scoped_source_attempt_v29(correspondence.source.cleanup, budget, floor, |budget| {
+        let floor = budget.storage();
         correspondence.source.retain_construction(|| {
             // Exactly one rejected output or superseded error can require
             // destruction. Pay its initial drop and bounded payload retries

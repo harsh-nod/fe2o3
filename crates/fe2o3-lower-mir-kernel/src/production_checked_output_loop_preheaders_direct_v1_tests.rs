@@ -321,6 +321,11 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
         for mutation in [false, true] {
             let run = |limit, storage| {
                 let (prefix, inherited) = promoted(profile, mutation);
+                transition_work_oracle::assert_policy6_endpoints(
+                    prefix.prefix().prefix().prefix(),
+                    transition_work_oracle::Family::Preheaders,
+                    mutation,
+                );
                 let sibling = vec![0x6d_u8; 29];
                 let floor = inherited + std::mem::size_of_val(&sibling) + sibling.capacity();
                 let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
@@ -419,12 +424,19 @@ fn source_loop_preheaders_direct_one_short_storage_observes_phase_with_live_sibl
             // Both targets use the same storage-aware canonical replay schedule.
             // Add the actual inline optional nominal-helper header for this
             // retained source owner.
-            // Work and the exact nested first-denial phase stay unchanged.
+            // One complete P6 replay precedes the map-refused replay. The
+            // independent endpoint census pins the cache work change while
+            // keeping the original storage and nested first-denial phase.
+            let schedule = transition_work_oracle::expected(
+                transition_work_oracle::Family::Preheaders,
+                mutation,
+            );
+            let delta = schedule.complete_replay_delta() + schedule.map_refused_replay_delta();
             let nominal_header = std::mem::size_of::<Option<Box<SealedBf16CallRelationV1>>>();
             let expected = if mutation {
-                (845_738, 2_686_090 + nominal_header)
+                (845_738 + delta, 2_686_090 + nominal_header)
             } else {
-                (65_552, 1_655_673 + nominal_header)
+                (65_552 + delta, 1_655_673 + nominal_header)
             };
             assert_eq!((accepted, peak), expected);
         }

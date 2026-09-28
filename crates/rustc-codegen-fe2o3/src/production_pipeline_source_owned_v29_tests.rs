@@ -60,6 +60,7 @@ fn source_owned_entry_header_pays_owned_aligned_capture_and_result_independently
             &'a Source<'s>,
             &'a Handoff<'a, 's>,
             &'a [AbiRoot<'a>],
+            TargetProfile,
             &'a mut Budget<'w>,
         );
         let expected = size_of::<F>()

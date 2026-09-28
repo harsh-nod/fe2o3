@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_checked_output_transition_work_oracle_v1_tests.rs"]
+mod transition_work_oracle;
+
 #[path = "production_checked_output_licm_source_v1_tests.rs"]
 mod licm_source_tests;
 

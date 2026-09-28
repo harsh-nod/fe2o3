@@ -147,7 +147,7 @@ pub(in crate::production::semantic_ssa) trait SemanticSsaEmissionObserverV1 {
     ) -> Result<(), Self::Error>;
 }
 
-pub(super) struct NoSemanticSsaEmissionObserverV1;
+pub(in crate::production::semantic_ssa) struct NoSemanticSsaEmissionObserverV1;
 
 impl SemanticSsaEmissionObserverV1 for NoSemanticSsaEmissionObserverV1 {
     type Error = Infallible;
@@ -221,7 +221,7 @@ impl SemanticSsaEmissionObserverV1 for NoSemanticSsaEmissionObserverV1 {
     }
 }
 
-pub(super) fn infallible_v1<T>(result: Result<T, Infallible>) -> T {
+pub(in crate::production::semantic_ssa) fn infallible_v1<T>(result: Result<T, Infallible>) -> T {
     match result {
         Ok(value) => value,
         Err(error) => match error {},
@@ -502,6 +502,14 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         place: &SemanticPlaceV1,
         role: SemanticSsaOperandRoleV1,
     ) -> EmissionResultV1<O::Error, B::Error> {
+        self.place_contents_with_definition(place, role, false)
+    }
+    fn place_contents_with_definition(
+        &mut self,
+        place: &SemanticPlaceV1,
+        role: SemanticSsaOperandRoleV1,
+        mut field_definition: bool,
+    ) -> EmissionResultV1<O::Error, B::Error> {
         self.event(
             role,
             SemanticSsaEventRoleV1::BaseUse,
@@ -509,6 +517,7 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
         )?;
         for (ordinal, projection) in place.projections().iter().enumerate() {
             self.visit(SemanticSsaVisitV1::Projection)?;
+            field_definition &= matches!(projection.kind(), SemanticProjectionKindV1::Field(_));
             if let SemanticProjectionKindV1::Index(local) = projection.kind() {
                 self.event(
                     role,
@@ -516,6 +525,13 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
                     SsaEventV1::Use(SsaVariableIdV1::new(local.index())),
                 )?;
             }
+        }
+        if field_definition {
+            self.event(
+                role,
+                SemanticSsaEventRoleV1::DestinationDefine,
+                SsaEventV1::Define(SsaVariableIdV1::new(place.local().index())),
+            )?;
         }
         Ok(())
     }
@@ -563,7 +579,13 @@ impl<B: SemanticSsaEventBufferV1, O: SemanticSsaEmissionObserverV1> EmitterV1<'_
                 SsaEventV1::Define(SsaVariableIdV1::new(place.local().index())),
             )
         } else {
-            self.place_contents(place, role)
+            // A static field update consumes the old holder representation and
+            // creates a new whole-holder version; it does not read removed leaves.
+            self.place_contents_with_definition(
+                place,
+                role,
+                role == SemanticSsaOperandRoleV1::Destination,
+            )
         }
     }
     fn terminator(

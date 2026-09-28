@@ -3221,8 +3221,13 @@ impl SemanticProjectionV1 {
             SemanticProjectionKindV1::ConstantIndex {
                 offset,
                 minimum_length,
-                from_end: _,
-            } if offset >= minimum_length => {
+                from_end,
+            } if if from_end {
+                offset == 0 || offset > minimum_length
+            } else {
+                offset >= minimum_length
+            } =>
+            {
                 return Err(SemanticMirErrorV1::InvalidProjectionShape);
             }
             SemanticProjectionKindV1::Subslice {
@@ -14938,7 +14943,9 @@ fn validate_place(
             SemanticProjectionKindV1::Field(field) => {
                 let field = field as usize;
                 match type_shape(context, current_type) {
-                    SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
+                    SemanticTypeShapeV1::Tuple(fields)
+                    | SemanticTypeShapeV1::Aggregate(fields)
+                    | SemanticTypeShapeV1::Union(fields) => {
                         fields.fields.get(field).copied().ok_or(
                             SemanticMirErrorV1::InvalidTypeOperation {
                                 operation: SemanticTypeOperationV1::Projection,

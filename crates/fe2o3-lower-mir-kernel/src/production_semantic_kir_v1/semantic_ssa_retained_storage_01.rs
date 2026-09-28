@@ -898,8 +898,11 @@ mod retained_representation_tests_v1760 {
                     SemanticUnwindActionV1::Unreachable
                 },
             };
+            // One terminator visit, one condition visit even for a constant,
+            // then two diagnostic operands only on the retained live path.
+            let expected_work = 1 + 1 + if expected { 0 } else { 2 };
             let mut initialized = BTreeSet::from([1]);
-            let mut budget = SemanticRetainedInitializationBudgetV1::new(usize::MAX, usize::MAX);
+            let mut budget = SemanticRetainedInitializationBudgetV1::new(expected_work, usize::MAX);
             budget.charge_storage(1).unwrap();
             apply_retained_terminator_move_effects_v1(
                 &terminator,
@@ -911,7 +914,30 @@ mod retained_representation_tests_v1760 {
             .unwrap();
             assert_eq!(initialized.contains(&1), expected);
             assert_eq!(budget.storage, usize::from(expected));
-            assert_eq!(budget.work, if expected { 1 } else { 3 });
+            assert_eq!(budget.work, expected_work);
+            let mut short_initialized = BTreeSet::from([1]);
+            let mut short =
+                SemanticRetainedInitializationBudgetV1::new(expected_work - 1, usize::MAX);
+            short.charge_storage(1).unwrap();
+            let error = apply_retained_terminator_move_effects_v1(
+                &terminator,
+                representation,
+                &slots,
+                &mut short_initialized,
+                &mut short,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                ProductionSemanticKirErrorV1::ResourceLimit {
+                    resource: ProductionSemanticKirResourceV1::AnalysisWork,
+                    actual,
+                    limit,
+                } if actual == expected_work && limit == expected_work - 1
+            ));
+            assert_eq!(short.work, expected_work);
+            assert_eq!(short_initialized.contains(&1), expected);
+            assert_eq!(short.storage, usize::from(expected));
         }
     }
 }

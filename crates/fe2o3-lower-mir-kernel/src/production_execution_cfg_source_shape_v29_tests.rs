@@ -3,6 +3,9 @@ use super::*;
 mod carrier_tests {
     include!("production_compiler_carrier_representation_v18_tests.rs");
 }
+mod argument_tests {
+    include!("production_call_argument_representation_v29_tests.rs");
+}
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticLayoutIdentityV1,

@@ -1394,8 +1394,9 @@ impl ProductionSourceCorrespondenceV18<'_> {
     {
         self.query(budget)?;
         let floor = budget.storage();
-        let (leaves, retained) =
+        let (mut leaves, retained) =
             scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
+                let floor = budget.storage();
                 self.retain_query((|| {
                     let headers = argument_sum_v1(&[
                         size_of::<ProductionSourceScalarLeavesV18<'_>>(),
@@ -1412,6 +1413,9 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     Ok((leaves, retained))
                 })())
             })?;
+        // The constructor's own callback header has now been settled. Only
+        // the still-live leaf scope contributes to the returned custody floor.
+        leaves.floor = budget.storage();
         let view = ProductionSourceScalarLeavesV18 { leaves: &leaves };
         let caught =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)));

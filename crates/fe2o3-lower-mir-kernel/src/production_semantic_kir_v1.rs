@@ -24470,6 +24470,24 @@ fn binding_from_value_defs(
     binding_from_value_defs_with_validation(types, ty, values, true)
 }
 
+fn binding_from_value_defs_with_representation_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    values: &[ValueDef],
+    representation: ExecutionCfgRepresentationV29,
+) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+    binding_from_value_defs_with_allocation_v29(
+        types,
+        ty,
+        values,
+        true,
+        &mut CompilerCarrierAllocationV29 {
+            budget: None,
+            representation,
+        },
+    )
+}
+
 fn binding_from_value_defs_with_validation(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,

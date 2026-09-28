@@ -52,6 +52,14 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             cursor.check_ledger(budget)?;
             result?;
         }
+        let representation = if execution
+            .as_ref()
+            .is_some_and(|cursor| cursor.references.is_some())
+        {
+            ExecutionCfgRepresentationV29::OriginalSource
+        } else {
+            ExecutionCfgRepresentationV29::LegacyAbi
+        };
         let mut locals = vec![None; function.locals().len()];
         let option_producers = semantic_option_producers_v1(function, callables)
             .map_err(|error| unsupported(0, None, None, error.detail()))?;
@@ -84,7 +92,12 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         values,
                     } => (
                         *local,
-                        binding_from_value_defs(types, *semantic_type, values)?,
+                        binding_from_value_defs_with_representation_v29(
+                            types,
+                            *semantic_type,
+                            values,
+                            representation,
+                        )?,
                     ),
                 };
                 locals[local] = Some(value);

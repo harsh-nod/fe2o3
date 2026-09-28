@@ -253,7 +253,26 @@ fn with_assert_pending(
         assertion_calls_owner(expected, diamond),
         |instances, budget| {
             let floor = budget.storage();
+            let before_settlement = CAPABILITY_ORIGIN_SETTLEMENT_V29.with(|row| row.get());
             let lowered = lower_scalar_instances(instances, budget);
+            let after_settlement = CAPABILITY_ORIGIN_SETTLEMENT_V29.with(|row| row.get());
+            let retired_queries: usize = (0..lowered.len())
+                .map(|index| {
+                    scalar_transport_planning_credits_v29(
+                        instances,
+                        instances.id_at(index).unwrap(),
+                    )
+                    .1
+                })
+                .sum();
+            assert_eq!(after_settlement[0] - before_settlement[0], lowered.len());
+            // The fixed header has its own independent equation/cut tests.
+            // Query/map bytes here come from the source-only oracle, not the
+            // measured credit or production capability resolver.
+            assert_eq!(
+                after_settlement[1] - before_settlement[1],
+                lowered.len() * capability_origin_storage_headers_v29().unwrap() + retired_queries,
+            );
             let input_storage: usize = lowered
                 .iter()
                 .enumerate()
@@ -308,6 +327,21 @@ fn with_assert_pending(
             assert_eq!(budget.storage(), floor);
         },
     );
+}
+
+#[test]
+fn assertion_output_credit_excludes_only_settled_capability_query_scratch() {
+    for expected in [false, true] {
+        for diamond in [false, true] {
+            with_assert_pending(expected, diamond, |pending, _, _| {
+                assert!(pending.sidecars.rows.iter().any(|row| {
+                    row.instance_assert_origins
+                        .as_ref()
+                        .is_some_and(|capture| !capture.records.is_empty())
+                }));
+            });
+        }
+    }
 }
 
 fn capture(pending: &PendingScopedRootEmissionV29, index: usize) -> &InstanceAssertCaptureV1 {

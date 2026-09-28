@@ -149,18 +149,20 @@ pub(super) fn scalar_archive_storage_v1(
         .unwrap()
         .checked_add(carrier_scratch)
         .unwrap()
-        .checked_add(scalar_transport_planning_storage_v29(instances, instance))
+        .checked_add(scalar_transport_planning_credits_v29(instances, instance).0)
         .unwrap()
 }
 
-fn scalar_transport_planning_storage_v29(
+pub(super) fn scalar_transport_planning_credits_v29(
     instances: &ProductionCallInstancePlanV1<'_>,
     instance: ProductionCallInstanceIdV1,
-) -> usize {
+) -> (usize, usize) {
     use std::mem::size_of;
     // A test-only storage model for whole-place scalar fixtures. It walks the
     // original source and captured transport roster, never the measured ledger
     // or production resolver. Capability/borrow/projected inputs are excluded.
+    // Outer alias-visited scratch remains paid; scoped resolver query/map
+    // credit is retired before the transport plan is returned.
     #[allow(dead_code)]
     enum Key {
         Local(u32, u32),
@@ -217,7 +219,7 @@ fn scalar_transport_planning_storage_v29(
         );
     }
     if transported.is_empty() {
-        return 0;
+        return (0, 0);
     }
     let mut definitions = vec![Vec::new(); function.locals().len()];
     for block in function.blocks() {
@@ -255,6 +257,7 @@ fn scalar_transport_planning_storage_v29(
     }
     let (mut memo, mut visiting) = (BTreeSet::new(), BTreeSet::new());
     let mut bytes = 0;
+    let mut retired = 0;
     for local in transported {
         bytes += size_of::<BTreeSet<u32>>();
         let mut visited = BTreeSet::new();
@@ -271,7 +274,7 @@ fn scalar_transport_planning_storage_v29(
                 visited.insert(current),
                 "fixture transport aliases are acyclic"
             );
-            bytes += resolve(current, &definitions, &promoted, &mut memo, &mut visiting);
+            retired += resolve(current, &definitions, &promoted, &mut memo, &mut visiting);
             if declaration.role().is_entry_argument() {
                 break;
             }
@@ -285,7 +288,7 @@ fn scalar_transport_planning_storage_v29(
         }
     }
     assert!(visiting.is_empty());
-    bytes
+    (bytes, retired)
 }
 
 fn with_plan(test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentBudgetV1<'_>)) {

@@ -1128,6 +1128,8 @@ fn lower_compiler_module_with_ordered_context(
     // Join before omitting only the redundant raw-module verification pass.
     if let Some(OrderedModuleOwner::CompositionV1(owner)) = ordered_owner {
         ordered_program_composition_v1::validate_owner_context(module, target, owner)?;
+    } else if let Some(input @ SemanticAnchorInputV1::NativeV18(_)) = semantic_anchor_identity {
+        input.validate(module)?;
     } else {
         verify_module(module).map_err(LoweringErrors::verification)?;
     }
@@ -1143,10 +1145,24 @@ fn lower_compiler_module_with_ordered_context(
         Some(OrderedModuleOwner::CompositionV1(owner)) => {
             v12_preflight::reject_unsupported_v17_module(owner.canonical())?;
         }
-        None => reject_unsupported_v12_module(module)?,
+        None => match semantic_anchor_identity {
+            Some(input @ SemanticAnchorInputV1::NativeV18(owner)) => {
+                input.validate(module)?;
+                v12_preflight::reject_unsupported_v18_module(owner)?;
+            }
+            _ => reject_unsupported_v12_module(module)?,
+        },
     }
 
-    if let Some(exact_target) = target.exact_target_binding() {
+    // V18 source KIR is target-neutral. Its typed selection is inert emission
+    // input; all declared capabilities are still validated below. Historical
+    // and V12 entries retain their required exact-target capability rows.
+    if let Some(exact_target) = target.exact_target_binding()
+        && !matches!(
+            semantic_anchor_identity,
+            Some(SemanticAnchorInputV1::NativeV18(_))
+        )
+    {
         for kernel in &module.kernels {
             let entry = kernel_entry_function(module, kernel)?;
             require_exact_kernel_binding(module, kernel, entry, exact_target)?;

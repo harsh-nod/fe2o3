@@ -6,19 +6,42 @@ use fe2o3_kernel_ir::{Module, OperationKind, Type};
 /// Check the whole module before graph selection or textual emission. Uncalled
 /// declarations, unreachable blocks, and dead results are still input syntax.
 pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), LoweringErrors> {
-    reject_unsupported_module(module, None)
+    reject_unsupported_module(module, None, false)
 }
 
 pub(super) fn reject_unsupported_v16_module(
     owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16,
 ) -> Result<(), LoweringErrors> {
-    reject_unsupported_module(owner.module(), Some(OrderedProfile::RegionV16))
+    reject_unsupported_module(owner.module(), Some(OrderedProfile::RegionV16), false)
 }
 
 pub(super) fn reject_unsupported_v17_module(
     owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17,
 ) -> Result<(), LoweringErrors> {
-    reject_unsupported_module(owner.module(), Some(OrderedProfile::ProgramV17))
+    reject_unsupported_module(owner.module(), Some(OrderedProfile::ProgramV17), false)
+}
+
+/// Only a genuine V18 owner may retain inert scalar/unit layout metadata.
+/// No storage type or operation is admitted by this metadata-only exception.
+pub(super) fn reject_unsupported_v18_module(
+    owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+) -> Result<(), LoweringErrors> {
+    use fe2o3_kernel_ir::StorageLayoutKindV1;
+    for row in &owner.module().storage_layouts {
+        let inert_scalar = match &row.kind {
+            StorageLayoutKindV1::Scalar(_) => true,
+            StorageLayoutKindV1::Record(fields) => fields.is_empty() && row.size == 0,
+            _ => false,
+        };
+        if !inert_scalar {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(owner.module()),
+                LoweringDiagnosticCode::UnsupportedType,
+                "V18 scalar LLVM lowering admits only inert scalar/unit layout metadata",
+            ));
+        }
+    }
+    reject_unsupported_module(owner.module(), None, true)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -30,8 +53,9 @@ enum OrderedProfile {
 fn reject_unsupported_module(
     module: &Module,
     ordered: Option<OrderedProfile>,
+    scalar_v18_metadata: bool,
 ) -> Result<(), LoweringErrors> {
-    if !module.storage_layouts.is_empty() {
+    if !scalar_v18_metadata && !module.storage_layouts.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
             LoweringDiagnosticCode::UnsupportedType,

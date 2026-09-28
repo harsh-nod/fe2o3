@@ -41,11 +41,13 @@ impl<'a> ExecutionLifecycleSourceV29<'a> {
         if let Some(profile) = kernel_argument_abi {
             profile.check(owner, budget)?;
         }
-        crate::with_checked_execution_source_v29(owner, launch, input, budget, |_, _| Ok(()))
-            .map_err(|error| match error {
-                crate::ProductionContextRootErrorV29::Resource(error) => error.into(),
-                _ => execution_lifecycle_error_v29(),
-            })?;
+        crate::production_execution_source_input_v29::check_source_owned_census_v18(
+            owner, launch, input, budget,
+        )
+        .map_err(|error| match error {
+            crate::ProductionContextRootErrorV29::Resource(error) => error.into(),
+            _ => execution_lifecycle_error_v29(),
+        })?;
         Ok(Self {
             owner,
             launch,

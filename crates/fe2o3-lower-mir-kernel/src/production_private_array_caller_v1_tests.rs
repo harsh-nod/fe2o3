@@ -482,7 +482,10 @@ fn checked_owner() -> ProductionPreRankedKirOwnerV1 {
 fn private_array_actual_checked_failure_rolls_back_rows_and_reused_value_ids_not_work() {
     let owner = checked_owner();
     let source = &owner.semantic_ssa().source_semantic().functions()[0];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
     let mut lowering = actual_lowering(&owner, 10_000);
+    lowering.emission_work = Some(&mut budget);
     let mut block = BasicBlock::new(BlockId(0));
     lowering
         .begin_block(SemanticBlockIdV1::from_index(0), &mut block)

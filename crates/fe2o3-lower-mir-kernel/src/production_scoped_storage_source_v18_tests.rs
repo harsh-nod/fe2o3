@@ -186,3 +186,5 @@ fn source_reconstruction_rejects_a_structurally_valid_unused_table_extension() {
     }).unwrap();
     assert_eq!(budget.storage(), 0);
 }
+
+include!("production_original_inline_census_v1767_tests.rs");

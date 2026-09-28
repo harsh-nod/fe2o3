@@ -18,6 +18,7 @@ mod distinct_invocation_v1_tests;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
 pub(crate) use guarded_access_v1::origins::structural_origins_v1;
+mod closed_scalar_v18;
 mod ordered_composition_v1;
 mod physical_entry_v20;
 mod physical_global_copy_v21;
@@ -26,6 +27,7 @@ mod pointer_derivation;
 mod private_slots;
 mod receipt_v1;
 mod storage_discriminant_v18;
+pub use closed_scalar_v18::*;
 
 pub use complete_body_v19::derive_complete_body_memory_obligations_v19;
 pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;
@@ -828,14 +830,34 @@ fn derive_kernel_memory_obligations_with_composition_context(
     composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     let module = verified.module();
+    let effect_summaries = analyze_interprocedural_effects_from_verified_v1(verified)
+        .expect("verified module remains valid while deriving effect summaries");
+    derive_kernel_memory_obligations_from_authenticated_module(
+        module,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        composition,
+        &effect_summaries,
+    )
+}
+
+fn derive_kernel_memory_obligations_from_authenticated_module(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+    effect_summaries: &crate::InterproceduralEffectAnalysisV1,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     let ordered_composition =
         composition.is_some_and(|owner| ordered_composition_v1::contains(owner, module, kernel_id));
     let complete_body_v19 = canonical_v19.is_some_and(|owner| {
         std::ptr::eq(module, owner.module())
             && complete_body_v19::contains_verified_complete_body(owner, kernel_id)
     });
-    let effect_summaries = analyze_interprocedural_effects_from_verified_v1(verified)
-        .expect("verified module remains valid while deriving effect summaries");
     let kernel = module
         .kernels
         .iter()

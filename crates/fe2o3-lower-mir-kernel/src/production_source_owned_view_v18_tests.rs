@@ -1333,6 +1333,20 @@ fn source_owned_entrance_retains_repeated_helper_and_cyclic_invocation_coordinat
 fn source_preparation_boundary_header_has_independent_exact_and_short_costs() {
     let header = size_of::<ScopedSourceCleanupBoundaryV29>()
         + size_of::<std::thread::Result<SourceOwnedResultV18<ProductionPreparedSourceV18>>>();
+    type Capture<'a> = (
+        ProductionSemanticSsaOwnerV1,
+        crate::ProductionSourceLaunchRosterV1,
+        crate::ProductionExecutionSourceInputV29<'a>,
+        Option<ProductionKernelArgumentAbiInputV18<'a>>,
+        ProductionSemanticKirLimitsV1,
+        usize,
+        &'a std::cell::Cell<bool>,
+    );
+    let callback = cleanup_callback_header_oracle_v1766::<
+        ProductionPreparedSourceV18,
+        ProductionSourceOwnedViewErrorV18,
+        Capture<'_>,
+    >();
     for short in [false, true] {
         for preexisting in [false, true] {
             let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
@@ -1361,11 +1375,7 @@ fn source_preparation_boundary_header_has_independent_exact_and_short_costs() {
                         Err(EntranceError::Resource(ArgumentResourceV1::Storage(_)))
                     ));
                     assert_eq!(budget.storage(), entry - capture);
-                    let next = if short {
-                        header
-                    } else {
-                        header + size_of::<ProductionPreparedSourceV18>()
-                    };
+                    let next = if short { header } else { header + callback };
                     assert_eq!(budget.failed_storage(), Some(entry + next));
                     assert_eq!(
                         budget.work(),
@@ -1375,6 +1385,48 @@ fn source_preparation_boundary_header_has_independent_exact_and_short_costs() {
                 },
             );
         }
+    }
+}
+
+#[test]
+fn prepared_source_callback_header_refusal_drops_capture_and_restores_adopted_credit() {
+    struct Capture<'a>(&'a std::cell::Cell<usize>);
+    impl Drop for Capture<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    for preexisting in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let prepared = prepared_source_fixture(ModuleFixture::Ordinary, preexisting, &mut budget);
+        let retained = prepared.adopted_storage();
+        let header = size_of::<ScopedSourceCleanupBoundaryV29>()
+            + size_of::<std::thread::Result<Result<(), SourceConsumerErrorV18<EntranceError>>>>();
+        let filler = MODULE_LIMIT - budget.storage() - header;
+        budget.reserve_storage(filler).unwrap();
+        let floor = budget.storage() - retained;
+        let before = budget.work();
+        let drops = std::cell::Cell::new(0);
+        let captured = Capture(&drops);
+        let result = prepared.with_checked_source_v18(
+            &mut budget,
+            move |_, _| -> SourceOwnedResultV18<()> {
+                std::hint::black_box(&captured);
+                panic!("callback frame refusal must precede source replay and consumer entry");
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(EntranceError::Resource(ArgumentResourceV1::Storage(error)))
+                if error.actual() > MODULE_LIMIT && error.limit() == MODULE_LIMIT
+        ));
+        assert_eq!(drops.get(), 1);
+        assert_eq!((budget.storage(), budget.work()), (floor, before));
+        assert_eq!(budget.peak_storage(), MODULE_LIMIT);
+        budget.release_storage(filler).unwrap();
+        assert_eq!(budget.storage(), MODULE_FLOOR);
     }
 }
 

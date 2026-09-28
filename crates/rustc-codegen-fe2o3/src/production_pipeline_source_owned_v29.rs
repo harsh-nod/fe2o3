@@ -1,6 +1,7 @@
 //! Fixed live-rustc MIR29 import and lexical V18 closed scalar continuation.
 //! This is not the default compiler route or final ranked/formal/target authority.
 use super::*;
+use fe2o3_amd_target::ProductionAmdTargetProfileV1 as TargetProfile;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 pub(crate) use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -28,6 +29,7 @@ pub(crate) enum Error {
     Descriptor(crate::compiler_descriptor::CompilerDescriptorError),
     Source(ProductionSourceOwnedViewErrorV18),
     Handoff(ProductionClosedScalarHandoffErrorV18),
+    TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
     Resource(Resource),
     Unsupported(&'static str),
 }
@@ -43,6 +45,7 @@ impl std::error::Error for Error {
             Self::Descriptor(error) => Some(error),
             Self::Source(error) => Some(error),
             Self::Handoff(error) => Some(error),
+            Self::TargetLlvm(error) => Some(error),
             Self::Resource(error) => Some(error),
             Self::Unsupported(_) => None,
         }
@@ -71,6 +74,11 @@ impl From<ProductionClosedScalarHandoffErrorV18> for Error {
 impl From<Resource> for Error {
     fn from(error: Resource) -> Self {
         Self::Resource(error)
+    }
+}
+impl From<target_result::ClosedScalarTargetLlvmErrorV29> for Error {
+    fn from(error: target_result::ClosedScalarTargetLlvmErrorV29) -> Self {
+        Self::TargetLlvm(error)
     }
 }
 
@@ -107,6 +115,7 @@ fn entry_headers<R, F>() -> Result<usize, Resource> {
         &'a Source<'source>,
         &'a Handoff<'a, 'source>,
         &'a [AbiRoot<'a>],
+        TargetProfile,
         &'a mut Budget<'work>,
     );
     [
@@ -150,7 +159,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         self.with_source_owned_scalar_limits_v29(
             WORK_LIMIT,
             STORAGE_LIMIT,
-            move |source, handoff, _, budget| consume(source, handoff, budget),
+            move |source, handoff, _, _, budget| consume(source, handoff, budget),
         )
     }
 
@@ -165,6 +174,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &'view Source<'source>,
             &Handoff<'view, 'source>,
             &[AbiRoot<'abi>],
+            TargetProfile,
             &mut Budget<'work>,
         ) -> Result<R, Error>,
     {
@@ -244,6 +254,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         drop(contexts);
         let original_sha = *semantic_ssa.source_semantic_sha256();
         let original_ssa = semantic_ssa.identity();
+        let target = bindings.rustc_target.profile();
         let abi = crate::compiler_descriptor::source_owned_v29::ScalarAbi::capture(
             &bindings.typed_descriptor_roots,
             &mut budget,
@@ -286,7 +297,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             // The actual F is owned by this catch, including its destructor.
             let original_roots = &roots;
             let result = catch_unwind(AssertUnwindSafe(move || {
-                consume(source, borrowed, original_roots, callback_budget)
+                consume(source, borrowed, original_roots, target, callback_budget)
             }));
             let settled = handoff.discard(budget).map_err(Error::from);
             match result {
@@ -331,7 +342,11 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &mut Budget<'work>,
         ) -> Result<R, Error>,
     {
-        self.with_source_owned_scalar_limits_v29(WORK_LIMIT, STORAGE_LIMIT, consume)
+        self.with_source_owned_scalar_limits_v29(
+            WORK_LIMIT,
+            STORAGE_LIMIT,
+            move |source, handoff, roots, _, budget| consume(source, handoff, roots, budget),
+        )
     }
 
     pub(crate) fn with_source_owned_scalar_test_limits_v29<R, F>(
@@ -347,10 +362,20 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &mut Budget<'work>,
         ) -> Result<R, Error>,
     {
-        self.with_source_owned_scalar_limits_v29(WORK_LIMIT, storage, consume)
+        self.with_source_owned_scalar_limits_v29(
+            WORK_LIMIT,
+            storage,
+            move |source, handoff, roots, _, budget| consume(source, handoff, roots, budget),
+        )
     }
 }
 
 #[cfg(test)]
 #[path = "production_pipeline_source_owned_v29_tests.rs"]
 mod tests;
+
+#[path = "production_pipeline_source_owned_target_llvm_v29.rs"]
+mod target_llvm;
+
+#[path = "production_pipeline_source_owned_target_result_v29.rs"]
+pub(crate) mod target_result;

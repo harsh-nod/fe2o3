@@ -431,12 +431,16 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 arguments,
             },
         )?;
-        let binding = match self
-            .source_reference_call_result_v29(block, call, callee, &results, &nominal)?
-        {
-            Some(binding) => binding,
-            None => binding_from_value_defs(self.types, signature.result_semantic_type, &results)?,
-        };
+        let binding =
+            match self.source_reference_call_result_v29(block, call, callee, &results, &nominal)? {
+                Some(binding) => binding,
+                None => binding_from_value_defs_with_representation_v29(
+                    self.types,
+                    signature.result_semantic_type,
+                    &results,
+                    self.control_flow_ssa.representation,
+                )?,
+            };
         let nominal_bytes = argument_sum_v1(&[
             std::mem::size_of::<Vec<Option<ExecutionCfgLeafV29>>>(),
             argument_product_v1(

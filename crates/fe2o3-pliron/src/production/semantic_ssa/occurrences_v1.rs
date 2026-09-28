@@ -481,11 +481,21 @@ pub(super) trait ReplayDriver {
     fn start(&mut self, functions: usize) -> Result<(), Self::Error>;
     fn input(
         &mut self,
+        function_id: SemanticFunctionIdV1,
         function: &SemanticFunctionDeclV1,
         types: Option<&[SemanticTypeDeclV1]>,
         callables: &[SemanticCallableDeclV1],
         transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
-    ) -> Result<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize), Self::Error>;
+        limits: ProductionSemanticSsaLimitsV1,
+    ) -> Result<
+        (
+            SsaConstructionInputV1,
+            Vec<SsaVariableIdV1>,
+            usize,
+            Option<SemanticSsaAuxiliaryResourcesV1>,
+        ),
+        Self::Error,
+    >;
     fn join(
         &mut self,
         input: &SsaConstructionInputV1,
@@ -502,17 +512,52 @@ impl ReplayDriver for PlainReplay {
     }
     fn input(
         &mut self,
+        function_id: SemanticFunctionIdV1,
         function: &SemanticFunctionDeclV1,
         types: Option<&[SemanticTypeDeclV1]>,
         callables: &[SemanticCallableDeclV1],
         transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
-    ) -> Result<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize), Self::Error> {
-        Ok(semantic_function_ssa_input_v1(
-            function,
-            types,
-            callables,
-            transparent_borrows,
-        ))
+        limits: ProductionSemanticSsaLimitsV1,
+    ) -> Result<
+        (
+            SsaConstructionInputV1,
+            Vec<SsaVariableIdV1>,
+            usize,
+            Option<SemanticSsaAuxiliaryResourcesV1>,
+        ),
+        Self::Error,
+    > {
+        use super::adapter::{emission_v1, prepared_v1};
+        use super::holder_availability_v1::{Account, PlainMeter};
+        let mut observer = emission_v1::NoSemanticSsaEmissionObserverV1;
+        let prepared =
+            emission_v1::infallible_v1(prepared_v1::prepare_semantic_ssa_adapter_with_observer_v1(
+                function,
+                types,
+                callables,
+                transparent_borrows,
+                &mut observer,
+            ));
+        if prepared.field_update_count() == 0 {
+            let entries = emission_v1::infallible_v1(prepared.into_entries(&mut observer));
+            let (input, implicit, work) = emission_v1::infallible_v1(entries.finish(&mut observer));
+            return Ok((input, implicit, work, None));
+        }
+        let mut meter = PlainMeter;
+        let mut account = Account::new(function_id, limits);
+        let mut markers = account.markers(
+            prepared.field_update_count(),
+            prepared.field_update_recording_work(),
+            &mut meter,
+        )?;
+        let mut entries = emission_v1::infallible_v1(
+            prepared.into_entries_recording(&mut observer, Some(&mut markers)),
+        );
+        let values = emission_v1::infallible_v1(entries.entry_values(&mut observer));
+        entries.refine_holders(&values, &markers, &mut account, &mut meter)?;
+        let resources = account.finish(markers, &mut meter)?;
+        let (input, implicit, work) = entries.finish_prebuilt(values);
+        Ok((input, implicit, work, Some(resources)))
     }
     fn join(
         &mut self,

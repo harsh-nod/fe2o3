@@ -8,6 +8,9 @@ use fe2o3_lower_mir_kernel::{
 
 const SOURCE_OWNED_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::source_owned_scalar_child";
 
+#[path = "production_rustc_driver_source_owned_target_llvm_v29_tests.rs"]
+mod target_llvm_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ScalarResult {
     source: [u8; 32],

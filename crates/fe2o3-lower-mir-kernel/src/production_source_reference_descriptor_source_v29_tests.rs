@@ -398,3 +398,5 @@ fn runtime_descriptor_source_fixtures_have_exact_reachable_rosters_and_original_
         assert_eq!(owner.source_semantic().types().len(), 6);
     }
 }
+
+include!("production_descriptor_failure_tail_v1766_tests.rs");

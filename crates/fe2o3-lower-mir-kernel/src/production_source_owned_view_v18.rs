@@ -215,7 +215,10 @@ impl ProductionPendingScopedSourceOwnerV29 {
                 return Err(error.into());
             }
         };
-        boundary.run(budget, move |cleanup, budget| {
+        let entered = std::cell::Cell::new(false);
+        let entry = &entered;
+        let result = boundary.run(budget, move |cleanup, budget| {
+            entry.set(true);
             let floor = budget
                 .storage()
                 .checked_sub(existing)
@@ -267,7 +270,13 @@ impl ProductionPendingScopedSourceOwnerV29 {
                     ledger: budget.work_ledger_identity_v1(),
                 })
             })
-        })
+        });
+        // A rejected callback frame drops its owned source before the inner
+        // attempt can adopt the incoming occurrence reservation.
+        if !entered.get() {
+            let _ = budget.release_storage(existing);
+        }
+        result
     }
 
     /// Replays this exact source owner before a same-ledger borrowed continuation.
@@ -452,7 +461,11 @@ impl ProductionPreparedSourceV18 {
                 return Err(error.into());
             }
         };
-        boundary.run(budget, move |cleanup, budget| {
+        let retained = self.retained;
+        let entered = std::cell::Cell::new(false);
+        let entry = &entered;
+        let result = boundary.run(budget, move |cleanup, budget| {
+            entry.set(true);
             let floor = budget
                 .storage()
                 .checked_sub(self.retained)
@@ -479,7 +492,13 @@ impl ProductionPreparedSourceV18 {
             }));
             drop(pending);
             source_owned_finish_callback_v18(caught, None, Ok(()), cleanup, budget, retained)
-        })
+        });
+        // Callback-frame refusal precedes adoption, but the owned prepared
+        // source has already dropped inside the checked boundary.
+        if !entered.get() {
+            let _ = budget.release_storage(retained);
+        }
+        result
     }
 }
 

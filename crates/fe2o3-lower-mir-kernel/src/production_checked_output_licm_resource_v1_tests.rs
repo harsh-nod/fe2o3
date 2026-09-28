@@ -42,6 +42,11 @@ type Measurements = (
 
 fn measured(profile: Profile, mutation: bool, limit: usize, storage: usize) -> Measurements {
     let (prefix, inherited) = direct::prefix(profile, mutation);
+    transition_work_oracle::assert_policy6_endpoints(
+        prefix.prefix().prefix().prefix().prefix(),
+        transition_work_oracle::Family::Licm,
+        mutation,
+    );
     let sibling = vec![0x6d_u8; 43];
     let floor = inherited + std::mem::size_of_val(&sibling) + sibling.capacity();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
@@ -123,22 +128,27 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
-            // Pin the storage-aware representation's exact replay schedule.
-            // The optional nominal-helper relation contributes one header for
-            // this retained source owner; work and first-denial phase are fixed.
+            // Three complete P6 replays on success; the storage-short run
+            // completes two, then stops at the third P6 map before its O/I check.
+            // Keep the old baseline separate from the independently derived
+            // selected-edge cache delta. Storage and denial chronology are fixed.
+            let schedule =
+                transition_work_oracle::expected(transition_work_oracle::Family::Licm, mutation);
+            let complete = schedule.complete_replay_delta();
+            let partial = schedule.map_refused_replay_delta();
             let nominal_header = std::mem::size_of::<Option<Box<SealedBf16CallRelationV1>>>();
             let expected = if mutation {
                 (
-                    2_733_569,
+                    2_733_569 + 3 * complete,
                     3_335_432 + nominal_header,
-                    2_686_896,
+                    2_686_896 + 2 * complete + partial,
                     3_309_581 + nominal_header,
                 )
             } else {
                 (
-                    249_631,
+                    249_631 + 3 * complete,
                     1_949_698 + nominal_header,
-                    238_296,
+                    238_296 + 2 * complete + partial,
                     1_933_733 + nominal_header,
                 )
             };
