@@ -2,7 +2,6 @@
 // payloads. Native authentication, clocks and the HostMetadataTable adapter are
 // explicit boundaries, not new authority in this settlement proof.
 include!("compute_pipeline_publication_v1.rs");
-use vstd::assert_seqs_equal;
 
 // Verus must prove the standard-library unreachable formatter is never reached.
 // unreached has a false precondition; this does not assume away panic paths.
@@ -306,15 +305,15 @@ fn settle_returned<R, P, S>(pipeline: &mut RuntimeComputePipelineV1<PublicationF
             timing_preserves_intact(before, identity, duration, None);
         }],
         [proof {
-            assert_seqs_equal!(pipeline@.slots, withdrawn(before, identity).slots);
+            assert(pipeline@.slots =~= withdrawn(before, identity).slots);
         }],
         [proof {
-            assert_seqs_equal!(pipeline@.slots, timed(before, identity, duration, Some(time)).slots);
+            assert(pipeline@.slots =~= timed(before, identity, duration, Some(time)).slots);
             assert(pipeline@ == timed(before, identity, duration, Some(time)));
             timing_preserves_intact(before, identity, duration, Some(time));
         }], [],
         [proof {
-            assert_seqs_equal!(pipeline@.slots, installed(timed(before, identity, duration, Some(time)), identity).slots);
+            assert(pipeline@.slots =~= installed(timed(before, identity, duration, Some(time)), identity).slots);
         }])
 }
 
