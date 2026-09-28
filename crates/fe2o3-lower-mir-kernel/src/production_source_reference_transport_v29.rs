@@ -1,3 +1,5 @@
+include!("production_source_reference_owned_types_v29.rs");
+
 // Plain source anchors retain the original root's authenticated direct-owner
 // representation. In particular, a DisjointSlice is one Slice, not its fields.
 fn source_reference_anchor_type_v29(
@@ -240,15 +242,17 @@ fn source_reference_rebuild_node_v29(
                 std::mem::size_of::<SemanticSourceReferenceBindingV29>(),
             )?;
             let mut payload = source_reference_owned_vec_v29(plan, types.len(), budget)?;
-            for ty in &types {
+            // This iterator finishes before recursive rebuild or external use.
+            // Its vector shell and moved boxes retain their original credits.
+            for ty in types {
                 budget.source_reference_charge_v29(plan, 1)?;
                 let value = values.next().ok_or_else(execution_cfg_error_v29)?;
-                if &value.ty != ty {
+                if value.ty != ty {
                     return Err(execution_cfg_error_v29());
                 }
                 payload.push(ValueDef::new(
                     value.id,
-                    execution_cfg_clone_type_v29(ty, budget)
+                    source_reference_move_type_v29(ty, budget)
                         .inspect_err(|error| source_reference_record_failure_v29(plan, error))?,
                 ));
             }

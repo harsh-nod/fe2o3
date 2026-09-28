@@ -9,6 +9,9 @@ mod slot_demand_tests;
 #[path = "production_source_reference_enum_read_guards_v29_tests.rs"]
 mod read_guard_tests;
 
+#[path = "production_source_reference_owned_types_source_v29_tests.rs"]
+mod owned_type_tests;
+
 const ENUM: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 const TAGS: [u128; 3] = [3, 17, 250];
 

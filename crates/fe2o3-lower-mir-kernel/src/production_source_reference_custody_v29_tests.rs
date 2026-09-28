@@ -515,7 +515,23 @@ fn source_reference_large_aligned_result_prepays_both_live_slots() {
         + 2 * size_of::<Result<(), Box<dyn std::any::Any + Send>>>()
         + size_of::<std::ops::Range<usize>>()
         + size_of::<usize>()
-        + size_of::<bool>();
+        + size_of::<bool>()
+        + size_of::<std::vec::IntoIter<Type>>()
+        + size_of::<&mut std::vec::IntoIter<Type>>()
+        + size_of::<Option<Type>>()
+        + size_of::<Type>()
+        + size_of::<(Type, &mut dyn SemanticEmissionBudgetV1)>()
+        + size_of::<Result<Type, ProductionSemanticKirErrorV1>>()
+        + size_of::<&Type>()
+        + size_of::<&Box<Type>>()
+        + size_of::<&fe2o3_kernel_ir::PointerType>()
+        + size_of::<&fe2o3_kernel_ir::SliceType>()
+        + size_of::<usize>()
+        + size_of::<(&mut usize, &mut dyn SemanticEmissionBudgetV1)>()
+        + size_of::<Option<usize>>()
+        + size_of::<Result<usize, ArgumentResourceV1>>()
+        + size_of::<Result<(), ArgumentResourceV1>>()
+        + size_of::<Result<(), ProductionSemanticKirErrorV1>>();
     assert_eq!(
         source_reference_headers_v29::<Large<'_>>().unwrap(),
         expected
@@ -1035,7 +1051,23 @@ fn source_reference_fixed_header_exact_and_one_short_are_source_derived() {
         + 2 * size_of::<Result<(), Box<dyn std::any::Any + Send>>>()
         + size_of::<std::ops::Range<usize>>()
         + size_of::<usize>()
-        + size_of::<bool>();
+        + size_of::<bool>()
+        + size_of::<std::vec::IntoIter<Type>>()
+        + size_of::<&mut std::vec::IntoIter<Type>>()
+        + size_of::<Option<Type>>()
+        + size_of::<Type>()
+        + size_of::<(Type, &mut dyn SemanticEmissionBudgetV1)>()
+        + size_of::<Result<Type, ProductionSemanticKirErrorV1>>()
+        + size_of::<&Type>()
+        + size_of::<&Box<Type>>()
+        + size_of::<&fe2o3_kernel_ir::PointerType>()
+        + size_of::<&fe2o3_kernel_ir::SliceType>()
+        + size_of::<usize>()
+        + size_of::<(&mut usize, &mut dyn SemanticEmissionBudgetV1)>()
+        + size_of::<Option<usize>>()
+        + size_of::<Result<usize, ArgumentResourceV1>>()
+        + size_of::<Result<(), ArgumentResourceV1>>()
+        + size_of::<Result<(), ProductionSemanticKirErrorV1>>();
     assert_eq!(source_reference_headers_v29::<()>().unwrap(), expected);
     with_instances(|instances, _| {
         for short in [false, true] {

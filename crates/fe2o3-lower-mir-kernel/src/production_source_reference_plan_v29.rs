@@ -283,6 +283,9 @@ fn source_reference_headers_v29<R>() -> Result<usize, ArgumentResourceV1> {
         size_of::<usize>(),
         size_of::<bool>(),
         source_reference_cleanup_headers_v29()?,
+        // Only one owned payload iterator/type walk is live: Loan/EnumView
+        // completes it before any recursive rebuild or consumer invocation.
+        source_reference_owned_type_headers_v29()?,
     ])
 }
 
