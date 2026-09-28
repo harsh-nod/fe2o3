@@ -2166,10 +2166,9 @@ impl KfdRuntimeBackendV1 {
                 } else {
                     self.pending_compute.insert(pending.id, pending);
                 }
-                let _ = self.terminal_error(
-                    "KFD compute publication unwound while logical custody was retained",
-                );
-                std::panic::resume_unwind(payload);
+                super::sdma_host_write::resume_sdma_owner_panic_v1(payload, || {
+                    self.poison_terminal_v1()
+                })
             }
         };
         match publication {
@@ -2177,6 +2176,19 @@ impl KfdRuntimeBackendV1 {
                 self.remove_pending_compute_from_stream_v1(pending.launch.stream, pending.id);
                 self.release_pending_compute_dependency_retains_v1(&pending);
                 Ok(BackendPollV1::Pending)
+            }
+            Err(failure) if self.active_compute_lane_v1(pending.id).is_some() => {
+                // Publication transferred custody even if its result is an error.
+                // Retire only the pending handoff; never settle or duplicate Active.
+                self.remove_pending_compute_from_stream_v1(pending.launch.stream, pending.id);
+                self.release_pending_compute_dependency_retains_v1(&pending);
+                match failure {
+                    failure @ RuntimeBackendFailureV1::Terminal(_) => Err(failure),
+                    RuntimeBackendFailureV1::Rejected(_)
+                    | RuntimeBackendFailureV1::Quiescent(_) => Err(self.terminal_error(
+                        "KFD indexed compute publication returned a nonterminal failure",
+                    )),
+                }
             }
             Err(RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_)) => {
                 self.release_compute_lane_lease_v1(pending.launch.stream, lane);
@@ -3608,56 +3620,15 @@ impl KfdRuntimeBackendV1 {
         let restore_shells = self.prepare_three_binding_restore_shells_v1(persistent.admissions)?;
         let (persistent_inputs, promotions) =
             self.take_three_binding_persistent_inputs_v1(persistent.admissions, id)?;
-        let mut publication_profile = Some(PersistentPublicationProfileV1 {
+        let publication_profile = PersistentPublicationProfileV1 {
             launch: profile_launch,
             semantic_contract: profile_semantic_contract,
             bindings: profile_bindings,
-        });
+        };
         #[cfg(test)]
         if self.scripted_sdma.is_some() {
-            if self.scripted_persistent_publication_retries != 0 {
-                self.scripted_persistent_publication_retries -= 1;
-                performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
-                performance.user_data_materializations = 0;
-                self.active = Some(ActiveSubmissionV1 {
-                    id,
-                    stream,
-                    ordered_predecessor,
-                    deferred_ordered_predecessor_retain: false,
-                    kernel,
-                    dependency_depth,
-                    allocations,
-                    writebacks,
-                    resident_descriptors: persistent.descriptors,
-                    ordinary_recipe: None,
-                    dispatch_shape_sha256,
-                    published_at: Instant::now(),
-                    performance,
-                    execution: Some(
-                        ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
-                            admissions: persistent.admissions,
-                            promotions,
-                            restore_shells,
-                            inputs: PreparedReceiptV1::Armed(persistent_inputs),
-                            profile: publication_profile
-                                .take()
-                                .expect("prepared publication profile"),
-                        },
-                    ),
-                });
-                return Ok(());
-            }
-            let devices = persistent_inputs.map(|input| match input {
-                KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => ready.owner.normalize(),
-                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
-                | KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => device,
-                KfdRuntimePersistentComputeInputV1::Native(_) => {
-                    unreachable!("scripted three-binding publication retained native input")
-                }
-            });
             performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
             performance.user_data_materializations = 0;
-            let published_at = Instant::now();
             self.active = Some(ActiveSubmissionV1 {
                 id,
                 stream,
@@ -3670,24 +3641,19 @@ impl KfdRuntimeBackendV1 {
                 resident_descriptors: persistent.descriptors,
                 ordinary_recipe: None,
                 dispatch_shape_sha256,
-                published_at,
+                published_at: Instant::now(),
                 performance,
-                execution: Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
-                    admissions: persistent.admissions,
-                    restore_shells,
-                    devices,
-                }),
+                execution: Some(
+                    ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
+                        admissions: persistent.admissions,
+                        promotions,
+                        restore_shells,
+                        inputs: PreparedReceiptV1::Armed(persistent_inputs),
+                        profile: publication_profile,
+                    },
+                ),
             });
-            self.observe_persistent_dispatch_published_v1(
-                id,
-                stream,
-                kernel,
-                dispatch_shape_sha256,
-                publication_profile
-                    .take()
-                    .expect("scripted publication retains its profile"),
-            );
-            return Ok(());
+            return self.publish_initial_persistent_prepared_v1();
         }
         #[cfg(not(test))]
         let inputs = persistent_inputs.map(|input| match input {
@@ -3764,50 +3730,14 @@ impl KfdRuntimeBackendV1 {
                 };
             }
         };
-        let native_binding = native_binding_started.elapsed();
-        let publication_started = Instant::now();
-        let publication = self
-            .queue
-            .as_mut()
-            .expect("three-binding persistent binding retains its queue")
-            .submit_three_binding_directional_persistent_fixed_dispatch_v1(binding);
         record_initial_persistent_timing_v1(
             &mut performance,
-            native_binding,
-            publication_started.elapsed(),
+            native_binding_started.elapsed(),
+            Duration::ZERO,
         );
         performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
         performance.user_data_materializations = 0;
-        let execution = match publication {
-            Ok(dispatch) => ActiveComputeExecutionV1::ThreeBindingPersistent {
-                admissions: persistent.admissions,
-                restore_shells,
-                dispatch,
-            },
-            Err(failure) => {
-                let (_, retryable) = failure.into_parts();
-                let Some(prepared) = retryable else {
-                    return Err(self.terminal_error(
-                        "KFD three-binding persistent publication became indeterminate",
-                    ));
-                };
-                ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
-                    admissions: persistent.admissions,
-                    promotions,
-                    restore_shells,
-                    prepared: PreparedReceiptV1::Armed(prepared),
-                    profile: publication_profile
-                        .take()
-                        .expect("retryable publication retains its profile"),
-                }
-            }
-        };
-        let published = matches!(
-            execution,
-            ActiveComputeExecutionV1::ThreeBindingPersistent { .. }
-        );
-        let published_at = Instant::now();
-        self.retain_primary_compute_lane_v1();
+        // Index the receipt before the first consuming call or queue observer.
         self.active = Some(ActiveSubmissionV1 {
             id,
             stream,
@@ -3820,22 +3750,17 @@ impl KfdRuntimeBackendV1 {
             resident_descriptors: persistent.descriptors,
             ordinary_recipe: None,
             dispatch_shape_sha256,
-            published_at,
+            published_at: Instant::now(),
             performance,
-            execution: Some(execution),
+            execution: Some(ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
+                admissions: persistent.admissions,
+                promotions,
+                restore_shells,
+                prepared: PreparedReceiptV1::Armed(binding),
+                profile: publication_profile,
+            }),
         });
-        if published {
-            self.observe_persistent_dispatch_published_v1(
-                id,
-                stream,
-                kernel,
-                dispatch_shape_sha256,
-                publication_profile
-                    .take()
-                    .expect("published dispatch retains its profile"),
-            );
-        }
-        Ok(())
+        self.publish_initial_persistent_prepared_v1()
     }
 
     pub(super) fn publish_persistent_full_range_v1(
@@ -3899,6 +3824,14 @@ impl KfdRuntimeBackendV1 {
                 format!("KFD persistent content role: {error}"),
             )
         })?;
+        #[cfg(test)]
+        let input_shell = if self.scripted_sdma.is_some() {
+            Some(try_uninit_box_v1().map_err(|_| {
+                Self::capacity("scripted initial publication input shell allocation failed")
+            })?)
+        } else {
+            None
+        };
         let (persistent_input, promotion) =
             self.take_persistent_compute_input_v1(persistent.allocation, id, persistent.source)?;
         performance.ready_promotion = promotion;
@@ -3911,40 +3844,6 @@ impl KfdRuntimeBackendV1 {
         if self.scripted_sdma.is_some() {
             performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
             performance.user_data_materializations = 0;
-            if self.scripted_persistent_publication_retries != 0 {
-                self.scripted_persistent_publication_retries -= 1;
-                self.active = Some(ActiveSubmissionV1 {
-                    id,
-                    stream,
-                    ordered_predecessor,
-                    deferred_ordered_predecessor_retain: false,
-                    kernel,
-                    dependency_depth,
-                    allocations,
-                    writebacks,
-                    resident_descriptors: persistent.descriptors,
-                    ordinary_recipe: None,
-                    dispatch_shape_sha256,
-                    published_at: Instant::now(),
-                    performance,
-                    execution: Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared {
-                        allocation: persistent.allocation,
-                        access: persistent.access,
-                        source: persistent.source,
-                        input: PreparedReceiptV1::Armed(Box::new(persistent_input)),
-                        profile: publication_profile,
-                    }),
-                });
-                return Ok(());
-            }
-            let device = Box::new(match persistent_input {
-                KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => ready.owner.normalize(),
-                KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
-                | KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => device,
-                KfdRuntimePersistentComputeInputV1::Native(_) => {
-                    unreachable!("scripted publication retained native input")
-                }
-            });
             self.active = Some(ActiveSubmissionV1 {
                 id,
                 stream,
@@ -3959,20 +3858,18 @@ impl KfdRuntimeBackendV1 {
                 dispatch_shape_sha256,
                 published_at: Instant::now(),
                 performance,
-                execution: Some(ActiveComputeExecutionV1::ScriptedPersistent {
+                execution: Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared {
                     allocation: persistent.allocation,
                     access: persistent.access,
-                    device,
+                    source: persistent.source,
+                    input: PreparedReceiptV1::Armed(fill_restore_shell_v1(
+                        input_shell.expect("reserved scripted input shell"),
+                        persistent_input,
+                    )),
+                    profile: publication_profile,
                 }),
             });
-            self.observe_persistent_dispatch_published_v1(
-                id,
-                stream,
-                kernel,
-                dispatch_shape_sha256,
-                publication_profile,
-            );
-            return Ok(());
+            return self.publish_initial_persistent_prepared_v1();
         }
         #[cfg(not(test))]
         let KfdRuntimePersistentComputeInputV1::Native(input) = persistent_input;
@@ -4046,60 +3943,14 @@ impl KfdRuntimeBackendV1 {
                 };
             }
         };
-        let native_binding = native_binding_started.elapsed();
-        let publication_started = Instant::now();
-        let publication = self
-            .queue
-            .as_mut()
-            .expect("persistent-compute binding retains its queue")
-            .submit_directional_persistent_fixed_dispatch_v1(binding);
         record_initial_persistent_timing_v1(
             &mut performance,
-            native_binding,
-            publication_started.elapsed(),
+            native_binding_started.elapsed(),
+            Duration::ZERO,
         );
-        let dispatch = match publication {
-            Ok(dispatch) => dispatch,
-            Err(failure) => {
-                let detail = failure.error().to_string();
-                let (_, retryable) = failure.into_parts();
-                let Some(prepared) = retryable else {
-                    return Err(self.terminal_error(format!(
-                        "KFD persistent-compute publication became indeterminate: {detail}"
-                    )));
-                };
-                performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
-                performance.user_data_materializations = 0;
-                self.retain_primary_compute_lane_v1();
-                self.active = Some(ActiveSubmissionV1 {
-                    id,
-                    stream,
-                    ordered_predecessor,
-                    deferred_ordered_predecessor_retain: false,
-                    kernel,
-                    dependency_depth,
-                    allocations,
-                    writebacks,
-                    resident_descriptors: persistent.descriptors,
-                    ordinary_recipe: None,
-                    dispatch_shape_sha256,
-                    published_at: Instant::now(),
-                    performance,
-                    execution: Some(ActiveComputeExecutionV1::PersistentPrepared {
-                        allocation: persistent.allocation,
-                        access: persistent.access,
-                        source: persistent.source,
-                        prepared: PreparedReceiptV1::Armed(prepared),
-                        profile: publication_profile,
-                    }),
-                });
-                return Ok(());
-            }
-        };
         performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
         performance.user_data_materializations = 0;
-        let published_at = Instant::now();
-        self.retain_primary_compute_lane_v1();
+        // Index the receipt before the first consuming call or queue observer.
         self.active = Some(ActiveSubmissionV1 {
             id,
             stream,
@@ -4112,22 +3963,17 @@ impl KfdRuntimeBackendV1 {
             resident_descriptors: persistent.descriptors,
             ordinary_recipe: None,
             dispatch_shape_sha256,
-            published_at,
+            published_at: Instant::now(),
             performance,
-            execution: Some(ActiveComputeExecutionV1::Persistent {
+            execution: Some(ActiveComputeExecutionV1::PersistentPrepared {
                 allocation: persistent.allocation,
                 access: persistent.access,
-                dispatch,
+                source: persistent.source,
+                prepared: PreparedReceiptV1::Armed(binding),
+                profile: publication_profile,
             }),
         });
-        self.observe_persistent_dispatch_published_v1(
-            id,
-            stream,
-            kernel,
-            dispatch_shape_sha256,
-            publication_profile,
-        );
-        Ok(())
+        self.publish_initial_persistent_prepared_v1()
     }
 
     #[allow(clippy::result_large_err)]

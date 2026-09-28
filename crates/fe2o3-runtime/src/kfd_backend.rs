@@ -13327,6 +13327,7 @@ mod tests {
     mod cooperative_sdma_tests;
     #[cfg(feature = "hardware-diagnostic")]
     mod directional_wait_diagnostic_tests;
+    mod initial_publication_tests;
     #[path = "initialized_storage_tests.rs"]
     mod initialized_storage_tests;
     mod native_xgmi_creation_tests;
@@ -13762,6 +13763,24 @@ mod tests {
         allocations: [u64; 3],
         byte_len: u64,
     ) -> u64 {
+        submit_scripted_three_binding_with_dependencies_v1(
+            backend,
+            stream,
+            kernel,
+            allocations,
+            byte_len,
+            &[],
+        )
+    }
+
+    fn submit_scripted_three_binding_with_dependencies_v1(
+        backend: &mut KfdRuntimeBackendV1,
+        stream: u64,
+        kernel: u64,
+        allocations: [u64; 3],
+        byte_len: u64,
+        dependencies: &[u64],
+    ) -> u64 {
         let mut explicit_kernarg = [0_u8; 32];
         explicit_kernarg[24..].copy_from_slice(&(byte_len / 4).to_le_bytes());
         let bindings = [
@@ -13799,7 +13818,7 @@ mod tests {
                 kernel,
                 explicit_kernarg: &explicit_kernarg,
                 bindings: &bindings,
-                dependencies: &[],
+                dependencies,
                 geometry: crate::RuntimeLaunchGeometryV1 {
                     grid: [64, 1, 1],
                     workgroup: [64, 1, 1],

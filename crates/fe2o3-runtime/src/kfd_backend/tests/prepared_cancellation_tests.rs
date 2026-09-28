@@ -59,8 +59,8 @@ pub(super) struct InputFacts {
     pub(super) owner: u64,
     pub(super) bytes: usize,
     pub(super) digest: [u8; 32],
-    certificate: Option<[u8; 32]>,
-    origin: &'static str,
+    pub(super) certificate: Option<[u8; 32]>,
+    pub(super) origin: &'static str,
 }
 
 #[derive(Debug, Eq, PartialEq)]

@@ -29,6 +29,9 @@ pub(super) enum ScriptedPreparedPublicationFaultV1 {
     Terminal,
     Unwind,
     ProfileUnwind,
+    InitialObserverUnwind,
+    InitialRejected,
+    InitialQuiescent,
 }
 
 #[cfg(test)]
@@ -66,6 +69,43 @@ fn scripted_device_v1(input: KfdRuntimePersistentComputeInputV1) -> DirectionalS
 }
 
 impl KfdRuntimeBackendV1 {
+    pub(super) fn publish_initial_persistent_prepared_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        #[cfg(test)]
+        if self.scripted_sdma.is_some() {
+            use ScriptedPreparedPublicationFaultV1 as Fault;
+            match self.scripted_prepared_publication_fault {
+                Some(Fault::InitialObserverUnwind) => {
+                    self.scripted_prepared_publication_fault = None;
+                    std::panic::panic_any("scripted initial queue observer unwind");
+                }
+                Some(Fault::InitialRejected | Fault::InitialQuiescent) => {
+                    let fault = self.scripted_prepared_publication_fault.take();
+                    return Err(if fault == Some(Fault::InitialRejected) {
+                        Self::capacity("scripted initial publication rejection")
+                    } else {
+                        Self::quiescent_error(
+                            KfdRuntimeBackendErrorKindV1::Native,
+                            "scripted initial publication quiescent failure",
+                        )
+                    });
+                }
+                _ => {}
+            }
+            if self.scripted_persistent_publication_retries != 0
+                && self.scripted_prepared_publication_fault.is_none()
+            {
+                self.scripted_persistent_publication_retries -= 1;
+                self.scripted_prepared_publication_fault =
+                    Some(ScriptedPreparedPublicationFaultV1::Retryable);
+            }
+            return self.poll_persistent_prepared_v1().map(|_| ());
+        }
+        self.retain_primary_compute_lane_v1();
+        self.poll_persistent_prepared_v1().map(|_| ())
+    }
+
     pub(super) fn persistent_prepared_selected_v1(&self) -> bool {
         match self
             .active
@@ -187,10 +227,10 @@ impl KfdRuntimeBackendV1 {
                 let dispatch = match result {
                     Ok(Some(dispatch)) => dispatch,
                     Ok(None) => return Ok(None),
-                    Err(_) => {
-                        return Err(self.terminal_error(
-                            "KFD persistent-compute publication became indeterminate",
-                        ));
+                    Err(error) => {
+                        return Err(self.terminal_error(format!(
+                            "KFD persistent-compute publication became indeterminate: {error}"
+                        )));
                     }
                 };
                 // The variant was authenticated above. Only infallible field
