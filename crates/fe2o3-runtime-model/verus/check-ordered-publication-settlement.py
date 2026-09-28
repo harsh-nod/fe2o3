@@ -40,8 +40,10 @@ def mutations(body):
         "let $entry = match $pipeline.entry_mut_v1(RuntimeComputePipelineIdentityV1 { submission: 0, ..$identity }) {")
     timestamp = "$fields!($entry.active).published_at = $now;"
     need(body.count(timestamp) == 1, "unique timestamp assignment")
+    anchor = "$($after_confirm)*"
+    need(body.count(anchor) == 1, "unique timestamp relocation anchor")
     delayed = body.replace(timestamp, "")
-    delayed = delayed.replace("$($after_confirm)*", "$($after_confirm)*\n"
+    delayed = delayed.replace(anchor, anchor + "\n"
         "            let $entry = $pipeline.entry_mut_v1($identity).unwrap();\n            " + timestamp)
     cases["timestamp-after-confirmation"] = (delayed, "*settle_returned")
     add("publication-omits-duration", "$fields!($entry.active).performance.publication = $elapsed;",

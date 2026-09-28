@@ -16,6 +16,7 @@ need(all(text != body and not any(token in text for token in ("assume(", "admit(
          for text, _ in cases.values()), "executable mutations without proof bypass")
 for changed in (body + body, body.replace("id: $id,", "id: 0,"),
                 body.replace("$fields!($entry.active).published_at = $now;", ""),
+                body.replace("$($after_confirm)*", ""), body + "\n$($after_confirm)*",
                 body + "\nOk(Some(observation))"):
     try:
         runner["mutations"](changed)
