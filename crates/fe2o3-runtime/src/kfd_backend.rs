@@ -101,6 +101,8 @@ use materialized_completion_receipt::MaterializedCompletionReceiptV1;
 mod materialized_publication;
 mod materialized_submission_attempt;
 mod ordered_publication;
+mod ordinary_queue_io;
+use ordinary_queue_io::OrdinaryQueueIoV1;
 mod peer_ancestry;
 mod peer_compute_access;
 mod persistent_completion;
@@ -1331,6 +1333,8 @@ pub struct KfdRuntimeBackendV1 {
     dispatch_capacity: RuntimeDispatchCapacityV1,
     admitted_device: Option<CheckedGfx942XnackMinusDevice>,
     queue: Option<ComputeAqlQueueSessionV1>,
+    #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+    cpu_queue: Option<ordinary_queue_io::CpuOrdinaryQueueV1>,
     primary_teardown: Option<Box<PrimaryQueueReleaseCustodyV1>>,
     terminal_memory: Option<SharedGttMemorySessionV1>,
     terminal_sdma_custody: Option<KfdRuntimeTerminalSdmaCustodyV1>,
@@ -1844,6 +1848,8 @@ impl KfdRuntimeBackendV1 {
             dispatch_capacity: dispatch.capacity,
             admitted_device,
             queue: None,
+            #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+            cpu_queue: None,
             primary_teardown: None,
             terminal_memory: None,
             terminal_sdma_custody: None,
@@ -2221,6 +2227,10 @@ impl KfdRuntimeBackendV1 {
         self.terminal = true;
         if let Some(queue) = self.queue.as_mut() {
             queue.poison_after_runtime_owner_failure_v1();
+        }
+        #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+        if let Some(queue) = self.cpu_queue.as_mut() {
+            queue.fixture.poison_terminal();
         }
         if let Some(custody) = self.primary_teardown.as_mut() {
             custody.poison_after_runtime_owner_failure_v1();
@@ -13314,6 +13324,12 @@ impl crate::RuntimeOwnedShutdownBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
 
 impl Drop for KfdRuntimeBackendV1 {
     fn drop(&mut self) {
+        #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+        if self.cpu_queue.as_ref().is_some_and(|queue| {
+            self.require_cpu_provider_v1().is_err() || queue.fixture.ensure_clean().is_err()
+        }) {
+            std::process::abort();
+        }
         #[cfg(test)]
         if self.scripted_sdma.is_some() && self.scripted_drop_disarmed {
             return;
@@ -13382,6 +13398,8 @@ mod tests {
     mod compute_settlement_custody_tests;
     mod cooperative_directed_tests;
     mod cooperative_sdma_tests;
+    #[cfg(feature = "cpu-runtime-fixtures")]
+    mod cpu_receipt_tests;
     #[cfg(feature = "hardware-diagnostic")]
     mod directional_wait_diagnostic_tests;
     mod initial_publication_tests;
@@ -22810,7 +22828,11 @@ mod tests {
         assert!(!body.contains("publish_persistent_full_range_v1"));
         assert!(!body.contains("publish_three_binding_persistent_v1"));
         let adapter = include_str!("kfd_backend/ordered_publication.rs");
-        assert!(adapter.contains("submit_fixed_dispatch_classified_v1::<1>()"));
+        assert!(adapter.contains("OrdinaryQueueIoV1::new"));
+        let io = include_str!("kfd_backend/ordinary_queue_io.rs");
+        assert!(io.contains("lane.submit_fixed_dispatch_classified_v1::<1>()"));
+        assert!(!io.contains("materialize_initial_data_v1"));
+        assert!(!io.contains("bind_fixed_dispatch"));
         assert!(!adapter.contains("materialize_initial_data_v1"));
         assert!(!adapter.contains("bind_fixed_dispatch"));
         assert!(!adapter.contains("publish_persistent_full_range_v1"));

@@ -203,7 +203,7 @@ impl KfdRuntimeBackendV1 {
             self.selected_native_compute_lane_v1().map_err(|_| self.terminal_error(
                 "ordered predecessor lost its exact physical compute lane before successor publication",
             ))?;
-            if self.queue.is_none() {
+            if !self.ordinary_queue_available_v1() {
                 return Err(self.terminal_error("ordered successor lost its native queue"));
             }
         }
@@ -248,14 +248,16 @@ impl KfdRuntimeBackendV1 {
             .map_err(|_| self.terminal_error("staged successor lost its native lane"))?;
         let root =
             OrderedPublicationV1::indexed(self.compute_pipeline.entry_mut_v1(identity).unwrap());
-        let result = self
-            .queue
-            .as_mut()
-            .unwrap()
-            .with_compute_lane_v1(lane, |queue| {
-                root.attempt
-                    .submit_classified(|| queue.submit_fixed_dispatch_classified_v1::<1>())
-            });
+        let result = OrdinaryQueueIoV1::new(
+            self.queue.as_mut(),
+            #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+            self.cpu_queue.as_mut(),
+        )
+        .and_then(|queue| {
+            queue.with_lane(lane, |queue| {
+                root.attempt.submit_classified(|| queue.submit_classified())
+            })
+        });
         match result {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => {

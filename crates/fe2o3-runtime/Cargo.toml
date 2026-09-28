@@ -13,6 +13,8 @@ name = "fe2o3_runtime"
 
 [features]
 default = []
+# CPU-only opaque receipts for in-crate runtime ownership tests, not an execution backend.
+cpu-runtime-fixtures = ["fe2o3-kfd/cpu-runtime-fixtures"]
 # Unsafe, exact-artifact hardware diagnosis only. This grants no Worker V3 authority.
 hardware-diagnostic = ["fe2o3-kfd/hardware-diagnostic"]
 # Repository-owned exact-artifact KFD/HSA qualification. This exposes no

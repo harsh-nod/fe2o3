@@ -277,7 +277,7 @@ impl KfdRuntimeBackendV1 {
         let native_lane = self
             .selected_native_compute_lane_v1()
             .map_err(|_| self.terminal_error("ordinary completion lost native lane"))?;
-        if self.queue.is_none() {
+        if !self.ordinary_queue_available_v1() {
             return Err(self.terminal_error("ordinary completion lost native queue"));
         }
         for operation in [MaterializedConsumeV1::Poll, MaterializedConsumeV1::Recycle] {
@@ -289,34 +289,40 @@ impl KfdRuntimeBackendV1 {
             }
             let recycle_started = (operation == MaterializedConsumeV1::Recycle).then(Instant::now);
             let (active, phase) = target.parts_mut(&mut self.active, &mut self.compute_pipeline);
-            let queue = self.queue.as_mut().unwrap();
-            let result = queue.with_compute_lane_v1(native_lane, |queue| {
-                let Some(ActiveComputeExecutionV1::Materialized(receipt)) =
-                    active.execution.as_mut()
-                else {
-                    unreachable!("preflighted ordinary completion receipt")
-                };
-                if operation == MaterializedConsumeV1::Poll
-                    && matches!(receipt, MaterializedCompletionReceiptV1::Published(_))
-                {
-                    if receipt.poll_ready(|batch| queue.poll_fixed_dispatch(batch))? {
-                        if let Some(phase) = phase {
-                            *phase = RuntimeComputePipelinePhaseV1::Completed;
+            let result = OrdinaryQueueIoV1::new(
+                self.queue.as_mut(),
+                #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+                self.cpu_queue.as_mut(),
+            )
+            .and_then(|queue| {
+                queue.with_lane(native_lane, |queue| {
+                    let Some(ActiveComputeExecutionV1::Materialized(receipt)) =
+                        active.execution.as_mut()
+                    else {
+                        unreachable!("preflighted ordinary completion receipt")
+                    };
+                    if operation == MaterializedConsumeV1::Poll
+                        && matches!(receipt, MaterializedCompletionReceiptV1::Published(_))
+                    {
+                        if receipt.poll_ready(|batch| queue.poll(batch))? {
+                            if let Some(phase) = phase {
+                                *phase = RuntimeComputePipelinePhaseV1::Completed;
+                            }
+                            active.performance.publish_to_completion =
+                                active.published_at.elapsed();
                         }
-                        active.performance.publish_to_completion = active.published_at.elapsed();
+                    } else if operation == MaterializedConsumeV1::Recycle
+                        && matches!(receipt, MaterializedCompletionReceiptV1::Completed(_))
+                        && receipt.recycle_retired(|completed| queue.recycle(completed))?
+                    {
+                        active.performance.completed_readback = Duration::ZERO;
+                        active.performance.completion_detach_restore = Duration::ZERO;
+                        if let Some(phase) = phase {
+                            *phase = RuntimeComputePipelinePhaseV1::PhysicallyRetired;
+                        }
                     }
-                } else if operation == MaterializedConsumeV1::Recycle
-                    && matches!(receipt, MaterializedCompletionReceiptV1::Completed(_))
-                    && receipt
-                        .recycle_retired(|completed| queue.recycle_fixed_dispatch(completed))?
-                {
-                    active.performance.completed_readback = Duration::ZERO;
-                    active.performance.completion_detach_restore = Duration::ZERO;
-                    if let Some(phase) = phase {
-                        *phase = RuntimeComputePipelinePhaseV1::PhysicallyRetired;
-                    }
-                }
-                Ok::<(), fe2o3_kfd::ComputeAqlQueueSessionErrorV1>(())
+                    Ok::<(), fe2o3_kfd::ComputeAqlQueueSessionErrorV1>(())
+                })
             });
             match result {
                 Ok(Ok(())) => {}

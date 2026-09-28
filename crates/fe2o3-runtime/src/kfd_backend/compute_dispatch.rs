@@ -511,6 +511,25 @@ impl KfdRuntimeBackendV1 {
         &self,
         launch: &BackendLaunchV1<'_>,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+        if self.cpu_queue.is_some() {
+            self.require_cpu_provider_v1()?;
+            if launch.bindings.iter().any(|binding| {
+                binding.region.access != RuntimeAccessV1::Read
+                    || !self
+                        .allocations
+                        .get(&binding.region.allocation)
+                        .is_some_and(|record| {
+                            record.kind == RuntimeMemoryKindV1::HostVisible
+                                && matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Synthetic)
+                        })
+            }) {
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "CPU receipt fixture admits only read-only synthetic host bindings",
+                ));
+            }
+        }
         if launch.explicit_kernarg.len() > MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1 {
             return Err(Self::capacity(
                 "KFD explicit kernarg exceeds the runtime admission bound",
@@ -2173,6 +2192,20 @@ impl KfdRuntimeBackendV1 {
         let user_data_count =
             u64::try_from(data.len()).expect("fixed-dispatch data count is bounded below u64");
 
+        let cpu = false;
+        #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+        let cpu = cpu || self.cpu_queue.is_some();
+        #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+        if cpu {
+            self.require_cpu_provider_v1()?;
+            if !writebacks.is_empty() {
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Unsupported,
+                    "CPU receipt fixture has no device writeback authority",
+                ));
+            }
+            self.detach_cpu_recycled_dispatch_v1()?;
+        }
         let scripted = false;
         #[cfg(test)]
         let scripted = scripted
@@ -2191,13 +2224,13 @@ impl KfdRuntimeBackendV1 {
                 &data,
             )
         });
-        let preallocation = if scripted {
+        let preallocation = if scripted || cpu {
             None
         } else {
             self.preallocate_native_binding_v1(reuse_attached)?
         };
         // Pure host preparation can still reject without taking native custody.
-        let programs = if reuse_attached || scripted {
+        let programs = if reuse_attached || scripted || cpu {
             None
         } else {
             let validated_program = build_program_v1(&program, signature, &abi_rows)?;
@@ -2233,6 +2266,10 @@ impl KfdRuntimeBackendV1 {
                 }),
             )),
         });
+        #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+        if cpu {
+            return self.submit_materialized_binding_v1();
+        }
         #[cfg(test)]
         if scripted {
             return self.publish_scripted_materialized_binding_v1(data);
@@ -3168,6 +3205,10 @@ impl KfdRuntimeBackendV1 {
         if self.queue_retired {
             return Ok(());
         }
+        #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+        if self.cpu_queue.is_some() {
+            return self.shutdown_cpu_queue_v1();
+        }
         self.release_retained_persistent_control_v1()?;
         #[cfg(test)]
         if let Some(driver) = self.scripted_sdma.as_ref() {
@@ -3432,6 +3473,10 @@ impl KfdRuntimeBackendV1 {
     pub(super) fn detach_recycled_dispatch(
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+        if self.cpu_queue.is_some() {
+            return self.detach_cpu_recycled_dispatch_v1();
+        }
         self.synchronize_recycled_dispatch_data_v1()?;
         if self.recycled_dispatch.is_none() {
             return Ok(());

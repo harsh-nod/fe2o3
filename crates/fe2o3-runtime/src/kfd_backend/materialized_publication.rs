@@ -115,7 +115,7 @@ impl KfdRuntimeBackendV1 {
             || matches!(self.active.as_ref().unwrap().execution.as_ref(),
             Some(ActiveComputeExecutionV1::MaterializedPrepared(prepared)) if prepared.scripted.is_some());
         if !scripted {
-            if self.queue.is_none() {
+            if !self.ordinary_queue_available_v1() {
                 return Err(self.terminal_error("materialized retry lost its native queue"));
             }
             self.selected_native_compute_lane_v1().map_err(|_| {
@@ -188,15 +188,18 @@ impl KfdRuntimeBackendV1 {
             .selected_native_compute_lane_v1()
             .map_err(|_| self.terminal_error("ordinary publication lost its exact native lane"))?;
         let root = MaterializedBindingV1::indexed(self.active.as_mut().unwrap());
-        let Some(queue) = self.queue.as_mut() else {
-            return Err(self.terminal_error("ordinary publication lost its native queue"));
-        };
-        let publication = queue
-            .with_compute_lane_v1(native_lane, |queue| {
+        let publication = OrdinaryQueueIoV1::new(
+            self.queue.as_mut(),
+            #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
+            self.cpu_queue.as_mut(),
+        )
+        .and_then(|queue| {
+            queue.with_lane(native_lane, |queue| {
                 root.submission
-                    .submit_classified(|| queue.submit_fixed_dispatch_classified_v1::<1>())
+                    .submit_classified(|| queue.submit_classified())
             })
-            .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
+        })
+        .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
         match publication {
             Ok(()) => Ok(()),
             Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
