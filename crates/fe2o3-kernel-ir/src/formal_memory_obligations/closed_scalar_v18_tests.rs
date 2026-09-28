@@ -39,7 +39,12 @@ fn extract(
     let (owner, receipt) =
         VerifiedCanonicalKernelIrModuleV18::from_module_ref_with_verification_budget_v18(
             module,
-            StorageLayoutLimitsV1::default(),
+            StorageLayoutLimitsV1 {
+                rows: 64,
+                edges: 256,
+                containment_depth: 32,
+                object_bytes: 4096,
+            },
             &mut budget,
         )
         .unwrap();
