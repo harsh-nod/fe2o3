@@ -211,7 +211,7 @@ fn inspect_failure_and_drop(
         };
         assert_eq!(
             error.detail(),
-            "scripted three-binding persistent restoration slots changed unexpectedly"
+            "three-binding completion custody changed before native effects"
         );
     }
     assert!(f.context.is_terminal());
