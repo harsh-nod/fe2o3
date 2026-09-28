@@ -628,3 +628,10 @@ mod retained_origin_worklist;
 pub(super) use retained_origin_worklist::{
     RetainedExactOriginWorklistV1, retained_origin_worklist_frame_v1,
 };
+
+#[path = "bf16_nominal_retained_local_provenance_v1.rs"]
+mod retained_local_provenance;
+#[allow(unused_imports)]
+pub(super) use retained_local_provenance::{
+    RetainedLocalProvenanceV1, retained_provenance_frame_v1,
+};

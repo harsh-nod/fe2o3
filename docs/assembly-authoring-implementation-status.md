@@ -1608,3 +1608,28 @@ See [qualification and limits](retained-exclusive-carrier-qualification-20260928
 This is an isolated analysis component, not a genuine source checkpoint.
 Provenance/allocation/capability integration, authenticated continuation,
 argument writers and production admission remain open. Broad exits remain 6/18.
+
+## Retained local-provenance component — 2026-09-28
+
+The carrier owner, three result tables, three edge tables and three distinct
+FIFO worklists now remain attached through partial failures. All 11 controls
+and full 356-model / 3,256-backend regressions passed (197 ignored), plus builds.
+See [qualification and limits](retained-local-provenance-qualification-20260928.md).
+
+This component supports a later BeforeAllocation continuation, not the earlier
+Option → enum → scalar BeforeProvenance boundary. Genuine source connections,
+allocation/capability integration and production admission remain open.
+Broad accepted exits remain 6/18.
+
+## Authenticated Option → enum → scalar checkpoint — 2026-09-28
+
+The separate source-owned entry now reaches BeforeProvenance with actual scalar
+analysis on the original owner and budget. All 13 new controls and full
+356-model / 3,269-backend regressions passed (197 ignored), plus builds and five
+actual Rust-source sessions; the two positive sources completed 36 numerical
+helper runs. Complete scalar tables match independent unchanged original APIs.
+See [qualification and limits](option-enum-scalar-preparation-qualification-20260928.md).
+
+This stops before provenance and does not change the ordinary production route.
+Later provenance/allocation/capability integration, argument writers and
+production admission remain open. Broad accepted exits remain 6/18.

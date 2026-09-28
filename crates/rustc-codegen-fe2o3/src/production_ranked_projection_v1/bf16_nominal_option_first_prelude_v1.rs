@@ -541,3 +541,10 @@ pub(crate) use option_enum_prelude::observe_option_enum_before_scalar_for_test_v
 pub(in crate::production_ranked_projection_v1) use option_enum_prelude::{
     BeforeScalarV1, with_nominal_option_enum_before_scalar_v1,
 };
+
+#[cfg(test)]
+pub(crate) use option_enum_prelude::observe_option_enum_scalar_before_provenance_for_test_v1;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use option_enum_prelude::{
+    BeforeProvenanceV1, with_nominal_option_enum_scalar_before_provenance_v1,
+};

@@ -1,36 +1,38 @@
-//! Additive source-owned enum continuation. Stops before scalar inventory.
-//! The original BeforeEnum entry, its debits and old routes remain unchanged.
+//! Source-owned Option -> enum -> scalar continuation, stopping before provenance.
+//! Earlier checkpoint entries, algorithms and ordinary routes are unchanged.
 use super::*;
-use fe2o3_mir_model::SemanticEnumPayloadDominancePreparationV1;
+use crate::production_ranked_projection_v1::bf16_nominal_source_algorithms_v1::RetainedScalarInventoryV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EnumPhase {
+enum ScalarPhase {
     Fresh,
     Terminal,
-    BeforeScalar,
+    BeforeProvenance,
 }
 
-/// Both actual model owners exist outside the checked-call catch/postflight.
-struct PendingBeforeScalarV1 {
-    phase: EnumPhase,
-    options: PendingOptionFirstPreludeV1,
-    enumeration: SemanticEnumPayloadDominancePreparationV1,
-    enum_invoked: bool,
+/// The complete earlier owners and scalar partial arrays remain outside the
+/// genuine checked-call catch/postflight, with one accepted-credit counter.
+struct PendingBeforeProvenanceV1 {
+    phase: ScalarPhase,
+    earlier: PendingBeforeScalarV1,
+    scalar: RetainedScalarInventoryV1,
+    scalar_invoked: bool,
     failure: Option<Backend>,
 }
-impl PendingBeforeScalarV1 {
+impl PendingBeforeProvenanceV1 {
     fn new() -> Self {
         Self {
-            phase: EnumPhase::Fresh,
-            options: PendingOptionFirstPreludeV1::new(),
-            enumeration: SemanticEnumPayloadDominancePreparationV1::new(),
-            enum_invoked: false,
+            phase: ScalarPhase::Fresh,
+            earlier: PendingBeforeScalarV1::new(),
+            scalar: RetainedScalarInventoryV1::new(),
+            scalar_invoked: false,
             failure: None,
         }
     }
     fn prepare(&mut self, source: &Source<'_>, resources: &mut Prep<'_, '_>) -> BResult<()> {
-        let fresh = self.phase == EnumPhase::Fresh && !self.enum_invoked && self.failure.is_none();
-        self.phase = EnumPhase::Terminal;
+        let fresh =
+            self.phase == ScalarPhase::Fresh && !self.scalar_invoked && self.failure.is_none();
+        self.phase = ScalarPhase::Terminal;
         if !fresh
             || !resources.is_metered()
             || resources.has_denial()
@@ -38,105 +40,114 @@ impl PendingBeforeScalarV1 {
         {
             return Err(accounting());
         }
-        // New wrapper vertices only. The existing private Option preparation
-        // retains exactly its original internal call/debit/error order.
         resources.work(32)?;
-        self.options.prepare(source, resources)?;
-        if self.options.phase != Phase::BeforeEnum {
+        // Private preparation, NOT the earlier factory or its refund boundary.
+        self.earlier.prepare(source, resources)?;
+        if self.earlier.phase != EnumPhase::BeforeScalar {
             return Err(accounting());
         }
-        self.enum_invoked = true;
-        self.enumeration
-            .prepare_into(source.function, source.types, &mut ModelMeter(resources))
-            .map_err(model_error)?;
-        if resources.has_denial() || self.enumeration.completed().is_none() {
+        self.scalar_invoked = true;
+        self.scalar.prepare_into(source.function, resources)?;
+        self.scalar.completed_for(source.function, resources)?;
+        if resources.has_denial() {
             return Err(accounting());
         }
-        self.phase = EnumPhase::BeforeScalar;
+        self.phase = ScalarPhase::BeforeProvenance;
         Ok(())
     }
     fn view<'a>(
         &'a self,
         source: &'a Source<'_>,
         resources: &Prep<'_, '_>,
-    ) -> BResult<BeforeScalarV1<'a>> {
-        if self.phase != EnumPhase::BeforeScalar || !self.enum_invoked {
+    ) -> BResult<BeforeProvenanceV1<'a>> {
+        if self.phase != ScalarPhase::BeforeProvenance || !self.scalar_invoked {
             return Err(accounting());
         }
-        Ok(BeforeScalarV1 {
-            options: self.options.view(source, resources)?,
-            enumeration: self.enumeration.completed().ok_or_else(accounting)?,
-            enum_invoked: self.enum_invoked,
+        Ok(BeforeProvenanceV1 {
+            earlier: self.earlier.view(source, resources)?,
+            scalar: self.scalar.completed_for(source.function, resources)?,
+            scalar_invoked: self.scalar_invoked,
         })
     }
 }
 
-/// Immutable same-owner DATA, not scalar/provenance/capability/F2 readiness.
-pub(in crate::production_ranked_projection_v1) struct BeforeScalarV1<'a> {
-    options: BeforeEnumV1<'a>,
-    enumeration: &'a SemanticEnumPayloadDominanceV1,
-    enum_invoked: bool,
+/// Immutable actual source DATA. This is not provenance/allocation/capability
+/// completeness and confers no F2 or ordinary-route readiness.
+pub(in crate::production_ranked_projection_v1) struct BeforeProvenanceV1<'a> {
+    earlier: BeforeScalarV1<'a>,
+    scalar: &'a AssertionDefinitionInventoryV1,
+    scalar_invoked: bool,
 }
-impl BeforeScalarV1<'_> {
+impl BeforeProvenanceV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn function(&self) -> &SemanticFunctionDeclV1 {
-        self.options.function()
+        self.earlier.function()
     }
     pub(in crate::production_ranked_projection_v1) fn option_producers(
         &self,
     ) -> &[SemanticOptionProducerV1] {
-        self.options.producers()
+        self.earlier.option_producers()
     }
     pub(in crate::production_ranked_projection_v1) fn option_dominance(
         &self,
     ) -> &SemanticOptionDominanceV1 {
-        self.options.dominance()
+        self.earlier.option_dominance()
     }
     pub(in crate::production_ranked_projection_v1) fn enum_dominance(
         &self,
     ) -> &SemanticEnumPayloadDominanceV1 {
-        self.enumeration
+        self.earlier.enum_dominance()
     }
     pub(in crate::production_ranked_projection_v1) fn enum_api_invoked(&self) -> bool {
-        self.enum_invoked
+        self.earlier.enum_api_invoked()
+    }
+    pub(in crate::production_ranked_projection_v1) fn scalar_inventory(
+        &self,
+    ) -> &AssertionDefinitionInventoryV1 {
+        self.scalar
+    }
+    pub(in crate::production_ranked_projection_v1) fn scalar_api_invoked(&self) -> bool {
+        self.scalar_invoked
     }
 }
 
-const ENUM_FRAME_ROWS: usize = 19;
-fn enum_frame_rows<R, F>() -> BResult<[usize; ENUM_FRAME_ROWS]> {
+const SCALAR_FRAME_ROWS: usize = 21;
+fn scalar_frame_rows<R, F>() -> BResult<[usize; SCALAR_FRAME_ROWS]> {
     Ok([
-        size_of::<PendingBeforeScalarV1>(),
+        size_of::<PendingBeforeProvenanceV1>(),
         size_of::<(
-            SemanticEnumPayloadDominancePreparationV1,
-            EnumPhase,
+            PendingBeforeScalarV1,
+            RetainedScalarInventoryV1,
+            ScalarPhase,
             bool,
             Option<Backend>,
         )>(),
         size_of::<(
-            &mut PendingBeforeScalarV1,
+            &mut PendingBeforeProvenanceV1,
             &Source<'static>,
             &mut Prep<'static, 'static>,
             bool,
             BResult<()>,
         )>(),
         size_of::<(
+            BeforeProvenanceV1<'static>,
             BeforeScalarV1<'static>,
-            BeforeEnumV1<'static>,
-            Option<&SemanticEnumPayloadDominanceV1>,
-            &SemanticEnumPayloadDominanceV1,
-            BResult<BeforeScalarV1<'static>>,
+            &AssertionDefinitionInventoryV1,
+            BResult<&AssertionDefinitionInventoryV1>,
+            BResult<BeforeProvenanceV1<'static>>,
         )>(),
         size_of::<(
-            &PendingBeforeScalarV1,
+            &PendingBeforeProvenanceV1,
             &Source<'static>,
             &Prep<'static, 'static>,
             bool,
         )>(),
         size_of::<(
-            &BeforeScalarV1<'static>,
+            &BeforeProvenanceV1<'static>,
             &SemanticFunctionDeclV1,
             &[SemanticOptionProducerV1],
             &SemanticOptionDominanceV1,
             &SemanticEnumPayloadDominanceV1,
+            &AssertionDefinitionInventoryV1,
             bool,
         )>(),
         size_of::<(
@@ -150,7 +161,7 @@ fn enum_frame_rows<R, F>() -> BResult<[usize; ENUM_FRAME_ROWS]> {
             F,
         )>(),
         size_of::<(
-            &mut PendingBeforeScalarV1,
+            &mut PendingBeforeProvenanceV1,
             &mut usize,
             &ProductionPreRankedKirOwnerV1,
             &CanonicalKirInventoryV1<'static>,
@@ -171,28 +182,17 @@ fn enum_frame_rows<R, F>() -> BResult<[usize; ENUM_FRAME_ROWS]> {
             bool,
         )>(),
         size_of::<(Source<'static>, SourceIdentity, Ledger, Option<Ledger>)>(),
-        size_of::<(
-            Prep<'static, 'static>,
-            ModelMeter<'static, 'static, 'static>,
-            &mut usize,
-            &mut Budget<'static>,
-        )>(),
+        size_of::<(Prep<'static, 'static>, &mut usize, &mut Budget<'static>)>(),
         size_of::<(F, F, R, R)>(),
         size_of::<(Result<R>, Result<R>, BResult<R>, BResult<R>, BResult<()>)>(),
         size_of::<(Custody, Custody, usize, usize, bool, Result<()>)>(),
-        size_of::<(
-            Backend,
-            Option<Backend>,
-            &Backend,
-            QueryError,
-            SemanticEnumPayloadMeteredErrorV1<Backend>,
-        )>(),
+        size_of::<(Backend, Option<Backend>, &Backend, QueryError)>(),
         size_of::<(PanicPayload, std::result::Result<Result<R>, PanicPayload>)>(),
         size_of::<(
-            [usize; ENUM_FRAME_ROWS],
-            [usize; ENUM_FRAME_ROWS],
-            BResult<[usize; ENUM_FRAME_ROWS]>,
-            std::array::IntoIter<usize, ENUM_FRAME_ROWS>,
+            [usize; SCALAR_FRAME_ROWS],
+            [usize; SCALAR_FRAME_ROWS],
+            BResult<[usize; SCALAR_FRAME_ROWS]>,
+            std::array::IntoIter<usize, SCALAR_FRAME_ROWS>,
             usize,
             usize,
             Option<usize>,
@@ -200,28 +200,41 @@ fn enum_frame_rows<R, F>() -> BResult<[usize; ENUM_FRAME_ROWS]> {
         )>(),
         size_of::<(BResult<usize>, usize, usize, Option<usize>, &usize)>(),
         size_of::<(
-            &mut SemanticEnumPayloadDominancePreparationV1,
+            &mut RetainedScalarInventoryV1,
             &SemanticFunctionDeclV1,
-            &[SemanticTypeDeclV1],
-            &mut ModelMeter<'static, 'static, 'static>,
+            &mut Prep<'static, 'static>,
             BResult<()>,
+        )>(),
+        size_of::<(
+            &RetainedScalarInventoryV1,
+            &SemanticFunctionDeclV1,
+            &Prep<'static, 'static>,
+            BResult<&AssertionDefinitionInventoryV1>,
+        )>(),
+        size_of::<(
+            &mut PendingBeforeScalarV1,
+            &Source<'static>,
+            &mut Prep<'static, 'static>,
+            BResult<()>,
+            &PendingBeforeScalarV1,
+            BResult<BeforeScalarV1<'static>>,
         )>(),
     ])
 }
-fn enum_frame<R, F>() -> BResult<usize> {
-    // The complete unchanged parent policy pays all reached private Option
-    // preparation/getter/custody callees. Every new vertex is additive above.
-    enum_frame_rows::<R, F>()?
+fn scalar_frame<R, F>() -> BResult<usize> {
+    // Entire existing Option/enum policy is retained. The scalar component pays
+    // its own exact 17-row policy and original header inside prepare_into.
+    scalar_frame_rows::<R, F>()?
         .into_iter()
-        .try_fold(super::frame::<R, F>()?, |sum, row| {
+        .try_fold(super::enum_frame::<R, F>()?, |sum, row| {
             sum.checked_add(row).ok_or_else(arithmetic)
         })
 }
 
-/// A separate authenticated entry. Never nests an externally owned enum
-/// payload inside the older BeforeEnum entry's earlier refund boundary.
+/// A separate authenticated entry. Never nests an externally owned scalar
+/// payload inside the older BeforeScalar entry's earlier refund boundary.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::production_ranked_projection_v1) fn with_nominal_option_enum_before_scalar_v1<
+pub(in crate::production_ranked_projection_v1) fn with_nominal_option_enum_scalar_before_provenance_v1<
     'w,
     R,
     F,
@@ -237,16 +250,16 @@ pub(in crate::production_ranked_projection_v1) fn with_nominal_option_enum_befor
 ) -> Result<R>
 where
     R: Copy + 'static,
-    F: for<'a, 'b, 'm> FnOnce(BeforeScalarV1<'a>, &mut Prep<'b, 'm>) -> BResult<R>,
+    F: for<'a, 'b, 'm> FnOnce(BeforeProvenanceV1<'a>, &mut Prep<'b, 'm>) -> BResult<R>,
 {
     owner.with_bf16_nominal_entry_resources_v1(inventory, budget, move |budget| {
         let before = Custody::take(budget)?;
-        let bytes = enum_frame::<R, F>().map_err(query_error)?;
+        let bytes = scalar_frame::<R, F>().map_err(query_error)?;
         let mut owned = 0usize;
         PreparationResourcesV1::new(budget, &mut owned)
             .reserve_storage(bytes)
             .map_err(query_error)?;
-        let mut pending = PendingBeforeScalarV1::new();
+        let mut pending = PendingBeforeProvenanceV1::new();
         let result = owner.with_checked_bf16_nominal_call_v1(
             inventory,
             root,
@@ -261,14 +274,13 @@ where
                     || !std::ptr::eq(checked.source_call(), call)
                 {
                     return Err(QueryError::Unavailable(
-                        "Option/enum checked source identity differs",
+                        "Option/enum/scalar checked source identity differs",
                     ));
                 }
                 let semantic = source_owner.semantic_ssa().source_semantic();
-                let function = semantic
-                    .functions()
-                    .get(caller.index() as usize)
-                    .ok_or(QueryError::Unavailable("Option/enum source caller absent"))?;
+                let function = semantic.functions().get(caller.index() as usize).ok_or(
+                    QueryError::Unavailable("Option/enum/scalar source caller absent"),
+                )?;
                 if semantic.functions().len() != 2
                     || semantic.types().len() > 4096
                     || semantic.callables().len() > 4096
@@ -276,7 +288,7 @@ where
                     || function.locals().len() > 4096
                 {
                     return Err(QueryError::Unavailable(
-                        "Option/enum source exceeds closed owner profile",
+                        "Option/enum/scalar source exceeds closed owner profile",
                     ));
                 }
                 let source = Source {
@@ -308,7 +320,7 @@ where
             },
         );
         // The checked wrapper still converts/drops panic payloads at its own
-        // unchanged boundary. Both preparation owners and saved errors outlive it.
+        // unchanged boundary. All preparation owners and saved errors outlive it.
         let custody = before.check(budget, owned);
         let denied = budget.failed_work().is_some() || budget.failed_storage().is_some();
         drop(pending);
@@ -322,20 +334,10 @@ where
 }
 
 #[cfg(test)]
-#[path = "bf16_nominal_option_enum_genuine_v1_tests.rs"]
+#[path = "bf16_nominal_option_enum_scalar_genuine_v1_tests.rs"]
 mod genuine;
 #[cfg(test)]
-#[path = "bf16_nominal_option_enum_prelude_v1_tests.rs"]
+#[path = "bf16_nominal_option_enum_scalar_prelude_v1_tests.rs"]
 mod tests;
 #[cfg(test)]
-pub(crate) use genuine::observe_option_enum_before_scalar_for_test_v1;
-
-// Separate scalar continuation; the BeforeScalar entry is unchanged.
-#[path = "bf16_nominal_option_enum_scalar_prelude_v1.rs"]
-mod option_enum_scalar_prelude;
-#[cfg(test)]
-pub(crate) use option_enum_scalar_prelude::observe_option_enum_scalar_before_provenance_for_test_v1;
-#[allow(unused_imports)]
-pub(in crate::production_ranked_projection_v1) use option_enum_scalar_prelude::{
-    BeforeProvenanceV1, with_nominal_option_enum_scalar_before_provenance_v1,
-};
+pub(crate) use genuine::observe_option_enum_scalar_before_provenance_for_test_v1;
