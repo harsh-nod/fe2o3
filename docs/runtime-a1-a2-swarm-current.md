@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [runtime source-event custody integration](evidence/dev-runtime-source-custody-2026-09-28/README.md)
+now roots genuine source events beside indexed ordinary dispatches, preserves
+requests through Prepared retry, resamples after no-effect ordered withdrawal,
+and releases unused events after Ready before recycle. Logical handles remain
+independent; release failures retain exact returned or indeterminate custody and
+terminalize without recycling. Ten new CPU groups cover both lanes, rollback,
+out-of-order semantic gating and fault paths. All 20 CPU receipt groups, 1828
+runtime tests, 155 KFD live-queue tests and 95 doctests pass, along with strict
+Clippy, non-fixture production checks and formatting. No full KFD rerun, new
+Verus qualification, GPU execution or performance measurement is claimed. Native
+target scheduling, lane-local DATA composition and A1/A2 exit gates remain open.
+
 The [classified dependency-source publication](evidence/dev-source-publication-classification-2026-09-28/README.md)
 API now preserves rejection, complete-rollback retry and terminal outcomes while
 keeping the legacy error API. Nine new CPU test groups cover N=3 exact source
@@ -32,10 +44,10 @@ The broad KFD run passed 1720 tests and found two test-oracle failures; both wer
 corrected without production changes, and all 155 live-queue tests pass. This is
 not a fresh all-green full KFD rerun. Full runtime tests pass 1818/0 with 30
 hardware ignores; 95 doctests, strict Clippy, the no-default-features production
-check and formatting pass. Runtime ownership of native source events, physical
-versus logical target settlement, lane-local storage composition, source-rollback
-refinement, GPU overlap and matched performance remain open. A1/A2 and accepted
-lane checkpoints are unchanged.
+check and formatting pass. That packet did not integrate runtime ownership of
+native source events. Physical versus logical target settlement, lane-local
+storage composition, source-rollback refinement, GPU overlap and matched
+performance remain open. A1/A2 and accepted lane checkpoints are unchanged.
 
 The [generated-only composed startup](evidence/dev-generated-composed-startup-2026-09-28/README.md)
 now exposes mandatory Context-request/N1/N2 accounting through both checked-device
