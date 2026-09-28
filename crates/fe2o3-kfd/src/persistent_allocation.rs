@@ -374,6 +374,16 @@ pub struct Gfx942PersistentDependencyFrontierV1 {
 }
 
 impl Gfx942PersistentDependencyFrontierV1 {
+    #[cfg(test)]
+    pub(crate) fn identity_for_test_v1(&self) -> (usize, Gfx942DeviceMemoryIdentityV1, u64, u64) {
+        (
+            Rc::as_ptr(&self.incarnation) as usize,
+            self.binding,
+            self.generation,
+            self.through_sequence,
+        )
+    }
+
     pub const fn through_sequence(&self) -> u64 {
         self.through_sequence
     }

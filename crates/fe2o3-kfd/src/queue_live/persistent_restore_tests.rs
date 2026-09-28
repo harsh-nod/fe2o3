@@ -2,15 +2,21 @@
 
 use super::tests::{persistent_compute_cancellation_test_session, test_queue_key};
 use super::*;
+use crate::persistent_allocation::{
+    PersistentOwnerSnapshotForTestV1, PersistentUseIdentityForTestV1,
+};
 use crate::persistent_compute::{
     Gfx942PersistentComputeTerminalStageV1, PersistentComputeAttachmentEntryV1,
 };
+use crate::persistent_directional_sdma::Gfx942PersistentDirectionalSdmaAttachmentV1;
+use crate::queue::completion::CompletionCustodySnapshotV1;
 use crate::queue::dispatch_binding::control_release::{
-    ReturningControlCleanupCustodyV1, ReturningControlModeV1,
+    RetainedControlSnapshotV1, ReturningControlCleanupCustodyV1, ReturningControlModeV1,
 };
 use crate::queue::dispatch_binding::preparation::persistent_cancel_control_in_memory_v1;
 use crate::shared_memory::{
     DataCleanupCustodyV1, DispatchDataReleaseV1, PreparationMemoryFixtureV1 as Memory,
+    PreparationMemoryObservationV1,
 };
 use arrayvec::ArrayVec;
 
@@ -18,16 +24,89 @@ struct Case {
     memory: Memory,
     session: ComputeAqlQueueSessionV1,
     binding: PersistentComputeBindingKeyV1,
-    recycle: Gfx942CompletionRecycleObservationV1,
+    published: Option<Gfx942DispatchBatchV1<1>>,
+    recycle: Option<Gfx942CompletionRecycleObservationV1>,
     identities: Vec<Gfx942DeviceMemoryIdentityV1>,
     digests: Vec<Option<[u8; 32]>>,
 }
 
+type FrontierIdentity = (usize, Gfx942DeviceMemoryIdentityV1, u64, u64);
+
+#[derive(Debug, Eq, PartialEq)]
+enum UseSnapshot {
+    Published(PersistentUseIdentityForTestV1),
+    Recycled(PersistentUseIdentityForTestV1),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct EntrySnapshot {
+    owner: PersistentOwnerSnapshotForTestV1,
+    attachment: Gfx942PersistentDirectionalSdmaAttachmentV1,
+    initialization: PersistentComputeInitializationV1,
+    storage_identity: Option<Gfx942DeviceMemoryIdentityV1>,
+    effect: Gfx942PersistentComputeEffectV1,
+    state: UseSnapshot,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CaseSnapshot {
+    memory: PreparationMemoryObservationV1,
+    completion: CompletionCustodySnapshotV1,
+    completion_poisoned: bool,
+    control: RetainedControlSnapshotV1,
+    queue: QueueKeyV1,
+    binding: PersistentComputeBindingKeyV1,
+    predecessor: Option<u64>,
+    entries: Vec<EntrySnapshot>,
+    detached_count: usize,
+    detached_generation: Option<u64>,
+    detached_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
+    detached_next: Option<usize>,
+    next_generation: u64,
+    terminal_poisoned: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CompletedSnapshot {
+    owner: PersistentOwnerSnapshotForTestV1,
+    attachment: Gfx942PersistentDirectionalSdmaAttachmentV1,
+    frontier: FrontierIdentity,
+    effect: Gfx942PersistentComputeEffectV1,
+    digest: Option<[u8; 32]>,
+    initialized: bool,
+}
+
+fn completed_snapshot(
+    completed: &Gfx942ThreeBindingPersistentComputeCompletedV1,
+) -> [CompletedSnapshot; 3] {
+    completed
+        .completed
+        .each_ref()
+        .map(|entry| CompletedSnapshot {
+            owner: entry.allocation.owner.ownership_snapshot_for_test_v1(),
+            attachment: entry.allocation.attachment,
+            frontier: entry.frontier.identity_for_test_v1(),
+            effect: entry.effect,
+            digest: entry.authenticated_sha256,
+            initialized: entry.fully_initialized,
+        })
+}
+
 impl Case {
     fn new(count: usize, initialized: bool) -> Self {
+        Self::new_for_queue(count, initialized, 710)
+    }
+
+    fn new_for_queue(count: usize, initialized: bool, queue_id: u64) -> Self {
+        let mut case = Self::published_for_queue(count, initialized, queue_id);
+        case.complete_and_recycle();
+        case
+    }
+
+    fn published_for_queue(count: usize, initialized: bool, queue_id: u64) -> Self {
         assert!(count == 1 || (count == 3 && initialized));
         let mut memory = Memory::new(true);
-        let mut queue = test_queue_key(710, 1);
+        let mut queue = test_queue_key(queue_id, 1);
         queue.vm = memory.primary_vm();
         let binding = PersistentComputeBindingKeyV1 {
             queue,
@@ -124,44 +203,125 @@ impl Case {
             .unwrap()
             .mark_published(epoch, &published)
             .unwrap();
-        let completed = session
-            .completion_owner
-            .complete_one_without_native_for_test(published);
-        session
-            .dispatch
-            .as_mut()
-            .unwrap()
-            .mark_completed(epoch, &completed)
-            .unwrap();
-        let occurrence = completed.occurrence_v1().unwrap();
-        let recycle = session
-            .completion_owner
-            .recycle_one_without_native_for_test(completed);
-        session
-            .dispatch
-            .as_mut()
-            .unwrap()
-            .mark_recycled_occurrence(epoch, occurrence)
-            .unwrap();
         for entry in &mut session.persistent_compute.as_mut().unwrap().entries {
             let state =
                 core::mem::replace(&mut entry.state, PersistentComputeUseStateV1::Quarantined);
             let PersistentComputeUseStateV1::Prepared(prepared) = state else {
                 unreachable!()
             };
-            let published = entry.allocation.owner.publish(prepared).unwrap();
-            entry.state = PersistentComputeUseStateV1::Recycled(
-                entry.allocation.owner.complete(published).unwrap(),
+            entry.state = PersistentComputeUseStateV1::Published(
+                entry.allocation.owner.publish(prepared).unwrap(),
             );
         }
         Self {
             memory,
             session,
             binding,
-            recycle,
+            published: Some(wrap_published(published, epoch)),
+            recycle: None,
             identities,
             digests,
         }
+    }
+
+    fn complete_and_recycle(&mut self) {
+        let (published, epoch) = unwrap_published(self.published.take().unwrap());
+        let completed = self
+            .session
+            .completion_owner
+            .complete_one_without_native_for_test(published);
+        self.session
+            .dispatch
+            .as_mut()
+            .unwrap()
+            .mark_completed(epoch, &completed)
+            .unwrap();
+        let occurrence = completed.occurrence_v1().unwrap();
+        let recycle = self
+            .session
+            .completion_owner
+            .recycle_one_without_native_for_test(completed);
+        self.session
+            .dispatch
+            .as_mut()
+            .unwrap()
+            .mark_recycled_occurrence(epoch, occurrence)
+            .unwrap();
+        for entry in &mut self.session.persistent_compute.as_mut().unwrap().entries {
+            let state =
+                core::mem::replace(&mut entry.state, PersistentComputeUseStateV1::Quarantined);
+            let PersistentComputeUseStateV1::Published(published) = state else {
+                unreachable!()
+            };
+            entry.state = PersistentComputeUseStateV1::Recycled(
+                entry.allocation.owner.complete(published).unwrap(),
+            );
+        }
+        self.recycle = Some(recycle);
+    }
+
+    fn snapshot(&self) -> CaseSnapshot {
+        let session = &self.session;
+        let attachment = session.persistent_compute.as_ref().unwrap();
+        assert!(attachment.terminal_custody.is_none());
+        CaseSnapshot {
+            memory: self.memory.observation(),
+            completion: session.completion_owner.custody_snapshot_for_test(),
+            completion_poisoned: session.completion_owner.is_poisoned_for_test(),
+            control: RetainedControlSnapshotV1::recycled_owner_v1(
+                session.dispatch.as_ref().unwrap(),
+            ),
+            queue: session.key,
+            binding: attachment.binding,
+            predecessor: attachment.predecessor_dispatch_generation,
+            entries: attachment
+                .entries
+                .iter()
+                .map(|entry| EntrySnapshot {
+                    owner: entry.allocation.owner.ownership_snapshot_for_test_v1(),
+                    attachment: entry.allocation.attachment,
+                    initialization: entry.initialization,
+                    storage_identity: entry.storage_identity,
+                    effect: entry.effect,
+                    state: match &entry.state {
+                        PersistentComputeUseStateV1::Published(lease) => {
+                            UseSnapshot::Published(lease.cancellation_identity_for_test())
+                        }
+                        PersistentComputeUseStateV1::Recycled(lease) => {
+                            UseSnapshot::Recycled(lease.cancellation_identity_for_test())
+                        }
+                        _ => panic!("expected published or recycled test custody"),
+                    },
+                })
+                .collect(),
+            detached_count: session.detached_data_count,
+            detached_generation: session.detached_dispatch_generation,
+            detached_identities: session.detached_data_identities.clone(),
+            detached_next: session.detached_next_insertion_index,
+            next_generation: session.next_persistent_compute_generation,
+            terminal_poisoned: session.terminal_poisoned,
+        }
+    }
+
+    fn recycled_three_receipt(&self) -> Gfx942RecycledThreeBindingPersistentComputeDispatchV1 {
+        Gfx942RecycledThreeBindingPersistentComputeDispatchV1 {
+            binding: self.binding,
+            recycle: self.recycle.unwrap(),
+            thread_affinity: PhantomData,
+        }
+    }
+
+    fn finish_three(&mut self, receipt: Gfx942RecycledThreeBindingPersistentComputeDispatchV1) {
+        let completed = self
+            .session
+            .detach_recycled_three_binding_directional_persistent_fixed_dispatch_v1(receipt)
+            .unwrap();
+        for (index, completed) in completed.into_completed().into_iter().enumerate() {
+            self.check_completed(completed, index, true);
+        }
+        assert!(self.session.persistent_compute.is_none());
+        assert!(!self.session.terminal_poisoned);
+        self.release_control();
     }
 
     fn release_data(&mut self, data: Gfx942FixedDispatchDataV1) {
@@ -195,12 +355,19 @@ impl Case {
         };
         assert_eq!(completed.authenticated_sha256, expected_digest);
         assert_eq!(completed.fully_initialized, initialized);
-        let mut allocation = completed
-            .retire_settled_frontier_for_replay_v1()
-            .unwrap()
-            .0
-            .into_allocation();
+        let input = completed.retire_settled_frontier_for_replay_v1().unwrap().0;
+        self.check_input(input, index, initialized);
+    }
+
+    fn check_input(
+        &mut self,
+        input: Gfx942PersistentComputeInputV1,
+        index: usize,
+        initialized: bool,
+    ) {
+        let mut allocation = input.into_allocation();
         assert_eq!(allocation.owner.live_use_count(), 0);
+        assert_eq!(allocation.owner.retained_settled_use_count(), 0);
         let attachment = allocation.attachment;
         let buffer = allocation
             .owner
@@ -222,12 +389,188 @@ impl Case {
 }
 
 #[test]
+fn persistent_completed_restore_foreign_poll_returns_exact_published_receipt() {
+    let mut original = Case::published_for_queue(3, true, 710);
+    let mut foreign = Case::published_for_queue(3, true, 711);
+    let (completion, epoch) = unwrap_published(original.published.take().unwrap());
+    let occurrence = completion.occurrence_v1().unwrap();
+    let receipt = Gfx942ThreeBindingPersistentComputeDispatchV1 {
+        binding: original.binding,
+        batch: wrap_published(completion, epoch),
+        thread_affinity: PhantomData,
+    };
+    let original_before = original.snapshot();
+    let foreign_before = foreign.snapshot();
+    let (error, recovered) = foreign
+        .session
+        .poll_and_recycle_three_binding_directional_persistent_fixed_dispatch_v1(receipt)
+        .err()
+        .expect("foreign queue must reject published receipt")
+        .into_parts();
+    assert!(matches!(
+        error,
+        ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::ResourcePhase)
+    ));
+    assert_eq!(original.snapshot(), original_before);
+    assert_eq!(foreign.snapshot(), foreign_before);
+    let recovered = recovered.expect("foreign queue must return the caller's receipt");
+    assert_eq!(recovered.binding, original.binding);
+    let (completion, recovered_epoch) = unwrap_published(recovered.batch);
+    assert_eq!(recovered_epoch, epoch);
+    assert_eq!(completion.occurrence_v1().unwrap(), occurrence);
+    let recovered = Gfx942ThreeBindingPersistentComputeDispatchV1 {
+        binding: recovered.binding,
+        batch: wrap_published(completion, recovered_epoch),
+        thread_affinity: PhantomData,
+    };
+    let pending = original
+        .session
+        .poll_and_recycle_three_binding_directional_persistent_fixed_dispatch_v1_using(
+            recovered,
+            |session, identity, completion| {
+                session
+                    .dispatch
+                    .as_ref()
+                    .unwrap()
+                    .validate_published(identity, completion)
+                    .is_ok()
+            },
+            |session, completion| {
+                session
+                    .completion_owner
+                    .observe_one_pending_with_current_closing_for_test(completion)
+                    .map_err(|(error, completion)| (error.into(), completion))
+            },
+        )
+        .unwrap();
+    let Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Pending(receipt) = pending else {
+        panic!("injected Pending must preserve original-session custody")
+    };
+    assert_eq!(receipt.binding, original.binding);
+    let (completion, continued_epoch) = unwrap_published(receipt.batch);
+    assert_eq!(continued_epoch, epoch);
+    assert_eq!(completion.occurrence_v1().unwrap(), occurrence);
+    original.published = Some(wrap_published(completion, continued_epoch));
+    assert_eq!(original.snapshot(), original_before);
+    assert_eq!(foreign.snapshot(), foreign_before);
+    for case in [&mut original, &mut foreign] {
+        case.complete_and_recycle();
+        case.finish_three(case.recycled_three_receipt());
+    }
+}
+
+#[test]
+fn persistent_completed_restore_foreign_detach_returns_exact_recycled_receipt() {
+    let mut original = Case::new_for_queue(3, true, 710);
+    let mut foreign = Case::new_for_queue(3, true, 711);
+    let original_before = original.snapshot();
+    let foreign_before = foreign.snapshot();
+    let (error, recovered) = foreign
+        .session
+        .detach_recycled_three_binding_directional_persistent_fixed_dispatch_v1(
+            original.recycled_three_receipt(),
+        )
+        .unwrap_err()
+        .into_parts();
+    assert!(matches!(
+        error,
+        ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::ResourcePhase)
+    ));
+    let recovered = recovered.expect("foreign queue must return the caller's receipt");
+    assert_eq!(recovered.binding, original.binding);
+    assert_eq!(Some(recovered.recycle), original.recycle);
+    assert_eq!(original.snapshot(), original_before);
+    assert_eq!(foreign.snapshot(), foreign_before);
+    original.finish_three(recovered);
+    foreign.finish_three(foreign.recycled_three_receipt());
+}
+
+#[test]
+fn persistent_completed_restore_three_retirement_rejection_preserves_all_frontiers() {
+    for rejected in 0..3 {
+        let mut case = Case::new(3, true);
+        let mut completed = case
+            .session
+            .detach_recycled_three_binding_directional_persistent_fixed_dispatch_v1(
+                case.recycled_three_receipt(),
+            )
+            .unwrap();
+        for entry in &completed.completed {
+            assert_eq!(entry.allocation.owner.live_use_count(), 0);
+            assert_eq!(entry.allocation.owner.retained_settled_use_count(), 1);
+        }
+        let entry = &mut completed.completed[rejected];
+        let request =
+            Gfx942PersistentUseRequestV1::new(Gfx942PersistentOperationV1::ComputeWrite, 0, 4096)
+                .unwrap();
+        assert_eq!(
+            entry
+                .allocation
+                .owner
+                .reserve(request, None)
+                .unwrap_err()
+                .error(),
+            Gfx942PersistentUseErrorV1::DependencyRequired
+        );
+        let reserved = entry
+            .allocation
+            .owner
+            .reserve(request, Some(&entry.frontier))
+            .unwrap();
+        assert_eq!(entry.allocation.owner.live_use_count(), 1);
+        let before = completed_snapshot(&completed);
+        let memory_before = case.memory.observation();
+        let mut recovered = completed
+            .retire_settled_frontiers_for_replay_v1()
+            .unwrap_err();
+        assert_eq!(
+            completed_snapshot(&recovered),
+            before,
+            "rejected ordinal {rejected}"
+        );
+        assert_eq!(case.memory.observation(), memory_before);
+        for entry in &recovered.completed {
+            assert_eq!(entry.allocation.owner.retained_settled_use_count(), 1);
+        }
+        recovered.completed[rejected]
+            .allocation
+            .owner
+            .cancel_reserved(reserved)
+            .unwrap();
+        let inputs = recovered.retire_settled_frontiers_for_replay_v1().unwrap();
+        for (index, (input, effect)) in inputs.into_iter().enumerate() {
+            assert_eq!(
+                effect,
+                if index < 2 {
+                    Gfx942PersistentComputeEffectV1::Read
+                } else {
+                    Gfx942PersistentComputeEffectV1::Write
+                }
+            );
+            if index < 2 {
+                let Gfx942PersistentComputeInputV1::Initialized(ready) = &input else {
+                    panic!("read input must preserve its authenticated digest")
+                };
+                assert_eq!(Some(ready.authenticated_sha256), case.digests[index]);
+            } else {
+                assert!(matches!(
+                    input,
+                    Gfx942PersistentComputeInputV1::InitializedAfterDispatch(_)
+                ));
+            }
+            case.check_input(input, index, true);
+        }
+        case.release_control();
+    }
+}
+
+#[test]
 fn persistent_completed_restore_public_single_preserves_cold_and_initialized_storage() {
     for initialized in [false, true] {
         let mut case = Case::new(1, initialized);
         let receipt = Gfx942RecycledPersistentComputeDispatchV1 {
             binding: case.binding,
-            recycle: case.recycle,
+            recycle: case.recycle.unwrap(),
             thread_affinity: PhantomData,
         };
         let completed = case
@@ -246,7 +589,7 @@ fn persistent_completed_restore_public_three_preserves_storage_and_read_digests(
     let mut case = Case::new(3, true);
     let receipt = Gfx942RecycledThreeBindingPersistentComputeDispatchV1 {
         binding: case.binding,
-        recycle: case.recycle,
+        recycle: case.recycle.unwrap(),
         thread_affinity: PhantomData,
     };
     let completed = case
@@ -277,7 +620,7 @@ fn persistent_completed_restore_public_scope_failure_keeps_entire_original_roste
                     .detach_recycled_directional_persistent_fixed_dispatch_v1(
                         Gfx942RecycledPersistentComputeDispatchV1 {
                             binding: case.binding,
-                            recycle: case.recycle,
+                            recycle: case.recycle.unwrap(),
                             thread_affinity: PhantomData,
                         },
                     )
@@ -291,7 +634,7 @@ fn persistent_completed_restore_public_scope_failure_keeps_entire_original_roste
                     .detach_recycled_three_binding_directional_persistent_fixed_dispatch_v1(
                         Gfx942RecycledThreeBindingPersistentComputeDispatchV1 {
                             binding: case.binding,
-                            recycle: case.recycle,
+                            recycle: case.recycle.unwrap(),
                             thread_affinity: PhantomData,
                         },
                     )

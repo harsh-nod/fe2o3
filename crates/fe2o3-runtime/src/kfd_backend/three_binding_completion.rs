@@ -275,6 +275,52 @@ impl KfdRuntimeBackendV1 {
         self.three_completion_root_mut_v1().receipt = receipt;
     }
 
+    fn reduce_three_poll_failure_v1(
+        &mut self,
+        failure: fe2o3_kfd::Gfx942ThreeBindingPersistentComputePollAndRecycleFailureV1,
+    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
+        let (error, recovered) = failure.into_parts();
+        self.retain_three_completion_failure_v1(
+            recovered.map(KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputePublished),
+        );
+        self.terminal_error(format!("KFD three-binding completion/recycle: {error}"))
+    }
+
+    fn reduce_three_detach_failure_v1(
+        &mut self,
+        failure: fe2o3_kfd::Gfx942ThreeBindingPersistentComputeDetachFailureV1,
+    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
+        let (error, recovered) = failure.into_parts();
+        self.retain_three_completion_failure_v1(
+            recovered.map(KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputeRecycled),
+        );
+        self.terminal_error(format!("KFD three-binding completion detach: {error}"))
+    }
+
+    fn retire_three_completed_v1(
+        &mut self,
+        completed: fe2o3_kfd::Gfx942ThreeBindingPersistentComputeCompletedV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        match completed.retire_settled_frontiers_for_replay_v1() {
+            Ok(completed) => {
+                let effects = std::array::from_fn(|index| completed[index].1);
+                self.three_completion_root_mut_v1().receipt = ThreeCompletionReceiptV1::Retired(
+                    completed
+                        .map(|(input, _)| Some(KfdRuntimePersistentComputeInputV1::Native(input))),
+                    effects,
+                );
+                Ok(())
+            }
+            Err(completed) => {
+                self.three_completion_root_mut_v1().receipt =
+                    ThreeCompletionReceiptV1::Detached(completed);
+                Err(self.terminal_error(
+                    "KFD three-binding frontier retirement rejected its exact completed roster",
+                ))
+            }
+        }
+    }
+
     #[allow(clippy::result_large_err)]
     fn advance_indexed_three_completion_v1(
         &mut self,
@@ -317,30 +363,24 @@ impl KfdRuntimeBackendV1 {
                     },
                 }),
         };
-        let observed_at =
-            match poll {
-                Ok(Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Pending(dispatch)) => {
-                    self.three_completion_root_mut_v1().receipt =
-                        ThreeCompletionReceiptV1::Published(dispatch);
-                    return Ok(self.three_completion_pending_v1());
-                }
-                Ok(Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Recycled {
-                    recycled,
-                    completion_observed_at,
-                }) => {
-                    self.three_completion_root_mut_v1().receipt =
-                        ThreeCompletionReceiptV1::Recycled(recycled);
-                    completion_observed_at
-                }
-                Err(failure) => {
-                    let (error, recovered) = failure.into_parts();
-                    self.retain_three_completion_failure_v1(recovered.map(
-                        KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputePublished,
-                    ));
-                    return Err(self
-                        .terminal_error(format!("KFD three-binding completion/recycle: {error}")));
-                }
-            };
+        let observed_at = match poll {
+            Ok(Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Pending(dispatch)) => {
+                self.three_completion_root_mut_v1().receipt =
+                    ThreeCompletionReceiptV1::Published(dispatch);
+                return Ok(self.three_completion_pending_v1());
+            }
+            Ok(Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Recycled {
+                recycled,
+                completion_observed_at,
+            }) => {
+                self.three_completion_root_mut_v1().receipt =
+                    ThreeCompletionReceiptV1::Recycled(recycled);
+                completion_observed_at
+            }
+            Err(failure) => {
+                return Err(self.reduce_three_poll_failure_v1(failure));
+            }
+        };
         let active = self.active.as_mut().unwrap();
         active.performance.publish_to_completion =
             observed_at.saturating_duration_since(active.published_at);
@@ -364,38 +404,14 @@ impl KfdRuntimeBackendV1 {
                     ThreeCompletionReceiptV1::Detached(completed)
             }
             Err(failure) => {
-                let (error, recovered) = failure.into_parts();
-                self.retain_three_completion_failure_v1(
-                    recovered.map(
-                        KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputeRecycled,
-                    ),
-                );
-                return Err(
-                    self.terminal_error(format!("KFD three-binding completion detach: {error}"))
-                );
+                return Err(self.reduce_three_detach_failure_v1(failure));
             }
         }
         let ThreeCompletionReceiptV1::Detached(completed) = self.take_three_completion_receipt_v1()
         else {
             unreachable!()
         };
-        match completed.retire_settled_frontiers_for_replay_v1() {
-            Ok(completed) => {
-                let effects = std::array::from_fn(|index| completed[index].1);
-                self.three_completion_root_mut_v1().receipt = ThreeCompletionReceiptV1::Retired(
-                    completed
-                        .map(|(input, _)| Some(KfdRuntimePersistentComputeInputV1::Native(input))),
-                    effects,
-                );
-            }
-            Err(completed) => {
-                self.three_completion_root_mut_v1().receipt =
-                    ThreeCompletionReceiptV1::Detached(completed);
-                return Err(self.terminal_error(
-                    "KFD three-binding frontier retirement rejected its exact completed roster",
-                ));
-            }
-        }
+        self.retire_three_completed_v1(completed)?;
         self.finish_indexed_three_completion_v1()
     }
 
