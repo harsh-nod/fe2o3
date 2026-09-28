@@ -470,6 +470,7 @@ fn run_indexed_object_payloads_v29(
     SOURCE_ADDRESS_ACCESS_ALLOCATIONS_V29.set(0);
     scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_QUERY_SCRATCH_V29.set((0, 0));
     scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.set((0, 0, 0));
+    scoped_raw_admission_v29::SOURCE_ADDRESS_QUERY_SCRATCH_V29.set((0, 0, 0, 0));
     scoped_raw_admission_v29::PENDING_ALTERNATIVE_CAPACITY_V29.set((0, 0, 0));
     OBJECT_PAYLOAD_INDEX_MUTATED_V29.set(false);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
@@ -823,6 +824,28 @@ fn original_object_payload_index_rejects_duplicate_missing_stale_and_foreign_key
                 "exact foreign custody refusal required: {result:?}"
             );
         }
+    }
+}
+
+#[test]
+fn original_source_access_query_retains_only_actual_rows_before_pending_memory() {
+    let mut previous = None;
+    for count in [1, 4, 16] {
+        let (result, _, _, _, payloads, completed) =
+            run_indexed_object_payloads_v29(count, 0, MODULE_LIMIT, MODULE_LIMIT);
+        result.unwrap();
+        assert!(completed);
+        assert_eq!(payloads.0, 3);
+        let (calls, reclaimed, rows, retained) =
+            scoped_raw_admission_v29::SOURCE_ADDRESS_QUERY_SCRATCH_V29.get();
+        assert_eq!(calls, 3);
+        assert!(reclaimed > 0 && rows > count && retained > 0);
+        if let Some((old_reclaimed, old_rows, old_retained)) = previous {
+            assert!(reclaimed > old_reclaimed);
+            assert!(rows > old_rows);
+            assert!(retained > old_retained);
+        }
+        previous = Some((reclaimed, rows, retained));
     }
 }
 

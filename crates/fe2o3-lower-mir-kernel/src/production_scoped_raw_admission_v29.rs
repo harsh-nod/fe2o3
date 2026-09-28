@@ -2052,7 +2052,7 @@ fn check_expanded_source_memory_inner_v29(
         }
     }
     let (sources, issued) =
-        source_address_accesses_v29(instances, references, &source_index, slots, budget)?;
+        source_address_accesses_retained_v29(instances, references, &source_index, slots, budget)?;
     let index_failures =
         source_index_failures_v29(instances, references.plan, &source_index, slots, budget)?;
     check_source_object_effect_census_v29(
@@ -2252,6 +2252,7 @@ fn check_expanded_source_memory_inner_v29(
 include!("production_source_direct_object_activation_v29.rs");
 include!("production_source_safe_object_activation_v29.rs");
 include!("production_source_object_activation_scratch_v29.rs");
+include!("production_source_access_query_scratch_v29.rs");
 include!("production_source_pending_alternative_capacity_v29.rs");
 
 fn retain_pending_memory_v29(
