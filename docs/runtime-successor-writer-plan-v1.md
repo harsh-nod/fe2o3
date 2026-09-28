@@ -263,8 +263,14 @@ with a retained successor retires only Pending FIFO and explicit-dependency
 metadata, preserving deferred ordering and resource custody. Public scripted
 flush/retry/fault controls qualify this runtime handoff, not native receipts.
 
-Next, couple the same receipt-storage transition to genuine private KFD CPU
-receipts and refine staged occupancy separately from confirmed logical epochs.
+The [shared publication receipt cell](evidence/dev-native-publication-cell-2026-09-28/README.md)
+now couples the exact consuming/store and classification body to genuine private
+KFD CPU receipts. Its success, retry, error and unwind controls use the production
+facade conversion; three compiled source mutants test oracle sensitivity.
+This is not full runtime handoff or hardware evidence.
+
+Next, couple completion receipt storage and refine staged occupancy separately
+from confirmed logical epochs.
 Refine logical commit separately from optional/fallible observer emission;
 R60's existing model joins these effects and is not correspondence evidence for
 the indexed adapters. Production-body mutations must detect receipt redirection,

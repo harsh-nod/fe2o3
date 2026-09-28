@@ -174,6 +174,18 @@ The next proof must model physical staging separately from confirmed epochs and
 logical settlement separately from optional profiling, and couple exact lower
 receipts to their indexed runtime owners.
 
+Submission classification and receipt storage now share one concrete private
+cell across initial, retry and ordered publication. A closure-taking API installs
+consuming state before the native call and roots the returned outcome before
+the outer lane callback closes. KFD CPU tests compile that exact source and use
+the production facade's failure conversion with genuine typed lower receipts.
+The [receipt-cell packet](evidence/dev-native-publication-cell-2026-09-28/README.md)
+adds success/recycle, signal-capacity, rejection, terminal and unwind controls,
+plus three compiled production-body mutations. Injected submission/completion
+and CPU-only fixtures do not qualify GPU execution, native teardown or the full
+runtime Active/Pending handoff. Completion receipt-state sharing and indexed
+metadata refinement remain separate work.
+
 The direct adapter's same-device copies are native SDMA submissions. Direct
 dependency chains are capped at 256 before ledger mutation, cancellation can
 withdraw only work still waiting before publication, and a published copy is

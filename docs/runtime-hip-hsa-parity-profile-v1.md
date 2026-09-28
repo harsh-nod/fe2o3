@@ -139,6 +139,13 @@ correspondence and matched HIP/HSA measurements remain open. R60's abstract retr
 and atomic commit/profile transitions do not establish those production
 properties. No behavioral or performance parity is newly accepted.
 
+The [shared publication-cell evidence](evidence/dev-native-publication-cell-2026-09-28/README.md)
+now compiles the production consuming/store and classified-result bodies in KFD
+tests with real typed lower CPU receipts. These controls and compiled mutants
+qualify that isolated bridge, not full runtime owner/receipt association,
+GPU submission/completion, native cleanup, formal correspondence or performance.
+No compatibility runtime or public receipt constructor is introduced.
+
 Poll and `wait` never perform deferred compute preparation, but can retry
 publication of an already bound Prepared recipe. Submit may publish immediately
 ready work. The additive in-process `flush_stream`

@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+Shared publication-receipt development (2026-09-28 UTC): initial binding,
+Prepared retry and ordered publication now use one private concrete receipt cell
+and classified-result mapping. KFD tests compile that exact source against real
+typed lower CPU receipts and the production private-to-public error conversion.
+Six groups cover primary/AUX success, capacity retry, rejection, terminal failure
+and returned/consuming unwind. Three compiled production-body mutations are
+detected by behavioral assertions, and the restored baseline passes. The
+[receipt-cell packet](evidence/dev-native-publication-cell-2026-09-28/README.md)
+records 1703 KFD passes with one unwaived telemetry failure, 1794 runtime passes
+with three unwaived socket-inspection failures and 28 ignores, and passing final
+static and mutation checks. Its selections overlap. The packet
+separates this coupling from full runtime indexing, native GPU execution and
+formal refinement. Completion receipt coupling and staged metadata refinement
+are next; protected Worker, Context composition, native cleanup and matched
+performance remain open. A1/A2 and accepted lane checkpoints are unchanged.
+
 Ordinary ordered-publication development (2026-09-28 UTC): same-recipe successors
 now retain an indexed Publishing owner before submit while preserving the
 predecessor. Returned outcomes are stored before the outer lane callback closes;
@@ -35,8 +51,8 @@ ordering and resource custody. The
 separates public scripted workflows from native execution and correspondence.
 It records nine ordered and 35 materialized focused passes, 1794 full-runtime
 passes with three unwaived socket-inspection failures, and passing static checks.
-The next work is actual native receipt coupling and a shared-source refinement
-for staging/confirmation and logical commit versus optional profiling. R60's
+That checkpoint left actual native receipt coupling and a shared-source refinement
+for staging/confirmation and logical commit versus optional profiling open. R60's
 independent 64-epoch model is not a proof of these production transitions or the
 1024-slot development profile. A1/A2 and accepted checkpoints remain unchanged.
 
