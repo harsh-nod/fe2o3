@@ -16061,6 +16061,22 @@ mod tests {
             }
         }
 
+        fn published_owners(&self) -> [(u64, usize, [u8; 32]); 3] {
+            let Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { devices, .. }) =
+                self.backend.active.as_ref().unwrap().execution.as_ref()
+            else {
+                panic!("producer retains its published roster");
+            };
+            std::array::from_fn(|index| {
+                let bytes = devices[index].scripted_bytes().unwrap();
+                (
+                    devices[index].scripted_owner_id().unwrap(),
+                    bytes.as_ptr() as usize,
+                    Sha256::digest(bytes).into(),
+                )
+            })
+        }
+
         fn submit(&mut self) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
             self.backend
                 .submit_producer_aware_launch_v1(BackendProducerAwareLaunchV1 {
@@ -16408,6 +16424,7 @@ mod tests {
     #[test]
     fn producer_launch_active_three_binding_parent_terminal_retains_both_rosters() {
         let mut fixture = ScriptedActiveProducerFixtureV1::new(true);
+        let original = fixture.published_owners();
         let consumer = fixture.submit().unwrap();
         fixture.backend.release_event_v1(fixture.event).unwrap();
         fixture
@@ -16421,10 +16438,12 @@ mod tests {
             Err(RuntimeBackendFailureV1::Terminal(_))
         ));
         assert!(fixture.backend.terminal);
-        assert!(matches!(
-            fixture.backend.terminal_sdma_custody,
-            Some(KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentInputs(_))
-        ));
+        assert!(fixture.backend.terminal_sdma_custody.is_none());
+        assert_eq!(
+            fixture.backend.active.as_ref().unwrap().id,
+            fixture.producer
+        );
+        assert_eq!(fixture.published_owners(), original);
         assert_eq!(
             &*fixture.backend.pending_compute[&consumer].explicit_success_dependencies,
             &[fixture.producer]

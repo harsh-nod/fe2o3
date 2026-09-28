@@ -343,6 +343,7 @@ fn native_waw_revalidates_restored_output_before_publication() {
 #[test]
 fn native_waw_output_owner_drift_quarantines_both_rosters() {
     let (mut f, _extra) = fixture(true);
+    let original = f.published_owners();
     let c = f.submit().unwrap();
     let output = f.launch.bindings[2].region.allocation;
     let owners = f.backend.allocation_custody[&output].owners.clone();
@@ -353,10 +354,9 @@ fn native_waw_output_owner_drift_quarantines_both_rosters() {
         Err(RuntimeBackendFailureV1::Terminal(_))
     ));
     assert!(f.backend.terminal);
-    assert!(matches!(
-        f.backend.terminal_sdma_custody,
-        Some(KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentInputs(_))
-    ));
+    assert!(f.backend.terminal_sdma_custody.is_none());
+    assert_eq!(f.backend.active.as_ref().unwrap().id, f.producer);
+    assert_eq!(f.published_owners(), original);
     assert_eq!(f.backend.allocation_custody[&output].owners, owners);
     assert!(f.backend.pending_compute.contains_key(&c));
     assert_eq!(f.backend.compute_dependency_retain_counts[&f.producer], 1);
