@@ -346,7 +346,11 @@ fn backend_snapshot(
                     ..
                 } => (
                     2,
-                    Some((*allocation, *access, &**input as *const _ as usize)),
+                    Some((
+                        *allocation,
+                        *access,
+                        input.armed().unwrap().as_ref() as *const _ as usize,
+                    )),
                 ),
                 _ => panic!("fixture must own its real Scripted execution"),
             };
@@ -425,7 +429,8 @@ fn backend_snapshot(
                             ..
                         } => {
                             assert_eq!(*allocation, id);
-                            let KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) = &**input
+                            let KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) =
+                                input.armed().unwrap().as_ref()
                             else {
                                 panic!(
                                     "first preparation must retain the authenticated ready owner"
@@ -435,7 +440,7 @@ fn backend_snapshot(
                                 ready.owner.scripted_owner_id().unwrap(),
                                 ready.owner.scripted_bytes().unwrap().to_vec(),
                                 Some(ready.owner.authenticated_sha256()),
-                                Some(&**input as *const _ as usize),
+                                Some(input.armed().unwrap().as_ref() as *const _ as usize),
                             )
                         }
                         _ => {

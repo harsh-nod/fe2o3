@@ -6,7 +6,7 @@ use std::mem::ManuallyDrop;
 use std::os::unix::process::ExitStatusExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-fn fixture() -> (KfdRuntimeBackendV1, u64, u64) {
+pub(super) fn fixture() -> (KfdRuntimeBackendV1, u64, u64) {
     let (mut backend, stream, _, device) = scripted_direct_backend_v1(
         4096,
         vec![ScriptedSdmaStepV1::PromoteInitializedStorage(
@@ -29,7 +29,7 @@ fn fixture() -> (KfdRuntimeBackendV1, u64, u64) {
     (backend, submission, device)
 }
 
-fn three_fixture() -> (KfdRuntimeBackendV1, u64, Vec<u64>) {
+pub(super) fn three_fixture() -> (KfdRuntimeBackendV1, u64, Vec<u64>) {
     let steps = (0..3)
         .map(|_| ScriptedSdmaStepV1::PromoteInitializedStorage(ScriptedFailureModeV1::Success));
     let (mut backend, stream, allocations) =
@@ -55,10 +55,10 @@ fn three_fixture() -> (KfdRuntimeBackendV1, u64, Vec<u64>) {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct InputFacts {
-    owner: u64,
-    bytes: usize,
-    digest: [u8; 32],
+pub(super) struct InputFacts {
+    pub(super) owner: u64,
+    pub(super) bytes: usize,
+    pub(super) digest: [u8; 32],
     certificate: Option<[u8; 32]>,
     origin: &'static str,
 }
@@ -70,7 +70,7 @@ struct OwnerFacts {
     restored_box: Option<usize>,
 }
 
-fn input_facts(input: &KfdRuntimePersistentComputeInputV1) -> InputFacts {
+pub(super) fn input_facts(input: &KfdRuntimePersistentComputeInputV1) -> InputFacts {
     let (id, bytes, certificate, origin) = match input {
         KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => (
             device.scripted_owner_id().unwrap(),
@@ -101,7 +101,7 @@ fn input_facts(input: &KfdRuntimePersistentComputeInputV1) -> InputFacts {
     }
 }
 
-fn shell_facts(shell: &ThreeBindingPersistentRestoreShellV1) -> [usize; 4] {
+pub(super) fn shell_facts(shell: &ThreeBindingPersistentRestoreShellV1) -> [usize; 4] {
     [
         shell
             .ready
@@ -128,7 +128,7 @@ fn owners(backend: &KfdRuntimeBackendV1) -> Vec<OwnerFacts> {
         ActiveComputeExecutionV1::ScriptedPersistentPrepared {
             allocation, input, ..
         } => vec![OwnerFacts {
-            input: input_facts(input),
+            input: input_facts(input.armed().unwrap()),
             shells: Some(shell_facts(
                 backend.allocations[allocation]
                     .persistent_storage_restore
@@ -142,6 +142,8 @@ fn owners(backend: &KfdRuntimeBackendV1) -> Vec<OwnerFacts> {
             restore_shells,
             ..
         } => inputs
+            .armed()
+            .unwrap()
             .iter()
             .zip(restore_shells)
             .map(|(input, shell)| OwnerFacts {
@@ -187,7 +189,7 @@ fn owners(backend: &KfdRuntimeBackendV1) -> Vec<OwnerFacts> {
     }
 }
 
-fn profile_facts(backend: &KfdRuntimeBackendV1) -> String {
+pub(super) fn profile_facts(backend: &KfdRuntimeBackendV1) -> String {
     let profile = match backend.active.as_ref().unwrap().execution.as_ref().unwrap() {
         ActiveComputeExecutionV1::ScriptedPersistentPrepared { profile, .. }
         | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { profile, .. } => {
@@ -592,7 +594,7 @@ fn healthy<const N: usize>(origin: usize, publish: bool) {
                 input,
                 ..
             } => (
-                vec![input_facts(input)],
+                vec![input_facts(input.armed().unwrap())],
                 vec![PersistentFullRangeComputeAdmissionV1 {
                     allocation: *allocation,
                     access: *access,
@@ -604,7 +606,7 @@ fn healthy<const N: usize>(origin: usize, publish: bool) {
                 admissions,
                 ..
             } => (
-                inputs.iter().map(input_facts).collect(),
+                inputs.armed().unwrap().iter().map(input_facts).collect(),
                 admissions.to_vec(),
             ),
             _ => panic!("prepared before cancellation/publication"),
@@ -629,6 +631,23 @@ fn healthy<const N: usize>(origin: usize, publish: bool) {
                 .performance
                 .persistent_control_reused()
         );
+    }
+    let profile = profile_facts(&backend);
+    let ledger = super::prepared_publication_tests::ledger(&backend);
+    let shells = super::prepared_publication_tests::shells(&backend);
+    for _ in 0..2 {
+        backend.scripted_prepared_publication_fault =
+            Some(super::super::prepared_publication::ScriptedPreparedPublicationFaultV1::Retryable);
+        assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+        assert!(backend.persistent_prepared_is_armed_v1());
+        assert_eq!(
+            super::prepared_publication_tests::inputs(&backend),
+            before_inputs
+        );
+        assert_eq!(profile_facts(&backend), profile);
+        assert_eq!(super::prepared_publication_tests::ledger(&backend), ledger);
+        assert_eq!(super::prepared_publication_tests::shells(&backend), shells);
+        assert!(!backend.terminal);
     }
     if publish {
         assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
@@ -724,6 +743,7 @@ fn prepared_cancellation_preserves_single_and_three_binding_origins() {
 #[test]
 fn prepared_three_binding_poll_still_publishes_and_completes() {
     for origin in 0..4 {
+        healthy::<1>(origin, true);
         healthy::<3>(origin, true);
     }
 }

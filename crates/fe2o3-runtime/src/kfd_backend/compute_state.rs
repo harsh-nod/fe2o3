@@ -83,6 +83,28 @@ pub(super) struct PersistentPublicationProfileV1 {
     pub(super) bindings: Option<Result<Vec<KfdProfileBindingV1>, ()>>,
 }
 
+pub(super) enum PreparedReceiptV1<T> {
+    Armed(T),
+    // The consuming lower operation now owns the native publication obligation.
+    NativeOwned,
+}
+
+impl<T> PreparedReceiptV1<T> {
+    pub(super) fn armed(&self) -> Option<&T> {
+        match self {
+            Self::Armed(receipt) => Some(receipt),
+            Self::NativeOwned => None,
+        }
+    }
+
+    pub(super) fn into_armed(self) -> Option<T> {
+        match self {
+            Self::Armed(receipt) => Some(receipt),
+            Self::NativeOwned => None,
+        }
+    }
+}
+
 // The large test-only scripted owner keeps failure-path custody inline so the
 // tests exercise the same allocation-free terminal-recovery invariant.
 #[allow(clippy::large_enum_variant)]
@@ -96,7 +118,7 @@ pub(super) enum ActiveComputeExecutionV1 {
         allocation: u64,
         access: RuntimeAccessV1,
         source: PersistentFullRangeComputeSourceV1,
-        prepared: Gfx942PreparedPersistentComputeDispatchV1,
+        prepared: PreparedReceiptV1<Gfx942PreparedPersistentComputeDispatchV1>,
         profile: PersistentPublicationProfileV1,
     },
     Persistent {
@@ -108,7 +130,7 @@ pub(super) enum ActiveComputeExecutionV1 {
         admissions: [PersistentFullRangeComputeAdmissionV1; 3],
         promotions: [Option<KfdRuntimeReadyPromotionPerformanceV1>; 3],
         restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
-        prepared: Gfx942PreparedThreeBindingPersistentComputeDispatchV1,
+        prepared: PreparedReceiptV1<Gfx942PreparedThreeBindingPersistentComputeDispatchV1>,
         profile: PersistentPublicationProfileV1,
     },
     ThreeBindingPersistent {
@@ -127,7 +149,7 @@ pub(super) enum ActiveComputeExecutionV1 {
         allocation: u64,
         access: RuntimeAccessV1,
         source: PersistentFullRangeComputeSourceV1,
-        input: Box<KfdRuntimePersistentComputeInputV1>,
+        input: PreparedReceiptV1<Box<KfdRuntimePersistentComputeInputV1>>,
         profile: PersistentPublicationProfileV1,
     },
     PersistentCancelling(Box<super::prepared_cancellation::PreparedComputeCancellationV1>),
@@ -136,7 +158,7 @@ pub(super) enum ActiveComputeExecutionV1 {
         admissions: [PersistentFullRangeComputeAdmissionV1; 3],
         promotions: [Option<KfdRuntimeReadyPromotionPerformanceV1>; 3],
         restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
-        inputs: [KfdRuntimePersistentComputeInputV1; 3],
+        inputs: PreparedReceiptV1<[KfdRuntimePersistentComputeInputV1; 3]>,
         profile: PersistentPublicationProfileV1,
     },
     #[cfg(test)]

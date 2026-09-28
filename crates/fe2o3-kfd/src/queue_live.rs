@@ -17399,6 +17399,257 @@ mod tests {
         }
     }
 
+    fn prepared_publication_identity_v1(
+        state: &PersistentComputeUseStateV1,
+    ) -> crate::persistent_allocation::PersistentUseIdentityForTestV1 {
+        let PersistentComputeUseStateV1::Prepared(lease) = state else {
+            panic!("prepared publication lease required");
+        };
+        lease.cancellation_identity_for_test()
+    }
+
+    #[test]
+    fn three_binding_persistent_submit_retains_native_attachment_on_callback_failure() {
+        for case in 0..4 {
+            assert!(!take_persistent_unwind_process_gate_record_v1());
+            assert!(!take_dispatch_terminal_process_gate_record_v1());
+            let queue = test_queue_key(194, 1);
+            let (mut session, prepared, identities, digests) =
+                prepared_three_binding_persistent_compute_cancellation_fixture_v1(queue);
+            let binding = prepared.binding;
+            let before: Vec<_> = session
+                .three_binding_persistent_compute_attachment_v1()
+                .unwrap()
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        prepared_publication_identity_v1(&entry.state),
+                        entry.allocation.owner.ownership_snapshot_for_test_v1(),
+                    )
+                })
+                .collect();
+            let roster = |session: &ComputeAqlQueueSessionV1| {
+                let (generation, data) = session.persistent_compute_test_release.as_ref().unwrap();
+                (
+                    *generation,
+                    data.as_ptr() as usize,
+                    data.iter()
+                        .map(|data| data.storage_identity())
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let native_roster = roster(&session);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                session.submit_three_binding_directional_persistent_fixed_dispatch_v1_using(
+                    prepared,
+                    |_| {
+                        let error = ComputeAqlQueueSessionErrorV1::Native(
+                            "three-binding injected submit failure",
+                        );
+                        match case {
+                            0 => Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
+                                error,
+                            )),
+                            1 => Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                                error,
+                            )),
+                            2 => Err(FixedDispatchSubmissionFailureV1::Terminal(error)),
+                            _ => std::panic::panic_any("three-binding submit unwind"),
+                        }
+                    },
+                )
+            }));
+            if case == 3 {
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<&str>(),
+                    Some(&"three-binding submit unwind")
+                );
+            } else {
+                let (_, retryable) = result.unwrap().unwrap_err().into_parts();
+                assert_eq!(
+                    retryable.map(|receipt| receipt.binding),
+                    (case == 0).then_some(binding)
+                );
+            }
+            assert_eq!(session.terminal_poisoned, case != 0);
+            assert_eq!(take_persistent_unwind_process_gate_record_v1(), case == 3);
+            assert_eq!(take_dispatch_terminal_process_gate_record_v1(), case == 2);
+            assert_eq!(roster(&session), native_roster);
+            let attachment = session
+                .three_binding_persistent_compute_attachment_v1()
+                .unwrap();
+            assert_eq!(attachment.binding, binding);
+            assert_eq!(attachment.predecessor_dispatch_generation, Some(7));
+            assert_eq!(attachment.entries.len(), 3);
+            assert_eq!(
+                matches!(
+                    attachment.terminal_custody,
+                    Some(PersistentComputeTerminalNativeCustodyV1::Attached)
+                ),
+                matches!(case, 1 | 2)
+            );
+            if matches!(case, 0 | 3) {
+                assert!(attachment.terminal_custody.is_none());
+            }
+            for (index, entry) in attachment.entries.iter().enumerate() {
+                assert!(
+                    before[index]
+                        .1
+                        .same_allocation(&entry.allocation.owner.ownership_snapshot_for_test_v1())
+                );
+                assert_eq!(entry.storage_identity, Some(identities[index]));
+                assert_eq!(
+                    entry.initialization.authenticated_sha256(),
+                    Some(digests[index])
+                );
+                assert!(entry.initialization.is_fully_initialized());
+                assert_eq!(
+                    entry.effect,
+                    if index == 2 {
+                        Gfx942PersistentComputeEffectV1::Write
+                    } else {
+                        Gfx942PersistentComputeEffectV1::Read
+                    }
+                );
+                if case == 0 {
+                    assert_eq!(
+                        (
+                            prepared_publication_identity_v1(&entry.state),
+                            entry.allocation.owner.ownership_snapshot_for_test_v1()
+                        ),
+                        before[index]
+                    );
+                    assert!(matches!(
+                        entry.state,
+                        PersistentComputeUseStateV1::Prepared(_)
+                    ));
+                } else {
+                    assert!(matches!(
+                        entry.state,
+                        PersistentComputeUseStateV1::Quarantined
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn three_binding_persistent_exact_occupancy_rearms_then_publishes() {
+        for occupancy in [
+            fe2o3_aql::AqlRingReservationError::Full,
+            fe2o3_aql::AqlRingReservationError::InsufficientSpace {
+                requested: 1,
+                available: 0,
+            },
+        ] {
+            let queue = test_queue_key(194, 1);
+            let (mut session, prepared, identities, digests) =
+                prepared_three_binding_persistent_compute_cancellation_fixture_v1(queue);
+            let binding = prepared.binding;
+            let before: Vec<_> = session
+                .three_binding_persistent_compute_attachment_v1()
+                .unwrap()
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        prepared_publication_identity_v1(&entry.state),
+                        entry.allocation.owner.ownership_snapshot_for_test_v1(),
+                    )
+                })
+                .collect();
+            let roster = |session: &ComputeAqlQueueSessionV1| {
+                let (generation, data) = session.persistent_compute_test_release.as_ref().unwrap();
+                (
+                    *generation,
+                    data.as_ptr() as usize,
+                    data.iter()
+                        .map(|data| data.storage_identity())
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let native_roster = roster(&session);
+            let mut dispatch =
+                super::super::dispatch_binding::TestOnlyDispatchGenerationOwnerV1::after_recycled(
+                    7,
+                )
+                .unwrap();
+            let failure = session
+                .submit_three_binding_directional_persistent_fixed_dispatch_v1_using(
+                    prepared,
+                    |session| {
+                        session.submit_fixed_dispatch_inner_classified_with_test_owner(
+                            &mut dispatch,
+                            |generation| test_completion_template(queue, generation),
+                            |_, packets| {
+                                assert_eq!(packets.packet_count(), 1);
+                                Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(
+                                    NativeAqlSubmissionErrorV1::Ring(occupancy),
+                                ))
+                            },
+                        )
+                    },
+                )
+                .unwrap_err();
+            let prepared = failure.into_parts().1.unwrap();
+            assert_eq!(roster(&session), native_roster);
+            assert_eq!(prepared.binding, binding);
+            assert_eq!(dispatch.predecessor_generation(), 7);
+            assert_eq!(dispatch.last_cancelled_generation(), Some(8));
+            assert!(matches!(
+                dispatch.active_generation(),
+                Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            ));
+            let attachment = session
+                .three_binding_persistent_compute_attachment_v1()
+                .unwrap();
+            for (index, entry) in attachment.entries.iter().enumerate() {
+                assert_eq!(
+                    (
+                        prepared_publication_identity_v1(&entry.state),
+                        entry.allocation.owner.ownership_snapshot_for_test_v1()
+                    ),
+                    before[index]
+                );
+                assert_eq!(entry.storage_identity, Some(identities[index]));
+                assert_eq!(
+                    entry.initialization.authenticated_sha256(),
+                    Some(digests[index])
+                );
+            }
+            assert!(!session.terminal_poisoned);
+            let _published = session
+                .submit_three_binding_directional_persistent_fixed_dispatch_v1_using(
+                    prepared,
+                    |session| {
+                        session.submit_fixed_dispatch_inner_classified_with_test_owner(
+                            &mut dispatch,
+                            |generation| test_completion_template(queue, generation),
+                            |_, packets| {
+                                assert_eq!(packets.packet_count(), 1);
+                                Ok(64)
+                            },
+                        )
+                    },
+                )
+                .unwrap();
+            assert!(matches!(dispatch.active_generation(), Ok(9)));
+            let attachment = session
+                .three_binding_persistent_compute_attachment_v1()
+                .unwrap();
+            assert_eq!(attachment.binding, binding);
+            assert_eq!(attachment.predecessor_dispatch_generation, Some(7));
+            assert!(
+                attachment
+                    .entries
+                    .iter()
+                    .all(|entry| matches!(entry.state, PersistentComputeUseStateV1::Published(_)))
+            );
+            assert!(!session.terminal_poisoned);
+        }
+    }
+
     #[test]
     fn persistent_submit_panic_resumes_payload_and_retains_terminal_phase() {
         assert!(!take_persistent_unwind_process_gate_record_v1());

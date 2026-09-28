@@ -96,6 +96,7 @@ mod compute_settlement;
 mod peer_ancestry;
 mod peer_compute_access;
 mod prepared_cancellation;
+mod prepared_publication;
 use peer_ancestry::PeerLaunchAncestryV1;
 use peer_compute_access::{
     PeerAccessPurposeV1, PeerComputePermitsV1, PeerCopyAccessV1, PeerCopyLegV1, PeerCopyOriginV1,
@@ -1383,6 +1384,9 @@ pub struct KfdRuntimeBackendV1 {
     #[cfg(test)]
     scripted_prepared_cancel_fault: Option<prepared_cancellation::ScriptedPreparedCancelFaultV1>,
     #[cfg(test)]
+    scripted_prepared_publication_fault:
+        Option<prepared_publication::ScriptedPreparedPublicationFaultV1>,
+    #[cfg(test)]
     scripted_persistent_poll_pending_observations: u64,
     #[cfg(test)]
     scripted_persistent_wait_pending_observations: u64,
@@ -1872,6 +1876,8 @@ impl KfdRuntimeBackendV1 {
             scripted_persistent_transition_failure: None,
             #[cfg(test)]
             scripted_prepared_cancel_fault: None,
+            #[cfg(test)]
+            scripted_prepared_publication_fault: None,
             #[cfg(test)]
             scripted_persistent_poll_pending_observations: 0,
             #[cfg(test)]
@@ -13322,6 +13328,7 @@ mod tests {
     mod native_xgmi_creation_tests;
     mod native_xgmi_retirement_tests;
     mod prepared_cancellation_tests;
+    mod prepared_publication_tests;
     mod queued_producer_context_tests;
     #[cfg(feature = "hardware-qualification")]
     mod r57_v2_tests;

@@ -243,7 +243,11 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn prepared_cancel_custody_intact_v1(&self, submission: u64, restored: bool) -> bool {
+    pub(super) fn prepared_persistent_custody_intact_v1(
+        &self,
+        submission: u64,
+        restored: bool,
+    ) -> bool {
         let Some(active) = self.active.as_ref() else {
             return false;
         };
@@ -351,6 +355,80 @@ impl KfdRuntimeBackendV1 {
         true
     }
 
+    pub(super) fn prepared_persistent_storage_intact_v1(&self) -> bool {
+        let Some(execution) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.execution.as_ref())
+        else {
+            return false;
+        };
+        let single = |allocation, source| {
+            self.allocations
+                .get(&allocation)
+                .is_some_and(|record| match source {
+                    PersistentFullRangeComputeSourceV1::InitializedStorage => record
+                        .persistent_storage_restore
+                        .as_ref()
+                        .is_some_and(|shell| shell.initialized.is_some() && shell.replay.is_some()),
+                    _ => record.persistent_storage_restore.is_none(),
+                })
+        };
+        match execution {
+            ActiveComputeExecutionV1::PersistentPrepared {
+                allocation, source, ..
+            } => single(*allocation, *source),
+            ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
+                admissions,
+                restore_shells,
+                ..
+            } => admissions
+                .iter()
+                .zip(restore_shells)
+                .all(|(admission, shell)| shell.supports_origin_v1(*admission)),
+            #[cfg(test)]
+            ActiveComputeExecutionV1::ScriptedPersistentPrepared {
+                allocation,
+                source,
+                input,
+                ..
+            } => {
+                single(*allocation, *source)
+                    && input.armed().is_some_and(|input| {
+                        matches!(
+                            (source, input.as_ref()),
+                            (
+                                PersistentFullRangeComputeSourceV1::InitializedStorage,
+                                KfdRuntimePersistentComputeInputV1::ScriptedStorage(_)
+                            ) | (
+                                PersistentFullRangeComputeSourceV1::AuthenticatedH2d,
+                                KfdRuntimePersistentComputeInputV1::ScriptedReady(_)
+                            ) | (
+                                PersistentFullRangeComputeSourceV1::RetainedControlReplay,
+                                KfdRuntimePersistentComputeInputV1::ScriptedReplay(_)
+                            )
+                        )
+                    })
+            }
+            #[cfg(test)]
+            ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
+                admissions,
+                restore_shells,
+                inputs,
+                ..
+            } => inputs.armed().is_some_and(|inputs| {
+                admissions.iter().zip(restore_shells).zip(inputs).all(
+                    |((admission, shell), input)| {
+                        !matches!(input, KfdRuntimePersistentComputeInputV1::Native(_))
+                            && shell.supports_origin_v1(*admission)
+                            && shell.accepts_v1(*admission, input)
+                    },
+                )
+            }),
+            _ => false,
+        }
+    }
+
     fn single_cancel_shell_v1(
         &self,
         admission: PersistentFullRangeComputeAdmissionV1,
@@ -389,7 +467,9 @@ impl KfdRuntimeBackendV1 {
         submission: u64,
     ) -> Result<crate::BackendCancellationV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
     {
-        if !self.prepared_cancel_custody_intact_v1(submission, false)
+        if !self.persistent_prepared_is_armed_v1()
+            || !self.prepared_persistent_custody_intact_v1(submission, false)
+            || !self.prepared_persistent_storage_intact_v1()
             || self.terminal_sdma_custody.is_some()
         {
             return Err(
@@ -408,47 +488,6 @@ impl KfdRuntimeBackendV1 {
         );
         if native && self.queue.is_none() {
             return Err(self.terminal_error("prepared cancellation lost its native queue"));
-        }
-        let shells_valid = match self.active.as_ref().unwrap().execution.as_ref().unwrap() {
-            ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
-                admissions,
-                restore_shells,
-                ..
-            } => admissions
-                .iter()
-                .zip(restore_shells)
-                .all(|(admission, shell)| shell.supports_origin_v1(*admission)),
-            #[cfg(test)]
-            ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
-                admissions,
-                restore_shells,
-                inputs,
-                ..
-            } => admissions.iter().zip(restore_shells).zip(inputs).all(
-                |((admission, shell), input)| {
-                    shell.supports_origin_v1(*admission) && shell.accepts_v1(*admission, input)
-                },
-            ),
-            _ => true,
-        };
-        if !shells_valid {
-            return Err(self.terminal_error("prepared cancellation lost a restore shell"));
-        }
-        if single {
-            let shell = self.allocations[&first.allocation]
-                .persistent_storage_restore
-                .as_ref();
-            let valid = match first.source {
-                PersistentFullRangeComputeSourceV1::InitializedStorage => {
-                    shell.is_some_and(|shell| shell.initialized.is_some() && shell.replay.is_some())
-                }
-                _ => shell.is_none(),
-            };
-            if !valid {
-                return Err(
-                    self.terminal_error("prepared cancellation lost its storage-origin shell")
-                );
-            }
         }
         if self
             .submissions
@@ -492,7 +531,9 @@ impl KfdRuntimeBackendV1 {
             ActiveComputeExecutionV1::PersistentPrepared {
                 prepared, profile, ..
             } => PreparedComputeCancellationV1 {
-                receipt: PreparedCancellationReceiptV1::Single(prepared),
+                receipt: PreparedCancellationReceiptV1::Single(
+                    prepared.into_armed().expect("preflighted armed receipt"),
+                ),
                 slots: [
                     slot(first, promotion, single_shell.unwrap(), None),
                     None,
@@ -509,7 +550,9 @@ impl KfdRuntimeBackendV1 {
             } => {
                 let mut shells = restore_shells.into_iter();
                 PreparedComputeCancellationV1 {
-                    receipt: PreparedCancellationReceiptV1::Three(prepared),
+                    receipt: PreparedCancellationReceiptV1::Three(
+                        prepared.into_armed().expect("preflighted armed receipt"),
+                    ),
                     slots: std::array::from_fn(|index| {
                         slot(
                             admissions[index],
@@ -526,7 +569,12 @@ impl KfdRuntimeBackendV1 {
                 PreparedComputeCancellationV1 {
                     receipt: PreparedCancellationReceiptV1::InputsReturned,
                     slots: [
-                        slot(first, promotion, single_shell.unwrap(), Some(*input)),
+                        slot(
+                            first,
+                            promotion,
+                            single_shell.unwrap(),
+                            Some(*input.into_armed().expect("preflighted scripted input")),
+                        ),
                         None,
                         None,
                     ],
@@ -542,7 +590,10 @@ impl KfdRuntimeBackendV1 {
                 profile,
             } => {
                 let mut shells = restore_shells.into_iter();
-                let mut inputs = inputs.into_iter();
+                let mut inputs = inputs
+                    .into_armed()
+                    .expect("preflighted scripted inputs")
+                    .into_iter();
                 PreparedComputeCancellationV1 {
                     receipt: PreparedCancellationReceiptV1::InputsReturned,
                     slots: std::array::from_fn(|index| {
@@ -742,7 +793,7 @@ impl KfdRuntimeBackendV1 {
             self.scripted_prepared_cancel_fault = None;
             std::panic::panic_any("scripted cancellation commit unwind");
         }
-        if !self.prepared_cancel_custody_intact_v1(submission, true)
+        if !self.prepared_persistent_custody_intact_v1(submission, true)
             || self
                 .submissions
                 .capacity()

@@ -1056,6 +1056,9 @@ impl KfdRuntimeBackendV1 {
         lane: usize,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.with_compute_lane_state_v1(lane, |backend| {
+            if backend.persistent_prepared_selected_v1() {
+                return backend.poll_persistent_prepared_v1();
+            }
             #[cfg(test)]
             if backend.scripted_persistent_poll_pending_observations != 0
                 && backend.active.as_ref().is_some_and(|active| {
@@ -1268,58 +1271,10 @@ impl KfdRuntimeBackendV1 {
                 ActiveComputeExecutionV1::MaterializedCompleted(completed) => {
                     backend.finish_completed(active, completed)
                 }
-                ActiveComputeExecutionV1::PersistentPrepared {
-                    allocation,
-                    access,
-                    source,
-                    prepared,
-                    profile,
-                } => {
-                    let publication_started = Instant::now();
-                    match backend
-                        .queue
-                        .as_mut()
-                        .expect("prepared persistent submission retains its queue")
-                        .submit_directional_persistent_fixed_dispatch_v1(prepared)
-                    {
-                        Ok(dispatch) => {
-                            active.performance.publication += publication_started.elapsed();
-                            active.published_at = Instant::now();
-                            active.execution = Some(ActiveComputeExecutionV1::Persistent {
-                                allocation,
-                                access,
-                                dispatch,
-                            });
-                            backend.observe_persistent_dispatch_published_v1(
-                                active.id,
-                                active.stream,
-                                active.kernel,
-                                active.dispatch_shape_sha256,
-                                profile,
-                            );
-                            backend.active = Some(active);
-                            Ok(BackendPollV1::Pending)
-                        }
-                        Err(failure) => {
-                            let (_, retryable) = failure.into_parts();
-                            if let Some(prepared) = retryable {
-                                active.execution =
-                                    Some(ActiveComputeExecutionV1::PersistentPrepared {
-                                        allocation,
-                                        access,
-                                        source,
-                                        prepared,
-                                        profile,
-                                    });
-                                backend.active = Some(active);
-                                Ok(BackendPollV1::Pending)
-                            } else {
-                                Err(backend.terminal_error(
-                                    "KFD persistent-compute publication became indeterminate",
-                                ))
-                            }
-                        }
-                    }
+                execution @ ActiveComputeExecutionV1::PersistentPrepared { .. } => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("prepared publication bypassed its indexed path"))
                 }
                 ActiveComputeExecutionV1::Persistent {
                     allocation,
@@ -1335,60 +1290,10 @@ impl KfdRuntimeBackendV1 {
                         active, allocation, access, poll,
                     )
                 }
-                ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
-                    admissions,
-                    promotions,
-                    restore_shells,
-                    prepared,
-                    profile,
-                } => {
-                    let publication_started = Instant::now();
-                    match backend
-                        .queue
-                        .as_mut()
-                        .expect("prepared three-binding submission retains its queue")
-                        .submit_three_binding_directional_persistent_fixed_dispatch_v1(prepared)
-                    {
-                        Ok(dispatch) => {
-                            active.performance.publication += publication_started.elapsed();
-                            active.published_at = Instant::now();
-                            active.execution =
-                                Some(ActiveComputeExecutionV1::ThreeBindingPersistent {
-                                    admissions,
-                                    restore_shells,
-                                    dispatch,
-                                });
-                            backend.observe_persistent_dispatch_published_v1(
-                                active.id,
-                                active.stream,
-                                active.kernel,
-                                active.dispatch_shape_sha256,
-                                profile,
-                            );
-                            backend.active = Some(active);
-                            Ok(BackendPollV1::Pending)
-                        }
-                        Err(failure) => {
-                            let (_, retryable) = failure.into_parts();
-                            if let Some(prepared) = retryable {
-                                active.execution = Some(
-                                    ActiveComputeExecutionV1::ThreeBindingPersistentPrepared {
-                                        admissions,
-                                        promotions,
-                                        restore_shells,
-                                        prepared,
-                                        profile,
-                                    },
-                                );
-                                backend.active = Some(active);
-                                Ok(BackendPollV1::Pending)
-                            } else {
-                                Err(backend.terminal_error(
-                                    "KFD three-binding persistent publication became indeterminate",
-                                ))
-                            }
-                        }
-                    }
+                execution @ ActiveComputeExecutionV1::ThreeBindingPersistentPrepared { .. } => {
+                    active.execution = Some(execution);
+                    backend.active = Some(active);
+                    Err(backend.terminal_error("prepared publication bypassed its indexed path"))
                 }
                 ActiveComputeExecutionV1::ThreeBindingPersistent {
                     admissions,
@@ -1428,58 +1333,11 @@ impl KfdRuntimeBackendV1 {
                     devices,
                 ),
                 #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedPersistentPrepared {
-                    allocation,
-                    access,
-                    input,
-                    profile,
-                    ..
-                } => {
-                    active.published_at = Instant::now();
-                    let device = match *input {
-                        KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => {
-                            ready.owner.normalize()
-                        }
-                        KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
-                        | KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => device,
-                        KfdRuntimePersistentComputeInputV1::Native(_) => {
-                            unreachable!("scripted publication retained native input")
-                        }
-                    };
-                    active.execution = Some(ActiveComputeExecutionV1::ScriptedPersistent {
-                        allocation,
-                        access,
-                        device: Box::new(device),
-                    });
-                    backend.observe_persistent_dispatch_published_v1(
-                        active.id,
-                        active.stream,
-                        active.kernel,
-                        active.dispatch_shape_sha256,
-                        profile,
-                    );
+                execution @ (ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. }
+                    | ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared { .. }) => {
+                    active.execution = Some(execution);
                     backend.active = Some(active);
-                    Ok(BackendPollV1::Pending)
-                }
-                #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedThreeBindingPersistentPrepared {
-                    admissions, restore_shells, inputs, profile, ..
-                } => {
-                    let devices = inputs.map(|input| match input {
-                        KfdRuntimePersistentComputeInputV1::ScriptedReady(ready) => ready.owner.normalize(),
-                        KfdRuntimePersistentComputeInputV1::ScriptedReplay(device)
-                        | KfdRuntimePersistentComputeInputV1::ScriptedStorage(device) => device,
-                        KfdRuntimePersistentComputeInputV1::Native(_) => unreachable!("scripted prepared input"),
-                    });
-                    active.published_at = Instant::now();
-                    active.execution = Some(ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
-                        admissions, restore_shells, devices,
-                    });
-                    backend.observe_persistent_dispatch_published_v1(
-                        active.id, active.stream, active.kernel, active.dispatch_shape_sha256, profile,
-                    );
-                    backend.active = Some(active);
-                    Ok(BackendPollV1::Pending)
+                    Err(backend.terminal_error("scripted prepared publication bypassed its indexed path"))
                 }
                 ActiveComputeExecutionV1::PersistentCancelling(cancellation) => {
                     active.execution = Some(ActiveComputeExecutionV1::PersistentCancelling(cancellation));
@@ -3641,6 +3499,13 @@ impl KfdRuntimeBackendV1 {
         dispatch_shape_sha256: [u8; 32],
         profile: PersistentPublicationProfileV1,
     ) {
+        #[cfg(test)]
+        if self.scripted_prepared_publication_fault
+            == Some(super::prepared_publication::ScriptedPreparedPublicationFaultV1::ProfileUnwind)
+        {
+            self.scripted_prepared_publication_fault = None;
+            panic!("scripted persistent publication profile unwind");
+        }
         let profile_dispatch = self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, id);
         let profile_queue = self.profile_resource_v1(
             KfdProfileResourceKindV1::NativeQueue,
@@ -3773,7 +3638,7 @@ impl KfdRuntimeBackendV1 {
                             admissions: persistent.admissions,
                             promotions,
                             restore_shells,
-                            inputs: persistent_inputs,
+                            inputs: PreparedReceiptV1::Armed(persistent_inputs),
                             profile: publication_profile
                                 .take()
                                 .expect("prepared publication profile"),
@@ -3930,7 +3795,7 @@ impl KfdRuntimeBackendV1 {
                     admissions: persistent.admissions,
                     promotions,
                     restore_shells,
-                    prepared,
+                    prepared: PreparedReceiptV1::Armed(prepared),
                     profile: publication_profile
                         .take()
                         .expect("retryable publication retains its profile"),
@@ -4066,7 +3931,7 @@ impl KfdRuntimeBackendV1 {
                         allocation: persistent.allocation,
                         access: persistent.access,
                         source: persistent.source,
-                        input: Box::new(persistent_input),
+                        input: PreparedReceiptV1::Armed(Box::new(persistent_input)),
                         profile: publication_profile,
                     }),
                 });
@@ -4224,7 +4089,7 @@ impl KfdRuntimeBackendV1 {
                         allocation: persistent.allocation,
                         access: persistent.access,
                         source: persistent.source,
-                        prepared,
+                        prepared: PreparedReceiptV1::Armed(prepared),
                         profile: publication_profile,
                     }),
                 });
