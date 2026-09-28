@@ -44,11 +44,61 @@ pub(super) fn rooted_host_backing_admission_error_v1(
 }
 
 #[cfg(test)]
+mod generated_composed_tests;
+#[cfg(test)]
 mod host_backing_tests;
 #[cfg(test)]
 mod host_pool_tests;
 
 impl KfdRuntimeBackendV1 {
+    /// Opens generated-only execution with mandatory Context-request/N1/N2
+    /// accounting. Admission failure is returned without an unrooted fallback.
+    /// This does not grant generic launch or Worker verification authority.
+    pub fn open_worker_v3_generated_only_with_composed_backing_root_v1(
+        device_unique_id: u64,
+        root: &Gfx942ComposedBackingRootV1,
+        device_budget: Gfx942ComposedBackingDeviceBudgetV1,
+        session_budget: Gfx942ComposedBackingSessionBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        Self::from_checked_device_worker_v3_generated_only_with_composed_backing_root_v1(
+            Self::open_checked_device_v1(device_unique_id)?,
+            root,
+            device_budget,
+            session_budget,
+        )
+    }
+
+    /// Retains the checked device and one composed admission while preserving
+    /// the generated-only launch gate. Context imports the Required request
+    /// profile; direct witness-free allocation is not permitted.
+    ///
+    /// ```no_run
+    /// use fe2o3_kfd::{CheckedGfx942XnackMinusDevice, Gfx942ComposedBackingRootV1,
+    ///     Gfx942ComposedBackingDeviceBudgetV1, Gfx942ComposedBackingSessionBudgetV1};
+    /// use fe2o3_runtime::{KfdRuntimeBackendV1, KfdRuntimeBackendErrorV1};
+    /// fn open(device: CheckedGfx942XnackMinusDevice, root: &Gfx942ComposedBackingRootV1,
+    ///     device_budget: Gfx942ComposedBackingDeviceBudgetV1,
+    ///     session_budget: Gfx942ComposedBackingSessionBudgetV1,
+    /// ) -> Result<KfdRuntimeBackendV1, KfdRuntimeBackendErrorV1> {
+    ///     KfdRuntimeBackendV1::from_checked_device_worker_v3_generated_only_with_composed_backing_root_v1(
+    ///         device, root, device_budget, session_budget)
+    /// }
+    /// ```
+    pub fn from_checked_device_worker_v3_generated_only_with_composed_backing_root_v1(
+        device: CheckedGfx942XnackMinusDevice,
+        root: &Gfx942ComposedBackingRootV1,
+        device_budget: Gfx942ComposedBackingDeviceBudgetV1,
+        session_budget: Gfx942ComposedBackingSessionBudgetV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        Self::from_checked_device_with_composed_gate_v1(
+            device,
+            KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly,
+            root,
+            device_budget,
+            session_budget,
+        )
+    }
+
     /// Opens the mandatory Context-request/N1/N2 profile. Logical allocation
     /// requires Context witnesses; direct witness-free allocation is rejected.
     pub fn open_default_with_composed_backing_root_v1<A>(

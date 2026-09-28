@@ -257,6 +257,7 @@ pub use production_application::{
     ProductionWorkerV3KfdPreparationErrorV1, ProductionWorkerV3RuntimeInitializationErrorV1,
     authenticate_inherited_worker_v3_application_v1,
     prepare_inherited_worker_v3_kfd_application_v1, run_inherited_worker_v3_current_thread_v1,
+    run_inherited_worker_v3_current_thread_with_composed_backing_root_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use published_direct_link::{

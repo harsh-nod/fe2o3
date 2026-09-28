@@ -2,6 +2,10 @@
 
 use std::{future::Future, pin::Pin, time::Instant};
 
+use fe2o3_kfd::{
+    Gfx942ComposedBackingDeviceBudgetV1, Gfx942ComposedBackingRootV1,
+    Gfx942ComposedBackingSessionBudgetV1,
+};
 use fe2o3_runtime::*;
 
 use crate::{
@@ -235,6 +239,140 @@ where
     A: CompilerGeneratedRuntimeArguments<K>,
     O: GeneratedRuntimeTypedOutputBundleV1,
 {
+    // SAFETY: forwards the same inherited handoff startup contract.
+    unsafe {
+        run_inherited_with_backend::<K, P, R, A, O>(
+            verifier,
+            make_arguments,
+            result_budget,
+            config,
+            KfdRuntimeBackendV1::open_worker_v3_generated_only_v1,
+        )
+    }
+}
+
+/// Runs the same authenticated one-shot application with mandatory composed
+/// Context-request/N1/N2 accounting. The original root and budgets reach the
+/// generated-only backend after authentication, evidence and bounds checks.
+/// Admission failure never falls back to unrooted execution.
+///
+/// The root accounts logical requests and the supported native backing classes,
+/// not every process allocation or caller-owned argument/result storage. The
+/// separate result budget and the existing Stop/shutdown contract still apply.
+/// This entrypoint supplies no verifier or semantic-machine refinement provider.
+///
+/// ```no_run
+/// use fe2o3_host::*;
+/// use fe2o3_kfd::{Gfx942ComposedBackingRootV1, Gfx942ComposedBackingDeviceBudgetV1,
+///     Gfx942ComposedBackingSessionBudgetV1};
+/// fn application<K, P, R, A, O>(
+///     verifier: &mut WorkerV3RefiningProtectedVerifierAdapterV1<P, R>,
+///     arguments: impl FnOnce() -> (A, O),
+///     budget: &GeneratedRuntimeResultBudgetV1,
+///     config: ProductionWorkerV3CurrentThreadConfigV1,
+///     root: &Gfx942ComposedBackingRootV1,
+///     device: Gfx942ComposedBackingDeviceBudgetV1,
+///     session: Gfx942ComposedBackingSessionBudgetV1,
+/// ) where
+///     K: CompilerGeneratedKernelExpectationV1 + 'static,
+///     P: WorkerV3ProtectedVerifierBackendV1<K>,
+///     R: WorkerV3SemanticMachineRefinementBackendV1<K>,
+///     A: CompilerGeneratedRuntimeArguments<K>,
+///     O: GeneratedRuntimeTypedOutputBundleV1,
+/// {
+///     // SAFETY: cooperative startup before unrelated code or threads.
+///     let report = unsafe {
+///         run_inherited_worker_v3_current_thread_with_composed_backing_root_v1::<K, P, R, A, O>(
+///             verifier, arguments, budget, config, root, device, session)
+///     };
+///     assert!(report.is_success());
+/// }
+/// ```
+///
+/// Composed accounting does not replace semantic-machine refinement:
+/// ```compile_fail,E0308
+/// use fe2o3_host::*;
+/// use fe2o3_kfd::{Gfx942ComposedBackingRootV1, Gfx942ComposedBackingDeviceBudgetV1,
+///     Gfx942ComposedBackingSessionBudgetV1};
+/// fn lacks_refinement<K, P, R, A>(
+///     verifier: &mut WorkerV3ProtectedVerifierAdapterV1<P>,
+///     arguments: impl FnOnce() -> (A, ()),
+///     budget: &GeneratedRuntimeResultBudgetV1,
+///     config: ProductionWorkerV3CurrentThreadConfigV1,
+///     root: &Gfx942ComposedBackingRootV1,
+///     device: Gfx942ComposedBackingDeviceBudgetV1,
+///     session: Gfx942ComposedBackingSessionBudgetV1,
+/// ) where
+///     K: CompilerGeneratedKernelExpectationV1 + 'static,
+///     P: WorkerV3ProtectedVerifierBackendV1<K>,
+///     R: WorkerV3SemanticMachineRefinementBackendV1<K>,
+///     A: CompilerGeneratedRuntimeArguments<K>,
+/// {
+///     unsafe {
+///         run_inherited_worker_v3_current_thread_with_composed_backing_root_v1::<K, P, R, A, ()>(
+///             verifier, arguments, budget, config, root, device, session);
+///     }
+/// }
+/// ```
+///
+/// # Safety
+/// Same cooperative startup requirements as
+/// [`run_inherited_worker_v3_current_thread_v1`].
+pub unsafe fn run_inherited_worker_v3_current_thread_with_composed_backing_root_v1<K, P, R, A, O>(
+    verifier: &mut WorkerV3RefiningProtectedVerifierAdapterV1<P, R>,
+    make_arguments: impl FnOnce() -> (A, O),
+    result_budget: &GeneratedRuntimeResultBudgetV1,
+    config: ProductionWorkerV3CurrentThreadConfigV1,
+    root: &Gfx942ComposedBackingRootV1,
+    device_budget: Gfx942ComposedBackingDeviceBudgetV1,
+    session_budget: Gfx942ComposedBackingSessionBudgetV1,
+) -> ProductionWorkerV3CurrentThreadReportV1<
+    O::Results,
+    WorkerV3RefiningProtectedVerifierErrorV1<P::Error, R::Error>,
+>
+where
+    K: CompilerGeneratedKernelExpectationV1 + 'static,
+    P: WorkerV3ProtectedVerifierBackendV1<K>,
+    R: WorkerV3SemanticMachineRefinementBackendV1<K>,
+    A: CompilerGeneratedRuntimeArguments<K>,
+    O: GeneratedRuntimeTypedOutputBundleV1,
+{
+    // SAFETY: forwards the same inherited handoff startup contract.
+    unsafe {
+        run_inherited_with_backend::<K, P, R, A, O>(
+            verifier,
+            make_arguments,
+            result_budget,
+            config,
+            |device| {
+                KfdRuntimeBackendV1::open_worker_v3_generated_only_with_composed_backing_root_v1(
+                    device,
+                    root,
+                    device_budget,
+                    session_budget,
+                )
+            },
+        )
+    }
+}
+
+unsafe fn run_inherited_with_backend<K, P, R, A, O>(
+    verifier: &mut WorkerV3RefiningProtectedVerifierAdapterV1<P, R>,
+    make_arguments: impl FnOnce() -> (A, O),
+    result_budget: &GeneratedRuntimeResultBudgetV1,
+    config: ProductionWorkerV3CurrentThreadConfigV1,
+    open_backend: impl FnOnce(u64) -> Result<KfdRuntimeBackendV1, KfdRuntimeBackendErrorV1>,
+) -> ProductionWorkerV3CurrentThreadReportV1<
+    O::Results,
+    WorkerV3RefiningProtectedVerifierErrorV1<P::Error, R::Error>,
+>
+where
+    K: CompilerGeneratedKernelExpectationV1 + 'static,
+    P: WorkerV3ProtectedVerifierBackendV1<K>,
+    R: WorkerV3SemanticMachineRefinementBackendV1<K>,
+    A: CompilerGeneratedRuntimeArguments<K>,
+    O: GeneratedRuntimeTypedOutputBundleV1,
+{
     // SAFETY: the caller upholds the inherited handoff's cooperative startup contract.
     let executable =
         match unsafe { authenticate_inherited_worker_v3_application_v1::<K, _>(verifier) } {
@@ -245,7 +383,13 @@ where
                 );
             }
         };
-    run_authenticated(executable, make_arguments, result_budget, config)
+    run_authenticated(
+        executable,
+        make_arguments,
+        result_budget,
+        config,
+        open_backend,
+    )
 }
 
 fn run_authenticated<K, A, O, VE>(
@@ -253,6 +397,7 @@ fn run_authenticated<K, A, O, VE>(
     make_arguments: impl FnOnce() -> (A, O),
     result_budget: &GeneratedRuntimeResultBudgetV1,
     config: ProductionWorkerV3CurrentThreadConfigV1,
+    open_backend: impl FnOnce(u64) -> Result<KfdRuntimeBackendV1, KfdRuntimeBackendErrorV1>,
 ) -> ProductionWorkerV3CurrentThreadReportV1<O::Results, VE>
 where
     K: CompilerGeneratedKernelExpectationV1 + 'static,
@@ -275,9 +420,8 @@ where
     }
     let initialized = RuntimeAsyncCurrentThreadOwnedEngineV1::new_with_progress(
         || {
-            let backend =
-                KfdRuntimeBackendV1::open_worker_v3_generated_only_v1(config.device_unique_id)
-                    .map_err(ProductionWorkerV3RuntimeInitializationErrorV1::Backend)?;
+            let backend = open_backend(config.device_unique_id)
+                .map_err(ProductionWorkerV3RuntimeInitializationErrorV1::Backend)?;
             RuntimeContextV1::open_with_version_journal_v1(
                 backend,
                 config.journal_allocation_capacity,

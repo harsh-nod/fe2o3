@@ -3,6 +3,76 @@
 use super::*;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
+#[test]
+fn application_backing_selection_preserves_shared_authentication_and_factory_order() {
+    // Source wiring only: this does not manufacture an authenticated executable
+    // or assert that a production verifier/Worker invocation ran in this test.
+    let source = include_str!("../current_thread.rs");
+    let legacy = source
+        .split_once("pub unsafe fn run_inherited_worker_v3_current_thread_v1<")
+        .unwrap()
+        .1
+        .split_once(
+            "pub unsafe fn run_inherited_worker_v3_current_thread_with_composed_backing_root_v1<",
+        )
+        .unwrap()
+        .0;
+    assert!(legacy.contains("run_inherited_with_backend::<K, P, R, A, O>("));
+    let composed = source
+        .split_once(
+            "pub unsafe fn run_inherited_worker_v3_current_thread_with_composed_backing_root_v1<",
+        )
+        .unwrap()
+        .1
+        .split_once("unsafe fn run_inherited_with_backend<")
+        .unwrap()
+        .0;
+    assert!(composed.contains("run_inherited_with_backend::<K, P, R, A, O>("));
+    assert!(composed.contains("open_worker_v3_generated_only_with_composed_backing_root_v1("));
+    assert!(!composed.contains("open_worker_v3_generated_only_v1("));
+    let inherited = source
+        .split_once("unsafe fn run_inherited_with_backend<")
+        .unwrap()
+        .1
+        .split_once("fn run_authenticated<")
+        .unwrap()
+        .0;
+    assert!(
+        inherited
+            .find("authenticate_inherited_worker_v3_application_v1::<K, _>(verifier)")
+            .unwrap()
+            < inherited.find("run_authenticated(").unwrap()
+    );
+    let authenticated = source
+        .split_once("fn run_authenticated<")
+        .unwrap()
+        .1
+        .split_once("fn drive<")
+        .unwrap()
+        .0;
+    let evidence = authenticated
+        .find("executable.require_runtime_evidence()")
+        .unwrap();
+    let preflights = authenticated
+        .match_indices("config.preflight()")
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert_eq!(preflights.len(), 2);
+    let arguments = authenticated.find("make_arguments();").unwrap();
+    let backend = authenticated
+        .find("open_backend(config.device_unique_id)")
+        .unwrap();
+    assert!(evidence < preflights[0] && preflights[0] < arguments);
+    assert!(arguments < preflights[1] && preflights[1] < backend);
+    assert_eq!(
+        authenticated
+            .matches("open_backend(config.device_unique_id)")
+            .count(),
+        1
+    );
+    assert!(!authenticated.contains("KfdRuntimeBackendV1::open_"));
+}
+
 #[derive(Default)]
 struct Trace {
     shutdowns: Cell<usize>,
