@@ -497,19 +497,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         } else {
             let callee_id =
                 ordinary_target.expect("ordinary target checked before call preparation");
-            let PreparedDefinedCallArgumentsV1 { arguments, .. } = self
-                .prepare_defined_call_arguments_v1(
-                    block,
-                    call,
-                    callee,
-                    DefinedCallArgumentSignatureV1 {
-                        projection: DefinedCallProjectionV29::Ordinary,
-                        semantic_types: &signature.parameter_semantic_types,
-                        projections: &signature.call_arguments,
-                        parameter_types: signature.parameter_types,
-                    },
-                    operations,
-                )?;
+            let PreparedDefinedCallArgumentsV1 {
+                arguments,
+                source_bindings,
+                ..
+            } = self.prepare_defined_call_arguments_v1(
+                block,
+                call,
+                callee,
+                DefinedCallArgumentSignatureV1 {
+                    projection: DefinedCallProjectionV29::Ordinary,
+                    semantic_types: &signature.parameter_semantic_types,
+                    projections: &signature.call_arguments,
+                    parameter_types: signature.parameter_types,
+                },
+                operations,
+            )?;
+            if signature.bf16_nominal {
+                bf16_check_call_bindings_v1(&source_bindings)?;
+            }
             (callee_id, arguments)
         };
         let call_operation = call_operation_ordinal_v1(operations, block)?;

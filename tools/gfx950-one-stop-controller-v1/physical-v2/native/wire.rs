@@ -1,9 +1,12 @@
 //! Launch-owned real transport. No CLI PID, arbitrary MI input or retry route.
 use super::{
+    argv_readiness,
     clock::{self, Clock},
     config::{self, Options},
     custody::{self, DebuggerChild, LaunchedInferior},
+    failure_diagnostic::FailureDiagnostic,
     scope::Scope,
+    setup_diagnostic::{SetupDiagnostic, SetupStage, SetupTrace},
     streams::{self, Item, ReadBudget, Stream},
 };
 use fe2o3_private_one_stop_protocol::{
@@ -81,6 +84,8 @@ fn reserve(n: usize) -> Result<Vec<u8>, Refusal> {
 pub(super) struct SpawnFailure {
     pub refusal: Refusal,
     pub cleanup: Option<Cleanup>,
+    pub diagnostic: SetupDiagnostic,
+    pub failure_observation: FailureDiagnostic,
 }
 pub(super) struct NativePeer<'a> {
     options: &'a Options,
@@ -103,8 +108,40 @@ pub(super) struct NativePeer<'a> {
     closed: bool,
     cleanup: Option<Cleanup>,
 }
+struct InitialArgv<'a> {
+    child: &'a mut Child,
+    debugger: &'a DebuggerChild,
+    executable: &'a config::PinnedFile,
+    scope: &'a Scope,
+    clock: Clock,
+}
+impl argv_readiness::Source for InitialArgv<'_> {
+    fn clock(&mut self) -> Result<(), Refusal> {
+        self.clock.check()
+    }
+    fn identity(&mut self) -> Result<(), Refusal> {
+        self.scope.current(self.clock)?;
+        self.debugger.check(self.child, self.executable)?;
+        self.scope.member(self.child.id())
+    }
+    fn read_cmdline(&mut self) -> Result<Vec<u8>, Refusal> {
+        custody::read_bounded(
+            format!("/proc/{}/cmdline", self.child.id()),
+            argv_readiness::MAX_CMDLINE,
+        )
+    }
+    fn yield_once(&mut self) {
+        thread::yield_now();
+    }
+}
 impl<'a> NativePeer<'a> {
+    // Fixed inline failure samples avoid allocation after an owned child exists.
+    #[allow(
+        clippy::result_large_err,
+        reason = "bounded allocation-free failure diagnostics"
+    )]
     pub(super) fn spawn(options: &'a Options, clock: Clock) -> Result<Self, SpawnFailure> {
+        let mut trace = SetupTrace::new();
         let pre = (|| {
             clock.check()?;
             options.recheck(clock)?;
@@ -129,6 +166,8 @@ impl<'a> NativePeer<'a> {
         .map_err(|refusal| SpawnFailure {
             refusal,
             cleanup: None,
+            diagnostic: trace.freeze(0),
+            failure_observation: FailureDiagnostic::unobserved(),
         })?;
         let (scope, out, err, commands, argv) = pre;
         let (tx, rx) = mpsc::sync_channel(8);
@@ -142,14 +181,25 @@ impl<'a> NativePeer<'a> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // No source binding means this code is typechecked but never entered.
-        clock.check().map_err(|refusal| SpawnFailure {
-            refusal,
-            cleanup: None,
-        })?;
-        let child = command.spawn().map_err(|_| SpawnFailure {
-            refusal: Refusal::Process,
-            cleanup: None,
-        })?;
+        trace
+            .step(SetupStage::SpawnClock, || clock.check())
+            .map_err(|refusal| SpawnFailure {
+                refusal,
+                cleanup: None,
+                diagnostic: trace.freeze(0),
+                failure_observation: FailureDiagnostic::unobserved(),
+            })?;
+        let child = trace
+            .step(SetupStage::Spawn, || {
+                command.spawn().map_err(|_| Refusal::Process)
+            })
+            .map_err(|refusal| SpawnFailure {
+                refusal,
+                cleanup: None,
+                diagnostic: trace.freeze(0),
+                failure_observation: FailureDiagnostic::unobserved(),
+            })?;
+        trace.child(child.id());
         let mut result = Self {
             options,
             clock,
@@ -175,33 +225,60 @@ impl<'a> NativePeer<'a> {
             result.debugger = Some(DebuggerChild::observe(
                 &mut result.child,
                 &options.debugger,
+                &mut trace,
             )?);
-            result.scope.member(result.child.id())?;
-            if custody::read_bounded(format!("/proc/{}/cmdline", result.child.id()), 2048)?
-                != result.argv
-            {
-                return Err(Refusal::Changed);
-            }
-            result.input = Some(result.child.stdin.take().ok_or(Refusal::Incomplete)?);
-            let out = result.child.stdout.take().ok_or(Refusal::Incomplete)?;
-            let err = result.child.stderr.take().ok_or(Refusal::Incomplete)?;
-            result.readers.push(streams::start(
-                out,
-                Stream::Out,
-                tx.clone(),
-                budget.clone(),
-            )?);
+            trace.custody_acquired();
+            trace.step(SetupStage::ScopeMember, || {
+                result.scope.member(result.child.id())
+            })?;
+            argv_readiness::initial(
+                &mut InitialArgv {
+                    child: &mut result.child,
+                    debugger: result.debugger.as_ref().ok_or(Refusal::Process)?,
+                    executable: &options.debugger,
+                    scope: &result.scope,
+                    clock: result.clock,
+                },
+                &result.argv,
+                &mut trace,
+            )?;
+            result.input = Some(trace.step(SetupStage::TakeStdin, || {
+                result.child.stdin.take().ok_or(Refusal::Incomplete)
+            })?);
+            let out = trace.step(SetupStage::TakeStdout, || {
+                result.child.stdout.take().ok_or(Refusal::Incomplete)
+            })?;
+            let err = trace.step(SetupStage::TakeStderr, || {
+                result.child.stderr.take().ok_or(Refusal::Incomplete)
+            })?;
             result
                 .readers
-                .push(streams::start(err, Stream::Err, tx.clone(), budget)?);
-            result.clock.check()
+                .push(trace.step(SetupStage::StartStdoutReader, || {
+                    streams::start(out, Stream::Out, tx.clone(), budget.clone())
+                })?);
+            trace.stdout_reader_started();
+            result
+                .readers
+                .push(trace.step(SetupStage::StartStderrReader, || {
+                    streams::start(err, Stream::Err, tx.clone(), budget)
+                })?);
+            trace.stderr_reader_started();
+            trace.step(SetupStage::FinalClock, || result.clock.check())
         })();
         drop(tx);
         if let Err(refusal) = setup {
+            // Freeze the first failure before unchanged cleanup does any further work.
+            let diagnostic = trace.freeze(result.sent);
+            let no_readers_or_commands =
+                result.readers.is_empty() && result.input.is_none() && result.sent == 0;
+            let failure_observation =
+                FailureDiagnostic::observe(&mut result.child, result.clock, no_readers_or_commands);
             let cleanup = result.teardown();
             return Err(SpawnFailure {
                 refusal,
                 cleanup: Some(cleanup),
+                diagnostic,
+                failure_observation,
             });
         }
         Ok(result)
@@ -338,6 +415,18 @@ impl<'a> NativePeer<'a> {
         self.closed = true;
         self.cleanup = Some(c);
         c
+    }
+    // Failure-only, borrowed post-cleanup bytes; no native query or new I/O.
+    pub(super) fn publication_failure_context(&self) -> super::publication::RetainedTransport<'_> {
+        super::publication::RetainedTransport {
+            sent_consumed: self.sent,
+            records_after_cleanup: self.records,
+            eof_after_cleanup: self.eof,
+            closed_after_cleanup: self.closed,
+            stdout: &self.out,
+            stderr: &self.err,
+            commands: &self.commands,
+        }
     }
     pub(super) fn encode_transcript(&self, out: &mut impl Write) -> Result<(), Refusal> {
         self.clock.check()?;

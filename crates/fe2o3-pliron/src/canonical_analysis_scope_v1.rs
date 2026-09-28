@@ -18,7 +18,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
 };
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum CanonicalAnalysisScopeErrorV1 {
     Resource(Resource),
     Inventory(CanonicalKirInventoryErrorV1),

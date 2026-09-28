@@ -8,8 +8,8 @@ use fe2o3_kernel_ir::{
     Operation, OperationKind, ScalarType, validate_gfx942_inline_assembly_v1,
 };
 
-pub(super) fn has_closed_effects(
-    inventory: &Inventory<'_>,
+pub(super) fn has_closed_effects<O>(
+    inventory: &Inventory<'_, O>,
     function: Function,
     operation: &Operation,
     budget: &mut Budget<'_>,

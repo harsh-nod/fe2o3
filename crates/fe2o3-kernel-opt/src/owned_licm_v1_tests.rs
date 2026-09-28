@@ -965,8 +965,8 @@ fn measured_peak_minus_one_records_exact_first_denial_for_strict_successor() {
             panic!("expected independent loop replay Storage refusal")
         };
         assert_eq!((error.actual(), error.limit()), (peak, peak - 1));
-        assert_eq!(peak, 43_224);
-        assert_eq!((budget.work(), budget.peak_storage()), (21_884, 43_112));
+        assert_eq!(peak, 52_256);
+        assert_eq!((budget.work(), budget.peak_storage()), (21_884, 52_144));
     }
     assert_eq!(work.failed_work(), None);
     assert_eq!(sibling, vec![0xa5; 43]);

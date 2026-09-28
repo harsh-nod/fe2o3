@@ -250,6 +250,11 @@ impl ProductionPreRankedKirOwnerV1 {
             &mut ArgumentBudgetV1<'w>,
         ) -> Result<R, ProductionSemanticKirErrorV1>,
     ) -> Result<R, ProductionSemanticKirErrorV1> {
+        if self.helper_source_policy_v1() == ProductionHelperSourcePolicyV1::Bf16Nominal {
+            return Err(bf16_emission_refusal_v1(
+                "BF16 generic canonical-call consumer unavailable",
+            ));
+        }
         with_canonical_call_scratch_v1(budget, |budget| {
             budget.charge_work(1)?;
             if !inventory.belongs_to(self.executable()) {

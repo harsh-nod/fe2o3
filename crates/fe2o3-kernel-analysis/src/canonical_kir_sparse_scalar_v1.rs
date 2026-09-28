@@ -277,6 +277,8 @@ pub(super) fn transfer(
                 CastKind::SignExtend => scalar::Cast::IntExtend { signed: true },
                 CastKind::Bitcast => scalar::Cast::Bitcast,
                 CastKind::RestrictPointerAccess
+                | CastKind::PointerToGeneric
+                | CastKind::SliceToGeneric
                 | CastKind::FloatExtend
                 | CastKind::FloatTruncate
                 | CastKind::IntegerToFloat
@@ -290,7 +292,8 @@ pub(super) fn transfer(
                     .map_or(Value::Dynamic, |bits| constant(to, bits)),
             )
         }
-        OperationKind::Execution(_)
+        OperationKind::Storage(_)
+        | OperationKind::Execution(_)
         | OperationKind::VerificationContract(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
@@ -327,5 +330,56 @@ pub(super) fn transfer(
         | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
         | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
         | OperationKind::Gfx942PhysicalLdsExchangeStep(_) => Transfer::one(Value::Dynamic),
+    }
+}
+
+#[cfg(test)]
+#[path = "canonical_kir_pointer_to_generic_v18_tests.rs"]
+mod pointer_to_generic_tests;
+
+#[cfg(test)]
+#[path = "canonical_kir_slice_to_generic_v18_tests.rs"]
+mod slice_to_generic_tests;
+
+#[cfg(test)]
+mod storage_transfer_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        AddressSpace, MemoryAccess, StorageOperationV1, StorageProjectionV1, ValueId,
+    };
+    #[test]
+    fn storage_results_do_not_fold_even_with_constant_inputs() {
+        let input = Input {
+            value: constant(ScalarType::U32, 7),
+            ty: Some(ScalarType::U32),
+        };
+        for storage in [
+            StorageOperationV1::Project {
+                base: ValueId(0),
+                step: StorageProjectionV1::Field(0),
+            },
+            StorageOperationV1::ReadValue {
+                address: ValueId(0),
+                access: MemoryAccess::new(AddressSpace::Private, 4),
+            },
+        ] {
+            let result = transfer(
+                &OperationKind::Storage(storage),
+                Some(ScalarType::U32),
+                [input; 3],
+            );
+            assert_eq!(result.values, [Value::Dynamic; 2]);
+            assert!(!result.exceptional);
+        }
+        assert_eq!(
+            transfer(
+                &OperationKind::Constant(Constant::U32(7)),
+                Some(ScalarType::U32),
+                [input; 3]
+            )
+            .values[0],
+            constant(ScalarType::U32, 7)
+        );
     }
 }

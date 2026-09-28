@@ -158,10 +158,26 @@ impl CompilerExecutionClientV1 {
     /// Admission first retains a private close-on-exec duplicate, then closes the public child
     /// slot on every successful duplication path. The returned client is therefore the only owner
     /// used by the backend and cannot leak the canonical descriptor into later subprocesses.
-    pub fn admit_inherited_child(
+    /// Use [`Self::admit`] when an `OwnedFd` already represents the input.
+    ///
+    /// # Safety
+    /// Transfer exclusive ownership of FD 195, inherited without a Rust owner or
+    /// explicitly relinquished for this transfer. It must have no existing Rust owner
+    /// or outstanding borrow. No thread, signal handler, or foreign code may close,
+    /// replace, or acquire it during this call. If absent, keep the slot unallocated
+    /// until return. Consume this transfer only once, even after an error or unwind;
+    /// a later occupant of the same descriptor number is not another inherited input.
+    /// Descriptor validity, flags, and socket checks do not establish ownership.
+    ///
+    /// ```compile_fail,E0133
+    /// use fe2o3_compiler_execution_client::CompilerExecutionClientV1;
+    /// let _ = CompilerExecutionClientV1::admit_inherited_child(std::time::Duration::from_secs(1));
+    /// ```
+    pub unsafe fn admit_inherited_child(
         timeout: Duration,
     ) -> Result<Self, CompilerExecutionClientErrorV1> {
-        let retained = inherited_admission::retain_inherited_peer()?;
+        // SAFETY: the caller transfers the fixed slot under this method's contract.
+        let retained = unsafe { inherited_admission::retain_inherited_peer() }?;
         Self::admit(retained, timeout)
     }
 

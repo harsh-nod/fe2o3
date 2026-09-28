@@ -99,7 +99,9 @@ fn source_type_nodes(ty: &Type, depth: usize) -> Result<usize, KirBridgeErrorV12
         return Err(KirBridgeErrorV1::UnsupportedType.into());
     }
     match ty {
-        Type::Execution(_) => Err(KirBridgeErrorV1::UnsupportedType.into()),
+        Type::Execution(_) | Type::StorageObject(_) => {
+            Err(KirBridgeErrorV1::UnsupportedType.into())
+        }
         Type::Pointer(pointer) => {
             checked_bridge_add_v12(1, source_type_nodes(&pointer.pointee, depth + 1)?)
         }
@@ -373,4 +375,32 @@ pub(super) fn extraction_envelope(
 #[cfg(test)]
 mod tests {
     include!("kir_bridge_native_profile_v1_tests.rs");
+}
+
+#[cfg(test)]
+mod storage_native_profile_tests {
+    use super::*;
+
+    #[test]
+    fn native_source_type_count_refuses_storage_rows_without_guessing_layout() {
+        let storage = Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(matches!(
+                source_type_nodes(&ty, 0),
+                Err(KirBridgeErrorV12::Bridge(KirBridgeErrorV1::UnsupportedType))
+            ));
+        }
+        assert_eq!(
+            source_type_nodes(&Type::Scalar(ScalarType::U32), 0).unwrap(),
+            1
+        );
+    }
 }

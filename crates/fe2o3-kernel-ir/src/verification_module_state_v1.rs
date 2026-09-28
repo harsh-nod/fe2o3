@@ -217,6 +217,7 @@ mod tests {
         let first = FunctionId::new(format!("{common}a"));
         let second = FunctionId::new(format!("{common}b"));
         Module {
+            storage_layouts: Vec::new(),
             id: "module".into(),
             functions: vec![declaration(first.as_str()), declaration(second.as_str())],
             kernels: vec![

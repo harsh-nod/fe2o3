@@ -3,13 +3,16 @@
 #![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_endian = "little")))]
 compile_error!("fixed reviewed Linux x86_64 little-endian controller only");
+mod argv_readiness;
 mod clock;
 mod config;
 mod custody;
+mod failure_diagnostic;
 mod parent;
 mod profile;
 mod publication;
 mod scope;
+mod setup_diagnostic;
 mod streams;
 mod wire;
 use std::process::ExitCode;
@@ -36,8 +39,8 @@ fn main() -> ExitCode {
         Ok(v) => v,
         Err(e) => {
             eprintln!(
-                "one-stop debugger setup refused: {:?}; known cleanup={:?}; no whole-family claim",
-                e.refusal, e.cleanup
+                "one-stop debugger setup refused: {:?}; known cleanup={:?}; diagnostic={}; failure_observation={}; no whole-family claim",
+                e.refusal, e.cleanup, e.diagnostic, e.failure_observation
             );
             return ExitCode::FAILURE;
         }
@@ -52,9 +55,13 @@ fn main() -> ExitCode {
             Ok(x) => x.cleanup,
             Err((_, c)) => *c,
         };
-        eprintln!(
-            "one-stop raw observation publication refused: {e:?}; retained cleanup={cleanup:?}"
+        let diagnostic = publication::failure_diagnostic(
+            e,
+            &result,
+            cleanup,
+            peer.publication_failure_context(),
         );
+        eprintln!("{diagnostic}");
         return ExitCode::FAILURE;
     }
     if okay {

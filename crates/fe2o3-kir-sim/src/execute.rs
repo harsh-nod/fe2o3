@@ -6821,7 +6821,8 @@ fn execute_non_assembly_operation(
         OperationKind::MemoryIntrinsic(intrinsic) => {
             execute_memory_intrinsic(engine, values, intrinsic, &site)
         }
-        OperationKind::Execution(_)
+        OperationKind::Storage(_)
+        | OperationKind::Execution(_)
         | OperationKind::Barrier(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::Matrix(_)
@@ -8529,8 +8530,8 @@ fn execute_cast(
                 "preflighted cast target",
             ))?;
     let bits = match kind {
-        CastKind::RestrictPointerAccess => {
-            unreachable!("pointer access restriction is not a scalar cast")
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
+            unreachable!("pointer or slice conversion is not a scalar cast")
         }
         CastKind::Truncate => value.bits() & mask(to_width),
         CastKind::ZeroExtend | CastKind::Bitcast => value.bits(),

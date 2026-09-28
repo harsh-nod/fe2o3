@@ -110,10 +110,15 @@ fn owning_resource(error: ScopedModuleErrorV29) -> ArgumentResourceV1 {
             SemanticKirAssertOriginErrorV1::Resource(error),
         ))
         | ScopedModuleErrorV29::Canonical(
-            fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Resource(error),
+            fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Resource(error),
         )
         | ScopedModuleErrorV29::Canonical(
-            fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Decode(
+            fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Layout(
+                fe2o3_kernel_ir::StorageLayoutErrorV1::Resource(error),
+            ),
+        )
+        | ScopedModuleErrorV29::Canonical(
+            fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Decode(
                 fe2o3_kernel_ir::KernelIrDecodeError::Resource(error),
             ),
         ) => error,

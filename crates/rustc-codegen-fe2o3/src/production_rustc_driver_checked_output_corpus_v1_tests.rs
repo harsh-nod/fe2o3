@@ -9,6 +9,9 @@ const REPORT: &str = "FE2O3_TEST_CHECKED_OUTPUT_CORPUS_REPORT_V1";
 const CONFIGURATIONS: usize = 50;
 const ROOTS: usize = 34;
 
+#[path = "production_rustc_driver_checked_output_source_driver_corpus_v1_tests.rs"]
+mod source_driver_corpus;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CargoTarget {

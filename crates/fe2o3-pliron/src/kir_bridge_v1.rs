@@ -717,6 +717,9 @@ fn preflight_with_profile_v12(
     module: &Module,
     profile: KirBridgeTypeProfileV12,
 ) -> Result<(usize, Vec<KirBridgeCorrespondenceV1>), KirBridgeErrorV1> {
+    if !module.storage_layouts.is_empty() {
+        return Err(KirBridgeErrorV1::UnsupportedType);
+    }
     let mut tree_work = BUILTIN_MODULE_ROOT_TREE_WORK_V1;
     let mut ordinal = 0_u64;
     let mut correspondence = Vec::new();
@@ -811,7 +814,9 @@ fn to_u32(value: usize) -> Result<u32, KirBridgeErrorV1> {
 
 fn preflight_type(ty: &Type) -> Result<(), KirBridgeErrorV1> {
     match ty {
-        Type::Vector(_) | Type::Execution(_) => Err(KirBridgeErrorV1::UnsupportedType),
+        Type::Vector(_) | Type::Execution(_) | Type::StorageObject(_) => {
+            Err(KirBridgeErrorV1::UnsupportedType)
+        }
         Type::Unit | Type::Scalar(_) => Ok(()),
         Type::Pointer(pointer) => {
             preflight_address_space(pointer.address_space)?;
@@ -834,7 +839,12 @@ fn preflight_operation(
     coordinate: KirBridgeCoordinateV1,
 ) -> Result<(), KirBridgeErrorV1> {
     match &operation.kind {
-        OperationKind::Execution(_)
+        OperationKind::Cast {
+            kind: CastKind::PointerToGeneric | CastKind::SliceToGeneric,
+            ..
+        }
+        | OperationKind::Storage(_)
+        | OperationKind::Execution(_)
         | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::Gfx942OrderedProgram(_)
         | OperationKind::Gfx942CompleteBodyDeclaration(_)
@@ -1197,7 +1207,7 @@ fn build_operation(
             let to = profile.to_pliron(context, to)?;
             CastOp::new(
                 context,
-                cast_to_pliron(*kind),
+                cast_to_pliron(*kind)?,
                 value_for(values, function, *value)?,
                 to,
             )
@@ -1442,7 +1452,9 @@ pub(crate) fn ranked_data_type_node_is_supported_v2(ty: &dyn pliron::r#type::Typ
 
 fn type_to_pliron(context: &Context, ty: &Type) -> Result<TypeHandle, KirBridgeErrorV1> {
     Ok(match ty {
-        Type::Vector(_) | Type::Execution(_) => return Err(KirBridgeErrorV1::UnsupportedType),
+        Type::Vector(_) | Type::Execution(_) | Type::StorageObject(_) => {
+            return Err(KirBridgeErrorV1::UnsupportedType);
+        }
         Type::Unit => UnitType::get(context).into(),
         Type::Scalar(ScalarType::Bool) => IntegerType::get(context, 1, Signedness::Signless).into(),
         Type::Scalar(ScalarType::I8) => IntegerType::get(context, 8, Signedness::Signed).into(),
@@ -1575,8 +1587,11 @@ const fn compare_to_pliron(predicate: fe2o3_kernel_ir::ComparePredicate) -> Comp
     }
 }
 
-const fn cast_to_pliron(kind: CastKind) -> CastKindAttr {
-    match kind {
+fn cast_to_pliron(kind: CastKind) -> Result<CastKindAttr, KirBridgeErrorV1> {
+    Ok(match kind {
+        CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
+            return Err(KirBridgeErrorV1::UnsupportedType);
+        }
         CastKind::RestrictPointerAccess => CastKindAttr::RestrictPointerAccess,
         CastKind::Truncate => CastKindAttr::Truncate,
         CastKind::ZeroExtend => CastKindAttr::ZeroExtend,
@@ -1586,7 +1601,7 @@ const fn cast_to_pliron(kind: CastKind) -> CastKindAttr {
         CastKind::IntegerToFloat => CastKindAttr::IntegerToFloat,
         CastKind::FloatToInteger => CastKindAttr::FloatToInteger,
         CastKind::Bitcast => CastKindAttr::Bitcast,
-    }
+    })
 }
 
 fn index_live_functions(
@@ -1644,7 +1659,7 @@ fn extract_optimized_module_graph(
 
     let mut output = match profile {
         KirBridgeTypeProfileV12::Legacy => metadata.clone(),
-        KirBridgeTypeProfileV12::V12 => module_metadata_v12(metadata),
+        KirBridgeTypeProfileV12::V12 => module_metadata_v12(metadata)?,
     };
     let mut ordinal = 0_u64;
     let mut correspondence = Vec::new();
@@ -2751,7 +2766,8 @@ fn remap_preserved_operation(
         | OperationKind::Fence(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::WorkgroupMemory(_) => {}
-        OperationKind::Execution(_)
+        OperationKind::Storage(_)
+        | OperationKind::Execution(_)
         | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::Gfx942OrderedProgram(_)
         | OperationKind::Gfx942CompleteBodyDeclaration(_)
@@ -3428,5 +3444,71 @@ mod tests {
             HARD_MAX_SESSION_OPERATION_TREE_ITEMS
         );
         assert!(!aggregate_limited.is_poisoned());
+    }
+}
+
+#[cfg(test)]
+mod storage_bridge_profile_tests {
+    use super::*;
+
+    #[test]
+    fn storage_types_cannot_be_interned_by_bare_module_local_ids() {
+        let session = PlironSession::new(
+            crate::ShellLimits::default(),
+            [dialect_gpu::dialect_registration().unwrap()],
+        )
+        .unwrap();
+        let storage = Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(matches!(
+                preflight_type(&ty),
+                Err(KirBridgeErrorV1::UnsupportedType)
+            ));
+            assert!(matches!(
+                type_to_pliron(&session.context, &ty),
+                Err(KirBridgeErrorV1::UnsupportedType)
+            ));
+            assert!(matches!(
+                KirBridgeTypeProfileV12::V12.preflight_type(&ty),
+                Err(KirBridgeErrorV1::UnsupportedType)
+            ));
+            assert!(matches!(
+                KirBridgeTypeProfileV12::V12.to_pliron(&session.context, &ty),
+                Err(KirBridgeErrorV1::UnsupportedType)
+            ));
+        }
+        assert!(type_to_pliron(&session.context, &Type::Scalar(ScalarType::U32)).is_ok());
+    }
+
+    #[test]
+    fn storage_operation_is_not_a_preserved_legacy_operation() {
+        let kind = OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::Project {
+            base: ValueId(0),
+            step: fe2o3_kernel_ir::StorageProjectionV1::Field(0),
+        });
+        let operation = KirOperation::new(vec![], kind.clone());
+        let coordinate = KirBridgeCoordinateV1::Operation {
+            function: 0,
+            block: 0,
+            operation: 0,
+        };
+        assert!(matches!(
+            preflight_operation(&operation, coordinate),
+            Err(KirBridgeErrorV1::UnsupportedOperation { .. })
+        ));
+        assert!(matches!(
+            KirBridgeTypeProfileV12::V12.preflight_operation(&operation, coordinate),
+            Err(KirBridgeErrorV1::UnsupportedOperation { .. })
+        ));
+        assert!(remap_preserved_operation(&kind, vec![ValueId(1)]).is_err());
+        assert!(preserved_operation_kind(&kind).is_err());
     }
 }

@@ -505,6 +505,7 @@ fn full_module() -> Module {
     );
 
     Module {
+        storage_layouts: Vec::new(),
         id: ModuleId::new("tests::wire::full"),
         functions: vec![defined, declaration],
         kernels: vec![kernel_1d, kernel_2d, kernel_3d],

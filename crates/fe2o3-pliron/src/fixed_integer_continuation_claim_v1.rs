@@ -30,7 +30,14 @@ impl std::fmt::Display for Error {
         write!(f, "unauthenticated integer continuation claim: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Framing | Self::Endpoint | Self::Profile | Self::Pass => None,
+        }
+    }
+}
 
 /// Borrowed syntax only. Dynamic work, epochs, map digest and graph/report
 /// fields are not authenticated observations or resource allowances.

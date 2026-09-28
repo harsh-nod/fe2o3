@@ -97,6 +97,7 @@ const _: () = assert!(MAX_CLI_EXPLORATION_ENVELOPE_BYTES < MAX_SUCCESS_BYTES);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum UnsupportedFeatureCode {
+    InertStorage,
     InertV12Carrier,
     InertExecutionV15,
     FloatType,
@@ -3393,6 +3394,9 @@ fn admission_error_kind(error: &SimulationAdmissionErrorV1) -> ErrorKind {
 
 fn preflight_kind(error: &SimulationPreflightErrorV1) -> ErrorKind {
     match error {
+        SimulationPreflightErrorV1::StorageProfileNotAdmitted => {
+            ErrorKind::PreflightStorageProfileNotAdmitted
+        }
         SimulationPreflightErrorV1::PhysicalEntrySymbolicDebugUnavailableV20 => {
             ErrorKind::PreflightPhysicalEntrySymbolicDebugUnavailableV20
         }
@@ -3616,6 +3620,7 @@ fn wave_mask(width: WaveWidth, mask: u64) -> String {
 
 fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
     match feature {
+        UnsupportedFeatureV1::InertStorage => UnsupportedFeatureCode::InertStorage,
         UnsupportedFeatureV1::InertV12Carrier => UnsupportedFeatureCode::InertV12Carrier,
         UnsupportedFeatureV1::InertExecutionV15 => UnsupportedFeatureCode::InertExecutionV15,
         UnsupportedFeatureV1::FloatType(_) => UnsupportedFeatureCode::FloatType,
@@ -6320,6 +6325,10 @@ mod physical_global_copy_v21_tests;
 #[cfg(test)]
 #[path = "linux_physical_lds_exchange_v22_tests.rs"]
 mod physical_lds_exchange_v22_tests;
+
+#[cfg(test)]
+#[path = "linux_storage_profile_v1_tests.rs"]
+mod storage_profile_v1_tests;
 
 #[cfg(test)]
 mod target_profile_output_tests {

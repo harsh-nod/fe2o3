@@ -15,6 +15,7 @@ enum CallInstanceEmissionErrorV1 {
     MissingTerminator,
     ForeignBlock,
     ExecutionTransport,
+    StorageTransport,
     CalleeFrameAllocation,
     CalleeWorkgroupAllocation,
     CalleeCollective,
@@ -242,6 +243,7 @@ fn call_splice_check_callee_operation_v1(
     use OperationKind as Op;
     match kind {
         Op::Execution(_) => Err(Error::ExecutionTransport),
+        Op::Storage(_) => Err(Error::StorageTransport),
         Op::Alloca { .. } => Err(Error::CalleeFrameAllocation),
         Op::WorkgroupMemory(_) => Err(Error::CalleeWorkgroupAllocation),
         Op::Barrier(_)
@@ -685,4 +687,20 @@ fn splice_production_call_instance_with_scoped_frame_v29(
 #[cfg(test)]
 mod call_instance_emission_tests {
     include!("production_call_instance_emission_v1_tests.rs");
+}
+
+#[cfg(test)]
+#[test]
+fn storage_call_splicing_requires_storage_correspondence_v1() {
+    let operation = OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::Project {
+        base: ValueId(0),
+        step: fe2o3_kernel_ir::StorageProjectionV1::Field(0),
+    });
+    assert_eq!(
+        call_splice_check_callee_operation_v1(&operation),
+        Err(CallInstanceEmissionErrorV1::StorageTransport)
+    );
+    assert!(
+        call_splice_check_callee_operation_v1(&OperationKind::Constant(Constant::U32(9))).is_ok()
+    );
 }

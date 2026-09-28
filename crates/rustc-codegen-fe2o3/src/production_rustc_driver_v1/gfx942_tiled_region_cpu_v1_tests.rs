@@ -1,11 +1,11 @@
 //! Fresh actual-source CPU gate. Historical inspection/normal reports remain unchanged.
 use super::*;
 #[path = "gfx942_tiled_region_cpu_capture_v1_tests.rs"]
-mod capture;
+pub(in crate::production_rustc_driver_v1) mod capture;
 #[path = "gfx942_tiled_region_cpu_observation_v1_tests.rs"]
 mod observed;
 #[path = "gfx942_tiled_region_cpu_oracle_v1_tests.rs"]
-mod oracle;
+pub(in crate::production_rustc_driver_v1) mod oracle;
 
 const CPU_OUTPUT: &str = "FE2O3_TEST_TILED_CPU_OUTPUT_V1";
 const CPU_SCHEMA: &str = "fe2o3-gfx942-bf16-source-cpu-observation-v1";

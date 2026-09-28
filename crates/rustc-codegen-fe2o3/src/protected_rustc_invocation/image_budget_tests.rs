@@ -1,18 +1,12 @@
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use sha2::{Digest, Sha256};
-use std::{
-    fs::File,
-    io::Write,
-    os::fd::{AsRawFd, FromRawFd},
-};
+use std::{fs::File, io::Write, os::fd::AsRawFd};
 
 fn image() -> (File, std::path::PathBuf) {
-    // SAFETY: the terminated name and flags are valid memfd_create inputs.
-    let fd = unsafe { libc::memfd_create(c"fe2o3-image-budget-test".as_ptr(), libc::MFD_CLOEXEC) };
-    assert!(fd >= 0, "memfd_create: {}", std::io::Error::last_os_error());
-    // SAFETY: successful memfd_create returned a new uniquely owned descriptor.
-    let mut file = unsafe { File::from_raw_fd(fd) };
+    let fd = rustix::fs::memfd_create("fe2o3-image-budget-test", rustix::fs::MemfdFlags::CLOEXEC)
+        .expect("memfd_create");
+    let mut file = File::from(fd);
     file.write_all(b"compiler image").unwrap();
     let path = format!("/proc/self/fd/{}", file.as_raw_fd()).into();
     (file, path)

@@ -129,6 +129,9 @@ impl SliceType {
 pub enum Type {
     Unit,
     Scalar(ScalarType),
+    /// Module-local physical layout used only as a pointer or slice target.
+    /// This is not a first-class SSA object or a source-validity claim.
+    StorageObject(crate::StorageLayoutIdV1),
     /// Non-storable execution role available only in canonical Kernel IR V15.
     Execution(crate::ExecutionRoleV15),
     /// A first-class fixed-lane vector available in canonical Kernel IR V12.
@@ -164,7 +167,7 @@ impl Type {
 
     pub fn is_storable(&self) -> bool {
         match self {
-            Self::Unit | Self::Slice(_) | Self::Execution(_) => false,
+            Self::Unit | Self::Slice(_) | Self::Execution(_) | Self::StorageObject(_) => false,
             Self::Pointer(pointer) => !pointer.pointee.contains_execution_role_v15(),
             Self::Scalar(_) | Self::Vector(_) => true,
         }
@@ -177,7 +180,9 @@ impl Type {
                 Self::Execution(_) => return true,
                 Self::Pointer(pointer) => ty = &pointer.pointee,
                 Self::Slice(slice) => ty = &slice.element,
-                Self::Unit | Self::Scalar(_) | Self::Vector(_) => return false,
+                Self::Unit | Self::Scalar(_) | Self::Vector(_) | Self::StorageObject(_) => {
+                    return false;
+                }
             }
         }
     }

@@ -24,6 +24,15 @@ pub(crate) fn take_fixed(
     descriptor: RawFd,
     role: &'static str,
 ) -> Result<OwnedFd, ExternalAnchorProvisioningHelperErrorV1> {
+    let retained = duplicate_fixed(descriptor, role)?;
+    close_fixed(descriptor)?;
+    Ok(retained)
+}
+
+pub(crate) fn duplicate_fixed(
+    descriptor: RawFd,
+    role: &'static str,
+) -> Result<OwnedFd, ExternalAnchorProvisioningHelperErrorV1> {
     // SAFETY: F_GETFD observes only the scalar fixed descriptor and reports invalid values via errno.
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
     if flags < 0 {
@@ -47,9 +56,7 @@ pub(crate) fn take_fixed(
         return Err(descriptor_error("retain inherited helper descriptor"));
     }
     // SAFETY: the successful fcntl returned a new descriptor owned by this process.
-    let retained = unsafe { OwnedFd::from_raw_fd(retained) };
-    close_fixed(descriptor)?;
-    Ok(retained)
+    Ok(unsafe { OwnedFd::from_raw_fd(retained) })
 }
 
 pub(crate) fn close_fixed(

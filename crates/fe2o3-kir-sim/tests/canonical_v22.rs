@@ -557,7 +557,7 @@ fn capability_matrix_names_only_the_closed_v22_profile_and_keeps_older_rows() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V22)
         .collect();
-    assert_eq!(rows.len(), 4 * 48);
+    assert_eq!(rows.len(), 4 * 49);
     for row in rows {
         let expected = row.profile == SimulationCapabilityProfileV1::Gfx942XnackMinus
             && matches!(
@@ -580,7 +580,7 @@ fn capability_matrix_names_only_the_closed_v22_profile_and_keeps_older_rows() {
             .iter()
             .filter(|row| row.kir_wire_version != SimulationKirWireVersionV1::V22)
             .count(),
-        10 * 4 * 48
+        10 * 4 * 49
     );
     assert!(!matrix.hardware_observed);
     assert_eq!(matrix.authority, "none");

@@ -23,37 +23,75 @@ include!("kir_bridge_v12_roster_resources_tests.rs");
 fn execution_v15_roles_and_operations_are_rejected_by_both_bridge_profiles() {
     use fe2o3_kernel_ir::{ExecutionOperationV15 as Execution, ExecutionRoleV15 as Role};
     let context = Context::new();
-    for profile in [KirBridgeTypeProfileV12::Legacy, KirBridgeTypeProfileV12::V12] {
+    for profile in [
+        KirBridgeTypeProfileV12::Legacy,
+        KirBridgeTypeProfileV12::V12,
+    ] {
         for role in [
-            Role::Context, Role::Workgroup,
-            Role::MaskedTileU32 { lanes: 3, elements: 2 },
-            Role::LaneFragmentU32 { lanes: 3, elements: 2 },
+            Role::Context,
+            Role::Workgroup,
+            Role::MaskedTileU32 {
+                lanes: 3,
+                elements: 2,
+            },
+            Role::LaneFragmentU32 {
+                lanes: 3,
+                elements: 2,
+            },
         ] {
             let role = Type::Execution(role);
             for ty in [
                 role.clone(),
                 Type::pointer(
                     Type::slice(role, AddressSpace::Global, AccessMode::ReadOnly),
-                    AddressSpace::Private, AccessMode::ReadWrite,
+                    AddressSpace::Private,
+                    AccessMode::ReadWrite,
                 ),
             ] {
-                assert!(matches!(profile.preflight_type(&ty), Err(KirBridgeErrorV1::UnsupportedType)));
-                assert!(matches!(profile.to_pliron(&context, &ty), Err(KirBridgeErrorV1::UnsupportedType)));
+                assert!(matches!(
+                    profile.preflight_type(&ty),
+                    Err(KirBridgeErrorV1::UnsupportedType)
+                ));
+                assert!(matches!(
+                    profile.to_pliron(&context, &ty),
+                    Err(KirBridgeErrorV1::UnsupportedType)
+                ));
             }
         }
         for execution in [
             Execution::ContextIssue,
-            Execution::WorkgroupDerive { context: ValueId(0) },
-            Execution::ScopeEnd { workgroup: ValueId(0), discarded: vec![ValueId(1)] },
-            Execution::MaskedTileLoadU32 {
-                workgroup: ValueId(0), input: ValueId(1), base: ValueId(2), lanes: 3, elements: 2,
+            Execution::WorkgroupDerive {
+                context: ValueId(0),
             },
-            Execution::TileIntoFragmentU32 { tile: ValueId(0), lanes: 3, elements: 2 },
-            Execution::FragmentIntoPartsU32 { fragment: ValueId(0), lanes: 3, elements: 2 },
+            Execution::ScopeEnd {
+                workgroup: ValueId(0),
+                discarded: vec![ValueId(1)],
+            },
+            Execution::MaskedTileLoadU32 {
+                workgroup: ValueId(0),
+                input: ValueId(1),
+                base: ValueId(2),
+                lanes: 3,
+                elements: 2,
+            },
+            Execution::TileIntoFragmentU32 {
+                tile: ValueId(0),
+                lanes: 3,
+                elements: 2,
+            },
+            Execution::FragmentIntoPartsU32 {
+                fragment: ValueId(0),
+                lanes: 3,
+                elements: 2,
+            },
         ] {
             let kind = OperationKind::Execution(execution);
             let operation = KirOperation::new(vec![], kind.clone());
-            let coordinate = KirBridgeCoordinateV1::Operation { function: 0, block: 0, operation: 0 };
+            let coordinate = KirBridgeCoordinateV1::Operation {
+                function: 0,
+                block: 0,
+                operation: 0,
+            };
             assert!(matches!(
                 profile.preflight_operation(&operation, coordinate),
                 Err(KirBridgeErrorV1::UnsupportedOperation { .. }),
@@ -570,7 +608,7 @@ fn v12_metadata_copy_contains_no_definition_bodies_or_redundant_signature_trees(
         ),
     ));
     let snapshot = source.clone();
-    let metadata = module_metadata_v12(&source);
+    let metadata = module_metadata_v12(&source).unwrap();
     assert_eq!(metadata.id, source.id);
     assert_eq!(metadata.kernels, source.kernels);
     assert_eq!(metadata.required_capabilities, source.required_capabilities);
@@ -744,4 +782,68 @@ fn v12_function_index_rejects_incomplete_duplicate_unknown_and_declaration_origi
     );
     graph.origins.functions.insert(live[1], original);
     assert!(index_live_functions(live, &source, &graph.origins).is_ok());
+}
+
+#[test]
+fn legacy_bridge_refuses_storage_tables_before_metadata_or_graph_copy() {
+    let mut source = Module::new("storage_table_boundary");
+    assert!(
+        module_metadata_v12(&source)
+            .unwrap()
+            .storage_layouts
+            .is_empty()
+    );
+    source
+        .storage_layouts
+        .push(fe2o3_kernel_ir::StorageLayoutV1 {
+            size: 4,
+            alignment: 4,
+            kind: fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(ScalarType::U32),
+        });
+    assert!(matches!(
+        module_metadata_v12(&source),
+        Err(KirBridgeErrorV1::UnsupportedType)
+    ));
+    for profile in [
+        KirBridgeTypeProfileV12::Legacy,
+        KirBridgeTypeProfileV12::V12,
+    ] {
+        assert!(matches!(
+            preflight_with_profile_v12(&source, profile),
+            Err(KirBridgeErrorV1::UnsupportedType)
+        ));
+    }
+}
+
+#[test]
+fn legacy_bridge_refuses_new_generic_casts_without_changing_old_casts() {
+    let coordinate = KirBridgeCoordinateV1::Operation {
+        function: 0,
+        block: 0,
+        operation: 0,
+    };
+    for kind in [CastKind::PointerToGeneric, CastKind::SliceToGeneric] {
+        let operation = KirOperation::new(
+            vec![],
+            OperationKind::Cast {
+                kind,
+                value: ValueId(0),
+                to: Type::Scalar(ScalarType::U32),
+            },
+        );
+        assert!(matches!(preflight_operation(&operation, coordinate),
+            Err(KirBridgeErrorV1::UnsupportedOperation { coordinate: actual }) if actual == coordinate));
+        assert!(matches!(
+            cast_to_pliron(kind),
+            Err(KirBridgeErrorV1::UnsupportedType)
+        ));
+    }
+    assert_eq!(
+        cast_to_pliron(CastKind::RestrictPointerAccess).unwrap(),
+        CastKindAttr::RestrictPointerAccess
+    );
+    assert_eq!(
+        cast_to_pliron(CastKind::ZeroExtend).unwrap(),
+        CastKindAttr::ZeroExtend
+    );
 }

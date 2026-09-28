@@ -158,8 +158,22 @@ impl Sources {
         helper_io::close_fixed(INPUT_FDS[index]).map_err(Into::into)
     }
     fn take(&mut self, index: usize) -> Result<File> {
-        let f = helper_io::take_fixed(INPUT_FDS[index], "native helper source")?;
+        self.take_with(
+            index,
+            |fd| helper_io::duplicate_fixed(fd, "native helper source").map_err(Into::into),
+            |fd| helper_io::close_fixed(fd).map_err(Into::into),
+        )
+    }
+    fn take_with(
+        &mut self,
+        index: usize,
+        duplicate: impl FnOnce(RawFd) -> Result<OwnedFd>,
+        close: impl FnOnce(RawFd) -> Result<()>,
+    ) -> Result<File> {
+        let f = duplicate(INPUT_FDS[index])?;
+        // A failed close may already have released the slot; never retry it in Drop.
         self.0[index] = false;
+        close(INPUT_FDS[index])?;
         Ok(f.into())
     }
 }

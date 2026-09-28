@@ -160,8 +160,22 @@ impl Sources {
         crate::entrypoint::close_inherited(INPUT_FDS[index]).map_err(Into::into)
     }
     fn take(&mut self, index: usize, target: RawFd, label: &'static str) -> Result<OwnedFd> {
-        let owned = crate::entrypoint::take_inherited_at(INPUT_FDS[index], target, label)?;
+        self.take_with(
+            index,
+            |fd| crate::entrypoint::duplicate_inherited_at(fd, target, label).map_err(Into::into),
+            |fd| crate::entrypoint::close_inherited(fd).map_err(Into::into),
+        )
+    }
+    fn take_with(
+        &mut self,
+        index: usize,
+        duplicate: impl FnOnce(RawFd) -> Result<OwnedFd>,
+        close: impl FnOnce(RawFd) -> Result<()>,
+    ) -> Result<OwnedFd> {
+        let owned = duplicate(INPUT_FDS[index])?;
+        // A failed close may already have released the slot; never retry it in Drop.
         self.live[index] = false;
+        close(INPUT_FDS[index])?;
         Ok(owned)
     }
 }

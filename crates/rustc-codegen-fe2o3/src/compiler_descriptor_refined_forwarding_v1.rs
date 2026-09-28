@@ -401,6 +401,9 @@ pub(crate) mod fixtures {
                             semantic_type_identity: view.semantic.types()
                                 [source_ty.index() as usize]
                                 .identity(),
+                            semantic_layout_identity: view.semantic.types()
+                                [source_ty.index() as usize]
+                                .layout_identity(),
                         };
                         offset += size;
                         result

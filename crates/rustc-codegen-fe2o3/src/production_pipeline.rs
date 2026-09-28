@@ -61,6 +61,9 @@ mod nominal_policy4_v3;
 mod pre_ranked_observation_v1;
 #[path = "production_pipeline_private_cell_native_v1.rs"]
 pub(crate) mod private_cell_native_v1;
+#[cfg(test)]
+#[path = "production_pipeline_source_abi_v1_tests.rs"]
+mod source_abi_v1_tests;
 #[path = "production_pipeline_source_local_order_v1.rs"]
 pub(crate) mod source_local_order_v1;
 #[path = "production_pipeline/tiled_region_v1.rs"]
@@ -2609,6 +2612,71 @@ fn compiler_semantic_storage_map_v1(
     .map_err(ProductionPipelineError::SimulationBundleV3)
 }
 
+fn compiler_legacy_slot_shape_v2(
+    ty: &fe2o3_kernel_ir::Type,
+) -> Result<(u32, u32, Option<u32>), ProductionPipelineError> {
+    let mut leaf = ty;
+    loop {
+        leaf = match leaf {
+            fe2o3_kernel_ir::Type::Pointer(pointer) => &pointer.pointee,
+            fe2o3_kernel_ir::Type::Slice(slice) => &slice.element,
+            fe2o3_kernel_ir::Type::StorageObject(_) => {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "storage-object types require a storage-aware simulator descriptor",
+                ));
+            }
+            fe2o3_kernel_ir::Type::Unit
+            | fe2o3_kernel_ir::Type::Scalar(_)
+            | fe2o3_kernel_ir::Type::Vector(_)
+            | fe2o3_kernel_ir::Type::Execution(_) => break,
+        };
+    }
+    Ok(match ty {
+        fe2o3_kernel_ir::Type::Scalar(scalar) => {
+            let width = match scalar {
+                fe2o3_kernel_ir::ScalarType::Bool
+                | fe2o3_kernel_ir::ScalarType::I8
+                | fe2o3_kernel_ir::ScalarType::U8 => 1,
+                fe2o3_kernel_ir::ScalarType::I16
+                | fe2o3_kernel_ir::ScalarType::U16
+                | fe2o3_kernel_ir::ScalarType::F16
+                | fe2o3_kernel_ir::ScalarType::Bf16 => 2,
+                fe2o3_kernel_ir::ScalarType::I32
+                | fe2o3_kernel_ir::ScalarType::U32
+                | fe2o3_kernel_ir::ScalarType::F32 => 4,
+                fe2o3_kernel_ir::ScalarType::I64
+                | fe2o3_kernel_ir::ScalarType::U64
+                | fe2o3_kernel_ir::ScalarType::F64
+                | fe2o3_kernel_ir::ScalarType::Index => 8,
+                fe2o3_kernel_ir::ScalarType::I128 | fe2o3_kernel_ir::ScalarType::U128 => 16,
+            };
+            (width, width, None)
+        }
+        fe2o3_kernel_ir::Type::Pointer(_) => (8, 8, None),
+        fe2o3_kernel_ir::Type::Slice(_) => (8, 8, Some(8)),
+        fe2o3_kernel_ir::Type::StorageObject(_) => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "storage-object KIR parameters have no admitted legacy simulator slot",
+            ));
+        }
+        fe2o3_kernel_ir::Type::Execution(_) => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "execution KIR parameters have no admitted physical simulator slot",
+            ));
+        }
+        fe2o3_kernel_ir::Type::Vector(_) => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "vector KIR parameters have no admitted physical simulator slot",
+            ));
+        }
+        fe2o3_kernel_ir::Type::Unit => {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "unit KIR parameters have no physical simulator slot",
+            ));
+        }
+    })
+}
+
 fn compiler_semantic_storage_map_v2(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     container_identity: [u8; 32],
@@ -2644,45 +2712,7 @@ fn compiler_semantic_storage_map_v2(
     let mut next = 0_u32;
     let mut kernarg_alignment = 1_u32;
     for ty in &kir_function.signature.parameters {
-        let (width, alignment, metadata_relative) = match ty {
-            fe2o3_kernel_ir::Type::Scalar(scalar) => {
-                let width = match scalar {
-                    fe2o3_kernel_ir::ScalarType::Bool
-                    | fe2o3_kernel_ir::ScalarType::I8
-                    | fe2o3_kernel_ir::ScalarType::U8 => 1,
-                    fe2o3_kernel_ir::ScalarType::I16
-                    | fe2o3_kernel_ir::ScalarType::U16
-                    | fe2o3_kernel_ir::ScalarType::F16
-                    | fe2o3_kernel_ir::ScalarType::Bf16 => 2,
-                    fe2o3_kernel_ir::ScalarType::I32
-                    | fe2o3_kernel_ir::ScalarType::U32
-                    | fe2o3_kernel_ir::ScalarType::F32 => 4,
-                    fe2o3_kernel_ir::ScalarType::I64
-                    | fe2o3_kernel_ir::ScalarType::U64
-                    | fe2o3_kernel_ir::ScalarType::F64
-                    | fe2o3_kernel_ir::ScalarType::Index => 8,
-                    fe2o3_kernel_ir::ScalarType::I128 | fe2o3_kernel_ir::ScalarType::U128 => 16,
-                };
-                (width, width, None)
-            }
-            fe2o3_kernel_ir::Type::Pointer(_) => (8, 8, None),
-            fe2o3_kernel_ir::Type::Slice(_) => (8, 8, Some(8)),
-            fe2o3_kernel_ir::Type::Execution(_) => {
-                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "execution KIR parameters have no admitted physical simulator slot",
-                ));
-            }
-            fe2o3_kernel_ir::Type::Vector(_) => {
-                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "vector KIR parameters have no admitted physical simulator slot",
-                ));
-            }
-            fe2o3_kernel_ir::Type::Unit => {
-                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                    "unit KIR parameters have no physical simulator slot",
-                ));
-            }
-        };
+        let (width, alignment, metadata_relative) = compiler_legacy_slot_shape_v2(ty)?;
         next = align_up_u32_v1(next, alignment).ok_or(
             ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
         )?;
@@ -2885,6 +2915,11 @@ fn compiler_component_storage_v2(
         .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
             MAP_ERROR,
         ))?;
+    if let Some(ty @ (fe2o3_kernel_ir::Type::Pointer(_) | fe2o3_kernel_ir::Type::Slice(_))) =
+        parameter_types.get(ordinal)
+    {
+        compiler_legacy_slot_shape_v2(ty)?;
+    }
     let (representation, expected_metadata) = match parameter_types.get(ordinal) {
         Some(fe2o3_kernel_ir::Type::Scalar(_)) => (
             fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::ScalarValue,
@@ -2901,7 +2936,8 @@ fn compiler_component_storage_v2(
         Some(
             fe2o3_kernel_ir::Type::Unit
             | fe2o3_kernel_ir::Type::Vector(_)
-            | fe2o3_kernel_ir::Type::Execution(_),
+            | fe2o3_kernel_ir::Type::Execution(_)
+            | fe2o3_kernel_ir::Type::StorageObject(_),
         )
         | None => {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
@@ -3902,6 +3938,87 @@ fn consume_prepared_with_budget_v29<M>(
     })
 }
 
+// Source-qualified test checkpoint only. Ordinary consumer above is unchanged.
+#[cfg(test)]
+fn consume_prepared_with_actual_inputs_for_test_v1<M, F>(
+    prepared: PreparedSsaMaterializationV29,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    owned_frame: &mut usize,
+    use_root: impl for<'a> FnMut(
+        fe2o3_lower_mir_kernel::ProductionCheckedContextRootV29<'a>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    )
+        -> Result<(), fe2o3_lower_mir_kernel::ProductionContextRootErrorV29>,
+    consume: F,
+) -> Result<PreparedMaterializationV29<M>, Box<ProductionPipelineError>>
+where
+    F: FnOnce(
+        fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+        &crate::collector::RetainedContextEntriesV29,
+        &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+        &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        &mut usize,
+    ) -> Result<M, ProductionPipelineError>,
+{
+    // This header-only debit belongs to the outer genuine phase; its physical
+    // closure/borrow frames are gone before that phase refunds it. No payload
+    // or retained input is cloned, reconstructed or newly claimed by this debit.
+    let frame = std::mem::size_of::<F>()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(4096))
+        .and_then(|n| {
+            std::mem::size_of::<Result<M, ProductionPipelineError>>()
+                .checked_mul(2)
+                .and_then(|result| n.checked_add(result))
+        })
+        .ok_or_else(|| {
+            materialization_resource_error_v29(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+            )
+        })?;
+    let total = owned_frame.checked_add(frame).ok_or_else(|| {
+        materialization_resource_error_v29(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+        )
+    })?;
+    budget
+        .charge_work(frame)
+        .map_err(materialization_resource_error_v29)?;
+    budget
+        .reserve_storage(frame)
+        .map_err(materialization_resource_error_v29)?;
+    *owned_frame = total;
+    let PreparedSsaMaterializationV29 {
+        semantic_ssa,
+        ranked_roots,
+        launch,
+        bindings,
+    } = prepared;
+    context_handoff_v29::check_context_handoff_v29(
+        &bindings.context_entries,
+        &semantic_ssa,
+        &launch,
+        budget,
+        use_root,
+    )?;
+    let materialized = consume(
+        semantic_ssa,
+        launch,
+        &bindings.context_entries,
+        &ranked_roots,
+        &bindings.reference_effect_bindings,
+        budget,
+        owned_frame,
+    )?;
+    Ok(PreparedMaterializationV29 {
+        materialized,
+        ranked_roots,
+        bindings,
+    })
+}
+
 impl MaterializedNeutralProductionCompilation {
     fn verify_general_kernel_checks(
         self,
@@ -4261,10 +4378,14 @@ mod tests {
             ssa < materialize && materialize < verify && verify < lower,
             "semantic SSA, ranked verification, and lowering typestates are out of order",
         );
+        let projection = include_str!("production_ranked_projection_v1.rs");
         assert!(
-            include_str!("production_ranked_projection_v1.rs")
-                .contains("prepare_reference_effect_request_v2")
+            projection
+                .contains("include!(\"production_ranked_projection_v1/root_recipe_core_v1.rs\");")
         );
+        assert!(projection.contains("verify_prepared_ranked_root_recipe_v1("));
+        let recipe = include_str!("production_ranked_projection_v1/root_recipe_core_v1.rs");
+        assert!(recipe.contains("prepare_reference_effect_request_v2"));
     }
 
     #[test]
@@ -4615,3 +4736,155 @@ pub(crate) use physical_global_copy_target_v21::AuthenticatedPhysicalGlobalCopyT
 
 mod physical_lds_exchange_target_v22;
 pub(crate) use physical_lds_exchange_target_v22::AuthenticatedPhysicalLdsExchangeTargetModuleV22;
+
+/// Borrowed actual prepared-input custody. Fields and construction belong only
+/// to this pipeline module; projection siblings cannot substitute equal clones.
+/// Non-Clone, no readiness, no owned proof token, no mutable inputs or budget.
+pub(crate) struct ActualRetainedRankedInputsV1<'a> {
+    owner: &'a fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    inputs: &'a [crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+    bindings: &'a crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+}
+impl ActualRetainedRankedInputsV1<'_> {
+    pub(crate) fn belongs_to(
+        &self,
+        owner: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    ) -> bool {
+        std::ptr::eq(self.owner, owner)
+    }
+    pub(crate) fn inputs(
+        &self,
+    ) -> &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1] {
+        self.inputs
+    }
+    pub(crate) fn bindings(
+        &self,
+    ) -> &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1 {
+        self.bindings
+    }
+}
+/// The sole constructor is called after the actual prepared SSA/launch become
+/// the retained owner inside the genuine richer-consumer callback. HRTB prevents
+/// this view or its borrows from escaping as R. Credits stay in the outer phase.
+#[cfg(test)]
+fn with_actual_retained_ranked_inputs_for_test_v1<R, F>(
+    owner: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    inputs: &[crate::production_ranked_projection_v1::ProductionRankedRootInputV1],
+    bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    owned_frame: &mut usize,
+    inspect: F,
+) -> Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>
+where
+    F: for<'a> FnOnce(
+        ActualRetainedRankedInputsV1<'a>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>,
+{
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+    let mut frame = 4096usize;
+    for amount in [
+        std::mem::size_of::<ActualRetainedRankedInputsV1<'static>>(),
+        std::mem::size_of::<F>()
+            .checked_mul(2)
+            .ok_or(Resource::Arithmetic)?,
+        std::mem::size_of::<Result<R, fe2o3_lower_mir_kernel::Bf16CallInstanceErrorV1>>()
+            .checked_mul(2)
+            .ok_or(Resource::Arithmetic)?,
+    ] {
+        frame = frame.checked_add(amount).ok_or(Resource::Arithmetic)?;
+    }
+    let total = owned_frame.checked_add(frame).ok_or(Resource::Arithmetic)?;
+    budget.charge_work(frame)?;
+    budget.reserve_storage(frame)?;
+    *owned_frame = total;
+    inspect(
+        ActualRetainedRankedInputsV1 {
+            owner,
+            inputs,
+            bindings,
+        },
+        budget,
+    )
+}
+
+#[cfg(test)]
+mod storage_descriptor_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{AccessMode, AddressSpace, ScalarType, StorageLayoutIdV1, Type};
+    #[test]
+    fn legacy_descriptor_slots_refuse_storage_even_behind_a_pointer_or_slice() {
+        let storage = Type::StorageObject(StorageLayoutIdV1(31));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(compiler_legacy_slot_shape_v2(&ty).is_err());
+        }
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::Scalar(ScalarType::U32)).unwrap(),
+            (4, 4, None)
+        );
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::pointer(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadWrite
+            ))
+            .unwrap(),
+            (8, 8, None)
+        );
+        assert_eq!(
+            compiler_legacy_slot_shape_v2(&Type::slice(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadOnly
+            ))
+            .unwrap(),
+            (8, 8, Some(8))
+        );
+    }
+}
+
+#[cfg(test)]
+mod storage_component_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, FunctionBody, ScalarType, SemanticKernargSlotV2,
+        StorageLayoutIdV1, Type, ValueId,
+    };
+    #[test]
+    fn component_map_cannot_relabel_storage_pointers_as_old_scalar_regions() {
+        let body = FunctionBody {
+            parameters: vec![ValueId(7)],
+            blocks: vec![],
+        };
+        let slot = [(SemanticKernargSlotV2::new(0, 8, 8), None)];
+        let storage = Type::StorageObject(StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(
+                compiler_component_storage_v2(vec![], ValueId(7), &body, &[ty], &slot).is_err()
+            );
+        }
+        assert!(
+            compiler_component_storage_v2(
+                vec![],
+                ValueId(7),
+                &body,
+                &[Type::Scalar(ScalarType::U64)],
+                &slot
+            )
+            .is_ok()
+        );
+    }
+}

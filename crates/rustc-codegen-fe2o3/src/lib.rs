@@ -212,6 +212,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 pub struct Fe2o3CodegenBackend {
     config: BackendConfig,
     llvm_backend: Box<dyn CodegenBackend>,
+    compiler_execution_input: protected_compiler_execution::CompilerExecutionStartupInputV1,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -350,7 +351,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 "[rustc-codegen-fe2o3] production target authentication failed before monomorphization without fallback: {error}"
                                 ))
                             }),
-                        compiler_execution: protected_compiler_execution::admit_for_production_codegen()
+                        compiler_execution: self.compiler_execution_input.admit()
                             .unwrap_or_else(|error| {
                                 tcx.dcx().fatal(format!(
                                     "[rustc-codegen-fe2o3] protected compiler-execution admission failed without fallback: {error}"
@@ -504,14 +505,18 @@ impl CodegenBackend for Fe2o3CodegenBackend {
     }
 }
 
+/// Constructs the backend without consuming the dynamic loader's raw FD slots.
 #[unsafe(no_mangle)]
 pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
+    let compiler_execution_input =
+        protected_compiler_execution::CompilerExecutionStartupInputV1::capture();
     let config = BackendConfig::from_env();
     let llvm_backend = rustc_codegen_llvm::LlvmCodegenBackend::new();
 
     Box::new(Fe2o3CodegenBackend {
         config,
         llvm_backend,
+        compiler_execution_input,
     })
 }
 
@@ -592,7 +597,7 @@ mod tests {
             .next()
             .expect("bounded production transaction");
         assert!(production.contains("protected_rustc_invocation.take()"));
-        assert!(backend.contains("protected_compiler_execution::admit_for_production_codegen()"));
+        assert!(backend.contains("self.compiler_execution_input.admit()"));
         assert!(production.contains("from_rustc_invocation_descriptor_v3"));
         assert!(production.contains("invocation.descriptor()"));
         assert!(!production.contains("local_crate_source_file"));
@@ -622,9 +627,7 @@ mod tests {
             .find("production_target_account::with_device_phase(")
             .unwrap();
         let execution = backend
-            .find(
-                "compiler_execution: protected_compiler_execution::admit_for_production_codegen()",
-            )
+            .find("compiler_execution: self.compiler_execution_input.admit()")
             .unwrap();
         assert!(account < admission && admission < execution && execution < monomorphization);
         let host_codegen = backend

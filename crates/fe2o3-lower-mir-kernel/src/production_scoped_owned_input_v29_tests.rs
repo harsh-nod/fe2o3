@@ -170,7 +170,7 @@ fn owned_execution_input_rejects_launch_substitution_even_when_graph_is_identica
         assert!(
             pending
                 .graph
-                .matches_module_with_budget_v15(&candidate, budget)
+                .matches_module_with_budget_v18(&candidate, budget)
                 .unwrap()
         );
         drop((candidate, roots));
@@ -311,13 +311,25 @@ fn owned_execution_input_never_refunds_a_replaced_ledger_or_swallows_panic() {
             }));
             if mode == 2 {
                 assert_eq!(result.unwrap_err().downcast_ref::<u32>(), Some(&1729));
-            } else {
+            } else if mode == 0 {
                 assert!(matches!(
                     result,
                     Ok(Err(ScopedModuleErrorV29::Source(
                         ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
                             ArgumentResourceV1::Accounting
                         )
+                    )))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Ok(Err(ScopedModuleErrorV29::Source(
+                        ProductionSemanticKirErrorV1::Unsupported {
+                            function: 0,
+                            block: None,
+                            statement: None,
+                            detail: "scoped module differs from its complete source roster",
+                        }
                     )))
                 ));
             }

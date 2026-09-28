@@ -112,8 +112,28 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
         memory: &WorkgroupMemory,
         location: &VerificationDiagnosticLocationV1<'_>,
     ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+        self.verify_workgroup_memory_in_context_v1(operation, memory, location, None)
+    }
+
+    pub(crate) fn verify_workgroup_memory_in_context_v1(
+        &mut self,
+        operation: &Operation,
+        memory: &WorkgroupMemory,
+        location: &VerificationDiagnosticLocationV1<'_>,
+        storage: Option<&crate::StructurallyCheckedModuleStorageV1<'module>>,
+    ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
         self.budget.charge_work(3)?;
-        if !verification_type_facts_v15(&memory.element, self.budget)?.storable {
+        let storable = if let Some(storage) = storage {
+            self.verify_storage_allocation_element_v1(
+                storage,
+                &memory.element,
+                memory.alignment,
+                location,
+            )?
+        } else {
+            verification_type_facts_v15(&memory.element, self.budget)?.storable
+        };
+        if !storable {
             self.emit_fixed(
                 location,
                 DiagnosticCode::InvalidWorkgroupMemory,

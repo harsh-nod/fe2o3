@@ -5,6 +5,429 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Disabled loaded-maintenance debugger source — 2026-09-27
+
+The [loaded-maintenance debugger checkpoint](debugger-loaded-maintenance-source-qualification-20260927.md)
+adds a separate physical-v4 source overlay with all public gates disabled.
+Fresh relocation passed 41 source controls, strict C++ builds, 264 real-helper
+mock groups (1,033 checks), and six first-failure controls. Existing physical-v3
+remains byte-exact.
+
+A separate private full debugger build passed all four phases and postflight.
+It has not yet passed actual layout, loaded-runtime/startup, controller/family
+or native capture acceptance. The previous native failure is not reclassified.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Authentic proof-retirement connection — 2026-09-27
+
+The [authentic retirement checkpoint](bf16-authentic-proof-retirement-qualification-20260927.md)
+connects the retired payload to the original factory's pending owner and
+original Budget. Thirty new controls passed, alongside 356 model and 3,010
+backend tests (189 ignored), backend build and 83 JavaScript controls.
+The genuine-source ladder passed all five compilation sessions and expected
+numerical/refusal checks. Both ordinary ladders passed; all 38 lossless
+observation bodies and 52 artifacts match the retained-payload checkpoint.
+
+Genuine observation covers Empty/Error/Panic/Reentry and the independently
+classified source prefix. It stops before an unsupported fixed-query candidate;
+it does not claim genuine nonempty proof coverage. The independent original
+fixed-query oracle, Option-first prelude, later writers, joint bounds driver,
+mandatory verification and production routing remain open.
+No compiler pin or public capture gate changes. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Retained analysis and proof-payload prerequisites — 2026-09-27
+
+The [retained-payload checkpoint](bf16-retained-payload-prerequisites-qualification-20260927.md)
+adds opaque retained model-preparation owners and a lifetime-free lazy-proof
+retirement bridge. All 48 new controls passed, alongside 356 model and 2,980
+backend tests (189 ignored), backend build and 83 JavaScript controls.
+Both ordinary compilation ladders passed; all 38 lossless observation bodies
+and 52 artifacts match the argument-initialization checkpoint exactly.
+
+These are ownership prerequisites, not the complete authentic factory
+connection. The same-pending connector, genuine cutpoint observation, original
+Option-first prelude, later writers, joint bounds driver and production routing
+remain open. The debugger's bounded native attempt remains unaccepted.
+No compiler pin or public capture gate changes. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Authentic argument initialization and native commit diagnosis — 2026-09-27
+
+The [argument-initialization checkpoint](bf16-root-argument-initialization-qualification-20260927.md)
+passed 15 new controls, 331 model and 2,957 backend tests (189 ignored),
+backend build and 83 JavaScript controls. Its genuine-source CPU ladder passed
+five actual rustc sessions and 36 positive numerical runs, with actual
+initialization markers in identity, swapped-input, error and panic sessions.
+Both ordinary ladders passed; 38 lossless observation bodies and 52 artifacts
+match the preceding checkpoint exactly.
+
+The [native debugger attempt](debugger-commit-boundary-diagnosis-20260927.md)
+refused at commit-site 7 after the runtime loaded; no physical capture was
+accepted. Selected-family cleanup and a separate manual postflight passed.
+The missing loaded-host maintenance transition is being implemented without
+rearming the retired unloaded-entry epoch or bypassing the commit guard.
+
+Argument initialization is an internal one-shot boundary, not complete
+producer chronology or a production route. Physical retention through factory
+postflight, the ordinary Option-first prelude, remaining writers, the joint
+bounds driver and native capture remain open. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Lazy fixed-proof ownership and read-only debugger replay — 2026-09-26
+
+The [lazy-proof checkpoint](bf16-lazy-fixed-proof-qualification-20260926.md)
+retains first-use proof state and pending candidates across refusal. All 26 new
+controls passed; full regression passed 331 model and 2,942 backend tests
+(189 ignored), backend build and 83 JavaScript controls. Both ordinary ladders
+passed with 38 lossless observation bodies and 52 artifacts unchanged.
+
+The separate [debugger replay](debugger-readonly-replay-qualification-20260926.md)
+passed 30 controls and actual read-only validation of 27 products, 38 runtime
+sources, 16 startup modules, 93 benign records and 310 startup records. It did
+not launch a debugger, target or GPU, and does not qualify a fresh native capture.
+
+Physical proof-payload retirement through factory postflight, authentic argument
+initialization, earlier producer chronology, the joint bounds driver, remaining
+writers and production routing remain open. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Preparation policy and direct comparisons — 2026-09-26
+
+The [policy/comparison checkpoint](bf16-policy-direct-comparison-qualification-20260926.md)
+shares allocation policy without adding ordinary runtime wrapper calls, and
+retains unique, duplicate and conflicting direct predicates in source order.
+All 38 new controls passed (13 policy + 25 comparison); full regression passed
+331 model and 2,916 backend tests (189 ignored), build and 83 JavaScript controls.
+Both ordinary ladders passed, with all 38 lossless bodies and 52 artifacts
+unchanged. These private components do not establish authentic all-producer
+custody or complete the source factory. Lazy joint ownership, remaining writers,
+mandatory verification and production routing remain open.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Uniform operand preparation — 2026-09-26
+
+The [operand checkpoint](bf16-uniform-operand-qualification-20260926.md)
+shares ordinary and paid operand decisions while preserving argument-slot,
+operation and SSA mutations on later refusal. All 13 new controls passed;
+full regression passed 331 model and 2,878 backend tests (189 ignored),
+build and 83 JavaScript controls. Both normal ladders passed; all 38 result
+bodies and 52 artifacts are unchanged. Source-ordered comparison/induction/
+switch producers, authentic continuation and joint bounds ownership remain
+unfinished. The separate preparation-policy refactor is not part of this
+checkpoint. Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Source-bound bounds components — 2026-09-26
+
+The [bounds component checkpoint](bf16-bounds-components-qualification-20260926.md)
+adds shared source scanning, extent preparation and source-selected fixed-array
+guard sessions. All 85 new component controls passed; full regression passed
+331 model and 2,865 backend tests (189 ignored), builds and 83 retained JavaScript
+controls. All 38 normal observation bodies and 52 artifacts remain unchanged.
+Authentic argument-producer continuation, lazy joint proof/resource ownership
+and actual bounds-factory admission remain unfinished. Private debugger history
+and current-consumer checks passed, but full native execution/capture is pending.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Actual source-use observers and lifetime accounting — 2026-09-26
+
+The [actual-source checkpoint](bf16-actual-source-use-qualification-20260926.md)
+qualifies the previously pending real-source observers and independent oracle.
+Regression passed 331 model and 2,780 backend tests (189 ignored), builds, five
+actual Rust sessions and all 306 comparison controls. The strict real-source
+comparison passed with source-derived lifetime accounting; report storage/peaks
+remain exact. All 38 ordinary result bodies and 52 artifacts are unchanged.
+Complete operation streams, bounds/effects and normal nominal-helper admission
+remain open. Private debugger startup and controller CPU checks passed, but no
+new target execution or physical capture is claimed. Accepted broad exits
+remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Source-use and borrowed-local components — 2026-09-26
+
+The [component checkpoint](bf16-source-use-local-contract-components-20260926.md)
+adds source-occurrence selection and original-ledger borrowed local contracts.
+Regression passed 331 model and 2,723 backend tests (189 ignored), builds and
+17 telemetry controls. All 38 ordinary observation bodies and 52 artifacts are
+byte-identical to the source-origin checkpoint. The two new actual-source
+factories still require their separate real-source qualification; these are
+private component foundations, not complete operation streams or admission.
+The private diagnostic debugger build/static checks and 153 captured-evidence
+decoder controls also passed, without debugger startup or target execution.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Actual source-call reference origins — 2026-09-26
+
+The [source-origin checkpoint](bf16-actual-root-reference-origins-qualification-20260926.md)
+joins actual source-call ordinals and identities to the same pending guard
+vector, then propagates exact reference origins on the original ledger.
+An independent actual-source oracle checks all associations, origins and FIFO
+order. Regression passed 331 model and 2,683 backend tests (189 ignored),
+plus build, five current Rust sessions and a separate historical scoped probe.
+All 181 comparison controls passed. Direct lossless comparison passed with 132 changes within its strict 138-path policy, plus historical zero-work calibration and all three complete dependency trees; numerical, storage, peak, refusal and admission results remain exact.
+All 38 ordinary observation bodies and 52 artifacts are byte-identical to S4.
+This is source-associated origin data, not later memory-use-site or complete
+recipe admission; normal nominal-helper routing remains refused.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**. No new GPU execution
+or debugger capture is claimed.
+
+## Actual retained-input guarded accesses — 2026-09-26
+
+The [guarded-access qualification](bf16-actual-guarded-access-qualification-20260926.md)
+continues the same actual retained-input owner and operation/value-ID namespace
+through identity mutable-access preparation. An independent actual-source
+oracle checks complete access/cache/predicate payloads; partial paid storage
+stays outer-owned through postflights. Regression passed 331 model and 2,654
+backend tests (189 ignored), plus build and five genuine Rust sessions.
+All 141 comparison controls and the cumulative R16/direct R20/direct R21
+lossless checks passed, including independently measured accepted-frame
+accounting. All 38 ordinary sessions and 52 artifacts are unchanged from S3.
+This is access data, not reference-origin or later memory-use-site admission.
+Complete nominal recipes and ordinary nominal-helper routing remain unfinished.
+Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**; no new GPU execution
+or debugger capture is claimed.
+
+## Actual retained-input root prefix and indices — 2026-09-26
+
+The [actual-prefix checkpoint](bf16-actual-root-prefix-indices-qualification-20260926.md)
+connects actual retained inputs, entry-prefix operations and invocation indices
+in one private pending assembly and value-ID namespace. Qualification passed
+331 model and 2,631 backend tests, build, five fresh Rust sessions, 88 comparison
+controls, cumulative/direct lossless comparisons and 38 ordinary sessions.
+All 38 ordinary observation bodies and 52 artifacts are unchanged. Actual
+nonempty references, guarded accesses and the complete nominal recipe remain
+open; normal nominal-helper admission is still refused. Accepted broad exits
+remain **M1/V1/V2/U1/U2/U3 (6/18)**. No new GPU or debugger capture is claimed.
+
+## Shared invocation-index preparation — 2026-09-26
+
+The [index-preparation checkpoint](bf16-shared-invocation-index-qualification-20260926.md)
+qualifies shared ordinary/component seed, propagation and assignment algorithms.
+All 331 model and 2,617 backend tests, build, five fresh Rust sessions, 67
+comparison controls, strict lossless R19/R20 parity and 38 ordinary sessions
+passed. The 38 observation bodies and 52 artifacts are unchanged. The bounded
+component remains unjoined data; actual root-prefix/value ownership, guarded
+accesses and a complete nominal recipe remain open. Accepted broad exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**. No new GPU or debugger capture is claimed.
+
+## Supported-profile graph completion and debugger rebuild — 2026-09-26
+
+The [compiler checkpoint](bf16-complete-profile-graph-qualification-20260926.md)
+qualifies a private immutable graph loan complete only for the unchanged closed
+source profile. All 331 model and 2,605 backend tests, build, five fresh Rust
+sessions, exact lossless comparison and 38 normal sessions passed. All 38 normal
+observation bodies and 52 artifacts are unchanged. Actual index/value namespace,
+guarded-access binding and complete nominal root recipe remain open.
+
+The [private debugger rebuild](physical-debugger-maintenance-rebuild-qualification-20260926.md)
+passed full GDB build, 87 static controls, 55 decoder/derivation controls, six
+startup-draft controls and two-pass static artifact measurement. No startup,
+loaded closure, GPU dispatch or physical capture is claimed; public gates remain
+disabled. Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Initial source graph, shared origins and disabled debugger maintenance — 2026-09-26
+
+The [compiler checkpoint](bf16-initial-graph-reference-origin-qualification-20260926.md)
+qualifies the original-ledger initial graph and shared, still-unjoined reference-
+origin preparation: 331 model and 2,598 backend tests, build, five actual Rust
+sessions, 55 comparison controls and 38 normal sessions passed. All 38 normal
+observation bodies and 52 artifacts are unchanged. Actual access-vector binding
+and the complete nominal root recipe remain open.
+
+The [disabled debugger checkpoint](physical-debugger-host-maintenance-qualification-20260926.md)
+adds a separate physical-v3 host-entry maintenance package without changing
+physical-v2. Its relocated actual-helper CPU probe passed 100 groups/481 checks;
+73 Node controls and the parent C++ regressions also passed. No live capture,
+public activation or additional broad exit is claimed. Accepted exits remain
+**M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Original-ledger recipe context and debugger failure evidence — 2026-09-26
+
+The [recipe-context checkpoint](bf16-recipe-resource-context-qualification-20260926.md)
+qualifies the concrete source/facts resource context and borrowed ordinary
+checked-reference continuation: 331 model tests, 2,572 backend tests, build,
+five fresh real-source sessions, 36+2 normal sessions and 40 lossless-comparison
+controls. All 38 normal observation bodies and 52 artifacts match the prior
+ordinary checkpoint. Authenticated nominal origin construction and the complete
+root recipe remain open; normal helper admission is still refused.
+
+The separately coordinated [debugger attempt](gfx950-publication-diagnostic-native-observation-20260926.md)
+failed publication but preserved the underlying `Incomplete` result and native
+relation refusal `(15)`. Exact owned-family cleanup and independent absence
+checks passed; capture and dispatch remain unknown. No automatic retry or public
+capture activation occurred. Accepted broad exits remain **6/18**.
+
+## Complete retained Final effects — 2026-09-26
+
+The [retained-effects checkpoint](bf16-helper-retained-effects-qualification-20260926.md)
+preserves all four source-indexed Final fields on the original ledger, with
+immutable observation after inner source/dense postflights. Qualification passed
+331 model tests, 2,557 backend tests, backend/extractor build, five fresh Rust
+sessions and 28 lossless-comparison controls. Numerical/refusal/storage/peak
+results remain unchanged. Real fixtures prove source-row read presence, not an
+independent allocation-payload oracle. Complete root recipe and normal nominal
+continuation remain open; accepted broad exits stay **6/18**.
+
+## Shared ordinary root preparation — 2026-09-26
+
+The [shared root-recipe checkpoint](bf16-shared-root-recipe-qualification-20260926.md)
+separates complete ordinary preparation from its immediate mandatory verification.
+All 331 model and 2,544 backend tests, backend/extractor build, 36 fresh normal
+composition sessions and two fresh direct-BF16 continuation sessions passed.
+This preserves existing ordinary compilation; it does not admit the nominal
+helper path. The strict original-meter adapter, complete memory/source mapping
+and nominal normal continuation remain open. Broad accepted exits stay **6/18**.
+
+## Source-bound assertions and retained debugger failure — 2026-09-26
+
+The [assertion evaluator checkpoint](bf16-helper-root-assertion-qualification-20260926.md)
+connects the full shared evaluator and same-source decision scope to the original
+ledger. All 331 model tests, 2,536 backend tests, backend/extractor build and five
+fresh Rust sessions passed. Actual roots contain zero assertion terminators;
+positive assertion coverage comes from component controls, not those sessions.
+The [private debugger attempt](physical-debugger-publication-deadline-20260926.md)
+failed during report publication, with independently verified owned-family
+cleanup. No capture or public activation is claimed. Complete root recipe and
+normal continuation remain open; broad accepted exits stay **6/18**.
+
+## Bounded initial debugger readiness — 2026-09-26
+
+The [readiness checkpoint](physical-debugger-initial-argv-readiness-20260926.md)
+reproduces transient empty command-line reads using harmless CPU-only children
+and adds a bounded initial-setup wait on the same owned debugger. All 129 Rust
+tests, 31 Node controls, strict package Clippy and build passed. Later identity
+checks and cleanup remain unchanged. Public activation stays disabled; a fresh
+private native capture is still required. Broad accepted exits stay **6/18**.
+
+## Original-meter assertion helper prerequisite — 2026-09-26
+
+The [assertion helper checkpoint](bf16-helper-assertion-resources-qualification-20260926.md)
+adds tested original-ledger containers, clone/comparison costs and typed-frame
+accounting without switching the existing evaluator. All 331 model tests,
+2,499 backend tests and backend/extractor build passed, including 18 new
+helper controls. Full evaluator integration and the source-bound retained mask
+remain pending; accepted broad exits stay **6/18**.
+
+## Original-meter source CFG retention — 2026-09-26
+
+The [root CFG checkpoint](bf16-helper-root-cfg-qualification-20260926.md)
+retains the actual source graph with rich tables and induction evidence on the
+original ledger. All 331 model tests, 2,481 backend tests and five fresh genuine
+Rust sessions passed. The lossless comparison rehashed both dependency trees
+and preserved numerical, refusal, storage and peak results. Full assertion/range
+analysis and root/ranked/formal/LLVM continuation remain open; accepted broad
+exits stay **6/18**.
+
+## Joined root-source preparation — 2026-09-26
+
+The [joined root-source checkpoint](bf16-helper-root-source-qualification-20260926.md)
+retains the actual complete-CFG induction report and rich tables on the original
+ledger. All 331 model tests, 2,460 backend tests and five fresh Rust-kernel
+sessions passed. An independently qualified lossless comparison rehashed both
+459-file dependency trees and confirmed unchanged numerical, mask, refusal,
+storage and peak results. Full root/ranked/formal/LLVM continuation and live
+debugger qualification remain open; broad accepted exits remain **6/18**.
+
+## Strict induction resources and bounded debugger failure observations — 2026-09-26
+
+The [induction model checkpoint](bf16-helper-induction-resources-qualification-20260926.md)
+adds strict original-meter complete-CFG analysis while preserving legacy
+semantics. Qualification passed 331 model, 1,861 lowerer and 2,446 backend
+tests, plus strict model Clippy.
+The [debugger failure-observation checkpoint](physical-debugger-failure-observations-20260926.md)
+passed 28 Node and 112 Rust tests, strict Clippy and build. It retains bounded
+pre-teardown status/pipe evidence without changing admission or cleanup rules.
+Public activation remains disabled; no new native capture or broad exit is
+claimed. Full root integration and live-debugger qualification remain open.
+
+## Original-meter Option preparation and exact debugger refusal — 2026-09-26
+
+The [Option preparation checkpoint](bf16-helper-option-preparation-qualification-20260926.md)
+adds actual source-derived Option producer/dominance facts on the original
+ledger. All 318 model tests, 2,446 backend tests and five fresh Rust sessions
+passed; numerical/refusal/storage results remain unchanged.
+The [fresh debugger diagnostic](physical-debugger-cmdline-refusal-20260926.md)
+narrows setup failure to an empty command-line read before any debugger command.
+Independent family cleanup passed; no physical capture succeeded. Full root
+projection and live-debugger qualification remain open; broad exits stay **6/18**.
+
+## Postflight helper candidate and retained preparation — 2026-09-26
+
+The [postflight preparation checkpoint](bf16-helper-postflight-preparation-qualification-20260926.md)
+adds strict original-entry resource accounting, a source-rejoined candidate
+exposed after all preparation/facts/dense postflights, and retained scalar and
+allocation provenance. Qualification passed 1,861 lowerer tests, 2,446 backend
+tests and five fresh Rust source sessions. Results, masks, refusals and storage
+match the preceding checkpoint; failed R9 evidence and its exact test-only
+refund correction are retained. Complete root/ranked/formal/LLVM continuation
+is still pending. Broad accepted exits remain **6/18**.
+
+## Physical debugger startup diagnostics — 2026-09-26
+
+The [new debugger checkpoint](physical-debugger-setup-diagnostics-20260926.md)
+records a failed private setup attempt with independently verified family
+cleanup, then qualifies a disabled diagnostic successor: 25 Node and 97 Rust
+tests, strict Clippy and build passed. The exact old failing identity check
+remains unknown; no physical capture succeeded and no diagnostic retry ran.
+Public runtime bindings remain disabled. Broad accepted exits remain **6/18**.
+
+## Genuine dense propagation and borrowed ranked candidate — 2026-09-26
+
+The [new C2/C4 and proxy checkpoint](bf16-helper-dense-proxy-qualification-20260926.md)
+qualifies metered source preparation, all three actual propagation passes,
+function-qualified returns and final callback/resource-failure controls.
+The latest gate passed 404 CLI binary tests, 2,424 backend tests and five fresh
+Rust helper sessions with unchanged numerical results and logical peak storage.
+The proxy remains a borrowed recipe candidate during Final, not postflight-ready
+output or ordinary compilation. Full root/memory/CFG projection, source/ranked
+correspondence and formal/LLVM continuation remain open; broad exits stay **6/18**.
+
+## Genuine helper routing and caller/result prerequisites — 2026-09-26
+
+The [new routing checkpoint](bf16-helper-routing-capability-qualification-20260926.md)
+qualifies the genuine same-owner pending route, resource-boundary controls and
+fresh Identity/Swap01 CPU observations. Shared caller authentication and
+function-qualified return mapping pass the 2,381-test backend suite; all
+79 tutorial-manifest tests also pass after correcting a stale CI snapshot.
+C2 source-derived propagation and N3 ranked/formal/LLVM continuation remain
+unfinished. C1/C3 synthetic controls are not a genuine combined admission.
+Accepted broad exits remain **6/18**.
+
+## Borrowed helper projection and merged regression — 2026-09-26
+
+The [N2a checkpoint](bf16-helper-ranked-call-qualification-20260926.md) joins
+the checked source-owned call to its independent canonical effect report and
+tensor contract on the original ledger. The merged regression passed 10,393
+test executions with zero failures, including fresh helper and root CPU sessions.
+Normal helper capability/layout/result projection and ranked/formal/LLVM
+continuation remain unfinished; accepted broad exits remain **6/18**.
+
+## Checked helper query and final debugger startup — 2026-09-26
+
+The [source-owned nominal query](bf16-nominal-helper-query-qualification-20260926.md)
+now joins an actual retained Rust helper call to its canonical owner, ordered
+BF16/F32 components and return layout on the original bounded ledger.
+The merged gate passed 8,783 test executions with zero failures, including
+five fresh helper source sessions and historical/root-only compatibility.
+Normal helper ranked/formal/LLVM continuation remains unfinished.
+
+The [final debugger startup checkpoint](final-debugger-startup-qualification-20260926.md)
+records actual final-build MI2 startup and independently reviewed loaded files
+and cleanup. Consumer controls passed, but runtime bindings remain disabled.
+No target, physical capture or GPU dispatch was performed. Accepted broad exits
+remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
+## Genuine Rust BF16 helper emission and CPU observation — 2026-09-26
+
+The [source-owned helper checkpoint](bf16-helper-source-cpu-qualification-20260926.md)
+now connects actual Rust helper analysis to canonical Function/Call/Return and
+two-frame CPU observation. Identity and Swap01 each passed 18 numerical cases
+and 16 request refusals; wrong-launch and callback error/panic sessions also
+passed. The unchanged 2 GiB logical ledger covers replay and both live owners.
+The compatibility gate passed 4,569 test executions with zero failures, including
+fresh historical helper and root-only core/normal/CPU source ladders.
+Helper normal ranked/formal/LLVM continuation, edited-tile promotion and hardware
+remain open. Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Closed BF16 helper-call CPU observation — 2026-09-26
 
 The [two-frame CPU checkpoint](bf16-helper-call-cpu-qualification-20260926.md)
@@ -1051,3 +1474,48 @@ The hard boundaries above do not block every lane. With disjoint owner approval:
 Each lane still needs its own reviewed contract, bounded implementation and
 actual qualification; difficulty is not a blocker and partial delivery is not
 completion.
+
+## Original fixed-proof constructor retention — 2026-09-27
+
+The test-only original constructor now retains partial/completed proof payloads
+through postflight and destruction-before-refund. All ten new controls passed,
+including original debit one-short refusal and same-Box checkpoint panic custody.
+Full CPU regression passed 356 model and 3,020 backend tests (189 ignored) plus
+backend/extractor build. Root verified seven full original inverses, three
+registration inverses and 56 source spans.
+
+See [the qualification record](original-fixed-constructor-retention-qualification-20260927.md).
+This does not yet execute original queries or establish genuine nonempty proof
+comparison. Original query driver, exact nonempty DATA, genuine connector and
+later production stages remain open. Broad accepted exits remain 6/18;
+no public activation or global compiler pin change.
+
+## Original fixed-query driver — 2026-09-27
+
+The independent original oracle now runs closed bounded query schedules and
+retains nonempty payloads through postflight. All 13 controls passed; full CPU
+regression passed 356 model and 3,033 backend tests (189 ignored), plus build.
+See [the qualification record](original-fixed-query-driver-qualification-20260927.md).
+Exact cache DATA, the authentic source/Budget connector and later production
+stages remain open. Broad accepted exits remain 6/18; no public activation
+or global compiler pin change.
+
+## Complete bounded original-query DATA — 2026-09-27
+
+The test-only original oracle now compares complete bounded checked rows and
+cache keys, values and insertion order through live, retired and final postflight
+observations. All 21 new controls passed; full regression passed 356 model and
+3,054 backend tests (189 ignored), plus build.
+See [the qualification record](original-fixed-query-content-qualification-20260927.md).
+The authentic same-source/shared-Budget connector and later production stages
+remain open. Broad accepted exits remain 6/18; no public activation or global
+compiler pin change.
+
+## Disabled debugger debug-type anchor — 2026-09-27
+
+The disabled physical-v4 package retains the complete scratch debug type without
+adding runtime calls or owner fields. All 45 source controls, strict CPU builds,
+264 maintenance groups / 1,033 checks and six first-poison groups passed.
+See [the qualification record](debugger-disabled-type-anchor-qualification-20260927.md).
+Actual nine-type layout, current startup and native capture remain unqualified.
+All public gates remain disabled; accepted broad exits remain 6/18.

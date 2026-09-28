@@ -20,89 +20,115 @@ fn measure(
 ) -> Observation {
     let mut observation = None;
     with_prefix(erased, profile, bound, |prefix, parent| {
-        let mut prefix = Some(prefix);
-        let native = if replay {
-            let (v, r) = prepare(
-                prefix.take().unwrap(),
-                profile,
-                Limits::default(),
-                ForwardingLimits::default(),
-                UnrollLimits::default(),
-                parent,
-            )
-            .unwrap();
-            parent.reserve_storage(r.retained_storage()).unwrap();
-            Some((v, r))
+        observation = Some(if replay {
+            measure_replay(prefix, profile, parent, work_limit, storage_limit)
         } else {
-            None
-        };
-        let sibling = vec![0x57u8; 37];
-        let floor = parent.storage() + size_of_val(&sibling) + sibling.capacity();
-        let mut work = Work::new(work_limit);
-        let (error, accepted, peak, failed_storage, llvm, retained) = {
-            let mut budget = Budget::new(&mut work, storage_limit);
-            budget.reserve_storage(floor).unwrap();
-            budget.charge_work(17).unwrap();
-            let ledger = budget.work_ledger_identity_v1();
-            let result = match &native {
-                Some((v, _)) => v.verify_equivalence(&mut budget).map(|()| None),
-                None => prepare(
-                    prefix.take().unwrap(),
-                    profile,
-                    Limits::default(),
-                    ForwardingLimits::default(),
-                    UnrollLimits::default(),
-                    &mut budget,
-                )
-                .map(Some),
-            };
-            assert_eq!(budget.storage(), floor);
-            let (error, llvm, retained) = match result {
-                Ok(Some((v, r))) => {
-                    budget.reserve_storage(r.retained_storage()).unwrap();
-                    assert_eq!(v.retained_storage_floor_v1(), budget.storage());
-                    let llvm = (v.llvm.len(), v.llvm.capacity());
-                    drop(v);
-                    budget.release_storage(r.retained_storage()).unwrap();
-                    (None, Some(llvm), Some(r.retained_storage()))
-                }
-                Ok(None) => {
-                    let (v, r) = native.as_ref().unwrap();
-                    (
-                        None,
-                        Some((v.llvm.len(), v.llvm.capacity())),
-                        Some(r.retained_storage()),
-                    )
-                }
-                Err(e) => (Some(e), None, None),
-            };
-            assert!(budget.work_ledger_identity_v1() == ledger);
-            assert_eq!(budget.storage(), floor);
-            assert_eq!(sibling, [0x57; 37]);
-            (
-                error,
-                budget.work(),
-                budget.peak_storage(),
-                budget.failed_storage(),
-                llvm,
-                retained,
-            )
-        };
-        observation = Some(Observation {
-            error,
-            work: accepted,
-            peak,
-            failed_work: work.failed_work(),
-            failed_storage,
-            llvm,
-            retained,
+            measure_factory(prefix, profile, parent, work_limit, storage_limit)
         });
-        if let Some((v, r)) = native {
-            drop(v);
-            parent.release_storage(r.retained_storage()).unwrap();
-        }
     });
     observation.unwrap()
+}
+
+// Separate owner construction from replay so their by-value temporaries do not
+// occupy one large debug frame on every measurement path.
+#[inline(never)]
+fn measure_factory(
+    prefix: Prefix6,
+    profile: Profile,
+    parent: &mut Budget<'_>,
+    work_limit: usize,
+    storage_limit: usize,
+) -> Observation {
+    observe(parent.storage(), work_limit, storage_limit, |budget| {
+        let floor = budget.storage();
+        let result = prepare(
+            prefix,
+            profile,
+            Limits::default(),
+            ForwardingLimits::default(),
+            UnrollLimits::default(),
+            budget,
+        );
+        assert_eq!(budget.storage(), floor);
+        let (v, r) = result?;
+        budget.reserve_storage(r.retained_storage()).unwrap();
+        assert_eq!(v.retained_storage_floor_v1(), budget.storage());
+        let llvm = (v.llvm.len(), v.llvm.capacity());
+        drop(v);
+        budget.release_storage(r.retained_storage()).unwrap();
+        Ok((llvm, r.retained_storage()))
+    })
+}
+
+#[inline(never)]
+fn measure_replay(
+    prefix: Prefix6,
+    profile: Profile,
+    parent: &mut Budget<'_>,
+    work_limit: usize,
+    storage_limit: usize,
+) -> Observation {
+    let (v, r) = prepare(
+        prefix,
+        profile,
+        Limits::default(),
+        ForwardingLimits::default(),
+        UnrollLimits::default(),
+        parent,
+    )
+    .unwrap();
+    parent.reserve_storage(r.retained_storage()).unwrap();
+    let observation = observe(parent.storage(), work_limit, storage_limit, |budget| {
+        v.verify_equivalence(budget)?;
+        Ok(((v.llvm.len(), v.llvm.capacity()), r.retained_storage()))
+    });
+    drop(v);
+    parent.release_storage(r.retained_storage()).unwrap();
+    observation
+}
+
+#[inline(never)]
+fn observe(
+    parent_floor: usize,
+    work_limit: usize,
+    storage_limit: usize,
+    run: impl FnOnce(&mut Budget<'_>) -> Result<((usize, usize), usize)>,
+) -> Observation {
+    let sibling = vec![0x57u8; 37];
+    let floor = parent_floor + size_of_val(&sibling) + sibling.capacity();
+    let mut work = Work::new(work_limit);
+    let (error, accepted, peak, failed_storage, llvm, retained) = {
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(17).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = run(&mut budget);
+        assert_eq!(budget.storage(), floor);
+        let (error, llvm, retained) = match result {
+            Ok((llvm, retained)) => (None, Some(llvm), Some(retained)),
+            Err(e) => (Some(e), None, None),
+        };
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(sibling, [0x57; 37]);
+        (
+            error,
+            budget.work(),
+            budget.peak_storage(),
+            budget.failed_storage(),
+            llvm,
+            retained,
+        )
+    };
+    Observation {
+        error,
+        work: accepted,
+        peak,
+        failed_work: work.failed_work(),
+        failed_storage,
+        llvm,
+        retained,
+    }
 }
 fn exact_work(replay: bool) {
     for erased in [false, true] {

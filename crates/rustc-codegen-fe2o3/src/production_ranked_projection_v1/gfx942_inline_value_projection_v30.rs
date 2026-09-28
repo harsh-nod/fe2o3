@@ -3,7 +3,7 @@
 //! authentication, instruction rewriting, or an independent admission route.
 
 use super::{
-    GpuSemanticExpressionResolverV2, HashSet, ProductionOverflowContractV2,
+    AssertionSetV1, GpuSemanticExpressionResolverV2, ProductionOverflowContractV2,
     ProductionRankedProjectionErrorV1, ProductionSemanticBinaryOpV2,
     ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ScalarAssignmentSiteV1,
     SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1, SemanticEdgeRoleV1,
@@ -192,10 +192,21 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         let use_site = self
             .use_site
             .ok_or("GPU typed ISA result has no exact use site")?;
-        let mut edge = HashSet::new();
-        edge.try_reserve(1)
+        // This legacy projection uses the analyzer's matching legacy container
+        // arm; it retains HashSet reservation/insertion and diagnostic order.
+        let mut edge = AssertionSetV1::new(&mut self.definitions.resources)
             .map_err(|_| "GPU typed ISA return-edge storage cannot be reserved")?;
-        edge.insert((call_block, destination.edge().target().index() as usize));
+        edge.reserve(
+            1,
+            &mut self.definitions.resources,
+            "GPU typed ISA return-edge storage cannot be reserved",
+        )
+        .map_err(|_| "GPU typed ISA return-edge storage cannot be reserved")?;
+        edge.insert(
+            (call_block, destination.edge().target().index() as usize),
+            &mut self.definitions.resources,
+        )
+        .map_err(|_| "GPU typed ISA return-edge dominance exceeds its analysis budget")?;
         if !self
             .definitions
             .edge_set_dominates(&edge, use_site.block)

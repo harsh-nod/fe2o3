@@ -620,7 +620,11 @@ impl Operation {
         mut visitor: impl FnMut(TargetCapabilityRefV1<'_>) -> Result<(), E>,
     ) -> Result<(), E> {
         match &self.kind {
-            OperationKind::Intrinsic(_) | OperationKind::MemoryIntrinsic(_) => {}
+            // Storage effects and source/runtime support are separate checks;
+            // this structural opcode has no additional target capability.
+            OperationKind::Storage(_)
+            | OperationKind::Intrinsic(_)
+            | OperationKind::MemoryIntrinsic(_) => {}
             OperationKind::Alloca {
                 count,
                 address_space: AddressSpace::Workgroup,

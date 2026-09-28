@@ -316,6 +316,52 @@ fn predicated_recipe_rejects_changed_pair_extent_rank_and_use_bijection() {
 }
 
 #[test]
+fn row_striped_checked_pair_keeps_success_extent_and_use_identity() {
+    assert!(kernel_with_operations(row_operations()).is_ok());
+    for fault in 0..4 {
+        let mut rows = row_operations();
+        match fault {
+            0 | 1 => {
+                let ProductionRankedOperationV1::PredicatedAccess { index, success, .. } =
+                    rows.last_mut().unwrap()
+                else {
+                    unreachable!()
+                };
+                if fault == 0 {
+                    *success = local(INDEX);
+                } else {
+                    *index = local(COMPONENT);
+                }
+            }
+            2 => {
+                let ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+                    physical_extent,
+                    ..
+                } = &mut rows[4]
+                else {
+                    unreachable!()
+                };
+                *physical_extent = ProductionRankedValueV1::Argument(1);
+            }
+            3 => {
+                rows.push(ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: local(VIEW),
+                    indices: vec![local(INDEX)],
+                });
+            }
+            _ => unreachable!(),
+        }
+        let expected = if fault == 3 {
+            ProductionRankedKernelErrorV1::InvalidPredicatedAccessIndexUse { index: INDEX }
+        } else {
+            ProductionRankedKernelErrorV1::InvalidShape
+        };
+        assert_eq!(kernel_with_operations(rows), Err(expected), "fault {fault}");
+    }
+}
+
+#[test]
 fn predicated_recipe_validation_is_deterministic_and_read_only() {
     let first = kernel_with_operations(operations()).unwrap();
     let second = kernel_with_operations(operations()).unwrap();

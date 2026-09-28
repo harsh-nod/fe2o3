@@ -108,6 +108,8 @@ fn argument(kind: Kind, index: u8) -> Argument {
             .map_or(RustcAbiClassV1::Scalar, RustLayoutEvidenceV1::abi_class),
         layout,
         semantic_type_identity: SemanticTypeIdentityV1::from_sha256([index + 1; 32]),
+        semantic_layout_identity:
+            fe2o3_mir_model::semantic_mir_v1::SemanticLayoutIdentityV1::from_sha256([0; 32]),
     }
 }
 
@@ -325,10 +327,15 @@ fn laid_out_capture_checks_the_actual_bounded_argument_roster() {
         "scalar packing actual argument count",
     );
     assert_eq!(rows, before);
-    mismatch_is(
-        capture(&mut []).unwrap_err(),
-        "scalar packing actual argument count",
-    );
+    assert_eq!(capture(&mut []).unwrap(), None);
+    check(&root(
+        Vec::new(),
+        Extent {
+            bytes: 0,
+            alignment: 1,
+        },
+    ))
+    .unwrap();
     let mut cursor = Cursor {
         end: u64::MAX,
         alignment: 8,
@@ -454,6 +461,13 @@ fn laid_out_nominal_variants_preserve_exact_old_retained_layouts() {
     same!(OldGeneralArgument, GeneralTypedArgumentV3);
     same!(OldContract, GeneralTypedKernelContractV3);
     same!(OldDescriptorKind, Kind);
-    same!(OldArgument, Argument);
+    // The source-ABI join retains one additional inline layout identity, never
+    // a second layout tree or a separately allocated component roster.
+    assert_eq!(
+        size_of::<Argument>(),
+        size_of::<OldArgument>()
+            + size_of::<fe2o3_mir_model::semantic_mir_v1::SemanticLayoutIdentityV1>()
+    );
+    assert_eq!(align_of::<Argument>(), align_of::<OldArgument>());
     same!(OldRoot, Root);
 }

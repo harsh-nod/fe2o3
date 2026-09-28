@@ -8,7 +8,7 @@ a general-purpose or formally verified compiler.
 ```text
 Rust/rustc semantic MIR
   -> semantic ownership and bounded generic SSA planning
-  -> ranked recipe projection
+  -> ranked recipe projection with owner-bound promoted-read queries
   -> checked recipe normalization
   -> immutable nine-stage Pliron verification
   -> verified target-neutral Kernel IR
@@ -58,8 +58,10 @@ planner cannot infer:
   indices, and enum payload fields through joins and loop fixed points;
 - exact reinitialization clears only the reinitialized path, while parent/child
   reuse, union fields, dynamic indices, and missing type evidence fail closed;
-- a borrow is transparent only when its reference has exactly one direct use
-  in the exact accepted argument of a registered compiler intrinsic; and
+- registered-intrinsic borrow transparency requires exactly one direct use in
+  the exact accepted intrinsic argument;
+- a separate typed analysis can close same-block shared primitive loans over
+  ordinary reads and static reference-holder fields, as described below; and
 - an implicit entry definition is permitted only for the exact ambient,
   inhabited zero-sized `WorkgroupLdsScope` temporary whose producer rustc may
   erase and whose uses are all certified transparent scope consumers.
@@ -75,6 +77,65 @@ wrappers emitted by rustc desugaring, are resolved with bounded cycle checks;
 ambiguous or type-changing paths fail closed. Exact SSA-keyed enum facts are
 renamed across certified edge arguments, intersected at joins, invalidated by
 unknown definitions, and bounded independently for work and storage.
+
+### Shared primitive reference promotion
+
+The production [SSA owner](../crates/fe2o3-pliron/src/production/semantic_ssa.rs)
+classifies whole scalar or validity-scalar locals with exact thin immutable
+`Shared` references using a [bounded typed analysis](../crates/fe2o3-pliron/src/production/semantic_ssa/adapter_shared_primitive_v29.rs).
+Direct reference holders and static tuple/aggregate field paths may stay in
+value SSA when all aliases close within one block and the referent is unchanged
+while any alias is live. Alias `Copy` duplicates a reference; `Move` consumes
+that alias. The analysis checks holder redefinition, storage lifetime and
+use-after-move rather than treating every reference use as interchangeable.
+
+An [original-source holder census](../crates/fe2o3-pliron/src/production/semantic_ssa/adapter_shared_primitive_liveness_v1.rs)
+can end an otherwise unused reference temporary after its complete final
+statement, even when rustc emits no `StorageDead` for that temporary. It pins
+locals mentioned across blocks, in terminators or as return values, and pins
+cyclic blocks and their remaining downstream blocks. Cleanup removes only
+logical aliases after RHS evaluation and assignment; it never changes source
+storage, generations or lifetime events. This is not full non-lexical lifetime
+analysis or permission for aliases to cross CFG edges.
+
+Before ranked checks, a lexical
+[`ProductionSemanticSharedReadsV1`](../crates/fe2o3-pliron/src/production/semantic_ssa/shared_primitive_reads_v1.rs)
+view observes the same bounded alias analysis and keeps only reads whose loan
+remains valid and whose referent the exact SSA owner actually promotes.
+The [ranked projection consumer](../crates/rustc-codegen-fe2o3/src/production_ranked_projection_v1/shared_value_reads_projection_v1.rs)
+queries the exact source owner, function, statement and original place. Only
+an ordinary non-atomic operand read with an authentic matching row is treated
+as a value read rather than a ranked memory access. An unindexed dereference,
+a copied place description or a reference type alone supplies no exemption.
+The view is not a persistent cache or a separate alias-analysis implementation.
+
+Ordinary operand dereference reads can use the existing value representation in
+[`ProductionSemanticKirOwnerV1::try_lower`](../crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1.rs),
+which constructs the production SSA owner before lowering. Original borrow,
+use and lifetime events remain in the source and still undergo SSA replay and
+lowering checks. Work and temporary storage are bounded and charged; this is
+not a claim of whole-pipeline linear complexity.
+
+Explicit semantic `Load` remains backed, even when nonvolatile, because its
+current production consumer requires a physical pointer. Escaping references,
+mutable or raw access, cross-block aliases, volatile/atomic operations and
+referent mutation hazards do not gain promotion from this rule. They retain
+the existing storage classification and downstream checks, not a new blanket
+source-language rejection. Nominal-call and matrix-reference rules are unchanged.
+
+[Adapter tests](../crates/fe2o3-pliron/src/production/semantic_ssa/adapter_shared_primitive_v29_tests.rs)
+cover alias, lifetime, hostile-use and resource boundaries (`shared_primitive_`).
+[Read-view tests](../crates/fe2o3-pliron/src/production/semantic_ssa/shared_primitive_reads_v1_tests.rs)
+cover original static-field copies into unscoped compiler temporaries, genuine
+future-use refusals, owner/place identity and query cleanup (`shared_value_reads_`).
+[Admitted-source lowering tests](../crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/shared_primitive_source_v29_tests.rs)
+check direct/static-holder reads without backing, explicit `Load` with backing,
+exact emitted values and replay (`shared_primitive_current_main_`). The ignored
+[ordinary Rust matrix](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_shared_primitive_policy5_v1_tests.rs)
+checks both built-in targets, retained and rustc-erased source shapes, direct and
+static-field cases, native lowering and simulation; it must be run explicitly.
+These controls are not tutorial-corpus qualification, default V18 activation or
+a new formal proof.
 
 ## Existing normalization and legalization
 

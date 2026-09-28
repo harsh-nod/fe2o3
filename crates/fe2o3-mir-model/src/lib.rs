@@ -74,8 +74,11 @@ pub use semantic_memory::{
 };
 pub use semantic_option_dominance::{
     MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1, SemanticEnumPayloadAvailabilityV1,
-    SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceErrorV1,
-    SemanticOptionDominanceV1, SemanticOptionProducerV1, semantic_option_producers_v1,
+    SemanticEnumPayloadDominancePreparationV1, SemanticEnumPayloadDominanceV1,
+    SemanticEnumPayloadMeterV1, SemanticEnumPayloadMeteredErrorV1, SemanticOptionAvailabilityV1,
+    SemanticOptionDominanceErrorV1, SemanticOptionDominancePreparationV1,
+    SemanticOptionDominanceV1, SemanticOptionProducerPreparationV1, SemanticOptionProducerV1,
+    semantic_option_producers_v1, semantic_option_producers_with_meter_v1,
 };
 pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,
@@ -95,13 +98,14 @@ pub use semantic_u32_induction::{
     SemanticU32InductionAnalysisLimitsV1, SemanticU32InductionBlockSiteV1,
     SemanticU32InductionBoundSnapshotCertificateV1, SemanticU32InductionBoundSnapshotErrorV1,
     SemanticU32InductionBoundSnapshotMeterV1, SemanticU32InductionBoundSnapshotReportV1,
-    SemanticU32InductionNoOverflowCertificateV1, SemanticU32InductionNoOverflowReportV1,
-    SemanticU32InductionPlaceBindingV1, SemanticU32InductionStatementSiteV1,
-    analyze_semantic_u32_induction_bound_snapshots_v1,
+    SemanticU32InductionMeteredErrorV1, SemanticU32InductionNoOverflowCertificateV1,
+    SemanticU32InductionNoOverflowReportV1, SemanticU32InductionPlaceBindingV1,
+    SemanticU32InductionStatementSiteV1, analyze_semantic_u32_induction_bound_snapshots_v1,
     analyze_semantic_u32_induction_bound_snapshots_with_meter_v1,
     analyze_semantic_u32_induction_no_overflow_reachable_with_limits_v2,
     analyze_semantic_u32_induction_no_overflow_v1,
     analyze_semantic_u32_induction_no_overflow_with_limits_v1,
+    analyze_semantic_u32_induction_no_overflow_with_meter_v1,
     analyze_semantic_u32_induction_no_overflow_with_ssa_plan_v2,
 };
 pub use semantic_u32_induction_evidence_v1::{

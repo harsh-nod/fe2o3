@@ -72,9 +72,6 @@ pub(crate) struct TypedArgumentListV1<T> {
 
 impl<T> TypedArgumentListV1<T> {
     pub(crate) fn new(arguments: Vec<T>) -> Result<Self, TypedArgumentListError> {
-        if arguments.is_empty() {
-            return Err(TypedArgumentListError::Empty);
-        }
         if arguments.len() > MAX_ARGUMENTS_PER_KERNEL {
             return Err(TypedArgumentListError::TooMany {
                 actual: arguments.len(),
@@ -94,14 +91,12 @@ impl<T> TypedArgumentListV1<T> {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TypedArgumentListError {
-    Empty,
     TooMany { actual: usize, maximum: usize },
 }
 
 impl fmt::Display for TypedArgumentListError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Empty => formatter.write_str("typed kernel argument list must not be empty"),
             Self::TooMany { actual, maximum } => write!(
                 formatter,
                 "typed kernel argument count {actual} exceeds maximum {maximum}"
@@ -4007,10 +4002,15 @@ mod tests {
     }
 
     #[test]
-    fn typed_argument_lists_reject_empty_and_oversized_collections() {
+    fn typed_argument_lists_accept_empty_and_reject_oversized_collections() {
+        let empty = TypedArgumentListV1::<TypeIdentity>::new(Vec::new()).unwrap();
+        assert_eq!(empty.len(), 0);
+        assert!(empty.as_slice().is_empty());
         assert_eq!(
-            TypedArgumentListV1::<TypeIdentity>::new(Vec::new()),
-            Err(TypedArgumentListError::Empty)
+            TypedArgumentListV1::new(vec![type_identity(7); MAX_ARGUMENTS_PER_KERNEL])
+                .unwrap()
+                .len(),
+            MAX_ARGUMENTS_PER_KERNEL
         );
         assert!(matches!(
             TypedArgumentListV1::new(vec![type_identity(7); MAX_ARGUMENTS_PER_KERNEL + 1]),

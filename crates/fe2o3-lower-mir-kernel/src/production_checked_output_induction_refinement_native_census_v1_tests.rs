@@ -113,14 +113,19 @@ fn with_pair(
     extra: Option<(ScalarType, BinaryOp)>,
     run: impl FnOnce(&Pair<'_>, &CanonicalKirInventoryV1<'_>, &mut AssertOriginBudgetV1<'_>),
 ) {
+    with_launch_module(graph(extra), run)
+}
+fn with_launch_module(
+    module: Module,
+    run: impl FnOnce(&Pair<'_>, &CanonicalKirInventoryV1<'_>, &mut AssertOriginBudgetV1<'_>),
+) {
     let mut work = Work::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
     let sibling = [0x65u8; 29];
     budget.reserve_storage(sibling.len()).unwrap();
     {
         let (input, storage) =
-            Owner::from_module_ref_with_verification_budget_v12(&graph(extra), &mut budget)
-                .unwrap();
+            Owner::from_module_ref_with_verification_budget_v12(&module, &mut budget).unwrap();
         budget.reserve_storage(storage.retained_storage()).unwrap();
         let tail = fe2o3_kernel_opt::prepare_owned_induction_refinement_v1(
             &input,
@@ -150,6 +155,52 @@ fn with_pair(
         .unwrap();
     assert_eq!(budget.storage(), sibling.len());
     assert_eq!(sibling, [0x65; 29]);
+}
+#[test]
+fn invocation_index_census_induction_continuation_preserves_exact_launch_sites() {
+    use fe2o3_kernel_ir::{Axis, IndexKind, IntrinsicKind, IntrinsicOperation};
+    for kind in [IndexKind::Local, IndexKind::Workgroup] {
+        for axis in [Axis::X, Axis::Y] {
+            let mut module = graph(None);
+            if axis == Axis::Y {
+                let LaunchDomain::D1 { x } = module.kernels[0].domain.clone() else {
+                    panic!("expected the original one-dimensional fixture");
+                };
+                module.kernels[0].domain = LaunchDomain::D2 {
+                    x,
+                    y: LaunchExtent::Static(1),
+                };
+            }
+            module.functions[0].body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(Operation::effect_free(
+                    ValueDef::new(ValueId(1000), Type::INDEX),
+                    OperationKind::Intrinsic(IntrinsicOperation::new(
+                        IntrinsicKind::InvocationIndex { kind, axis },
+                        Type::INDEX,
+                    )),
+                ));
+            with_launch_module(module, |pair, inventory, budget| {
+                let sites = inventory.operations().iter().filter(|row| matches!(row.operation.kind,
+                    OperationKind::Intrinsic(IntrinsicOperation { kind: IntrinsicKind::InvocationIndex { kind: actual, axis: actual_axis }, .. })
+                        if actual == kind && actual_axis == axis)).count();
+                assert_eq!(sites, 1);
+                let result = native_result(pair, inventory, true, budget);
+                if axis == Axis::X {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(E::UnsupportedOperation {
+                            phase: "typed induction test",
+                            detail: "closed opcode census",
+                            ..
+                        })
+                    ));
+                }
+            });
+        }
+    }
 }
 fn native_result(
     pair: &Pair<'_>,
@@ -192,9 +243,10 @@ fn source_induction_refinement_native_admits_only_the_actual_checked_sum() {
     with_pair(None, |pair, inventory, budget| {
         assert!(matches!(
             native_result(pair, inventory, false, budget),
-            Err(E::Unsupported {
+            Err(E::UnsupportedOperation {
                 phase: "typed induction test",
-                detail: "closed opcode census"
+                detail: "closed opcode census",
+                ..
             })
         ));
         native_result(pair, inventory, true, budget).unwrap();
@@ -230,9 +282,10 @@ fn source_induction_refinement_native_keeps_all_unrelated_integer_arithmetic_clo
             with_pair(Some((scalar, op)), |pair, inventory, budget| {
                 assert!(matches!(
                     native_result(pair, inventory, true, budget),
-                    Err(E::Unsupported {
+                    Err(E::UnsupportedOperation {
                         phase: "typed induction test",
-                        detail: "closed opcode census"
+                        detail: "closed opcode census",
+                        ..
                     })
                 ));
             });

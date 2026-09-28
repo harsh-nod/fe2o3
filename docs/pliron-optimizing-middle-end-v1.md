@@ -1347,3 +1347,176 @@ Callers prepay the exported view/query/scratch extents and their live backing.
 V1/V2 decoding and identities remain unchanged. This codec admits inert content,
 not an authenticated source ABI, signed native output or executable artifact;
 the independent source join, host packer and production handoff remain separate.
+
+## Source ABI and invocation-index admission
+
+The [source ABI plan](../crates/fe2o3-lower-mir-kernel/src/production_source_abi_plan_v1.rs)
+borrows the admitted semantic source, exact kernel-root association and actual
+physical entry signature. It preserves every logical argument, including
+ignored zero-sized arguments, and maps each supported source leaf to its
+physical parameter. Source byte offsets describe the retained Rust layout;
+they are not kernarg offsets or permission to copy a Rust value's bytes.
+
+The [backend correspondence check](../crates/rustc-codegen-fe2o3/src/compiler_descriptor_source_abi_v1.rs)
+captures fresh rustc layout identities and rejoins the complete logical and
+physical argument rosters with original source, target layout and actual
+optimized output. Struct, tuple, array, nested and zero-sized forms have
+actual-rustc coverage across gfx942/gfx950 and opt0/mir0 plus opt3/mir2.
+Foreign source/layout, changed argument or optimized-endpoint substitutions
+remain refusals. Owner-bound queries use the continuing resource ledger;
+source offsets and equal physical widths never replace source type identity.
+
+This is a descriptor prerequisite, not general aggregate launch support.
+Existing descriptor encoding and maximum argument-count restrictions remain in force.
+A versioned aggregate descriptor schema, safe typed host serialization, exact
+emitted-object correspondence and the consuming production launch join are
+still required. No public detached plan or caller-supplied correspondence
+constructs source admission.
+
+The [physical entry schedule](../crates/rustc-codegen-fe2o3/src/compiler_descriptor_entry_packing_v1.rs)
+retains logical arguments, including zero-sized values, while separately
+assigning dense physical slots and kernarg offsets. It checks every root and
+original/optimized entry association before the consuming callback runs; a
+later-root refusal cannot expose an earlier partial schedule. The schedule
+borrows its authenticated source and captured rustc layouts with exclusive
+access to the continuing resource budget. Resource failure remains sticky.
+
+Explicit payload extent and implicit argument placement are distinct. The
+schedule preserves every explicit component offset, aligns the hidden block
+start to eight bytes, adds the worker's 256-byte implicit span and requires
+segment alignment of at least eight. Arithmetic and source-owner tests do not
+replace an exact emitted-object join with the pinned production LLVM worker.
+Neither this schedule nor a diagnostic copy authorizes memcpy or GPU launch.
+
+Zero-argument typed kernels retain an empty logical and physical source ABI:
+zero explicit bytes with alignment one. The generated `Arguments::new()` and
+KFD adapter trait accept that empty roster, without a dummy or zero-sized
+argument. Genuine Rust sessions cover empty, single u8/u16/u32, three-u32 and
+mixed scalar signatures on both targets at both optimization settings. Their
+checked entry schedules retain the separate eight-byte-aligned hidden tail.
+The host's exact explicit-layout versus physical-segment alignment check is
+not relaxed; joining that physical descriptor to launch remains deferred.
+
+Row-striped 2D indexing lowers all four potentially overflowing multiply/add
+steps to the existing checked INDEX/BOOL result pairs. The final presence
+predicate retains each pair's own no-overflow bit together with component,
+stride, row and column bounds; the consuming access also checks slice extent.
+Rejected bounds cannot make earlier partial integer arithmetic defined. This
+arithmetic correction does not admit row-striped operations through the
+closed checked-output opcode census or discharge memory/currentness proofs.
+
+The [source path bridge](../crates/fe2o3-lower-mir-kernel/src/production_source_abi_paths_v1.rs)
+reuses the existing checked structural argument walker. Visitor-scoped field
+and array-index paths retain exact source type, local, node and physical-slot
+coverage without introducing a second aggregate traversal. Zero-sized nodes
+and nodes contained within one atomic ABI component do not become independent
+scalar-load permissions. Queries bind the same immutable owner, source root,
+body and resource ledger. A selected resource failure is recorded before an
+owned visitor's destructor can unwind; later queries cannot erase it.
+
+The [invocation-index census](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_invocation_indices_v1.rs)
+recognizes exact `Local-X` and `Workgroup-X` scalar intrinsics in the existing
+checked-output continuations, at kernel entries only; other axes remain closed.
+It checks the immutable operation occurrence,
+kernel-entry/root association, result definition and type, and absence of
+operands, memory effects and compiler-ordering effects. It does not infer
+ranges, uniformity, safe addressing or launch dimensions. Source replay,
+transition equality, exact target coordinates and final memory/formal checks
+remain separate mandatory checks on the actual output.
+
+Structured [census diagnostics](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_census_context_v1.rs)
+retain phase, operation coordinates and closed opcode/type context for
+unsupported operations. They do not broaden admission. At the private
+descriptor boundary, checked source-ABI errors reuse the existing typed
+admission or optimization payload; redundant wrapper nesting is normalized
+without changing the internal checks or allocating an error box.
+
+## Checked Wave Collective Census
+
+The [Wave census](../crates/fe2o3-lower-mir-kernel/src/production_checked_output_wave_reductions_v1.rs)
+recognizes F32 Sum, Maximum and Broadcast with full Wave64 participation, subgroup
+convergence and static power-of-two tile widths from 1 through 64. It checks
+the exact immutable operation, function/block occurrence, result definition,
+input uses and unique kernel-root association in all four checked-output
+continuations. Broadcast also checks the exact second operand's U32 definition
+and use. Helper-function collectives, Shuffle and Wave32 remain outside this
+census even where another IR or simulator layer can represent them.
+
+This is operation admission, not an optimizing rewrite or convergence proof.
+Source replay, optimization-transition checks, target legality, full-wave
+control analysis and exact numerical semantics remain mandatory. Broadcast lane
+bounds are independently required by source materialization, canonical KIR
+verification and native lowering; an unconstrained dynamic lane is not admitted
+by this census. Collectives remain ordered and non-pure; this census does not
+permit ordinary pure-operation CSE or DCE. The target profile is not inferred
+from semantic data layout.
+
+The optional test-only endpoint snapshots retain bounded operation context for
+diagnosing corpus refusals. They carry no source, proof or publication authority
+and cannot substitute for compiling a tutorial's ordinary Rust body.
+
+## Typed Storage Prerequisites
+
+The [storage layout records](../crates/fe2o3-kernel-ir/src/storage_layout_v1.rs)
+represent physical scalars, vectors, pointers, records, unions, arrays, slices
+and variant encodings. Layout IDs are meaningful only within their exact table.
+The [structural checker](../crates/fe2o3-kernel-ir/src/verification_storage_v1.rs)
+checks bounded sizes, placements, containment, encodings and table references
+using iterative traversal and prepaid sorting. Packed-field placement and
+overlapping union storage remain explicit; pointer recursion is not mistaken
+for containment recursion.
+
+The module owns these records through `Module.storage_layouts`.
+`Type::StorageObject` names a row below a pointer or slice; it is not a bare SSA
+value. Typed storage operations represent projection, value reads and writes,
+object copies and discriminant access. A separate
+[storage-aware verifier](../crates/fe2o3-kernel-ir/src/verification_storage_module_v1.rs)
+checks structure, CFG and types against the exact module/table borrow. It does
+not establish source validity, initialized bytes, active variants, pointer
+provenance, actual bounds/alignment, lifetime, aliasing or copy-overlap safety.
+
+The move-only [canonical V18 owner](../crates/fe2o3-kernel-ir/src/canonical_kir_v18.rs)
+retains the actual decoded, verified module and its exact canonical bytes.
+The V18 grammar includes the complete storage table, explicit function roles
+and the existing V15 execution, V16 ordered-region and V17 ordered-program
+payloads. Bounded comparison and independent candidate copying reuse the
+shared codec; mutated candidates need fresh admission. Table and row identities
+are inert content keys, not source or execution authority. Returned storage
+receipts require caller reservations while their owners remain live.
+
+Concrete-to-Generic pointer and slice casts require the exact V18 profile and
+preserve pointee/element and access rights. Execution ownership may cross V18
+backedges only when every incoming state agrees exactly; this is not a
+termination proof. Old wire profiles, canonical owners, Pliron bridges,
+optimizer recipes, target lowering and simulator execution do not acquire
+storage support from these representation APIs. V18 Storage and V19 complete
+bodies retain distinct interpretations of their profile-specific wire tag;
+existing V19-V22 behavior remains unchanged.
+
+The prepared scoped-source path now builds a bounded layout-table closure from
+captured source types and actual SSA demands. Its
+[source layout builder](../crates/fe2o3-lower-mir-kernel/src/production_source_storage_layout_v29.rs)
+preserves original geometry, pointer address spaces and pointer recursion while
+rejecting by-value containment cycles. Row ownership moves into the genuine
+V18 module with retained storage credit. The
+[source replay](../crates/fe2o3-lower-mir-kernel/src/production_scoped_source_replay_v29.rs)
+reconstructs and compares the complete graph and table, not an older graph-only
+identity. The public pending-source observer therefore names a V18 owner; its
+successful observation still stops before execution admission.
+
+The [V18 analysis scope](../crates/fe2o3-pliron/src/canonical_analysis_scope_v18.rs)
+binds sparse scalar, MemorySSA and call-effect queries to the exact canonical
+inventory and shared resource ledger. These analyses do not grant rewrite or
+native-execution authority. The shared private-memory checker has distinct V12
+and V18 owner paths; the existing V12 production adapter retains its previous
+work and scratch-credit contract.
+
+General Rust storage-operation lowering, initialized-byte/provenance/lifetime
+checks, optimization correspondence and native completion remain separate
+integration work. These table and analysis foundations do not claim that tutorial
+kernels compile through V18, that an optimizing storage rewrite is admitted,
+or that any milestone is complete.
+
+The legacy default backend route is unchanged by these additions. Passing a
+checked-output component does not select it as the default compiler, publish
+an artifact or establish signed proof, host launch or hardware qualification.

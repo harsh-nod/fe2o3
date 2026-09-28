@@ -5,13 +5,13 @@ use crate::{
     BasicBlock, BlockId, CanonicalKernelIrVerificationResourceBudgetV1,
     CanonicalKernelIrVerificationResourceErrorV1, ControlFlowError, ControlFlowLimits,
     DiagnosticCode, Function, MeteredControlFlowErrorV1, MeteredIndexedControlFlowV1, Module,
-    Operation, OperationKind, TargetCapability, Terminator, Type, ValueId,
-    VerificationDefinitionSiteV1, VerificationDiagnosticCollectorV1,
+    Operation, OperationKind, StructurallyCheckedModuleStorageV1, TargetCapability, Terminator,
+    Type, ValueId, VerificationDefinitionSiteV1, VerificationDiagnosticCollectorV1,
     VerificationDiagnosticLocationV1, VerificationFunctionStateV1, VerificationModuleStateV1,
-    analyze_control_flow_with_verification_budget_v1, clone_diagnostic_location_v1,
-    emit_dynamic_v1, emit_fixed_v1, function_diagnostic_location_v1,
+    VerificationStorageContextV1, analyze_control_flow_with_verification_budget_v1,
+    clone_diagnostic_location_v1, emit_dynamic_v1, emit_fixed_v1, function_diagnostic_location_v1,
     reserved_diagnostic_call_is_terminating_v1, try_verify_registered_operation_with_resources_v1,
-    verify_type_v12_with_budget_v1,
+    verify_type_with_storage_context_v1,
 };
 
 pub(crate) fn run_verification_function_pass_v1<'module>(
@@ -22,6 +22,25 @@ pub(crate) fn run_verification_function_pass_v1<'module>(
     diagnostics: &mut VerificationDiagnosticCollectorV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    run_verification_function_pass_in_context_v1(
+        VerificationStorageContextV1::Legacy(module),
+        function,
+        module_state,
+        supported_capabilities,
+        diagnostics,
+        budget,
+    )
+}
+
+pub(crate) fn run_verification_function_pass_in_context_v1<'module>(
+    context: VerificationStorageContextV1<'_, 'module>,
+    function: &'module Function,
+    module_state: &VerificationModuleStateV1<'module>,
+    supported_capabilities: Option<&BTreeSet<TargetCapability>>,
+    diagnostics: &mut VerificationDiagnosticCollectorV1,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    let module = context.module();
     let Some(body) = &function.body else {
         return Ok(());
     };
@@ -81,7 +100,7 @@ pub(crate) fn run_verification_function_pass_v1<'module>(
             dynamic_workgroup_memory_declarations: 0,
             gfx950_lds_transpose_current_formats: 0,
         };
-        pass.verify()
+        pass.verify(context.storage())
     };
     let function_release = function_state.release(budget);
     let control_flow_release = match control_flow {
@@ -105,7 +124,10 @@ pub(crate) struct VerificationFunctionPassV1<'a, 'module, 'work> {
 }
 
 impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
-    fn verify(&mut self) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    fn verify(
+        &mut self,
+        storage: Option<&StructurallyCheckedModuleStorageV1<'module>>,
+    ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
         let body = self
             .function
             .body
@@ -114,7 +136,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
         let base_location =
             function_diagnostic_location_v1(self.module, self.function, self.budget)?;
 
-        let has_execution_roles = self.verify_definition_rosters(&base_location)?;
+        let has_execution_roles = self.verify_definition_rosters(&base_location, storage)?;
         self.budget.charge_work(body.blocks.len())?;
         for block in &body.blocks {
             if block.terminator.is_none() {
@@ -178,8 +200,25 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                     self.diagnostics,
                     self.budget,
                 )?;
+                if let Some(storage) = storage {
+                    if self.reject_storage_legacy_bridge_v1(operation, &location)? {
+                        continue;
+                    }
+                    if matches!(operation.kind, OperationKind::Storage(_)) {
+                        self.verify_storage_operation_v1(storage, operation, &location)?;
+                        continue;
+                    }
+                }
                 if !registered {
-                    self.verify_legacy_operation_v1(operation, &location)?;
+                    if let Some(storage) = storage {
+                        self.verify_legacy_operation_in_context_v1(
+                            operation,
+                            &location,
+                            Some(storage),
+                        )?;
+                    } else {
+                        self.verify_legacy_operation_v1(operation, &location)?;
+                    }
                 } else if matches!(operation.kind, OperationKind::Matrix(_)) {
                     self.verify_matrix_lds_allocation_v1(operation, &location)?;
                 }
@@ -204,14 +243,25 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
             self.verify_physical_lds_exchange_function_v22(&base_location)?;
         }
         if has_execution_roles {
-            crate::verification_execution_lifecycle_v15::verify_execution_lifecycle_v15(
-                self.module,
-                self.function,
-                self.function_state,
-                self.control_flow,
-                self.diagnostics,
-                self.budget,
-            )?;
+            if let Some(storage) = storage {
+                crate::verification_execution_lifecycle_v15::verify_storage_execution_lifecycle_v18(
+                    storage,
+                    self.function,
+                    self.function_state,
+                    self.control_flow,
+                    self.diagnostics,
+                    self.budget,
+                )?;
+            } else {
+                crate::verification_execution_lifecycle_v15::verify_execution_lifecycle_v15(
+                    self.module,
+                    self.function,
+                    self.function_state,
+                    self.control_flow,
+                    self.diagnostics,
+                    self.budget,
+                )?;
+            }
         }
         Ok(())
     }
@@ -219,6 +269,7 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
     fn verify_definition_rosters(
         &mut self,
         base_location: &VerificationDiagnosticLocationV1<'_>,
+        storage: Option<&StructurallyCheckedModuleStorageV1<'module>>,
     ) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
         let block_rows = self.function_state.block_rows();
         self.budget.charge_work(block_rows.len())?;
@@ -246,11 +297,12 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
                 VerificationDefinitionSiteV1::FunctionParameter
             ) {
                 let location = self.definition_location_v1(row.value.site, base_location)?;
-                verify_type_v12_with_budget_v1(
+                verify_type_with_storage_context_v1(
                     row.value.ty,
                     &location,
                     self.diagnostics,
                     self.budget,
+                    storage,
                 )?;
             }
         }

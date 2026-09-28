@@ -1167,3 +1167,18 @@ fn sparse_allocation_receipt_uses_actual_capacity_and_preserves_denial_floor() {
         assert_eq!(short.failed_storage(), Some(error.actual()));
     }
 }
+
+// Required pinned-host/compiler premise, not a portable Rust ABI guarantee.
+#[test]
+fn private_call_whole_entry_pinned_sparse_engine_layout_equivalence_premise() {
+    use std::mem::{align_of, size_of};
+    type Layout = (
+        CanonicalKirSparseV1<'static, 'static>,
+        [Vec<usize>; 4],
+        Vec<u8>,
+        [usize; 5],
+    );
+    assert_eq!(size_of::<usize>(), 8);
+    assert_eq!(size_of::<Engine<'_, '_>>(), size_of::<Layout>());
+    assert_eq!(align_of::<Engine<'_, '_>>(), align_of::<Layout>());
+}

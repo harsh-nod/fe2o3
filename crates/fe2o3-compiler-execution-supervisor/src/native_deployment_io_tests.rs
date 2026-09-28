@@ -8,7 +8,7 @@ use std::{
         unix::{fs::MetadataExt, process::CommandExt},
     },
     panic::{AssertUnwindSafe, catch_unwind},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
 };
 
 struct Script {
@@ -345,6 +345,16 @@ fn actual_non_socket_refusal_preserves_borrowed_descriptor() {
 const CASE_ENV: &str = "FE2O3_NATIVE_SUPERVISOR_IO_CASE";
 const REPORT_ENV: &str = "FE2O3_NATIVE_SUPERVISOR_IO_REPORT";
 
+struct RawSourceChild(Option<Child>);
+impl Drop for RawSourceChild {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 #[test]
 fn isolated_raw_source_cases() {
     for case in [
@@ -355,6 +365,7 @@ fn isolated_raw_source_cases() {
         "refusal",
         "unwind",
         "close-error",
+        "startup-missing",
     ] {
         // Named paths pin inode identities through all child closure assertions.
         let files: [_; 11] = std::array::from_fn(|_| tempfile::NamedTempFile::new().unwrap());
@@ -392,16 +403,15 @@ fn isolated_raw_source_cases() {
                 Ok(())
             });
         }
-        let mut child = command.spawn().unwrap();
+        let mut child = RawSourceChild(Some(command.spawn().unwrap()));
         drop(command);
         let deadline = Instant::now() + Duration::from_secs(20);
         let status = loop {
-            if let Some(status) = child.try_wait().unwrap() {
+            if let Some(status) = child.0.as_mut().unwrap().try_wait().unwrap() {
+                drop(child.0.take());
                 break status;
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
                 panic!("raw source subprocess timed out: {case}");
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -454,6 +464,42 @@ fn raw_source_subprocess() {
         assert!(raw_open(fd));
     }
     match case.as_str() {
+        "startup-missing" => {
+            use crate::{
+                NATIVE_ISSUER_PROCESS_STORAGE_V2, NATIVE_ISSUER_PROCESS_WORK_V2,
+                NATIVE_ISSUER_STARTUP_INPUT_STORAGE_V2 as INPUT,
+                ProtectedIssuerCleanupServiceV2 as Cleanup,
+                ProtectedIssuerDeploymentErrorV2 as StartupError,
+                ProtectedIssuerDispatchLimitsV2 as Dispatch,
+                ProtectedIssuerSessionLimitsV2 as Session, ProtectedIssuerWaitV2 as Wait,
+                run_inherited_protected_issuer_service_v2 as run,
+            };
+            use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account;
+
+            deployment::close_inherited(INPUT_FDS[LISTENER]).unwrap();
+            let wait = Wait::new(1, Duration::from_millis(1)).unwrap();
+            let session = Session::new(Duration::from_millis(1), wait, wait, wait, wait).unwrap();
+            let dispatch = Dispatch::new(1, wait, 1).unwrap();
+            let mut cleanup =
+                Cleanup::admit(Account::new(Work::new(1 << 30), Cleanup::STORAGE)).unwrap();
+            let mut w = Work::new(NATIVE_ISSUER_PROCESS_WORK_V2);
+            let mut b = Budget::new(&mut w, NATIVE_ISSUER_PROCESS_STORAGE_V2);
+            b.reserve_storage(INPUT).unwrap();
+            // SAFETY: this isolated refusal fixture transfers the raw table with
+            // one missing slot, no Rust FD owners and a fresh, empty cleanup pool.
+            let result = unsafe { run(session, dispatch, &mut cleanup, &mut b) };
+            // The test's arguments/environment would fail invocation inspection;
+            // BADF proves the missing slot was rejected before that inspection.
+            assert!(matches!(
+                result,
+                Err(StartupError::Io(Error::Io {
+                    errno: Errno::BADF,
+                    ..
+                }))
+            ));
+            assert_eq!(b.storage(), INPUT);
+            cleanup.shutdown().unwrap();
+        }
         "refusal" | "unwind" => {
             let mut w = Work::new(if case == "refusal" { 0 } else { SOURCE_WORK });
             let floor = INPUT_FDS.len() * FILE_STORAGE;

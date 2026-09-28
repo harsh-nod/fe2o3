@@ -169,6 +169,59 @@ fn with_chain(
 ) {
     with_module(graph(extra), 1, 1, run)
 }
+#[test]
+fn invocation_index_census_refined_forwarding_preserves_exact_launch_sites() {
+    use fe2o3_kernel_ir::{Axis, IndexKind, IntrinsicKind, IntrinsicOperation};
+    for kind in [IndexKind::Local, IndexKind::Workgroup] {
+        for axis in [Axis::X, Axis::Y] {
+            let mut module = graph(None);
+            if axis == Axis::Y {
+                let LaunchDomain::D1 { x } = module.kernels[0].domain.clone() else {
+                    panic!("expected the original one-dimensional fixture");
+                };
+                module.kernels[0].domain = LaunchDomain::D2 {
+                    x,
+                    y: LaunchExtent::Static(1),
+                };
+            }
+            module.functions[0].body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(Operation::effect_free(
+                    ValueDef::new(ValueId(1000), Type::INDEX),
+                    OperationKind::Intrinsic(IntrinsicOperation::new(
+                        IntrinsicKind::InvocationIndex { kind, axis },
+                        Type::INDEX,
+                    )),
+                ));
+            with_module(
+                module,
+                1,
+                1,
+                |refinement, forwarding, intermediate, output, budget| {
+                    for inventory in [intermediate, output] {
+                        assert_eq!(inventory.operations().iter().filter(|row| matches!(row.operation.kind,
+                        OperationKind::Intrinsic(IntrinsicOperation { kind: IntrinsicKind::InvocationIndex { kind: actual, axis: actual_axis }, .. })
+                            if actual == kind && actual_axis == axis)).count(), 1);
+                    }
+                    let result =
+                        native_result(refinement, forwarding, intermediate, output, true, budget);
+                    if axis == Axis::X {
+                        result.unwrap();
+                    } else {
+                        assert!(matches!(
+                            result,
+                            Err(E::UnsupportedOperation {
+                                phase: "composed Add test",
+                                detail: "closed opcode census",
+                                ..
+                            })
+                        ));
+                    }
+                },
+            );
+        }
+    }
+}
 fn with_module(
     module: Module,
     refinements: usize,
@@ -306,9 +359,10 @@ fn refined_forwarding_allowance_requires_both_actual_pairs_and_keeps_shifted_sto
             ));
             assert!(matches!(
                 native_result(refinement, forwarding, intermediate, output, false, budget),
-                Err(E::Unsupported {
+                Err(E::UnsupportedOperation {
                     phase: "composed Add test",
-                    detail: "closed opcode census"
+                    detail: "closed opcode census",
+                    ..
                 })
             ));
             native_result(refinement, forwarding, intermediate, output, true, budget).unwrap();
@@ -373,9 +427,10 @@ fn refined_forwarding_allowance_keeps_all_twenty_seven_ordinary_arithmetic_negat
                 |refinement, forwarding, intermediate, output, budget| {
                     assert!(matches!(
                         native_result(refinement, forwarding, intermediate, output, true, budget),
-                        Err(E::Unsupported {
+                        Err(E::UnsupportedOperation {
                             phase: "composed Add test",
-                            detail: "closed opcode census"
+                            detail: "closed opcode census",
+                            ..
                         })
                     ));
                 },

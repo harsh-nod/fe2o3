@@ -31,8 +31,17 @@ impl<'b, 'w> Admitted<'b, 'w> {
     /// Inputs must be prepaid. Successful policy admission replaces its file
     /// charge with full capability storage; that charge remains caller-owned.
     /// The native client owns and retires its own peer reservation.
-    pub(crate) fn admit(b: &'b mut Budget<'w>) -> Result<Self, Error> {
-        let mut slots = InheritedExecutionSlots::new();
+    ///
+    /// # Safety
+    /// Transfer unique ownership of FDs 202 and 195, inherited without Rust owners
+    /// or explicitly relinquished for this transfer. There must be no existing Rust
+    /// owner or outstanding borrow. No thread, handler, or foreign code may close,
+    /// replace, or acquire either slot until this call returns; absent slots must
+    /// remain unallocated. This consumes the transfer once, including quota
+    /// refusal or unwind. Presence and flag checks cannot establish ownership.
+    pub(crate) unsafe fn admit(b: &'b mut Budget<'w>) -> Result<Self, Error> {
+        // SAFETY: the caller transfers both slots, including on unpaid refusal.
+        let mut slots = unsafe { InheritedExecutionSlots::new() };
         if b.storage() < Self::INPUT_STORAGE {
             return Err(Resource::Accounting.into());
         }
@@ -46,7 +55,10 @@ impl<'b, 'w> Admitted<'b, 'w> {
         // Client admission consumes the fixed slot on every exit, including
         // failure before inspection. Disarm our guard before handing it over.
         slots.service = None;
-        let client = Client::admit_inherited_child(super::RECEIPT_ACQUISITION_TIMEOUT_V1, b)?;
+        // SAFETY: startup custody remains exclusive, both slots were checked
+        // before policy duplication, and the sole service closer is disarmed above.
+        let client =
+            unsafe { Client::admit_inherited_child(super::RECEIPT_ACQUISITION_TIMEOUT_V1, b) }?;
         Ok(Self { policy, client })
     }
 

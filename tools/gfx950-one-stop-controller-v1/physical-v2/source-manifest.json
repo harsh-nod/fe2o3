@@ -2,7 +2,7 @@
   "schema": "fe2o3-gfx950-one-stop-controller-source-v2",
   "license": "MIT OR Apache-2.0",
   "runtime_profile": "unbound",
-  "rust_files": 20,
+  "rust_files": 23,
   "files": [
     {
       "path": "Cargo.lock",
@@ -11,8 +11,8 @@
     },
     {
       "path": "Cargo.toml",
-      "bytes": 480,
-      "sha256": "b0a4756dd8dc24caa7ef87ee5eaea0d94d6dccc2fa754b1fc54f08a1e34bdb2e"
+      "bytes": 486,
+      "sha256": "8653bce4860838e30827a2914d7add44a83042387a2d88026fd963c93b7c9d39"
     },
     {
       "path": "LICENSE-APACHE",
@@ -40,24 +40,34 @@
       "sha256": "67a554cd8dce025c1f786a2ad118959ec44e57d3274257b0ebf883d6a3dcfb5d"
     },
     {
+      "path": "native/argv_readiness.rs",
+      "bytes": 12180,
+      "sha256": "c9f44b09c728dc4d57e52b6e2ddf732e3565ded378bf6ea124997b460231c765"
+    },
+    {
       "path": "native/clock.rs",
       "bytes": 1634,
       "sha256": "6f3432bb3e0bf3db2608bc3b581e96958483022542c4db62625514026f005e20"
     },
     {
       "path": "native/config.rs",
-      "bytes": 14559,
-      "sha256": "fed56a8f76f3bcb951168eea7272d7a03a2fd1747c1256c6a2b7f6c8d5b05d4b"
+      "bytes": 15004,
+      "sha256": "18f9a081d1589270d68cb24566b89976befc386199aaa030f9a0219e4d0b8364"
     },
     {
       "path": "native/custody.rs",
-      "bytes": 11341,
-      "sha256": "0da919a5511648152f2fdb14a3f46338d7c6d2550f687a494e62c43c02645b15"
+      "bytes": 12730,
+      "sha256": "d8821fe65367491f0977649bbc5500ed94cb2e022ec387c8c61bbfc0a45a0717"
+    },
+    {
+      "path": "native/failure_diagnostic.rs",
+      "bytes": 16755,
+      "sha256": "6297cef4adb651916b41b9643ec639974ff837825bf28a1c629b2240473f8a34"
     },
     {
       "path": "native/main.rs",
-      "bytes": 2297,
-      "sha256": "5b109c1856a5a2690aaac423cfca8d829b621e50627df54b5a7b6d1a51e09b90"
+      "bytes": 2522,
+      "sha256": "78b5ed7fb3a29810e34e758840332fc39947c9ae71aca59edfce42fd6ba9f90e"
     },
     {
       "path": "native/parent.rs",
@@ -71,13 +81,18 @@
     },
     {
       "path": "native/publication.rs",
-      "bytes": 3144,
-      "sha256": "9f91a9039f3cd0f73d232e383e9a2d71db82742e495d79bc027dca3e8797883a"
+      "bytes": 18111,
+      "sha256": "1929f1df83f57f2d7db92c44dea12f9db54f3fcba379d46b7b96d976d22c7fb2"
     },
     {
       "path": "native/scope.rs",
       "bytes": 8899,
       "sha256": "8a41c2798c6b72f6fc207d37026da70c268485bb37aaecd3b4ba8329cb28df6d"
+    },
+    {
+      "path": "native/setup_diagnostic.rs",
+      "bytes": 12306,
+      "sha256": "baa5f941feca4afe100f5e87be7c8782ad9a0b78f774d8acf0f7573d1a951699"
     },
     {
       "path": "native/streams.rs",
@@ -86,8 +101,8 @@
     },
     {
       "path": "native/wire.rs",
-      "bytes": 23628,
-      "sha256": "4e05d4898a4b7d7120d739db5d0fad87e8170f591d1430bd0c9d3f048bc2be51"
+      "bytes": 27252,
+      "sha256": "8145521181b3f38388ea254826d524826a4c976300620a5e4f9bae30135cf28e"
     },
     {
       "path": "physical_snapshot_v2.rs",

@@ -111,7 +111,9 @@ fn selected_admission_consumes_missing_cloexec_and_invalid_policy_inputs() {
                 install(&source, fd, cloexec == Some(fd));
             }
         }
-        let error = admit_for_production_codegen()
+        // SAFETY: install relinquishes fresh descriptor ownership in this isolated
+        // child; deliberately absent slots remain vacant through this one attempt.
+        let error = unsafe { admit_for_production_codegen() }
             .err()
             .expect("hostile inputs must reject");
         match (error, expected_errno) {
@@ -126,14 +128,7 @@ fn selected_admission_consumes_missing_cloexec_and_invalid_policy_inputs() {
     }
 }
 
-#[test]
-fn selected_admission_cannot_duplicate_policy_into_missing_service_slot() {
-    if isolated(concat!(
-        module_path!(),
-        "::selected_admission_cannot_duplicate_policy_into_missing_service_slot"
-    )) {
-        return;
-    }
+fn valid_policy() -> CompilerExecutionPolicyCapabilityV1 {
     use fe2o3_compiler_execution_protocol::{
         CompilerExecutionIssuerMeasurementV1 as Measurement, CompilerExecutionIssuerPolicyV1,
     };
@@ -149,7 +144,18 @@ fn selected_admission_cannot_duplicate_policy_into_missing_service_slot() {
         anchor,
     )
     .unwrap();
-    let policy = CompilerExecutionPolicyCapabilityV1::create(record).unwrap();
+    CompilerExecutionPolicyCapabilityV1::create(record).unwrap()
+}
+
+#[test]
+fn selected_admission_cannot_duplicate_policy_into_missing_service_slot() {
+    if isolated(concat!(
+        module_path!(),
+        "::selected_admission_cannot_duplicate_policy_into_missing_service_slot"
+    )) {
+        return;
+    }
+    let policy = valid_policy();
     let file = policy.try_clone_for_transfer().unwrap();
     install(&file, POLICY, false);
     let occupied = leave_service_hole(&file);
@@ -161,7 +167,9 @@ fn selected_admission_cannot_duplicate_policy_into_missing_service_slot() {
         policy.policy().canonical_bytes()
     );
     drop(duplicate);
-    let result = admit_for_production_codegen();
+    // SAFETY: install relinquished the policy slot; this isolated child retains
+    // every lower descriptor and leaves the service slot vacant through refusal.
+    let result = unsafe { admit_for_production_codegen() };
     assert!(matches!(&result,
         Err(ProtectedCompilerExecutionErrorV1::Descriptor(error))
         if error.raw_os_error() == Some(libc::EBADF)));
@@ -173,8 +181,10 @@ fn selected_admission_cannot_duplicate_policy_into_missing_service_slot() {
     // when the supplied service input is not a socket.
     install(&file, POLICY, false);
     install(&file, SERVICE, false);
+    // SAFETY: both fresh installs relinquished their sole ownership; the previous
+    // transfer was consumed, and no other fixture thread can touch these slots.
     assert!(matches!(
-        admit_for_production_codegen(),
+        unsafe { admit_for_production_codegen() },
         Err(ProtectedCompilerExecutionErrorV1::Client(_))
     ));
     assert_closed();
@@ -199,7 +209,9 @@ fn shared_slot_guard_closes_on_unwind_and_preserves_transferred_ownership() {
     }
     assert!(
         std::panic::catch_unwind(|| {
-            let slots = InheritedExecutionSlots::new();
+            // SAFETY: both installs relinquished their sole descriptor ownership
+            // in this isolated child. This guard alone consumes them on unwind.
+            let slots = unsafe { InheritedExecutionSlots::new() };
             slots.validate().unwrap();
             panic!("injected admission unwind");
         })
@@ -210,7 +222,9 @@ fn shared_slot_guard_closes_on_unwind_and_preserves_transferred_ownership() {
     for fd in [POLICY, SERVICE] {
         install(&source, fd, false);
     }
-    let mut slots = InheritedExecutionSlots::new();
+    // SAFETY: the new installs relinquished both slots after prior cleanup; this
+    // isolated child's guard owns them until the explicit transfers below.
+    let mut slots = unsafe { InheritedExecutionSlots::new() };
     slots.validate().unwrap();
     slots.close_policy().unwrap();
     let replacement = rustix::io::fcntl_dupfd_cloexec(&source, POLICY).unwrap();
@@ -223,4 +237,112 @@ fn shared_slot_guard_closes_on_unwind_and_preserves_transferred_ownership() {
     rustix::fs::fstat(&service).unwrap();
     drop((replacement, service));
     assert_closed();
+}
+
+#[test]
+fn startup_refusal_never_reconsumes_reused_descriptor_numbers() {
+    if isolated(concat!(
+        module_path!(),
+        "::startup_refusal_never_reconsumes_reused_descriptor_numbers"
+    )) {
+        return;
+    }
+    assert_closed();
+    let input = CompilerExecutionStartupInputV1::capture();
+    let source = File::open("/dev/null").unwrap();
+    let replacements: Vec<_> = [POLICY, SERVICE]
+        .map(|fd| {
+            let replacement = rustix::io::fcntl_dupfd_cloexec(&source, fd).unwrap();
+            assert_eq!(replacement.as_raw_fd(), fd);
+            replacement
+        })
+        .into();
+    assert!(matches!(
+        input.admit(),
+        Err(ProtectedCompilerExecutionErrorV1::Descriptor(e))
+            if e.raw_os_error() == Some(libc::EBADF)
+    ));
+    assert!(matches!(
+        input.admit(),
+        Err(ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)
+    ));
+    drop(input);
+    for replacement in &replacements {
+        rustix::fs::fstat(replacement).unwrap();
+    }
+    drop(replacements);
+    assert_closed();
+}
+
+#[test]
+fn startup_capture_retains_cloexec_owners_until_one_safe_admission_or_drop() {
+    if isolated(concat!(
+        module_path!(),
+        "::startup_capture_retains_cloexec_owners_until_one_safe_admission_or_drop"
+    )) {
+        return;
+    }
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+    let policy = valid_policy();
+    let file = policy.try_clone_for_transfer().unwrap();
+    let (client, _server) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    let client = File::from(client);
+    for admit in [false, true] {
+        install(&file, POLICY, false);
+        install(&client, SERVICE, false);
+        // SAFETY: install relinquished each newly created descriptor once. These
+        // owners deliberately remain live while the safe loader takes duplicates.
+        let originals = unsafe { [OwnedFd::from_raw_fd(POLICY), OwnedFd::from_raw_fd(SERVICE)] };
+        let input = CompilerExecutionStartupInputV1::capture();
+        {
+            let retained = input.0.lock().unwrap();
+            let owned = retained.as_ref().unwrap().as_ref().unwrap();
+            for fd in [&owned.policy, &owned.service] {
+                assert!(
+                    rustix::io::fcntl_getfd(fd)
+                        .unwrap()
+                        .contains(rustix::io::FdFlags::CLOEXEC)
+                );
+            }
+        }
+        if admit {
+            let admitted = input.admit().unwrap();
+            assert_eq!(admitted.policy.policy(), policy.policy());
+            admitted.policy.revalidate().unwrap();
+            assert!(matches!(
+                input.admit(),
+                Err(ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)
+            ));
+            drop(admitted);
+        }
+        drop(input);
+        for fd in &originals {
+            rustix::fs::fstat(fd).unwrap();
+            assert!(
+                rustix::io::fcntl_getfd(fd)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
+            );
+        }
+        let repeated_factory = CompilerExecutionStartupInputV1::capture();
+        assert!(matches!(
+            repeated_factory.admit(),
+            Err(ProtectedCompilerExecutionErrorV1::Descriptor(e))
+                if e.raw_os_error() == Some(libc::EINVAL)
+        ));
+        drop(repeated_factory);
+        for fd in &originals {
+            rustix::fs::fstat(fd).unwrap();
+        }
+        drop(originals);
+        assert_closed();
+        policy.revalidate().unwrap();
+        rustix::fs::fstat(&client).unwrap();
+    }
 }

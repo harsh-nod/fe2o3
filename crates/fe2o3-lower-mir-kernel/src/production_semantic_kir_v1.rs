@@ -79,6 +79,18 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+include!("production_bf16_call_parameters_v1.rs");
+include!("production_bf16_call_capture_v1.rs");
+include!("production_bf16_call_full_wave_v1.rs");
+include!("production_bf16_call_replay_v1.rs");
+include!("production_bf16_call_coverage_v1.rs");
+include!("production_bf16_call_resources_v1.rs");
+include!("production_bf16_call_emission_v1.rs");
+include!("production_bf16_call_emission_view_v1.rs");
+include!("production_bf16_call_query_v1.rs");
+#[cfg(test)]
+#[path = "production_bf16_call_emission_v1_tests.rs"]
+mod bf16_call_emission_tests_v1;
 include!("production_ordered_region_pre_ranked_v16.rs");
 include!("production_ordered_region_inspection_v1.rs");
 include!("production_ordered_program_pre_ranked_v17.rs");
@@ -217,6 +229,13 @@ const DEFAULT_MAX_STATEMENTS_V1: usize = 1_048_576;
 const DEFAULT_MAX_OPERATIONS_V1: usize = 1_048_576;
 const DEFAULT_ARGUMENT_CORRESPONDENCE_WORK_V1: usize = 16 * 1024 * 1024;
 const DEFAULT_ARGUMENT_CORRESPONDENCE_STORAGE_V1: usize = 16 * 1024 * 1024;
+const DEFAULT_STORAGE_LAYOUT_LIMITS_V1: fe2o3_kernel_ir::StorageLayoutLimitsV1 =
+    fe2o3_kernel_ir::StorageLayoutLimitsV1 {
+        rows: 1 << 20,
+        edges: 1 << 22,
+        containment_depth: 256,
+        object_bytes: (1_u64 << 61) - 1,
+    };
 
 /// Independent work limits for semantic-MIR-to-Kernel-IR lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -227,6 +246,7 @@ pub struct ProductionSemanticKirLimitsV1 {
     max_operations: usize,
     max_argument_correspondence_work: usize,
     max_argument_correspondence_storage: usize,
+    storage_layout_limits: fe2o3_kernel_ir::StorageLayoutLimitsV1,
 }
 
 impl ProductionSemanticKirLimitsV1 {
@@ -254,6 +274,7 @@ impl ProductionSemanticKirLimitsV1 {
             max_operations,
             max_argument_correspondence_work: DEFAULT_ARGUMENT_CORRESPONDENCE_WORK_V1,
             max_argument_correspondence_storage: DEFAULT_ARGUMENT_CORRESPONDENCE_STORAGE_V1,
+            storage_layout_limits: DEFAULT_STORAGE_LAYOUT_LIMITS_V1,
         }
     }
 
@@ -269,6 +290,21 @@ impl ProductionSemanticKirLimitsV1 {
         self.max_argument_correspondence_work = max_work;
         self.max_argument_correspondence_storage = max_storage_bytes;
         self
+    }
+
+    /// Retains the caller's physical-layout resource policy without widening it.
+    /// These limits grant neither source validity nor target allocation authority.
+    pub const fn with_storage_layout_limits(
+        mut self,
+        limits: fe2o3_kernel_ir::StorageLayoutLimitsV1,
+    ) -> Self {
+        self.storage_layout_limits = limits;
+        self
+    }
+
+    /// Returns the retained physical-layout policy for admission and replay.
+    pub const fn storage_layout_limits(self) -> fe2o3_kernel_ir::StorageLayoutLimitsV1 {
+        self.storage_layout_limits
     }
 }
 
@@ -1977,46 +2013,48 @@ fn module_requires_kernel_ir_v11_v1(module: &Module) -> bool {
 }
 
 fn module_requires_kernel_ir_v9_v1(module: &Module) -> bool {
-    module.functions.iter().any(|function| {
-        function
-            .signature
-            .parameters
-            .iter()
-            .chain(&function.signature.results)
-            .any(type_requires_kernel_ir_v9_v1)
-            || function.body.as_ref().is_some_and(|body| {
-                body.blocks
-                    .iter()
-                    .flat_map(|block| &block.parameters)
-                    .chain(
-                        body.blocks
-                            .iter()
-                            .flat_map(|block| &block.operations)
-                            .flat_map(|operation| &operation.results),
-                    )
-                    .any(|value| type_requires_kernel_ir_v9_v1(&value.ty))
-                    || body.blocks.iter().any(|block| {
-                        block.operations.iter().any(|operation| {
-                            matches!(
-                                operation.kind,
-                                OperationKind::Gfx950LdsTranspose(_)
-                                    | OperationKind::GuardedStore { .. }
-                                    | OperationKind::Wave(WaveOperation {
-                                        kind: WaveOperationKind::ReduceF32 { .. }
-                                            | WaveOperationKind::BroadcastF32 { .. },
-                                        ..
-                                    })
-                            )
+    !module.storage_layouts.is_empty()
+        || module.functions.iter().any(|function| {
+            function
+                .signature
+                .parameters
+                .iter()
+                .chain(&function.signature.results)
+                .any(type_requires_kernel_ir_v9_v1)
+                || function.body.as_ref().is_some_and(|body| {
+                    body.blocks
+                        .iter()
+                        .flat_map(|block| &block.parameters)
+                        .chain(
+                            body.blocks
+                                .iter()
+                                .flat_map(|block| &block.operations)
+                                .flat_map(|operation| &operation.results),
+                        )
+                        .any(|value| type_requires_kernel_ir_v9_v1(&value.ty))
+                        || body.blocks.iter().any(|block| {
+                            block.operations.iter().any(|operation| {
+                                matches!(
+                                    operation.kind,
+                                    OperationKind::Gfx950LdsTranspose(_)
+                                        | OperationKind::Storage(_)
+                                        | OperationKind::GuardedStore { .. }
+                                        | OperationKind::Wave(WaveOperation {
+                                            kind: WaveOperationKind::ReduceF32 { .. }
+                                                | WaveOperationKind::BroadcastF32 { .. },
+                                            ..
+                                        })
+                                )
+                            })
                         })
-                    })
-            })
-    })
+                })
+        })
 }
 
 fn type_requires_kernel_ir_v9_v1(ty: &Type) -> bool {
     match ty {
-        // Both require a newer wire; neither frozen V8 nor V9 admits them.
-        Type::Vector(_) | Type::Execution(_) => true,
+        // These require a newer wire; neither frozen V8 nor V9 admits them.
+        Type::Vector(_) | Type::Execution(_) | Type::StorageObject(_) => true,
         Type::Pointer(pointer) => {
             pointer.access == AccessMode::WriteOnly
                 || type_requires_kernel_ir_v9_v1(&pointer.pointee)
@@ -10312,6 +10350,7 @@ struct LoweredFunctionPlanV1 {
 
 #[derive(Clone)]
 struct LoweredFunctionSignatureV1 {
+    bf16_nominal: bool,
     parameter_semantic_types: Vec<SemanticTypeIdV1>,
     call_arguments: Vec<HelperCallArgumentV1>,
     parameter_types: Vec<Type>,
@@ -10328,6 +10367,12 @@ struct HelperCallArgumentV1 {
 
 #[derive(Clone)]
 enum PlannedParameterLocalBindingV1 {
+    Bf16Nominal {
+        local: usize,
+        semantic_type: SemanticTypeIdV1,
+        descriptor: SemanticPromotedBindingV1,
+        values: Vec<ValueDef>,
+    },
     Direct {
         local: usize,
         value: ValueId,
@@ -10676,6 +10721,7 @@ fn lower_one_semantic_function_for_composition_v1<'facts>(
     placement: SemanticEmissionPlacementV1,
     execution: Option<ExecutionAvailabilityV29<'_>>,
     ordered_composition: Option<OrderedCompositionPermitV1>,
+    bf16: Option<&mut Bf16CallEmissionStateV1<'_>>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     lower_one_semantic_function_with_composition_v1(
         semantic,
@@ -10697,6 +10743,7 @@ fn lower_one_semantic_function_for_composition_v1<'facts>(
         None,
         None,
         ordered_composition,
+        bf16,
     )
 }
 
@@ -10721,6 +10768,7 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
     execution_calls: Option<&mut dyn ExecutionDefinedCallConsumerV29>,
     lifecycle: Option<&mut dyn ExecutionLifecycleConsumerV29>,
     ordered_composition: Option<OrderedCompositionPermitV1>,
+    bf16: Option<&mut Bf16CallEmissionStateV1<'_>>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     if ordered_composition.is_some_and(|permit| !permit.matches(semantic)) {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -10788,7 +10836,8 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
                     kernel_ir_value: *value,
                 })
             }
-            PlannedParameterLocalBindingV1::Flattened { .. } => None,
+            PlannedParameterLocalBindingV1::Flattened { .. }
+            | PlannedParameterLocalBindingV1::Bf16Nominal { .. } => None,
         }
     }));
     let failure_block = has_runtime_assert
@@ -11051,6 +11100,17 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
                 })?;
         }
     }
+    if let Some(state) = bf16 {
+        // Reborrow the emitter's original ledger; do not create a second
+        // mutable borrow while its source-SSA maps remain live.
+        let emission_budget = lowering
+            .emission_work
+            .take()
+            .ok_or(ArgumentResourceV1::Accounting)?;
+        state
+            .capture
+            .record(state.source, plan, &lowering, emission_budget)?;
+    }
     #[cfg(test)]
     let execution_observation = lowering
         .execution
@@ -11257,7 +11317,8 @@ fn lower_module_with_assert_origins_v1(
 
 // A pending continuation is not admission: the final merged graph still needs
 // the independent physical and source/SSA helper checks before owner creation.
-enum HelperLoweringAdmissionV1 {
+enum HelperLoweringAdmissionV1<'a> {
+    PendingBf16Nominal(Bf16CallEmissionStateV1<'a>),
     RawPure,
     PendingUnitLocal { requires_source: bool },
     // Private same-source permit; final V17 structural admission is mandatory.
@@ -11315,7 +11376,8 @@ fn lower_module_for_helper_admission_v1(
             assert_origins,
             &mut budget,
         ),
-        HelperLoweringAdmissionV1::PendingOrderedComposition(_) => {
+        HelperLoweringAdmissionV1::PendingOrderedComposition(_)
+        | HelperLoweringAdmissionV1::PendingBf16Nominal(_) => {
             return Err(ordered_composition_refusal_v1(
                 "composition requires the caller-owned cumulative ledger",
             ));
@@ -12160,14 +12222,26 @@ fn lower_single_root_module(
         closure_budget,
     )?);
     for function_id in closure.iter().copied().skip(1) {
-        plans.push(direct_scalar_helper_plan_v1(
-            semantic,
-            selected_root,
-            function_id,
-            defined_function_ids[&function_id].clone(),
-            limits.max_operations,
-            closure_budget,
-        )?);
+        let plan = match admission {
+            HelperLoweringAdmissionV1::PendingBf16Nominal(state) => bf16_parameter_plan_v1(
+                state.source,
+                semantic,
+                selected_root,
+                function_id,
+                defined_function_ids[&function_id].clone(),
+                closure_budget,
+                call_budget,
+            )?,
+            _ => direct_scalar_helper_plan_v1(
+                semantic,
+                selected_root,
+                function_id,
+                defined_function_ids[&function_id].clone(),
+                limits.max_operations,
+                closure_budget,
+            )?,
+        };
+        plans.push(plan);
     }
     // Declaration expansion was charged before growing each parameter roster.
     // Charge its repetition at call sites before cloning signatures or bodies.
@@ -12204,6 +12278,9 @@ fn lower_single_root_module(
             (
                 plan.semantic_function,
                 LoweredFunctionSignatureV1 {
+                    bf16_nominal: plan.parameter_local_bindings.iter().any(|binding| {
+                        matches!(binding, PlannedParameterLocalBindingV1::Bf16Nominal { .. })
+                    }),
                     parameter_semantic_types: semantic.functions()
                         [plan.semantic_function.index() as usize]
                         .abi()
@@ -12328,6 +12405,10 @@ fn lower_single_root_module(
                         }
                         _ => None,
                     },
+                    match admission {
+                        HelperLoweringAdmissionV1::PendingBf16Nominal(state) => Some(state),
+                        _ => None,
+                    },
                 )?;
                 remaining_operations = remaining_operations
                     .checked_sub(lowered.emitted_operations)
@@ -12405,6 +12486,9 @@ fn lower_single_root_module(
                     call_budget,
                 )?;
             }
+            if let HelperLoweringAdmissionV1::PendingBf16Nominal(state) = admission {
+                bf16_pending_capabilities_v1(state, &plans, &mut module, symbol, call_budget)?;
+            }
             finish_semantic_root_module_v1(
                 &mut module,
                 symbol,
@@ -12420,6 +12504,13 @@ fn lower_single_root_module(
                     .function(&plan.kernel_ir_function)
                     .is_some_and(|decision| decision.is_complete_and_pure())
                 {
+                    // This private pending category is not an effect summary.
+                    // The only producer holds the live checked BF16 relation,
+                    // and cannot return an owner until exact nominal replay.
+                    if let HelperLoweringAdmissionV1::PendingBf16Nominal(state) = admission {
+                        bf16_pending_helper_v1(state, plan, &module, call_budget)?;
+                        continue;
+                    }
                     // Source context has checked every helper scalar/marker statement.
                     // This private continuation cannot escape as an owner until the
                     // complete immutable V17 composition independently validates it.
@@ -12564,6 +12655,19 @@ include!("production_scoped_memory_anchors_v29.rs");
 #[path = "production_retained_load_fault_v1_tests.rs"]
 mod retained_load_fault_v1_tests;
 include!("production_execution_lifecycle_insertion_v29.rs");
+include!("production_source_storage_layout_v29.rs");
+include!("production_source_storage_demands_v29.rs");
+include!("production_scoped_source_cleanup_v29.rs");
+include!("production_scoped_source_layout_owner_v29.rs");
+#[cfg(test)]
+#[path = "production_source_storage_demand_resources_v29_tests.rs"]
+mod source_storage_demand_resources_v29_tests;
+#[cfg(test)]
+#[path = "production_source_storage_demands_v29_tests.rs"]
+mod source_storage_demands_v29_tests;
+#[cfg(test)]
+#[path = "production_storage_layout_limits_v1_tests.rs"]
+mod storage_layout_limits_v1_tests;
 include!("production_scoped_module_v29.rs");
 include!("production_scoped_owned_input_v29.rs");
 include!("production_scoped_source_replay_v29.rs");
@@ -20834,51 +20938,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "row-striped-2d geometry is malformed",
             ));
         }
-        let zero = self.emit_index_constant(operations, 0)?;
-        let one = self.emit_index_constant(operations, 1)?;
-        let maximum = self.emit_index_constant(operations, u64::MAX)?;
         let lanes = self.emit_index_constant(operations, lanes_per_row)?;
         let elements = self.emit_index_constant(operations, elements_per_lane)?;
 
         let row = self.emit_index_binary(operations, BinaryOp::Divide, raw, lanes)?;
         let lane = self.emit_index_binary(operations, BinaryOp::Remainder, raw, lanes)?;
-        let maximum_component =
-            self.emit_index_binary(operations, BinaryOp::Divide, maximum, lanes)?;
-        let component_multiply_safe = self.emit_compare(
+        // Failed bounds predicates cannot make an already evaluated partial
+        // integer operation total. Retain each checked result's own overflow bit.
+        let (column_base, component_multiply_safe) = self.emit_checked_index(
             operations,
-            ComparePredicate::LessThanOrEqual,
+            CheckedBinaryOperator::Multiply,
             component,
-            maximum_component,
+            lanes,
         )?;
-        let column_base =
-            self.emit_index_binary(operations, BinaryOp::Multiply, component, lanes)?;
-        let column = self.emit_index_binary(operations, BinaryOp::Add, column_base, lane)?;
-        let column_add_safe = self.emit_compare(
-            operations,
-            ComparePredicate::LessThanOrEqual,
-            column_base,
-            column,
-        )?;
-
-        let stride_nonzero =
-            self.emit_compare(operations, ComparePredicate::LessThan, zero, row_stride)?;
-        let safe_stride = self.emit_select_index(operations, stride_nonzero, row_stride, one)?;
-        let maximum_row =
-            self.emit_index_binary(operations, BinaryOp::Divide, maximum, safe_stride)?;
-        let row_multiply_safe = self.emit_compare(
-            operations,
-            ComparePredicate::LessThanOrEqual,
-            row,
-            maximum_row,
-        )?;
-        let row_offset = self.emit_index_binary(operations, BinaryOp::Multiply, row, row_stride)?;
-        let index = self.emit_index_binary(operations, BinaryOp::Add, row_offset, column)?;
-        let index_add_safe = self.emit_compare(
-            operations,
-            ComparePredicate::LessThanOrEqual,
-            row_offset,
-            index,
-        )?;
+        let (column, column_add_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Add, column_base, lane)?;
+        let (row_offset, row_multiply_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Multiply, row, row_stride)?;
+        let (index, index_add_safe) =
+            self.emit_checked_index(operations, CheckedBinaryOperator::Add, row_offset, column)?;
 
         let component_valid =
             self.emit_compare(operations, ComparePredicate::LessThan, component, elements)?;
@@ -33865,4 +33943,56 @@ mod resource_tests {
     }
 
     include!("production_semantic_kir_v1/correspondence_ordering_v1_tests.rs");
+}
+
+#[cfg(test)]
+mod storage_old_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        StorageLayoutIdV1, StorageLayoutKindV1, StorageLayoutV1, StorageOperationV1,
+        StorageProjectionV1,
+    };
+    #[test]
+    fn old_profile_selection_never_makes_storage_a_v8_or_v9_value() {
+        let storage = Type::StorageObject(StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert!(type_requires_kernel_ir_v9_v1(&ty));
+        }
+        let mut module = Module::new("storage_old_profile");
+        assert!(!module_requires_kernel_ir_v9_v1(&module));
+        module.storage_layouts.push(StorageLayoutV1 {
+            size: 4,
+            alignment: 4,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U32),
+        });
+        assert!(module_requires_kernel_ir_v9_v1(&module));
+        assert!(ProductionCanonicalKernelIrV1::from_module(module).is_err());
+        let mut module = Module::new("raw_storage_old_profile");
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::new(
+            vec![],
+            OperationKind::Storage(StorageOperationV1::Project {
+                base: ValueId(0),
+                step: StorageProjectionV1::Field(0),
+            }),
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        module.functions.push(Function::internal_helper(
+            "dead",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        ));
+        assert!(module_requires_kernel_ir_v9_v1(&module));
+        assert!(ProductionCanonicalKernelIrV1::from_module(module).is_err());
+    }
 }

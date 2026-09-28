@@ -4,6 +4,12 @@ use gpu_device::{Blocked, DisjointSlice, Index1D, kernel};
     typed,
     namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
 )]
+pub fn empty() {}
+
+#[kernel(
+    typed,
+    namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+)]
 pub fn transform(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {
     let _ = (factor, source, destination);
 }
@@ -12,12 +18,7 @@ pub fn transform(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {
     typed,
     namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
 )]
-pub fn combine(
-    left: &[f32],
-    right: &[f32],
-    offset: f32,
-    destination: DisjointSlice<f32>,
-) {
+pub fn combine(left: &[f32], right: &[f32], offset: f32, destination: DisjointSlice<f32>) {
     let _ = (left, right, offset, destination);
 }
 
@@ -34,14 +35,7 @@ pub fn multi_argument_kernel(
     extent_y: u32,
     extent_z: u32,
 ) {
-    let _ = (
-        first,
-        second,
-        destination,
-        extent_x,
-        extent_y,
-        extent_z,
-    );
+    let _ = (first, second, destination, extent_x, extent_y, extent_z);
 }
 
 #[kernel(
@@ -65,6 +59,8 @@ pub fn assert_generated_adapters() {
     {
     }
 
+    assert_kfd_adapter::<empty_gpu::Marker, empty_gpu::Arguments>();
+    let _: empty_gpu::Arguments = empty_gpu::Arguments::new();
     assert_kfd_adapter::<transform_gpu::Marker, transform_gpu::Arguments<'static>>();
     assert_kfd_adapter::<combine_gpu::Marker, combine_gpu::Arguments<'static>>();
     assert_kfd_adapter::<

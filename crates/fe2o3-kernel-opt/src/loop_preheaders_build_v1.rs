@@ -215,7 +215,11 @@ fn clone_type(ty: &Type, meter: &mut Meter<'_, '_>) -> Result<(Type, usize)> {
         current = match current {
             Type::Pointer(pointer) => &pointer.pointee,
             Type::Slice(slice) => &slice.element,
-            Type::Unit | Type::Scalar(_) | Type::Execution(_) | Type::Vector(_) => break,
+            Type::Unit
+            | Type::Scalar(_)
+            | Type::Execution(_)
+            | Type::Vector(_)
+            | Type::StorageObject(_) => break,
         };
         meter.reserve(size_of::<Type>())?;
         bytes = bytes
@@ -299,4 +303,42 @@ fn redirect(
         Terminator::Return { .. } | Terminator::Unreachable => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod storage_clone_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, CanonicalKernelIrWorkBudgetV1 as Work, StorageLayoutIdV1,
+    };
+    #[test]
+    fn storage_type_copy_preserves_the_inert_id_and_existing_node_debits() {
+        let input = Type::pointer(
+            Type::slice(
+                Type::StorageObject(StorageLayoutIdV1(31)),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            AddressSpace::Private,
+            AccessMode::ReadWrite,
+        );
+        let expected_work = 3 * 2 * size_of::<Type>();
+        let mut work = Work::new(expected_work);
+        {
+            let mut budget = Budget::new(&mut work, 1 << 20);
+            budget.reserve_storage(11).unwrap();
+            scoped(&mut budget, |meter| {
+                let (copied, bytes) = clone_type(&input, meter)?;
+                assert_eq!(copied, input);
+                assert_eq!(bytes, 2 * size_of::<Type>());
+                drop(copied);
+                meter.release(bytes)?;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(budget.storage(), 11);
+        }
+        assert_eq!(work.work(), expected_work);
+    }
 }

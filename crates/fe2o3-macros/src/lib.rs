@@ -2,6 +2,8 @@
 
 mod control_flow_v1;
 mod kernel_context_entry_v1;
+#[cfg(test)]
+mod zero_argument_typed_v1_tests;
 
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
@@ -2785,12 +2787,6 @@ fn validate_general_typed_function_shape_v1(input: &ItemFn) -> syn::Result<()> {
         return Err(syn::Error::new_spanned(
             &signature.output,
             "general typed V1 requires the unit return type or KernelResult",
-        ));
-    }
-    if signature.inputs.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &signature.inputs,
-            "general typed V1 requires at least one kernel argument",
         ));
     }
     Ok(())
@@ -6293,9 +6289,6 @@ mod tests {
             parse_quote! {
                 pub fn unsupported_third(a: &[f32], b: &[f32], c: *mut f32) {}
             },
-            parse_quote! {
-                pub fn empty() {}
-            },
         ];
 
         for input in cases {
@@ -7037,9 +7030,6 @@ mod tests {
                 pub fn result(value: u32) -> u32 {
                     value
                 }
-            ),
-            parse_quote!(
-                pub fn empty() {}
             ),
             parse_quote!(
                 pub fn raw(value: *const u32) {}

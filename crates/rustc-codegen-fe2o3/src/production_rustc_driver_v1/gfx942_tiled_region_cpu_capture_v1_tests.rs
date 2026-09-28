@@ -281,6 +281,7 @@ pub(super) fn preflight_summary(
         first_site: None,
     };
     row.kind = match error {
+        P::StorageProfileNotAdmitted => "storage-profile-not-admitted",
         P::ResourceLimit {
             resource,
             actual,
@@ -370,6 +371,7 @@ fn unsupported_feature_name(feature: &UnsupportedFeatureV1) -> &'static str {
     use UnsupportedFeatureV1 as F;
     match feature {
         F::InertV12Carrier => "inert-v12-carrier",
+        F::InertStorage => "inert-storage",
         F::InertExecutionV15 => "inert-execution-v15",
         F::FloatType(_) => "float-type",
         F::UnsupportedType => "unsupported-type",
@@ -458,5 +460,37 @@ fn negative_oracle_does_not_accept_other_refusal_or_success() {
         assert_ne!(expected_refusal(control), "ok");
         assert_ne!(expected_refusal(control), "other-execution-refusal");
         assert_ne!(expected_refusal(control), "preflight");
+    }
+}
+
+#[test]
+fn storage_refusal_summary_preserves_legacy_labels() {
+    for (error, expected) in [
+        (
+            SimulationPreflightErrorV1::StorageProfileNotAdmitted,
+            "storage-profile-not-admitted",
+        ),
+        (
+            SimulationPreflightErrorV1::AllocationFailure,
+            "allocation-failure",
+        ),
+    ] {
+        let error = SimulationErrorV1::Preflight(error);
+        let summary = preflight_summary(Err(&error)).unwrap();
+        assert_eq!(summary.kind, expected);
+        assert_eq!(summary.detail, None);
+        assert_eq!(summary.numbers, [0; 3]);
+        assert_eq!(summary.first_site, None);
+        assert_eq!(classify(Err(&error)), "preflight");
+    }
+    for (feature, expected) in [
+        (UnsupportedFeatureV1::InertStorage, "inert-storage"),
+        (UnsupportedFeatureV1::InertV12Carrier, "inert-v12-carrier"),
+        (
+            UnsupportedFeatureV1::InertExecutionV15,
+            "inert-execution-v15",
+        ),
+    ] {
+        assert_eq!(unsupported_feature_name(&feature), expected);
     }
 }

@@ -1,46 +1,36 @@
 use super::*;
+pub(super) use fe2o3_kernel_analysis::CheckedCanonicalKirPrivateMemoryV1 as PrivateMemory;
+use fe2o3_kernel_analysis::{
+    CanonicalKirPrivateMemoryErrorV1 as PhysicalError,
+    check_canonical_kir_private_memory_retaining_scratch_v1,
+};
 
 #[path = "production_checked_output_private_cfg_v1.rs"]
 mod physical_cfg;
 #[path = "production_checked_output_private_source_cfg_v1.rs"]
 mod source_cfg;
 
-#[derive(Clone, Copy)]
-struct Address {
-    allocation: usize,
-    start: usize,
-    length: usize,
-    offset: usize,
-    alignment: u32,
-    stride: usize,
+fn physical_error(error: PhysicalError) -> E {
+    match error {
+        PhysicalError::Resource(error) => E::Resource(error),
+        PhysicalError::Inventory(error) => inventory_error(error),
+        PhysicalError::Unsupported { phase, detail } => refused(phase, detail),
+        PhysicalError::Panicked => E::SourceOutput(ProductionSourceOutputErrorV1::Panicked),
+    }
 }
 
-/// A temporary census of this exact borrowed inventory, not a transferable
-/// private-memory certificate. Source/N and optimizer equivalence are separate
-/// prerequisites of the enclosing consuming admission transaction.
-pub(super) struct PrivateMemory<'a, 'g> {
+// Preserve the old scratch-retention contract until its enclosing transaction
+// drops all borrowed proofs. This delegates to the one neutral physical engine.
+pub(super) fn check<'a, 'g>(
     inventory: &'a CanonicalKirInventoryV1<'g>,
-    definitions: Vec<Option<Address>>,
-    operations: Vec<bool>,
-    latest_stores: Vec<Option<usize>>,
+    max_cells: usize,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<PrivateMemory<'a, 'g>> {
+    check_canonical_kir_private_memory_retaining_scratch_v1(inventory, max_cells, budget)
+        .map_err(physical_error)
 }
 
-impl PrivateMemory<'_, '_> {
-    pub(super) fn definition(&self, index: usize) -> bool {
-        self.definitions.get(index).is_some_and(Option::is_some)
-    }
-    pub(super) fn operation(&self, index: usize) -> bool {
-        self.operations.get(index).copied().unwrap_or(false)
-    }
-    pub(super) fn is_for(&self, inventory: &CanonicalKirInventoryV1<'_>) -> bool {
-        std::ptr::eq(self.inventory, inventory)
-    }
-}
-
-fn is_private(ty: &Type) -> bool {
-    matches!(ty, Type::Pointer(pointer) if pointer.address_space == AddressSpace::Private)
-}
-
+#[cfg(test)]
 fn index(
     inventory: &CanonicalKirInventoryV1<'_>,
     function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
@@ -51,271 +41,6 @@ fn index(
         .definition_index_for_value(function, value, budget)
         .map_err(inventory_error)?
         .ok_or_else(|| refused("private", "exact function-local definition"))
-}
-
-pub(super) fn check<'a, 'g>(
-    inventory: &'a CanonicalKirInventoryV1<'g>,
-    max_cells: usize,
-    budget: &mut AssertOriginBudgetV1<'_>,
-) -> R<PrivateMemory<'a, 'g>> {
-    charge(budget, 2)?;
-    budget
-        .reserve_storage(std::mem::size_of::<&CanonicalKirInventoryV1<'_>>())
-        .map_err(E::Resource)?;
-    let mut constants = scratch::<Option<u64>>(inventory.definitions().len(), budget)?;
-    let mut addresses = scratch::<Option<Address>>(inventory.definitions().len(), budget)?;
-    let mut operations = scratch::<bool>(inventory.operations().len(), budget)?;
-    let mut latest_stores = scratch::<Option<usize>>(inventory.operations().len(), budget)?;
-    charge(
-        budget,
-        inventory
-            .definitions()
-            .len()
-            .checked_mul(2)
-            .and_then(|n| {
-                inventory
-                    .operations()
-                    .len()
-                    .checked_mul(2)
-                    .and_then(|m| n.checked_add(m))
-            })
-            .ok_or_else(arithmetic)?,
-    )?;
-    constants.resize(inventory.definitions().len(), None);
-    addresses.resize(inventory.definitions().len(), None);
-    operations.resize(inventory.operations().len(), false);
-    latest_stores.resize(inventory.operations().len(), None);
-    for row in inventory.operations() {
-        charge(budget, 2)?;
-        if let OperationKind::Constant(Constant::Index(value)) = row.operation.kind
-            && row.results.len() == 1
-        {
-            constants[row.results.start] = Some(value);
-        }
-    }
-    let mut cells = 0usize;
-    for (ordinal, row) in inventory.operations().iter().enumerate() {
-        charge(budget, 3)?;
-        let OperationKind::Alloca {
-            element,
-            count,
-            address_space,
-            alignment,
-        } = &row.operation.kind
-        else {
-            continue;
-        };
-        if *address_space != AddressSpace::Private
-            || !matches!(element, Type::Scalar(_))
-            || *alignment == 0
-            || row.results.len() != 1
-            || row.effects.len() != 1
-        {
-            return Err(refused("private", "one exact scalar private allocation"));
-        }
-        charge(budget, 3)?;
-        let Type::Scalar(scalar) = element else {
-            unreachable!()
-        };
-        let stride = usize::from(
-            scalar
-                .bit_width()
-                .ok_or_else(|| refused("private", "fixed-width scalar allocation layout"))?
-                .div_ceil(8),
-        );
-        let length = match count {
-            None => 1,
-            Some(count) => {
-                let definition = index(inventory, row.coordinate.block.function, *count, budget)?;
-                usize::try_from(
-                    constants[definition]
-                        .ok_or_else(|| refused("private", "constant allocation extent"))?,
-                )
-                .map_err(|_| arithmetic())?
-            }
-        };
-        charge(budget, 5)?;
-        let end = cells.checked_add(length).ok_or_else(arithmetic)?;
-        if length == 0 || end > max_cells {
-            return Err(refused("private", "bounded nonzero allocation extent"));
-        }
-        charge(budget, 1)?;
-        length.checked_mul(stride).ok_or_else(arithmetic)?;
-        if !matches!(
-            inventory.effects()[row.effects.start].effect,
-            fe2o3_kernel_ir::KirLocalMemoryEffectRefV1::Allocate(AddressSpace::Private)
-        ) {
-            return Err(refused("private", "exact allocation effect"));
-        }
-        addresses[row.results.start] = Some(Address {
-            allocation: ordinal,
-            start: cells,
-            length,
-            offset: 0,
-            alignment: *alignment,
-            stride,
-        });
-        operations[ordinal] = true;
-        cells = end;
-    }
-    // Only direct constant element addresses are admitted. In particular phi,
-    // pointer casts, integer-derived pointers and nested/dynamic GEPs do not
-    // acquire provenance by sharing a numeric address or a private type.
-    for (ordinal, row) in inventory.operations().iter().enumerate() {
-        charge(
-            budget,
-            row.results.len().checked_add(2).ok_or_else(arithmetic)?,
-        )?;
-        if !row
-            .results
-            .clone()
-            .any(|i| is_private(inventory.definitions()[i].ty))
-        {
-            continue;
-        }
-        if matches!(row.operation.kind, OperationKind::Alloca { .. }) {
-            continue;
-        }
-        let OperationKind::GetElementPointer { base, offset } = row.operation.kind else {
-            return Err(refused(
-                "private",
-                "direct allocation or constant element address",
-            ));
-        };
-        let base_index = index(inventory, row.coordinate.block.function, base, budget)?;
-        let offset_index = index(inventory, row.coordinate.block.function, offset, budget)?;
-        charge(budget, 5)?;
-        let base =
-            addresses[base_index].ok_or_else(|| refused("private", "known allocation base"))?;
-        let allocation = &inventory.operations()[base.allocation];
-        if base.offset != 0 || allocation.results.start != base_index || row.results.len() != 1 {
-            return Err(refused("private", "direct allocation base only"));
-        }
-        let offset = usize::try_from(
-            constants[offset_index]
-                .ok_or_else(|| refused("private", "constant exact element offset"))?,
-        )
-        .map_err(|_| arithmetic())?;
-        if offset >= base.length {
-            return Err(refused("private", "element offset within allocation"));
-        }
-        addresses[row.results.start] = Some(Address { offset, ..base });
-        operations[ordinal] = true;
-    }
-    for (ordinal, definition) in inventory.definitions().iter().enumerate() {
-        charge(budget, 2)?;
-        if is_private(definition.ty) && addresses[ordinal].is_none() {
-            return Err(refused(
-                "private",
-                "no private parameters or transported unknown pointers",
-            ));
-        }
-    }
-    let mut latest = scratch::<Option<usize>>(cells, budget)?;
-    charge(budget, cells)?;
-    latest.resize(cells, None);
-    let mut cross_block = false;
-    for block in inventory.blocks() {
-        charge(budget, cells.checked_add(1).ok_or_else(arithmetic)?)?;
-        latest.fill(None);
-        for ordinal in block.operations.clone() {
-            let row = &inventory.operations()[ordinal];
-            charge(budget, 3)?;
-            let memory = match row.operation.kind {
-                OperationKind::Load { pointer, access }
-                    if access.address_space == AddressSpace::Private =>
-                {
-                    Some((pointer, access, false))
-                }
-                OperationKind::Store {
-                    pointer, access, ..
-                } if access.address_space == AddressSpace::Private => Some((pointer, access, true)),
-                _ => None,
-            };
-            if let Some((pointer, access, write)) = memory {
-                let definition = index(inventory, row.coordinate.block.function, pointer, budget)?;
-                charge(budget, 6)?;
-                let address = addresses[definition]
-                    .ok_or_else(|| refused("private", "known memory address"))?;
-                if access.volatile || access.alignment == 0 || row.effects.len() != 1 {
-                    return Err(refused("private", "one ordinary nonvolatile memory effect"));
-                }
-                charge(budget, 4)?;
-                let byte_offset = address
-                    .offset
-                    .checked_mul(address.stride)
-                    .ok_or_else(arithmetic)?;
-                if access.alignment > address.alignment
-                    || byte_offset % access.alignment as usize != 0
-                {
-                    return Err(refused(
-                        "private",
-                        "access alignment follows allocation and element offset",
-                    ));
-                }
-                if !matches!(
-                    (write, inventory.effects()[row.effects.start].effect),
-                    (
-                        true,
-                        fe2o3_kernel_ir::KirLocalMemoryEffectRefV1::Write(AddressSpace::Private)
-                    ) | (
-                        false,
-                        fe2o3_kernel_ir::KirLocalMemoryEffectRefV1::Read(AddressSpace::Private)
-                    )
-                ) {
-                    return Err(refused("private", "exact memory effect"));
-                }
-                let cell = address
-                    .start
-                    .checked_add(address.offset)
-                    .ok_or_else(arithmetic)?;
-                if write {
-                    latest[cell] = Some(ordinal);
-                } else if latest[cell].is_none() {
-                    cross_block = true;
-                } else {
-                    latest_stores[ordinal] = latest[cell];
-                }
-                operations[ordinal] = true;
-            }
-            for operand in &inventory.uses()[row.operands.clone()] {
-                charge(budget, 3)?;
-                if addresses[operand.definition].is_none() {
-                    continue;
-                }
-                let permitted = match row.operation.kind {
-                    OperationKind::GetElementPointer { base, .. } => {
-                        base == operand.value && operations[ordinal]
-                    }
-                    OperationKind::Load { pointer, .. } => {
-                        pointer == operand.value && operations[ordinal]
-                    }
-                    OperationKind::Store { pointer, value, .. } => {
-                        pointer == operand.value && value != operand.value && operations[ordinal]
-                    }
-                    _ => false,
-                };
-                if !permitted {
-                    return Err(refused("private", "private pointer does not escape"));
-                }
-            }
-        }
-        for operand in &inventory.uses()[block.terminator_uses.clone()] {
-            charge(budget, 2)?;
-            if addresses[operand.definition].is_some() {
-                return Err(refused("private", "no private pointer control transport"));
-            }
-        }
-    }
-    if cross_block {
-        physical_cfg::check(inventory, &addresses, &mut latest_stores, budget)?;
-    }
-    Ok(PrivateMemory {
-        inventory,
-        definitions: addresses,
-        operations,
-        latest_stores,
-    })
 }
 
 #[derive(Clone, Copy)]
@@ -485,7 +210,7 @@ pub(super) fn source_lifetimes(
     proof: &PrivateMemory<'_, '_>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
-    let sites = source_statement_sites_v1(source, proof.inventory, budget)?;
+    let sites = source_statement_sites_v1(source, proof.inventory(), budget)?;
     source_lifetimes_from_sites(source.semantic().semantic(), proof, &sites, budget)
 }
 
@@ -554,7 +279,7 @@ pub(super) fn source_lifetimes_from_sites(
 ) -> R<()> {
     let mut kills = None;
     let mut cross_block = false;
-    for (read, store) in proof.latest_stores.iter().enumerate() {
+    for (read, store) in proof.latest_stores().iter().enumerate() {
         charge(budget, 4)?;
         let Some(store) = store else {
             continue;
@@ -792,7 +517,7 @@ mod tests {
                         && proof.operation(5)
                         && proof.operation(6)
                 );
-                assert_eq!(proof.latest_stores[6], Some(5));
+                assert_eq!(proof.latest_stores()[6], Some(5));
                 drop(proof);
             }
             Some(expected) => assert!(

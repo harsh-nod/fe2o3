@@ -64,6 +64,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         if let Some(parameter_local_bindings) = parameters.local_bindings {
             for binding in parameter_local_bindings {
                 let (local, value) = match binding {
+                    PlannedParameterLocalBindingV1::Bf16Nominal {
+                        local,
+                        semantic_type,
+                        descriptor,
+                        values,
+                    } => (
+                        *local,
+                        descriptor.binding_from_transport(types, *semantic_type, values)?,
+                    ),
                     PlannedParameterLocalBindingV1::Direct { local, value, ty } => (
                         *local,
                         SemanticValueBindingV1::Value {
@@ -152,6 +161,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             emission_work.as_deref_mut(),
             execution.as_ref(),
             lifecycle.as_deref(),
+            parameters.local_bindings,
         )?;
         let workgroup_pipeline_contracts = workgroup_pipeline_type_contracts_v1(
             types,

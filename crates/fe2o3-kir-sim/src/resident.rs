@@ -158,7 +158,11 @@ fn hash_map_bucket_bytes<K, V>(buckets: usize) -> Option<usize> {
 /// Returns heap bytes retained by a decoded module, excluding the inline
 /// `Module` value itself.
 pub(crate) fn module_retained_heap_bytes(module: &Module) -> Option<usize> {
+    if !module.storage_layouts.is_empty() {
+        return None;
+    }
     let mut resident = ResidentLedger::new(0);
+    resident.add_vec::<fe2o3_kernel_ir::StorageLayoutV1>(module.storage_layouts.capacity())?;
     resident.add_bytes(module.id.retained_capacity_bytes())?;
     resident.add_vec::<Function>(module.functions.capacity())?;
     for function in &module.functions {
@@ -288,7 +292,8 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)
-        | OperationKind::VerificationContract(_) => Some(()),
+        | OperationKind::VerificationContract(_)
+        | OperationKind::Storage(_) => Some(()),
     }
 }
 
@@ -304,7 +309,11 @@ fn add_type_boxes(resident: &mut ResidentLedger, ty: &Type) -> Option<()> {
                 resident.add_box::<Type>()?;
                 &slice.element
             }
-            Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::Execution(_) => return Some(()),
+            Type::Unit
+            | Type::Scalar(_)
+            | Type::Vector(_)
+            | Type::Execution(_)
+            | Type::StorageObject(_) => return Some(()),
         };
     }
 }
@@ -403,6 +412,28 @@ fn add_plain_btree_set<T: Ord>(resident: &mut ResidentLedger, values: &BTreeSet<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_legacy_resident_census_checks_eligibility_and_empty_capacity() {
+        use fe2o3_kernel_ir::{StorageLayoutIdV1, StorageLayoutKindV1, StorageLayoutV1};
+        let mut module = Module::new("storage_census");
+        let old = module_retained_heap_bytes(&module).unwrap();
+        module.storage_layouts.try_reserve_exact(3).unwrap();
+        assert_eq!(
+            module_retained_heap_bytes(&module),
+            Some(old + module.storage_layouts.capacity() * size_of::<StorageLayoutV1>())
+        );
+        assert_eq!(
+            type_retained_heap_bytes(&Type::StorageObject(StorageLayoutIdV1(0))),
+            Some(0)
+        );
+        module.storage_layouts.push(StorageLayoutV1 {
+            size: 4,
+            alignment: 4,
+            kind: StorageLayoutKindV1::Scalar(fe2o3_kernel_ir::ScalarType::U32),
+        });
+        assert_eq!(module_retained_heap_bytes(&module), None);
+    }
     use fe2o3_kernel_ir::{
         AccessMode, BasicBlock, BlockId, Function, FunctionId, Gfx950LdsTransposeFormatV1,
         Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, Kernel, LaunchDomain,

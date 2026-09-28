@@ -148,6 +148,37 @@ impl OwnedExecutionInputV29 {
             &mut ArgumentBudgetV1<'work>,
         ) -> Result<R, ScopedModuleErrorV29>,
     ) -> Result<R, ScopedModuleErrorV29> {
+        self.check_source(owner, launch, budget)?;
+        let floor = budget.storage();
+        with_scoped_source_cleanup_v29(budget, floor, |cleanup, budget| {
+            self.with_checked_source_cleanup(owner, launch, cleanup, budget, visit)
+        })
+    }
+
+    fn with_source_with_cleanup<'work, R>(
+        &self,
+        owner: &ProductionSemanticSsaOwnerV1,
+        launch: &crate::ProductionSourceLaunchRosterV1,
+        cleanup: &ScopedSourceCleanupV29,
+        budget: &mut ArgumentBudgetV1<'work>,
+        visit: impl FnOnce(
+            &ExecutionLifecycleSourceV29<'_>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<R, ScopedModuleErrorV29>,
+    ) -> Result<R, ScopedModuleErrorV29> {
+        if cleanup.is_denied() {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        self.check_source(owner, launch, budget)?;
+        self.with_checked_source_cleanup(owner, launch, cleanup, budget, visit)
+    }
+
+    fn check_source(
+        &self,
+        owner: &ProductionSemanticSsaOwnerV1,
+        launch: &crate::ProductionSourceLaunchRosterV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ScopedModuleErrorV29> {
         if self.ledger != budget.work_ledger_identity_v1()
             || budget.storage() < self.retained_storage
         {
@@ -167,13 +198,32 @@ impl OwnedExecutionInputV29 {
         {
             return Err(execution_lifecycle_error_v29().into());
         }
-        let roots = scoped_slot_attempt_v29(budget, |budget| {
+        Ok(())
+    }
+
+    fn with_checked_source_cleanup<'work, R>(
+        &self,
+        owner: &ProductionSemanticSsaOwnerV1,
+        launch: &crate::ProductionSourceLaunchRosterV1,
+        cleanup: &ScopedSourceCleanupV29,
+        budget: &mut ArgumentBudgetV1<'work>,
+        visit: impl FnOnce(
+            &ExecutionLifecycleSourceV29<'_>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<R, ScopedModuleErrorV29>,
+    ) -> Result<R, ScopedModuleErrorV29> {
+        if cleanup.is_denied() {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        let floor = budget.storage();
+        let slot = std::ptr::from_ref(budget) as usize;
+        let roots = scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
             let mut roots = emission_vec_v1(self.roots.len(), budget)?;
             for root in &self.roots {
                 budget.charge_work(size_of::<ScopedRootRecipeV29>())?;
                 roots.push(root.borrow(&self.semantic_sha256, owner)?);
             }
-            Ok(roots)
+            Ok::<_, ScopedModuleErrorV29>(roots)
         })?;
         let scratch = argument_product_v1(
             roots.capacity(),
@@ -195,16 +245,30 @@ impl OwnedExecutionInputV29 {
         }));
         drop(roots);
         // Only this view's backing is temporary; the visitor may retain output.
-        let cleanup = if self.ledger == budget.work_ledger_identity_v1() {
-            budget.release_storage(scratch)
+        if slot != std::ptr::from_ref(budget) as usize
+            || self.ledger != budget.work_ledger_identity_v1()
+            || floor
+                .checked_add(scratch)
+                .is_none_or(|minimum| budget.storage() < minimum)
+        {
+            cleanup.deny_refund();
+        }
+        let settlement = if !cleanup.is_denied() {
+            budget
+                .release_storage(scratch)
+                .inspect_err(|_| cleanup.deny_refund())
         } else {
             Err(ArgumentResourceV1::Accounting)
         };
         match result {
-            Ok(result) => {
-                cleanup?;
-                result
-            }
+            Ok(Ok(value)) => match settlement {
+                Ok(()) => Ok(value),
+                Err(error) => {
+                    drop(value);
+                    Err(error.into())
+                }
+            },
+            Ok(Err(error)) => Err(error),
             Err(payload) => std::panic::resume_unwind(payload),
         }
     }

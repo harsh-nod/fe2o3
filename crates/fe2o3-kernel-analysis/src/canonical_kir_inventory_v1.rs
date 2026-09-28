@@ -1,4 +1,4 @@
-//! Borrowed inventory of one exact connected canonical V12 owner.
+//! Borrowed inventory of one exact canonical V12 or storage-aware V18 owner.
 //! Construction indexes the executable graph, never constructs another program.
 //! Reports here establish no bounds, alias, initialization or semantic-preservation proof.
 
@@ -12,9 +12,10 @@ use fe2o3_kernel_ir::{
     CanonicalKirEdgeArgumentCoordinateV1 as EdgeArgument, CanonicalKirEdgeCoordinateV1 as Edge,
     CanonicalKirFunctionCoordinateV1 as FunctionCoordinate,
     CanonicalKirOperationCoordinateV1 as OperationCoordinate, CanonicalKirUseCoordinateV1 as Use,
-    CompilerOrderingEffectSummaryV12, Function, Kernel, KirLocalMemoryEffectRefV1, Operation,
-    OperationKind, Terminator, Type, ValueId, VerifiedCanonicalKernelIrIdentityV12,
-    VerifiedCanonicalKernelIrModuleV12,
+    CompilerOrderingEffectSummaryV12, Function, Kernel, KirLocalMemoryEffectRefV1, Module,
+    Operation, OperationKind, Terminator, Type, ValueId, VerifiedCanonicalKernelIrIdentityV12,
+    VerifiedCanonicalKernelIrIdentityV18, VerifiedCanonicalKernelIrModuleV12,
+    VerifiedCanonicalKernelIrModuleV18,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -171,8 +172,8 @@ impl CanonicalKirInventoryStorageV1 {
 /// there is no constructor taking an arbitrary module plus a claimed hash.
 /// Indexes are facts about that graph, not a second executable representation.
 #[derive(Debug)]
-pub struct CanonicalKirInventoryV1<'g> {
-    owner: &'g VerifiedCanonicalKernelIrModuleV12,
+pub struct CanonicalKirInventoryV1<'g, O = VerifiedCanonicalKernelIrModuleV12> {
+    owner: &'g O,
     functions: Vec<CanonicalKirFunctionRefV1<'g>>,
     blocks: Vec<CanonicalKirBlockRefV1<'g>>,
     definitions: Vec<CanonicalKirDefinitionRefV1<'g>>,
@@ -187,6 +188,58 @@ pub struct CanonicalKirInventoryV1<'g> {
     block_index: Vec<(Block, BlockId, usize)>,
     value_index: Vec<(FunctionCoordinate, ValueId, usize)>,
 }
+
+/// Inventory retaining the exact V18 owner and its complete storage-table identity.
+/// It supplies graph facts, not storage alias, initialization or optimization proofs.
+/// The V12-only analysis interfaces do not accept this profile implicitly.
+///
+/// ```no_run
+/// use fe2o3_kernel_analysis::{CanonicalKirInventoryErrorV1, CanonicalKirInventoryV18};
+/// use fe2o3_kernel_ir::{VerifiedCanonicalKernelIrIdentityV18,
+///     VerifiedCanonicalKernelIrModuleV18, CanonicalKernelIrVerificationResourceBudgetV1};
+/// fn inspect(owner: &VerifiedCanonicalKernelIrModuleV18,
+///     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>)
+///     -> Result<VerifiedCanonicalKernelIrIdentityV18, CanonicalKirInventoryErrorV1>
+/// {
+///     // The caller retains the input owner's reservation throughout.
+///     let (inventory, receipt) = CanonicalKirInventoryV18::derive_v18(owner, budget)?;
+///     budget.reserve_storage(receipt.retained_storage())?;
+///     assert!(inventory.belongs_to(owner));
+///     let identity = inventory.identity_v18();
+///     drop(inventory);
+///     budget.release_storage(receipt.retained_storage())?;
+///     Ok(identity)
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_analysis::{CanonicalKirInventoryV1, CanonicalKirInventoryV18};
+/// fn v12_only(_: &CanonicalKirInventoryV1<'_>) {}
+/// fn reject_profile(inventory: &CanonicalKirInventoryV18<'_>) {
+///     v12_only(inventory);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_analysis::CanonicalKirInventoryV18;
+/// use fe2o3_kernel_ir::{VerifiedCanonicalKernelIrModuleV18,
+///     CanonicalKernelIrVerificationResourceBudgetV1};
+/// fn escape(owner: VerifiedCanonicalKernelIrModuleV18,
+///     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>)
+///     -> CanonicalKirInventoryV18<'static>
+/// {
+///     CanonicalKirInventoryV18::derive_v18(&owner, budget).unwrap().0
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_kernel_analysis::CanonicalKirInventoryV18;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<CanonicalKirInventoryV18<'static>>();
+/// ```
+pub type CanonicalKirInventoryV18<'g> =
+    CanonicalKirInventoryV1<'g, VerifiedCanonicalKernelIrModuleV18>;
+
 impl<'g> CanonicalKirInventoryV1<'g> {
     /// Charges before every roster/operand/effect/edge visit, allocation,
     /// index comparison/swap, and linking operation. Two source traversals,
@@ -202,8 +255,39 @@ impl<'g> CanonicalKirInventoryV1<'g> {
         owner: &'g VerifiedCanonicalKernelIrModuleV12,
         budget: &mut Budget<'_>,
     ) -> Result<(Self, CanonicalKirInventoryStorageV1)> {
+        Self::derive_for_module(owner, owner.module(), budget)
+    }
+
+    pub fn identity(&self) -> VerifiedCanonicalKernelIrIdentityV12 {
+        *self.owner.canonical().identity()
+    }
+}
+
+impl<'g> CanonicalKirInventoryV18<'g> {
+    /// Index the actual V18 owner with the same metered traversal and transfer
+    /// contract as [`CanonicalKirInventoryV1::derive`]. No graph or table is copied.
+    /// The input owner's reservation must remain live with the returned borrow.
+    pub fn derive_v18(
+        owner: &'g VerifiedCanonicalKernelIrModuleV18,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirInventoryStorageV1)> {
+        Self::derive_for_module(owner, owner.module(), budget)
+    }
+
+    pub fn identity_v18(&self) -> VerifiedCanonicalKernelIrIdentityV18 {
+        *self.owner.identity()
+    }
+}
+
+impl<'g, O> CanonicalKirInventoryV1<'g, O> {
+    // Only the typed constructors above choose the paired owner/module borrow.
+    fn derive_for_module(
+        owner: &'g O,
+        module: &'g Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirInventoryStorageV1)> {
         let floor = budget.storage();
-        let result = Self::build(owner, budget);
+        let result = Self::build(owner, module, budget);
         let retained = budget
             .storage()
             .checked_sub(floor)
@@ -212,14 +296,42 @@ impl<'g> CanonicalKirInventoryV1<'g> {
         result.map(|inventory| (inventory, CanonicalKirInventoryStorageV1 { retained }))
     }
 
-    pub const fn owner(&self) -> &'g VerifiedCanonicalKernelIrModuleV12 {
+    /// Recompute this exact inventory's logical retained receipt from immutable
+    /// row/index lengths. Names/types/operations are borrowed, not copied; their
+    /// bytes remain in the connected owner's separate reservation.
+    /// This adds no reservation and changes no derive/allocation semantics.
+    /// The fixed thirteen vector headers are charged before inspection.
+    pub fn retained_storage_v1(&self, budget: &mut Budget<'_>) -> Result<usize> {
+        budget.charge_work(14)?;
+        let mut bytes = size_of::<Self>();
+        macro_rules! retained {
+            ($rows:expr) => {
+                bytes = bytes
+                    .checked_add(retained_row_storage($rows)?)
+                    .ok_or(Resource::Arithmetic)?;
+            };
+        }
+        retained!(&self.functions);
+        retained!(&self.blocks);
+        retained!(&self.definitions);
+        retained!(&self.operations);
+        retained!(&self.uses);
+        retained!(&self.edges);
+        retained!(&self.edge_arguments);
+        retained!(&self.effects);
+        retained!(&self.calls);
+        retained!(&self.kernels);
+        retained!(&self.function_index);
+        retained!(&self.block_index);
+        retained!(&self.value_index);
+        Ok(bytes)
+    }
+
+    pub const fn owner(&self) -> &'g O {
         self.owner
     }
-    pub fn identity(&self) -> VerifiedCanonicalKernelIrIdentityV12 {
-        *self.owner.canonical().identity()
-    }
     /// Ephemeral exact-owner comparison, not a durable pointer identity.
-    pub fn belongs_to(&self, owner: &VerifiedCanonicalKernelIrModuleV12) -> bool {
+    pub fn belongs_to(&self, owner: &O) -> bool {
         std::ptr::eq(self.owner, owner)
     }
     pub fn functions(&self) -> &[CanonicalKirFunctionRefV1<'g>] {
@@ -299,11 +411,8 @@ impl<'g> CanonicalKirInventoryV1<'g> {
         find_value(&self.value_index, function, value, budget)
     }
 
-    fn build(
-        owner: &'g VerifiedCanonicalKernelIrModuleV12,
-        budget: &mut Budget<'_>,
-    ) -> Result<Self> {
-        let counts = census(owner, budget)?;
+    fn build(owner: &'g O, module: &'g Module, budget: &mut Budget<'_>) -> Result<Self> {
+        let counts = census(module, budget)?;
         budget.reserve_storage(size_of::<Self>())?;
         let mut result = Self {
             owner,
@@ -321,15 +430,14 @@ impl<'g> CanonicalKirInventoryV1<'g> {
             block_index: allocate(counts.blocks, budget)?,
             value_index: allocate(counts.values, budget)?,
         };
-        result.fill(&counts, budget)?;
+        result.fill(module, &counts, budget)?;
         result.link(&counts, budget)?;
         Ok(result)
     }
 
-    fn fill(&mut self, counts: &Census, budget: &mut Budget<'_>) -> Result<()> {
+    fn fill(&mut self, module: &'g Module, counts: &Census, budget: &mut Budget<'_>) -> Result<()> {
         budget.charge_work(1)?;
-        let owner = self.owner;
-        for (function_ordinal, function) in owner.module().functions.iter().enumerate() {
+        for (function_ordinal, function) in module.functions.iter().enumerate() {
             budget.charge_work(1)?;
             let f = FunctionCoordinate(ordinal(function_ordinal)?);
             let starts = self.positions();
@@ -556,7 +664,7 @@ impl<'g> CanonicalKirInventoryV1<'g> {
                 }
             );
         }
-        for (index, kernel) in owner.module().kernels.iter().enumerate() {
+        for (index, kernel) in module.kernels.iter().enumerate() {
             budget.charge_work(1)?;
             append!(
                 self.kernels,
@@ -700,10 +808,10 @@ fn count(value: &mut usize, budget: &mut Budget<'_>) -> Result<()> {
     *value = value.checked_add(1).ok_or(Resource::Arithmetic)?;
     Ok(())
 }
-fn census(owner: &VerifiedCanonicalKernelIrModuleV12, budget: &mut Budget<'_>) -> Result<Census> {
+fn census(module: &Module, budget: &mut Budget<'_>) -> Result<Census> {
     budget.charge_work(1)?;
     let mut c = Census::default();
-    for function in &owner.module().functions {
+    for function in &module.functions {
         count(&mut c.functions, budget)?;
         for _ in &function.signature.parameters {
             count(&mut c.definitions, budget)?;
@@ -749,7 +857,7 @@ fn census(owner: &VerifiedCanonicalKernelIrModuleV12, budget: &mut Budget<'_>) -
             }
         }
     }
-    for _ in &owner.module().kernels {
+    for _ in &module.kernels {
         count(&mut c.kernels, budget)?;
     }
     Ok(c)
@@ -757,16 +865,20 @@ fn census(owner: &VerifiedCanonicalKernelIrModuleV12, budget: &mut Budget<'_>) -
 fn ordinal(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Resource::Arithmetic.into())
 }
+fn row_storage<T>(count: usize) -> Result<usize> {
+    count
+        .checked_mul(size_of::<T>())
+        .ok_or(Resource::Arithmetic.into())
+}
+fn retained_row_storage<T>(rows: &[T]) -> Result<usize> {
+    row_storage::<T>(rows.len())
+}
 fn allocate<T>(count: usize, budget: &mut Budget<'_>) -> Result<Vec<T>> {
     if count == 0 {
         return Ok(Vec::new());
     }
     budget.charge_work(1)?;
-    budget.reserve_storage(
-        count
-            .checked_mul(size_of::<T>())
-            .ok_or(Resource::Arithmetic)?,
-    )?;
+    budget.reserve_storage(row_storage::<T>(count)?)?;
     let mut values = Vec::new();
     values
         .try_reserve_exact(count)
@@ -878,3 +990,7 @@ fn heap_sort<T>(
 #[cfg(test)]
 #[path = "canonical_kir_inventory_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "canonical_kir_inventory_v18_tests.rs"]
+pub(crate) mod v18_tests;

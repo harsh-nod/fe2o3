@@ -294,6 +294,16 @@ pub(crate) fn take_inherited_at(
     target: RawFd,
     label: &'static str,
 ) -> Result<OwnedFd, ExternalAnchorEntrypointErrorV1> {
+    let retained = duplicate_inherited_at(source, target, label)?;
+    close_inherited(source)?;
+    Ok(retained)
+}
+
+pub(crate) fn duplicate_inherited_at(
+    source: RawFd,
+    target: RawFd,
+    label: &'static str,
+) -> Result<OwnedFd, ExternalAnchorEntrypointErrorV1> {
     require_inherited(source, label)?;
     require_unused(target, label)?;
     // SAFETY: F_DUPFD_CLOEXEC atomically creates one new owned descriptor or reports an error.
@@ -312,9 +322,7 @@ pub(crate) fn take_inherited_at(
         });
     }
     // SAFETY: successful F_DUPFD_CLOEXEC returned one newly owned descriptor.
-    let retained = unsafe { OwnedFd::from_raw_fd(retained) };
-    close_inherited(source)?;
-    Ok(retained)
+    Ok(unsafe { OwnedFd::from_raw_fd(retained) })
 }
 
 pub(crate) fn require_inherited(

@@ -15,7 +15,7 @@ use std::process::Command;
 #[path = "gfx942_bf16_tile_values_inputs_v1_tests.rs"]
 mod inputs;
 #[path = "gfx942_bf16_tile_values_observation_v1_tests.rs"]
-mod observation;
+pub(super) mod observation;
 
 const OUTPUT_ENV: &str = "FE2O3_TEST_BF16_TILE_VALUES_OUTPUT_V1";
 const CHILD_ENV: &str = "FE2O3_TEST_BF16_TILE_VALUES_INPUTS_V1";

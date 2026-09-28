@@ -743,6 +743,32 @@ fn require_ranked_bound(
 }
 
 impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_, '_, '_, F> {
+    fn shared_value_reads_v1<'s>(
+        &mut self,
+        owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    ) -> Result<fe2o3_pliron::ProductionSemanticSharedReadsV1<'s>> {
+        self.progress.check(self.facts)?;
+        self.facts.shared_value_reads_v1(owner, function)
+    }
+    fn shared_value_read_v1(
+        &mut self,
+        reads: &fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>,
+        function: &SemanticFunctionDeclV1,
+        site: super::ProjectedSemanticAccessSiteV1,
+        place: &super::SemanticPlaceV1,
+    ) -> Result<bool> {
+        self.progress.check(self.facts)?;
+        self.facts
+            .shared_value_read_v1(reads, function, site, place)
+    }
+    fn release_shared_value_reads_v1(
+        &mut self,
+        reads: fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>,
+    ) -> Result<()> {
+        self.progress.check(self.facts)?;
+        self.facts.release_shared_value_reads_v1(reads)
+    }
     fn require_guarded_source_progress_v1(
         &mut self,
         types: &[SemanticTypeDeclV1],
@@ -920,6 +946,19 @@ impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_
         self.progress.check(self.facts)?;
         self.facts
             .masked_assertion_source_proved_v1(function, block, expected, successor)
+    }
+    fn with_nominal_call_v1(
+        &mut self,
+        block: usize,
+        call: &SemanticDirectCallV1,
+        source: SemanticSourceProvenanceV1,
+        visit: &mut bf16_nominal_call_routing_v1::NominalCallVisitorV1<'_>,
+    ) -> Result<()> {
+        self.progress.check(self.facts)?;
+        let outcome = self.facts.with_nominal_call_v1(block, call, source, visit);
+        // Postflight custody failure overrides apparent visitor success/error.
+        self.progress.check(self.facts)?;
+        outcome
     }
     fn require_unit_local_call(
         &mut self,

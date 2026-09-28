@@ -21,7 +21,7 @@ fn payload_targets(cases: &[(u128, u32)], otherwise: u32) -> SemanticSwitchTarge
     .unwrap()
 }
 
-fn payload_fixture(
+pub(super) fn payload_fixture(
     cases: &[(u128, u32)],
     otherwise: u32,
     second_definition: bool,
@@ -210,7 +210,10 @@ fn target_occurrence_scan_prepays_exact_and_one_short_work() {
         let targets = payload_targets(&cases, otherwise);
         let cost = cases.len() + 1;
         let limit = MAX_SEMANTIC_OPTION_DOMINANCE_WORK_V1;
-        let mut exact = WorkBudgetV1 { used: limit - cost };
+        let mut exact = WorkBudgetV1 {
+            used: limit - cost,
+            ..Default::default()
+        };
         assert_eq!(
             enum_payload_target_is_unique_v1(
                 &targets,
@@ -223,6 +226,7 @@ fn target_occurrence_scan_prepays_exact_and_one_short_work() {
         assert_eq!(exact.used, limit);
         let mut short = WorkBudgetV1 {
             used: limit - cost + 1,
+            ..Default::default()
         };
         assert_eq!(
             enum_payload_target_is_unique_v1(

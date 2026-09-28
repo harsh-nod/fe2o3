@@ -46,7 +46,7 @@ fn closed_type(t: &Type) -> bool {
         Type::Scalar(_) => scalar(t),
         Type::Pointer(p) => scalar(&p.pointee),
         Type::Slice(s) => scalar(&s.element),
-        Type::Unit | Type::Vector(_) | Type::Execution(_) => false,
+        Type::Unit | Type::Vector(_) | Type::Execution(_) | Type::StorageObject(_) => false,
     }
 }
 fn closed_op(k: &OperationKind) -> bool {
@@ -76,7 +76,8 @@ fn closed_op(k: &OperationKind) -> bool {
                     AddressSpace::Private | AddressSpace::Global
                 )
         }
-        OperationKind::Execution(_)
+        OperationKind::Storage(_)
+        | OperationKind::Execution(_)
         | OperationKind::VerificationContract(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
@@ -278,6 +279,36 @@ fn counts(i: &Inventory<'_>, limits: Limits) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod storage_recipe_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{AccessMode, AddressSpace, Constant, StorageLayoutIdV1};
+    #[test]
+    fn storage_is_outside_the_closed_unroll_recipe() {
+        let storage = Type::StorageObject(StorageLayoutIdV1(0));
+        assert!(!closed_type(&storage));
+        assert!(!closed_type(&Type::pointer(
+            storage.clone(),
+            AddressSpace::Private,
+            AccessMode::ReadWrite
+        )));
+        assert!(!closed_type(&Type::slice(
+            storage,
+            AddressSpace::Global,
+            AccessMode::ReadOnly
+        )));
+        assert!(!closed_op(&OperationKind::Storage(
+            fe2o3_kernel_ir::StorageOperationV1::Project {
+                base: ValueId(0),
+                step: fe2o3_kernel_ir::StorageProjectionV1::Field(0)
+            }
+        )));
+        assert!(closed_type(&Type::Scalar(ScalarType::U32)));
+        assert!(closed_op(&OperationKind::Constant(Constant::U32(7))));
+    }
+}
 fn take<C: Copy + Eq>(
     rows: &[Row<C>],
     cursor: &mut usize,
@@ -351,6 +382,12 @@ pub(super) fn verify(
     limits: Limits,
     m: &mut Meter<'_, '_>,
 ) -> Result<()> {
+    if !loop_unroll_legacy_storage_tables_v1(
+        &i.owner().module().storage_layouts,
+        &o.owner().module().storage_layouts,
+    ) {
+        return Err(Error::Mismatch("legacy profile excludes storage layouts"));
+    }
     m.work(12)?;
     counts(o, limits)?;
     let total = [
@@ -959,4 +996,30 @@ fn payload(
         return Err(Error::Mismatch("edge coverage"));
     }
     Ok(())
+}
+
+fn loop_unroll_legacy_storage_tables_v1(
+    input: &[fe2o3_kernel_ir::StorageLayoutV1],
+    output: &[fe2o3_kernel_ir::StorageLayoutV1],
+) -> bool {
+    input.is_empty() && output.is_empty()
+}
+
+#[cfg(test)]
+mod storage_table_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{StorageLayoutKindV1, StorageLayoutV1};
+
+    #[test]
+    fn canonical_kir_loop_unroll_v1_refuses_nonempty_storage_tables() {
+        let rows = [StorageLayoutV1 {
+            size: 1,
+            alignment: 1,
+            kind: StorageLayoutKindV1::Scalar(ScalarType::U8),
+        }];
+        assert!(loop_unroll_legacy_storage_tables_v1(&[], &[]));
+        assert!(!loop_unroll_legacy_storage_tables_v1(&rows, &[]));
+        assert!(!loop_unroll_legacy_storage_tables_v1(&[], &rows));
+        assert!(!loop_unroll_legacy_storage_tables_v1(&rows, &rows));
+    }
 }

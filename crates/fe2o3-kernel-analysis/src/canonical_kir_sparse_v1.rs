@@ -9,7 +9,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirDefinitionCoordinateV1 as Definition,
-    CanonicalKirUseCoordinateV1 as Use, ScalarType, Terminator,
+    CanonicalKirUseCoordinateV1 as Use, ScalarType, Terminator, VerifiedCanonicalKernelIrModuleV12,
+    VerifiedCanonicalKernelIrModuleV18,
 };
 use std::{error::Error, fmt, mem::size_of};
 
@@ -151,14 +152,18 @@ impl CanonicalKirSparseStorageV1 {
 }
 
 #[derive(Debug)]
-pub struct CanonicalKirSparseV1<'i, 'g> {
-    inventory: &'i CanonicalKirInventoryV1<'g>,
+pub struct CanonicalKirSparseV1<'i, 'g, O = VerifiedCanonicalKernelIrModuleV12> {
+    inventory: &'i CanonicalKirInventoryV1<'g, O>,
     values: Vec<Value>,
     blocks: Vec<u8>,
     edges: Vec<u8>,
     exceptions: Vec<CanonicalKirSparseExceptionV1>,
     retained: usize,
 }
+/// Sparse facts borrowing one exact storage-capable V18 inventory.
+pub type CanonicalKirSparseV18<'i, 'g> =
+    CanonicalKirSparseV1<'i, 'g, VerifiedCanonicalKernelIrModuleV18>;
+
 impl<'i, 'g> CanonicalKirSparseV1<'i, 'g> {
     /// Analyze every defined function once, with dynamic signature inputs.
     /// Calls do not specialize helpers or import return summaries.
@@ -176,6 +181,28 @@ impl<'i, 'g> CanonicalKirSparseV1<'i, 'g> {
         limits: CanonicalKirSparseLimitsV1,
         budget: &mut Budget<'_>,
     ) -> Result<(Self, CanonicalKirSparseStorageV1)> {
+        Self::derive_for_inventory(inventory, limits, budget)
+    }
+}
+
+impl<'i, 'g> CanonicalKirSparseV18<'i, 'g> {
+    /// Runs the same bounded solver over the actual V18 graph and storage table.
+    /// Storage-derived values stay conservative; this is not memory-safety proof.
+    pub fn derive_v18(
+        inventory: &'i crate::CanonicalKirInventoryV18<'g>,
+        limits: CanonicalKirSparseLimitsV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirSparseStorageV1)> {
+        Self::derive_for_inventory(inventory, limits, budget)
+    }
+}
+
+impl<'i, 'g, O> CanonicalKirSparseV1<'i, 'g, O> {
+    fn derive_for_inventory(
+        inventory: &'i CanonicalKirInventoryV1<'g, O>,
+        limits: CanonicalKirSparseLimitsV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirSparseStorageV1)> {
         let floor = budget.storage();
         let result = Engine::build(inventory, limits, budget).and_then(|engine| engine.run(budget));
         let release = budget
@@ -188,10 +215,10 @@ impl<'i, 'g> CanonicalKirSparseV1<'i, 'g> {
             (report, CanonicalKirSparseStorageV1 { retained })
         })
     }
-    pub const fn inventory(&self) -> &'i CanonicalKirInventoryV1<'g> {
+    pub const fn inventory(&self) -> &'i CanonicalKirInventoryV1<'g, O> {
         self.inventory
     }
-    pub fn belongs_to(&self, inventory: &CanonicalKirInventoryV1<'_>) -> bool {
+    pub fn belongs_to(&self, inventory: &CanonicalKirInventoryV1<'_, O>) -> bool {
         std::ptr::eq(self.inventory, inventory)
     }
     pub fn values(&self) -> &[Value] {
@@ -328,8 +355,8 @@ fn use_query_subrange(
         && parent.end <= roster_len
 }
 
-struct Engine<'i, 'g> {
-    report: CanonicalKirSparseV1<'i, 'g>,
+struct Engine<'i, 'g, O = VerifiedCanonicalKernelIrModuleV12> {
+    report: CanonicalKirSparseV1<'i, 'g, O>,
     heads: Vec<usize>,
     next: Vec<usize>,
     queued: Vec<u8>,
@@ -341,9 +368,9 @@ struct Engine<'i, 'g> {
     unresolved_len: usize,
     unresolved_cursor: usize,
 }
-impl<'i, 'g> Engine<'i, 'g> {
+impl<'i, 'g, O> Engine<'i, 'g, O> {
     fn build(
-        inventory: &'i CanonicalKirInventoryV1<'g>,
+        inventory: &'i CanonicalKirInventoryV1<'g, O>,
         limits: CanonicalKirSparseLimitsV1,
         budget: &mut Budget<'_>,
     ) -> Result<Self> {
@@ -373,7 +400,7 @@ impl<'i, 'g> Engine<'i, 'g> {
                 });
             }
         }
-        let mut retained = size_of::<CanonicalKirSparseV1<'_, '_>>()
+        let mut retained = size_of::<CanonicalKirSparseV1<'_, '_, O>>()
             .checked_add(bytes::<Value>(definitions)?)
             .and_then(|n| n.checked_add(blocks))
             .and_then(|n| n.checked_add(edges))
@@ -409,7 +436,7 @@ impl<'i, 'g> Engine<'i, 'g> {
         })
     }
 
-    fn run(mut self, budget: &mut Budget<'_>) -> Result<CanonicalKirSparseV1<'i, 'g>> {
+    fn run(mut self, budget: &mut Budget<'_>) -> Result<CanonicalKirSparseV1<'i, 'g, O>> {
         let inventory = self.report.inventory;
         for (index, operand) in inventory.uses().iter().enumerate() {
             budget.charge_work(1)?;
@@ -768,3 +795,7 @@ fn allocate<T: Copy>(
 #[cfg(test)]
 #[path = "canonical_kir_sparse_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "canonical_kir_v18_consumer_analyses_tests.rs"]
+mod v18_consumer_tests;

@@ -12,15 +12,15 @@ pub enum CanonicalKirCallEffectKindV1<'i, 'g> {
 /// iteration count is not expanded or proved here. Each call-path index refers
 /// to the same inventory's calls(), retaining actual operands and callee identity.
 #[derive(Debug)]
-pub struct CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g> {
-    inventory: &'i Inventory<'g>,
+pub struct CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g, O = VerifiedCanonicalKernelIrModuleV12> {
+    inventory: &'i Inventory<'g, O>,
     root: Function,
     function: Function,
     call_path: &'p [usize],
     kind: CanonicalKirCallEffectKindV1<'i, 'g>,
 }
-impl<'p, 'i, 'g> CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g> {
-    pub const fn inventory(&self) -> &'i Inventory<'g> {
+impl<'p, 'i, 'g, O> CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g, O> {
+    pub const fn inventory(&self) -> &'i Inventory<'g, O> {
         self.inventory
     }
     pub const fn root(&self) -> Function {
@@ -37,7 +37,11 @@ impl<'p, 'i, 'g> CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g> {
     }
 }
 
-impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
+/// One exact V18 physical-call path and its original borrowed effect.
+pub type CanonicalKirCallEffectOccurrenceV18<'p, 'i, 'g> =
+    CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g, VerifiedCanonicalKernelIrModuleV18>;
+
+impl<'i, 'g, O> CanonicalKirCallEffectsV1<'i, 'g, O> {
     /// Visits every physical and compiler-order occurrence in deterministic
     /// depth-first stored inventory order, retaining repeated calls and shared helpers.
     /// Incomplete roots reject before callbacks. Complete roots may still exhaust
@@ -75,7 +79,7 @@ impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
         root: Function,
         budget: &mut Budget<'_>,
         mut visit: impl for<'p> FnMut(
-            CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g>,
+            CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g, O>,
         ) -> std::result::Result<(), E>,
     ) -> std::result::Result<(), E> {
         if self.decision(root, budget)? == Decision::Incomplete {
@@ -104,7 +108,7 @@ impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
         root: Function,
         budget: &mut Budget<'_>,
         visit: &mut impl for<'p> FnMut(
-            CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g>,
+            CanonicalKirCallEffectOccurrenceV1<'p, 'i, 'g, O>,
         ) -> std::result::Result<(), E>,
     ) -> std::result::Result<(), E> {
         let inventory = self.inventory;

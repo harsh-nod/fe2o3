@@ -26,7 +26,9 @@ fn native_session_refusal_closes_both_inputs_without_resetting_the_account() {
         let mut b = Budget::new(&mut work, 4 * 1024 * 1024);
         b.reserve_storage(prepaid).unwrap();
         let ledger = b.work_ledger_identity_v1();
-        let result = Admitted::admit(&mut b);
+        // SAFETY: install relinquished the two live descriptors with into_raw_fd
+        // in this isolated child; this attempt consumes that fresh transfer once.
+        let result = unsafe { Admitted::admit(&mut b) };
         if prepaid < Admitted::INPUT_STORAGE {
             assert!(matches!(result, Err(Error::Resource(Resource::Accounting))));
         } else if limit == 0 {
@@ -75,7 +77,9 @@ fn missing_service_slot_cannot_become_a_private_policy_file() {
     b.reserve_storage(Admitted::INPUT_STORAGE).unwrap();
     let before = b.work();
     let floor = b.storage();
-    let result = Admitted::admit(&mut b);
+    // SAFETY: install relinquished the policy slot. The isolated fixture owns
+    // every lower descriptor and keeps the service slot vacant through refusal.
+    let result = unsafe { Admitted::admit(&mut b) };
     assert!(matches!(&result, Err(Error::Descriptor(e)) if e.raw_os_error() == Some(libc::EBADF)));
     drop(result);
     assert_eq!(b.work(), before + 2);

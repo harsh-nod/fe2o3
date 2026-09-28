@@ -450,6 +450,8 @@ pub(super) fn roots(semantic: &Semantic) -> Vec<TypedDescriptorRootV1> {
                                 rustc_abi_class: RustcAbiClassV1::ScalarPair,
                                 semantic_type_identity: semantic.types()[t.index() as usize]
                                     .identity(),
+                                semantic_layout_identity: semantic.types()[t.index() as usize]
+                                    .layout_identity(),
                             }
                         })
                         .collect(),

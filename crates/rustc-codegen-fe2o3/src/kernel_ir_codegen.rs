@@ -150,6 +150,7 @@ pub(crate) enum CompilerModuleConstructionError {
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
     UnsupportedExecutionType,
+    UnsupportedStorage,
     #[cfg(test)]
     UnsupportedFloatTarget(String),
     #[cfg(test)]
@@ -182,6 +183,7 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::DescriptorSymbolClosureMismatch => {
                 formatter.write_str("compiler descriptor symbols do not match the module closure")
             }
+            Self::UnsupportedStorage => formatter.write_str("storage objects require storage-aware compiler-module admission"),
             Self::UnsupportedExecutionType => formatter
                 .write_str("execution roles have no admitted compiler-module representation"),
             #[cfg(test)]
@@ -569,6 +571,9 @@ fn append_module_asm_bytes(llvm_ir: &mut String, bytes: &[u8]) {
 }
 
 fn enforce_compiler_module_bounds(module: &Module) -> Result<(), CompilerModuleConstructionError> {
+    if !module.storage_layouts.is_empty() {
+        return Err(CompilerModuleConstructionError::UnsupportedStorage);
+    }
     check_compiler_module_limit(
         "compiler-module ID bytes",
         module.id.as_str().len(),
@@ -695,6 +700,9 @@ fn enforce_compiler_module_bounds(module: &Module) -> Result<(), CompilerModuleC
 
 fn check_operation_bounds(operation: &Operation) -> Result<(), CompilerModuleConstructionError> {
     match &operation.kind {
+        OperationKind::Storage(_) => {
+            return Err(CompilerModuleConstructionError::UnsupportedStorage);
+        }
         OperationKind::Call { callee, arguments } => {
             check_symbol_bytes(callee.as_str())?;
             check_compiler_module_limit(
@@ -773,6 +781,7 @@ fn check_type_depth(ty: &Type, depth: usize) -> Result<(), CompilerModuleConstru
     }
     match ty {
         Type::Execution(_) => Err(CompilerModuleConstructionError::UnsupportedExecutionType),
+        Type::StorageObject(_) => Err(CompilerModuleConstructionError::UnsupportedStorage),
         Type::Pointer(pointer) => check_type_depth(&pointer.pointee, depth + 1),
         Type::Slice(slice) => check_type_depth(&slice.element, depth + 1),
         Type::Unit | Type::Scalar(_) | Type::Vector(_) => Ok(()),
@@ -826,5 +835,71 @@ fn check_compiler_module_limit(
         Err(CompilerModuleConstructionError::LimitExceeded { field, actual, max })
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod storage_compiler_profile_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, BasicBlock, BlockId, Function, ScalarType, Signature,
+        StorageLayoutIdV1, ValueId,
+    };
+    #[test]
+    fn compiler_module_refuses_storage_before_legacy_custody() {
+        let mut module = Module::new("storage_compiler");
+        assert!(enforce_compiler_module_bounds(&module).is_ok());
+        module
+            .storage_layouts
+            .push(fe2o3_kernel_ir::StorageLayoutV1 {
+                size: 4,
+                alignment: 4,
+                kind: fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(ScalarType::U32),
+            });
+        assert_eq!(
+            enforce_compiler_module_bounds(&module),
+            Err(CompilerModuleConstructionError::UnsupportedStorage)
+        );
+        module.storage_layouts.clear();
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::new(
+            vec![],
+            OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::Project {
+                base: ValueId(0),
+                step: fe2o3_kernel_ir::StorageProjectionV1::Field(0),
+            }),
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        module.functions.push(Function::internal_helper(
+            "dead",
+            Signature::new(vec![], vec![]),
+            vec![],
+            vec![block],
+        ));
+        assert_eq!(
+            enforce_compiler_module_bounds(&module),
+            Err(CompilerModuleConstructionError::UnsupportedStorage)
+        );
+    }
+
+    #[test]
+    fn compiler_type_bounds_do_not_admit_nested_storage_as_old_pointers() {
+        let storage = Type::StorageObject(StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert_eq!(
+                check_type_depth(&ty, 0),
+                Err(CompilerModuleConstructionError::UnsupportedStorage)
+            );
+        }
+        assert_eq!(check_type_depth(&Type::Scalar(ScalarType::U32), 0), Ok(()));
     }
 }

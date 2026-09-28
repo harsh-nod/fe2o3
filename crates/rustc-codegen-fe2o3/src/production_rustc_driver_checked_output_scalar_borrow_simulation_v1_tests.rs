@@ -41,6 +41,14 @@ fn backing(
 }
 
 pub(super) fn scenarios() -> Result<Vec<Scenario>, SourceFailure> {
+    scenarios_with_value(|_| 7)
+}
+
+pub(super) fn shared_scenarios() -> Result<Vec<Scenario>, SourceFailure> {
+    scenarios_with_value(|input| input)
+}
+
+fn scenarios_with_value(expected: fn(u32) -> u32) -> Result<Vec<Scenario>, SourceFailure> {
     [
         (0, 0),
         (1, 0),
@@ -64,7 +72,7 @@ pub(super) fn scenarios() -> Result<Vec<Scenario>, SourceFailure> {
                 ),
             ],
             backings: vec![initial],
-            expected: vec![backing(7, len)?.1],
+            expected: vec![backing(expected(input), len)?.1],
             output_elements: len,
             written_elements: len,
         })
@@ -93,6 +101,30 @@ pub(super) fn require_abi(module: &AdmittedSimulationModuleV1) -> Result<&Kernel
         return Err(failure("scalar borrow exact u32 ABI"));
     }
     Ok(kernel)
+}
+
+#[test]
+fn independent_shared_primitive_vectors_preserve_input_not_tuple_field_zero() {
+    let rows = shared_scenarios().unwrap();
+    assert_eq!(rows.len(), 6);
+    for (row, input) in rows
+        .into_iter()
+        .zip([0_u32, 0, 1, u32::MAX, 0x8000_0000, 0x5555_aaaa])
+    {
+        let bytes = row.expected[0].buffer.bytes();
+        assert!(bytes[..GUARD_ELEMENTS * 4].iter().all(|byte| *byte == 0xa5));
+        assert!(
+            bytes[(GUARD_ELEMENTS + row.output_elements) * 4..]
+                .iter()
+                .all(|byte| *byte == 0x5a)
+        );
+        for cell in
+            bytes[GUARD_ELEMENTS * 4..(GUARD_ELEMENTS + row.output_elements) * 4].chunks_exact(4)
+        {
+            assert_eq!(cell, input.to_le_bytes());
+            assert_ne!(cell, 23_u32.to_le_bytes());
+        }
+    }
 }
 
 #[test]

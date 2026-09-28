@@ -5,6 +5,10 @@ use fe2o3_kernel_ir::{AddressSpace, Module, OperationKind};
 pub(super) const CHILD_TEST: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::policy5_source::checked_output_policy5_source_child";
 const CHILD_REPORT: &str = "FE2O3_TEST_POLICY5_SOURCE_REPORT";
 
+#[path = "production_rustc_driver_shared_primitive_policy5_v1_tests.rs"]
+mod shared_primitive;
+pub(super) use shared_primitive::Config as SharedPrimitiveConfig;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Report {
     source: [u8; 32],
@@ -16,6 +20,7 @@ struct Report {
     after_private_reads: usize,
     llvm_private_reads: usize,
     llvm_digest: [u8; 32],
+    shared_primitive: Option<shared_primitive::Observed>,
 }
 
 fn private_reads(module: &Module) -> usize {
@@ -34,6 +39,43 @@ fn private_reads(module: &Module) -> usize {
 
 pub(super) fn configure_child(command: &mut Command, report: &Path) {
     command.env(CHILD_REPORT, report);
+}
+
+pub(super) fn configure_shared_child(command: &mut Command, case: &OrdinarySourceCase) {
+    shared_primitive::configure_child(command, case);
+}
+
+pub(super) fn check_shared(
+    report: &Path,
+    observation: &Observation,
+    config: SharedPrimitiveConfig,
+) {
+    let report: Report = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    assert_eq!(observation.policy, 5);
+    assert_eq!(report.output, observation.output_digest);
+    assert_ne!(report.source, [0; 32]);
+    assert_ne!(report.llvm_digest, [0; 32]);
+    assert_eq!((report.store_rows, report.load_rows), (0, 0));
+    assert_eq!(
+        (
+            report.before_private_reads,
+            report.after_private_reads,
+            report.llvm_private_reads
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        (observation.private_reads, observation.private_writes),
+        (0, 0)
+    );
+    shared_primitive::check(
+        report
+            .shared_primitive
+            .as_ref()
+            .expect("required source observation"),
+        config,
+    );
+    eprintln!("ordinary Shared primitive production observation: {report:?}");
 }
 
 pub(super) fn check(report: &Path, observation: &Observation, retained_mir: bool, barrier: bool) {
@@ -132,6 +174,8 @@ impl Callbacks for CallbacksV1 {
                 after_private_reads: private_reads(stage.output().module()),
                 llvm_private_reads: 0,
                 llvm_digest: [0; 32],
+                shared_primitive: shared_primitive::requested()
+                    .map(|config| shared_primitive::observe(&stage, config)),
             };
             let module = stage.output().module();
             let semantic = stage.semantic();

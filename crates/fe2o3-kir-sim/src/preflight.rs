@@ -41,6 +41,7 @@ pub const MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1: usize = 1 << 20;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum UnsupportedFeatureV1 {
     InertV12Carrier,
+    InertStorage,
     InertExecutionV15,
     FloatType(ScalarType),
     UnsupportedType,
@@ -319,6 +320,8 @@ pub enum SimulationPreflightErrorV1 {
     PhysicalLdsExchangeAliasedArgumentsV22,
     PhysicalGlobalCopyAliasedArgumentsV21,
     InvalidLimits(SimulationLimitsErrorV1),
+    /// Typed storage is outside every existing simulation profile.
+    StorageProfileNotAdmitted,
     UnknownKernel(fe2o3_kernel_ir::KernelId),
     MissingEntry(FunctionId),
     InvalidLaunch(&'static str),
@@ -377,6 +380,7 @@ impl fmt::Display for SimulationPreflightErrorV1 {
             Self::PhysicalGlobalCopyPendingDebugUnavailableV21 => formatter.write_str("physical-global-copy symbolic/pending values are unavailable in the current debugger/checkpoint schema"),
             Self::PhysicalGlobalCopyAliasedArgumentsV21 => formatter.write_str("physical-global-copy input and output require separate request-local allocations"),
             Self::InvalidLimits(error) => error.fmt(formatter),
+            Self::StorageProfileNotAdmitted => formatter.write_str("module-owned storage layouts require a separate simulation profile"),
             Self::PhysicalEntrySymbolicDebugUnavailableV20 => write!(
                 formatter,
                 "physical-entry symbolic pointer/carry state is unavailable in the current public debugger and checkpoint schema"
@@ -520,6 +524,9 @@ pub(crate) fn preflight(
     let limits = limits
         .validate()
         .map_err(SimulationPreflightErrorV1::InvalidLimits)?;
+    if !module.storage_layouts.is_empty() {
+        return Err(SimulationPreflightErrorV1::StorageProfileNotAdmitted);
+    }
     let input_peak = conservative_preflight_input_bytes(admitted_resident_bytes, module, request)
         .ok_or(SimulationPreflightErrorV1::ResourceLimit {
         resource: "resident bytes",
@@ -1799,6 +1806,7 @@ fn scan_operation(
     }
     match &operation.kind {
         OperationKind::Execution(_) => reject!(UnsupportedFeatureV1::InertExecutionV15),
+        OperationKind::Storage(_) => reject!(UnsupportedFeatureV1::InertStorage),
         OperationKind::Constant(constant) => {
             if matches!(constant, Constant::Index(value) if target.index_width() == IndexWidthV1::Bits32 && *value > u64::from(u32::MAX))
             {
@@ -2350,6 +2358,15 @@ fn scan_terminator(
 }
 
 fn unsupported_type(ty: &Type, target: SimulationTargetV1) -> Option<UnsupportedFeatureV1> {
+    let mut leaf = ty;
+    loop {
+        leaf = match leaf {
+            Type::Pointer(pointer) => &pointer.pointee,
+            Type::Slice(slice) => &slice.element,
+            Type::StorageObject(_) => return Some(UnsupportedFeatureV1::InertStorage),
+            _ => break,
+        };
+    }
     if ty.contains_execution_role_v15() {
         return Some(UnsupportedFeatureV1::InertExecutionV15);
     }
@@ -2393,6 +2410,75 @@ fn unsupported_type(ty: &Type, target: SimulationTargetV1) -> Option<Unsupported
     }
 }
 
+#[cfg(test)]
+mod storage_closed_profile_tests {
+    use super::*;
+
+    #[test]
+    fn storage_table_refusal_precedes_legacy_resident_census() {
+        let mut module = Module::new("storage_boundary");
+        module
+            .storage_layouts
+            .push(fe2o3_kernel_ir::StorageLayoutV1 {
+                size: 4,
+                alignment: 4,
+                kind: fe2o3_kernel_ir::StorageLayoutKindV1::Scalar(ScalarType::U32),
+            });
+        let request = SimulationRequestV1::new("absent", [1, 1, 1], [1, 1, 1], vec![]);
+        let limits = SimulationLimitsV1 {
+            max_resident_bytes: 1,
+            ..SimulationLimitsV1::default()
+        };
+        for version in [7, 9, 10, 11, 12, 16, 17, 19, 20, 21, 22] {
+            assert!(matches!(
+                preflight(
+                    &module,
+                    usize::MAX,
+                    &request,
+                    None,
+                    SimulationTargetV1::amdgpu_64(),
+                    limits,
+                    version
+                ),
+                Err(SimulationPreflightErrorV1::StorageProfileNotAdmitted)
+            ));
+        }
+    }
+
+    #[test]
+    fn storage_type_and_generic_casts_remain_outside_old_simulation() {
+        let storage = Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(0));
+        for ty in [
+            storage.clone(),
+            Type::pointer(
+                storage.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            ),
+            Type::slice(storage, AddressSpace::Global, AccessMode::ReadOnly),
+        ] {
+            assert_eq!(
+                unsupported_type(&ty, SimulationTargetV1::amdgpu_64()),
+                Some(UnsupportedFeatureV1::InertStorage)
+            );
+        }
+        for kind in [CastKind::PointerToGeneric, CastKind::SliceToGeneric] {
+            assert!(!supported_cast(
+                kind,
+                ScalarType::U64,
+                ScalarType::U64,
+                SimulationTargetV1::amdgpu_64()
+            ));
+        }
+        assert!(supported_cast(
+            CastKind::ZeroExtend,
+            ScalarType::U8,
+            ScalarType::U32,
+            SimulationTargetV1::amdgpu_64()
+        ));
+    }
+}
+
 pub(crate) fn supported_cast(
     kind: CastKind,
     from: ScalarType,
@@ -2404,7 +2490,9 @@ pub(crate) fn supported_cast(
         return false;
     };
     match kind {
-        CastKind::RestrictPointerAccess => false,
+        CastKind::RestrictPointerAccess | CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
+            false
+        }
         CastKind::Truncate => from.is_integer() && to.is_integer() && to_bits < from_bits,
         CastKind::ZeroExtend => {
             (from.is_integer() || from == ScalarType::Bool)

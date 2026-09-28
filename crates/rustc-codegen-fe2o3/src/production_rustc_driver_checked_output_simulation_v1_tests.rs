@@ -39,6 +39,7 @@ pub(super) enum Case {
     MaskedShift(masked_shift::Batch),
     ConstantShift(constant_shift::Batch),
     ScalarBorrow,
+    SharedPrimitive,
     NumericCast(numeric_cast::OperationCase),
     SaturatingInteger(saturating_integer::OperationCase),
     Fill,
@@ -52,6 +53,7 @@ impl Case {
     fn name(self) -> &'static str {
         match self {
             Self::ScalarBorrow => "scalar-borrow-policy5",
+            Self::SharedPrimitive => "shared-primitive-policy5",
             Self::IntegerIdentity(case) => case.name(),
             Self::ConstantShift(case) => case.name(),
             Self::MaskedShift(case) => case.name(),
@@ -68,6 +70,7 @@ impl Case {
     fn numerical_policy(self) -> &'static str {
         match self {
             Self::ScalarBorrow => scalar_borrow::NUMERICAL_POLICY,
+            Self::SharedPrimitive => "shared-primitive-u32-input-identity-v1",
             Self::IntegerIdentity(_) => integer_identity::NUMERICAL_POLICY,
             Self::ConstantShift(_) => constant_shift::NUMERICAL_POLICY,
             Self::MaskedShift(_) => masked_shift::NUMERICAL_POLICY,
@@ -92,7 +95,7 @@ pub(super) fn check_native_arithmetic(case: Case, llvm: &str) -> Result<(), Sour
             "shifts require exact per-root native owner observations",
         ));
     }
-    if case == Case::ScalarBorrow {
+    if matches!(case, Case::ScalarBorrow | Case::SharedPrimitive) {
         // The fixed Policy5 child independently compares native private-load
         // count with its exact S/O observation; no arithmetic-specific opcode.
         return Ok(());
@@ -222,6 +225,7 @@ pub(super) fn requested() -> Result<Option<Case>, SourceFailure> {
     };
     match raw.to_str() {
         Some("scalar-borrow-policy5") => Ok(Some(Case::ScalarBorrow)),
+        Some("shared-primitive-policy5") => Ok(Some(Case::SharedPrimitive)),
         Some("fill") => Ok(Some(Case::Fill)),
         Some("vecadd") => Ok(Some(Case::Vecadd)),
         Some("scalar-gemm") => Ok(Some(Case::ScalarGemm)),
@@ -343,6 +347,7 @@ fn elementwise(case: Case, out_len: usize, extra_inputs: usize) -> Result<Scenar
         }
         Case::ScalarGemm => return Err(failure("GEMM requires its recurrence fixture")),
         Case::ScalarBorrow
+        | Case::SharedPrimitive
         | Case::IntegerIdentity(_)
         | Case::SaturatingInteger(_)
         | Case::NumericCast(_)
@@ -432,6 +437,7 @@ fn gemm_inputs(
 fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
     match case {
         Case::ScalarBorrow => scalar_borrow::scenarios(),
+        Case::SharedPrimitive => scalar_borrow::shared_scenarios(),
         Case::IntegerIdentity(case) => integer_identity::scenarios(case),
         Case::ConstantShift(case) => constant_shift::scenarios(case),
         Case::MaskedShift(case) => masked_shift::scenarios(case),
@@ -491,7 +497,7 @@ fn require_abi(module: &AdmittedSimulationModuleV1, case: Case) -> Result<&Kerne
     if matches!(case, Case::ConstantShift(_) | Case::MaskedShift(_)) {
         return Err(failure("shifts require exact multi-root execution plans"));
     }
-    if case == Case::ScalarBorrow {
+    if matches!(case, Case::ScalarBorrow | Case::SharedPrimitive) {
         return scalar_borrow::require_abi(module);
     }
     if let Case::NumericCast(case) = case {
@@ -617,6 +623,7 @@ fn check_execution(
         | Case::Vecadd
         | Case::ScalarGemm
         | Case::ScalarBorrow
+        | Case::SharedPrimitive
         | Case::IntegerIdentity(_)
         | Case::SaturatingInteger(_)
         | Case::NumericCast(_)

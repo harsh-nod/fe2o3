@@ -4623,6 +4623,13 @@ impl<'a> FunctionLowerer<'a> {
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
         let scalar = match ty {
+            Type::StorageObject(_) => {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedType,
+                    "storage-object types require storage-aware AMDGPU lowering",
+                ));
+            }
             Type::Execution(_) => {
                 return Err(LoweringErrors::one(
                     location.clone(),
@@ -5041,6 +5048,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Intrinsic(_)
             | OperationKind::Alloca { .. }
+            | OperationKind::Storage(_)
             | OperationKind::Execution(_)
             | OperationKind::VerificationContract(_)
             | OperationKind::VectorLoad(_)
@@ -9364,6 +9372,7 @@ fn validate_cast(
     let from_width = llvm_width(from_scalar);
     let to_width = llvm_width(to_scalar);
     let valid = match kind {
+        CastKind::PointerToGeneric | CastKind::SliceToGeneric => false,
         CastKind::RestrictPointerAccess => unreachable!("handled pointer restriction"),
         CastKind::Truncate => {
             supported_integer(from_scalar) && supported_integer(to_scalar) && from_width > to_width
@@ -9527,7 +9536,11 @@ fn llvm_type(ty: &Type) -> &'static str {
             "ptr addrspace(5)"
         }
         Type::Pointer(_) => unreachable!("preflight rejected unsupported address space"),
-        Type::Unit | Type::Slice(_) | Type::Vector(_) | Type::Execution(_) => {
+        Type::Unit
+        | Type::Slice(_)
+        | Type::Vector(_)
+        | Type::Execution(_)
+        | Type::StorageObject(_) => {
             unreachable!("type is not a first-class G1 LLVM value")
         }
     }
@@ -9683,6 +9696,9 @@ fn saturating_float_to_integer_intrinsic_name(to: ScalarType) -> String {
 
 fn cast_opcode(kind: CastKind, from: &Type) -> &'static str {
     match kind {
+        CastKind::PointerToGeneric | CastKind::SliceToGeneric => {
+            unreachable!("preflight rejects V18 generic casts")
+        }
         CastKind::RestrictPointerAccess => {
             unreachable!("pointer access restriction uses an identity select")
         }

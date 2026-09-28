@@ -384,10 +384,26 @@ impl fmt::Debug for InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
 
 impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
     /// Consumes the inherited public FD slot into one private close-on-exec client.
-    pub fn admit_inherited_application_service() -> Result<Self, CompilerExecutionClientErrorV1> {
-        CompilerExecutionClientV1::admit_inherited_child(
-            WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1,
-        )
+    ///
+    /// # Safety
+    /// Transfer exclusive ownership of inherited FD 195, with no existing Rust
+    /// owner or outstanding borrow and no thread, handler, or foreign code able to
+    /// close, replace, or acquire it during admission. An absent slot must remain
+    /// unallocated until return. This transfer is consumed once, including failure
+    /// or unwind; descriptor checks do not prove that it is an inherited input.
+    ///
+    /// ```compile_fail,E0133
+    /// use fe2o3_host::InheritedWorkerV3CompilerCurrentRecordAuditorV1;
+    /// let _ = InheritedWorkerV3CompilerCurrentRecordAuditorV1::admit_inherited_application_service();
+    /// ```
+    pub unsafe fn admit_inherited_application_service()
+    -> Result<Self, CompilerExecutionClientErrorV1> {
+        // SAFETY: the caller transfers exactly the custody required by the client.
+        unsafe {
+            CompilerExecutionClientV1::admit_inherited_child(
+                WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1,
+            )
+        }
         .map(|client| Self {
             client: Some(client),
         })

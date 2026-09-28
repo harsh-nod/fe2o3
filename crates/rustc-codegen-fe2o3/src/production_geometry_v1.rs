@@ -408,9 +408,11 @@ fn type_size_bytes(value: &Type) -> Result<u32, ProductionGeometryErrorV1> {
         Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index | ScalarType::F64)
         | Type::Pointer(_) => Ok(8),
         Type::Scalar(ScalarType::I128 | ScalarType::U128) => Ok(16),
-        Type::Unit | Type::Slice(_) | Type::Vector(_) | Type::Execution(_) => {
-            Err(ProductionGeometryErrorV1::UnsizedWorkgroupType)
-        }
+        Type::Unit
+        | Type::Slice(_)
+        | Type::Vector(_)
+        | Type::Execution(_)
+        | Type::StorageObject(_) => Err(ProductionGeometryErrorV1::UnsizedWorkgroupType),
     }
 }
 
@@ -1092,5 +1094,19 @@ mod tests {
                 kir: 1024,
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod storage_geometry_profile_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_geometry_does_not_guess_storage_object_extent() {
+        assert_eq!(
+            type_size_bytes(&Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(0))),
+            Err(ProductionGeometryErrorV1::UnsizedWorkgroupType)
+        );
+        assert_eq!(type_size_bytes(&Type::Scalar(ScalarType::U32)), Ok(4));
     }
 }

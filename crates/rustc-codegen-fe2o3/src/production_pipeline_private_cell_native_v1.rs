@@ -336,6 +336,9 @@ impl RankedVerifiedProductionCompilation {
         use fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1;
         let policy = self.ranked.materialized().helper_source_policy_v1();
         let (prefix, ranked_verification, bindings) = match policy {
+            ProductionHelperSourcePolicyV1::Bf16Nominal => {
+                return Err(mismatch("BF16 nominal normal continuation unavailable"));
+            }
             ProductionHelperSourcePolicyV1::RawEmpty => {
                 let stage = self.prepare_admitted_policy6_v1(budget)?;
                 (

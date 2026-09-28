@@ -83,7 +83,7 @@ impl<'a> OwnerRef<'a> {
     }
 }
 
-pub(super) fn physical_matches(
+pub(in crate::compiler_descriptor) fn physical_matches(
     kind: DescriptorArgumentKindV1,
     access: AccessMode,
     ty: &Type,
@@ -119,6 +119,12 @@ fn derive_bytes(
     budget: &mut Budget<'_>,
 ) -> R<Vec<u8>> {
     checked_scope(owner, budget, |budget| {
+        source_abi_v1::check_if_aggregate(owner, roots, profile, budget)
+            .map_err(|error| match error {
+                source_abi_v1::SourceAbiErrorV1::Resource(error) => E::Resource(error),
+                source_abi_v1::SourceAbiErrorV1::Source(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) => E::Resource(error),
+                other => E::Descriptor(CompilerDescriptorError::from_source_abi(other)),
+            })?;
         let view = owner.view()?;
         dialect_amdgcn::check_production_target_coordinate_preservation_v1(
             view.neutral,

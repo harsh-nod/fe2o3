@@ -701,3 +701,45 @@ fn independently_specified_declaration_budget_covers_nonempty_retained_vectors()
         assert_eq!(budget.storage(), floor);
     }
 }
+
+#[test]
+fn retained_storage_query_equals_actual_derive_receipt_and_preserves_floor() {
+    for module in [mixed_module(), Module::new("empty_inventory_control")] {
+        let (owner, owner_storage) = admit(&module);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
+        let mut budget = Budget::new(&mut work, 10_000_000);
+        budget.reserve_storage(owner_storage + 19).unwrap();
+        let (inventory, storage) = CanonicalKirInventoryV1::derive(&owner, &mut budget).unwrap();
+        let floor = budget.storage();
+        let before = budget.work();
+        assert_eq!(
+            inventory.retained_storage_v1(&mut budget).unwrap(),
+            storage.retained_storage()
+        );
+        assert_eq!(budget.work() - before, 14);
+        assert_eq!(budget.storage(), floor);
+        let measure = |limit| {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = Budget::new(&mut work, 0);
+            let result = inventory.retained_storage_v1(&mut budget);
+            assert_eq!(budget.storage(), 0);
+            (result, budget.work(), budget.failed_work())
+        };
+        assert_eq!(measure(14), (Ok(storage.retained_storage()), 14, None));
+        assert!(matches!(
+            measure(13).0,
+            Err(CanonicalKirInventoryErrorV1::Resource(Resource::Work(_)))
+        ));
+        assert_eq!(measure(13).1, 0);
+        assert!(measure(13).2.is_some());
+    }
+}
+#[test]
+fn retained_storage_shared_payload_formula_rejects_arithmetic_overflow() {
+    assert_eq!(row_storage::<u64>(0).unwrap(), 0);
+    assert_eq!(row_storage::<u64>(3).unwrap(), 3 * size_of::<u64>());
+    assert_eq!(
+        row_storage::<u64>(usize::MAX),
+        Err(Resource::Arithmetic.into())
+    );
+}

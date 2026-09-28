@@ -108,6 +108,7 @@ fn clone_execution_function_signature_v29(
         result_types.push(execution_cfg_clone_type_v29(ty, budget)?);
     }
     Ok(LoweredFunctionSignatureV1 {
+        bf16_nominal: signature.bf16_nominal,
         parameter_semantic_types,
         call_arguments,
         parameter_types,

@@ -14,7 +14,7 @@ const encode=v=>Buffer.from(JSON.stringify(v,null,2)+'\n');
 function fixture(){
  const data=new Map(PATHS.map(p=>[p,Buffer.from('inert source-shaped fixture '+p+'\n')]));
  const value={schema:'fe2o3-gfx950-one-stop-controller-source-v2',license:'MIT OR Apache-2.0',
-  runtime_profile:'unbound',rust_files:20,files:PATHS.map(p=>({path:p,bytes:data.get(p).length,sha256:hash(data.get(p))}))};
+  runtime_profile:'unbound',rust_files:23,files:PATHS.map(p=>({path:p,bytes:data.get(p).length,sha256:hash(data.get(p))}))};
  return {data,value};
 }
 function diskFixture(t){
@@ -26,7 +26,7 @@ function diskFixture(t){
  return{...f,root};
 }
 test('checked-in selected package bytes verify without runtime claims',()=>{
- const r=readPackage(packageRoot);assert.equal(r.files,24);assert(r.bytes>0&&r.bytes<TOTAL_CAP);
+ const r=readPackage(packageRoot);assert.equal(r.files,27);assert(r.bytes>0&&r.bytes<TOTAL_CAP);
  for(const key of ['complete_tree_verified','source_authenticated','built_binary_verified','startup_qualified','native_authority'])assert.equal(r[key],false);
  assert.equal(r.processes_started,0);assert.equal(r.runtime_profile,'unbound');
 });
@@ -46,7 +46,7 @@ test('separate unpublished workspace and fixed binary do not join parent workspa
  const lock=fs.readFileSync(packageRoot+'/Cargo.lock','utf8');assert(lock.includes('name = "fe2o3-private-one-stop-protocol"'));
 });
 test('selected source roster has exact project and dual license leaves',()=>{
- assert.equal(PATHS.filter(p=>p.endsWith('.rs')).length,20);
+ assert.equal(PATHS.filter(p=>p.endsWith('.rs')).length,23);
  assert(PATHS.includes('LICENSE-MIT'));assert(PATHS.includes('LICENSE-APACHE'));
  assert(!PATHS.some(p=>/\.(inc|cc|h)$/.test(p)));
  assert.equal(manifest(fs.readFileSync(packageRoot+'/source-manifest.json')).license,'MIT OR Apache-2.0');
@@ -77,7 +77,7 @@ test('malformed hashes and missing fields refuse before callback',()=>{
  }
 });
 test('changed payload or byte length cannot match the source pins',()=>{
- const f=fixture();assert.equal(verifyPayload(manifest(encode(f.value)),p=>f.data.get(p)).files,24);
+ const f=fixture();assert.equal(verifyPayload(manifest(encode(f.value)),p=>f.data.get(p)).files,27);
  const p=PATHS[0];for(const b of [Buffer.from('changed'),Buffer.alloc(f.data.get(p).length,0)]){
   const data=new Map(f.data);data.set(p,b);assert.throws(()=>verifyPayload(f.value,n=>data.get(n)));
  }
@@ -95,7 +95,7 @@ test('manifest encoding denies duplicate keys trailing values and excessive byte
  }
 });
 test('inert temporary selected-file package reads without execution',t=>{
- const f=diskFixture(t);assert.equal(readPackage(f.root).files,24);
+ const f=diskFixture(t);assert.equal(readPackage(f.root).files,27);
 });
 test('noncanonical relative and symlink package roots refuse',t=>{
  const f=diskFixture(t),alias=f.root+'-alias';fs.symlinkSync(f.root,alias);t.after(()=>fs.unlinkSync(alias));
@@ -157,4 +157,94 @@ test('unavailable values remain typed and no published runtime binding exists',(
  const b=JSON.parse(fs.readFileSync(packageRoot+'/runtime-bindings.json','utf8'));
  assert.deepEqual(Object.keys(b).sort(),['controller','debugger','family','native_attempt','startup','target'].sort());
  for(const value of Object.values(b))assert.equal(value,null);
+});
+
+test('setup diagnostics preserve the first failure without becoming runtime binding',()=>{
+ const wire=fs.readFileSync(packageRoot+'/native/wire.rs','utf8');
+ const main=fs.readFileSync(packageRoot+'/native/main.rs','utf8');
+ const start=wire.indexOf('if let Err(refusal) = setup {');
+ const stop=wire.indexOf('        Ok(result)',start);
+ assert(start>=0&&stop>start);
+ const failure=wire.slice(start,stop);
+ assert(failure.indexOf('let diagnostic = trace.freeze(result.sent);')>=0);
+ assert(failure.indexOf('let diagnostic = trace.freeze(result.sent);')<failure.indexOf('let cleanup = result.teardown();'));
+ assert(main.includes('e.refusal, e.cleanup, e.diagnostic'));
+ assert(!failure.includes('eof =')&&!failure.includes('may_have_inferior ='));
+});
+test('diagnostics leaf has fixed setup stages and no acquisition interface',()=>{
+ const text=fs.readFileSync(packageRoot+'/native/setup_diagnostic.rs','utf8');
+ for(const stage of ['ExecutableLink','ExecutableMetadata','ExecutableRecheck','ScopeMember','Cmdline'])
+  assert(text.includes(stage));
+ assert(text.includes('ChildWaitObservation::Unobserved'));
+ assert(text.includes('initial_stamp: None'));
+ assert(text.includes('readers_started: 0'));
+ assert(!text.includes('std::process')&&!text.includes('std::fs'));
+ assert(!text.includes('Command::')&&!text.includes('process.env'));
+});
+test('old count or omitted diagnostic source refuses before any payload read',()=>{
+ for(const change of [
+  v=>v.rust_files=20,
+  v=>v.files=v.files.filter(row=>row.path!=='native/setup_diagnostic.rs')
+ ]){
+  const f=fixture();change(f.value);let reads=0;
+  assert.throws(()=>verifyPayload(f.value,()=>{reads++;return Buffer.alloc(0)}));
+  assert.equal(reads,0);
+ }
+});
+
+test('failure capture is inserted only after first refusal and before unchanged cleanup',()=>{
+ const wire=fs.readFileSync(packageRoot+'/native/wire.rs','utf8');
+ const start=wire.indexOf('if let Err(refusal) = setup {'),stop=wire.indexOf('        Ok(result)',start);
+ const failure=wire.slice(start,stop);
+ assert(failure.indexOf('let diagnostic = trace.freeze(result.sent);')<failure.indexOf('FailureDiagnostic::observe('));
+ assert(failure.indexOf('FailureDiagnostic::observe(')<failure.indexOf('let cleanup = result.teardown();'));
+ assert(failure.includes('result.readers.is_empty()')&&failure.includes('result.input.is_none()')&&failure.includes('result.sent == 0'));
+ assert(!failure.includes('eof =')&&!failure.includes('may_have_inferior ='));
+});
+test('failure capture keeps bounded owned-pipe diagnostics separate from admission',()=>{
+ const s=fs.readFileSync(packageRoot+'/native/failure_diagnostic.rs','utf8');
+ assert(s.includes('const RETAIN: usize = 256;')&&s.includes('const READ_CALLS: u8 = 4;'));
+ assert(s.includes('child.try_wait()')&&s.includes('OFlags::NONBLOCK'));
+ assert(s.includes('PipeState::OwnershipNotIntact')&&s.includes('Restore::Error'));
+ assert(s.includes('diagnostic_only=true'));
+ assert(!s.includes('Command::')&&!s.includes('thread::')&&!s.includes('fs::File')&&!s.includes('/proc/'));
+ const main=fs.readFileSync(packageRoot+'/native/main.rs','utf8');
+ assert(main.includes('failure_observation={}')&&main.includes('e.failure_observation'));
+});
+test('previous count or omitted failure capture source refuses before reads',()=>{
+ for(const change of [v=>v.rust_files=21,v=>v.files=v.files.filter(p=>p.path!=='native/failure_diagnostic.rs')]){
+  const f=fixture();change(f.value);let reads=0;
+  assert.throws(()=>verifyPayload(f.value,()=>{reads++;return Buffer.alloc(0)}));
+  assert.equal(reads,0);
+ }
+});
+
+test('initial argv readiness has a closed bounded source seam and later ownership stays one-shot',()=>{
+ const s=fs.readFileSync(packageRoot+'/native/argv_readiness.rs','utf8');
+ assert(s.includes('const ATTEMPTS: u8 = 16;')&&s.includes('const MAX_CMDLINE: usize = 2048;'));
+ const compact=s.replace(/\s+/g,'');
+ assert(compact.includes('letsame=raw==expected;')&&compact.includes('if!raw.is_empty(){returntrace.step(SetupStage::Cmdline,||Err(Refusal::Changed));}'));
+ assert(s.includes('CmdlineReadyLimit')&&s.includes('source.yield_once();'));
+ assert(!s.includes('Command::')&&!s.includes('std::process')&&!s.includes('std::fs')&&!s.includes('/proc/'));
+ const w=fs.readFileSync(packageRoot+'/native/wire.rs','utf8');
+ const start=w.indexOf('    fn owner_current('),end=w.indexOf('    fn receive_until(',start);
+ assert(start>=0&&end>start);const later=w.slice(start,end);
+ assert(!later.includes('argv_readiness')&&!later.includes('yield'));
+ assert(later.includes('custody::read_bounded(format!("/proc/{}/cmdline", self.child.id()), 2048)? != self.argv'));
+});
+test('initial readiness adapter retains original clock custody and complete scope guards',()=>{
+ const w=fs.readFileSync(packageRoot+'/native/wire.rs','utf8');
+ const start=w.indexOf("impl argv_readiness::Source for InitialArgv<'_>"),end=w.indexOf("impl<'a> NativePeer<'a>",start);
+ assert(start>=0&&end>start);const adapter=w.slice(start,end);
+ for(const text of ['self.clock.check()','self.scope.current(self.clock)?','self.debugger.check(self.child, self.executable)?','self.scope.member(self.child.id())','argv_readiness::MAX_CMDLINE'])assert(adapter.includes(text));
+ const readiness=w.indexOf('argv_readiness::initial('),stdin=w.indexOf('SetupStage::TakeStdin');
+ assert(readiness>=0&&readiness<stdin);
+ const diagnostic=fs.readFileSync(packageRoot+'/native/setup_diagnostic.rs','utf8');
+ for(const name of ['cmdline_attempts','cmdline_empty','cmdline_identity_checks','cmdline_yields'])assert(diagnostic.includes(name));
+});
+test('previous inventory or omitted readiness module refuses before payload reads',()=>{
+ for(const change of [v=>v.rust_files=22,v=>v.files=v.files.filter(p=>p.path!=='native/argv_readiness.rs')]){
+  const f=fixture();change(f.value);let reads=0;
+  assert.throws(()=>verifyPayload(f.value,()=>{reads++;return Buffer.alloc(0)}));assert.equal(reads,0);
+ }
 });

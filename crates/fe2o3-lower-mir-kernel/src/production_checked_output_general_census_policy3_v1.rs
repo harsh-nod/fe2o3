@@ -4,6 +4,10 @@ use fe2o3_kernel_ir::{
     KirLocalMemoryEffectRefV1,
 };
 
+#[cfg(test)]
+#[path = "production_checked_output_census_context_v1_tests.rs"]
+mod census_context_tests;
+
 include!("production_checked_output_masked_assert_success_v1.rs");
 #[path = "production_checked_output_induction_refinement_native_census_v1.rs"]
 mod induction_refinement;
@@ -280,9 +284,16 @@ pub(super) fn ranked(
     lowering: &ProductionRankedKernelLoweringInputV1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
-    for block in lowering.kernel().blocks() {
+    ranked_blocks(lowering.kernel().blocks(), budget)
+}
+
+fn ranked_blocks(
+    blocks: &[fe2o3_pliron::ProductionRankedBlockV1],
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
+    for (block_index, block) in blocks.iter().enumerate() {
         charge(budget, 1)?;
-        for operation in block.operations() {
+        for (operation_index, operation) in block.operations().iter().enumerate() {
             charge(budget, 1)?;
             match operation {
                 ProductionRankedOperationV1::ExecutionLayout { .. }
@@ -306,10 +317,15 @@ pub(super) fn ranked(
                             | dialect_kernel::MemorySpaceAttr::Private
                     ) => {}
                 _ => {
-                    return Err(refused(
-                        "ranked",
-                        "closed global effects and source scalar recipes",
-                    ));
+                    return Err(E::UnsupportedOperation {
+                        phase: "ranked",
+                        detail: "closed global effects and source scalar recipes",
+                        context: ProductionCheckedOutputCensusContextV1::ranked(
+                            block_index,
+                            operation_index,
+                            operation,
+                        ),
+                    });
                 }
             }
         }
@@ -655,6 +671,14 @@ fn native_inner(
             {
                 None
             }
+            OperationKind::Intrinsic(_)
+                if invocation_indices::native(inventory, ordinal, row, budget)? =>
+            {
+                None
+            }
+            OperationKind::Wave(_) if wave_reductions::native(inventory, ordinal, row, budget)? => {
+                None
+            }
             OperationKind::Call { callee, arguments } => {
                 if !helpers.call(inventory, ordinal, budget)? && !exp::call(row.operation, budget)?
                 {
@@ -692,7 +716,16 @@ fn native_inner(
                 }
                 None
             }
-            _ => return Err(refused(phase, "closed opcode census")),
+            _ => {
+                return Err(E::UnsupportedOperation {
+                    phase,
+                    detail: "closed opcode census",
+                    context: ProductionCheckedOutputCensusContextV1::native(
+                        row.coordinate,
+                        row.operation,
+                    ),
+                });
+            }
         };
         match memory {
             Some((access, write)) => {

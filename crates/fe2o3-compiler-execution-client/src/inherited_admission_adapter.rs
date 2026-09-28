@@ -16,14 +16,26 @@ macro_rules! inherited_admission_adapter {
             /// Errors close all consumed descriptors and leave the caller's input
             /// reservation intact; work, peaks and denial history are never reset.
             ///
-            /// The caller must exclusively own the reserved slot during admission.
             /// This admits transport only, not protected compiler or issuer authority.
-            #[doc = concat!("\n```\nuse fe2o3_compiler_execution_client::{", stringify!($Client), " as Client, ", stringify!($Error), " as Error};\nuse fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;\nfn admit<'b, 'w>(b: &'b mut Budget<'w>) -> Result<Client<'b, 'w>, Error> {\n    b.reserve_storage(Client::PEER_STORAGE)?;\n    Client::admit_inherited_child(std::time::Duration::from_secs(1), b)\n}\n```")]
-            pub fn admit_inherited_child(
+            /// Use `Self::admit` when an `OwnedFd` already represents the input.
+            ///
+            /// # Safety
+            /// Transfer exclusive ownership of FD 195, inherited without a Rust
+            /// owner or explicitly relinquished for this transfer. It must have no
+            /// existing Rust owner or outstanding borrow. No thread, signal handler,
+            /// or foreign code may close, replace, or acquire it during this call.
+            /// If absent, keep the slot unallocated until return. Consume this
+            /// transfer only once, even after an error, resource refusal, or unwind.
+            /// A later occupant of FD 195 is not another inherited input. Checks
+            /// cannot prove ownership.
+            #[doc = concat!("\n```compile_fail,E0133\nuse fe2o3_compiler_execution_client::{", stringify!($Client), " as Client, ", stringify!($Error), " as Error};\nuse fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;\nfn admit<'b, 'w>(b: &'b mut Budget<'w>) -> Result<Client<'b, 'w>, Error> {\n    b.reserve_storage(Client::PEER_STORAGE)?;\n    Client::admit_inherited_child(std::time::Duration::from_secs(1), b)\n}\n```")]
+            pub unsafe fn admit_inherited_child(
                 timeout: Duration,
                 budget: &'budget mut Budget<'work>,
             ) -> std::result::Result<Self, $Error> {
-                let pending = crate::inherited_admission::PendingInheritedPeer::new();
+                // SAFETY: the caller transfers exclusive custody through all exits,
+                // including budget refusal before the descriptor can be inspected.
+                let pending = unsafe { crate::inherited_admission::PendingInheritedPeer::new() };
                 let (peer, deadline) = budget.with_prepaid_scope::<_, $Error>(
                     Self::PEER_STORAGE,
                     8,

@@ -289,7 +289,10 @@ fn native_inherited_case_child() {
         "timeout-long" => Duration::from_secs(301),
         _ => Duration::from_secs(1),
     };
-    let result = Client::admit_inherited_child(timeout, &mut budget);
+    // SAFETY: the exact-filter subprocess inherited this slot through exec with
+    // no Rust owner. No fixture thread closes/replaces it; the missing cases keep
+    // it vacant. This is the only admission attempt for this child's transfer.
+    let result = unsafe { Client::admit_inherited_child(timeout, &mut budget) };
     let replacement = canonical_vacancy(&observer);
     if matches!(case.as_str(), "success" | "work-exact") {
         let client =

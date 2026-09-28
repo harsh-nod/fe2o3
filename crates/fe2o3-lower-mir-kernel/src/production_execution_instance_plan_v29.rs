@@ -287,6 +287,7 @@ fn execution_function_signature_v29(
         drop(layout.parameter_declarations);
         budget.release_storage(declaration_bytes)?;
         Ok(LoweredFunctionSignatureV1 {
+            bf16_nominal: false,
             parameter_semantic_types,
             call_arguments: layout.call_arguments,
             parameter_types: layout.parameter_types,

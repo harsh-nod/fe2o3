@@ -35,9 +35,10 @@ use crate::reference_effect_bijection_v1::{
     establish_reference_effect_bijection_v1,
 };
 use crate::reference_effect_v1::{
-    AuthenticatedReferenceEffectBindingsV1, ReferenceArgumentRelationV1,
-    ReferenceEffectExpressionV1, ReferenceEffectIrV1, ReferenceOutputCoordinateV1,
-    ReferenceOutputWriteV1, ReferencePathPredicateV1, ReferenceScalarTypeV1,
+    AuthenticatedReferenceEffectBindingV1, AuthenticatedReferenceEffectBindingsV1,
+    ReferenceArgumentRelationV1, ReferenceEffectExpressionV1, ReferenceEffectIrV1,
+    ReferenceOutputCoordinateV1, ReferenceOutputWriteV1, ReferencePathPredicateV1,
+    ReferenceScalarTypeV1,
 };
 #[cfg(test)]
 use crate::reference_effect_v1::{ReferenceBinaryOpV1, ReferenceCastKindV1, ReferenceConstantV1};
@@ -86,7 +87,26 @@ pub(crate) fn reserved_reference_value_count_v2(
 pub(crate) fn reserved_reference_output_ranks_v2(
     bindings: &AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<Vec<usize>, crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1> {
-    let [binding] = bindings.as_slice() else {
+    checked_reference_prefix_output_writes_v2(bindings.as_slice())?
+        .iter()
+        .map(|write| match &write.coordinate {
+            ReferenceOutputCoordinateV1::LogicalPoint(axes) => Ok(axes.len()),
+            _ => Err(
+                crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
+                    "reference-effect projection requires independently indexed logical point outputs",
+                ),
+            ),
+        })
+        .collect()
+}
+
+pub(crate) fn checked_reference_prefix_output_writes_v2(
+    bindings: &[AuthenticatedReferenceEffectBindingV1],
+) -> Result<
+    &[ReferenceOutputWriteV1],
+    crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1,
+> {
+    let [binding] = bindings else {
         return Err(
             crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
                 "reference-effect projection requires exactly one authenticated kernel/reference binding",
@@ -109,18 +129,7 @@ pub(crate) fn reserved_reference_output_ranks_v2(
             ),
         );
     }
-    binding
-        .observable_output_writes
-        .iter()
-        .map(|write| match &write.coordinate {
-            ReferenceOutputCoordinateV1::LogicalPoint(axes) => Ok(axes.len()),
-            _ => Err(
-                crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
-                    "reference-effect projection requires independently indexed logical point outputs",
-                ),
-            ),
-        })
-        .collect()
+    Ok(&binding.observable_output_writes)
 }
 
 /// Move-only compiler custody over a request derived from exact collector and

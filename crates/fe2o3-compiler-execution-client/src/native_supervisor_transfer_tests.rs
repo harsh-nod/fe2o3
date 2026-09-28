@@ -62,7 +62,17 @@ fn resource_refusals_precede_connect_and_connect_refusal_restores_original_accou
         if case == 6 {
             assert!(result.is_err());
         } else if case < 5 {
-            assert!(matches!(result.unwrap(), Err(Failure::Resource(_))));
+            let error = result.unwrap().err().expect("underfunded transfer refused");
+            // The one-short total is exhausted by the nested handoff constructor.
+            let resource_refusal = if case == 2 {
+                matches!(
+                    error,
+                    Failure::Handoff(HandoffError::Resource(Resource::Work(_)))
+                )
+            } else {
+                matches!(error, Failure::Resource(_))
+            };
+            assert!(resource_refusal, "case {case}: {error:?}");
         } else {
             assert!(matches!(result.unwrap(), Err(Failure::Mismatch(_))));
         }

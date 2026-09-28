@@ -129,8 +129,9 @@ pub(super) unsafe fn run(
     let mut sources = unsafe { Sources::new() };
     b.with_prepaid_scope(INPUT_STORAGE, 8, NATIVE_ISSUER_STARTUP_WORK_V2,
         NATIVE_ISSUER_STARTUP_FRAME_STORAGE_V2, |b| {
-            observations::require_descriptor_only_invocation().map_err(ProfileError::from)?;
+            // Invocation inspection opens /proc files; validate every raw slot first.
             sources.validate()?;
+            observations::require_descriptor_only_invocation().map_err(ProfileError::from)?;
             // SAFETY: no descriptor-owning admission has happened; the caller also
             // excludes ambient Rust owners, threads and pending cleanup custody.
             unsafe { io::close_unrelated()?; }

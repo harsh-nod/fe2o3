@@ -141,6 +141,11 @@ pub(super) fn join_raw_empty_summary_v1(
         DefinedCallableEmptyEffectDecisionV1::ExactEmptyOnly
         | DefinedCallableEmptyEffectDecisionV1::ExactEmptyDeterministicScalar
         | DefinedCallableEmptyEffectDecisionV1::LocalMemoryRequiresCall => {}
+        DefinedCallableEmptyEffectDecisionV1::NominalTensorRequiresCall => {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "nominal tensor call cannot join a raw-empty scalar/local summary",
+            ));
+        }
         DefinedCallableEmptyEffectDecisionV1::Unknown => {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "materialized helper effect fact has an unfinished source summary",

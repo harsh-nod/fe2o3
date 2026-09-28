@@ -26,13 +26,16 @@
     "block": 3
   },
   "crates/cargo-fe2o3/src/binding_wrapper.rs": {
-    "block": 2
+    "block": 3
   },
   "crates/cargo-fe2o3/src/cargo_invocation_boundary.rs": {
     "block": 7
   },
   "crates/cargo-fe2o3/src/compiler_execution_boundary.rs": {
     "block": 2
+  },
+  "crates/cargo-fe2o3/src/compiler_execution_boundary_native_tests.rs": {
+    "block": 1
   },
   "crates/cargo-fe2o3/src/main.rs": {
     "block": 6
@@ -170,20 +173,39 @@
   "crates/fe2o3-compiler-closure-capability/src/compiler_execution_policy.rs": {
     "block": 1
   },
-  "crates/fe2o3-compiler-closure-capability/src/sealed_image.rs": {
+  "crates/fe2o3-compiler-closure-capability/src/native_policy_inheritance_tests.rs": {
     "block": 5
+  },
+  "crates/fe2o3-compiler-closure-capability/src/sealed_image.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-compiler-closure-capability/src/sealed_image/child_inheritance.rs": {
+    "block": 2
   },
   "crates/fe2o3-compiler-closure-capability/src/sealed_image/native.rs": {
     "block": 3
   },
   "crates/fe2o3-compiler-execution-client/src/bin/compiler-execution-client-check.rs": {
-    "block": 1
+    "block": 4,
+    "function": 1
   },
   "crates/fe2o3-compiler-execution-client/src/child_channel.rs": {
     "block": 20
   },
+  "crates/fe2o3-compiler-execution-client/src/inherited_admission.rs": {
+    "block": 10,
+    "function": 2
+  },
+  "crates/fe2o3-compiler-execution-client/src/inherited_admission_adapter.rs": {
+    "block": 1,
+    "function": 1
+  },
   "crates/fe2o3-compiler-execution-client/src/lib.rs": {
-    "block": 18
+    "block": 11,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-client/src/native_supervisor_handoff_io.rs": {
+    "block": 1
   },
   "crates/fe2o3-compiler-execution-client/src/supervisor_handoff.rs": {
     "block": 3
@@ -195,7 +217,10 @@
     "block": 9
   },
   "crates/fe2o3-compiler-execution-client/tests/inherited_child.rs": {
-    "block": 4
+    "block": 6
+  },
+  "crates/fe2o3-compiler-execution-client/tests/native_inherited/support.rs": {
+    "block": 5
   },
   "crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs": {
     "block": 3
@@ -203,13 +228,49 @@
   "crates/fe2o3-compiler-execution-coordinator/src/inherited.rs": {
     "block": 2
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_activation.rs": {
+    "block": 16,
+    "extern_block": 2,
+    "function": 6
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_activation_tests.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_entrypoint.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_inherited.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_inherited_adapter.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_inherited_tests.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_launch_adapter.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_provisioner.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_provisioner_activation.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_tests.rs": {
+    "block": 1
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/provisioning_entrypoint.rs": {
     "block": 5
   },
   "crates/fe2o3-compiler-execution-issuer/examples/native_ready_fixture/io.rs": {
     "block": 16
   },
-  "crates/fe2o3-compiler-execution-issuer/src/launch_inputs_v2_tests.rs": {
+  "crates/fe2o3-compiler-execution-issuer/src/launch_inputs_tests.rs": {
     "block": 3
   },
   "crates/fe2o3-compiler-execution-issuer/src/lib.rs": {
@@ -225,18 +286,45 @@
     "block": 5
   },
   "crates/fe2o3-compiler-execution-supervisor/src/handoff_ancillary_tests.rs": {
-    "block": 7
+    "block": 8
   },
   "crates/fe2o3-compiler-execution-supervisor/src/handoff_v2_test_process.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/main_native.rs": {
     "block": 1
   },
   "crates/fe2o3-compiler-execution-supervisor/src/native_consuming_test_process.rs": {
     "block": 7
   },
+  "crates/fe2o3-compiler-execution-supervisor/src/native_deployment_io.rs": {
+    "block": 3,
+    "function": 2
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/native_deployment_io_tests.rs": {
+    "block": 14
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/native_entrypoint.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/native_startup_body.rs": {
+    "block": 2,
+    "function": 1
+  },
   "crates/fe2o3-compiler-execution-supervisor/src/process.rs": {
-    "block": 25,
+    "block": 29,
     "extern_block": 1,
     "function": 5
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/process_mechanics_tests.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/process_native_body.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/process_reaper.rs": {
+    "block": 1
   },
   "crates/fe2o3-compiler-ffi/tests/v3_owned_decode_allocations.rs": {
     "block": 4,
@@ -516,15 +604,48 @@
   "crates/fe2o3-external-anchor-coordinator/src/lib.rs": {
     "block": 2
   },
+  "crates/fe2o3-external-anchor-coordinator/src/native_launch_adapter.rs": {
+    "block": 3
+  },
   "crates/fe2o3-external-anchor-provisioner/src/entrypoint.rs": {
-    "block": 9,
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-external-anchor-provisioner/src/helper_io.rs": {
+    "block": 7,
     "function": 2
+  },
+  "crates/fe2o3-external-anchor-provisioner/src/main_native.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-external-anchor-provisioner/src/native_entrypoint.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-external-anchor-provisioner/src/native_entrypoint/tests.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-external-anchor-provisioner/src/native_startup_body.rs": {
+    "block": 1
   },
   "crates/fe2o3-external-anchor-service/src/entrypoint.rs": {
     "block": 10
   },
+  "crates/fe2o3-external-anchor-service/src/main_native.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-external-anchor-service/src/native_entrypoint.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-external-anchor-service/src/native_entrypoint/tests.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-external-anchor-service/src/peer_io.rs": {
+    "block": 2
+  },
   "crates/fe2o3-external-anchor-service/src/service.rs": {
-    "block": 3
+    "block": 1
   },
   "crates/fe2o3-hip-sys/src/cooperative_peer.rs": {
     "block": 4,
@@ -571,6 +692,10 @@
   "crates/fe2o3-host/src/argument_alias.rs": {
     "block": 19,
     "function": 2
+  },
+  "crates/fe2o3-host/src/compiler_execution_current_record_audit.rs": {
+    "block": 1,
+    "function": 1
   },
   "crates/fe2o3-host/src/compiler_execution_current_record_audit/tests.rs": {
     "block": 4
@@ -832,6 +957,9 @@
     "function": 13,
     "impl": 6
   },
+  "crates/fe2o3-macros/src/zero_argument_typed_v1_tests.rs": {
+    "function": 1
+  },
   "crates/fe2o3-macros/tests/fixtures/renamed-device/src/main.rs": {
     "function": 1
   },
@@ -895,9 +1023,38 @@
   "crates/fe2o3-protected-service-profile/tests/process_profile.rs": {
     "block": 15
   },
+  "crates/fe2o3-protected-service-spawn/src/cleanup_bridge.rs": {
+    "function": 7
+  },
+  "crates/fe2o3-protected-service-spawn/src/launch_io.rs": {
+    "block": 6,
+    "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/launch_io_tests.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_child.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_child_tests.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_retained_child.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_spawn.rs": {
+    "function": 3
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_spawn_tests.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-protected-service-spawn/src/profile_transition_tests.rs": {
+    "block": 4
+  },
   "crates/fe2o3-protected-service-spawn/src/syscall.rs": {
-    "block": 37,
-    "function": 6
+    "block": 40,
+    "function": 7
   },
   "crates/fe2o3-runtime-protocol/src/worker_v3_load_envelope.rs": {
     "block": 1
@@ -962,10 +1119,18 @@
     "attribute": 1
   },
   "crates/rustc-codegen-fe2o3/src/protected_compiler_execution.rs": {
+    "block": 6,
+    "function": 2
+  },
+  "crates/rustc-codegen-fe2o3/src/protected_compiler_execution_native_v3.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/src/protected_compiler_execution_native_v3_tests.rs": {
     "block": 2
   },
   "crates/rustc-codegen-fe2o3/src/protected_compiler_execution_tests.rs": {
-    "block": 3
+    "block": 9
   },
   "crates/rustc-codegen-fe2o3/src/protected_rustc_invocation.rs": {
     "block": 1

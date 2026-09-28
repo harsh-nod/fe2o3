@@ -356,7 +356,7 @@ fn execution_cfg_clone_type_inner_v29(
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
     execution_cfg_charge_node_v29(nodes, budget)?;
     match ty {
-        Type::Unit | Type::Scalar(_) | Type::Vector(_) => Ok(ty.clone()),
+        Type::Unit | Type::Scalar(_) | Type::Vector(_) | Type::StorageObject(_) => Ok(ty.clone()),
         Type::Pointer(pointer) => {
             budget.reserve_storage(std::mem::size_of::<Type>())?;
             Ok(Type::pointer(
@@ -470,4 +470,40 @@ fn rebuild_execution_cfg_binding_v29(
         id: value.id,
         ty: output_type,
     })
+}
+
+#[cfg(test)]
+mod storage_cfg_copy_tests {
+    use super::*;
+
+    use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, StorageLayoutIdV1};
+    #[test]
+    fn storage_terminal_copy_preserves_id_without_copying_a_layout_table() {
+        let input = Type::pointer(
+            Type::slice(
+                Type::StorageObject(StorageLayoutIdV1(31)),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+            AddressSpace::Private,
+            AccessMode::ReadWrite,
+        );
+        let mut work = Work::new(3);
+        let mut nodes = 0;
+        {
+            let mut budget = ArgumentBudgetV1::new(&mut work, 11 + 2 * std::mem::size_of::<Type>());
+            budget.reserve_storage(11).unwrap();
+            let copied =
+                execution_cfg_clone_type_inner_v29(&input, &mut nodes, &mut budget).unwrap();
+            assert_eq!(copied, input);
+            assert_eq!(budget.storage(), 11 + 2 * std::mem::size_of::<Type>());
+            drop(copied);
+            budget
+                .release_storage(2 * std::mem::size_of::<Type>())
+                .unwrap();
+            assert_eq!(budget.storage(), 11);
+        }
+        assert_eq!(work.work(), 3);
+        assert_eq!(nodes, 3);
+    }
 }
