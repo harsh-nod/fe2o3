@@ -133,21 +133,15 @@ impl Prepared {
     }
 
     pub(crate) fn issuer_continuity_quota<T: Send + 'static>(&self) -> Result<Quota> {
-        let base = continuity::<T>(self.process_quota()?, self.issuer_image_quota()?)?;
         let root =
             RootConnection::validation_quota(self.trust.policy().policy().executable().byte_len())?;
-        Ok(Quota {
-            work: sum(&[
-                base.work(),
-                CompilerTrace::<T>::OBSERVATION_WORK,
-                root.work(),
-            ])?,
-            scratch: sum(&[
-                base.scratch(),
-                CompilerTrace::<T>::OBSERVATION_SCRATCH,
-                root.scratch(),
-            ])?,
-        })
+        continuity::<T>(
+            self.process_quota()?,
+            Quota {
+                work: root.work(),
+                scratch: root.scratch(),
+            },
+        )
     }
 
     /// Additional finite cleanup funding, with the original pool and all existing
@@ -291,13 +285,14 @@ pub(super) fn launch_quota<T: Send + 'static>(
     })
 }
 
-pub(super) fn continuity<T: Send + 'static>(process: Quota, running_image: Quota) -> Result<Quota> {
+pub(super) fn continuity<T: Send + 'static>(process: Quota, root: Quota) -> Result<Quota> {
     Ok(Quota {
         work: sum(&[
             LOCAL_WORK,
             Resources::<Payload<T>>::ACCESS_WORK,
             process.work(),
-            running_image.work(),
+            CompilerTrace::<T>::OBSERVATION_WORK,
+            root.work(),
             READY_WORK,
             PlainChild::OPERATION_WORK,
         ])?,
@@ -305,7 +300,8 @@ pub(super) fn continuity<T: Send + 'static>(process: Quota, running_image: Quota
             FRAME,
             Resources::<Payload<T>>::ACCESS_SCRATCH,
             process.scratch(),
-            running_image.scratch(),
+            CompilerTrace::<T>::OBSERVATION_SCRATCH,
+            root.scratch(),
             READY_SCRATCH,
             PlainChild::OPERATION_SCRATCH,
         ])?,

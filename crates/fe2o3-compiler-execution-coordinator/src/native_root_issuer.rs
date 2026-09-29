@@ -165,11 +165,8 @@ impl<T: Send + 'static> ManagedIssuer<'_, T> {
             self.child.with_resources(b, |p, b| -> Result<()> {
                 p.prepared.validate_process(self.child.pid(), b)?;
                 match_ready(&self.ready, self.child.pid(), &p.manifest, &p.prepared, b)?;
-                fe2o3_broker_authority_service::validate_retained_issuer_image_v3(
-                    &self.child,
-                    p.prepared.trust.policy().policy(),
-                    b,
-                )?;
+                // Connection validation includes the actual running image on
+                // this same retained child and policy, after the root join.
                 trace.with_observation(b, |original, b| -> Result<()> {
                     Ok(self.connection.validate(
                         &self.root,

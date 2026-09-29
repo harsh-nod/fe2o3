@@ -555,19 +555,21 @@ fn root_startup_quote_funds_original_view_channel_and_handshake_without_resettin
 }
 
 #[test]
-fn issuer_continuity_funds_running_image_and_refuses_quote_overflow() {
+fn issuer_continuity_funds_root_validation_and_refuses_quote_overflow() {
     let zero = Quota {
         work: 0,
         scratch: 0,
     };
-    let image = Quota {
+    let increment = Quota {
         work: 13,
         scratch: 17,
     };
     let base = quota::continuity::<()>(zero, zero).unwrap();
-    let measured = quota::continuity::<()>(zero, image).unwrap();
-    assert_eq!(measured.work() - base.work(), image.work());
-    assert_eq!(measured.scratch() - base.scratch(), image.scratch());
+    for (process, root) in [(increment, zero), (zero, increment)] {
+        let measured = quota::continuity::<()>(process, root).unwrap();
+        assert_eq!(measured.work() - base.work(), increment.work());
+        assert_eq!(measured.scratch() - base.scratch(), increment.scratch());
+    }
     for overflow in [
         Quota {
             work: usize::MAX,
@@ -579,7 +581,39 @@ fn issuer_continuity_funds_running_image_and_refuses_quote_overflow() {
         },
     ] {
         assert!(quota::continuity::<()>(zero, overflow).is_err());
+        assert!(quota::continuity::<()>(overflow, zero).is_err());
     }
+}
+
+#[test]
+fn issuer_continuity_charges_the_running_image_once_through_root_validation() {
+    use fe2o3_broker_authority_service::retained_issuer_image_quota_v3;
+    let quote = |length| {
+        let root = RootConnection::validation_quota(length).unwrap();
+        quota::continuity::<()>(
+            Quota {
+                work: 0,
+                scratch: 0,
+            },
+            Quota {
+                work: root.work(),
+                scratch: root.scratch(),
+            },
+        )
+        .unwrap()
+    };
+    let small = quote(4096);
+    let large = quote(8192);
+    let small_image = retained_issuer_image_quota_v3(4096).unwrap();
+    let large_image = retained_issuer_image_quota_v3(8192).unwrap();
+    assert_eq!(
+        large.work() - small.work(),
+        large_image.work() - small_image.work()
+    );
+    assert_eq!(
+        large.scratch() - small.scratch(),
+        large_image.scratch() - small_image.scratch()
+    );
 }
 
 #[test]
