@@ -57,7 +57,9 @@ def mutations(body):
 
     call = "$cancel!($recipe, $session, $identity)"
     test = call + ".is_err()"
-    add("omits-cancellation", test, "false")
+    # Keep the call syntactically referenced so omission fails semantically,
+    # without unrelated unused-macro diagnostics from the observation adapter.
+    add("omits-cancellation", test, "{ if false { let _ = " + call + "; } false }")
     add("cancels-twice", test, "{ let _ = " + call + "; " + test + " }")
     add("inverts-cancellation-result", test, call + ".is_ok()")
     add("ignores-cancellation-refusal", test, "{ let _ = " + call + "; false }")
