@@ -73,13 +73,28 @@ fn creator_scope_subprocess() {
     };
     // Only private controller mechanics run here. No root identity, executable,
     // child, namespace, service-manager unit, or deployment authority is admitted.
-    let limit = if mode == "exhausted" {
-        Cleanup::ADMISSION_WORK + Cleanup::pump_work(1).unwrap()
-    } else {
-        100_000_000
-    };
-    let mut account = Account::new(Work::new(limit), Cleanup::STORAGE);
-    let identity = account.with_budget(|b| b.work_ledger_identity_v1());
+    let prefix = 17;
+    let limit = prefix
+        + if mode == "exhausted" {
+            Cleanup::ADMISSION_WORK + Cleanup::pump_work(1).unwrap()
+        } else {
+            100_000_000
+        };
+    let peak = Cleanup::STORAGE + 13;
+    let mut cleanup_work = Work::new(limit);
+    cleanup_work.charge_work(prefix).unwrap();
+    assert_eq!(
+        cleanup_work.charge_work(limit).unwrap_err().actual(),
+        prefix + limit
+    );
+    let mut account = Account::new(cleanup_work, peak);
+    // Borrowed ledger identity cannot survive an Account move. Seed distinctive
+    // accepted/failed history instead, while leaving admission's live floor zero.
+    account.with_budget(|b| {
+        b.reserve_storage(peak).unwrap();
+        b.release_storage(peak).unwrap();
+        assert!(b.reserve_storage(peak + 1).is_err());
+    });
     let cleanup = crate::process_reaper::isolated_cleanup(account);
     let mut work = Work::new(100_000_000);
     let mut request = Budget::new(&mut work, 0);
@@ -120,9 +135,21 @@ fn creator_scope_subprocess() {
         }
         match mode.as_str() {
             "empty" | "busy_then_empty" => {
-                let mut returned = scope.shutdown().unwrap();
-                assert!(returned.with_budget(|b| b.work_ledger_identity_v1()) == identity);
-                assert_eq!(returned.storage(), 0);
+                let returned = scope.shutdown().unwrap();
+                let repeated_shutdown = if mode == "busy_then_empty" {
+                    Cleanup::shutdown_work()
+                } else {
+                    0
+                };
+                assert_eq!(returned.work_limit(), limit);
+                assert_eq!(
+                    returned.work(),
+                    prefix + Cleanup::ADMISSION_WORK + repeated_shutdown
+                );
+                assert_eq!(returned.failed_work(), Some(prefix + limit));
+                assert_eq!(returned.storage_limit(), peak);
+                assert_eq!((returned.storage(), returned.peak_storage()), (0, peak));
+                assert_eq!(returned.failed_storage(), Some(peak + 1));
                 drop(scope);
                 witness("complete");
             }
