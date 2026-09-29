@@ -13,6 +13,15 @@ fn check_kernel_context_source_protocol() {
     for case in [
         "valid_zst",
         "valid_transport",
+        "valid_shared_reborrow",
+        "valid_mutable_reborrow",
+        "valid_shared_reborrow_transport",
+        "valid_mutable_reborrow_transport",
+        "shared_reborrow_reordered",
+        "mutable_reborrow_reordered",
+        "projected_field_reborrow",
+        "reference_mutability_downgrade",
+        "issued_context_borrow",
         "transport_reordered",
         "reordered",
         "substituted_zst",
@@ -57,6 +66,74 @@ fn check_kernel_context_source_protocol() {
             "valid_transport" => {
                 body = "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let forwarded = issued; let first = a; let second = b; let marker = tag; context_probe_body(forwarded, first, second, marker);";
                 "semantic body construction rejected inconsistent kernel binding identity"
+            }
+            "valid_shared_reborrow"
+            | "valid_shared_reborrow_transport"
+            | "shared_reborrow_reordered" => {
+                parameters = "a: &[u32], b: &[u32], tag: Tag";
+                pointer = "fn(&[u32], &[u32], Tag)";
+                helper_parameters = "context: Context<'_>, a: &[u32], b: &[u32], tag: Tag";
+                body = match case {
+                    "valid_shared_reborrow" => {
+                        "context_probe_body(KernelContext::<'_, Marker>::__compiler_issue(), &*a, &*b, tag);"
+                    }
+                    "valid_shared_reborrow_transport" => {
+                        "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let forwarded = issued; let first = a; let second = b; let first_ref = &*first; let second_ref = &*second; let marker = tag; context_probe_body(forwarded, first_ref, second_ref, marker);"
+                    }
+                    "shared_reborrow_reordered" => {
+                        "context_probe_body(KernelContext::<'_, Marker>::__compiler_issue(), &*b, &*a, tag);"
+                    }
+                    _ => unreachable!(),
+                };
+                if case == "shared_reborrow_reordered" {
+                    "helper must consume the issued context and identity-forward every physical argument"
+                } else {
+                    "semantic body construction rejected inconsistent kernel binding identity"
+                }
+            }
+            "valid_mutable_reborrow"
+            | "valid_mutable_reborrow_transport"
+            | "mutable_reborrow_reordered"
+            | "reference_mutability_downgrade" => {
+                parameters = "a: &mut [u32], b: &mut [u32], tag: Tag";
+                pointer = "fn(&mut [u32], &mut [u32], Tag)";
+                helper_parameters = "context: Context<'_>, a: &mut [u32], b: &mut [u32], tag: Tag";
+                body = match case {
+                    "valid_mutable_reborrow" => {
+                        "context_probe_body(KernelContext::<'_, Marker>::__compiler_issue(), &mut *a, &mut *b, tag);"
+                    }
+                    "valid_mutable_reborrow_transport" => {
+                        "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let forwarded = issued; let first = a; let second = b; let first_ref = &mut *first; let second_ref = &mut *second; let marker = tag; context_probe_body(forwarded, first_ref, second_ref, marker);"
+                    }
+                    "mutable_reborrow_reordered" => {
+                        "context_probe_body(KernelContext::<'_, Marker>::__compiler_issue(), &mut *b, &mut *a, tag);"
+                    }
+                    "reference_mutability_downgrade" => {
+                        "let _shared: &[u32] = &*a; context_probe_body(KernelContext::<'_, Marker>::__compiler_issue(), a, b, tag);"
+                    }
+                    _ => unreachable!(),
+                };
+                match case {
+                    "mutable_reborrow_reordered" => {
+                        "helper must consume the issued context and identity-forward every physical argument"
+                    }
+                    "reference_mutability_downgrade" => {
+                        "entry protocol reborrow must preserve a physical reference argument"
+                    }
+                    _ => "semantic body construction rejected inconsistent kernel binding identity",
+                }
+            }
+            "projected_field_reborrow" => {
+                parameters = "a: &(u32, u32), b: &(u32, u32), tag: Tag";
+                pointer = "fn(&(u32, u32), &(u32, u32), Tag)";
+                helper_parameters =
+                    "context: Context<'_>, a: &(u32, u32), b: &(u32, u32), tag: Tag";
+                body = "let _field = &a.0; context_probe_body(KernelContext::<'_, Marker>::__compiler_issue(), a, b, tag);";
+                "entry protocol reborrow must preserve a physical reference argument"
+            }
+            "issued_context_borrow" => {
+                body = "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let _borrowed = &issued; context_probe_body(issued, a, b, tag);";
+                "entry protocol reborrow must preserve a physical reference argument"
             }
             "transport_reordered" => {
                 body = "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let forwarded = issued; let first = a; let second = b; let marker = tag; context_probe_body(forwarded, second, first, marker);";
@@ -298,6 +375,15 @@ const CONTEXT_BYTES: &[u8] = include_bytes!(env!("FE2O3_CONTEXT_PROTOCOL_BYTES")
             case,
             "valid_zst"
                 | "valid_transport"
+                | "valid_shared_reborrow"
+                | "valid_mutable_reborrow"
+                | "valid_shared_reborrow_transport"
+                | "valid_mutable_reborrow_transport"
+                | "shared_reborrow_reordered"
+                | "mutable_reborrow_reordered"
+                | "projected_field_reborrow"
+                | "reference_mutability_downgrade"
+                | "issued_context_borrow"
                 | "transport_reordered"
                 | "substituted_zst"
                 | "foreign_root"
