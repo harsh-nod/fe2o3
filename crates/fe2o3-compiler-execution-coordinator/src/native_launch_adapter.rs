@@ -201,7 +201,7 @@ macro_rules! launch {
                     // staged File is validated below before the stage can leave this scope.
                     let (stage, c) = unsafe { Stage::stage(&supervisor, &bindings,
                         channels.profile_writer.as_fd(), channels.gate_reader.as_fd(),
-                        channels.child.as_fd(), self.transfer_source_storage()?, b) }?;
+                        channels.exec_writer.as_fd(), self.transfer_source_storage()?, b) }?;
                     b.reserve_storage(c.additional_storage())?;
                     self.validate_staged(&stage, channels, b)?;
                     Ok((stage, c.additional_storage()))
@@ -278,25 +278,29 @@ macro_rules! launch {
                     drop(stage);
                     b.release_storage(stage_charge)?;
                     let Channels { root, child: bootstrap_child, profile_reader, profile_writer,
-                        gate_reader, gate_writer } = channels;
-                    drop(bootstrap_child); drop(profile_writer); drop(gate_reader);
-                    launch_io::await_profile_ready(profile_reader.as_fd(), root.as_fd(),
+                        gate_reader, gate_writer, exec_reader, exec_writer } = channels;
+                    drop(bootstrap_child); drop(profile_writer); drop(gate_reader); drop(exec_writer);
+                    launch_io::await_profile_ready(profile_reader.as_fd(), exec_reader.as_fd(),
                         &mut launch::Observer { child: &child, budget: b }, deadline)?;
                     child.with_resources(b, |p, b| p.validate_process(child.pid(), b))?;
                     launch_io::release_child(gate_writer.as_fd(),
                         &mut launch::Observer { child: &child, budget: b }, deadline)?;
                     drop(gate_writer);
+                    // Exec failures use this channel, not the persistent bootstrap.
+                    // Consume their canonical stage before bootstrap EOF can mask it.
+                    launch_io::await_exec_eof(exec_reader.as_fd(),
+                        &mut launch::Observer { child: &child, budget: b }, deadline)?;
                     let (readiness, ready_charge) = {
                         b.reserve_storage(READY_BYTES)?;
-                        let (bytes, fd) = launch_io::receive_ready::<READY_BYTES, false, _>(root.as_fd(),
+                        let sender = launch_io::MessageSender::new(child.pid().as_raw_pid(),
+                            credentials.uid(), credentials.gid());
+                        let (bytes, fd) = launch_io::receive_ready_from::<READY_BYTES, false, _>(root.as_fd(), sender,
                             &mut launch::Observer { child: &child, budget: b }, deadline)?;
                         if fd.is_some() { return Err(Error::Invalid("unexpected supervisor ready descriptor")); }
                         child.with_resources(b, |p, b| decode_ready(&bytes, child.pid(), p.trust.deployment().deployment(), b))?
                     };
                     b.release_storage(READY_BYTES)?;
                     b.reserve_storage(ready_charge)?;
-                    launch_io::await_exec_eof(root.as_fd(),
-                        &mut launch::Observer { child: &child, budget: b }, deadline)?;
                     child.with_resources(b, |p, b| -> Result<()> {
                         p.validate_process(child.pid(), b)?;
                         if !readiness.matches_deployment(launch::pid_u32(child.pid())?, p.trust.deployment().deployment(), b)? {
@@ -307,7 +311,7 @@ macro_rules! launch {
                     if !child.is_live(b)? { return Err(launch_io::Failure::ChildExited("supervisor readiness").into()); }
                     if Instant::now() >= deadline { return Err(launch_io::Failure::Timeout("supervisor final validation").into()); }
                     // SAFETY: private exact-family ready binds this actual PID/deployment;
-                    // CLOEXEC EOF follows its measured exec. Final profile, context and
+                    // independent CLOEXEC EOF preceded ready. Final profile, context and
                     // pidfd liveness checks passed; all bootstrap aliases are closed here.
                     unsafe { child.confirm_exec(b) }?;
                     let retained = sum(&[child.retained_storage(), ready_charge, $Managed::ENVELOPE])?;

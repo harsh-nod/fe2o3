@@ -237,8 +237,11 @@
     "block": 4
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_entrypoint.rs": {
-    "block": 3,
+    "block": 5,
     "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_entrypoint_tests.rs": {
+    "block": 1
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_inherited.rs": {
     "block": 3,
@@ -1026,9 +1029,19 @@
   "crates/fe2o3-protected-service-spawn/src/cleanup_bridge.rs": {
     "function": 7
   },
+  "crates/fe2o3-protected-service-spawn/src/creator_scope.rs": {
+    "block": 1,
+    "function": 2
+  },
+  "crates/fe2o3-protected-service-spawn/src/creator_scope_tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-protected-service-spawn/src/launch_io.rs": {
-    "block": 6,
+    "block": 10,
     "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/launch_io_credential_tests.rs": {
+    "block": 1
   },
   "crates/fe2o3-protected-service-spawn/src/launch_io_tests.rs": {
     "block": 3

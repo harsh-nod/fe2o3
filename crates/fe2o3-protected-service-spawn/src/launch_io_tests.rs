@@ -80,7 +80,7 @@ impl Io for Script {
                 (n, actual)
             })
     }
-    fn ready(&mut self, _: BorrowedFd<'_>) -> Result<ReadyPacket, Errno> {
+    fn ready(&mut self, _: BorrowedFd<'_>, _: bool) -> Result<ReadyPacket, Errno> {
         self.call(3);
         self.ready.pop_front().unwrap_or(Err(Errno::AGAIN))
     }
@@ -142,7 +142,7 @@ fn packet(fd: Option<OwnedFd>) -> ReadyPacket {
         rights: Rights {
             fd,
             invalid: false,
-            credentials: false,
+            credentials: None,
         },
     }
 }
@@ -259,15 +259,14 @@ fn exact_timeout_policy_and_attempt_costs() {
     assert_eq!(MAX_PHASE_ATTEMPTS, 120_001);
     assert_eq!(MAX_GATE_ATTEMPTS, 64);
     assert_eq!(Boundary::ProfileReady.work(), 1480);
-    assert_eq!(Boundary::ChildStage.work(), 18_824);
-    assert_eq!(Boundary::ExecEof.work(), 18_824);
+    assert_eq!(Boundary::ChildStage.work(), 26_888);
+    assert_eq!(Boundary::ExecEof.work(), 26_888);
     assert_eq!(Boundary::GateRelease.work(), 1416);
     assert_eq!(Boundary::Progress.work(), 1352);
-    assert_eq!(CONTROL_BYTES, 32);
-    assert_eq!(Boundary::ReadyTransfer.work(), 17_736);
-    assert_eq!(Boundary::ReadyTransfer.work(), 17_736);
+    assert_eq!(CONTROL_BYTES, 56);
+    assert_eq!(Boundary::ReadyTransfer.work(), 26_888);
     assert_eq!(MAX_LIVENESS_CHECKS, 360_000);
-    assert_eq!(MAX_WORK, 7310547488);
+    assert_eq!(MAX_WORK, 10344172768);
     assert!(
         ATTEMPT_SCRATCH
             >= size_of::<ReadyPacket>() + size_of::<([u8; MAX_READY_BYTES], Option<OwnedFd>)>()
@@ -835,17 +834,13 @@ fn disclosed_rights_and_rejected_pidfd_enter_owners_before_packet_refusal() {
         let first_id = identity(&first);
         let second = endpoint();
         let second_id = identity(&second);
-        let mut control = Control {
-            length: size_of::<libc::cmsghdr>() + count * size_of::<i32>(),
-            level: libc::SOL_SOCKET,
-            kind,
-            descriptors: [first.into_raw_fd(), -1, -1, -1],
-        };
+        let mut descriptors = [first.into_raw_fd(), -1];
         if count == 2 {
-            control.descriptors[1] = second.into_raw_fd();
+            descriptors[1] = second.into_raw_fd();
         } else {
             drop(second);
         }
+        let (control, length) = super::credential_tests::control(kind, &descriptors[..count]);
         let mut p = packet(None);
         if truncated {
             p.flags = ReturnFlags::CTRUNC;
@@ -853,7 +848,7 @@ fn disclosed_rights_and_rejected_pidfd_enter_owners_before_packet_refusal() {
         // SAFETY: these unique live raw descriptors transfer ownership exactly
         // once. This tests control cleanup, not an actual SCM_PIDFD receive.
         unsafe {
-            take_control(&mut p.rights, &control, CONTROL_BYTES);
+            take_control(&mut p.rights, &control, length);
         }
         if kind == SCM_PIDFD || count == 2 || truncated {
             assert!(matches!(
@@ -876,15 +871,11 @@ fn disclosed_rights_and_rejected_pidfd_enter_owners_before_packet_refusal() {
 fn unknown_non_fd_control_is_rejected_without_treating_payload_as_descriptors() {
     let fd = endpoint();
     let mut p = packet(None);
-    let control = Control {
-        length: CONTROL_BYTES,
-        level: libc::SOL_SOCKET,
-        kind: libc::SCM_CREDENTIALS,
-        descriptors: [fd.as_raw_fd(); 4],
-    };
+    let (control, length) =
+        super::credential_tests::control(libc::SCM_CREDENTIALS, &[fd.as_raw_fd(); 4]);
     // SAFETY: this non-FD control carries borrowed integer values, not rights.
     unsafe {
-        take_control(&mut p.rights, &control, CONTROL_BYTES);
+        take_control(&mut p.rights, &control, length);
     }
     assert!(matches!(
         p.validate(MAX_READY_BYTES, true),
@@ -1154,15 +1145,13 @@ fn kernel_record_marker_is_framing_only_and_cannot_turn_a_packet_into_eof() {
                 let mut p = packet(None);
                 p.bytes = length;
                 if marked {
-                    let control = Control {
-                        length: size_of::<libc::cmsghdr>() + size_of::<libc::ucred>(),
-                        level: libc::SOL_SOCKET,
-                        kind: libc::SCM_CREDENTIALS,
-                        descriptors: [fd.as_raw_fd(); 4],
-                    };
+                    let (control, length) = super::credential_tests::control(
+                        libc::SCM_CREDENTIALS,
+                        &[fd.as_raw_fd(); 3],
+                    );
                     // SAFETY: credential integers are borrowed data, never FD ownership.
                     unsafe {
-                        take_control(&mut p.rights, &control, CONTROL_BYTES);
+                        take_control(&mut p.rights, &control, length);
                     }
                 }
                 if truncated {
@@ -1180,7 +1169,7 @@ fn kernel_record_marker_is_framing_only_and_cannot_turn_a_packet_into_eof() {
         }
     }
     let mut p = packet(None);
-    p.rights.credentials = true;
+    p.rights.credentials = Some(MessageSender::new(1, 2, 3));
     assert!(matches!(
         p.validate(MAX_READY_BYTES, false),
         Err(Failure::MalformedReadyTransfer)

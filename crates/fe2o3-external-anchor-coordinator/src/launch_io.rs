@@ -4,8 +4,8 @@ use fe2o3_external_anchor_provisioner::{
     ExternalAnchorProvisioningReadyV1 as Ready,
 };
 pub(crate) use fe2o3_protected_service_spawn::launch_io::{
-    ATTEMPT_SCRATCH, Boundary, Error, Failure, MAX_LIVENESS_CHECKS, MAX_WORK, Observer,
-    await_exec_eof, await_profile_ready, bounded_deadline, release_child,
+    ATTEMPT_SCRATCH, Boundary, Error, Failure, MAX_LIVENESS_CHECKS, MAX_WORK, MessageSender,
+    Observer, await_exec_eof, await_profile_ready, bounded_deadline, release_child,
 };
 use std::{
     os::fd::{BorrowedFd, OwnedFd},
@@ -20,6 +20,19 @@ pub(crate) fn receive_ready<O: Observer>(
     let (bytes, fd) =
         fe2o3_protected_service_spawn::launch_io::receive_ready::<READY_BYTES, true, _>(
             bootstrap, observer, deadline,
+        )?;
+    decode(bytes, fd).map_err(Error::Failure)
+}
+
+pub(crate) fn receive_ready_from<O: Observer>(
+    bootstrap: BorrowedFd<'_>,
+    sender: MessageSender,
+    observer: &mut O,
+    deadline: Instant,
+) -> Result<(Ready, OwnedFd), Error<O::Error>> {
+    let (bytes, fd) =
+        fe2o3_protected_service_spawn::launch_io::receive_ready_from::<READY_BYTES, true, _>(
+            bootstrap, sender, observer, deadline,
         )?;
     decode(bytes, fd).map_err(Error::Failure)
 }

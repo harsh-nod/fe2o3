@@ -163,6 +163,8 @@ impl Channels {
             None,
         )
         .map_err(|e| io("create native anchor bootstrap", e))?;
+        net::sockopt::set_socket_passcred(&root, true)
+            .map_err(|e| io("enable anchor message credentials", e))?;
         let (profile_reader, profile_writer) =
             pipe::pipe_with(pipe::PipeFlags::CLOEXEC | pipe::PipeFlags::NONBLOCK)
                 .map_err(|e| io("create native anchor profile pipe", e))?;
