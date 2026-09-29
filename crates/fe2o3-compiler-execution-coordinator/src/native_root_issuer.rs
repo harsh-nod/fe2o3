@@ -1,6 +1,6 @@
 // Direct root-to-issuer composition. No handoff, deployment or occurrence authority
-// is manufactured here. The production owning attempt and privileged observer are
-// separate integrations; readiness precedes compiler resume and publication.
+// is manufactured here. The attempt owns its original trace/session independently
+// of the issuer; runtime admission and publication remain separate integrations.
 use super::PreparedCompilerExecutionSupervisorV3 as Prepared;
 use crate::compiler_child_channel::CompilerTrace;
 use crate::native_launch::{
@@ -41,7 +41,8 @@ use fe2o3_protected_service_spawn::{
     launch_io,
     native_spawn::{
         RootOwnedProtectedServiceChildV2 as PlainChild,
-        RootOwnedRetainedServiceChildV2 as RetainedChild, StagedProtectedServiceExecV2 as Stage,
+        RootOwnedRetainedServiceChildV2 as RetainedChild, RootTaskTraceEventV2 as TraceEvent,
+        StagedProtectedServiceExecV2 as Stage,
     },
 };
 use fe2o3_protected_static_executable::{
@@ -65,7 +66,7 @@ const MANIFEST_OWNER: usize = size_of::<(Manifest, RecordStorage)>();
 // Fixed table/metadata checks, descriptor creation/closure, and refusal cleanup.
 // Every native image, record, retained access and transport charges separately.
 const LOCAL_WORK: usize = 8 + 128 * 1088;
-const FRAME: usize = 4 * size_of::<(ManagedIssuer<'static, ()>, Storage)>()
+const FRAME: usize = 4 * size_of::<(NativeAttempt<'static, ()>, Storage)>()
     + 4 * size_of::<Stage>()
     + 8 * size_of::<Error>()
     + 4 * size_of::<fs::Stat>()
@@ -118,34 +119,34 @@ impl RequestAccount {
     }
 }
 
-/// Move-only originating-thread issuer custody, not production occurrence admission.
-/// The actual compiler trace stays with the caller; this owner cannot resume it.
+/// Original compiler/session custody, independent of the removable issuer.
+/// This owner cannot resume the compiler or admit a publication occurrence.
 /// Keep the creator thread and original cleanup controller alive until termination,
 /// including deferred/quarantined cleanup. Retire the FULL charge only after Drop.
+/// Removing the issuer does not reduce this charge or replace the session/trace.
 /// Keep the original Work borrow live and Budget at its admitting address until
 /// this owner drops; address equality is not persistent identity after that borrow.
-pub(crate) struct ManagedIssuer<'work, T: Send + 'static> {
-    child: Child<T>,
-    ready: Ready,
+pub(crate) struct NativeAttempt<'work, T: Send + 'static> {
+    // Field order starts compiler cancellation before dropping either other owner.
+    trace: CompilerTrace<'work, T>,
     root: RootSession<'work>,
-    connection: RootConnection<'work>,
+    issuer: Option<ManagedIssuer<'work, T>>,
     retained: usize,
     continuity: Quota,
     account: RequestAccount,
     // Never send the foreground launch owner or imply a Send escape for the trace.
     _creator: PhantomData<(&'work Budget<'work>, Rc<()>)>,
 }
-impl<T: Send + 'static> ManagedIssuer<'_, T> {
+impl<T: Send + 'static> NativeAttempt<'_, T> {
     const ENVELOPE: usize = size_of::<(Self, Storage)>()
-        - size_of::<Child<T>>()
-        - size_of::<Ready>()
+        - size_of::<CompilerTrace<'static, T>>()
         - size_of::<RootSession<'static>>()
-        - size_of::<RootConnection<'static>>();
-    pub(crate) fn pid(&self) -> rustix::process::Pid {
-        self.child.pid()
+        - size_of::<ManagedIssuer<'static, T>>();
+    pub(crate) fn issuer_pid(&self) -> Option<rustix::process::Pid> {
+        self.issuer.as_ref().map(|issuer| issuer.child.pid())
     }
-    pub(crate) const fn readiness(&self) -> &Ready {
-        &self.ready
+    pub(crate) fn readiness(&self) -> Option<&Ready> {
+        self.issuer.as_ref().map(|issuer| &issuer.ready)
     }
     pub(crate) const fn retained_storage(&self) -> usize {
         self.retained
@@ -156,35 +157,87 @@ impl<T: Send + 'static> ManagedIssuer<'_, T> {
 
     /// Owning attempt must check readiness/continuity before resuming its compiler.
     /// This does not perform Prepare/Issue or inspect a not-yet-created publication.
-    pub(crate) fn validate_ready(
-        &self,
-        trace: &CompilerTrace<'_, T>,
-        b: &mut Budget<'_>,
-    ) -> Result<()> {
+    pub(crate) fn validate_ready(&self, b: &mut Budget<'_>) -> Result<()> {
         self.account.with(self.retained, b, |b| {
-            self.child.with_resources(b, |p, b| -> Result<()> {
-                p.prepared.validate_process(self.child.pid(), b)?;
-                match_ready(&self.ready, self.child.pid(), &p.manifest, &p.prepared, b)?;
+            let issuer = self
+                .issuer
+                .as_ref()
+                .ok_or(Error::Invalid("root attempt has no issuer"))?;
+            issuer.child.with_resources(b, |p, b| -> Result<()> {
+                p.prepared.validate_process(issuer.child.pid(), b)?;
+                match_ready(
+                    &issuer.ready,
+                    issuer.child.pid(),
+                    &p.manifest,
+                    &p.prepared,
+                    b,
+                )?;
                 // Connection validation includes the actual running image on
                 // this same retained child and policy, after the root join.
-                trace.with_observation(b, |original, b| -> Result<()> {
-                    Ok(self.connection.validate(
-                        &self.root,
-                        original,
-                        &self.child,
-                        p.prepared.trust.policy().policy(),
-                        p.manifest.manifest(),
-                        b,
-                    )?)
-                })?;
+                self.trace
+                    .with_observation(b, |original, b| -> Result<()> {
+                        Ok(issuer.connection.validate(
+                            &self.root,
+                            original,
+                            &issuer.child,
+                            p.prepared.trust.policy().policy(),
+                            p.manifest.manifest(),
+                            b,
+                        )?)
+                    })?;
                 Ok(())
             })?;
-            require_live(&self.child, b)
+            require_live(&issuer.child, b)
         })
     }
-    pub(crate) fn cancel(mut self) -> CleanupPoll {
-        self.child.cancel()
+
+    /// Revalidate only the original live compiler/session, never issuer readiness.
+    pub(crate) fn validate_original(&self, b: &mut Budget<'_>) -> Result<()> {
+        self.account.with(self.retained, b, |b| {
+            self.trace.with_observation(b, |original, b| -> Result<()> {
+                Ok(self.root.validate_original(original, b)?)
+            })
+        })
     }
+
+    /// Original consuming wait only; neither readiness nor runtime admission.
+    pub(crate) fn poll_compiler(&mut self, b: &mut Budget<'_>) -> Result<TraceEvent> {
+        b.with_prepaid_scope(self.retained, 0, 0, 0, |b| self.trace.poll(b))
+    }
+
+    pub(crate) fn cancel_compiler(&mut self) -> CleanupPoll {
+        self.trace.cancel()
+    }
+
+    /// Uses the issuer's original cleanup slot without touching compiler/session.
+    /// This is not a restart path: the compiler input transfer remains one-use.
+    pub(crate) fn cancel_issuer(&mut self) -> Option<CleanupPoll> {
+        cancel_issuer_slot(&mut self.issuer)
+    }
+}
+
+// No root/session/trace or fresh account is available to issuer removal.
+fn cancel_issuer_slot<T: Send + 'static>(
+    slot: &mut Option<ManagedIssuer<'_, T>>,
+) -> Option<CleanupPoll> {
+    slot.take().map(|mut issuer| issuer.child.cancel())
+}
+
+struct ManagedIssuer<'work, T: Send + 'static> {
+    child: Child<T>,
+    ready: Ready,
+    connection: RootConnection<'work>,
+    retained: usize,
+}
+impl<T: Send + 'static> ManagedIssuer<'_, T> {
+    const ENVELOPE: usize = size_of::<(Self, Storage)>()
+        - size_of::<Child<T>>()
+        - size_of::<Ready>()
+        - size_of::<RootConnection<'static>>();
+}
+
+fn attempt_storage<T: Send + 'static>(trace: usize, root: usize, issuer: usize) -> Result<usize> {
+    sum(&[trace, root, issuer, NativeAttempt::<T>::ENVELOPE])
 }
 
 // Readiness alone cannot construct ManagedIssuer. The original held compiler
@@ -203,12 +256,12 @@ impl<T: Send + 'static> ReadyIssuer<'_, T> {
         - size_of::<Ready>()
         - size_of::<RootChannel<'static>>();
 }
-impl<T: Send + 'static> fmt::Debug for ManagedIssuer<'_, T> {
+impl<T: Send + 'static> fmt::Debug for NativeAttempt<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ManagedIssuer")
-            .field("pid", &self.pid())
-            .field("readiness", &self.ready.identity())
-            .field("authority", &"issuer-custody-only")
+        f.debug_struct("NativeAttempt")
+            .field("compiler", &self.trace.pid())
+            .field("issuer", &self.issuer_pid())
+            .field("authority", &"original-trace-and-session-custody-only")
             .finish_non_exhaustive()
     }
 }
@@ -228,40 +281,38 @@ impl<T: Send + 'static> Drop for CompilerCancellation<'_, '_, T> {
 }
 
 impl Prepared {
-    /// Consumes actual prepared root authority and the confirmed trace's ONE input
+    /// Consumes actual prepared root authority, the trace and its ONE input
     /// callback. No descriptor intake, PID reopen or AcceptedHandoff is available.
     /// Keep this preparation and the full compiler trace prepaid on the SAME Budget.
-    /// The returned charge is GROWTH above Prepared; the trace reservation remains
-    /// independent. On error/unwind the original compiler is cancelled, even when
-    /// only final outer accounting failed. Never resumes the compiler.
+    /// The returned charge is GROWTH above BOTH consumed owners, Prepared + trace.
+    /// Keep both input reservations and reserve growth before retaining the result.
+    /// On error/unwind both foreground inputs are consumed and the original compiler
+    /// is cancelled, even when only final outer accounting failed. Never resumes it.
     ///
     /// # Safety
-    /// Keep the actual cloning thread alive until issuer termination and unresolved
-    /// cleanup; preserve sole consuming-wait and descriptor/profile custody. The
+    /// Keep the actual cloning thread alive until compiler and issuer termination
+    /// and unresolved cleanup; preserve sole consuming-wait and descriptor/profile custody. The
     /// original T must satisfy its bounded, nonpanicking, independently funded Drop
     /// contract even if issuer cleanup releases the last dependency on another thread.
     /// Cleanup must be the already funded controller carrying this Prepared's root
-    /// lifecycle guard; no account may be renewed. The production owning attempt,
-    /// approved runtime enforcement and privileged publication observer are separate.
+    /// lifecycle guard; no account may be renewed. Approved runtime enforcement
+    /// and privileged publication observation remain separate.
     #[allow(unsafe_code)]
-    pub(crate) unsafe fn launch_issuer<'work, T: Send + 'static>(
+    pub(crate) unsafe fn launch_root_attempt<'work, T: Send + 'static>(
         self,
-        trace: &mut CompilerTrace<'work, T>,
+        mut trace: CompilerTrace<'work, T>,
         timeout: Duration,
         cleanup: &mut Cleanup,
         b: &mut Budget<'work>,
-    ) -> Result<(ManagedIssuer<'work, T>, Storage)> {
-        let input = self.retained_storage();
+    ) -> Result<(NativeAttempt<'work, T>, Storage)> {
+        let trace_storage = trace.retained_storage();
         let mut attempt = CompilerCancellation {
-            trace,
+            trace: &mut trace,
             committed: false,
         };
-        let result = b.with_prepaid_scope(
-            sum(&[input, attempt.trace.retained_storage()])?,
-            8,
-            LOCAL_WORK,
-            FRAME,
-            |b| -> Result<_> {
+        let input = sum(&[self.retained_storage(), trace_storage])?;
+        let (root, issuer, continuity, account, retained, growth) =
+            b.with_prepaid_scope(input, 8, LOCAL_WORK, FRAME, |b| -> Result<_> {
                 let deadline = launch_io::bounded_deadline(timeout)?;
                 self.validate_cleanup_guard(cleanup, b)?;
                 let (pending, growth) =
@@ -312,31 +363,39 @@ impl Prepared {
                             let retained = sum(&[
                                 child.retained_storage(),
                                 ready.retained_storage(),
-                                root.retained_storage(),
                                 connection.retained_storage(),
                                 ManagedIssuer::<T>::ENVELOPE,
                             ])?;
                             b.reserve_storage(ManagedIssuer::<T>::ENVELOPE)?;
                             Ok((root, connection, retained))
                         })?;
+                let issuer = ManagedIssuer {
+                    child,
+                    ready,
+                    connection,
+                    retained,
+                };
+                let retained =
+                    attempt_storage::<T>(trace_storage, root.retained_storage(), issuer.retained)?;
+                b.reserve_storage(NativeAttempt::<T>::ENVELOPE)?;
                 let growth = retained.checked_sub(input).ok_or(Resource::Accounting)?;
-                Ok((
-                    ManagedIssuer {
-                        child,
-                        ready,
-                        root,
-                        connection,
-                        retained,
-                        continuity,
-                        account,
-                        _creator: PhantomData,
-                    },
-                    Storage(growth),
-                ))
-            },
-        )?;
+                Ok((root, issuer, continuity, account, retained, Storage(growth)))
+            })?;
+        // No fallible work remains after the outer accounting scope succeeds.
         attempt.committed = true;
-        Ok(result)
+        drop(attempt);
+        Ok((
+            NativeAttempt {
+                trace,
+                root,
+                issuer: Some(issuer),
+                retained,
+                continuity,
+                account,
+                _creator: PhantomData,
+            },
+            growth,
+        ))
     }
 }
 

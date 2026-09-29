@@ -131,13 +131,14 @@ fn run(case: &str) {
     } else {
         fixtures::CLIENT
     };
-    let (mut trace, exit, drops) = compiler::confirmed(&f, client_uid, &mut cleanup.pool, &mut b);
+    let (trace, exit, drops) = compiler::confirmed(&f, client_uid, &mut cleanup.pool, &mut b);
     let trace_storage = trace.retained_storage();
     let ledger = b.work_ledger_identity_v1();
     let address = &b as *const Budget<'_> as usize;
     let quota = prepared.issuer_launch_quota(&trace).unwrap();
+    let transfer = trace.issuer_inputs_quota().unwrap();
     let cleanup_quota = prepared
-        .issuer_cleanup_quota(&trace, 2 * TURNS + 2)
+        .issuer_cleanup_quota(&trace, 3 * TURNS + 3)
         .unwrap();
     cleanup.check_capacity(cleanup_quota);
     let continuity = prepared
@@ -152,7 +153,7 @@ fn run(case: &str) {
             .work()
             .checked_add(4 * continuity.work())
             .unwrap()
-            .checked_add(continuity::additional_work(case, continuity))
+            .checked_add(continuity::additional_work(case, continuity, transfer))
             .unwrap()
     };
     b.charge_work(
@@ -176,8 +177,8 @@ fn run(case: &str) {
     // resume, PID reopen or foreign wait consumer. The original funded pool owns
     // the matching lifecycle guard. Drain keeps this creator alive through reap.
     let launched = unsafe {
-        prepared.launch_issuer(
-            &mut trace,
+        prepared.launch_root_attempt(
+            trace,
             if case == "zero-timeout" {
                 Duration::ZERO
             } else {
@@ -195,26 +196,39 @@ fn run(case: &str) {
     assert!(b.peak_storage() <= before_peak.max(floor + quota.scratch()));
     b.release_storage(padding).unwrap();
     if case.starts_with("ready-") {
-        let (issuer, growth) =
+        let (mut attempt, growth) =
             launched.expect("actual V3 issuer startup through Ready120 + EOF and root challenge");
         b.reserve_storage(growth.additional_storage()).unwrap();
         assert_eq!(
-            issuer.retained_storage(),
-            prepared_storage + growth.additional_storage()
+            attempt.retained_storage(),
+            prepared_storage + trace_storage + growth.additional_storage()
         );
-        assert_eq!(issuer.readiness().canonical_bytes().len(), 120);
         assert_eq!(
-            issuer.readiness().issuer_pid(),
-            issuer.pid().as_raw_pid() as u32
+            attempt.retained_storage(),
+            attempt_storage::<compiler::Backing>(
+                attempt.trace.retained_storage(),
+                attempt.root.retained_storage(),
+                attempt.issuer.as_ref().unwrap().retained,
+            )
+            .unwrap()
         );
-        assert_eq!(issuer.readiness().policy_identity(), expected_policy);
+        assert_eq!(attempt.readiness().unwrap().canonical_bytes().len(), 120);
+        assert_eq!(
+            attempt.readiness().unwrap().issuer_pid(),
+            attempt.issuer_pid().unwrap().as_raw_pid() as u32
+        );
+        assert_eq!(
+            attempt.readiness().unwrap().policy_identity(),
+            expected_policy
+        );
         f.assert_state("ready");
         let live = b.storage();
         let used = b.work();
-        issuer.validate_ready(&trace, &mut b).unwrap();
+        attempt.validate_ready(&mut b).unwrap();
         assert_eq!(b.storage(), live);
-        assert!(b.work() - used <= issuer.continuity_quota().work());
+        assert!(b.work() - used <= attempt.continuity_quota().work());
         if case == "ready-image-mismatch" {
+            let issuer = attempt.issuer.as_ref().unwrap();
             issuer
                 .child
                 .with_resources(&mut b, |p, b| -> Result<()> {
@@ -246,69 +260,93 @@ fn run(case: &str) {
         }
         foreign.reserve_storage(live).unwrap();
         assert!(matches!(
-            issuer.validate_ready(&trace, &mut foreign),
+            attempt.validate_ready(&mut foreign),
             Err(Error::Resource(Resource::Accounting))
         ));
         // Same ledger at another address and a foreign ledger at the original
         // address must both refuse while the actual child remains live.
         std::mem::swap(&mut b, &mut foreign);
         assert!(matches!(
-            issuer.validate_ready(&trace, &mut b),
+            attempt.validate_ready(&mut b),
             Err(Error::Resource(Resource::Accounting))
         ));
         assert!(matches!(
-            issuer.validate_ready(&trace, &mut foreign),
+            attempt.validate_ready(&mut foreign),
             Err(Error::Resource(Resource::Accounting))
         ));
         std::mem::swap(&mut b, &mut foreign);
-        issuer.validate_ready(&trace, &mut b).unwrap();
+        attempt.validate_ready(&mut b).unwrap();
         assert!(
-            trace.poll(&mut b).unwrap().is_exec(),
+            attempt.poll_compiler(&mut b).unwrap().is_exec(),
             "startup must leave compiler held"
         );
         let before_lifetime_work = b.work();
         match case {
-            "ready-issuer-exit" => continuity::issuer_exit(&issuer, &mut trace, &mut b),
-            "ready-compiler-cancel" => continuity::stop_issuer(&issuer, &trace, &mut b),
+            "ready-issuer-exit" => continuity::issuer_exit(&mut attempt, &mut b),
+            "ready-compiler-cancel" => continuity::stop_issuer(&attempt, &mut b),
             _ => {}
         }
-        if matches!(case, "ready-issuer-exit" | "ready-compiler-cancel") {
-            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
-        }
-        let issuer_storage = issuer.retained_storage();
-        assert_ne!(trace.cancel(), CleanupPoll::Quarantined);
-        if case == "ready-compiler-cancel" {
-            continuity::compiler_cancelled(&issuer, &trace, &mut b);
-            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
-        }
-        cleanup::wait_exit(&mut cleanup.pool, exit.as_fd());
-        if case == "ready-compiler-cancel" {
-            continuity::compiler_cancelled(&issuer, &trace, &mut b);
-            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
-        }
-        if matches!(case, "ready-issuer-exit" | "ready-compiler-cancel") {
-            assert_eq!(b.storage(), live);
-            assert!(
-                b.work() - before_lifetime_work <= continuity::additional_work(case, continuity)
+        if matches!(case, "ready-cancel" | "ready-unwind" | "ready-issuer-exit") {
+            continuity::remove_issuer(
+                &mut attempt,
+                case == "ready-unwind",
+                &mut cleanup.pool,
+                &mut b,
+                &mut foreign,
             );
         }
-        drop(trace);
-        b.release_storage(trace_storage).unwrap();
+        let retained = attempt.retained_storage();
         assert_eq!(
             drops.load(std::sync::atomic::Ordering::SeqCst),
             0,
-            "issuer must retain actual compiler backing after compiler reap"
+            "original compiler backing must remain owned"
         );
         if case == "ready-unwind" {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let _issuer = issuer;
-                panic!("intentional foreground issuer unwind");
+                let _attempt = attempt;
+                panic!("intentional foreground attempt unwind");
             }));
             assert!(result.is_err());
+            cleanup::wait_exit(&mut cleanup.pool, exit.as_fd());
         } else {
-            assert_ne!(issuer.cancel(), CleanupPoll::Quarantined);
+            if case == "ready-compiler-cancel" {
+                continuity::refuse_outer_scope(&mut attempt, &mut b);
+                continuity::compiler_cancelled(&attempt, &mut b);
+            } else {
+                assert_ne!(attempt.cancel_compiler(), CleanupPoll::Quarantined);
+            }
+            cleanup::wait_exit(&mut cleanup.pool, exit.as_fd());
+            if case == "ready-compiler-cancel" {
+                continuity::compiler_cancelled(&attempt, &mut b);
+            }
+            // Private-field inspection preserves the original dependency regression;
+            // no production API can extract either the compiler or the root session.
+            let NativeAttempt {
+                trace,
+                root,
+                mut issuer,
+                ..
+            } = attempt;
+            drop(trace);
+            drop(root);
+            if issuer.is_some() {
+                assert_eq!(
+                    drops.load(std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "issuer must retain actual compiler backing after compiler reap"
+                );
+                assert_ne!(
+                    cancel_issuer_slot(&mut issuer),
+                    Some(CleanupPoll::Quarantined)
+                );
+            }
         }
-        b.release_storage(issuer_storage).unwrap();
+        assert_eq!(b.storage(), live);
+        assert!(
+            b.work() - before_lifetime_work
+                <= continuity::additional_work(case, continuity, transfer)
+        );
+        b.release_storage(retained).unwrap();
     } else {
         let error = launched.unwrap_err();
         match case {
@@ -341,10 +379,9 @@ fn run(case: &str) {
                 "issuer admission must refuse before readiness, got {error:?}"
             ),
         }
-        // Verify launch refusal itself cancels the original compiler BEFORE
-        // explicit cancellation or dropping its foreground trace.
+        // The consuming constructor must cancel/drop its compiler on refusal;
+        // no loose foreground trace remains for the caller to rescue it.
         cleanup::wait_exit(&mut cleanup.pool, exit.as_fd());
-        drop(trace);
         b.release_storage(trace_storage + prepared_storage).unwrap();
         if case == "corrupt-state" {
             f.assert_state("corrupt");

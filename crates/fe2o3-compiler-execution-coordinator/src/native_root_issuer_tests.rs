@@ -38,8 +38,73 @@ fn issuer_account_scope_preserves_original_charges_and_history() {
     assert_eq!(b.work(), prefix + LOCAL_WORK);
     assert_eq!(b.peak_storage(), floor + FRAME);
     assert_eq!(b.failed_storage(), denial);
-    assert!(ManagedIssuer::<()>::ENVELOPE >= size_of::<RequestAccount>());
-    assert!(FRAME >= 4 * size_of::<ManagedIssuer<'_, ()>>());
+    assert!(NativeAttempt::<()>::ENVELOPE >= size_of::<RequestAccount>());
+    assert!(FRAME >= 4 * size_of::<NativeAttempt<'_, ()>>());
+}
+
+#[test]
+fn attempt_storage_counts_each_owner_once_and_growth_above_both_consumed_inputs() {
+    let prepared = 4096;
+    let trace = 8192;
+    let root = 512;
+    let issuer = prepared + 1024;
+    let retained = attempt_storage::<()>(trace, root, issuer).unwrap();
+    assert_eq!(
+        retained,
+        trace + root + issuer + NativeAttempt::<()>::ENVELOPE
+    );
+    let growth = retained.checked_sub(prepared + trace).unwrap();
+    assert_eq!(growth, root + 1024 + NativeAttempt::<()>::ENVELOPE);
+    assert_eq!(prepared + trace + growth, retained);
+    assert_eq!(
+        NativeAttempt::<()>::ENVELOPE,
+        size_of::<(NativeAttempt<'_, ()>, Storage)>()
+            - size_of::<CompilerTrace<'_, ()>>()
+            - size_of::<RootSession<'_>>()
+            - size_of::<ManagedIssuer<'_, ()>>()
+    );
+    assert!(
+        NativeAttempt::<()>::ENVELOPE
+            >= size_of::<RequestAccount>()
+                + size_of::<Quota>()
+                + size_of::<usize>()
+                + size_of::<Storage>()
+    );
+    assert_eq!(
+        ManagedIssuer::<()>::ENVELOPE,
+        size_of::<(ManagedIssuer<'_, ()>, Storage)>()
+            - size_of::<Child<()>>()
+            - size_of::<Ready>()
+            - size_of::<RootConnection<'_>>()
+    );
+}
+
+#[test]
+fn attempt_storage_rejects_each_overflow_without_constructing_authority() {
+    for (trace, root, issuer) in [
+        (usize::MAX, 1, 1),
+        (1, usize::MAX, 1),
+        (1, 1, usize::MAX),
+        (0, 0, usize::MAX - NativeAttempt::<()>::ENVELOPE + 1),
+    ] {
+        assert!(matches!(
+            attempt_storage::<()>(trace, root, issuer),
+            Err(Error::Resource(Resource::Arithmetic))
+        ));
+    }
+}
+
+#[test]
+fn original_validation_quota_funds_attempt_scope_and_actual_trace_session_checks() {
+    let quota = NativeAttempt::<()>::original_validation_quota();
+    assert_eq!(
+        quota.work(),
+        LOCAL_WORK + CompilerTrace::<()>::OBSERVATION_WORK + RootSession::VALIDATE_WORK
+    );
+    assert_eq!(
+        quota.scratch(),
+        FRAME + CompilerTrace::<()>::OBSERVATION_SCRATCH + RootSession::VALIDATE_SCRATCH
+    );
 }
 
 #[test]
@@ -523,6 +588,7 @@ fn root_startup_quote_funds_original_view_channel_and_handshake_without_resettin
             + CompilerTrace::<()>::OBSERVATION_SCRATCH
             + Resources::<Payload<()>>::ACCESS_SCRATCH
             + 2 * RootSession::CREATE_SCRATCH
+            + NativeAttempt::<()>::ENVELOPE
     );
     let add = Quota {
         work: 13,

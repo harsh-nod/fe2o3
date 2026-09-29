@@ -42,9 +42,10 @@ impl Prepared {
     /// two prepared process checks, the actual running issuer image, exact
     /// readiness, exec confirmation and the post-readiness root challenge.
     ///
-    /// Query is inert and grants no launch authority. It funds this composition,
-    /// not compiler resume, publication observation/issuance or production attempt setup. Keep
-    /// both input reservations; reserve launch's returned growth before retention.
+    /// Query is inert and grants no launch authority. It includes NativeAttempt
+    /// setup, not compiler resume or publication observation/issuance. Keep both
+    /// consumed input reservations; reserve launch_root_attempt's growth above
+    /// their SUM before retaining the returned attempt.
     /// Persistent cleanup uses issuer_cleanup_quota on its existing ledger.
     pub(crate) fn issuer_launch_quota<T: Send + 'static>(
         &self,
@@ -181,8 +182,22 @@ pub(super) fn root_startup_quota<T: Send + 'static>(launch: Quota, gate: Quota) 
             // Retained session overlaps the subsequent connection handshake.
             2 * RootSession::CREATE_SCRATCH,
             gate.scratch(),
+            NativeAttempt::<T>::ENVELOPE,
         ])?,
     })
+}
+
+impl<T: Send + 'static> NativeAttempt<'_, T> {
+    /// Original-request work and extra peak for validate_original, above the FULL
+    /// attempt reservation even when its issuer has already been removed.
+    pub(crate) const fn original_validation_quota() -> Quota {
+        Quota {
+            work: LOCAL_WORK + CompilerTrace::<T>::OBSERVATION_WORK + RootSession::VALIDATE_WORK,
+            scratch: FRAME
+                + CompilerTrace::<T>::OBSERVATION_SCRATCH
+                + RootSession::VALIDATE_SCRATCH,
+        }
+    }
 }
 
 pub(super) fn cleanup_quota<T: Send + 'static>(
