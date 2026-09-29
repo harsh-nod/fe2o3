@@ -73,23 +73,7 @@ impl NativeOccurrence {
             b.reserve_storage(storage.retained_storage())?;
             let (token, storage) = publication.acquire_current_token(b)?;
             b.reserve_storage(storage.retained_storage())?;
-            let published = published_invocation(&token);
-            if published != observation.descriptor() {
-                return Err(NativeOccurrenceError::Mismatch);
-            }
-            let (subject, storage) = Subject::from_publication(receipt, token.handoff(), b)?;
-            b.reserve_storage(storage.retained_storage())?;
-            if subject.attempt() != expected.attempt
-                || subject.rustc_invocation_sha256() != &expected.invocation_digest
-                || subject.compiler_closure() != *observation.descriptor().compiler_closure()
-            {
-                return Err(NativeOccurrenceError::Mismatch);
-            }
-            let mut digest = Sha256::new();
-            digest.update(OCCURRENCE_DOMAIN);
-            digest.update(observation.identity());
-            digest.update(subject.canonical_bytes());
-            let identity = digest.finalize().into();
+            let (subject, identity) = join_subject(&observation, &expected, receipt, &token, b)?;
             let retained = observation_storage
                 .checked_add(publication.storage().retained_storage())
                 .and_then(|n| n.checked_add(token.storage().retained_storage()))
@@ -144,4 +128,31 @@ impl NativeOccurrence {
     pub(crate) const fn retained_storage(&self) -> usize {
         self.retained
     }
+}
+
+// Shared exact join, under the caller's prepaid occurrence construction frame.
+// Observation/lock retention and post-join currentness checks remain with its owner.
+fn join_subject(
+    observation: &NativeObservation,
+    expected: &Expected,
+    receipt: Receipt,
+    token: &Token,
+    b: &mut Budget<'_>,
+) -> Result<(Subject, [u8; 32])> {
+    if published_invocation(token) != observation.descriptor() {
+        return Err(NativeOccurrenceError::Mismatch);
+    }
+    let (subject, storage) = Subject::from_publication(receipt, token.handoff(), b)?;
+    b.reserve_storage(storage.retained_storage())?;
+    if subject.attempt() != expected.attempt
+        || subject.rustc_invocation_sha256() != &expected.invocation_digest
+        || subject.compiler_closure() != *observation.descriptor().compiler_closure()
+    {
+        return Err(NativeOccurrenceError::Mismatch);
+    }
+    let mut digest = Sha256::new();
+    digest.update(OCCURRENCE_DOMAIN);
+    digest.update(observation.identity());
+    digest.update(subject.canonical_bytes());
+    Ok((subject, digest.finalize().into()))
 }

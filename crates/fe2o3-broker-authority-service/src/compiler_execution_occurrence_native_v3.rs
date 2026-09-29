@@ -8,6 +8,7 @@ use fe2o3_artifact_transaction::{
     CompilerExecutionSubjectErrorV3 as SubjectError,
     CompilerModuleHandoffConsumptionTokenV5 as Token,
     CompilerModuleHandoffCurrentnessLeaseV5 as Lease, CompilerModuleHandoffErrorV5 as HandoffError,
+    CompilerModuleHandoffReceiptV5 as Receipt,
     InertCompilerExecutionSubjectStorageV3 as SubjectStorage,
     InertCompilerExecutionSubjectV3 as Subject,
     acquire_compiler_module_handoff_currentness_lease_v5 as acquire,
@@ -27,3 +28,7 @@ fn published_invocation(token: &Token) -> &fe2o3_rustc_invocation::RustcInvocati
 }
 
 include!("compiler_execution_occurrence_native_body.rs");
+
+#[path = "compiler_execution_root_publication.rs"]
+mod root_publication;
+pub use root_publication::{RootPublicationCustodyErrorV3, RootPublicationCustodyV3};

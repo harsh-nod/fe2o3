@@ -139,6 +139,8 @@ mod compiler_execution_journal_recovery;
 #[cfg(target_os = "linux")]
 mod compiler_execution_occurrence;
 #[cfg(target_os = "linux")]
+pub use compiler_execution_occurrence::{RootPublicationCustodyErrorV3, RootPublicationCustodyV3};
+#[cfg(target_os = "linux")]
 mod compiler_execution_root_channel;
 #[cfg(target_os = "linux")]
 mod compiler_execution_root_connection;

@@ -8,6 +8,7 @@ use fe2o3_artifact_transaction::{
     CompilerExecutionSubjectErrorV2 as SubjectError,
     CompilerModuleHandoffConsumptionTokenV4 as Token,
     CompilerModuleHandoffCurrentnessLeaseV4 as Lease, CompilerModuleHandoffErrorV4 as HandoffError,
+    CompilerModuleHandoffReceiptV4 as Receipt,
     InertCompilerExecutionSubjectStorageV2 as SubjectStorage,
     InertCompilerExecutionSubjectV2 as Subject,
     acquire_compiler_module_handoff_currentness_lease_v4 as acquire,
