@@ -3,6 +3,8 @@
 Date: 2026-09-28 (Pacific). Continues the
 [aggregate cleanup checkpoint](native-domain-cleanup-20260928.md).
 
+Later results: [credential-bound bootstrap and five paired memory diagnostics](native-bootstrap-isolation-20260928.md).
+
 **M0-M7 and the 47/47 production-to-safe-GPU-launch gate remain incomplete.**
 This validates namespace creation, profile installation and aggregate cleanup,
 not protected proof execution, memory-writer exclusion or a GPU launch.
