@@ -73,6 +73,165 @@ fn this_sender() -> MessageSender {
 }
 
 #[test]
+fn authenticated_canonical_ready_precedes_bootstrap_eof() {
+    // Canonical anchor-ready bytes are inert here; family decoding and endpoint
+    // admission remain coordinator obligations, not transport test authority.
+    let ready = *b"F2O3AHR1\x01\x00\x02\x00\x00\x00\x00\x00";
+    let (sender, receiver) = pair(true);
+    let (endpoint, _peer) = pair(false);
+    let expected = rustix::fs::fstat(&endpoint).unwrap();
+    let fds = [endpoint.as_fd()];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+    assert!(control.push(SendAncillaryMessage::ScmRights(&fds)));
+    assert_eq!(
+        sendmsg(
+            &sender,
+            &[IoSlice::new(&ready)],
+            &mut control,
+            SendFlags::NOSIGNAL | SendFlags::DONTWAIT,
+        )
+        .unwrap(),
+        ready.len()
+    );
+    drop(sender);
+    let mut watch = Watch::default();
+    let (bytes, received) = receive_ready_from::<16, true, _>(
+        receiver.as_fd(),
+        this_sender(),
+        &mut watch,
+        Instant::now() + MAX_TIMEOUT,
+    )
+    .unwrap();
+    assert_eq!(bytes, ready);
+    let received = received.unwrap();
+    let actual = rustix::fs::fstat(&received).unwrap();
+    assert_eq!(
+        (actual.st_dev, actual.st_ino, actual.st_mode),
+        (expected.st_dev, expected.st_ino, expected.st_mode)
+    );
+    assert!(
+        rustix::io::fcntl_getfd(&received)
+            .unwrap()
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    );
+    assert_eq!(watch.0, 1);
+}
+
+#[test]
+fn authenticated_pre_ready_eof_is_distinct_from_an_empty_record() {
+    for empty_record in [false, true] {
+        let (sender, receiver) = pair(true);
+        if empty_record {
+            assert_eq!(
+                rustix::net::send(&sender, &[], SendFlags::NOSIGNAL).unwrap(),
+                0
+            );
+        }
+        drop(sender);
+        let mut watch = Watch::default();
+        if empty_record {
+            assert!(matches!(
+                receive_ready_from::<16, true, _>(
+                    receiver.as_fd(),
+                    this_sender(),
+                    &mut watch,
+                    Instant::now() + MAX_TIMEOUT,
+                ),
+                Err(Error::Failure(Failure::MalformedReadyTransfer))
+            ));
+        }
+        assert!(matches!(
+            receive_ready_from::<16, true, _>(
+                receiver.as_fd(),
+                this_sender(),
+                &mut watch,
+                Instant::now() + MAX_TIMEOUT,
+            ),
+            Err(Error::Failure(Failure::ChildExited(
+                "bootstrap EOF before service-ready transfer"
+            )))
+        ));
+        assert_eq!(watch.0, 1 + usize::from(empty_record));
+    }
+}
+
+#[test]
+fn authenticated_one_byte_ready_records_remain_failure_stages() {
+    let (sender, receiver) = pair(true);
+    for stage in 0..=u8::MAX {
+        rustix::net::send(&sender, &[stage], SendFlags::NOSIGNAL).unwrap();
+        let mut watch = Watch::default();
+        assert!(matches!(
+            receive_ready_from::<16, true, _>(
+                receiver.as_fd(),
+                this_sender(),
+                &mut watch,
+                Instant::now() + MAX_TIMEOUT,
+            ),
+            Err(Error::Failure(Failure::ChildStage(value))) if value == stage
+        ));
+        assert_eq!(watch.0, 1);
+    }
+}
+
+#[test]
+fn ready_eof_diagnostic_preserves_authentication_and_control_refusals() {
+    for mode in 0..7 {
+        for rights in [false, true] {
+            let mut packet = ReadyPacket::empty();
+            match mode {
+                0 => packet.rights.invalid = true,
+                1 => packet.flags = ReturnFlags::TRUNC,
+                2 => packet.flags = ReturnFlags::CTRUNC,
+                3 => packet.rights.credentials = Some(this_sender()),
+                4 => {
+                    let mut wrong = this_sender();
+                    wrong.pid += 1;
+                    packet.rights.credentials = Some(wrong);
+                }
+                5 => packet.bytes = 1,
+                6 => packet.bytes = 16,
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                packet.validate_from(16, rights, Some(this_sender())),
+                Err(Failure::MalformedReadyTransfer)
+            ));
+        }
+    }
+    // Legacy receives cannot distinguish an unmarked empty record from EOF.
+    assert!(matches!(
+        ReadyPacket::empty().validate_from(16, true, None),
+        Err(Failure::MalformedReadyTransfer)
+    ));
+    // Even zero-byte transfers carrying a real received right remain malformed.
+    let (sender, receiver) = pair(true);
+    let (endpoint, _peer) = pair(false);
+    let fds = [endpoint.as_fd()];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+    assert!(control.push(SendAncillaryMessage::ScmRights(&fds)));
+    assert_eq!(
+        sendmsg(
+            &sender,
+            &[IoSlice::new(&[])],
+            &mut control,
+            SendFlags::NOSIGNAL | SendFlags::DONTWAIT,
+        )
+        .unwrap(),
+        0
+    );
+    let mut packet = receive_packet(receiver.as_fd()).unwrap();
+    assert!(packet.rights.fd.is_some());
+    packet.rights.credentials = None;
+    assert!(matches!(
+        packet.validate_from(16, true, Some(this_sender())),
+        Err(Failure::MalformedReadyTransfer)
+    ));
+}
+
+#[test]
 fn credential_and_rights_receive_is_exact_and_disposes_all_rejected_rights() {
     let (sender, receiver) = pair(true);
     let file = tempfile::NamedTempFile::new().unwrap();
