@@ -139,6 +139,12 @@ mod compiler_execution_journal_recovery;
 #[cfg(target_os = "linux")]
 mod compiler_execution_occurrence;
 #[cfg(target_os = "linux")]
+mod compiler_execution_root_channel;
+#[cfg(target_os = "linux")]
+pub use compiler_execution_root_channel::{
+    RootLaunchChannelErrorV3, RootLaunchChannelStorageV3, RootLaunchChannelV3,
+};
+#[cfg(target_os = "linux")]
 mod compiler_execution_service;
 #[cfg(target_os = "linux")]
 mod compiler_execution_supervision;

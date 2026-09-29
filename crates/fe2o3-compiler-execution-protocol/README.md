@@ -1,5 +1,11 @@
 # fe2o3 compiler execution protocol
 
+`CompilerExecutionRootControlRecordV3` adds bounded root/issuer framing with
+policy, manifest, epoch, generation, sequence and exact request/reply association.
+Its payload and digest are inert, not authenticated custody or retirement proof.
+The root RPC consumer and startup migration remain pending; see the
+[root-control contract](../../docs/compiler-execution-root-control.md).
+
 Conditional SubjectV3 has nominal policy, profile, request, receipt, carriage,
 external-anchor transaction and service-packet components. Typed V3 launch,
 readiness, handoff and currentness joins reuse their existing identity-only

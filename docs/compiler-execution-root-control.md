@@ -33,7 +33,57 @@ expected PID/UID/GID must come from actual retained-child and profile custody.
 writing a later packet. The control protocol must also bind every message to
 the admitted policy, launch manifest, fresh launch epoch, and sequence.
 
+## Control Envelope
+
+`CompilerExecutionRootControlRecordV3` is an inert, fixed 4096-byte envelope.
+Its binding constructor requires a matching native policy and launch manifest,
+plus nonzero root-epoch and connection-generation values. The retained attempt
+must generate those values independently; a decoder cannot prove freshness.
+Replacement issuers need a new admitted generation, not a reset sequence on the
+old connection.
+
+| Bytes | Content |
+| --- | --- |
+| 0..20 | Magic `F2O3CRC3`, LE version 3, operation, fixed total length |
+| 20..24 | Request/reply flag followed by three zero bytes |
+| 24..152 | Policy, manifest, root epoch, connection generation (32 bytes each) |
+| 152..160 | Positive LE sequence |
+| 160..192 | Zero for a request; exact request digest for a reply |
+| 192..200 | LE payload length and four zero bytes |
+| 200..4064 | Up to 3864 opaque payload bytes, followed by zero padding |
+| 4064..4096 | SHA-256 of the domain and preceding fixed frame |
+
+The domain is `FE2O3/ROOT-ISSUER-CONTROL/V3\0`. Reconcile, Observe, Validate and
+Retire are closed operation labels, not permission to execute them. Payload
+decoding and lifecycle transitions remain broker obligations. The digest is not
+authentication: an attacker can rehash changed fields. `matches_binding` checks
+all four retained association fields; `matches_reply` additionally checks the
+direction, operation, sequence, and exact original request digest. Neither
+comparison authenticates credentials, proves durable state, releases locks, or
+establishes currentness.
+
+Every codec operation prepays its fixed work and scratch on the original budget;
+successful constructors/decoders return the full retained charge unreserved.
+The framing API does not own sockets, retry, advance a sequence, maintain a
+retirement tombstone, or activate the FD12 ABI. A root RPC consumer is still
+required.
+
 ## Startup Migration
+
+The broker now owns `RootLaunchChannelV3`, a root-created pair with no `from_fd`
+constructor or root-end extraction. It enables passcred on both nonblocking,
+close-on-exec endpoints before exposing an issuer-side staging borrow. It checks
+the original account, Budget address, process and kernel thread on each operation.
+Closing its parent issuer alias is idempotent, but does not certify closure of
+external stage aliases or retire a compiler occurrence. The owner is not yet
+connected to `launch_issuer` or a broker root session. Positive privileged socket
+validation remains required.
+
+Both native issuer entrypoints now preflight the complete current FD3..11 table
+after nonallocating process hardening and before descriptor-allocating input
+admission. Missing or close-on-exec slots refuse before a policy/manifest
+duplicate can reuse them. Object-role validation still follows, and V1 is
+unchanged. This ordering fix does not activate FD12.
 
 The pair must be created inside the direct launch's confirmed, held-exec input
 callback, after the compiler clone. Neither end may enter the compiler. The

@@ -70,6 +70,13 @@ mod receipt_publication_adapter;
 mod receipt_publication_codec;
 mod receipt_publication_v2;
 mod receipt_publication_v3;
+mod root_control_v3;
+pub use root_control_v3::{
+    COMPILER_EXECUTION_ROOT_CONTROL_BYTES_V3, COMPILER_EXECUTION_ROOT_CONTROL_PAYLOAD_BYTES_V3,
+    COMPILER_EXECUTION_ROOT_CONTROL_STORAGE_V3, COMPILER_EXECUTION_ROOT_CONTROL_WORK_V3,
+    CompilerExecutionRootControlBindingV3, CompilerExecutionRootControlErrorV3,
+    CompilerExecutionRootControlKindV3, CompilerExecutionRootControlRecordV3,
+};
 mod service;
 mod service_native_adapter;
 mod service_ready;
