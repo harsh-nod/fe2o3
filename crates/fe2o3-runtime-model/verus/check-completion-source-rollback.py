@@ -67,7 +67,9 @@ def mutations(body):
     release = "$release!($owner, $events).is_err()"
     cancel = "$cancel!($owner, $retention).is_err()"
     condition = release + " || " + cancel
-    add("eager-cancellation", condition, release + " | " + cancel)
+    add("eager-cancellation", condition,
+        "{ let release_failed = " + release + "; let cancel_failed = " + cancel
+        + "; release_failed || cancel_failed }")
     add("wrong-conjunction", condition, release + " && " + cancel)
     add("reversed-cleanup", condition, cancel + " || " + release)
     add("omits-release", condition, "false || " + cancel)
