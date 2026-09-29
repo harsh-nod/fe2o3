@@ -6,6 +6,10 @@ use fe2o3_compiler_execution_protocol::{
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::fs::File;
 
+mod process {
+    include!("native_root_issuer_process_tests.rs");
+}
+
 const LIMIT: usize = 1 << 30;
 
 #[test]
