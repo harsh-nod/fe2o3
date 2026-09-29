@@ -36,11 +36,47 @@ pub(super) fn test_issued_generic_global_domains_v26(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<usize> {
     let floor = budget.storage();
-    let result = original.with_pending_global_accesses_v18(optimized, 0, budget, |view, budget| {
+    let roots = original.source.root_count(budget)?;
+    for root in 0..roots {
+        original.with_pending_global_accesses_v18(optimized, root, budget, |view, budget| {
+            let output = optimized.output_inventory(budget)?;
+            let function = optimized_source_root_function_v18(original, optimized, root, budget)?;
+            let mut pending = 0;
+            for operation in &output.operations()[function.operations.clone()] {
+                if matches!(operation.operation.kind, OperationKind::Store { access, .. }
+                    if access.address_space == AddressSpace::Generic)
+                {
+                    assert!(view.access(operation.coordinate, budget)?.is_none());
+                    let index =
+                        descriptor_role_index_v18(view.roles.rows, operation.coordinate, budget)?;
+                    assert!(view.roles.rows[index].write_recipe_pending);
+                    pending += 1;
+                }
+            }
+            assert!(
+                pending > 0,
+                "root={root}: source-only arithmetic store remains pending"
+            );
+            Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+        })?;
+        assert_eq!(budget.storage(), floor);
+    }
+    let mut count = 0;
+    let mut visited_roots = 0;
+    let result = original.with_global_source_expressions_v23(optimized, budget, &mut |root, view, budget| {
+        assert_eq!(root, visited_roots, "source expression callbacks preserve the complete ascending root roster");
+        assert!(root < roots);
         let output = optimized.output_inventory(budget)?;
-        let mut count = 0;
-        for operation in output.operations() {
-            let Some(pair) = view.access(operation.coordinate, budget)? else { continue; };
+        let function = optimized_source_root_function_v18(original, optimized, root, budget)?;
+        let mut root_generic = 0;
+        let mut root_memory = 0;
+        for operation in &output.operations()[function.operations.clone()] {
+            let pair = view.access(operation.coordinate, budget)?;
+            if matches!(operation.operation.kind, OperationKind::Load { .. } | OperationKind::Store { .. }) {
+                assert!(pair.is_some(), "every actual fixture access needs its completed source value role");
+                root_memory += 1;
+            }
+            let Some(pair) = pair else { continue; };
             if pair.output.memory.address_space != AddressSpace::Generic { continue; }
             let GlobalSourceAccessOriginV18::Issued { instance, .. } = pair.origin else {
                 panic!("Generic source role must retain an exact issued origin");
@@ -69,10 +105,17 @@ pub(super) fn test_issued_generic_global_domains_v26(
                 ));
                 assert!(global_source_endpoint_v18(inventory, endpoint.logical, &assertion, budget)?.is_none());
             }
-            count += 1;
+            root_generic += 1;
         }
-        Ok::<_, ProductionSourceOwnedViewErrorV18>(count)
+        assert!(root_memory >= 2, "root={root}: complete load/store census");
+        assert!(root_generic > 0, "root={root}: actual Generic helper access");
+        count += root_generic;
+        visited_roots += 1;
+        Ok::<_, ProductionSourceOwnedViewErrorV18>(())
     });
     assert_eq!(budget.storage(), floor, "{result:?}");
-    result
+    result.map(|()| {
+        assert_eq!(visited_roots, roots);
+        count
+    })
 }

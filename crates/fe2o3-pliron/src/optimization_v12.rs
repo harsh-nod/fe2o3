@@ -292,6 +292,31 @@ pub(crate) fn policy3_execution_resources_v18(
     Ok((profile, capture))
 }
 
+pub(crate) fn mixed_pure_cse_execution_resources_v18(
+    canonical_bytes: usize,
+    registered_node_bound: usize,
+    admission: crate::kir_occurrence_capture_v1::ObserverAdmissionV18,
+) -> Result<
+    (
+        PlironOptimizationResourcesV12,
+        crate::kir_optimization_map_v12::CaptureLimitsV12,
+    ),
+    PlironOptimizationErrorV12,
+> {
+    // The existing eight-pass profile bounds the same observer hooks and CSE
+    // engines. Only the exact retained four-row report differs. CSE synthesis
+    // creates no definitions; neutral checked arithmetic uses the V18 bound.
+    let (mut profile, capture) =
+        policy3_execution_resources_v18(canonical_bytes, registered_node_bound, admission)?;
+    profile.report = size_of::<PlironOptimizationReportV1>()
+        .checked_add(
+            crate::fixed_policy_v3::POLICY10_PASSES.len()
+                * size_of::<PlironOptimizationPassReportV1>(),
+        )
+        .ok_or(PlironOptimizationErrorV12::Accounting)?;
+    Ok((profile, capture))
+}
+
 pub(crate) fn integer_execution_resources_v18(
     canonical_bytes: usize,
     registered_node_bound: usize,
@@ -553,6 +578,13 @@ pub(crate) fn execute_captured_fixed_policy_v1(
                 &mut ledger,
             ),
             FixedPolicy::IntegerWorklist9 => session.execute_fixed_integer_worklist_v18(
+                root,
+                plan,
+                capture,
+                occurrences,
+                &mut ledger,
+            ),
+            FixedPolicy::MixedPureCse10 => session.execute_fixed_mixed_pure_cse_v18(
                 root,
                 plan,
                 capture,

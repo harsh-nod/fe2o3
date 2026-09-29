@@ -295,12 +295,15 @@ impl Capture {
         admission: ObserverAdmissionV18,
         policy: FixedPolicy,
     ) -> Result<Self> {
-        // Integer6 and IntegerWorklist9 create at most one false constant per checked binary and
-        // otherwise only replaces values or erases nodes. Two traversals fit
-        // the existing scalar/CFG envelope without increasing any cap.
+        // Neutral arithmetic creates at most one false constant per checked
+        // binary; the remaining integer/CSE/DCE steps only replace or erase.
+        // These fixed rosters fit the existing eight-pass scalar/CFG envelope.
         if !matches!(
             policy,
-            FixedPolicy::Checked3 | FixedPolicy::Integer6 | FixedPolicy::IntegerWorklist9
+            FixedPolicy::Checked3
+                | FixedPolicy::Integer6
+                | FixedPolicy::IntegerWorklist9
+                | FixedPolicy::MixedPureCse10
         ) {
             return Err(E::Passes);
         }

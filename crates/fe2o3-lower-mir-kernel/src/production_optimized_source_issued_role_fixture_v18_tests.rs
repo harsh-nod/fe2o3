@@ -386,15 +386,127 @@ fn original_issued_descriptor_store_recipe_checks_both_unchanged_endpoints() {
     }
 }
 
+fn issued_scalar_scratch_storage_oracle_v18<Outer, Inner>() -> usize {
+    type Error = ProductionSourceOwnedViewErrorV18;
+    type Result = SourceOwnedResultV18<()>;
+    type Capture<'a, 'w, F> = (
+        &'a mut Option<F>,
+        &'a ScopedSourceCleanupV29,
+        &'a mut ArgumentBudgetV1<'w>,
+        &'a std::result::Result<(), ArgumentResourceV1>,
+    );
+    // The scratch constructor moves Inner and borrows its fixed-size argument
+    // and cleanup reference. Its two attempt frames coexist until Inner runs.
+    type Attempt<'a, F> = (F, &'a usize, &'a ScopedSourceCleanupV29);
+    let outer = size_of::<ScopedSourceCleanupBoundaryV29>()
+        + size_of::<std::thread::Result<Result>>()
+        + size_of::<Outer>()
+        + std::mem::align_of::<Outer>()
+        + size_of::<Option<Outer>>()
+        + std::mem::align_of::<Option<Outer>>()
+        + size_of::<Capture<'_, '_, Outer>>()
+        + size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, Outer>>>()
+        + size_of::<(Outer, &ScopedSourceCleanupV29, &mut ArgumentBudgetV1<'_>)>()
+        + size_of::<Error>()
+        + size_of::<Result>()
+        + size_of::<std::result::Result<(), ArgumentResourceV1>>()
+        + size_of::<std::result::Result<usize, ArgumentResourceV1>>()
+        + size_of::<Box<dyn std::any::Any + Send>>()
+        + 2 * size_of::<usize>()
+        + source_owned_finish_header_oracle_v26::<(), Error>();
+    let wrapper = size_of::<Attempt<'_, Inner>>()
+        + 2 * (size_of::<Result>()
+            + size_of::<std::thread::Result<Result>>()
+            + size_of::<std::panic::AssertUnwindSafe<Result>>());
+    MODULE_FLOOR
+        + outer
+        + wrapper
+        + scoped_source_attempt_header_oracle_v29::<(), Error, Attempt<'_, Inner>>()
+        + size_of::<[u64; 7]>()
+        + scoped_source_attempt_header_oracle_v29::<(), Error, Inner>()
+}
+
+type IssuedScratchTwoRefsV18<'a> = (&'a usize, &'a usize);
+type IssuedScratchFourRefsV18<'a> = (&'a usize, &'a usize, &'a usize, &'a usize);
+type IssuedScratchFiveRefsV18<'a> = (&'a usize, &'a usize, &'a usize, &'a usize, &'a usize);
+
+#[test]
+fn original_issued_descriptor_scalar_scratch_has_independent_exact_and_short_bounds() {
+    const WORK: usize = 3 * (32 + 2 + 1 + 4);
+    let peak = issued_scalar_scratch_storage_oracle_v18::<
+        IssuedScratchTwoRefsV18<'_>,
+        IssuedScratchTwoRefsV18<'_>,
+    >();
+    assert!(
+        peak > 4096,
+        "the historical fixed envelope no longer reaches the body"
+    );
+    for (work_limit, storage_limit, succeeds) in [
+        (WORK, peak, true),
+        (WORK - 1, peak, false),
+        (WORK, peak - 1, false),
+        (WORK, 4096, false),
+    ] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let entered = std::cell::Cell::new(false);
+        let result =
+            with_scoped_source_cleanup_v29(&mut budget, MODULE_FLOOR, |cleanup, budget| {
+                let floor = budget.storage();
+                let result = source_scalar_normalization_scratch_v18(
+                    cleanup,
+                    budget,
+                    size_of::<[u64; 7]>(),
+                    |budget| {
+                        assert_eq!((budget.work(), budget.storage()), (WORK, peak));
+                        entered.set(true);
+                        Ok(())
+                    },
+                );
+                assert_eq!(budget.storage(), floor);
+                assert!(!cleanup.is_denied());
+                result
+            });
+        assert_eq!(entered.get(), succeeds);
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+        if succeeds {
+            result.unwrap();
+            assert_eq!(budget.work(), WORK);
+        } else if work_limit < WORK {
+            assert!(
+                matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Work(error))) if error.limit() == work_limit && error.actual() == WORK)
+            );
+            assert_eq!(budget.work(), 2 * (32 + 2 + 1 + 4));
+        } else {
+            assert!(
+                matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Storage(error))) if error.limit() == storage_limit
+                    && error.actual() > storage_limit
+                    && (storage_limit == 4096 || error.actual() == peak))
+            );
+            if storage_limit != 4096 {
+                assert_eq!(budget.work(), WORK);
+            }
+        }
+    }
+}
+
 #[test]
 fn original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_denials() {
     // This unit boundary control is separate from the genuine same-candidate
     // expression mismatch above. It never fabricates a scalar/source proof.
     for fault in 0..5 {
         const WORK: usize = 256;
-        const LIMIT: usize = 4096;
+        let allocation =
+            size_of::<(&std::cell::Cell<bool>, Box<[u8; 32]>)>() + size_of::<[u8; 32]>();
+        let limit = issued_scalar_scratch_storage_oracle_v18::<
+            IssuedScratchFourRefsV18<'_>,
+            IssuedScratchFiveRefsV18<'_>,
+        >() + allocation;
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
-        let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, limit);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let entered = std::cell::Cell::new(false);
         let dropped = std::cell::Cell::new(false);
@@ -405,6 +517,7 @@ fn original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_den
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     source_scalar_normalization_scratch_v18(cleanup, budget, fixed, |budget| {
                         assert!(budget.storage() >= floor + fixed);
+                        assert_eq!(budget.work(), 3 * (32 + 2 + 1 + 4));
                         entered.set(true);
                         if fault == 2 {
                             // The denial occurs after the whole fixed scratch
@@ -419,12 +532,13 @@ fn original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_den
                             }
                         }
                         budget.reserve_storage(size_of::<Dropped<'_>>() + size_of::<[u8; 32]>())?;
+                        assert_eq!(budget.storage(), limit);
                         let owned = Dropped(&dropped, Box::new([0; 32]));
                         assert_eq!(owned.1[0], 0);
                         if fault == 3 {
                             // A denied second allocation must also settle the
                             // accepted first allocation after its owner drops.
-                            budget.reserve_storage(LIMIT - budget.storage() + 1)?;
+                            budget.reserve_storage(limit - budget.storage() + 1)?;
                         }
                         if fault == 4 {
                             std::panic::panic_any("scalar scratch sentinel");
@@ -464,7 +578,7 @@ fn original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_den
             ),
             3 => assert!(
                 matches!(result.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Resource(
-                ArgumentResourceV1::Storage(error))) if error.limit() == LIMIT && error.actual() == LIMIT + 1)
+                ArgumentResourceV1::Storage(error))) if error.limit() == limit && error.actual() == limit + 1)
             ),
             4 => assert_eq!(
                 result.unwrap_err().downcast_ref::<&str>(),
@@ -478,8 +592,12 @@ fn original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_den
 #[test]
 fn original_issued_descriptor_scalar_scratch_denies_refund_below_its_live_fixed_floor() {
     for panic in [false, true] {
+        let limit = issued_scalar_scratch_storage_oracle_v18::<
+            IssuedScratchFourRefsV18<'_>,
+            IssuedScratchFourRefsV18<'_>,
+        >();
         let mut work = CanonicalKernelIrWorkBudgetV1::new(256);
-        let mut budget = ArgumentBudgetV1::new(&mut work, 4096);
+        let mut budget = ArgumentBudgetV1::new(&mut work, limit);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let retained = std::cell::Cell::new(None);
         let completed = std::cell::Cell::new(false);
@@ -492,6 +610,8 @@ fn original_issued_descriptor_scalar_scratch_denies_refund_below_its_live_fixed_
                         budget,
                         size_of::<[u64; 7]>(),
                         |budget| {
+                            assert_eq!(budget.work(), 3 * (32 + 2 + 1 + 4));
+                            assert_eq!(budget.storage(), limit);
                             budget.release_storage(1)?;
                             assert!(budget.storage() > outer);
                             retained.set(Some(budget.storage()));

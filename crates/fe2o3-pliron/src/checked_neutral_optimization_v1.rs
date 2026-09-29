@@ -555,7 +555,7 @@ where
     result
 }
 
-fn drop_adoption_result<T>(value: T, bounded: bool) {
+pub(super) fn drop_adoption_result<T>(value: T, bounded: bool) {
     if bounded {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
             crate::kir_bridge_v1::discard_bounded_payload_v1(payload);

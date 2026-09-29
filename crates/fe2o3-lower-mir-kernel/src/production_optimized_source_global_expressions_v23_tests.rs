@@ -358,7 +358,7 @@ fn original_global_store_expression_scope_settles_exact_and_one_short_work() {
         let used = std::cell::Cell::new(0);
         let settled = std::cell::Cell::new(false);
         let selected = std::cell::Cell::new(None);
-        let result = run_descriptor_role_owner_with_abi_v18(
+        let result = run_descriptor_role_owner_result_with_abi_v18(
             owner,
             abi,
             OPTIMIZED_SOURCE_WORK_LIMIT_V18,
@@ -376,7 +376,18 @@ fn original_global_store_expression_scope_settles_exact_and_one_short_work() {
                 )
             },
         )
-        .0;
+        .0
+        .map_err(|error| match error {
+            ProductionSourceOptimizationErrorV18::Source(error) => error,
+            ProductionSourceOptimizationErrorV18::Adoption(
+                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+                    error @ ProductionSourceOwnedViewErrorV18::Binding(
+                        "test stops after exact global source expression scope",
+                    ),
+                ),
+            ) => error,
+            other => panic!("unexpected exact expression-scope refusal: {other:?}"),
+        });
         assert!(settled.get(), "scope settlement must complete: {result:?}");
         (result, used.get(), selected.get())
     };

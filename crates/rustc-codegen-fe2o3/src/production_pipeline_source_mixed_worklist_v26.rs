@@ -12,7 +12,7 @@ impl From<ProductionMixedSourceHandoffErrorV26> for Error {
     }
 }
 
-fn explicit_mixed_launches_v26(
+pub(super) fn explicit_mixed_launches_v26(
     original: &[CanonicalFormalLaunchInputV19],
     budget: &mut Budget<'_>,
 ) -> Result<Vec<ExplicitLaunchExtent>, Error> {

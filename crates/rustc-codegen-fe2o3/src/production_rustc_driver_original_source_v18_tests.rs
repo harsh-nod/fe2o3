@@ -7,6 +7,9 @@ mod bound_worklist_tests;
 #[path = "production_rustc_driver_mixed_worklist_v26_tests.rs"]
 mod mixed_worklist_tests;
 
+#[path = "production_rustc_driver_mixed_pure_cse_v26_tests.rs"]
+mod mixed_pure_cse_tests;
+
 #[path = "production_rustc_driver_array_index_source_v18_tests.rs"]
 mod array_index_tests;
 

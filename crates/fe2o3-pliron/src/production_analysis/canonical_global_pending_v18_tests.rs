@@ -1,5 +1,7 @@
 use super::super::super::tests::{LAYOUTS, pointer_flow, with_checked};
 use super::*;
+#[path = "canonical_global_pending_generic_v18_tests.rs"]
+mod generic_carriers;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work,
     CanonicalKirFunctionCoordinateV1, Function, MemoryAccess, Module, OperationKind, ScalarType,

@@ -359,6 +359,9 @@ mod bound_worklist_v21;
 #[path = "production_pipeline_source_mixed_worklist_v26.rs"]
 mod mixed_worklist_v26;
 
+#[path = "production_pipeline_source_mixed_pure_cse_v26.rs"]
+mod mixed_pure_cse_v26;
+
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// The fixed source profile is selected before any semantic admission.
     /// The continuation borrows the genuine source and move-only adopted output

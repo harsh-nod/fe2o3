@@ -15,6 +15,8 @@ use std::cell::Cell;
 
 #[path = "kir_bridge_mixed_cfg_domain_v26_tests.rs"]
 mod cfg_domain_v26;
+#[path = "kir_bridge_mixed_generic_v26_tests.rs"]
+mod generic_carriers_v26;
 
 const AMPLE: usize = 1 << 40;
 const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {

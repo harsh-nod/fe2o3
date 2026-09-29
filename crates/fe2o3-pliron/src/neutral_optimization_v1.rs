@@ -350,6 +350,13 @@ pub use integer_worklist_v18::{
     CheckedNeutralKernelIrOwnerIntegerWorklistV18, KirNeutralOptimizationOutputIntegerWorklistV18,
     optimize_neutral_kernel_ir_integer_worklist_v18,
 };
+
+#[path = "neutral_mixed_pure_cse_v18.rs"]
+mod mixed_pure_cse_v18;
+pub use mixed_pure_cse_v18::{
+    CheckedNeutralKernelIrOwnerMixedPureCseV18, KirNeutralOptimizationOutputMixedPureCseV18,
+    optimize_neutral_kernel_ir_mixed_pure_cse_v18,
+};
 #[path = "neutral_optimization_policy3_v1.rs"]
 mod policy3;
 #[path = "neutral_optimization_v18.rs"]

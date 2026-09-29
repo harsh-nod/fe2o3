@@ -1,4 +1,24 @@
 impl PlironSession {
+    pub(crate) fn execute_fixed_mixed_pure_cse_v18(
+        &mut self,
+        root: &OperationHandle,
+        plan: &PlironOptimizationPlanV1,
+        capture: &crate::kir_optimization_map_v12::CaptureV12,
+        occurrences: &crate::kir_occurrence_capture_v1::Capture,
+        ledger: &mut crate::fixed_policy_v3::CseLedger<'_, '_>,
+    ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
+        if plan.passes.as_slice() != crate::fixed_policy_v3::POLICY10_PASSES {
+            return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
+        }
+        self.execute_optimization_impl_v1(
+            root,
+            plan,
+            Some(capture),
+            Some(occurrences),
+            Some(ledger),
+        )
+    }
+
     pub(crate) fn execute_fixed_integer_worklist_v18(
         &mut self,
         root: &OperationHandle,

@@ -5,13 +5,17 @@ use fe2o3_kernel_ir::{AddressSpace, CanonicalKirOperationCoordinateV1};
 use pliron::builtin::op_interfaces::OneRegionInterface;
 
 // These are exact correspondence candidates, not a scalar-memory grammar:
-// nonvolatile Global loads/stores, scalar-Global pointer producers, and slice
+// nonvolatile Global/Generic loads/stores, scalar-Global pointer producers, and slice
 // lengths (including non-Global slices). The source join separately admits its
-// exact scalar Global recipe; observing a candidate never establishes safety.
+// exact scalar Global allocation and Generic transport recipe; observing a
+// candidate never establishes a pointer's origin or memory safety.
 fn closed(operation: &KirOperation) -> bool {
     match &operation.kind {
         OperationKind::Load { access, .. } | OperationKind::Store { access, .. } => {
-            access.address_space == AddressSpace::Global && !access.volatile
+            matches!(
+                access.address_space,
+                AddressSpace::Global | AddressSpace::Generic
+            ) && !access.volatile
         }
         OperationKind::SliceLength { .. } => true,
         OperationKind::SliceData { .. } | OperationKind::GetElementPointer { .. } => {
@@ -29,6 +33,41 @@ mod frame_tests {
     use super::*;
     use fe2o3_kernel_ir::{Function, FunctionBody, PointerType, ValueDef};
     use std::{cell::Ref, mem::size_of, ops::Range};
+    #[test]
+    fn pending_global_generic_carriers_are_inert_and_do_not_admit_other_spaces() {
+        use fe2o3_kernel_ir::{MemoryAccess, ScalarType};
+        for space in [
+            AddressSpace::Private,
+            AddressSpace::Workgroup,
+            AddressSpace::Global,
+            AddressSpace::Constant,
+            AddressSpace::Generic,
+        ] {
+            for volatile in [false, true] {
+                let mut access = MemoryAccess::new(space, 4);
+                access.volatile = volatile;
+                let expected =
+                    matches!(space, AddressSpace::Global | AddressSpace::Generic) && !volatile;
+                let load = KirOperation::new(
+                    vec![ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32))],
+                    OperationKind::Load {
+                        pointer: ValueId(0),
+                        access,
+                    },
+                );
+                let store = KirOperation::new(
+                    vec![],
+                    OperationKind::Store {
+                        pointer: ValueId(0),
+                        value: ValueId(1),
+                        access,
+                    },
+                );
+                assert_eq!(closed(&load), expected);
+                assert_eq!(closed(&store), expected);
+            }
+        }
+    }
     #[test]
     fn pending_global_native_scan_frames_have_an_independent_equation() {
         fn h<T>() -> usize {

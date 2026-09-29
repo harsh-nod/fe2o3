@@ -33,6 +33,15 @@ pub(crate) const POLICY9_PASSES: [PassKind; 2] = [
     PassKind::DeadCodeElimination,
 ];
 
+// The first mixed general-optimization policy preserves the complete CFG.
+// Existing CSE implementations admit only total, effect-free operation keys.
+pub(crate) const POLICY10_PASSES: [PassKind; 4] = [
+    PassKind::IntegerNeutralWorklistCanonicalization,
+    PassKind::LocalPureCommonSubexpressionElimination,
+    PassKind::DominancePureCommonSubexpressionElimination,
+    PassKind::DeadCodeElimination,
+];
+
 /// This selector is private to the common execution/capture implementation.
 /// External report contents never construct it or choose a roster.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +50,7 @@ pub(crate) enum FixedPolicy {
     Checked3,
     Integer6,
     IntegerWorklist9,
+    MixedPureCse10,
 }
 
 impl FixedPolicy {
@@ -50,6 +60,7 @@ impl FixedPolicy {
             Self::Checked3 => &POLICY3_PASSES,
             Self::Integer6 => &crate::fixed_integer_continuation_v1::INTEGER_CONTINUATION_PASSES,
             Self::IntegerWorklist9 => &POLICY9_PASSES,
+            Self::MixedPureCse10 => &POLICY10_PASSES,
         }
     }
 
@@ -61,6 +72,7 @@ impl FixedPolicy {
             Self::IntegerWorklist9 => {
                 b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-9/INTEGER-WORKLIST-V1\0"
             }
+            Self::MixedPureCse10 => b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-10/MIXED-PURE-CSE-V1\0",
         }
     }
 }
@@ -543,5 +555,6 @@ mod storage_v18;
 pub use storage_v18::{
     INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18, INTEGER_WORKLIST_EXECUTION_RECORD_BYTES_V18,
     IntegerContinuationExecutionWitnessV18, IntegerWorklistExecutionWitnessV18,
+    MIXED_PURE_CSE_EXECUTION_RECORD_BYTES_V18, MixedPureCseExecutionWitnessV18,
     POLICY3_EXECUTION_RECORD_BYTES_V18, Policy3ExecutionWitnessV18,
 };

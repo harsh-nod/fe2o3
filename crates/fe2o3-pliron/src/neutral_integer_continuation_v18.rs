@@ -169,12 +169,13 @@ impl<'input> KirNeutralOptimizationOutputIntegerContinuationV18<'input> {
     {
         let required = self
             .caller_floor
-            .checked_add(self.parts.storage.retained_storage())
-            .ok_or(Resource::Accounting)?;
+            .checked_add(self.parts.storage.retained_storage());
         if self.ledger != budget.work_ledger_identity_v1()
             || self.slot != std::ptr::from_ref(budget) as usize
-            || budget.storage() < required
+            || required.is_none_or(|required| budget.storage() < required)
         {
+            // An uncalled capture can panic during destruction as well.
+            super::checked_neutral_optimization_v1::drop_adoption_result(source, true);
             return Err(Resource::Accounting.into());
         }
         check_and_finish_parts_typed(

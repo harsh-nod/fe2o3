@@ -28,23 +28,53 @@ const NESTED: &str = r#"
     if i >= input.len() { return; }
     *slot = read_outer(&input[i]);
 "#;
+const REPEATED: &str = r#"
+    if i >= input.len() { return; }
+    let element = &input[i];
+    let first = read_outer(element);
+    let second = read_outer(element);
+    *slot = first ^ second;
+"#;
+const MUTABLE_STORE: &str = "store_outer(slot, seed);";
+const MUTABLE_RMW: &str = r#"
+    if i >= input.len() { return; }
+    update_outer(slot, &input[i]);
+"#;
 
 fn program(body: &str) -> String {
-    format!(
-        r#"use fe2o3_device::{{DisjointSlice, kernel, thread}};
+    program_roots(&[("mixed", body)])
+}
+
+fn program_roots(roots: &[(&str, &str)]) -> String {
+    let mut source = String::from(
+        r#"use fe2o3_device::{DisjointSlice, kernel, thread};
 #[inline(never)]
-fn read_leaf(value: &u32) -> u32 {{ *value }}
+fn read_leaf(value: &u32) -> u32 { *value }
 #[inline(never)]
-fn read_outer(value: &u32) -> u32 {{ read_leaf(value) }}
-#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [3, 1, 1]))]
-pub fn mixed(input: &[u32], mut output: DisjointSlice<u32>, seed: u32, _word: usize) {{
+fn read_outer(value: &u32) -> u32 { read_leaf(value) }
+#[inline(never)]
+fn store_leaf(value: &mut u32, input: u32) { *value = input; }
+#[inline(never)]
+fn store_outer(value: &mut u32, input: u32) { store_leaf(value, input); }
+#[inline(never)]
+fn update_leaf(value: &mut u32, input: &u32) { *value = *value ^ *input; }
+#[inline(never)]
+fn update_outer(value: &mut u32, input: &u32) { update_leaf(value, input); }
+"#,
+    );
+    for (name, body) in roots {
+        source.push_str(&format!(
+            r#"#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [3, 1, 1]))]
+pub fn {name}(input: &[u32], mut output: DisjointSlice<u32>, seed: u32, _word: usize) {{
     let index = thread::index_1d();
     let i = index.get();
     let Some(slot) = output.get_mut(index) else {{ return; }};
     {body}
 }}
 "#
-    )
+        ));
+    }
+    source
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -54,7 +84,13 @@ struct Observation {
     output: [u8; 32],
     target: String,
     llvm: String,
+    roots: usize,
     instances: usize,
+    instances_per_root: [usize; 2],
+    accesses_per_root: [[usize; 2]; 2],
+    helper_accesses: [usize; 2],
+    repeated_helper_access: bool,
+    shared_root_helper_access: bool,
     reads: usize,
     writes: usize,
     unused_slices: usize,
@@ -65,6 +101,7 @@ struct Observation {
     foreign_owner_refused: bool,
     foreign_ledger_refused: bool,
     incomplete_abi_refused: bool,
+    missing_root_refused: bool,
     callback_error_preserved: bool,
     exact_and_short_storage: bool,
     zero_work_refused: bool,
@@ -118,39 +155,47 @@ impl Callbacks for MixedCallbacks {
                         assert!(!std::ptr::eq(source.source_ssa(budget)?, &foreign));
                         handoff.check_original_source(source.source_ssa(budget)?, budget)?;
                         handoff.check_original_argument_abi_v26(AbiInput { roots }, budget)?;
-                        assert_eq!(source.root_count(budget)?, 1);
-                        assert_eq!(roots.len(), 1);
-                        assert_eq!(roots[0].arguments.len(), 4);
-                        assert!(matches!(
-                            roots[0].arguments[0].kind,
-                            AbiKind::Descriptor {
-                                source: SourceTypeDescriptorV3::SharedSlice(_),
-                                ..
-                            }
-                        ));
-                        assert!(matches!(
-                            roots[0].arguments[1].kind,
-                            AbiKind::Descriptor {
-                                source: SourceTypeDescriptorV3::DisjointSlice(_),
-                                ..
-                            }
-                        ));
-                        assert!(matches!(
-                            roots[0].arguments[3].kind,
-                            AbiKind::Descriptor {
-                                source: SourceTypeDescriptorV3::Usize,
-                                ..
-                            }
-                        ));
+                        let root_count = source.root_count(budget)?;
+                        assert!((1..=2).contains(&root_count));
+                        assert_eq!(roots.len(), root_count);
+                        let mut instances_per_root = [0; 2];
+                        for (ordinal, root) in roots.iter().enumerate() {
+                            instances_per_root[ordinal] = source.instance_count(ordinal, budget)?;
+                            assert_eq!(root.arguments.len(), 4);
+                            assert!(matches!(
+                                root.arguments[0].kind,
+                                AbiKind::Descriptor {
+                                    source: SourceTypeDescriptorV3::SharedSlice(_),
+                                    ..
+                                }
+                            ));
+                            assert!(matches!(
+                                root.arguments[1].kind,
+                                AbiKind::Descriptor {
+                                    source: SourceTypeDescriptorV3::DisjointSlice(_),
+                                    ..
+                                }
+                            ));
+                            assert!(matches!(
+                                root.arguments[3].kind,
+                                AbiKind::Descriptor {
+                                    source: SourceTypeDescriptorV3::Usize,
+                                    ..
+                                }
+                            ));
+                        }
                         let (launches, width) = handoff.launch_context(budget)?;
                         assert_eq!(width, FormalIndexWidth::Bits64);
-                        assert_eq!(
-                            launches,
-                            &[ExplicitLaunchExtent::Exact {
-                                rank: 1,
-                                extents: [192, 1, 1],
-                            }]
-                        );
+                        assert_eq!(launches.len(), root_count);
+                        for launch in launches {
+                            assert_eq!(
+                                *launch,
+                                ExplicitLaunchExtent::Exact {
+                                    rank: 1,
+                                    extents: [192, 1, 1],
+                                }
+                            );
+                        }
                         let original = source.canonical(budget)?;
                         let output = handoff.output(budget)?;
                         assert_eq!(output.input_audit_bytes(), original.canonical_bytes());
@@ -161,26 +206,66 @@ impl Callbacks for MixedCallbacks {
                         assert!(!handoff.ranked_verification_is_complete());
                         assert!(!handoff.grants_artifact_or_launch_authority());
                         let premises = handoff.runtime_premises(budget)?;
-                        assert_eq!(premises.len(), 2);
+                        assert_eq!(premises.len(), 2 * root_count);
                         let mut counts = [0; 2];
+                        let mut accesses_per_root = [[0; 2]; 2];
+                        let mut declared_slices = [[false; 2]; 2];
                         let mut unused = 0;
                         for premise in premises {
-                            assert_eq!(premise.root(), 0);
+                            assert!(premise.root() < root_count);
                             assert!(premise.original_argument() < 2);
-                            assert_eq!(premise.launch(), launches[0]);
+                            let root = premise.root();
+                            let argument = usize::try_from(premise.original_argument()).unwrap();
+                            assert!(!declared_slices[root][argument]);
+                            declared_slices[root][argument] = true;
+                            assert_eq!(premise.launch(), launches[root]);
                             assert_eq!(premise.index_width(), width);
                             assert!(!premise.grants_artifact_or_launch_authority());
                             let accesses = premise.access_counts();
                             unused += usize::from(accesses == [0, 0]);
                             counts[0] += accesses[0];
                             counts[1] += accesses[1];
+                            accesses_per_root[root][0] += accesses[0];
+                            accesses_per_root[root][1] += accesses[1];
                         }
+                        assert!(
+                            declared_slices[..root_count]
+                                .iter()
+                                .all(|row| *row == [true; 2])
+                        );
                         let occurrences = handoff.runtime_occurrences(budget)?;
                         assert_eq!(occurrences.len(), counts.iter().sum::<usize>());
-                        for row in occurrences {
+                        let mut helper_accesses = [0; 2];
+                        let mut repeated_helper_access = false;
+                        let mut shared_root_helper_access = false;
+                        for (ordinal, row) in occurrences.iter().enumerate() {
                             assert!(row.premise_index() < premises.len());
                             assert!(row.requires_address_formation_domain());
                             assert!(!row.grants_artifact_or_launch_authority());
+                            let root = premises[row.premise_index()].root();
+                            let instance = row.original_instance();
+                            assert!(instance < instances_per_root[root]);
+                            assert!(source.instance_active(root, instance, budget)?);
+                            let (function, caller) = source.instance(root, instance, budget)?;
+                            if caller.is_some() {
+                                helper_accesses[usize::from(row.domain().writing())] += 1;
+                            }
+                            for previous in &occurrences[..ordinal] {
+                                assert_ne!(row.original_operation(), previous.original_operation());
+                                assert_ne!(row.output_operation(), previous.output_operation());
+                                let previous_root = premises[previous.premise_index()].root();
+                                let previous_instance = previous.original_instance();
+                                let (previous_function, previous_caller) =
+                                    source.instance(previous_root, previous_instance, budget)?;
+                                if caller.is_some()
+                                    && previous_caller.is_some()
+                                    && function == previous_function
+                                {
+                                    repeated_helper_access |=
+                                        root == previous_root && instance != previous_instance;
+                                    shared_root_helper_access |= root != previous_root;
+                                }
+                            }
                         }
                         let native =
                             check_and_lower_mixed_target_llvm_v26(source, handoff, target, budget)?;
@@ -198,7 +283,13 @@ impl Callbacks for MixedCallbacks {
                             output: Sha256::digest(output.owner().canonical_bytes()).into(),
                             target: paid_text(target.device_target(), budget)?,
                             llvm,
-                            instances: source.instance_count(0, budget)?,
+                            roots: root_count,
+                            instances: instances_per_root.iter().sum(),
+                            instances_per_root,
+                            accesses_per_root,
+                            helper_accesses,
+                            repeated_helper_access,
+                            shared_root_helper_access,
                             reads: counts[0],
                             writes: counts[1],
                             unused_slices: unused,
@@ -209,6 +300,7 @@ impl Callbacks for MixedCallbacks {
                             foreign_owner_refused: false,
                             foreign_ledger_refused: false,
                             incomplete_abi_refused: false,
+                            missing_root_refused: false,
                             callback_error_preserved: false,
                             exact_and_short_storage: false,
                             zero_work_refused: false,
@@ -259,24 +351,50 @@ impl Callbacks for MixedCallbacks {
             let error = refused(
                 transaction()?.with_original_source_conditional_mixed_worklist_v26::<(), _>(
                     |_, handoff, roots, _, budget| {
-                        let root = &roots[0];
-                        let changed = [AbiRoot {
-                            kernel_binding: root.kernel_binding,
-                            export: root.export,
-                            arguments: &root.arguments[..root.arguments.len() - 1],
-                            explicit_argument_bytes: root.explicit_argument_bytes,
-                            kernarg_alignment_bytes: root.kernarg_alignment_bytes,
-                        }];
+                        assert!((1..=2).contains(&roots.len()));
+                        let changed: [AbiRoot<'_>; 2] = std::array::from_fn(|ordinal| {
+                            let root = &roots[ordinal.min(roots.len() - 1)];
+                            AbiRoot {
+                                kernel_binding: root.kernel_binding,
+                                export: root.export,
+                                arguments: &root.arguments
+                                    [..root.arguments.len() - usize::from(ordinal == 0)],
+                                explicit_argument_bytes: root.explicit_argument_bytes,
+                                kernarg_alignment_bytes: root.kernarg_alignment_bytes,
+                            }
+                        });
                         handoff.check_original_argument_abi_v26(
-                            AbiInput { roots: &changed },
+                            AbiInput {
+                                roots: &changed[..roots.len()],
+                            },
                             budget,
                         )?;
                         panic!("incomplete original ABI acquired mixed output custody")
                     },
                 ),
             );
-            assert!(matches!(error, Error::Source(_)));
+            assert!(matches!(error, Error::Source(SourceError::Binding(_))));
             report.incomplete_abi_refused = true;
+            if report.roots > 1 {
+                let reached = Cell::new(false);
+                let error = refused(
+                    transaction()?.with_original_source_conditional_mixed_worklist_v26::<(), _>(
+                        |_, handoff, roots, _, budget| {
+                            reached.set(true);
+                            handoff.check_original_argument_abi_v26(
+                                AbiInput {
+                                    roots: &roots[..roots.len() - 1],
+                                },
+                                budget,
+                            )?;
+                            panic!("missing original root acquired mixed output custody")
+                        },
+                    ),
+                );
+                assert!(reached.get());
+                assert!(matches!(error, Error::Source(SourceError::Binding(_))));
+                report.missing_root_refused = true;
+            }
 
             let reached = Cell::new(false);
             let error = refused(
@@ -426,6 +544,7 @@ fn actual_original_mixed_worklist_keeps_shared_store_rmw_and_nested_helper_contr
         program,
         |_, _, case, report, _| {
             assert!(report.target.starts_with("gfx942") || report.target.starts_with("gfx950"));
+            assert_eq!(report.roots, 1);
             assert_eq!(report.policy, 9);
             assert_eq!(report.writes, 1);
             assert_eq!(report.occurrences, report.reads + report.writes);
@@ -445,6 +564,63 @@ fn actual_original_mixed_worklist_keeps_shared_store_rmw_and_nested_helper_contr
             assert!(report.exact_and_short_storage && report.zero_work_refused);
             assert!(report.target_controls_checked);
             assert!(report.worker_input_controls_checked);
+            parse_and_verify_target_llvm(&report.llvm);
+        },
+    );
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src, authentic AMD dependencies and FE2O3_OPT LLVM 22"]
+fn actual_original_mixed_reference_calls_keep_repeated_mutable_and_multiroot_ownership() {
+    let repeated = program(REPEATED);
+    let mutable_store = program(MUTABLE_STORE);
+    let mutable_rmw = program(MUTABLE_RMW);
+    let multiple_roots = program_roots(&[("mixed_a", NESTED), ("mixed_b", NESTED)]);
+    run_actual_sources::<Observation>(
+        &[
+            ("repeated", &repeated),
+            ("mutable-store", &mutable_store),
+            ("mutable-rmw", &mutable_rmw),
+            ("multiple-roots", &multiple_roots),
+        ],
+        &[(0, 0)],
+        CHILD,
+        "CONDITIONAL_MIXED_REFERENCE_MATRIX_V26",
+        str::to_owned,
+        |_, _, case, report, _| {
+            let (root_count, per_root, helper_accesses, minimum_instances) = match case {
+                "repeated" => (1, [2, 1], [2, 0], 5),
+                "mutable-store" => (1, [0, 1], [0, 1], 3),
+                "mutable-rmw" => (1, [2, 1], [2, 1], 3),
+                "multiple-roots" => (2, [1, 1], [2, 0], 3),
+                _ => panic!("unexpected reference matrix case"),
+            };
+            assert!(report.target.starts_with("gfx942") || report.target.starts_with("gfx950"));
+            assert_eq!(report.policy, 9);
+            assert_eq!(report.roots, root_count);
+            assert_eq!(
+                (report.reads, report.writes),
+                (root_count * per_root[0], root_count)
+            );
+            assert_eq!(report.occurrences, report.reads + report.writes);
+            assert_eq!(report.helper_accesses, helper_accesses);
+            assert_eq!(report.unused_slices, usize::from(case == "mutable-store"));
+            for root in 0..root_count {
+                assert_eq!(report.accesses_per_root[root], per_root);
+                assert!(report.instances_per_root[root] >= minimum_instances);
+            }
+            if case == "repeated" {
+                assert!(report.repeated_helper_access);
+            }
+            if case == "multiple-roots" {
+                assert!(report.shared_root_helper_access);
+                assert!(report.missing_root_refused);
+            }
+            assert!(report.prepared && report.conditional_only);
+            assert!(report.foreign_owner_refused && report.foreign_ledger_refused);
+            assert!(report.incomplete_abi_refused && report.callback_error_preserved);
+            assert!(report.exact_and_short_storage && report.zero_work_refused);
+            assert!(report.target_controls_checked && report.worker_input_controls_checked);
             parse_and_verify_target_llvm(&report.llvm);
         },
     );
@@ -503,6 +679,33 @@ fn mixed_worklist_actual_fixture_has_safe_bounds_disjoint_writes_and_nested_refe
     assert!(source.contains("max_grid = [3, 1, 1]"));
     assert!(!source.contains("unsafe"));
     assert!(CHILD.ends_with("::mixed_worklist_tests::mixed_worklist_child"));
+}
+
+#[test]
+fn mixed_reference_matrix_uses_safe_actual_calls_and_distinct_kernel_roots() {
+    let repeated = program(REPEATED);
+    assert_eq!(repeated.matches("read_outer(element)").count(), 2);
+    assert!(repeated.contains("let element = &input[i]"));
+    let store = program(MUTABLE_STORE);
+    assert!(store.contains("store_outer(slot, seed)"));
+    assert!(store.contains("fn store_leaf(value: &mut u32, input: u32)"));
+    let rmw = program(MUTABLE_RMW);
+    assert!(rmw.contains("update_outer(slot, &input[i])"));
+    assert!(rmw.contains("fn update_leaf(value: &mut u32, input: &u32)"));
+    let roots = program_roots(&[("mixed_a", NESTED), ("mixed_b", NESTED)]);
+    assert_eq!(roots.matches("#[kernel(typed,").count(), 2);
+    assert_eq!(roots.matches("fn read_leaf(value: &u32)").count(), 1);
+    assert_eq!(roots.matches("*slot = read_outer(&input[i])").count(), 2);
+    assert!(roots.contains("pub fn mixed_a(") && roots.contains("pub fn mixed_b("));
+    for source in [&repeated, &store, &rmw, &roots] {
+        assert!(
+            !source.contains("unsafe") && !source.contains("*mut") && !source.contains("*const")
+        );
+        assert_eq!(
+            source.matches("output.get_mut(index)").count(),
+            source.matches("#[kernel(typed,").count()
+        );
+    }
 }
 
 #[test]

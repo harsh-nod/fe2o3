@@ -29,7 +29,7 @@ impl fmt::Display for ProductionMixedSourceCheckErrorV26 {
 }
 impl std::error::Error for ProductionMixedSourceCheckErrorV26 {}
 
-/// Preparation and actual consuming Policy9 adoption remain distinguishable.
+/// Preparation and actual consuming fixed-policy adoption remain distinguishable.
 #[derive(Debug)]
 pub enum ProductionMixedSourceHandoffErrorV26 {
     /// Preparation or source/native conjunction failed before owning adoption.
@@ -57,111 +57,120 @@ impl fmt::Display for ProductionMixedSourceHandoffErrorV26 {
 }
 impl std::error::Error for ProductionMixedSourceHandoffErrorV26 {}
 
-/// Move-only actual Policy9 output, inseparable from its source-bound runtime
-/// premise roster. Concrete allocation, initialization, cross-argument
-/// non-overlap and launch/width binding are mandatory downstream conditions.
-/// This intermediate owner confers no launch, artifact or ranked-final authority.
-#[must_use = "retain the actual output and its mandatory runtime contract together"]
-pub struct ProductionConditionalMixedOutputHandoffV26<'view, 'source> {
-    owned: SourceOutputHandoffV18<'view, 'source, IntegerWorklistSourceOptimizerV18>,
-    premises: Vec<ProductionMixedSliceRuntimePremiseV26>,
-    occurrences: Vec<ProductionMixedRuntimeOccurrenceV26>,
-    launches: &'view [fe2o3_kernel_ir::ExplicitLaunchExtent],
-    width: fe2o3_kernel_ir::FormalIndexWidth,
-}
-impl ProductionConditionalMixedOutputHandoffV26<'_, '_> {
-    /// Borrows the actual Policy9 output while its source and storage remain bound.
-    pub fn output(
-        &self,
-        budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&fe2o3_pliron::CheckedNeutralKernelIrOwnerIntegerWorklistV18> {
-        self.owned.output(budget)
-    }
-    /// Replays association with this exact retained original semantic SSA owner.
-    pub fn check_original_source(
-        &self,
-        source: &ProductionSemanticSsaOwnerV1,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<()> {
-        self.owned.check_original_source(source, budget)
-    }
-    /// Rejoin a downstream emitter's complete descriptor/component roster to
-    /// the captured original ABI. Semantic type and descriptor layout identities
-    /// remain distinct; equality of their digest bytes is never substituted.
-    pub fn check_original_argument_abi_v26(
-        &self,
-        abi: ProductionKernelArgumentAbiInputV18<'_>,
-        budget: &mut ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<()> {
-        self.owned.check(budget)?;
-        self.owned
-            .source
-            .require_kernel_argument_abi_v18(abi, budget)
-    }
-    /// Returns every original slice argument, including explicit zero-use rows;
-    /// concrete runtime facts remain required for the recorded accesses.
-    pub fn runtime_premises(
-        &self,
-        budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&[ProductionMixedSliceRuntimePremiseV26]> {
-        self.owned.check(budget)?;
-        Ok(&self.premises)
-    }
-    /// Returns the per-root explicit launch conditions and formal index width.
-    pub fn launch_context(
-        &self,
-        budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<(
-        &[fe2o3_kernel_ir::ExplicitLaunchExtent],
-        fe2o3_kernel_ir::FormalIndexWidth,
-    )> {
-        self.owned.check(budget)?;
-        Ok((self.launches, self.width))
-    }
-    /// Returns every exact global access, including its separate address formation.
-    pub fn runtime_occurrences(
-        &self,
-        budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&[ProductionMixedRuntimeOccurrenceV26]> {
-        self.owned.check(budget)?;
-        Ok(&self.occurrences)
-    }
-    /// Returns the checked live credit for output ownership and retained premises.
-    pub fn retained_storage(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<usize> {
-        self.owned.retained_storage(budget)
-    }
-    /// Refuses lost custody without refunding a caller's retained storage floor.
-    pub fn observe_retained_storage_v18(
-        &self,
-        required: usize,
-        budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<()> {
-        self.owned.observe_retained_storage_v18(required, budget)
-    }
-    /// Destroys the premise vectors and output before refunding their exact credit.
-    pub fn discard(self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
-        let Self {
-            owned,
-            premises,
-            occurrences,
-            ..
-        } = self;
-        drop(premises);
-        drop(occurrences);
-        owned.discard(budget)
-    }
-    /// Always false: live allocation, alias, initialization, and launch checks remain.
-    pub const fn runtime_requirements_are_discharged(&self) -> bool {
-        false
-    }
-    /// Always false: this conditional handoff is not a final ranked certificate.
-    pub const fn ranked_verification_is_complete(&self) -> bool {
-        false
-    }
-    /// Always false: downstream authenticated composition must admit execution.
-    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
-        false
-    }
+// Both fixed policies preserve the CFG and share the exact source/native
+// completion contract. Instantiate nominal owners, never erase policy identity.
+macro_rules! mixed_source_handoff_v26 {
+    ($handoff:ident, $policy:ident, $output:ident) => {
+        /// Move-only actual fixed-policy output, inseparable from its source-bound runtime
+        /// premise roster. Concrete allocation, initialization, cross-argument
+        /// non-overlap and launch/width binding are mandatory downstream conditions.
+        /// This intermediate owner confers no launch, artifact or ranked-final authority.
+        #[must_use = "retain the actual output and its mandatory runtime contract together"]
+        pub struct $handoff<'view, 'source> {
+            owned: SourceOutputHandoffV18<'view, 'source, $policy>,
+            premises: Vec<ProductionMixedSliceRuntimePremiseV26>,
+            occurrences: Vec<ProductionMixedRuntimeOccurrenceV26>,
+            launches: &'view [fe2o3_kernel_ir::ExplicitLaunchExtent],
+            width: fe2o3_kernel_ir::FormalIndexWidth,
+        }
+        impl $handoff<'_, '_> {
+            /// Borrows the actual nominal output while its source and storage remain bound.
+            pub fn output(
+                &self,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<&fe2o3_pliron::$output> {
+                self.owned.output(budget)
+            }
+            /// Replays association with this exact retained original semantic SSA owner.
+            pub fn check_original_source(
+                &self,
+                source: &ProductionSemanticSsaOwnerV1,
+                budget: &mut ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<()> {
+                self.owned.check_original_source(source, budget)
+            }
+            /// Rejoin a downstream emitter's complete descriptor/component roster to
+            /// the captured original ABI. Semantic type and descriptor layout identities
+            /// remain distinct; equality of their digest bytes is never substituted.
+            pub fn check_original_argument_abi_v26(
+                &self,
+                abi: ProductionKernelArgumentAbiInputV18<'_>,
+                budget: &mut ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<()> {
+                self.owned.check(budget)?;
+                self.owned
+                    .source
+                    .require_kernel_argument_abi_v18(abi, budget)
+            }
+            /// Returns every original slice argument, including explicit zero-use rows;
+            /// concrete runtime facts remain required for the recorded accesses.
+            pub fn runtime_premises(
+                &self,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<&[ProductionMixedSliceRuntimePremiseV26]> {
+                self.owned.check(budget)?;
+                Ok(&self.premises)
+            }
+            /// Returns the per-root explicit launch conditions and formal index width.
+            pub fn launch_context(
+                &self,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<(
+                &[fe2o3_kernel_ir::ExplicitLaunchExtent],
+                fe2o3_kernel_ir::FormalIndexWidth,
+            )> {
+                self.owned.check(budget)?;
+                Ok((self.launches, self.width))
+            }
+            /// Returns every exact global access, including its separate address formation.
+            pub fn runtime_occurrences(
+                &self,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<&[ProductionMixedRuntimeOccurrenceV26]> {
+                self.owned.check(budget)?;
+                Ok(&self.occurrences)
+            }
+            /// Returns the checked live credit for output ownership and retained premises.
+            pub fn retained_storage(
+                &self,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<usize> {
+                self.owned.retained_storage(budget)
+            }
+            /// Refuses lost custody without refunding a caller's retained storage floor.
+            pub fn observe_retained_storage_v18(
+                &self,
+                required: usize,
+                budget: &ArgumentBudgetV1<'_>,
+            ) -> SourceOwnedResultV18<()> {
+                self.owned.observe_retained_storage_v18(required, budget)
+            }
+            /// Destroys the premise vectors and output before refunding their exact credit.
+            pub fn discard(self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
+                let Self {
+                    owned,
+                    premises,
+                    occurrences,
+                    ..
+                } = self;
+                drop(premises);
+                drop(occurrences);
+                owned.discard(budget)
+            }
+            /// Always false: live allocation, alias, initialization, and launch checks remain.
+            pub const fn runtime_requirements_are_discharged(&self) -> bool {
+                false
+            }
+            /// Always false: this conditional handoff is not a final ranked certificate.
+            pub const fn ranked_verification_is_complete(&self) -> bool {
+                false
+            }
+            /// Always false: downstream authenticated composition must admit execution.
+            pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+                false
+            }
+        }
+    };
 }
 
 fn mixed_source_completion_headers_v26() -> Result<usize, ArgumentResourceV1> {
@@ -271,19 +280,21 @@ where
     })
 }
 
+macro_rules! mixed_source_completion_v26 {
+    ($method:ident, $handoff:ident, $policy:ident) => {
 impl<'source> ProductionSourceOwnedViewV18<'source> {
-    /// Runs real Policy9 optimization and performs complete source/native mixed
+    /// Runs the nominal fixed policy and performs complete source/native mixed
     /// conjunction inside the consuming output-adoption callback. The returned
     /// output retains the exact mandatory runtime premises, without claiming
     /// that host pointers or a physical launch exist during compilation.
-    pub fn conditional_mixed_worklist_output_v26<'view>(
+    pub fn $method<'view>(
         &'view self,
         abi: ProductionKernelArgumentAbiInputV18<'_>,
         launches: &'view [fe2o3_kernel_ir::ExplicitLaunchExtent],
         width: fe2o3_kernel_ir::FormalIndexWidth,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<
-        ProductionConditionalMixedOutputHandoffV26<'view, 'source>,
+        $handoff<'view, 'source>,
         ProductionMixedSourceHandoffErrorV26,
     > {
         self.query(budget)?;
@@ -296,7 +307,7 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
                 self.require_kernel_argument_abi_v18(abi, budget)?;
                 let headers = mixed_source_completion_headers_v26()?;
                 self.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
-                let result = self.with_retained_checked_optimization_policy_v18::<IntegerWorklistSourceOptimizerV18, (Vec<ProductionMixedSliceRuntimePremiseV26>, Vec<ProductionMixedRuntimeOccurrenceV26>), ProductionMixedSourceCheckErrorV26, _>(budget, |original, optimized, budget| {
+                let result = self.with_retained_checked_optimization_policy_v18::<$policy, (Vec<ProductionMixedSliceRuntimePremiseV26>, Vec<ProductionMixedRuntimeOccurrenceV26>), ProductionMixedSourceCheckErrorV26, _>(budget, |original, optimized, budget| {
                 let callback_floor = budget.storage();
                 scoped_source_attempt_v29(original.source.cleanup, budget, callback_floor, |budget| {
                 let payload_floor = budget.storage();
@@ -323,10 +334,10 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
                     }
                     Ok(())
                 })?;
-                let extra = size_of::<ProductionConditionalMixedOutputHandoffV26<'_, '_>>()
-                    .checked_sub(size_of::<SourceOutputHandoffV18<'_, '_, IntegerWorklistSourceOptimizerV18>>())
+                let extra = size_of::<$handoff<'_, '_>>()
+                    .checked_sub(size_of::<SourceOutputHandoffV18<'_, '_, $policy>>())
                     .ok_or(ArgumentResourceV1::Arithmetic)?;
-                let credit = argument_sum_v1(&[source_output_handoff_credit_v18::<IntegerWorklistSourceOptimizerV18>()?, extra, std::mem::align_of::<ProductionConditionalMixedOutputHandoffV26<'_, '_>>(), backing])?;
+                let credit = argument_sum_v1(&[source_output_handoff_credit_v18::<$policy>()?, extra, std::mem::align_of::<$handoff<'_, '_>>(), backing])?;
                 // The checked adopter immediately reserves this returned credit
                 // with the owned graph and payload; no detached proof escapes.
                 original.retain_query(budget.release_storage(backing).map_err(Into::into))?;
@@ -341,7 +352,7 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
                 Ok::<_, ProductionMixedSourceHandoffErrorV26>(result)
             },
         )?;
-        Ok(ProductionConditionalMixedOutputHandoffV26 {
+        Ok($handoff {
             owned: SourceOutputHandoffV18 {
                 source: self,
                 output,
@@ -357,5 +368,28 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
         })
     }
 }
+    };
+}
+
+mixed_source_handoff_v26!(
+    ProductionConditionalMixedOutputHandoffV26,
+    IntegerWorklistSourceOptimizerV18,
+    CheckedNeutralKernelIrOwnerIntegerWorklistV18
+);
+mixed_source_handoff_v26!(
+    ProductionConditionalMixedPureCseOutputHandoffV26,
+    MixedPureCseSourceOptimizerV18,
+    CheckedNeutralKernelIrOwnerMixedPureCseV18
+);
+mixed_source_completion_v26!(
+    conditional_mixed_worklist_output_v26,
+    ProductionConditionalMixedOutputHandoffV26,
+    IntegerWorklistSourceOptimizerV18
+);
+mixed_source_completion_v26!(
+    conditional_mixed_pure_cse_output_v26,
+    ProductionConditionalMixedPureCseOutputHandoffV26,
+    MixedPureCseSourceOptimizerV18
+);
 
 include!("production_source_mixed_contract_v26.rs");

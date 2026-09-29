@@ -1,4 +1,4 @@
-// The only producer here is the retained, source-checked Policy9 handoff.
+// Producers are the retained, nominal source-checked Policy9/Policy10 handoffs.
 // Encoded bytes are descriptive and never replace that owner or its proof.
 mod mixed_source_contract_v26 {
     use super::*;
@@ -262,9 +262,11 @@ mod mixed_source_contract_v26 {
         })
     }
 
-    impl ProductionConditionalMixedOutputHandoffV26<'_, '_> {
+    macro_rules! mixed_source_contract_emitter_v26 {
+        ($handoff:ident) => {
+    impl $handoff<'_, '_> {
         /// Emits the complete selected-root runtime contract from this retained
-        /// Policy9 output. The ABI is rejoined to the captured original source;
+        /// fixed-policy output. The ABI is rejoined to the captured original source;
         /// every generated descriptor field and memory occurrence is replayed.
         ///
         /// The returned bytes remain inert. Their digest cannot replace this
@@ -591,4 +593,9 @@ mod mixed_source_contract_v26 {
             ))
         }
     }
+        };
+    }
+
+    mixed_source_contract_emitter_v26!(ProductionConditionalMixedOutputHandoffV26);
+    mixed_source_contract_emitter_v26!(ProductionConditionalMixedPureCseOutputHandoffV26);
 }

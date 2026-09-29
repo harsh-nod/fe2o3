@@ -159,38 +159,14 @@ fn issued_helper_calls_keep_distinct_issuer_and_access_instances_across_nested_r
                             assert_ne!(access.pointer, issuer.pointer);
                         }
                         assert!(count > 0, "nested={nested}, root={root}");
-                        let ordinal = original.source.root(root, budget)?.1;
-                        let recipe = scalar_leaf_collision_recipe_v18(
-                            original.inventory.functions()[ordinal].function,
-                        );
-                        original.with_descriptor_source_roles_v18(
-                            optimized,
-                            root,
-                            &recipe,
-                            budget,
-                            |roles, budget| {
-                                let output = optimized.output_inventory(budget)?;
-                                let function = optimized_source_root_function_v18(
-                                    original, optimized, root, budget,
-                                )?;
-                                let mut accesses = 0;
-                                for operation in &output.operations()[function.operations.clone()] {
-                                    if matches!(
-                                        operation.operation.kind,
-                                        OperationKind::Load { .. } | OperationKind::Store { .. }
-                                    ) {
-                                        assert!(
-                                            roles.role(operation.coordinate, budget)?.is_some()
-                                        );
-                                        accesses += 1;
-                                    }
-                                }
-                                assert!(accesses >= 2);
-                                Ok(())
-                            },
-                        )?;
-                        completed.set(completed.get() + 1);
                     }
+                    // The helper performs an arithmetic Store. Its role must
+                    // include the original RHS proof, not a ranked-name recipe.
+                    let accesses = slice_view_v1::test_issued_generic_global_domains_v26(
+                        original, optimized, budget,
+                    )?;
+                    assert!(accesses >= roots);
+                    completed.set(roots);
                     Ok(())
                 },
             )

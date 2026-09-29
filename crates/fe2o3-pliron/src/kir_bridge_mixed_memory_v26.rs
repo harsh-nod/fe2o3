@@ -310,10 +310,17 @@ fn mixed_rows_v26(
                 return Err(Failure::ExactGraph);
             }
             accesses = accesses.checked_add(1).ok_or(ResourceError::Arithmetic)?;
+            // The same-owner checked domain already establishes the exact
+            // Global slice root and typed transport to this actual pointer.
+            // Generic is preserved representation, never origin evidence.
             match (global.domain(), &row.operation.kind) {
                 (Domain::Read(domain), OperationKind::Load { pointer, access })
                     if domain.pointer() == *pointer
-                        && access.address_space == fe2o3_kernel_ir::AddressSpace::Global
+                        && matches!(
+                            access.address_space,
+                            fe2o3_kernel_ir::AddressSpace::Global
+                                | fe2o3_kernel_ir::AddressSpace::Generic
+                        )
                         && !access.volatile =>
                 {
                     Some(Kind::ConditionalGlobalReadV26)
@@ -324,7 +331,11 @@ fn mixed_rows_v26(
                         pointer, access, ..
                     },
                 ) if domain.pointer() == *pointer
-                    && access.address_space == fe2o3_kernel_ir::AddressSpace::Global
+                    && matches!(
+                        access.address_space,
+                        fe2o3_kernel_ir::AddressSpace::Global
+                            | fe2o3_kernel_ir::AddressSpace::Generic
+                    )
                     && !access.volatile =>
                 {
                     Some(Kind::ConditionalGlobalWriteV26)

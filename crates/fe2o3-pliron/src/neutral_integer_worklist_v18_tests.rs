@@ -6,6 +6,103 @@ use fe2o3_kernel_ir::{
     ScalarType, Signature, Terminator, Type, ValueId,
 };
 
+macro_rules! early_adoption_capture_refusal {
+    ($name:ident, $optimize:path) => {
+        #[test]
+        fn $name() {
+            use std::{cell::Cell, rc::Rc};
+            struct Hostile(Rc<Cell<usize>>);
+            impl Drop for Hostile {
+                fn drop(&mut self) {
+                    self.0.set(self.0.get() + 1);
+                    panic!("uncalled integer-policy capture destructor");
+                }
+            }
+            let source = input(&reverse_chain(3));
+            for fault in 0..3 {
+                let mut work = Work::new(WORK);
+                let mut budget = Budget::new(&mut work, SPACE);
+                budget.reserve_storage(source.storage + 71).unwrap();
+                let floor = budget.storage();
+                let value = $optimize(&source.owner, LIMITS, &mut budget).unwrap();
+                assert_eq!(budget.storage(), floor);
+                budget
+                    .reserve_storage(value.storage().retained_storage())
+                    .unwrap();
+                let dropped = Rc::new(Cell::new(0));
+                let called = Rc::new(Cell::new(0));
+                let observed_call = Rc::clone(&called);
+                let hostile = Hostile(Rc::clone(&dropped));
+                let result = match fault {
+                    0 => {
+                        let original = (budget.storage(), budget.work());
+                        let mut foreign_work = Work::new(WORK);
+                        let mut foreign = Budget::new(&mut foreign_work, SPACE);
+                        foreign.reserve_storage(original.0).unwrap();
+                        let before = (foreign.storage(), foreign.work());
+                        let result =
+                            value.try_check_and_finish_with_v18(&mut foreign, move |_, _| {
+                                let _capture = hostile;
+                                observed_call.set(observed_call.get() + 1);
+                                Ok::<_, Infallible>(((), 0))
+                            });
+                        assert_eq!((foreign.storage(), foreign.work()), before);
+                        assert_eq!((budget.storage(), budget.work()), original);
+                        result
+                    }
+                    1 => {
+                        budget.release_storage(1).unwrap();
+                        let before = (budget.storage(), budget.work());
+                        let result =
+                            value.try_check_and_finish_with_v18(&mut budget, move |_, _| {
+                                let _capture = hostile;
+                                observed_call.set(observed_call.get() + 1);
+                                Ok::<_, Infallible>(((), 0))
+                            });
+                        assert_eq!((budget.storage(), budget.work()), before);
+                        result
+                    }
+                    _ => {
+                        let original_slot = std::ptr::from_ref(&budget) as usize;
+                        let mut moved = Box::new(budget);
+                        assert_ne!(original_slot, std::ptr::from_ref(&*moved) as usize);
+                        let before = (moved.storage(), moved.work());
+                        let result =
+                            value.try_check_and_finish_with_v18(&mut moved, move |_, _| {
+                                let _capture = hostile;
+                                observed_call.set(observed_call.get() + 1);
+                                Ok::<_, Infallible>(((), 0))
+                            });
+                        assert_eq!((moved.storage(), moved.work()), before);
+                        result
+                    }
+                };
+                assert!(matches!(
+                    result,
+                    Err(KirCheckedNeutralOptimizationErrorV1::Resource(
+                        Resource::Accounting
+                    ))
+                ));
+                assert_eq!(called.get(), 0);
+                assert_eq!(dropped.get(), 1);
+            }
+        }
+    };
+}
+
+early_adoption_capture_refusal!(
+    scalar_policy3_uncalled_capture_preserves_early_accounting_refusal,
+    crate::optimize_neutral_kernel_ir_v18
+);
+early_adoption_capture_refusal!(
+    integer_policy6_uncalled_capture_preserves_early_accounting_refusal,
+    crate::optimize_neutral_kernel_ir_integer_continuation_v18
+);
+early_adoption_capture_refusal!(
+    integer_policy9_uncalled_capture_preserves_early_accounting_refusal,
+    crate::optimize_neutral_kernel_ir_integer_worklist_v18
+);
+
 fn reverse_chain(depth: u32) -> Module {
     assert!(depth > 0);
     let mut module = Module::new("integer-worklist");

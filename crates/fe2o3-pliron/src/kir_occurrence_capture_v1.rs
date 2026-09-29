@@ -1734,6 +1734,24 @@ impl Capture {
         )
     }
 
+    pub(crate) fn finish_mixed_pure_cse_v18(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapMixedPureCseV18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::MixedPureCse10,
+            budget,
+        )
+    }
+
     fn finish_admitted_v18<I>(
         &self,
         ctx: &Context,

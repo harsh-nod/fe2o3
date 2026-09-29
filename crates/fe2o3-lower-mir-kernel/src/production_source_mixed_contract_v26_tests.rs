@@ -163,7 +163,9 @@ fn mixed_source_contract_descriptor_v26(
     Ok(bytes)
 }
 
-fn run_mixed_source_contract_v26(
+macro_rules! mixed_source_contract_runner_v26 {
+    ($name:ident, $method:ident, $version:literal) => {
+fn $name(
     fixture: u8,
     fault: u8,
     work_limit: usize,
@@ -243,7 +245,7 @@ fn run_mixed_source_contract_v26(
                 };
                 source.root_count(budget)?
             ];
-            let mut handoff = source.conditional_mixed_worklist_output_v26(
+            let mut handoff = source.$method(
                 ProductionKernelArgumentAbiInputV18 { roots: &roots },
                 &launches,
                 fe2o3_kernel_ir::FormalIndexWidth::Bits64,
@@ -275,6 +277,7 @@ fn run_mixed_source_contract_v26(
             let inspected = (|| -> SourceOwnedResultV18<()> {
                 if let Ok(n) = emitted {
                     assert_eq!(budget.storage(), floor);
+                    assert_eq!(handoff.output(budget)?.execution().policy_version(), $version);
                     let mut free = |_: usize| Ok::<(), ArgumentResourceV1>(());
                     let contract =
                         wire::decode_mixed_contract_v26(&output[..n], &mut free).unwrap();
@@ -350,6 +353,69 @@ fn run_mixed_source_contract_v26(
     })();
     assert_eq!(budget.storage(), MODULE_FLOOR, "{result:?}");
     (result, budget.work(), budget.peak_storage(), completed)
+}
+    };
+}
+
+mixed_source_contract_runner_v26!(
+    run_mixed_source_contract_v26,
+    conditional_mixed_worklist_output_v26,
+    9
+);
+mixed_source_contract_runner_v26!(
+    run_mixed_pure_cse_contract_v26,
+    conditional_mixed_pure_cse_output_v26,
+    10
+);
+
+#[test]
+fn mixed_pure_cse_contract_emits_shared_rmw_multiroot_and_nested_helper_occurrences() {
+    for fixture in 0..=3 {
+        let (result, _, _, completed) = run_mixed_pure_cse_contract_v26(
+            fixture,
+            0,
+            OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+            MODULE_LIMIT,
+        );
+        assert!(result.is_ok(), "fixture={fixture}: {result:?}");
+        assert!(completed);
+    }
+}
+
+#[test]
+fn mixed_pure_cse_contract_refuses_same_count_substitutions_and_missing_premises() {
+    for fault in [1, 2, 3, 4, 8] {
+        let (result, _, _, completed) = run_mixed_pure_cse_contract_v26(
+            1,
+            fault,
+            OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+            MODULE_LIMIT,
+        );
+        assert!(result.is_err(), "fault={fault}");
+        assert!(!completed);
+    }
+}
+
+#[test]
+fn mixed_pure_cse_contract_has_exact_and_one_short_transaction_limits() {
+    let (result, work, storage, completed) =
+        run_mixed_pure_cse_contract_v26(1, 0, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
+    assert!(result.is_ok(), "{result:?}");
+    assert!(completed);
+    let (result, exact_work, exact_storage, completed) =
+        run_mixed_pure_cse_contract_v26(1, 0, work, storage);
+    assert!(result.is_ok(), "{result:?}");
+    assert!(completed);
+    assert_eq!((exact_work, exact_storage), (work, storage));
+    for (work_limit, storage_limit) in [(work - 1, storage), (work, storage - 1)] {
+        let (result, _, _, _) = run_mixed_pure_cse_contract_v26(1, 0, work_limit, storage_limit);
+        assert_mixed_pure_cse_short_v26(
+            result.unwrap_err(),
+            work_limit < work,
+            work_limit,
+            storage_limit,
+        );
+    }
 }
 
 #[test]

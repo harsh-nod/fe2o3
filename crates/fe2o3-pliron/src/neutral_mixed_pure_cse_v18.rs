@@ -1,13 +1,14 @@
-//! Fixed Policy9 worklist closure and independent actual-V18 adoption.
+//! Fixed Policy10 pure CSE and independent complete actual-V18 adoption.
 use super::checked_neutral_optimization_v1::{
     AdoptionProfile, CheckedParts, ObservedParts, check_and_finish_parts_typed,
 };
 use super::storage_v18::KirNeutralOptimizationErrorV18;
 use crate::{
-    IntegerWorklistExecutionWitnessV18, KirBridgeReportV18, KirCheckedNeutralOptimizationErrorV1,
+    KirBridgeReportV18, KirCheckedNeutralOptimizationErrorV1,
     KirCheckedNeutralOptimizationStorageV1, KirNeutralOccurrenceRowsV1,
     KirNeutralOptimizationStorageV1, KirNeutralOwnedOriginStorageV1,
-    KirOptimizationMapIntegerWorklistV18, PlironOptimizationReportV1, fixed_policy_v3::FixedPolicy,
+    KirOptimizationMapMixedPureCseV18, MixedPureCseExecutionWitnessV18, PlironOptimizationReportV1,
+    fixed_policy_v3::FixedPolicy,
 };
 use fe2o3_kernel_analysis::{
     CanonicalKirInventoryV18, CheckedCanonicalKirTransitionV18, check_canonical_kir_transition_v18,
@@ -21,21 +22,21 @@ use std::{convert::Infallible, mem::size_of};
 
 type Observed<'a> = ObservedParts<
     'a,
-    KirOptimizationMapIntegerWorklistV18,
-    IntegerWorklistExecutionWitnessV18,
+    KirOptimizationMapMixedPureCseV18,
+    MixedPureCseExecutionWitnessV18,
     Owner,
     KirBridgeReportV18,
 >;
 type Checked = CheckedParts<
-    KirOptimizationMapIntegerWorklistV18,
-    IntegerWorklistExecutionWitnessV18,
+    KirOptimizationMapMixedPureCseV18,
+    MixedPureCseExecutionWitnessV18,
     Owner,
     KirBridgeReportV18,
 >;
 
-/// Actual worklist-closure/DCE observation, distinct from historical Policy6.
+/// Actual neutral/local-CSE/dominance-CSE/DCE observation, distinct from Policy9.
 /// It grants no source, memory, or publication rights.
-pub struct KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
+pub struct KirNeutralOptimizationOutputMixedPureCseV18<'input> {
     parts: Observed<'input>,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     slot: usize,
@@ -43,13 +44,13 @@ pub struct KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
 }
 
 /// Move-only actual V18 successor after independent occurrence-rule checking.
-/// It is not a Policy3, Policy6 or V12 owner and does not authorize final code generation.
+/// It is not a Policy3, Policy9 or V12 owner and does not authorize final code generation.
 ///
 /// ```compile_fail
-/// use fe2o3_pliron::{CheckedNeutralKernelIrOwnerIntegerWorklistV18, CheckedNeutralKernelIrOwnerIntegerContinuationV18};
-/// fn erase(v: CheckedNeutralKernelIrOwnerIntegerWorklistV18) -> CheckedNeutralKernelIrOwnerIntegerContinuationV18 { v }
+/// use fe2o3_pliron::{CheckedNeutralKernelIrOwnerMixedPureCseV18, CheckedNeutralKernelIrOwnerIntegerWorklistV18};
+/// fn erase(v: CheckedNeutralKernelIrOwnerMixedPureCseV18) -> CheckedNeutralKernelIrOwnerIntegerWorklistV18 { v }
 /// ```
-pub struct CheckedNeutralKernelIrOwnerIntegerWorklistV18 {
+pub struct CheckedNeutralKernelIrOwnerMixedPureCseV18 {
     parts: Checked,
 }
 
@@ -58,28 +59,29 @@ fn wrapper<T>() -> Option<usize> {
         size_of::<Owner>(),
         size_of::<PlironOptimizationReportV1>(),
         size_of::<KirBridgeReportV18>(),
-        size_of::<KirOptimizationMapIntegerWorklistV18>(),
+        size_of::<KirOptimizationMapMixedPureCseV18>(),
         size_of::<KirNeutralOccurrenceRowsV1>(),
     ]
     .into_iter()
     .try_fold(size_of::<T>(), usize::checked_sub)
 }
 fn observed_wrapper() -> Option<usize> {
-    wrapper::<KirNeutralOptimizationOutputIntegerWorklistV18<'_>>()
+    wrapper::<KirNeutralOptimizationOutputMixedPureCseV18<'_>>()
 }
 fn checked_wrapper() -> Option<usize> {
-    wrapper::<CheckedNeutralKernelIrOwnerIntegerWorklistV18>()
+    wrapper::<CheckedNeutralKernelIrOwnerMixedPureCseV18>()
 }
 
-/// Executes only the fixed def-use integer-neutral worklist and DCE on
-/// the actual V18 graph. No V12 re-encoding, pass substitution or fallback occurs.
+/// Executes the fixed integer-neutral worklist, local pure CSE, dominance pure
+/// CSE, and DCE on the actual V18 graph. The block/edge roster is preserved.
+/// No V12 re-encoding, pass substitution or fallback occurs. This one roster
+/// does not claim whole-pipeline fixpoint, SROA, inlining or loop optimization.
 /// Reserve the returned receipt before any subsequent controlled allocation.
-pub fn optimize_neutral_kernel_ir_integer_worklist_v18<'input>(
+pub fn optimize_neutral_kernel_ir_mixed_pure_cse_v18<'input>(
     input: &'input Owner,
     layouts: StorageLayoutLimitsV1,
     budget: &mut Budget<'_>,
-) -> Result<KirNeutralOptimizationOutputIntegerWorklistV18<'input>, KirNeutralOptimizationErrorV18>
-{
+) -> Result<KirNeutralOptimizationOutputMixedPureCseV18<'input>, KirNeutralOptimizationErrorV18> {
     let ledger = budget.work_ledger_identity_v1();
     let slot = std::ptr::from_ref(budget) as usize;
     let caller_floor = budget.storage();
@@ -92,8 +94,8 @@ pub fn optimize_neutral_kernel_ir_integer_worklist_v18<'input>(
         occurrences,
         execution,
         retained,
-    } = crate::kir_bridge_v1::optimize_integer_worklist_v18_graph(input, layouts, wrapper, budget)?;
-    Ok(KirNeutralOptimizationOutputIntegerWorklistV18 {
+    } = crate::kir_bridge_v1::optimize_mixed_pure_cse_v18_graph(input, layouts, wrapper, budget)?;
+    Ok(KirNeutralOptimizationOutputMixedPureCseV18 {
         ledger,
         slot,
         caller_floor,
@@ -110,7 +112,7 @@ pub fn optimize_neutral_kernel_ir_integer_worklist_v18<'input>(
     })
 }
 
-impl<'input> KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
+impl<'input> KirNeutralOptimizationOutputMixedPureCseV18<'input> {
     pub const fn input(&self) -> &'input Owner {
         self.parts.input
     }
@@ -120,13 +122,13 @@ impl<'input> KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
     pub const fn report(&self) -> &PlironOptimizationReportV1 {
         &self.parts.report
     }
-    pub const fn map(&self) -> &KirOptimizationMapIntegerWorklistV18 {
+    pub const fn map(&self) -> &KirOptimizationMapMixedPureCseV18 {
         &self.parts.map
     }
     pub const fn occurrences(&self) -> &KirNeutralOccurrenceRowsV1 {
         &self.parts.occurrences
     }
-    pub const fn execution(&self) -> &IntegerWorklistExecutionWitnessV18 {
+    pub const fn execution(&self) -> &MixedPureCseExecutionWitnessV18 {
         &self.parts.extra
     }
     pub const fn storage(&self) -> KirNeutralOptimizationStorageV1 {
@@ -136,7 +138,7 @@ impl<'input> KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
     pub fn try_check_and_finish_v18(
         self,
         budget: &mut Budget<'_>,
-    ) -> Result<CheckedNeutralKernelIrOwnerIntegerWorklistV18, KirCheckedNeutralOptimizationErrorV1>
+    ) -> Result<CheckedNeutralKernelIrOwnerMixedPureCseV18, KirCheckedNeutralOptimizationErrorV1>
     {
         self.try_check_and_finish_with_v18(budget, |_, _| Ok::<_, Infallible>(((), 0)))
             .map(|(owner, (), _)| owner)
@@ -150,7 +152,7 @@ impl<'input> KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
         source: F,
     ) -> Result<
         (
-            CheckedNeutralKernelIrOwnerIntegerWorklistV18,
+            CheckedNeutralKernelIrOwnerMixedPureCseV18,
             T,
             KirNeutralOwnedOriginStorageV1,
         ),
@@ -170,8 +172,13 @@ impl<'input> KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
             || self.slot != std::ptr::from_ref(budget) as usize
             || required.is_none_or(|required| budget.storage() < required)
         {
-            // An uncalled capture can panic during destruction as well.
-            super::checked_neutral_optimization_v1::drop_adoption_result(source, true);
+            // The callback never ran, but its destructor is still untrusted.
+            // Preserve custody refusal without charging or refunding this meter.
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(source);
+            })) {
+                crate::kir_bridge_v1::discard_bounded_payload_v1(payload);
+            }
             return Err(Resource::Accounting.into());
         }
         check_and_finish_parts_typed(
@@ -180,7 +187,7 @@ impl<'input> KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
             source,
             observed_wrapper,
             checked_wrapper,
-            FixedPolicy::IntegerWorklist9,
+            FixedPolicy::MixedPureCse10,
             AdoptionProfile {
                 bytes: Owner::canonical_bytes,
                 inventory: |owner, budget| CanonicalKirInventoryV18::derive_v18(owner, budget),
@@ -190,7 +197,7 @@ impl<'input> KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
         )
         .map(|(parts, source, receipt)| {
             (
-                CheckedNeutralKernelIrOwnerIntegerWorklistV18 { parts },
+                CheckedNeutralKernelIrOwnerMixedPureCseV18 { parts },
                 source,
                 receipt,
             )
@@ -198,7 +205,7 @@ impl<'input> KirNeutralOptimizationOutputIntegerWorklistV18<'input> {
     }
 }
 
-impl CheckedNeutralKernelIrOwnerIntegerWorklistV18 {
+impl CheckedNeutralKernelIrOwnerMixedPureCseV18 {
     pub const fn owner(&self) -> &Owner {
         &self.parts.owner
     }
@@ -208,13 +215,13 @@ impl CheckedNeutralKernelIrOwnerIntegerWorklistV18 {
     pub const fn bridge(&self) -> &KirBridgeReportV18 {
         &self.parts.bridge
     }
-    pub const fn map(&self) -> &KirOptimizationMapIntegerWorklistV18 {
+    pub const fn map(&self) -> &KirOptimizationMapMixedPureCseV18 {
         &self.parts.map
     }
     pub const fn occurrences(&self) -> &KirNeutralOccurrenceRowsV1 {
         &self.parts.occurrences
     }
-    pub const fn execution(&self) -> &IntegerWorklistExecutionWitnessV18 {
+    pub const fn execution(&self) -> &MixedPureCseExecutionWitnessV18 {
         &self.parts.extra
     }
     pub fn input_audit_bytes(&self) -> &[u8] {
@@ -229,5 +236,5 @@ impl CheckedNeutralKernelIrOwnerIntegerWorklistV18 {
 }
 
 #[cfg(test)]
-#[path = "neutral_integer_worklist_v18_tests.rs"]
+#[path = "neutral_mixed_pure_cse_v18_tests.rs"]
 mod tests;

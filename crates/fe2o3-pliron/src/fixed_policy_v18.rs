@@ -10,6 +10,12 @@ pub use worklist::{
     INTEGER_WORKLIST_EXECUTION_RECORD_BYTES_V18, IntegerWorklistExecutionWitnessV18,
 };
 
+#[path = "fixed_mixed_pure_cse_v18.rs"]
+mod mixed_pure_cse;
+pub use mixed_pure_cse::{
+    MIXED_PURE_CSE_EXECUTION_RECORD_BYTES_V18, MixedPureCseExecutionWitnessV18,
+};
+
 /// Existing policy-3 frame plus the exact 40-byte storage-table identity.
 /// The final control word names graph schema 18, not V12's reserved zero.
 pub const POLICY3_EXECUTION_RECORD_BYTES_V18: usize = POLICY3_EXECUTION_RECORD_BYTES_V1 + 40;
