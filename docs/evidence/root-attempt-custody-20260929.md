@@ -56,8 +56,8 @@ actual V5 owners and locks on success, scope refusal, unwind, and token-work
 exhaustion after retaining the lease. They do not exercise live
 `RootPublicationCustodyV3::observe` or a protected proof.
 
-The artifact/broker/spawn documentation tests also passed: 32 + 1 merged,
-91, and 63 + 2 merged respectively. Their earlier source was `2b0fa7cdf`, snapshot
+The artifact/broker/spawn documentation tests also passed: 32,
+91 + 1 merged, and 63 + 2 merged respectively. Their earlier source was `2b0fa7cdf`, snapshot
 `d37b08f061047c70e8643828cd7f1623fd17a3de2744059b2d666bd4852f6991`.
 Initial payload-test attempts failed because the isolated fixture lacked explicit
 path-guard selection and a mode-0700 runtime directory. Those fixture setup errors
