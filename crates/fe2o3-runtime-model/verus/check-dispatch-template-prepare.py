@@ -128,12 +128,8 @@ def mutations(body):
          'if $packets.is_empty() { return Err(Gfx942DispatchBindingErrorV1::InvalidCode("packet program index")); }\n'
          "            let mut $templates = Vec::<CompletionPacketTemplateV1>::new();"),
         ("lookup-before-earlier-abi", "let mut $templates = Vec::<CompletionPacketTemplateV1>::new();",
-         "let mut preflight = 0;\n"
-         "            while preflight < $packets.len() {\n"
-         "                if $packets[preflight].code_index >= $codes.len() {\n"
-         '                    return Err(Gfx942DispatchBindingErrorV1::InvalidCode("packet program index"));\n'
-         "                }\n"
-         "                preflight += 1;\n"
+         "if $packets.len() > 1 && $packets[1].code_index >= $codes.len() {\n"
+         '                return Err(Gfx942DispatchBindingErrorV1::InvalidCode("packet program index"));\n'
          "            }\n"
          "            let mut $templates = Vec::<CompletionPacketTemplateV1>::new();"),
     ):

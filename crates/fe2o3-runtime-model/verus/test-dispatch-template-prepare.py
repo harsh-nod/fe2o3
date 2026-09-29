@@ -338,6 +338,10 @@ rejects(lambda: schemas({**sources, "identity": sources["identity"] +
 
 cases = r["mutations"](inputs[r["BODY"]])
 need(len(cases) == 34, "mutation count")
+lookahead, lookahead_focus = cases["lookup-before-earlier-abi"]
+need(lookahead.count("if $packets.len() > 1 && $packets[1].code_index >= $codes.len() {") == 1
+     and lookahead.count("while ") == inputs[r["BODY"]].count("while ")
+     and lookahead_focus == "*prepare_dispatch_templates_v1", "bounded later-code precedence mutation")
 for data, focus in cases.values():
     need(data != inputs[r["BODY"]] and focus[1:] in r["METHODS"], "executable mutation")
 rejects(lambda: r["mutations"](inputs[r["BODY"]] * 2))
@@ -367,7 +371,8 @@ for name in r["METHODS"]:
                     dict(logical, spans=[{"is_primary": True, "file_name": "/foreign.rs"}])):
             need(not check([bad]), "unauthenticated diagnostic refused")
     for bad in ("Resource limit (rlimit) exceeded", "type annotations needed", "internal error",
-                "recommendation not met", "external_body/assume_specification not allowed with --no-cheating"):
+                "recommendation not met", "loop must have a decreases clause",
+                "external_body/assume_specification not allowed with --no-cheating"):
         need(not check([error, dict(error, message=bad)]), "nonlogical mixed result refused")
 positive = {"verus": verifier, "verification-results": campaign.EXPECTED}
 need(classifier.proof_positive(0, json.dumps(positive), "", verifier, campaign.EXPECTED, {path}), "positive accepted")
