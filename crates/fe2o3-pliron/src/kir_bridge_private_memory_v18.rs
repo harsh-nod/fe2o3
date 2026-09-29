@@ -59,6 +59,16 @@ impl NativeCanonicalPrivateAdmissionV18<'_> {
                 OperationKind::Alloca { .. } => Kind::Allocate,
                 OperationKind::Storage(Storage::ReadValue { .. }) => Kind::Read,
                 OperationKind::Storage(Storage::WriteValue { .. }) => Kind::Write,
+                OperationKind::Load { access, .. }
+                    if access.address_space == AddressSpace::Private && !access.volatile =>
+                {
+                    Kind::Read
+                }
+                OperationKind::Store { access, .. }
+                    if access.address_space == AddressSpace::Private && !access.volatile =>
+                {
+                    Kind::Write
+                }
                 _ => return None,
             },
         )
@@ -174,6 +184,30 @@ impl NativeCanonicalPrivateAdmissionV18<'_> {
                 )
                 .map_err(|_| Failure::ExactGraph)?;
                 if extracted != expected.kind {
+                    return Err(Failure::ExactGraph);
+                }
+            }
+            OperationKind::Load { access, .. } => {
+                let operation =
+                    Operation::get_op::<LoadOp>(pointer, context).ok_or(Failure::NativeSchema)?;
+                if access.address_space != AddressSpace::Private
+                    || access.volatile
+                    || memory_access_from_load(context, &operation)
+                        .map_err(|_| Failure::NativeSchema)?
+                        != *access
+                {
+                    return Err(Failure::ExactGraph);
+                }
+            }
+            OperationKind::Store { access, .. } => {
+                let operation =
+                    Operation::get_op::<StoreOp>(pointer, context).ok_or(Failure::NativeSchema)?;
+                if access.address_space != AddressSpace::Private
+                    || access.volatile
+                    || memory_access_from_store(context, &operation)
+                        .map_err(|_| Failure::NativeSchema)?
+                        != *access
+                {
                     return Err(Failure::ExactGraph);
                 }
             }
@@ -352,7 +386,9 @@ impl NativePrivateInputV1 for NativeCanonicalPrivateAdmissionV18<'_> {
                 "gpu_preserved_operation_kind",
                 "preserved_operation_kind"
             ) | (Kind::Read, "gpu_load_alignment", "memory_alignment")
+                | (Kind::Read, "gpu_load_address_space", "address_space")
                 | (Kind::Read, "gpu_load_volatile", "volatile")
+                | (Kind::Write, "gpu_store_address_space", "address_space")
                 | (Kind::Write, "gpu_store_alignment", "memory_alignment")
                 | (Kind::Write, "gpu_store_volatile", "volatile")
         ) || (matches!(kind, Kind::Read | Kind::Write)
@@ -576,6 +612,23 @@ fn native_private_headers_v18(capture: usize, alignment: usize) -> Result<usize,
         PreservedOperationOp,
         Option<PreservedOperationOp>,
         Option<PreservedOperationKindAttr>,
+        LoadOp,
+        Option<LoadOp>,
+        StoreOp,
+        Option<StoreOp>,
+        &'a fe2o3_kernel_ir::MemoryAccess,
+        fe2o3_kernel_ir::MemoryAccess,
+        Result<fe2o3_kernel_ir::MemoryAccess, KirBridgeErrorV1>,
+        AddressSpace,
+        Option<AddressSpaceAttr>,
+        Option<u32>,
+        Option<bool>,
+        Ref<'a, AddressSpaceAttr>,
+        Option<Ref<'a, AddressSpaceAttr>>,
+        Ref<'a, dialect_gpu::optimization_v1::MemoryAlignmentAttr>,
+        Option<Ref<'a, dialect_gpu::optimization_v1::MemoryAlignmentAttr>>,
+        Ref<'a, dialect_gpu::optimization_v1::VolatileAttr>,
+        Option<Ref<'a, dialect_gpu::optimization_v1::VolatileAttr>>,
         Option<&'a OperationKind>,
         &'a OperationKind,
         dialect_gpu::storage_operations_v18::StorageOpV18,
@@ -649,6 +702,112 @@ fn native_private_headers_v18(capture: usize, alignment: usize) -> Result<usize,
 
 #[cfg(test)]
 impl KirPlironGraphV18<'_> {
+    pub(crate) fn test_private_spill_fault_v25(
+        &mut self,
+        physical: &CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
+        epoch: u64,
+        fault: usize,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Failure> {
+        let coordinate = KirBridgeCoordinateV1::Operation {
+            function: 0,
+            block: 0,
+            operation: 5,
+        };
+        let pointer = *self
+            .coordinates
+            .iter()
+            .find(|(_, row)| **row == coordinate)
+            .unwrap()
+            .0;
+        let load = Operation::get_op::<LoadOp>(pointer, &self.session.context).unwrap();
+        let address = pointer.deref(&self.session.context).get_operand(0);
+        let result = pointer.deref(&self.session.context).get_result(0);
+        let original_address = self.origins.values[&address];
+        let original_result = self.origins.values[&result];
+        let original_count = self.coordinates.len();
+        match fault {
+            0 => {
+                self.coordinates.insert(
+                    pointer,
+                    KirBridgeCoordinateV1::Operation {
+                        function: 0,
+                        block: 0,
+                        operation: 4,
+                    },
+                );
+            }
+            1 => {
+                self.coordinates.insert(
+                    pointer,
+                    KirBridgeCoordinateV1::Operation {
+                        function: 1,
+                        block: 0,
+                        operation: 5,
+                    },
+                );
+            }
+            2 => {
+                self.origins.values.insert(address, ValueId(10));
+            }
+            3 => {
+                self.origins.values.insert(result, ValueId(20));
+            }
+            4 => load.set_attr_gpu_load_alignment(
+                &mut self.session.context,
+                dialect_gpu::optimization_v1::MemoryAlignmentAttr(8),
+            ),
+            5 => load.set_attr_gpu_load_volatile(
+                &mut self.session.context,
+                dialect_gpu::optimization_v1::VolatileAttr(true),
+            ),
+            6 => load.set_attr_gpu_load_address_space(
+                &mut self.session.context,
+                AddressSpaceAttr::Global,
+            ),
+            7 => {
+                let other = *self
+                    .origins
+                    .values
+                    .iter()
+                    .find(|(_, id)| **id == ValueId(10))
+                    .unwrap()
+                    .0;
+                Operation::replace_operand(pointer, &self.session.context, 0, other);
+            }
+            8 => {
+                let store_coordinate = KirBridgeCoordinateV1::Operation {
+                    function: 0,
+                    block: 0,
+                    operation: 4,
+                };
+                let store = *self
+                    .coordinates
+                    .iter()
+                    .find(|(_, row)| **row == store_coordinate)
+                    .unwrap()
+                    .0;
+                Operation::replace_operand(store, &self.session.context, 1, result);
+            }
+            _ => panic!("closed scalar spill fault"),
+        }
+        assert_eq!(self.coordinates.len(), original_count);
+        let floor = budget.storage();
+        let checked = self.visit_private_policy_functions_v18(physical, epoch, budget, |_, _| {
+            panic!("mutated scalar spill published a native token")
+        });
+        self.coordinates.insert(pointer, coordinate);
+        self.origins.values.insert(address, original_address);
+        self.origins.values.insert(result, original_result);
+        budget.release_storage(
+            budget
+                .storage()
+                .checked_sub(floor)
+                .ok_or(ResourceError::Accounting)?,
+        )?;
+        checked
+    }
+
     pub(crate) fn test_private_terminator_coordinate_fault_v18(
         &mut self,
         physical: &CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
