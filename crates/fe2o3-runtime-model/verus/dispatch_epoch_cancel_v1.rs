@@ -51,7 +51,10 @@ struct DispatchEpochIdentityV1 {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FixedDispatchCapacityProfileV1 { Default64, Qualification1024 }
-enum Gfx942DispatchBindingErrorV1 { Poisoned, StaleDispatchGeneration }
+enum Gfx942DispatchBindingErrorV1 {
+    Poisoned, StaleDispatchGeneration, WrongQueueGeneration, GenerationExhausted,
+    DispatchEpochCapacity { maximum: usize }, ResourcePhase,
+}
 struct DispatchGenerationOwnerV1<C> {
     next_generation: u64, recipe_occurrence: u64, recipe_queue: Option<QueueKeyV1>,
     capacity_profile: FixedDispatchCapacityProfileV1, slots: Vec<DispatchEpochSlotV1>,

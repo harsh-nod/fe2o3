@@ -46,6 +46,7 @@ patterns = [
         'include!("queue_completion/batch_bind_body.rs");',
         'macro_rules!completion_rust_expr{($body:expr)=>{$body};}',
         'fnbind_fixed_batch<constN:usize>(&mutself,templates:CompletionPacketTemplatesV1<N>)->Result<BoundCompletionBatchV1<N>,Gfx942CompletionErrorV1>{completion_bind_batch_body!(completion_rust_expr,self,templates,N)}',
+        'pub(super)fnbind_boxed_batch<constN:usize>(&mutself,templates:Box<[CompletionPacketTemplateV1;N]>)->Result<BoundCompletionBatchV1<N>,Gfx942CompletionErrorV1>{self.bind_fixed_batch(CompletionPacketTemplatesV1{values:templates})}',
         'fnselect_available_slots(&self,count:usize)->Vec<CompletionSlotLeaseV1>{completion_select_slots_body!(completion_rust_expr,self,count)}',
         'fncommit_bound_batch<constN:usize>(&mutself,bound:BoundCompletionBatchV1<N>,next_batch_id:u64)->BoundCompletionBatchV1<N>{completion_commit_batch_body!(completion_rust_expr,self,bound,next_batch_id,N)}',
         'fnvalidate_dispatch_binding(&self,binding:CompletionDispatchGenerationBindingV1)->Result<(),Gfx942CompletionErrorV1>{completion_dispatch_binding_body!(completion_rust_expr,self,binding)}',

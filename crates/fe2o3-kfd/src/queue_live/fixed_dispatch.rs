@@ -23,7 +23,10 @@ pub(super) trait DependencySourceRecipeV1<const N: usize> {
         &mut self,
         session: &mut ComputeAqlQueueSessionV1,
     ) -> Result<
-        ([CompletionPacketTemplateV1; N], DispatchEpochIdentityV1),
+        (
+            Box<[CompletionPacketTemplateV1; N]>,
+            DispatchEpochIdentityV1,
+        ),
         Gfx942DispatchBindingErrorV1,
     >;
 
@@ -48,7 +51,10 @@ impl<const N: usize> DependencySourceRecipeV1<N> for NativeDependencySourceRecip
         &mut self,
         session: &mut ComputeAqlQueueSessionV1,
     ) -> Result<
-        ([CompletionPacketTemplateV1; N], DispatchEpochIdentityV1),
+        (
+            Box<[CompletionPacketTemplateV1; N]>,
+            DispatchEpochIdentityV1,
+        ),
         Gfx942DispatchBindingErrorV1,
     > {
         session
@@ -4509,7 +4515,7 @@ impl ComputeAqlQueueSessionV1 {
 
     pub(super) fn submit_with_dependency_events_classified_v1<const N: usize>(
         &mut self,
-        templates: [CompletionPacketTemplateV1; N],
+        templates: Box<[CompletionPacketTemplateV1; N]>,
         session_occurrence: u64,
         source_acceptance_epoch: u64,
         submit: impl FnOnce(
@@ -4523,7 +4529,7 @@ impl ComputeAqlQueueSessionV1 {
         ),
         FixedDispatchSubmissionFailureV1,
     > {
-        let bound = match self.completion_owner.bind_batch(templates) {
+        let bound = match self.completion_owner.bind_boxed_batch(templates) {
             Ok(bound) => bound,
             Err(Gfx942CompletionErrorV1::InsufficientSignals) => {
                 return Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
@@ -4637,8 +4643,10 @@ impl ComputeAqlQueueSessionV1 {
             }
         };
         let identity = DispatchEpochIdentityV1::for_test(self.key, generation);
-        let completion =
-            self.submit_with_completions_classified_using([template(generation)], native_submit);
+        let completion = self.submit_with_completions_classified_using(
+            Box::new([template(generation)]),
+            native_submit,
+        );
         let result = finish_fixed_dispatch_submission(identity, completion, |identity| {
             owner.cancel_binding(identity.dispatch_generation())
         });
@@ -4670,7 +4678,8 @@ impl ComputeAqlQueueSessionV1 {
                 return self.terminalize_fixed_dispatch_submission_result_v1(Err(error));
             }
         };
-        let completion = self.submit_with_completions_classified_using([template], native_submit);
+        let completion =
+            self.submit_with_completions_classified_using(Box::new([template]), native_submit);
         let completion = match completion {
             Ok(completion) => {
                 if let Err(error) = owner.mark_published(identity, &completion) {

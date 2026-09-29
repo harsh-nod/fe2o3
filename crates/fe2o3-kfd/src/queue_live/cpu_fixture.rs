@@ -358,13 +358,17 @@ impl fixed_dispatch::DependencySourceRecipeV1<1> for CpuSourceRecipe<'_> {
         &mut self,
         session: &mut ComputeAqlQueueSessionV1,
     ) -> Result<
-        ([CompletionPacketTemplateV1; 1], DispatchEpochIdentityV1),
+        (
+            Box<[CompletionPacketTemplateV1; 1]>,
+            DispatchEpochIdentityV1,
+        ),
         Gfx942DispatchBindingErrorV1,
     > {
         let packet = template(session.key, self.0.next_generation());
+        let templates = Box::new([packet]);
         self.0
             .reserve_one(session.key, packet)
-            .map(|identity| ([packet], identity))
+            .map(|identity| (templates, identity))
     }
 
     fn mark_published(

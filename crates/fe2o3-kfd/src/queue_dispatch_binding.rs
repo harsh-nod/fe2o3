@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 
 include!("queue_dispatch_binding/epoch_cancel_body.rs");
+include!("queue_dispatch_binding/epoch_reserve_body.rs");
 include!("queue_dispatch_binding/cancel_binding_body.rs");
 
 macro_rules! dispatch_rust_expr {
@@ -44,6 +45,10 @@ mod capacity_tests;
 #[cfg(test)]
 #[path = "queue_dispatch_binding/epoch_cancel_tests.rs"]
 mod epoch_cancel_tests;
+
+#[cfg(test)]
+#[path = "queue_dispatch_binding/epoch_reserve_tests.rs"]
+mod epoch_reserve_tests;
 
 use core::fmt;
 use fe2o3_resource_accounting::{HostMetadataTableV1, ResourceCreditAccountV1};
@@ -106,10 +111,7 @@ pub(crate) use Gfx942FixedDispatchCapacityProfileV1 as FixedDispatchCapacityProf
 
 impl Gfx942FixedDispatchCapacityProfileV1 {
     pub const fn slots(self) -> usize {
-        match self {
-            Self::Default64 => GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1,
-            Self::Qualification1024 => 1024,
-        }
+        dispatch_capacity_slots_body!(dispatch_rust_expr, self)
     }
 }
 
@@ -1620,73 +1622,14 @@ impl DispatchGenerationOwnerV1 {
         queue: QueueKeyV1,
         expected_roster: CompletionDispatchRosterV1,
     ) -> Result<DispatchEpochIdentityV1, Gfx942DispatchBindingErrorV1> {
-        let (slot_index, dispatch_generation, slot_generation) =
-            self.preflight_reservation(queue)?;
-        if expected_roster.queue != queue
-            || expected_roster.dispatch_generation != dispatch_generation
-            || expected_roster.packet_count == 0
-            || (self.capacity_profile == FixedDispatchCapacityProfileV1::Qualification1024
-                && expected_roster.packet_count != 1)
-        {
-            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
-        }
-        let next_generation = dispatch_generation + 1;
-        let slot_index_u16 =
-            u16::try_from(slot_index).map_err(|_| Gfx942DispatchBindingErrorV1::ResourcePhase)?;
-
-        self.recipe_queue = Some(queue);
-        self.next_generation = next_generation;
-        self.slots[slot_index] = DispatchEpochSlotV1 {
-            slot_generation,
-            phase: DispatchEpochPhaseV1::Reserved {
-                dispatch_generation,
-                expected_roster,
-            },
-        };
-        Ok(DispatchEpochIdentityV1 {
-            queue,
-            recipe_occurrence: self.recipe_occurrence,
-            slot_index: slot_index_u16,
-            slot_generation,
-            dispatch_generation,
-        })
+        dispatch_reserve_epoch_body!(dispatch_rust_expr, self, queue, expected_roster)
     }
 
     fn preflight_reservation(
         &self,
         queue: QueueKeyV1,
     ) -> Result<(usize, u64, u64), Gfx942DispatchBindingErrorV1> {
-        self.ensure_not_poisoned()?;
-        if self.recipe_queue.is_some_and(|bound| bound != queue) {
-            return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
-        }
-        let mut has_vacant_slot = false;
-        let reusable_slot = self.slots.iter().enumerate().find_map(|(index, slot)| {
-            if slot.phase != DispatchEpochPhaseV1::Vacant {
-                return None;
-            }
-            has_vacant_slot = true;
-            slot.slot_generation
-                .checked_add(1)
-                .filter(|generation| *generation != 0)
-                .map(|generation| (index, generation))
-        });
-        let (slot_index, slot_generation) = match reusable_slot {
-            Some(slot) => slot,
-            None if has_vacant_slot => {
-                return Err(Gfx942DispatchBindingErrorV1::GenerationExhausted);
-            }
-            None => {
-                return Err(Gfx942DispatchBindingErrorV1::DispatchEpochCapacity {
-                    maximum: self.capacity_profile.slots(),
-                });
-            }
-        };
-        let dispatch_generation = self.next_generation;
-        dispatch_generation
-            .checked_add(1)
-            .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
-        Ok((slot_index, dispatch_generation, slot_generation))
+        dispatch_preflight_reservation_body!(dispatch_rust_expr, self, queue)
     }
 
     fn mark_published(
@@ -2088,8 +2031,11 @@ impl TestOnlyMultiInflightDispatchOwnerV1 {
         queue: QueueKeyV1,
         templates: &[CompletionPacketTemplateV1; N],
     ) -> Result<DispatchEpochIdentityV1, Gfx942DispatchBindingErrorV1> {
-        let roster =
-            completion_dispatch_roster_v1(&templates.map(|template| template.generations()))?;
+        let dispatches: Vec<_> = templates
+            .iter()
+            .map(|template| template.generations())
+            .collect();
+        let roster = completion_dispatch_roster_v1(&dispatches)?;
         self.owner.reserve(queue, roster)
     }
 
@@ -2570,7 +2516,10 @@ impl DispatchResourceOwnerV1 {
         &mut self,
         queue: QueueKeyV1,
     ) -> Result<
-        ([CompletionPacketTemplateV1; N], DispatchEpochIdentityV1),
+        (
+            Box<[CompletionPacketTemplateV1; N]>,
+            DispatchEpochIdentityV1,
+        ),
         Gfx942DispatchBindingErrorV1,
     > {
         self.generation.ensure_not_poisoned()?;
@@ -2633,13 +2582,15 @@ impl DispatchResourceOwnerV1 {
                 ))
             })
             .collect::<Result<Vec<_>, Gfx942DispatchBindingErrorV1>>()?;
-        let templates: [CompletionPacketTemplateV1; N] =
-            templates
-                .try_into()
-                .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                    packet: 0,
-                    detail: "prepared packet cardinality",
-                })?;
+        // Keep the roster heap-backed through submission, including large-N
+        // refusals whose return ABI must not reserve a template array on stack.
+        let templates: Box<[CompletionPacketTemplateV1; N]> = templates
+            .into_boxed_slice()
+            .try_into()
+            .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: 0,
+                detail: "prepared packet cardinality",
+            })?;
         let dispatches: Vec<_> = templates
             .iter()
             .map(|template| template.generations())

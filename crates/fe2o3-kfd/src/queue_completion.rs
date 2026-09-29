@@ -1516,6 +1516,13 @@ impl CompletionSignalArenaOwnerV1 {
         self.bind_fixed_batch(CompletionPacketTemplatesV1::from_array(templates))
     }
 
+    pub(super) fn bind_boxed_batch<const N: usize>(
+        &mut self,
+        templates: Box<[CompletionPacketTemplateV1; N]>,
+    ) -> Result<BoundCompletionBatchV1<N>, Gfx942CompletionErrorV1> {
+        self.bind_fixed_batch(CompletionPacketTemplatesV1 { values: templates })
+    }
+
     fn bind_fixed_batch<const N: usize>(
         &mut self,
         templates: CompletionPacketTemplatesV1<N>,

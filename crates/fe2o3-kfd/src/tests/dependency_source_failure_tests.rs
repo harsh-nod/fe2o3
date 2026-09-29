@@ -244,7 +244,10 @@ impl DependencySourceRecipeV1<3> for RefusingRecipe {
         &mut self,
         _: &mut ComputeAqlQueueSessionV1,
     ) -> Result<
-        ([CompletionPacketTemplateV1; 3], DispatchEpochIdentityV1),
+        (
+            Box<[CompletionPacketTemplateV1; 3]>,
+            DispatchEpochIdentityV1,
+        ),
         Gfx942DispatchBindingErrorV1,
     > {
         panic!("no bind at failure join")

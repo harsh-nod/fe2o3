@@ -190,7 +190,7 @@ impl Case {
             .unwrap();
         let (_, retention) = session
             .completion_owner
-            .bind_batch(templates)
+            .bind_boxed_batch(templates)
             .unwrap()
             .into_parts();
         let published = session

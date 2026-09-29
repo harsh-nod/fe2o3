@@ -39,10 +39,17 @@ impl<const N: usize> super::super::fixed_dispatch::DependencySourceRecipeV1<N> f
         &mut self,
         session: &mut ComputeAqlQueueSessionV1,
     ) -> Result<
-        ([CompletionPacketTemplateV1; N], DispatchEpochIdentityV1),
+        (
+            Box<[CompletionPacketTemplateV1; N]>,
+            DispatchEpochIdentityV1,
+        ),
         Gfx942DispatchBindingErrorV1,
     > {
-        let templates = [test_completion_template(session.key, self.owner().next_generation()); N];
+        let templates: Box<[CompletionPacketTemplateV1; N]> =
+            vec![test_completion_template(session.key, self.owner().next_generation()); N]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap();
         let identity = self.owner().reserve_batch(session.key, &templates)?;
         self.bound = Some((identity, self.owner.cpu_snapshot()));
         Ok((templates, identity))
@@ -80,6 +87,81 @@ fn ring_full() -> NativeAqlSubmissionFailureV1 {
             available: 0,
         },
     ))
+}
+
+#[test]
+fn maximum_source_retry_fits_two_mib_stack_and_preserves_custody() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            for auxiliary in [false, true] {
+                let (mut session, lane) = fixture(auxiliary);
+                let ordinal = usize::from(auxiliary);
+                let untouched = owner(&session, 1 - ordinal).custody_snapshot_for_test();
+                let mut recipe = Recipe::new();
+                for attempt in 1..=2 {
+                    let before = owner(&session, ordinal).state_snapshot_for_test();
+                    let acceptance = session
+                        .dependency_owner
+                        .custody_snapshot_for_test()
+                        .1
+                        .unwrap();
+                    let failure = session
+                        .with_compute_lane_v1(lane, |selected| {
+                            selected.session.submit_dependency_source_using_v1::<8192>(
+                                selected.lane,
+                                &mut recipe,
+                                |session, packets| {
+                                    assert_eq!(packets.packet_count(), 8192);
+                                    assert_eq!(
+                                        session
+                                            .completion_owner
+                                            .dependency_ledger_counts_for_test(),
+                                        (1 + attempt * 8192, 8192, 0)
+                                    );
+                                    Err(ring_full())
+                                },
+                            )
+                        })
+                        .unwrap()
+                        .unwrap_err();
+                    assert!(matches!(
+                        failure,
+                        Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)
+                    ));
+                    assert_eq!(
+                        owner(&session, ordinal).state_snapshot_for_test(),
+                        (before.0 + 1, before.1)
+                    );
+                    assert_eq!(
+                        owner(&session, ordinal).dependency_ledger_counts_for_test(),
+                        (1 + attempt * 8192, 0, 0)
+                    );
+                    assert_eq!(recipe.owner().next_generation(), attempt + 1);
+                    assert_eq!(recipe.owner().live_epoch_count(), 0);
+                    assert_eq!(recipe.cancellations.len(), attempt as usize);
+                    assert_eq!(
+                        recipe.cancellations.last(),
+                        Some(&recipe.bound.as_ref().unwrap().0)
+                    );
+                    assert_eq!(
+                        session.dependency_owner.custody_snapshot_for_test().1,
+                        Some(acceptance + 1)
+                    );
+                    assert_eq!(
+                        owner(&session, 1 - ordinal).custody_snapshot_for_test(),
+                        untouched
+                    );
+                    assert!(!session.terminal_poisoned);
+                }
+                owner(&session, ordinal).ensure_releasable().unwrap();
+                recipe.owner().ensure_releasable().unwrap();
+                restored(&session);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 fn submit(

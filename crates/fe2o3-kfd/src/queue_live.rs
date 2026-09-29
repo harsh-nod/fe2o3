@@ -5680,7 +5680,7 @@ impl ComputeAqlQueueSessionV1 {
             Ok(templates) => templates,
             Err(error) => return Err(retry(error.into_error(), raw_events)),
         };
-        let bound = match self.completion_owner.bind_batch(templates) {
+        let bound = match self.completion_owner.bind_boxed_batch(templates) {
             Ok(bound) => bound,
             Err(Gfx942CompletionErrorV1::InsufficientSignals) => {
                 if self
@@ -10932,13 +10932,13 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         templates: [CompletionPacketTemplateV1; N],
     ) -> Result<Gfx942CompletionBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
-        self.submit_with_completions_classified(templates)
+        self.submit_with_completions_classified(Box::new(templates))
             .map_err(FixedDispatchSubmissionFailureV1::into_error)
     }
 
     fn submit_with_completions_classified<const N: usize>(
         &mut self,
-        templates: [CompletionPacketTemplateV1; N],
+        templates: Box<[CompletionPacketTemplateV1; N]>,
     ) -> Result<Gfx942CompletionBatchV1<N>, FixedDispatchSubmissionFailureV1> {
         self.submit_with_completions_classified_using(templates, |session, packets| {
             session.submit_prepared_batch_classified(packets)
@@ -10947,7 +10947,7 @@ impl ComputeAqlQueueSessionV1 {
 
     fn submit_with_completions_classified_using<const N: usize>(
         &mut self,
-        templates: [CompletionPacketTemplateV1; N],
+        templates: Box<[CompletionPacketTemplateV1; N]>,
         submit: impl FnOnce(
             &mut Self,
             AqlPreparedKernelDispatchBatchV2<N>,
@@ -10958,7 +10958,7 @@ impl ComputeAqlQueueSessionV1 {
                 Gfx942CompletionErrorV1::Poisoned.into(),
             ));
         }
-        let bound = match self.completion_owner.bind_batch(templates) {
+        let bound = match self.completion_owner.bind_boxed_batch(templates) {
             Ok(bound) => bound,
             Err(Gfx942CompletionErrorV1::InsufficientSignals) => {
                 return Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
@@ -17404,7 +17404,7 @@ mod tests {
             )
             .expect("a corrected batch remains admissible");
         let _published = session
-            .submit_with_completions_classified_using(templates, |_, packets| {
+            .submit_with_completions_classified_using(Box::new(templates), |_, packets| {
                 assert_eq!(packets.packet_count(), 1);
                 Ok(41)
             })
@@ -18407,7 +18407,7 @@ mod tests {
 
         let source_failure = session
             .submit_with_dependency_events_classified_v1(
-                [test_completion_template(queue, 2)],
+                Box::new([test_completion_template(queue, 2)]),
                 1,
                 1,
                 |_, _| panic!("full signals must refuse before native submit"),
