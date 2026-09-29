@@ -41,6 +41,11 @@ pub use scalar_cfg_v18::*;
 pub use complete_body_v19::derive_complete_body_memory_obligations_v19;
 pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;
 pub use guarded_access_v1::{
+    CanonicalConditionalSliceAccessV26, CanonicalConditionalSliceDomainV26,
+    CanonicalConditionalSliceParameterV26, CheckedCanonicalConditionalSliceDomainsV26,
+    with_canonical_conditional_slice_domains_v26,
+};
+pub use guarded_access_v1::{
     CanonicalGuardedGlobalReadErrorV1, CanonicalGuardedGlobalReadFactV1,
     CanonicalGuardedGlobalReadFactV18, CanonicalGuardedGlobalReadLimitsV1,
     CanonicalGuardedGlobalReadOutcomeV1, CanonicalGuardedGlobalReadOutcomeV18,

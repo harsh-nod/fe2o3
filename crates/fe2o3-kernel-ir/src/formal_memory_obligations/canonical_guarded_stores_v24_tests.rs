@@ -1,6 +1,8 @@
 use super::*;
 use crate::{BasicBlock, IntrinsicOperation, Kernel, Signature, StorageLayoutLimitsV1, ValueDef};
 
+include!("canonical_conditional_slice_domains_v26_tests.rs");
+
 fn op(id: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(id), ty), kind)
 }

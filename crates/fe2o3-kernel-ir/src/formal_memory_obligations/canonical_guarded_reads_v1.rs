@@ -11,6 +11,10 @@ use predicates::PredicateRow;
 use runtime_slice_read_v1::RuntimeSliceReadConditionsV1;
 use std::cell::RefCell;
 
+#[path = "canonical_conditional_slice_domains_v26.rs"]
+mod conditional_slice_domains_v26;
+pub use conditional_slice_domains_v26::*;
+
 #[path = "canonical_guarded_reads_queries_v1.rs"]
 mod queries;
 pub use queries::*;
