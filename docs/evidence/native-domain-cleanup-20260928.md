@@ -1,5 +1,8 @@
 # Native Aggregate Cleanup Checkpoint
 
+Later progress: [fresh user-namespace mapping and actual Linux validation](native-user-namespace-20260928.md).
+The results below remain the earlier aggregate-cleanup checkpoint.
+
 This checkpoint advances [#272](https://github.com/harsh-nod/fe2o3/issues/272)
 after the [retained-runtime controller work](retained-runtime-controller-20260928.md).
 **M0-M7 and the 47/47 production-to-safe-GPU-launch gate remain incomplete.**
