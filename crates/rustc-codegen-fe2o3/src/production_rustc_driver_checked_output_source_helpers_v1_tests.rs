@@ -18,6 +18,10 @@ pub(crate) fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
             command.env(key, value);
         }
     }
+    forward_private_spill_probe_v25(
+        &mut command,
+        env::var_os("FE2O3_TRACE_PRIVATE_SPILLS_V25").as_deref(),
+    );
     command
         .env("CARGO_BUILD_JOBS", "1")
         .env("CARGO_INCREMENTAL", "0")
@@ -26,6 +30,33 @@ pub(crate) fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         .env("FE2O3_HIP_SYS_DISABLE", "1")
         .env("FE2O3_HSA_RUNTIME_DISABLE", "1");
     command
+}
+
+fn forward_private_spill_probe_v25(command: &mut Command, value: Option<&std::ffi::OsStr>) {
+    if value == Some(std::ffi::OsStr::new("1")) {
+        command.env("FE2O3_TRACE_PRIVATE_SPILLS_V25", "1");
+    }
+}
+
+#[test]
+fn private_spill_diagnostic_forwarding_requires_exact_one_without_other_environment() {
+    for value in [None, Some(""), Some("0"), Some("true"), Some("1")] {
+        let mut command = Command::new("diagnostic-not-executed");
+        command.env_clear();
+        forward_private_spill_probe_v25(&mut command, value.map(std::ffi::OsStr::new));
+        let values: Vec<_> = command.get_envs().collect();
+        if value == Some("1") {
+            assert_eq!(
+                values,
+                vec![(
+                    std::ffi::OsStr::new("FE2O3_TRACE_PRIVATE_SPILLS_V25"),
+                    Some(std::ffi::OsStr::new("1"))
+                )]
+            );
+        } else {
+            assert!(values.is_empty());
+        }
+    }
 }
 
 pub(crate) fn output(command: &mut Command) -> std::process::Output {

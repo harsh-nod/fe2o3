@@ -1,5 +1,6 @@
 // A lexical source/currentness/physical composition, not native Memory policy.
 // The source entry-value binder is an independent mandatory dependency.
+include!("production_source_private_spill_probe_v25.rs");
 #[derive(Clone, Copy)]
 struct SourcePrivateAllocationV18<'a> {
     root: usize,
@@ -395,6 +396,7 @@ fn source_private_allocations_v18<'a>(
             .source
             .missing("source private physical owner differs");
     }
+    source_private_spill_probe_v25(original, output, physical);
     let mut rows =
         emission_vec_v1(output.operations().len(), budget).map_err(immutable_memory_error_v29)?;
     budget.charge_work(output.operations().len())?;
