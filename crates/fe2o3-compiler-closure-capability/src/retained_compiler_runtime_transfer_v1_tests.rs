@@ -145,13 +145,26 @@ impl Tree {
         b: &mut Budget<'_>,
     ) -> Result<(File, RetainedCompilerRuntimeExecTransferChargeV1)> {
         let (uid, gid) = owners();
-        v.clone_proof_executor_using(uid, gid, synthetic_immutable, b, |b| self.revalidate(v, b))
+        v.clone_executable_using(
+            ExecRole::ProofExecutor,
+            uid,
+            gid,
+            synthetic_immutable,
+            b,
+            |b| self.revalidate(v, b),
+        )
     }
     fn validate(&self, v: &Inventory, file: &File, b: &mut Budget<'_>) -> Result<()> {
         let (uid, gid) = owners();
-        v.validate_proof_executor_using(file, uid, gid, synthetic_immutable, b, |b| {
-            self.revalidate(v, b)
-        })
+        v.validate_executable_using(
+            ExecRole::ProofExecutor,
+            file,
+            uid,
+            gid,
+            synthetic_immutable,
+            b,
+            |b| self.revalidate(v, b),
+        )
     }
     fn replace_helper(&self) {
         let source = self.code(PATHS[0]);
@@ -237,7 +250,7 @@ fn transfer_rejects_wrong_role_same_content_other_inode_and_descriptor_flags() {
     assert!(matches!(
         t.validate(&v, wrong_role, &mut b),
         Err(RetainedCompilerRuntimeErrorV1::Mismatch(
-            "proof executor transfer origin differs from retained entry"
+            "executable transfer origin differs from retained entry"
         ))
     ));
     let copy_path = t.root.join("same-content-other-inode");
@@ -293,7 +306,7 @@ fn private_transfer_check_requires_digest_and_protection_not_only_matching_inode
     b.reserve_storage(APPROVAL_STORAGE).unwrap();
     let v = t.retain(&mut b);
     b.reserve_storage(TRANSFER_SCRATCH).unwrap();
-    let mut selected = v.proof_executor(&mut b).unwrap();
+    let mut selected = v.executable(ExecRole::ProofExecutor, &mut b).unwrap();
     let file = &selected.retained.file;
     let (uid, gid) = owners();
     // Alter only the private test comparison, not public approval or custody.
@@ -327,14 +340,21 @@ fn post_duplicate_origin_revalidation_is_required_and_custody_charge_rolls_back(
     let charge = size_of::<(File, RetainedCompilerRuntimeExecTransferChargeV1)>() + 64;
     let (uid, gid) = owners();
     let mut calls = 0;
-    let result = v.clone_proof_executor_using(uid, gid, synthetic_immutable, &mut b, |b| {
-        calls += 1;
-        assert!(b.storage() >= before + charge + TRANSFER_SCRATCH);
-        if calls == 2 {
-            t.replace_helper();
-        }
-        t.revalidate(&v, b)
-    });
+    let result = v.clone_executable_using(
+        ExecRole::ProofExecutor,
+        uid,
+        gid,
+        synthetic_immutable,
+        &mut b,
+        |b| {
+            calls += 1;
+            assert!(b.storage() >= before + charge + TRANSFER_SCRATCH);
+            if calls == 2 {
+                t.replace_helper();
+            }
+            t.revalidate(&v, b)
+        },
+    );
     assert!(result.is_err());
     assert_eq!(calls, 2);
     assert_eq!(b.storage(), before);
@@ -352,14 +372,21 @@ fn final_transfer_validation_rechecks_origins_after_file_inspection() {
     let before = b.storage();
     let (uid, gid) = owners();
     let mut calls = 0;
-    let result =
-        v.validate_proof_executor_using(&file, uid, gid, synthetic_immutable, &mut b, |b| {
+    let result = v.validate_executable_using(
+        ExecRole::ProofExecutor,
+        &file,
+        uid,
+        gid,
+        synthetic_immutable,
+        &mut b,
+        |b| {
             calls += 1;
             if calls == 2 {
                 t.replace_helper();
             }
             t.revalidate(&v, b)
-        });
+        },
+    );
     assert!(result.is_err());
     assert_eq!(calls, 2);
     assert_eq!(b.storage(), before);
@@ -377,7 +404,7 @@ fn missing_retained_helper_refuses_before_origin_io() {
     assert!(matches!(
         t.duplicate(&v, &mut b),
         Err(RetainedCompilerRuntimeErrorV1::Mismatch(
-            "proof executor custody absent"
+            "executable custody absent"
         ))
     ));
     assert_eq!(PROBES.with(Cell::get), 0);
@@ -497,11 +524,18 @@ fn post_duplicate_unwind_preserves_original_account_and_work() {
     let (uid, gid) = owners();
     let mut calls = 0;
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = v.clone_proof_executor_using(uid, gid, synthetic_immutable, &mut b, |b| {
-            calls += 1;
-            assert_ne!(calls, 2, "synthetic post-duplicate unwind");
-            t.revalidate(&v, b)
-        });
+        let _ = v.clone_executable_using(
+            ExecRole::ProofExecutor,
+            uid,
+            gid,
+            synthetic_immutable,
+            &mut b,
+            |b| {
+                calls += 1;
+                assert_ne!(calls, 2, "synthetic post-duplicate unwind");
+                t.revalidate(&v, b)
+            },
+        );
     }));
     assert!(unwind.is_err());
     assert_eq!(calls, 2);
@@ -509,3 +543,6 @@ fn post_duplicate_unwind_preserves_original_account_and_work() {
     assert!(b.work() > work_before);
     t.revalidate(&v, &mut b).unwrap();
 }
+
+#[path = "retained_compiler_runtime_dynamic_transfer_v1_tests.rs"]
+mod dynamic;

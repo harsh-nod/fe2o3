@@ -46,8 +46,9 @@ pub use transfer::RetainedCompilerRuntimeExecTransferChargeV1;
 ///
 /// The sole public positive loader consumes fixed-root compiler approval. No
 /// caller-supplied bytes, FD, alternate path, PID, successful exit or callback
-/// can manufacture this owner. Only the admitted proof executor may be duplicated
-/// as an inert exec source, with its own full charge and final origin recheck.
+/// can manufacture this owner. Only the admitted rustc, ELF interpreter and proof
+/// executor may be duplicated through fixed-role inert exec-source entrypoints,
+/// each with its own full charge and final origin recheck.
 /// This is inventory custody only: no ELF dependency-resolution, process launch,
 /// mapping history, protected sibling association or completed-guard claim.
 ///
