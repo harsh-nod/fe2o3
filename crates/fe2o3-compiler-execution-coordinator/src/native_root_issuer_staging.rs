@@ -87,7 +87,7 @@ impl Channels {
 pub(super) fn source_storage(issuer_bytes: u64) -> Result<usize> {
     sum(&[
         Image::file_storage_for_length(issuer_bytes)?,
-        Inputs::PAIR_STORAGE,
+        Inputs::ROOT_STORAGE,
         PolicyCap::FILE_STORAGE,
         ServiceKey::FILE_STORAGE,
         ManifestCap::FILE_STORAGE,
@@ -120,7 +120,7 @@ pub(super) fn stage<T: Send + 'static>(
         prepare_peer(peer, b)?;
         let (issuer, c) = prepared.programs[2].try_clone_for_exec(b)?;
         b.reserve_storage(c.additional_storage())?;
-        let ((listener, root), c) = prepared.service_inputs.try_clone_ordered_for_spawn(b)?;
+        let (root, c) = prepared.service_inputs.try_clone_root_for_spawn(b)?;
         b.reserve_storage(c.additional_storage())?;
         let (policy, c) = prepared.trust.policy().try_clone_for_transfer(b)?;
         b.reserve_storage(c.additional_storage())?;
@@ -152,7 +152,7 @@ pub(super) fn stage<T: Send + 'static>(
         let bindings = bindings(sources)?;
         let source = source_storage(prepared.programs[2].measurement().byte_len())?;
         // SAFETY: the closed table covers all borrowed source bytes and descriptors,
-        // including full issuer image, local listener/root pair and control channels.
+        // including full issuer image, local root alias and control channels.
         // Their original typed owners remain charged; final Stage aliases are checked
         // immediately below against those same owners before clone/gate release.
         let (stage, c) = unsafe {
@@ -167,16 +167,7 @@ pub(super) fn stage<T: Send + 'static>(
             )
         }?;
         b.reserve_storage(c.additional_storage())?;
-        validate(
-            p,
-            &stage,
-            listener.as_fd(),
-            peer,
-            pidfd,
-            channels,
-            root_channel,
-            b,
-        )?;
+        validate(p, &stage, peer, pidfd, channels, root_channel, b)?;
         Ok((stage, c.additional_storage()))
     })
 }
@@ -196,7 +187,6 @@ pub(super) fn bindings(sources: [BorrowedFd<'_>; 10]) -> Result<[Binding<'_>; 10
 fn validate<T: Send + 'static>(
     p: &Payload<T>,
     stage: &Stage,
-    listener: BorrowedFd<'_>,
     peer: BorrowedFd<'_>,
     pidfd: BorrowedFd<'_>,
     channels: &Channels,
@@ -213,7 +203,7 @@ fn validate<T: Send + 'static>(
     prepared.programs[2].revalidate_exec_clone(stage.executable(), b)?;
     prepared
         .service_inputs
-        .validate_transfer(listener, file(3)?, b)?;
+        .validate_root_transfer(file(3)?, b)?;
     prepared.trust.policy().validate_transfer(file(6)?, b)?;
     p.key.validate_transfer(
         file(7)?,

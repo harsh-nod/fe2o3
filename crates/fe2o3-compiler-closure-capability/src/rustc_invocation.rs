@@ -58,6 +58,33 @@ impl RustcInvocationCapabilityV1 {
     /// Peak nested operation scratch, above the input/retained owner floor.
     pub const NATIVE_OPERATION_SCRATCH: usize =
         Self::NATIVE_FRAME + Self::NATIVE_MAX_RETAINED_STORAGE;
+    /// Complete native transfer cost, including exact retained-byte revalidation.
+    pub const NATIVE_TRANSFER_WORK: usize = Self::NATIVE_IO_WORK + Self::NATIVE_REVALIDATION_WORK;
+    pub const NATIVE_TRANSFER_SCRATCH: usize =
+        Self::NATIVE_FRAME + Self::NATIVE_FILE_STORAGE + Self::NATIVE_OPERATION_SCRATCH;
+
+    /// Duplicates the genuine sealed invocation without extracting its owner.
+    /// The returned File charge is unreserved; keep the original full owner
+    /// prepaid and reserve the charge before retaining the transfer. This is
+    /// mechanical immutable-file custody, never capture or execution authority.
+    pub fn try_clone_for_transfer_native(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(File, NativeStorage), NativeError> {
+        budget.with_prepaid_scope(
+            self.native_retained_storage()?,
+            8,
+            Self::NATIVE_IO_WORK,
+            Self::NATIVE_FRAME + Self::NATIVE_FILE_STORAGE,
+            |b| {
+                self.revalidate_native(b)?;
+                Ok((
+                    self.image.clone_fixed()?,
+                    NativeStorage(Self::NATIVE_FILE_STORAGE),
+                ))
+            },
+        )
+    }
 
     /// Fresh metered admission of the existing canonical V3 invocation format.
     /// No V1 compiler-execution subject, service or policy owner is constructed.

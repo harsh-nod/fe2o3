@@ -84,6 +84,13 @@ pub use root_gate_v3::{
     validate_compiler_execution_root_gate_reply_v3,
     validate_compiler_execution_root_gate_request_v3,
 };
+mod root_intake_v3;
+pub use root_intake_v3::{
+    COMPILER_EXECUTION_ROOT_INTAKE_BYTES_V3, COMPILER_EXECUTION_ROOT_INTAKE_STORAGE_V3,
+    COMPILER_EXECUTION_ROOT_INTAKE_WORK_V3, CompilerExecutionRootIntakeErrorV3,
+    CompilerExecutionRootIntakeKindV3, CompilerExecutionRootIntakeRecordV3,
+    CompilerExecutionRootIntakeRoleV3,
+};
 mod service;
 mod service_native_adapter;
 mod service_ready;

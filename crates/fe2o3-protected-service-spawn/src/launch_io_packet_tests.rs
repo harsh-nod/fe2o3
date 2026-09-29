@@ -22,6 +22,172 @@ fn pair(passcred: bool) -> (OwnedFd, OwnedFd) {
     pair
 }
 
+#[test]
+fn authenticated_single_right_uses_same_parser_and_preserves_zero_right_contract() {
+    fn check<const N: usize>() {
+        let (sender, receiver) = pair(true);
+        let file = tempfile::tempfile().unwrap();
+        let metadata = file.metadata().unwrap();
+        assert_eq!(refs(&metadata), 1);
+        let flags = rustix::io::fcntl_getfd(&file).unwrap();
+        assert!(
+            send_packet_with_descriptor(sender.as_fd(), &[0xa5; N], file.as_fd())
+                .unwrap()
+                .is_some()
+        );
+        // The unchanged API must close the right and refuse, not silently discard it.
+        assert!(matches!(
+            receive_authenticated_packet::<N>(receiver.as_fd(), this_sender()),
+            Err(Failure::MalformedReadyTransfer)
+        ));
+        assert_eq!(refs(&metadata), 1);
+        assert!(
+            send_packet_with_descriptor(sender.as_fd(), &[0x5a; N], file.as_fd())
+                .unwrap()
+                .is_some()
+        );
+        let (bytes, fd) = receive_authenticated_descriptor::<N>(receiver.as_fd(), this_sender())
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes, [0x5a; N]);
+        assert_eq!(
+            rustix::io::fcntl_getfd(&fd).unwrap(),
+            rustix::io::FdFlags::CLOEXEC
+        );
+        assert_eq!(rustix::io::fcntl_getfd(&file).unwrap(), flags);
+        let stat = rustix::fs::fstat(&fd).unwrap();
+        assert_eq!((stat.st_dev, stat.st_ino), (metadata.dev(), metadata.ino()));
+        assert_eq!(refs(&metadata), 2);
+        drop(fd);
+        assert_eq!(refs(&metadata), 1);
+        assert!(
+            receive_authenticated_descriptor::<N>(receiver.as_fd(), this_sender())
+                .unwrap()
+                .is_none()
+        );
+    }
+    check::<2>();
+    check::<224>();
+    check::<4096>();
+}
+
+#[test]
+fn single_right_refuses_missing_extra_truncated_and_wrong_sender_with_exact_disposal() {
+    const N: usize = 224;
+    let (sender, receiver) = pair(true);
+    let file = tempfile::tempfile().unwrap();
+    let metadata = file.metadata().unwrap();
+    for count in [0, 2, 8] {
+        let rights = [file.as_fd(); 8];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(8))];
+        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+        if count != 0 {
+            assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights[..count])));
+        }
+        assert_eq!(
+            sendmsg(
+                &sender,
+                &[IoSlice::new(&[0xa5; N])],
+                &mut ancillary,
+                SendFlags::DONTWAIT | SendFlags::NOSIGNAL
+            )
+            .unwrap(),
+            N
+        );
+        assert!(matches!(
+            receive_authenticated_descriptor::<N>(receiver.as_fd(), this_sender()),
+            Err(Failure::MalformedReadyTransfer)
+        ));
+        assert_eq!(refs(&metadata), 1);
+    }
+    for payload in [&[0xa5; N - 1][..], &[0xa5; N + 1][..]] {
+        let rights = [file.as_fd()];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+        assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights)));
+        assert_eq!(
+            sendmsg(
+                &sender,
+                &[IoSlice::new(payload)],
+                &mut ancillary,
+                SendFlags::DONTWAIT | SendFlags::NOSIGNAL
+            )
+            .unwrap(),
+            payload.len()
+        );
+        assert!(matches!(
+            receive_authenticated_descriptor::<N>(receiver.as_fd(), this_sender()),
+            Err(Failure::MalformedReadyTransfer)
+        ));
+        assert_eq!(refs(&metadata), 1);
+    }
+    assert!(
+        send_packet_with_descriptor(sender.as_fd(), &[0xa5; N], file.as_fd())
+            .unwrap()
+            .is_some()
+    );
+    let wrong = MessageSender::new(
+        rustix::process::getpid().as_raw_pid(),
+        rustix::process::getuid().as_raw() ^ 1,
+        rustix::process::getgid().as_raw(),
+    );
+    assert!(matches!(
+        receive_authenticated_descriptor::<N>(receiver.as_fd(), wrong),
+        Err(Failure::MalformedReadyTransfer)
+    ));
+    assert_eq!(refs(&metadata), 1);
+}
+
+#[test]
+fn single_right_keeps_retryable_errors_and_preflight_does_not_consume() {
+    for e in [Errno::AGAIN, Errno::INTR] {
+        assert!(
+            authenticated_descriptor_result::<224>(Err(e), this_sender())
+                .unwrap()
+                .is_none()
+        );
+    }
+    let (sender, receiver) = pair(false);
+    let file = tempfile::tempfile().unwrap();
+    for result in [
+        send_packet_with_descriptor(sender.as_fd(), &[], file.as_fd()),
+        send_packet_with_descriptor(sender.as_fd(), &[0], file.as_fd()),
+        send_packet_with_descriptor(sender.as_fd(), &[0; 4097], file.as_fd()),
+    ] {
+        assert_eq!(result, Err(Failure::MalformedReadyTransfer));
+    }
+    assert!(matches!(
+        receive_fixed_packet::<224>(receiver.as_fd()),
+        Err(Errno::AGAIN)
+    ));
+    assert!(matches!(
+        receive_authenticated_descriptor::<224>(receiver.as_fd(), this_sender()),
+        Err(Failure::Io {
+            source: Errno::INVAL,
+            ..
+        })
+    ));
+    rustix::net::sockopt::set_socket_passcred(&receiver, true).unwrap();
+    assert!(
+        send_packet_with_descriptor(sender.as_fd(), &[0xa5; 224], file.as_fd())
+            .unwrap()
+            .is_some()
+    );
+    for result in [
+        receive_authenticated_descriptor::<0>(receiver.as_fd(), this_sender()).map(|_| ()),
+        receive_authenticated_descriptor::<1>(receiver.as_fd(), this_sender()).map(|_| ()),
+        receive_authenticated_descriptor::<4097>(receiver.as_fd(), this_sender()).map(|_| ()),
+    ] {
+        assert_eq!(result, Err(Failure::MalformedReadyTransfer));
+    }
+    drop(
+        receive_authenticated_descriptor::<224>(receiver.as_fd(), this_sender())
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(refs(&file.metadata().unwrap()), 1);
+}
+
 fn this_sender() -> MessageSender {
     MessageSender::new(
         rustix::process::getpid().as_raw_pid(),

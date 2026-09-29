@@ -3,13 +3,19 @@
 Status: **private, unqualified prerequisite, not a deployable default switch**.
 The paired executable, unit and offline installer changes must remain private
 until the intended original-root direct startup route is composed and tested.
-The current V3 `Deployment::launch` starts the independently retained anchor,
-then `PreparedCompilerExecutionSupervisorV3::launch` refuses with
+The native entry now prepares the independently retained anchor, keeps the
+actual `Prepared` owner and activates its sole original-root listener. It runs
+the bounded intake receiver on that owner and the original request account.
+This source has not been built or tested by its author. The old indirect V3
+`Deployment::launch` / `PreparedCompilerExecutionSupervisorV3::launch` still refuses with
 `native V3 indirect launch requires the original-root FD12 route`.
 Here FD12 means the issuer's original-root control socket, not the unit's
 policy-input slot in the descriptor table below.
-That guard is unchanged. The original cleanup pool must cancel and drain the
-anchor; no `READY=1`, compiler intake, protected proof or GPU success is claimed.
+That guard is unchanged. A complete inert intake currently returns only
+`RuntimeEnforcementUnavailable`, then cancels and drains the anchor through its
+original cleanup pool. Existing service-manager activation notification is not
+compiler readiness. No successful startup, compiler launch, proof or GPU result
+is claimed.
 M0 alone is complete; M1-M7 and the strict production matrix remain incomplete.
 
 ## Paired Contract
@@ -118,11 +124,61 @@ and mixed inventory refusal, immutable source custody, install/reacquire/tamper,
 all shared publication fault points, unwind, parent replacement and isolated
 crash recovery. No builds, tests or privileged startup were run by this author.
 
-Before landing default switches: compose and test the sole original-root direct
-startup/listener route with complete cleanup and exact unit confinement. Then
-wire authenticated per-compilation intake through the existing invocation,
-Stage/Trace and root session. FD195 invocation authority must survive until the
-exact root acknowledgment before using the child-created FD195 channel.
+## Authenticated Intake Candidate
+
+The private V4 release/broker family carries a freshly loaded, fixed-origin V3
+client profile; the old V3 transport still means V1 profile. Distinct release
+magic, authentication domains, route grammar and exact profile identity reject
+cross-family records. There is no V1-to-V3 conversion or downgrade. The V4
+release launch remains deliberately unselected by the working default driver.
+Selecting it is a later paired validation/integration step, not a route hint
+that upgrades authority. The new profile's load/admission account survives
+descriptor transfers, thread moves and the retained invocation stream.
+
+The protected wrapper's V4 branch retains its genuine invocation authority
+stream while it contacts the fixed root endpoint. It prepays the bounded native
+descriptor capture before copying, retains the actual cwd and original stdio,
+and never enters the old local compiler spawn or FD195 readiness path. Legacy
+load-readiness/publication recovery refuses in this branch. These quotas cover
+the native descriptor capture and transport, not every allocation in the older
+Command/environment preparation pipeline.
+
+The 224-byte V3 intake records are inert. Hello, challenge and ACK carry no
+rights; ordered input records carry exactly one CLOEXEC right: sealed invocation,
+cwd, then each originally non-CLOEXEC stdio selected in the mask. The actual
+invocation length must match the bounded declaration before read/admission.
+Fresh nonce/challenge and preceding digests bind order, but do not authenticate
+the peer. The fixed root-owned directory chain, socket identity, actual root
+SO_PEERCRED and per-record SCM_CREDENTIALS are the transport TCB. The V3 profile's
+supervisor UID/GID is not reinterpreted as a measured root identity.
+
+The coordinator accepts through the original listener; issuer staging exports
+only its root directory, never a competing listener. Received rights enter the
+outer receiver before fallible validation. Native invocation admission uses a
+separately funded duplicate so constructor failure cannot remove the original
+right. The receiver keeps those rights through the exact terminal refusal ACK
+and handled cancellation/drain. Dropping Prepared starts anchor cancellation;
+the original pool retains its child/domain and canonical guard until terminal
+cleanup. No failed request refunds its account or retries on a fresh ledger.
+
+New authored coverage includes real one-right socket transfer/closure, all
+stdio masks, original right retention on constructor denial, malformed sequence,
+unwind, one-short funding before dequeue, original-account profile transfer,
+family negatives and entry cancellation order. These source tests are unrun.
+They do not instantiate an approved compiler runtime or qualify a service.
+The primary native lane still needs the actual nonroot client endpoint and
+paired executable exchange, with bad peer/record credentials, substituted
+directory/socket, timeout/EOF, unexpected/extra rights and exact-ACK stream
+lifetime checks. No transport ACK can create RootSession, Ready or proof.
+
+Before landing default switches: test the sole original-root direct startup and
+intake route with complete cleanup and exact unit confinement. Then connect
+admitted runtime/source-view custody through `CompilerInvocationBacking`, the
+existing Stage/Trace and `Prepared::launch_root_attempt`. The actual root must
+join the complete profile/anchor association; today's inert refusal transcript
+binds the policy and descriptor, not full compiler authority. Invocation authority
+must survive until the exact root acknowledgment before using the child-created
+FD195 channel.
 Genuine cwd/stdio/source/runtime/proof custody, original-account funding and
 trace-derived completion remain required. `RuntimeEnforcementUnavailable` and
 the indirect-launch guard must not be removed to make activation appear ready.

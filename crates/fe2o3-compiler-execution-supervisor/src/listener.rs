@@ -653,6 +653,8 @@ impl ProtectedIssuerSocketCustodyV1 {
 pub(super) struct ProvisionedProtectedIssuerSocketV1 {
     socket: ProtectedIssuerSocketCustodyV1,
     observed_state: Cell<ProtectedIssuerSocketStateV1>,
+    listener_exported: Cell<bool>,
+    original_root_activated: bool,
 }
 
 impl ProvisionedProtectedIssuerSocketV1 {
@@ -675,6 +677,8 @@ impl ProvisionedProtectedIssuerSocketV1 {
         Ok(Self {
             socket,
             observed_state: Cell::new(ProtectedIssuerSocketStateV1::Bound),
+            listener_exported: Cell::new(false),
+            original_root_activated: false,
         })
     }
 
@@ -699,6 +703,7 @@ impl ProvisionedProtectedIssuerSocketV1 {
                 socket_io_error("clone protected issuer bound socket", source.into())
             })?;
         self.validate_clone_checked(&descriptor)?;
+        self.listener_exported.set(true);
         Ok(descriptor)
     }
 
@@ -708,6 +713,73 @@ impl ProvisionedProtectedIssuerSocketV1 {
             ProtectedIssuerSocketStateV1::Bound,
         )?;
         require_socket_state(self.observe_state()?, ProtectedIssuerSocketStateV1::Bound)?;
+        Ok(())
+    }
+
+    pub(super) fn activate_original_root(&mut self) -> Result<(), SocketError> {
+        if self.listener_exported.get() {
+            return Err(SocketError::InvalidListener(
+                "listener was exported for indirect activation",
+            ));
+        }
+        require_socket_state(self.observe_state()?, ProtectedIssuerSocketStateV1::Bound)?;
+        // Enable credentials before clients can queue their first record.
+        rustix::net::sockopt::set_socket_passcred(&self.socket.descriptor, true)
+            .map_err(|e| socket_io_error("enable original-root listener credentials", e.into()))?;
+        listen(&self.socket.descriptor, LISTENER_BACKLOG_V1)
+            .map_err(|e| socket_io_error("activate original-root listener", e.into()))?;
+        self.check_root_listener()?;
+        self.original_root_activated = true;
+        Ok(())
+    }
+
+    pub(super) fn try_accept_original_root(&mut self) -> Result<Option<OwnedFd>, SocketError> {
+        if !self.original_root_activated {
+            return Err(SocketError::InvalidListener(
+                "not activated by original root",
+            ));
+        }
+        self.check_root_listener()?;
+        let accepted = match accept_with(
+            &self.socket.descriptor,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        ) {
+            Ok(fd) => Some(fd),
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => None,
+            Err(e) => return Err(socket_io_error("accept original-root intake", e.into())),
+        };
+        self.finish_root_accept(accepted)
+    }
+
+    fn finish_root_accept(
+        &self,
+        accepted: Option<OwnedFd>,
+    ) -> Result<Option<OwnedFd>, SocketError> {
+        self.check_root_listener()?;
+        if let Some(fd) = &accepted {
+            if !rustix::net::sockopt::socket_passcred(fd)
+                .map_err(|e| socket_io_error("inspect accepted intake credentials", e.into()))?
+            {
+                return Err(SocketError::InvalidListener(
+                    "accepted intake lost credentials",
+                ));
+            }
+        }
+        Ok(accepted)
+    }
+
+    fn check_root_listener(&self) -> Result<(), SocketError> {
+        require_socket_state(
+            self.observe_state()?,
+            ProtectedIssuerSocketStateV1::Listening,
+        )?;
+        if !rustix::net::sockopt::socket_passcred(&self.socket.descriptor)
+            .map_err(|e| socket_io_error("inspect original-root listener credentials", e.into()))?
+        {
+            return Err(SocketError::InvalidListener(
+                "original-root listener lost credentials",
+            ));
+        }
         Ok(())
     }
 
@@ -1018,3 +1090,7 @@ fn wait_for_listener(
 fn io_error(operation: &'static str, source: io::Error) -> ProtectedIssuerServiceErrorV1 {
     ProtectedIssuerServiceErrorV1::Io { operation, source }
 }
+
+#[cfg(test)]
+#[path = "listener_root_tests.rs"]
+mod root_tests;

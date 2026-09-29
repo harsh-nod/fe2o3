@@ -366,16 +366,30 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let metadata = ordered_rustc_codegen_metadata_v1(compile)?;
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
-            let capability_binding =
-                capability_broker::CapabilityBindingV3::from_environment_for_client(
-                    capability_broker::CapabilityProfileV1::Ordinary,
-                )
+            // The route family only chooses a strict parser. Neither the hint
+            // nor successful parsing grants authority; receive authenticates
+            // this exact family/binding and the complete transferred owners.
+            let profile_family = capability_broker::broker_route_family_from_environment()
                 .map_err(BindingWrapperError::CapabilityBroker)?;
+            let capability_binding = match profile_family {
+                capability_broker::CompilerExecutionProfileFamily::LegacyV1 => {
+                    capability_broker::CapabilityBindingV3::from_environment_for_client(
+                        capability_broker::CapabilityProfileV1::Ordinary,
+                    )
+                }
+                capability_broker::CompilerExecutionProfileFamily::NativeV3 => {
+                    capability_broker::CapabilityBindingV3::from_environment_for_client_v4(
+                        capability_broker::CapabilityProfileV1::Ordinary,
+                    )
+                }
+            }
+            .map_err(BindingWrapperError::CapabilityBroker)?;
             authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())?;
             validate_rustc_lib_tree_descriptor(capability_binding)?;
             // Authenticate the route and retain its invocation capability
             // before opening the configuration or any transitive provider input.
-            let transferred = receive_validated_compiler_capabilities(capability_binding)?;
+            let transferred =
+                receive_validated_compiler_capabilities(capability_binding, profile_family)?;
             let build_config = PreparedProductionBuildConfig::from_environment()
                 .map_err(BindingWrapperError::BuildConfiguration)?;
             validate_expected_build_config_identity(
@@ -459,6 +473,14 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     )
                 }
             };
+            if !selected_kernel_root && compiler_capabilities.has_native_profile() {
+                // Host dependencies do not enter the protected root path. Keep
+                // their established release behavior after authenticated selection.
+                compiler_capabilities
+                    .take_invocation_authority()?
+                    .release()
+                    .map_err(BindingWrapperError::CapabilityBroker)?;
+            }
             let mut managed = if !selected_kernel_root {
                 None
             } else {
@@ -477,9 +499,13 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             };
             let mut release_guard = managed.as_ref().map(ManagedAttemptRevocationGuard::arm);
             let source_isa_observer = match (managed.as_ref(), source_isa_binding) {
-                (Some(managed), Some((config, unit))) => compiler_capabilities
-                    .release_invocation_with_source_isa_observer(config, unit, managed.attempt)
-                    .map(Some),
+                (Some(managed), Some((config, unit)))
+                    if !compiler_capabilities.has_native_profile() =>
+                {
+                    compiler_capabilities
+                        .release_invocation_with_source_isa_observer(config, unit, managed.attempt)
+                        .map(Some)
+                }
                 _ => Ok(None),
             };
             let source_isa_observer = match source_isa_observer {
@@ -608,6 +634,14 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                         "reviewed invocation capture has no compiler capabilities".to_owned(),
                     )
                 })?;
+                if protected_kernel_root && capabilities.has_native_profile() {
+                    capabilities.prepay_native_capture(
+                        command.as_command(),
+                        command.configured_argv0(),
+                        &execution_directory,
+                        &environment.entries,
+                    )?;
+                }
                 let capture_v2 = InertRustcInvocationCaptureV2::capture(
                     command.as_command(),
                     command.configured_argv0(),
@@ -670,7 +704,11 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 Ok::<_, BindingWrapperError>(capability)
             })
             .transpose()?;
-        let compiler_execution_boundary = if protected_kernel_root {
+        let native_root_intake = protected_kernel_root
+            && compiler_capabilities
+                .as_ref()
+                .is_some_and(CompilerCapabilities::has_native_profile);
+        let compiler_execution_boundary = if protected_kernel_root && !native_root_intake {
             let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
                 BindingWrapperError::BuildObservation(
                     "selected protected rustc has no retained compiler capabilities".to_owned(),
@@ -701,6 +739,25 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             pinned_execution_directory,
         )
         .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))?;
+        if native_root_intake {
+            // The actual original broker stream and all captured inputs stay
+            // owned through the exact root reply. No Command::spawn, legacy FD195
+            // readiness or source/ISA release may precede this exchange.
+            let parent = parent_rustc_invocation_custody.as_ref().ok_or_else(|| {
+                BindingWrapperError::BuildObservation(
+                    "native root intake requires exact V3 parent capture".to_owned(),
+                )
+            })?;
+            let capabilities = compiler_capabilities.as_ref().unwrap();
+            capabilities.contact_native_root(parent)?;
+            // Present protocol can return only terminal enforcement refusal;
+            // a future consuming root launch must not fall through to local spawn.
+            return Err(BindingWrapperError::CompilerExecutionBoundary {
+                stage: "original-root compiler intake",
+                primary: "RuntimeEnforcementUnavailable".to_owned(),
+                cleanup: None,
+            });
+        }
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -1417,6 +1474,48 @@ fn validate_expected_build_config_identity(
         .map_err(BindingWrapperError::BuildConfiguration)
 }
 
+// The native profile decoder and later intake borrow this ONE wrapper request
+// account. This is not the separate root process's original launch account.
+fn native_intake_account()
+-> Result<crate::authority_release::profile::ClientProfileAccountV3, BindingWrapperError> {
+    use crate::authority_release::profile::{
+        FundedClientProfileV3, client_profile_receive_quota_v3,
+    };
+    use crate::protected_compiler_handoff_v3::root_intake;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+    use std::{
+        mem::size_of,
+        sync::{Arc, Mutex},
+    };
+    let overflow =
+        || BindingWrapperError::CapabilityBroker("native intake request quota overflow".to_owned());
+    let (profile_work, profile_storage) =
+        client_profile_receive_quota_v3().map_err(BindingWrapperError::CapabilityBroker)?;
+    let header = size_of::<Account>()
+        + size_of::<Mutex<Account>>()
+        + size_of::<FundedClientProfileV3>()
+        + 2 * size_of::<usize>();
+    let work = profile_work
+        .checked_add(root_intake::WORK)
+        .and_then(|n| n.checked_add(root_intake::CAPTURE_WORK))
+        .ok_or_else(overflow)?;
+    let storage = profile_storage
+        .checked_add(root_intake::SCRATCH)
+        .and_then(|n| n.checked_add(root_intake::CAPTURE_SCRATCH))
+        .and_then(|n| n.checked_add(root_intake::PARENT_MAX_STORAGE))
+        .and_then(|n| n.checked_add(size_of::<capability_broker::BrokeredInvocationAuthorityV1>()))
+        .and_then(|n| n.checked_add(header))
+        .ok_or_else(overflow)?;
+    let mut account = Account::new(Work::new(work), storage);
+    account
+        .with_budget(|b| b.reserve_storage(header))
+        .map_err(|e| BindingWrapperError::CapabilityBroker(e.to_string()))?;
+    Ok(Arc::new(Mutex::new(account)))
+}
+
 struct CompilerCapabilities {
     binding: capability_broker::CapabilityBindingV3,
     backend: PinnedCodegenBackend,
@@ -1424,22 +1523,44 @@ struct CompilerCapabilities {
     compiler_closure: Option<fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1>,
     compiler_execution_profile:
         Option<fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1>,
+    compiler_execution_profile_v3: Option<crate::authority_release::profile::FundedClientProfileV3>,
+    native_capture_prepaid: std::cell::Cell<bool>,
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
     output_dir: PathBuf,
 }
 
 fn receive_validated_compiler_capabilities(
     binding: capability_broker::CapabilityBindingV3,
+    family: capability_broker::CompilerExecutionProfileFamily,
 ) -> Result<capability_broker::BrokeredCapabilities, BindingWrapperError> {
-    let transferred = capability_broker::receive(managed_build_session()?, binding)
-        .map_err(BindingWrapperError::CapabilityBroker)?;
+    let transferred = match family {
+        capability_broker::CompilerExecutionProfileFamily::LegacyV1 => {
+            capability_broker::receive(managed_build_session()?, binding)
+        }
+        capability_broker::CompilerExecutionProfileFamily::NativeV3 => {
+            let account = native_intake_account()?;
+            capability_broker::receive_v4(managed_build_session()?, binding, account)
+        }
+    }
+    .map_err(BindingWrapperError::CapabilityBroker)?;
     if binding.requires_compiler_closure_v2() != transferred.compiler_closure.is_some() {
         return Err(BindingWrapperError::CapabilityBroker(
             "brokered compiler-closure descriptor presence differs from the authenticated binding"
                 .to_owned(),
         ));
     }
-    if binding.requires_compiler_closure_v2() != transferred.compiler_execution_profile.is_some() {
+    let native = transferred
+        .authenticated_client_profile_v3_identity()
+        .is_some();
+    let selected_native = matches!(
+        family,
+        capability_broker::CompilerExecutionProfileFamily::NativeV3
+    );
+    if native != selected_native
+        || (native && transferred.compiler_execution_profile.is_some())
+        || binding.requires_compiler_closure_v2()
+            != (native || transferred.compiler_execution_profile.is_some())
+    {
         return Err(BindingWrapperError::CapabilityBroker(
             "brokered compiler-execution client-profile presence differs from the authenticated binding"
                 .to_owned(),
@@ -1474,9 +1595,21 @@ impl CompilerCapabilities {
         mut transferred: capability_broker::BrokeredCapabilities,
         retain_for_selected_source_isa_observer: bool,
     ) -> Result<Self, BindingWrapperError> {
+        let compiler_execution_profile_v3 = if transferred
+            .authenticated_client_profile_v3_identity()
+            .is_some()
+        {
+            Some(
+                transferred
+                    .take_compiler_execution_profile_v3()
+                    .map_err(BindingWrapperError::CapabilityBroker)?,
+            )
+        } else {
+            None
+        };
         let invocation_authority = release_or_retain_invocation_authority(
             transferred.invocation_authority.take(),
-            retain_for_selected_source_isa_observer,
+            retain_for_selected_source_isa_observer || compiler_execution_profile_v3.is_some(),
             capability_broker::BrokeredInvocationAuthorityV1::release,
         )?;
         let output_dir = transferred.artifact.child_path();
@@ -1486,9 +1619,73 @@ impl CompilerCapabilities {
             artifact: transferred.artifact,
             compiler_closure: transferred.compiler_closure,
             compiler_execution_profile: transferred.compiler_execution_profile,
+            compiler_execution_profile_v3,
+            native_capture_prepaid: std::cell::Cell::new(false),
             invocation_authority,
             output_dir,
         })
+    }
+
+    fn has_native_profile(&self) -> bool {
+        self.compiler_execution_profile_v3.is_some()
+    }
+
+    fn prepay_native_capture(
+        &self,
+        command: &Command,
+        argv0: &OsStr,
+        cwd: &Path,
+        environment: &[(OsString, OsString)],
+    ) -> Result<(), BindingWrapperError> {
+        use crate::protected_compiler_handoff_v3::root_intake;
+        let profile = self.compiler_execution_profile_v3.as_ref().ok_or_else(|| {
+            BindingWrapperError::CapabilityBroker(
+                "native capture has no funded V3 profile".to_owned(),
+            )
+        })?;
+        profile
+            .with_profile_budget(|_, b| {
+                root_intake::prepay_capture_once(
+                    &self.native_capture_prepaid,
+                    command,
+                    argv0,
+                    cwd,
+                    environment,
+                    b,
+                )
+            })
+            .map_err(|e| BindingWrapperError::ChildCapability(e.to_string()))
+    }
+
+    fn contact_native_root(
+        &self,
+        parent: &ParentRustcInvocationCustody,
+    ) -> Result<(), BindingWrapperError> {
+        let profile = self.compiler_execution_profile_v3.as_ref().ok_or_else(|| {
+            BindingWrapperError::CapabilityBroker("missing authenticated native profile".to_owned())
+        })?;
+        let authority = self.invocation_authority.as_ref().ok_or_else(|| {
+            BindingWrapperError::CapabilityBroker(
+                "native root intake lost original invocation stream".to_owned(),
+            )
+        })?;
+        if !self.native_capture_prepaid.get() {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "native parent capture was not prepaid".to_owned(),
+            ));
+        }
+        profile
+            .with_profile_budget(|profile, b| parent.contact_original_root(profile, authority, b))
+            .map(|_| ())
+            .map_err(
+                |error: crate::protected_compiler_handoff_v3::root_intake::Error| {
+                    BindingWrapperError::CompilerExecutionBoundary {
+                        stage: "authenticated original-root intake",
+                        primary: error.to_string(),
+                        cleanup: None,
+                    }
+                },
+            )
     }
 
     fn take_invocation_authority(
@@ -1975,6 +2172,31 @@ fn prepare_managed_production_build(
     session: BuildSession,
     compiler_execution_profile: &fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1,
 ) -> Result<(BuildAttempt, ManagedProductionBuild, bool), BindingWrapperError> {
+    prepare_managed_production_build_for_profile(
+        config,
+        compiler_closure,
+        output_dir,
+        producer,
+        invocation,
+        session,
+        Some(compiler_execution_profile),
+    )
+}
+
+// None selects only the fresh native intake prerequisite. It cannot consume a
+// legacy receipt/readiness record; canonical V3 completion is still a separate
+// consuming root transition, never an upgrade of this old recovered graph.
+fn prepare_managed_production_build_for_profile(
+    config: PreparedProductionBuildConfig,
+    compiler_closure: CompilerClosureV2,
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    invocation: BuildInvocation,
+    session: BuildSession,
+    compiler_execution_profile: Option<
+        &fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1,
+    >,
+) -> Result<(BuildAttempt, ManagedProductionBuild, bool), BindingWrapperError> {
     let attempt = begin_build_attempt(output_dir, producer, invocation, session)
         .map_err(BindingWrapperError::Artifact)?;
     let recovered_envelope = match recover_worker_v3_load_envelope_v2(output_dir, attempt) {
@@ -1987,6 +2209,11 @@ fn prepare_managed_production_build(
         }
     };
     if let Some(envelope) = recovered_envelope {
+        let compiler_execution_profile = compiler_execution_profile.ok_or_else(|| {
+            BindingWrapperError::BuildObservation(
+                "native intake refuses legacy load-readiness recovery".to_owned(),
+            )
+        })?;
         let subject = envelope
             .wire()
             .reconstructed_compiler_execution_subject_v1()
@@ -2015,6 +2242,11 @@ fn prepare_managed_production_build(
     }
     match recover_protected_worker_v3_hsaco_publication_v1(output_dir, producer, attempt) {
         Ok(recovered) => {
+            let compiler_execution_profile = compiler_execution_profile.ok_or_else(|| {
+                BindingWrapperError::BuildObservation(
+                    "native intake refuses legacy compiler-publication recovery".to_owned(),
+                )
+            })?;
             let subject = recovered.compiler_execution_subject_v1().map_err(|error| {
                 BindingWrapperError::BuildObservation(format!(
                     "recovered production HSACO has no exact compiler-execution subject: {error}"
@@ -2093,17 +2325,27 @@ fn prepare_production_managed_attempt(
                     .to_owned(),
             )
         })?;
-    let compiler_execution_profile =
-        compiler_capabilities.protected_compiler_execution_profile()?;
-    let (attempt, production_build, began_attempt) = prepare_managed_production_build(
-        build_config,
-        compiler_closure,
-        output_dir,
-        &producer,
-        invocation,
-        session,
-        compiler_execution_profile,
-    )?;
+    let (attempt, production_build, began_attempt) = if compiler_capabilities.has_native_profile() {
+        prepare_managed_production_build_for_profile(
+            build_config,
+            compiler_closure,
+            output_dir,
+            &producer,
+            invocation,
+            session,
+            None,
+        )?
+    } else {
+        prepare_managed_production_build(
+            build_config,
+            compiler_closure,
+            output_dir,
+            &producer,
+            invocation,
+            session,
+            compiler_capabilities.protected_compiler_execution_profile()?,
+        )?
+    };
     let mut begin_attempt_guard = began_attempt.then(|| ManagedAttemptRevocationGuard {
         output_dir: output_dir.to_path_buf(),
         producer: producer.clone(),
@@ -2652,7 +2894,7 @@ mod lifecycle_tests {
         let error = run(argv).unwrap_err();
         assert!(
             matches!(&error, BindingWrapperError::CapabilityBroker(message)
-                if message == "capability broker route is not canonical V3"),
+                if message == "capability broker route has an unknown transport family"),
             "unexpected wrapper refusal: {error}"
         );
     }

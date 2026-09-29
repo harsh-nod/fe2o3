@@ -313,26 +313,35 @@ macro_rules! inherited {
                 -> Result<(Managed, Storage)> {
                 let input = self.retained;
                 b.with_prepaid_scope(input, 8, root::LOCAL_WORK, Self::FRAME, |b| {
-                    crate::native::require_root()?;
-                    self.trust.revalidate(b)?;
-                    self.inputs.validate_lifecycle(&self.lifecycle, b)?;
-                    self.inputs.validate_lifecycle(&self.supervisor_lifecycle, b)?;
-                    let Sources { supervisor, launcher, issuer } = self.programs;
-                    for (file, measurement) in [(&supervisor, self.trust.deployment().deployment().executable()),
-                        (&launcher, self.trust.deployment().deployment().launcher()), (&issuer, self.trust.policy().policy().executable())] {
-                        source::validate_executable(file, length(measurement.byte_len())?, b)?;
-                    }
-                    self.anchor.retain_cleanup_guard(self.trust.deployment(), self.trust.policy(), cleanup, b)?;
-                    let (anchor, c) = self.anchor.launch(self.trust.deployment(), self.trust.policy(), timeout, cleanup, b)?;
-                    b.reserve_storage(c.additional_storage())?;
-                    let (prepared, c) = Prepared::prepare(Sources::new(supervisor, launcher, issuer), self.trust,
-                        self.inputs, self.supervisor_lifecycle, self.lifecycle, anchor, b)?;
-                    b.reserve_storage(c.additional_storage())?;
+                    let prepared = self.prepare_inner(timeout, cleanup, b)?;
                     let (managed, c) = prepared.launch(timeout, cleanup, b)?;
                     b.reserve_storage(c.additional_storage())?;
                     let growth = managed.retained_storage().checked_sub(input).ok_or(Resource::Accounting)?;
                     Ok((managed, Storage(growth)))
                 })
+            }
+
+            // Called only inside the caller's one LOCAL_WORK/FRAME scope. The
+            // ordinary launch and original-root route use identical preparation;
+            // neither duplicates trust, lifecycle obligations or the listener.
+            fn prepare_inner(self, timeout: Duration, cleanup: &mut Cleanup,
+                b: &mut Budget<'_>) -> Result<Prepared> {
+                crate::native::require_root()?;
+                self.trust.revalidate(b)?;
+                self.inputs.validate_lifecycle(&self.lifecycle, b)?;
+                self.inputs.validate_lifecycle(&self.supervisor_lifecycle, b)?;
+                let Sources { supervisor, launcher, issuer } = self.programs;
+                for (file, measurement) in [(&supervisor, self.trust.deployment().deployment().executable()),
+                    (&launcher, self.trust.deployment().deployment().launcher()), (&issuer, self.trust.policy().policy().executable())] {
+                    source::validate_executable(file, length(measurement.byte_len())?, b)?;
+                }
+                self.anchor.retain_cleanup_guard(self.trust.deployment(), self.trust.policy(), cleanup, b)?;
+                let (anchor, c) = self.anchor.launch(self.trust.deployment(), self.trust.policy(), timeout, cleanup, b)?;
+                b.reserve_storage(c.additional_storage())?;
+                let (prepared, c) = Prepared::prepare(Sources::new(supervisor, launcher, issuer), self.trust,
+                    self.inputs, self.supervisor_lifecycle, self.lifecycle, anchor, b)?;
+                b.reserve_storage(c.additional_storage())?;
+                Ok(prepared)
             }
         }
         impl fmt::Debug for $Inherited {

@@ -21,6 +21,7 @@ struct Fake {
     waits: usize,
     busy: usize,
     shutdowns: usize,
+    intake: bool,
 }
 impl Fake {
     fn new() -> Self {
@@ -36,6 +37,7 @@ impl Fake {
             waits: 0,
             busy: 0,
             shutdowns: 0,
+            intake: false,
         }
     }
     fn effect(&self, name: &'static str) -> Result<()> {
@@ -75,6 +77,13 @@ impl Runtime for Fake {
     }
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()> {
         self.request("continuity", b)
+    }
+    fn intake(&mut self, b: &mut Budget<'_>) -> Result<bool> {
+        if !self.intake {
+            return Ok(false);
+        }
+        self.request("intake", b)?;
+        Ok(true)
     }
     fn cancel(&mut self) {
         self.trace.borrow_mut().events.push("cancel");
@@ -392,6 +401,59 @@ fn fixed_schedule_fits_checked_native_funding_and_accounts_are_independent() {
                 + (MONITOR_TURNS + CLEANUP_TURNS) * Cleanup::pump_work(CAPACITY).unwrap()
                 + CLEANUP_TURNS * Cleanup::shutdown_work()
     );
+}
+
+#[test]
+fn root_intake_terminal_refusal_or_error_cancels_before_original_cleanup_drain() {
+    for fail in [None, Some("intake")] {
+        let mut fake = Fake::new();
+        fake.signal_at = usize::MAX;
+        fake.intake = true;
+        fake.fail = fail;
+        fake.busy = 1;
+        let (result, trace, _) = run(fake, 3, 2);
+        assert!(result.is_err());
+        assert_eq!(
+            trace.borrow().events,
+            [
+                "start",
+                "publish",
+                "wait",
+                "continuity",
+                "intake",
+                "cancel",
+                "shutdown",
+                "wait",
+                "pump",
+                "shutdown",
+                "restore",
+                "drop"
+            ]
+        );
+    }
+}
+
+#[test]
+fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes() {
+    let old = Deployment::startup_quota(2, 1).unwrap();
+    let root = Deployment::original_root_startup_quota(2, 1).unwrap();
+    let continuity = Prepared::maximum_revalidation_quota().unwrap();
+    assert_eq!(root.cleanup_work(), old.cleanup_work());
+    assert_eq!(root.cleanup_storage(), old.cleanup_storage());
+    assert_eq!(
+        root.request_work(),
+        old.request_work()
+            + super::root::LOCAL_WORK
+            + fe2o3_compiler_execution_supervisor::ProvisionedProtectedIssuerServiceInputsV2::WORK
+            + 2 * (Receiver::TURN_WORK + continuity.work())
+    );
+    assert!(
+        root.request_storage()
+            >= old.request_storage() + Receiver::STORAGE + Receiver::SCRATCH + continuity.scratch()
+    );
+    assert!(Deployment::original_root_startup_quota(usize::MAX, 1).is_err());
+    assert!(Deployment::original_root_startup_quota(1, usize::MAX).is_err());
+    assert!(Deployment::original_root_startup_quota(0, 1).is_err());
 }
 
 // Exercise the real entry scheduling and real scope with inert effects only.

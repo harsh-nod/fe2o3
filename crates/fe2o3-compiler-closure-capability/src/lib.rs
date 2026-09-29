@@ -639,6 +639,28 @@ mod tests {
             Cap::NATIVE_OPERATION_SCRATCH,
             |b| admitted.revalidate_native(b),
         );
+        check(
+            admitted.native_retained_storage().unwrap(),
+            Cap::NATIVE_TRANSFER_WORK,
+            Cap::NATIVE_TRANSFER_SCRATCH,
+            |b| {
+                let (file, charge) = admitted.try_clone_for_transfer_native(b)?;
+                assert_eq!(charge.additional_storage(), Cap::NATIVE_FILE_STORAGE);
+                assert_eq!(
+                    rustix::io::fcntl_getfd(&file).unwrap(),
+                    rustix::io::FdFlags::CLOEXEC
+                );
+                assert_eq!(file.metadata().unwrap().len(), bytes.len() as u64);
+                let original = admitted.image.as_file().metadata().unwrap();
+                let transfer = file.metadata().unwrap();
+                assert_eq!(
+                    (original.dev(), original.ino()),
+                    (transfer.dev(), transfer.ino())
+                );
+                drop(file);
+                Ok(())
+            },
+        );
     }
 
     #[test]

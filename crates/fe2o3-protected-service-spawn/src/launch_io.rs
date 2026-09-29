@@ -362,13 +362,52 @@ pub fn receive_authenticated_packet<const N: usize>(
     if !(2..=AUTHENTICATED_PACKET_MAX_BYTES).contains(&N) {
         return Err(Failure::MalformedReadyTransfer);
     }
-    let result = rustix::net::sockopt::socket_passcred(fd).and_then(|enabled| {
+    let result = receive_credential_packet::<N>(fd);
+    authenticated_packet_result(result, sender)
+}
+
+fn receive_credential_packet<const N: usize>(fd: BorrowedFd<'_>) -> Result<Packet<N>, Errno> {
+    rustix::net::sockopt::socket_passcred(fd).and_then(|enabled| {
         if !enabled {
             return Err(Errno::INVAL);
         }
         receive_fixed_packet::<N>(fd)
-    });
-    authenticated_packet_result(result, sender)
+    })
+}
+
+/// Attempts one exact authenticated record carrying ONE inert descriptor.
+/// All ordinary packet preconditions/quotes apply: enable PASSCRED before any
+/// sender can enqueue, validate the endpoint, and prepay work/scratch before each
+/// attempt. Additionally prepay the returned FD owner and retained bytes before
+/// receive. This API supplies neither a fresh budget nor descriptor-role authority.
+/// Unknown ancillary records, SCM_PIDFD, extra/missing rights, wrong credentials,
+/// truncation and wrong byte counts refuse and close every disclosed descriptor.
+/// Returned ownership is CLOEXEC. EAGAIN/EINTR returns None without retry.
+pub fn receive_authenticated_descriptor<const N: usize>(
+    fd: BorrowedFd<'_>,
+    sender: MessageSender,
+) -> Result<Option<([u8; N], OwnedFd)>, Failure> {
+    if !(2..=AUTHENTICATED_PACKET_MAX_BYTES).contains(&N) {
+        return Err(Failure::MalformedReadyTransfer);
+    }
+    authenticated_descriptor_result(receive_credential_packet::<N>(fd), sender)
+}
+
+fn authenticated_descriptor_result<const N: usize>(
+    result: Result<Packet<N>, Errno>,
+    sender: MessageSender,
+) -> Result<Option<([u8; N], OwnedFd)>, Failure> {
+    match result {
+        Ok(packet) => {
+            let (bytes, fd) = packet.authenticate_transfer(sender, true)?;
+            Ok(Some((bytes, fd.ok_or(Failure::MalformedReadyTransfer)?)))
+        }
+        Err(Errno::AGAIN | Errno::INTR) => Ok(None),
+        Err(source) => Err(Failure::Io {
+            operation: "receive authenticated descriptor",
+            source,
+        }),
+    }
 }
 
 fn authenticated_packet_result<const N: usize>(
@@ -402,6 +441,37 @@ pub fn send_packet<const N: usize>(
         return Err(Failure::MalformedReadyTransfer);
     }
     packet_send_result(SystemIo.send(fd, payload), N)
+}
+
+/// Sends one exact inert record with one borrowed descriptor, without retries.
+/// Uses DONTWAIT/NOSIGNAL and the same conservative packet work/scratch quote.
+/// The source remains owned by the caller on every outcome. A successful syscall
+/// is not an ACK: keep the original descriptor/stream and request custody until
+/// an exact authenticated decision. No readiness or descriptor authority is given.
+pub fn send_packet_with_descriptor<const N: usize>(
+    fd: BorrowedFd<'_>,
+    payload: &[u8; N],
+    descriptor: BorrowedFd<'_>,
+) -> Result<Option<()>, Failure> {
+    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
+    if !(2..=AUTHENTICATED_PACKET_MAX_BYTES).contains(&N) {
+        return Err(Failure::MalformedReadyTransfer);
+    }
+    let rights = [descriptor];
+    let mut space = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut ancillary = SendAncillaryBuffer::new(&mut space);
+    if !ancillary.push(SendAncillaryMessage::ScmRights(&rights)) {
+        return Err(Failure::MalformedReadyTransfer);
+    }
+    packet_send_result(
+        sendmsg(
+            fd,
+            &[std::io::IoSlice::new(payload)],
+            &mut ancillary,
+            SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
+        ),
+        N,
+    )
 }
 
 fn packet_send_result(result: Result<usize, Errno>, length: usize) -> Result<Option<()>, Failure> {
@@ -699,9 +769,17 @@ impl<const N: usize> Packet<N> {
         }
     }
     fn authenticate(self, sender: MessageSender) -> Result<[u8; N], Failure> {
+        self.authenticate_transfer(sender, false)
+            .map(|(bytes, _)| bytes)
+    }
+    fn authenticate_transfer(
+        self,
+        sender: MessageSender,
+        right: bool,
+    ) -> Result<([u8; N], Option<OwnedFd>), Failure> {
         if self.bytes != N
             || self.rights.invalid
-            || self.rights.fd.is_some()
+            || self.rights.fd.is_some() != right
             || self.rights.credentials != Some(sender)
             || self
                 .flags
@@ -709,7 +787,7 @@ impl<const N: usize> Packet<N> {
         {
             return Err(Failure::MalformedReadyTransfer);
         }
-        Ok(self.payload)
+        Ok((self.payload, self.rights.fd))
     }
 }
 

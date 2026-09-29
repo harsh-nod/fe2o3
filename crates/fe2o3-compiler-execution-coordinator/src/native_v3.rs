@@ -7,6 +7,9 @@ use fe2o3_external_anchor_coordinator::RootManagedExternalAnchorV3 as Anchor;
 
 crate::native_adapter::preparation!(PreparedCompilerExecutionSupervisorV3, "3", "2");
 
+#[path = "native_root_intake.rs"]
+pub(crate) mod root_intake;
+
 mod consuming {
     #[cfg(test)]
     use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV3 as Policy;

@@ -1,9 +1,10 @@
 //! Fixed V3 orchestration for the paired native executable/provisioning contract.
 use crate::{
     InheritedCompilerExecutionDeploymentV3 as Deployment,
-    RootManagedCompilerExecutionServiceV3 as Managed,
+    PreparedCompilerExecutionSupervisorV3 as Prepared,
     native_activation::{Activation, TerminationSignals},
     native_inherited::{self as root, CompilerExecutionRootDeploymentErrorV2 as Failure, Result},
+    native_v3::root_intake::Receiver,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
@@ -31,9 +32,10 @@ pub(crate) const FRAME: usize =
 /// attempts. An interrupted wait consumes a turn too; this is not a wall-clock
 /// lease. Reaching the monitoring limit cancels the service and returns a refusal
 /// even if cleanup succeeds. No V1/V2 fallback or runtime family selector exists.
-/// The paired binary selects this entrypoint. Startup still refuses the indirect
-/// V3 supervisor launch until the original-root direct route is composed; no
-/// service readiness or protected compiler enforcement is implied by installation.
+/// The paired binary selects this original-root listener. One bounded authenticated
+/// inert intake may end only in RuntimeEnforcementUnavailable; it cannot start a
+/// compiler or return RootSession/Ready authority. Installed/native qualification
+/// and the runtime/source enforcement required for compiler launch remain separate.
 ///
 /// Every return requires termination of the dedicated process. Once cleanup is
 /// admitted, return/unwind before successful original-pool empty shutdown exits
@@ -62,7 +64,7 @@ pub(crate) const FRAME: usize =
 /// ```
 #[allow(unsafe_code)]
 pub unsafe fn run_inherited_compiler_execution_coordinator_v3() -> Result<()> {
-    let quota = Deployment::startup_quota(MONITOR_TURNS, CLEANUP_TURNS)?;
+    let quota = Deployment::original_root_startup_quota(MONITOR_TURNS, CLEANUP_TURNS)?;
     let mut request = Account::new(Work::new(quota.request_work()), quota.request_storage());
     let cleanup = Account::new(Work::new(quota.cleanup_work()), quota.cleanup_storage());
     request.with_budget(|b| {
@@ -74,7 +76,8 @@ pub unsafe fn run_inherited_compiler_execution_coordinator_v3() -> Result<()> {
                 Failure::from(error)
             })?;
             Ok(Native {
-                managed: None,
+                prepared: None,
+                intake: None,
                 activation: None,
                 signals: None,
                 // SAFETY: this unsafe entry owns the dedicated process, original
@@ -119,6 +122,9 @@ trait Runtime {
     fn publish(&mut self, b: &mut Budget<'_>) -> Result<()>;
     fn wait(&mut self, b: &mut Budget<'_>) -> Result<Option<i32>>;
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()>;
+    fn intake(&mut self, _b: &mut Budget<'_>) -> Result<bool> {
+        Ok(false)
+    }
     fn cancel(&mut self);
     fn pump(&mut self) -> Result<()>;
     fn shutdown(&mut self) -> Result<()>;
@@ -134,6 +140,12 @@ fn monitor(runtime: &mut impl Runtime, turns: usize, b: &mut Budget<'_>) -> Resu
             return Ok(());
         }
         runtime.continuity(b)?;
+        if runtime.intake(b)? {
+            return Err(root::invalid(
+                "compiler launch",
+                "RuntimeEnforcementUnavailable",
+            ));
+        }
         runtime.pump()?;
     }
     Err(root::invalid("lifetime", "monitoring turn limit reached"))
@@ -166,7 +178,8 @@ fn drain(runtime: &mut impl Runtime, turns: usize, b: &mut Budget<'_>) -> Result
 
 struct Native {
     // Cancel foreground custody before the armed creator scope can fail-stop.
-    managed: Option<Managed>,
+    prepared: Option<Prepared>,
+    intake: Option<Receiver>,
     activation: Option<Activation>,
     signals: Option<TerminationSignals>,
     creator: CreatorScope,
@@ -187,12 +200,20 @@ impl Runtime for Native {
         let (deployment, charge) = unsafe { Deployment::admit(b) }?;
         b.reserve_storage(charge.additional_storage())?;
         // SAFETY: this closed synchronous composition launches anchor then
-        // supervisor on this main thread. It only borrows the original pool;
+        // original-root preparation on this main thread. It borrows the original pool;
         // Native retains the scope through cancellation and empty shutdown.
         let cleanup = unsafe { self.creator.cleanup_for_launch() };
-        let (managed, growth) = deployment.launch(LAUNCH_TIMEOUT, cleanup, b)?;
-        self.managed = Some(managed);
+        let (prepared, growth) = deployment.prepare_original_root(LAUNCH_TIMEOUT, cleanup, b)?;
+        // Keep genuine foreground custody even if this outer growth reservation
+        // refuses. Cancellation drops it into the original independently funded pool.
+        self.prepared = Some(prepared);
         b.reserve_storage(growth.additional_storage())?;
+        b.reserve_storage(Receiver::STORAGE)?;
+        self.intake = Some(Receiver::empty());
+        self.intake
+            .as_ref()
+            .unwrap()
+            .activate(self.prepared.as_mut().unwrap(), b)?;
         Ok(())
     }
 
@@ -212,17 +233,29 @@ impl Runtime for Native {
 
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()> {
         Ok(self
-            .managed
+            .prepared
             .as_ref()
-            .ok_or_else(|| root::invalid("lifetime", "missing managed service"))?
-            .validate_continuity(b)?)
+            .ok_or_else(|| root::invalid("lifetime", "missing original-root preparation"))?
+            .revalidate(b)?)
+    }
+
+    fn intake(&mut self, b: &mut Budget<'_>) -> Result<bool> {
+        self.intake
+            .as_mut()
+            .ok_or_else(|| root::invalid("intake", "missing receiver"))?
+            .step(
+                self.prepared
+                    .as_mut()
+                    .ok_or_else(|| root::invalid("intake", "missing preparation"))?,
+                b,
+            )
     }
 
     fn cancel(&mut self) {
-        if let Some(managed) = self.managed.take() {
-            // Pending is not terminal. The pool keeps independently funded custody.
-            let _ = managed.cancel();
-        }
+        // Prepared's managed anchor must cancel/Drop before pump can reap its
+        // deferred slot. The pool retains actual child/domain + canonical guard,
+        // not the complete Prepared. Intake FDs stay owned through drain.
+        drop(self.prepared.take());
     }
 
     fn pump(&mut self) -> Result<()> {

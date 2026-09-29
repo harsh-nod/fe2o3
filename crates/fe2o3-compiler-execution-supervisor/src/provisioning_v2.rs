@@ -65,6 +65,10 @@ pub struct ProvisionedProtectedIssuerServiceInputsV2 {
 impl Inputs {
     /// Logical charge of the ordered input or transferred descriptor pair.
     pub const PAIR_STORAGE: usize = size_of::<(OwnedFd, Storage)>() + size_of::<(File, Storage)>();
+    /// Logical charge of one service-root directory alias (never a listener).
+    pub const ROOT_STORAGE: usize = size_of::<(File, Storage)>();
+    /// Logical charge of one untrusted accepted transport endpoint.
+    pub const CONNECTION_STORAGE: usize = size_of::<(OwnedFd, Storage)>();
     /// Logical growth above the consumed pair, including the bounded owned path.
     pub const OWNER_GROWTH: usize =
         size_of::<(Self, Storage)>() + MAX_PATH_BYTES - Self::PAIR_STORAGE;
@@ -145,6 +149,52 @@ impl Inputs {
         )
     }
 
+    /// Activates this original listener without exporting a listener alias.
+    /// This is transport setup, not invocation or compiler admission. Any prior
+    /// ordered-pair export permanently refuses this route, even after Drop. The
+    /// existing indirect-service transfer remains bound-only and is unavailable
+    /// after activation. Refusal may leave the socket listening; retire this
+    /// owner on failure, never retry setup or fall back to another acceptor.
+    pub fn activate_original_root_listener(&mut self, budget: &mut Budget<'_>) -> Result<()> {
+        budget.with_prepaid_scope(
+            self.retained_storage(),
+            ENTRY,
+            Self::WORK,
+            Self::SCRATCH,
+            |_| {
+                self.check()?;
+                self.listener.activate_original_root()?;
+                self.check()
+            },
+        )
+    }
+
+    /// Attempts one nonblocking accept from the root-activated original socket.
+    /// No polling, retry or allocation occurs. Interruption/would-block returns
+    /// None. An accepted endpoint is UNTRUSTED transport custody: authenticate
+    /// its peer and every record, with separate bounded intake funding, before
+    /// interpreting a request. No process or invocation authority is returned.
+    /// Reserve the returned full delta before retaining the endpoint. All error
+    /// paths close any endpoint accepted by this call, leaving this owner intact.
+    pub fn try_accept_original_root(
+        &mut self,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<(OwnedFd, Storage)>> {
+        budget.with_prepaid_scope(
+            self.retained_storage(),
+            ENTRY,
+            Self::WORK,
+            Self::SCRATCH,
+            |b| {
+                b.reserve_storage(Self::CONNECTION_STORAGE)?;
+                self.check()?;
+                let accepted = self.listener.try_accept_original_root()?;
+                self.check()?;
+                Ok(accepted.map(|fd| (fd, Storage(Self::CONNECTION_STORAGE))))
+            },
+        )
+    }
+
     /// Revalidates this exact root and its canonical shared lifecycle custody.
     /// Both full owners must remain prepaid. No root descriptor is exposed, and
     /// an independently valid lease from another parent cannot satisfy this join.
@@ -191,13 +241,7 @@ impl Inputs {
                 b.reserve_storage(Self::PAIR_STORAGE)?;
                 self.check()?;
                 let listener = self.listener.clone_checked()?;
-                let root = File::from(rustix::io::fcntl_dupfd_cloexec(&self.root, 0).map_err(
-                    |errno| Failure::Io {
-                        operation: "clone protected issuer deployment root",
-                        source: errno.into(),
-                    },
-                )?);
-                self.check_root(&root)?;
+                let root = self.clone_root()?;
                 self.listener.validate_clone_checked(&listener)?;
                 self.check()?;
                 Ok(((listener, root), Storage(Self::PAIR_STORAGE)))
@@ -234,6 +278,52 @@ impl Inputs {
             self.listener.validate_clone_checked(&listener)?;
             self.check()
         })
+    }
+
+    /// Duplicates only the exact checked directory for direct root-owned staging.
+    /// Unlike the ordered pair, this works after listener activation. No listener,
+    /// lifecycle obligation or process authority is transferred. Keep this owner
+    /// prepaid and validate the final staged alias before releasing a child.
+    pub fn try_clone_root_for_spawn(&self, budget: &mut Budget<'_>) -> Result<(File, Storage)> {
+        budget.with_prepaid_scope(
+            self.retained_storage(),
+            ENTRY,
+            Self::WORK,
+            Self::SCRATCH,
+            |b| {
+                b.reserve_storage(Self::ROOT_STORAGE)?;
+                self.check()?;
+                let root = self.clone_root()?;
+                self.check()?;
+                Ok((root, Storage(Self::ROOT_STORAGE)))
+            },
+        )
+    }
+
+    /// Checks a final staged directory against this original retained owner.
+    /// Both reservations must remain on the original account. Listening is
+    /// allowed; a changed root, socket or pathname still refuses.
+    pub fn validate_root_transfer(&self, root: &File, budget: &mut Budget<'_>) -> Result<()> {
+        let floor = self
+            .retained_storage()
+            .checked_add(Self::ROOT_STORAGE)
+            .ok_or(Resource::Arithmetic)?;
+        budget.with_prepaid_scope(floor, ENTRY, Self::WORK, Self::SCRATCH, |_| {
+            self.check()?;
+            self.check_root(root)?;
+            self.check()
+        })
+    }
+
+    fn clone_root(&self) -> Result<File> {
+        let root = File::from(
+            rustix::io::fcntl_dupfd_cloexec(&self.root, 0).map_err(|errno| Failure::Io {
+                operation: "clone protected issuer deployment root",
+                source: errno.into(),
+            })?,
+        );
+        self.check_root(&root)?;
+        Ok(root)
     }
 
     fn check_root(&self, root: &File) -> Result<()> {

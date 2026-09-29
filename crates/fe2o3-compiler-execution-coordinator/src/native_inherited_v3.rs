@@ -36,3 +36,55 @@ use fe2o3_external_anchor_coordinator::{
     PreparedExternalAnchorOccurrenceV3 as Anchor, RootManagedExternalAnchorV3 as ManagedAnchor,
 };
 crate::native_inherited_adapter::inherited!(InheritedCompilerExecutionDeploymentV3, "3", "2");
+
+impl InheritedCompilerExecutionDeploymentV3 {
+    /// Closed executable schedule. Preserve the legacy startup/cleanup allowance
+    /// and explicitly add every original-root operation; no presumed offset from
+    /// the now-unused indirect launch or Managed continuity is spent twice.
+    pub(crate) fn original_root_startup_quota(
+        turns: usize,
+        cleanup_turns: usize,
+    ) -> Result<root::CompilerExecutionStartupQuotaV2> {
+        use crate::native_v3::root_intake::Receiver;
+        let mut quota = Self::startup_quota(turns, cleanup_turns)?;
+        let continuity = Prepared::maximum_revalidation_quota()?;
+        quota.request_work = root::sum(&[
+            quota.request_work,
+            root::LOCAL_WORK,
+            Inputs::WORK,
+            root::repeated(turns, root::sum(&[Receiver::TURN_WORK, continuity.work()])?)?,
+        ])?;
+        quota.request_storage = root::sum(&[
+            quota.request_storage,
+            // The complete original admission reservation remains even when
+            // Prepared is smaller; growth and transcript overlap that floor.
+            Self::maximum_retained_storage()?,
+            Prepared::maximum_retained_storage()?,
+            Receiver::STORAGE,
+            Receiver::SCRATCH,
+            continuity.scratch(),
+        ])?;
+        Ok(quota)
+    }
+
+    /// Keeps genuine preparation at the original root without the indirect
+    /// supervisor launch. The sole listener remains bound. The caller keeps the
+    /// full consumed reservation and adds returned monotone growth, including
+    /// any conservative excess above Prepared's own charge, until final Drop.
+    /// Store the returned owner in outer cancellation custody before reserving
+    /// growth. On refusal the original pool still owns any nonterminal anchor
+    /// child/domain and its canonical guard, not a recreated cleanup controller.
+    pub(crate) fn prepare_original_root(
+        self,
+        timeout: Duration,
+        cleanup: &mut Cleanup,
+        b: &mut Budget<'_>,
+    ) -> Result<(Prepared, Storage)> {
+        let input = self.retained;
+        b.with_prepaid_scope(input, 8, root::LOCAL_WORK, Self::FRAME, |b| {
+            let prepared = self.prepare_inner(timeout, cleanup, b)?;
+            let growth = prepared.retained_storage().saturating_sub(input);
+            Ok((prepared, Storage(growth)))
+        })
+    }
+}

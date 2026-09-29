@@ -46,6 +46,7 @@ fe2o3-kernel-ir.workspace = true
 fe2o3-kernel-opt.workspace = true
 fe2o3-process-identity.workspace = true
 fe2o3-profiler-protocol.workspace = true
+fe2o3-protected-service-spawn.workspace = true
 fe2o3-rustc-invocation.workspace = true
 fe2o3-runtime-protocol.workspace = true
 fe2o3-semantic-import.workspace = true
@@ -56,7 +57,7 @@ fe2o3-verifier.workspace = true
 libc.workspace = true
 proc-macro2.workspace = true
 reserved-fe2o3-symbols.workspace = true
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["process", "rand"] }
 serde.workspace = true
 serde_json = "1"
 sha2.workspace = true
