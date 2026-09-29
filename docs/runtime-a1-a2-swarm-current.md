@@ -24,6 +24,23 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [epoch reservation and heap-backed template qualification](evidence/dev-dispatch-epoch-reserve-2026-09-29/README.md)
+shares actual capacity/preflight/reservation bodies with a no-cheating Verus root,
+proving exact refusal and first-reusable-slot-only commit. It also fixes a real
+large-template stack overflow by retaining boxed templates through live callers
+and completion binding. The new root passes 23 overlapping obligations; the full
+cancellation regression passes 16. Two signed campaigns pass 66 stages and all
+50 executable negatives at 6248 unchanged source hashes. KFD passes 1448/0 (320
+construction exclusions), runtime 1828/0 (30 hardware ignores), and doctests
+124/0. Nine new CPU groups include a 4608-case raw-state oracle and explicit
+2 MiB large-batch template/source-flow tests. Static checks, three affected
+positive roots, archive restore and independent absence of all 108 recorded
+groups pass. Maximum-size success uses retained-metadata fixtures and CPU
+no-effect receipts, not public-constructor reachability or native execution.
+Complete resource-derived `bind_templates` refinement and Ordinary refusal
+classification remain next. Native authority, protected Worker execution,
+GPU/performance and all milestone exit gates remain open; no speedup is claimed.
+
 The [transactional bound-batch preparation](evidence/dev-bound-batch-preparation-2026-09-28/README.md)
 completes every heap-owned roster and conversion before owner mutation, reuses
 selected leases directly, and shares the actual AQL constructors and complete
@@ -36,9 +53,10 @@ explicit std conversion contracts. Two signed campaigns pass 56 stages and all
 doctests 124/0. Static checks, five affected positive proof roots, archive restore
 and independent absence of all 98 recorded groups pass. Zero allocations are
 observed at the actual shared commit boundary for N=1,3,64,8192, not a latency
-or HIP/HSA speedup. Next is actual resource-derived `bind_templates`, dispatch
-epoch preflight/reservation and Ordinary refusal classification. Native mapping
-authentication, publication authority and all milestone exit gates remain open.
+or HIP/HSA speedup. The reservation qualification above now covers dispatch
+epoch preflight/reservation; actual resource-derived `bind_templates` and Ordinary
+refusal classification remain open. Native mapping authentication, publication
+authority and all milestone exit gates remain open.
 
 The [event issuer and pre-native output reservation](evidence/dev-event-issuance-preallocation-2026-09-28/README.md)
 remove the issuer's occurrence scratch Vec and move lane-output reservation ahead
