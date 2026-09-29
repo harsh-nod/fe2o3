@@ -1826,3 +1826,18 @@ Concrete read production, rvalue/statement processing, original source/SSA and
 backend joins remain open. This private component does not activate ordinary
 compilation, native debugging or GPU dispatch. Broad accepted exits remain
 M1/V1/V2/U1/U2/U3 (6/18).
+
+## Retained Shared reads and observer — 2026-09-29
+
+Original read-place, operand and scalar-operand transformations now retain
+partial aliases alongside the actual original observer row owner. Preparation,
+recording, refusal and unwind preserve exact source/account binding and terminal
+first-failure custody. The corrected 21 new controls passed within 1,743 pliron
+tests, with the full model/backend, authority, policy, broker/coordinator/spawn
+and build regression. See [qualification and limits](retained-shared-read-qualification-20260929.md).
+
+The first test-only compilation failure is preserved, not counted as passing.
+Whole-function rvalue/statement processing, original source/SSA and backend joins
+remain open. This private component does not activate ordinary compilation,
+native debugging or GPU dispatch. Broad accepted exits remain
+M1/V1/V2/U1/U2/U3 (6/18).

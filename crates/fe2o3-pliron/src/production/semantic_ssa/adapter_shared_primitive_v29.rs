@@ -783,3 +783,12 @@ pub(in super::super) fn analyze_observed(
 mod retained_alias_state;
 #[allow(unused_imports)]
 use retained_alias_state::{RetainedAliasErrorV1, RetainedAliasSessionV1, RetainedAliasStateV1};
+
+// Inert test DATA only; never a source-membership or SSA capability.
+#[cfg(test)]
+pub(in super::super) fn retained_test_site_v1(
+    block: u32,
+    statement: u32,
+) -> SemanticTransparentBorrowSiteV1 {
+    SemanticTransparentBorrowSiteV1 { block, statement }
+}
