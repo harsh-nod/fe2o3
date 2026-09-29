@@ -776,3 +776,10 @@ pub(in super::super) fn analyze_observed(
     }
     Ok(result)
 }
+
+// Inert retained alias-state primitives; no ordinary analysis route change.
+#[allow(dead_code)]
+#[path = "adapter_shared_primitive_alias_retained_v1.rs"]
+mod retained_alias_state;
+#[allow(unused_imports)]
+use retained_alias_state::{RetainedAliasErrorV1, RetainedAliasSessionV1, RetainedAliasStateV1};

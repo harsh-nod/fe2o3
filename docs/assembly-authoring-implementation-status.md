@@ -1796,3 +1796,20 @@ See [qualification and boundaries](retained-shared-liveness-qualification-202609
 This is not complete retained Shared analysis or ordinary whole-root activation:
 alias/transient ownership, statement-driven construction, source/SSA/query joins
 and the backend bridge remain. Broad accepted exits stay 6/18.
+
+## Retained Shared alias-state primitives — 2026-09-29
+
+The private alias-state owner/session preserves current, unvisited and removed
+payloads through refusal and prevents continued primitive work after an error.
+Its 16 new controls passed within 1,705 pliron tests, alongside the complete
+model/backend, authority, policy, broker/coordinator/spawn and build regression.
+See [qualification and limits](retained-shared-alias-state-qualification-20260929.md).
+Real statement-driven alias production, source/SSA joins, the backend bridge and
+ordinary whole-root activation remain open.
+
+The portable debugger input graph/resource planner also passed 44 fixture-free
+controls and 13 separately supplied historical integration controls. Its
+[usage and limits](../tools/debugger/loaded-operational-graph/README.md) distinguish
+structural plans from actual IO, admission and physical capture. The operational
+adapter and bounded evidence writer remain separate work.
+Broad accepted exits remain M1/V1/V2/U1/U2/U3 (6/18).
