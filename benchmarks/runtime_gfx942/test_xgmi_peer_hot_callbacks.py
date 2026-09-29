@@ -19,6 +19,7 @@ class HotCallbackTests(unittest.TestCase):
             root = Path(folder)
             names = (
                 "native_benchmark_args.hpp", "xgmi_peer_benchmark_common.hpp",
+                "xgmi_peer_series_common.hpp",
                 "xgmi_peer_segments_common.hpp", f"xgmi_peer_{backend}.cpp",
                 "xgmi_peer_hot_callbacks_test.cpp",
             )

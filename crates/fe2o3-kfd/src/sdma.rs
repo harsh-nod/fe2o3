@@ -53,6 +53,13 @@ mod xgmi_creation;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;
 mod xgmi_diagnostic;
 mod xgmi_retirement;
+mod retained_pair;
+pub use retained_pair::{
+    GFX942_XGMI_RETAINED_PAIR_POLICY_V1, GFX942_XGMI_RETAINED_PAIR_POLICY_SHA256_V1,
+    GFX942_XGMI_RETAINED_PAIR_PROFILE_V1, Gfx942NativeXgmiSdmaRetainedPairV1,
+    Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairCompletedCopyV1,
+    Gfx942XgmiRetainedPairWaitFailureV1, Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
+};
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::Gfx942XgmiCopyCallDiagnosticsV1;
 use xgmi_diagnostic::{CallTimer as XgmiCallTimer, Phase as XgmiCallPhase};
@@ -4060,6 +4067,7 @@ impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
 enum XgmiRouteCurrentnessV1 {
     Full,
     BatchScoped,
+    OrdinaryRetainedPair,
 }
 
 #[derive(Clone, Copy)]
@@ -4958,6 +4966,9 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
             }
             XgmiRouteCurrentnessV1::BatchScoped => {
                 source.validate_gfx942_xgmi_publication_with_peer(destination, route)?
+            }
+            XgmiRouteCurrentnessV1::OrdinaryRetainedPair => {
+                source.validate_gfx942_retained_pair_operational_v1(destination, route)?
             }
         }
         Ok(())

@@ -8,6 +8,7 @@ mod device_allocation;
 mod device_initialization;
 mod dispatch_retention;
 mod pair_currentness;
+mod pair_operational;
 mod queue_cleanup;
 mod transitions;
 mod xgmi_allocation;
@@ -5780,6 +5781,40 @@ impl SharedGttMemorySessionV1 {
         Ok(())
     }
 
+    pub(crate) fn validate_gfx942_retained_pair_binding_v1(
+        &self,
+        peer: &Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+        queue: QueueKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        self.validate_gfx942_xgmi_pair_binding(peer, route)?;
+        pair_operational::validate_direction(self.vm, self.gpu_id(), peer.gpu_id(), route, queue)?;
+        self.validate_retained_device_domain_v1(queue.vm)?;
+        peer.validate_retained_device_domain_v1(peer.vm)
+    }
+
+    pub(crate) fn validate_gfx942_retained_pair_operational_v1(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), MemorySessionError> {
+        self.validate_gfx942_xgmi_pair_binding(peer, route)?;
+        pair_operational::check(&mut self.engine, &mut peer.engine)
+    }
+
+    #[allow(private_bounds)]
+    pub(crate) fn validate_retained_queue_resource_v1<R, P, S>(
+        &self,
+        authority: &SharedGttQueueResourceAuthorityV1<R, P, S>,
+    ) -> Result<(), MemorySessionError>
+    where
+        R: SharedGttQueueResourceRoleV1,
+        P: GttProfileV1,
+        S: GpuMappedGttStateV1,
+    {
+        pair_operational::validate_resource(&self.engine, self.vm, authority)
+    }
+
     pub fn unmap_gfx942_device_memory(
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
@@ -7172,6 +7207,7 @@ mod tests {
     mod native_backing;
     pub(super) mod preparation;
     mod primary_construction;
+    mod retained_pair_operational;
     pub(super) mod primary_projection;
     pub(super) mod pristine_abort;
     pub(super) mod queue_construction;
@@ -7229,6 +7265,7 @@ mod tests {
     }
 
     struct FakeBackend {
+        opener_pid_override: Option<u32>,
         next_va: u64,
         next_handle: u64,
         flags: Vec<u32>,
@@ -7281,6 +7318,7 @@ mod tests {
     impl FakeBackend {
         fn good() -> Self {
             Self {
+                opener_pid_override: None,
                 next_va: 0x2_0000,
                 next_handle: 1,
                 flags: Vec::new(),
@@ -7403,7 +7441,7 @@ mod tests {
         type Mapping = FakeMapping;
 
         fn opener_pid(&self) -> u32 {
-            std::process::id()
+            self.opener_pid_override.unwrap_or_else(std::process::id)
         }
         fn gpu_id(&self) -> u32 {
             7

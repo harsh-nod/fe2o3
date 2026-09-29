@@ -203,6 +203,10 @@ pub use queue::{
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use sdma::{
+    GFX942_XGMI_RETAINED_PAIR_POLICY_V1, GFX942_XGMI_RETAINED_PAIR_POLICY_SHA256_V1,
+    GFX942_XGMI_RETAINED_PAIR_PROFILE_V1, Gfx942NativeXgmiSdmaRetainedPairV1,
+    Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairCompletedCopyV1,
+    Gfx942XgmiRetainedPairWaitFailureV1, Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
     GFX942_SDMA_COPY_MANIFEST_SHA256_V1, GFX942_SDMA_COPY_MANIFEST_V1,
     GFX942_SDMA_COPY_PACKET_BYTES_V1, GFX942_SDMA_D2H_ENGINE_INDEX_V1,
     GFX942_SDMA_FENCE_PACKET_BYTES_V1, GFX942_SDMA_H2D_ENGINE_INDEX_V1,

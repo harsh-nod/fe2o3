@@ -12,6 +12,9 @@ use fe2o3_kfd::{
 
 const CANARY_BYTES: usize = 32;
 
+#[path = "kfd_sdma_xgmi_peer_benchmark/retained_series.rs"]
+mod retained_series;
+
 struct Pair {
     source: Gfx942XgmiMappedDeviceMemoryV1,
     destination: Gfx942XgmiMappedDeviceMemoryV1,
@@ -191,6 +194,7 @@ fn prepare_round(
     pairs: &mut Vec<Pair>,
     copy_bytes: usize,
     round: usize,
+    previous_round: Option<usize>,
     direction: usize,
     source_canary: u8,
     destination_canary: u8,
@@ -206,8 +210,8 @@ fn prepare_round(
         let destination_lease = destination_session
             .unmap_gfx942_device_memory_from_xgmi_peer(source_session, route, pair.destination)
             .map_err(|failure| failure.error().to_string())?;
-        if round != 0 {
-            let prior = pattern(round - 1, slot, direction);
+        if let Some(previous_round) = previous_round {
+            let prior = pattern(previous_round, slot, direction);
             let observed_source = source_session.read_gfx942_xgmi_device_memory(&source_lease)?;
             let observed_destination =
                 destination_session.read_gfx942_xgmi_device_memory(&destination_lease)?;
@@ -267,9 +271,14 @@ fn validate_and_release_pair(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.len() != 6 {
-        return Err("usage: kfd-sdma-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples>".into());
+    if args.len() != 6 && args.len() != 7 {
+        return Err("usage: kfd-sdma-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--retained-pair-series-reviewed-mi300x]".into());
     }
+    let retained_series = match args.get(6).map(String::as_str) {
+        None => false,
+        Some("--retained-pair-series-reviewed-mi300x") => true,
+        Some(_) => return Err("unknown XGMI benchmark mode".into()),
+    };
     let unique_ids = [parse_unique_id(&args[0])?, parse_unique_id(&args[1])?];
     let copy_bytes: usize = args[2].parse()?;
     let depth: usize = args[3].parse()?;
@@ -289,6 +298,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .checked_mul(depth)
         .ok_or("XGMI bytes per round overflow")?;
     let copy_bytes_u32 = u32::try_from(copy_bytes)?;
+    if retained_series {
+        return retained_series::run(unique_ids, copy_bytes, depth, warmups, samples);
+    }
 
     // Process-wide XNACK admission for both devices precedes either VM.
     let left_device = admit_device(unique_ids[0])?;
@@ -334,6 +346,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut forward_pairs,
             copy_bytes,
             round,
+            round.checked_sub(1),
             0,
             0x17,
             0xa5,
@@ -352,6 +365,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut reverse_pairs,
             copy_bytes,
             round,
+            round.checked_sub(1),
             1,
             0x71,
             0x5a,

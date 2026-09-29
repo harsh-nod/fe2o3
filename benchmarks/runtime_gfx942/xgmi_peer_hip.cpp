@@ -2,6 +2,7 @@
 
 #include "native_benchmark_args.hpp"
 #include "xgmi_peer_benchmark_common.hpp"
+#include "xgmi_peer_series_common.hpp"
 #include "xgmi_peer_segments_common.hpp"
 
 #include <algorithm>
@@ -287,13 +288,15 @@ static void run_ordered_hip(const int devices[2], const uint64_t ids[2],
 int main(int argc, char **argv) {
   if (argc != 9 && argc != 10 && argc != 11) {
     std::fprintf(stderr,
-                 "usage: xgmi-peer-hip <device-0> <device-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1> [--persistent-hot | --ordered-segments <count>]\n");
+                 "usage: xgmi-peer-hip <device-0> <device-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1> [--persistent-hot | --persistent-series | --ordered-segments <count>]\n");
     return 2;
   }
   int devices[2] = {};
   uint64_t unique_ids[2] = {};
   fe2o3::runtime_gfx942::WorkloadShape workload;
   fe2o3::runtime_gfx942::PeerBenchmarkControls controls;
+  const bool persistent_series =
+      argc == 10 && std::strcmp(argv[9], "--persistent-series") == 0;
   if (!fe2o3::runtime_gfx942::parse_device_index(argv[1], &devices[0]) ||
       !fe2o3::runtime_gfx942::parse_device_index(argv[2], &devices[1]) ||
       !fe2o3::runtime_gfx942::parse_workload_shape(
@@ -301,7 +304,8 @@ int main(int argc, char **argv) {
       !fe2o3::runtime_gfx942::parse_unique_id(argv[7], &unique_ids[0]) ||
       !fe2o3::runtime_gfx942::parse_unique_id(argv[8], &unique_ids[1]) ||
       !fe2o3::runtime_gfx942::parse_peer_controls(
-          argc == 10 ? argv[9] : nullptr, workload, &controls) ||
+          persistent_series ? "--persistent-hot" : (argc == 10 ? argv[9] : nullptr),
+          workload, &controls) ||
       devices[0] == devices[1] ||
       unique_ids[0] == 0 || unique_ids[1] == 0 ||
       unique_ids[0] == unique_ids[1])
@@ -380,14 +384,23 @@ int main(int argc, char **argv) {
       forward_samples.push_back(forward_ns);
       reverse_samples.push_back(reverse_ns);
     };
-    const bool valid = fe2o3::runtime_gfx942::run_peer_persistent_hot(
-        workload, prepare, copy, validate, record_sample);
+    const bool valid = persistent_series
+        ? fe2o3::runtime_gfx942::run_peer_persistent_series(
+              workload, prepare, copy, validate,
+              [&](size_t direction, uint64_t elapsed) {
+                (direction == 0 ? forward_samples : reverse_samples).push_back(elapsed);
+              })
+        : fe2o3::runtime_gfx942::run_peer_persistent_hot(
+              workload, prepare, copy, validate, record_sample);
     release_direction(reverse, devices[1], devices[0]);
     release_direction(forward, devices[0], devices[1]);
     if (!valid) {
       std::fputs("HIP XGMI persistent-hot payload or canary mismatch\n", stderr);
       return 3;
     }
+    if (persistent_series &&
+        (forward_samples.size() != samples || reverse_samples.size() != samples))
+      return 2;
 
     const uint64_t forward_p50 = percentile(forward_samples, 1, 2);
     const uint64_t forward_p95 = percentile(forward_samples, 19, 20);
@@ -395,7 +408,13 @@ int main(int argc, char **argv) {
     const uint64_t reverse_p95 = percentile(reverse_samples, 19, 20);
     if (forward_p50 == 0 || reverse_p50 == 0)
       return 2;
+    if (persistent_series)
+      std::printf("forward_samples=%zu reverse_samples=%zu ",
+                  forward_samples.size(), reverse_samples.size());
     std::printf(
+        persistent_series ?
+        "validation=final-readback "
+        "backend=hip schema=fe2o3.xgmi-peer-persistent-series-benchmark.v1 surface=native-api devices=%d,%d unique_ids=%016llx,%016llx targets=%s,%s bytes=%zu depth=%zu warmups=%zu samples=%zu peer_access=enabled measurement=persistent-series mapping_lifetime=process-persistent-hot prime_batches=1 direction=forward-series-then-reverse-series outstanding_depth=%zu engine_parallelism=runtime-selected-unknown progress=peer-async-then-stream-synchronize timing=native-enqueue-through-observed-completion lifetime_setup=outside-samples lifetime_finish=outside-samples canaries=pass teardown=explicit forward_p50_ns=%llu forward_p95_ns=%llu forward_p50_GBps=%.3f reverse_p50_ns=%llu reverse_p95_ns=%llu reverse_p50_GBps=%.3f\n" :
         "backend=hip schema=fe2o3.xgmi-peer-persistent-hot-benchmark.v1 surface=native-api devices=%d,%d unique_ids=%016llx,%016llx targets=%s,%s bytes=%zu depth=%zu warmups=%zu samples=%zu peer_access=enabled measurement=persistent-hot mapping_lifetime=process-persistent-hot prime_batches=1 direction=forward-then-reverse outstanding_depth=%zu engine_parallelism=runtime-selected-unknown progress=peer-async-then-stream-synchronize timing=native-enqueue-through-observed-completion canaries=pass teardown=explicit forward_p50_ns=%llu forward_p95_ns=%llu forward_p50_GBps=%.3f reverse_p50_ns=%llu reverse_p95_ns=%llu reverse_p50_GBps=%.3f\n",
         devices[0], devices[1], static_cast<unsigned long long>(unique_ids[0]),
         static_cast<unsigned long long>(unique_ids[1]), properties[0].gcnArchName,
