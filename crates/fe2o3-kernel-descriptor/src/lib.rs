@@ -25,6 +25,7 @@ mod encode;
 mod error;
 pub mod ffi_contract;
 mod launch_policy;
+pub mod mixed_conditional_v26;
 mod model;
 mod nominal_v3;
 mod requirements_v2;
