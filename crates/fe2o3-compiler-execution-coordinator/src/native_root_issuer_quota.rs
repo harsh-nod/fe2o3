@@ -188,6 +188,28 @@ pub(super) fn root_startup_quota<T: Send + 'static>(launch: Quota, gate: Quota) 
 }
 
 impl<T: Send + 'static> NativeAttempt<'_, T> {
+    /// Complete request costs above the FULL attempt for consuming attachment.
+    /// Persistent cleanup funding is separate and stays on the original service.
+    pub(crate) fn publication_observation_quota(maximum_handoff_bytes: usize) -> Result<Quota> {
+        let publication = Publication::observation_quota(maximum_handoff_bytes)?;
+        publication_operation::<T>(Quota {
+            work: publication.work(),
+            scratch: publication.scratch(),
+        })
+    }
+
+    pub(crate) fn publication_revalidation_quota(&self) -> Result<Quota> {
+        let publication = self
+            .publication
+            .as_ref()
+            .ok_or(Error::Invalid("root attempt has no publication"))?
+            .revalidation_quota();
+        publication_operation::<T>(Quota {
+            work: publication.work(),
+            scratch: publication.scratch(),
+        })
+    }
+
     /// Original-request work and extra peak for validate_original, above the FULL
     /// attempt reservation even when its issuer has already been removed.
     pub(crate) const fn original_validation_quota() -> Quota {
@@ -198,6 +220,27 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
                 + RootSession::VALIDATE_SCRATCH,
         }
     }
+}
+
+fn publication_operation<T: Send + 'static>(publication: Quota) -> Result<Quota> {
+    Ok(Quota {
+        work: sum(&[
+            LOCAL_WORK,
+            2 * CompilerTrace::<T>::OBSERVATION_WORK,
+            2 * RootSession::VALIDATE_WORK,
+            CompilerTrace::<T>::PUBLICATION_FRAME_WORK,
+            publication.work(),
+        ])?,
+        // Both root checks are sequential; the second overlaps the returned
+        // publication, whose construction bound includes its full retained charge.
+        scratch: sum(&[
+            FRAME,
+            CompilerTrace::<T>::OBSERVATION_SCRATCH,
+            RootSession::VALIDATE_SCRATCH,
+            CompilerTrace::<T>::PUBLICATION_FRAME_SCRATCH,
+            publication.scratch(),
+        ])?,
+    })
 }
 
 pub(super) fn cleanup_quota<T: Send + 'static>(

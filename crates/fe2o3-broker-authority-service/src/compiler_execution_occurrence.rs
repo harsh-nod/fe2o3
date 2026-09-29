@@ -32,7 +32,9 @@ mod native_v3;
 pub(crate) use native_v3::{
     NativeOccurrence as NativeOccurrenceV3, NativeOccurrenceError as NativeOccurrenceErrorV3,
 };
-pub use native_v3::{RootPublicationCustodyErrorV3, RootPublicationCustodyV3};
+pub use native_v3::{
+    RootPublicationCustodyErrorV3, RootPublicationCustodyV3, RootPublicationQuotaV3,
+};
 
 enum CompilerExecutionOccurrenceCustodyV1 {
     Current {

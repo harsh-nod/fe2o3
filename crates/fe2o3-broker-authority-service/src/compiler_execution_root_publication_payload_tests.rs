@@ -3,6 +3,7 @@ use super::*;
 use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
     publish_compiler_module_handoff_v5 as publish,
+    quote_compiler_module_handoff_currentness_custody_v5 as custody_quote,
     try_acquire_artifact_process_spawn_lease_v1 as spawn_lease, with_artifact_process_spawn_v1,
 };
 use fe2o3_compiler_ffi::{

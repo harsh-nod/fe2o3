@@ -10,7 +10,7 @@ use crate::native_launch::{
 };
 use fe2o3_broker_authority_service::{
     RootConnectionV3 as RootConnection, RootControlSessionV3 as RootSession,
-    RootLaunchChannelV3 as RootChannel,
+    RootLaunchChannelV3 as RootChannel, RootPublicationCustodyV3 as Publication,
 };
 use fe2o3_compiler_closure_capability::{
     CompilerExecutionPolicyCapabilityV3 as PolicyCap,
@@ -120,7 +120,7 @@ impl RequestAccount {
 }
 
 /// Original compiler/session custody, independent of the removable issuer.
-/// This owner cannot resume the compiler or admit a publication occurrence.
+/// This owner cannot resume the compiler or grant publication/launch authority.
 /// Keep the creator thread and original cleanup controller alive until termination,
 /// including deferred/quarantined cleanup. Retire the FULL charge only after Drop.
 /// Removing the issuer does not reduce this charge or replace the session/trace.
@@ -131,6 +131,7 @@ pub(crate) struct NativeAttempt<'work, T: Send + 'static> {
     trace: CompilerTrace<'work, T>,
     root: RootSession<'work>,
     issuer: Option<ManagedIssuer<'work, T>>,
+    publication: Option<Publication>,
     retained: usize,
     continuity: Quota,
     account: RequestAccount,
@@ -194,6 +195,59 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
     /// Revalidate only the original live compiler/session, never issuer readiness.
     pub(crate) fn validate_original(&self, b: &mut Budget<'_>) -> Result<()> {
         self.account.with(self.retained, b, |b| {
+            self.trace.with_observation(b, |original, b| -> Result<()> {
+                Ok(self.root.validate_original(original, b)?)
+            })
+        })
+    }
+
+    /// Attach actual publication custody to this original attempt independently
+    /// of its issuer. Any error or unwind consumes/cancels the attempt, including
+    /// failure of the OUTERMOST accounting scope after successful acquisition.
+    /// The original cleanup slot retains partial custody until terminal cleanup.
+    /// Returned growth is unreserved above the complete consumed attempt charge.
+    pub(crate) fn observe_publication(
+        mut self,
+        cleanup: &mut Cleanup,
+        maximum_handoff_bytes: usize,
+        b: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        let (publication, retained, growth) = self.account.with(self.retained, b, |b| {
+            if self.publication.is_some() {
+                return Err(Error::Invalid("root attempt already owns a publication"));
+            }
+            self.trace
+                .with_observation(b, |original, b| -> Result<()> {
+                    Ok(self.root.validate_original(original, b)?)
+                })?;
+            let (publication, growth) =
+                self.trace
+                    .observe_publication(cleanup, maximum_handoff_bytes, b)?;
+            b.reserve_storage(growth)?;
+            self.trace
+                .with_observation(b, |original, b| -> Result<()> {
+                    Ok(self.root.validate_original(original, b)?)
+                })?;
+            let retained = sum(&[self.retained, growth])?;
+            Ok((publication, retained, Storage(growth)))
+        })?;
+        // Only infallible moves remain after the complete outer transaction.
+        self.publication = Some(publication);
+        self.retained = retained;
+        Ok((self, growth))
+    }
+
+    pub(crate) fn revalidate_publication(&self, b: &mut Budget<'_>) -> Result<()> {
+        self.account.with(self.retained, b, |b| {
+            let publication = self
+                .publication
+                .as_ref()
+                .ok_or(Error::Invalid("root attempt has no publication"))?;
+            self.trace
+                .with_observation(b, |original, b| -> Result<()> {
+                    Ok(self.root.validate_original(original, b)?)
+                })?;
+            self.trace.revalidate_publication(publication, b)?;
             self.trace.with_observation(b, |original, b| -> Result<()> {
                 Ok(self.root.validate_original(original, b)?)
             })
@@ -389,6 +443,7 @@ impl Prepared {
                 trace,
                 root,
                 issuer: Some(issuer),
+                publication: None,
                 retained,
                 continuity,
                 account,

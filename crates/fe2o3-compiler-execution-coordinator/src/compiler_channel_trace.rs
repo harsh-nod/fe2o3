@@ -41,6 +41,8 @@ impl Phase {
 }
 
 impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
+    pub(crate) const PUBLICATION_FRAME_WORK: usize = LOCAL_WORK;
+    pub(crate) const PUBLICATION_FRAME_SCRATCH: usize = FRAME;
     pub(crate) const OBSERVATION_WORK: usize =
         LOCAL_WORK + fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2::VIEW_WORK;
     pub(crate) const OBSERVATION_SCRATCH: usize =
@@ -170,6 +172,52 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
             }
             self.trace.with_task_observation(b, operation)
         })
+    }
+
+    /// Concrete publication attachment; no mutable trace or acquisition callback
+    /// escapes the phase boundary. The consuming NativeAttempt owns cancellation
+    /// until its outer accounting and original-session checks have also succeeded.
+    pub(crate) fn observe_publication(
+        &mut self,
+        cleanup: &mut fe2o3_protected_service_spawn::ProtectedServiceCleanupServiceV2,
+        maximum_handoff_bytes: usize,
+        b: &mut Budget<'_>,
+    ) -> Result<(
+        fe2o3_broker_authority_service::RootPublicationCustodyV3,
+        usize,
+    )> {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            self.require_publication_phase()?;
+            Ok(
+                fe2o3_broker_authority_service::RootPublicationCustodyV3::observe_with_limit(
+                    &mut self.trace,
+                    cleanup,
+                    maximum_handoff_bytes,
+                    b,
+                )?,
+            )
+        })
+    }
+
+    pub(crate) fn revalidate_publication(
+        &self,
+        publication: &fe2o3_broker_authority_service::RootPublicationCustodyV3,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        let floor = native::sum(&[self.retained, publication.retained_storage()])?;
+        b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
+            self.require_publication_phase()?;
+            Ok(publication.revalidate(&self.trace, b)?)
+        })
+    }
+
+    fn require_publication_phase(&self) -> Result<()> {
+        if self.phase != Phase::Transferred {
+            return Err(Error::Invalid(
+                "publication custody requires completed issuer input transfer",
+            ));
+        }
+        Ok(())
     }
 
     /// One original-account consuming wait; this does not release the spawn lease.

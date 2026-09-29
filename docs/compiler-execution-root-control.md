@@ -211,8 +211,13 @@ the full retained charge. Startup cancellation remains armed through the final
 fallible accounting scope; returned growth is above both consumed input owners.
 This owner grants neither compiler resume nor publication authority.
 
-The production attempt must also retain actual root-observed publication
-custody, including both lease and token. A
+The attempt also retains an optional actual root-observed publication owner,
+including both lease and token. Its consuming `observe_publication` checks the
+same root session before and after acquisition through a phase-checked,
+concrete `CompilerTrace` adapter. Failure or unwind, including failure of the
+outer accounting scope, drops and cancels the original attempt. Only infallible
+moves remain after that scope succeeds. Publication revalidation preserves the
+full original attempt reservation even after issuer removal. A
 subject, hash, PID, signed journal, or decoded carriage cannot recreate either
 owner. A failed send, issuer exit, or replacement connection must not release
 that occurrence or establish retirement.
@@ -234,8 +239,18 @@ cleanup retires both under the artifact spawn-exclusion barrier, with work
 funded in proportion to the declared retained storage. Nonblocking lock
 acquisition is not a deadline guarantee for filesystem I/O.
 
-Coordinator/RPC integration of this owner is still unfinished. Concrete payload
-tests use actual V5 owners and OS locks but not a live production observation.
+Publication observation accepts an explicit inert handoff byte ceiling. The
+shared recovery engine checks the durable record before reading or allocating
+payload bytes. Complete request work/scratch and independent persistent cleanup
+quotes include native descriptor admission, image measurements, filesystem and
+registry work, both artifact owners and overlapping construction frames. These
+quotes use the original accounts and do not raise the artifact storage cap.
+The canonical maximum handoff does not fit that cap; a caller must select and
+fund an affordable bound, not assume every schema-valid extent is executable.
+
+The production dispatcher and authenticated RPC integration remain unfinished.
+The controlled native fixture exercises actual process descriptors and V5 locks
+over inert handoff content, not production rustc, protected proof or GPU execution.
 There is no explicit publication-retirement API until the durable join below is
 implemented; connection authentication alone cannot authorize retirement.
 

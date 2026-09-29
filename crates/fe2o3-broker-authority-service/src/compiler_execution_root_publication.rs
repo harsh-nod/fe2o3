@@ -4,11 +4,10 @@ use super::*;
 use fe2o3_artifact_transaction::{
     ArtifactLockRetirementBarrierErrorV1 as BarrierError,
     ArtifactLockRetirementBarrierV1 as Barrier,
-    CompilerModuleHandoffCurrentnessCustodyQuoteV5 as Quote,
+    CompilerModuleHandoffCurrentnessCustodyQuoteV5 as Quote, MAX_COMPILER_MODULE_HANDOFF_BYTES_V5,
     acquire_compiler_module_handoff_currentness_lease_with_quote_v5 as acquire_quoted,
-    quote_compiler_module_handoff_currentness_custody_v5 as custody_quote,
     try_acquire_artifact_lock_retirement_barrier_v1 as retirement_barrier,
-    try_recover_compiler_module_handoff_receipt_v5 as try_recover,
+    try_recover_compiler_module_handoff_receipt_with_limit_v5 as try_recover,
 };
 use fe2o3_protected_service_spawn::{
     LateRetainedCustodyV2 as Holder, ProtectedServiceCleanupServiceV2 as Cleanup,
@@ -22,6 +21,10 @@ use fe2o3_protected_service_spawn::{
 #[path = "compiler_execution_root_publication_payload.rs"]
 mod payload;
 use payload::{Acquire, Owners, Validate};
+
+#[path = "compiler_execution_root_publication_quota.rs"]
+mod quota;
+pub use quota::RootPublicationQuotaV3;
 
 const ENTRY: usize = 8;
 const LOCAL_WORK: usize = ENTRY + 64 * 1088;
@@ -56,6 +59,7 @@ pub struct RootPublicationCustodyV3 {
     subject: Subject,
     identity: [u8; 32],
     retained: usize,
+    validation: RootPublicationQuotaV3,
 }
 
 impl RootPublicationCustodyV3 {
@@ -69,7 +73,21 @@ impl RootPublicationCustodyV3 {
         cleanup: &mut Cleanup,
         b: &mut Budget<'_>,
     ) -> Result<(Self, usize)> {
+        Self::observe_with_limit(trace, cleanup, MAX_COMPILER_MODULE_HANDOFF_BYTES_V5, b)
+    }
+
+    /// Same observation with an explicit inert payload ceiling. A larger durable
+    /// record refuses before payload reading; this neither selects an authority
+    /// provider nor changes the schema's resource limits. Use observation_quota
+    /// and observation_cleanup_quota to fund the original accounts beforehand.
+    pub fn observe_with_limit<T: Send + 'static>(
+        trace: &mut Trace<'_, T>,
+        cleanup: &mut Cleanup,
+        maximum_handoff_bytes: usize,
+        b: &mut Budget<'_>,
+    ) -> Result<(Self, usize)> {
         b.with_prepaid_scope(trace.retained_storage(), ENTRY, OBSERVE_WORK, FRAME, |b| {
+            let bounds = quota::custody_bounds(maximum_handoff_bytes)?;
             let (observation, observed_storage) = trace.with_task_observation(b, |root, b| {
                 Ok::<_, RootPublicationCustodyErrorV3>(NativeObservation::observe_from(
                     Source::Root(root),
@@ -80,15 +98,31 @@ impl RootPublicationCustodyV3 {
             let expected =
                 Expected::derive(observation.descriptor()).map_err(NativeOccurrenceError::from)?;
             let output = observation.output_dir();
+            bounds
+                .validate_inputs(&output, &expected.producer)
+                .map_err(NativeOccurrenceError::from)?;
             let receipt = {
                 // Recovery may create temporary OutputLocks on failing paths.
                 // Exclude spawns through their complete rollback/destruction.
                 let barrier = retirement_barrier()?;
-                try_recover(&output, &expected.producer, expected.attempt, &barrier, b)
-                    .map_err(NativeOccurrenceError::from)?
+                try_recover(
+                    &output,
+                    &expected.producer,
+                    expected.attempt,
+                    maximum_handoff_bytes,
+                    &barrier,
+                    b,
+                )
+                .map_err(NativeOccurrenceError::from)?
             };
-            let quote = custody_quote(&output, &expected.producer, receipt)
+            let quote = bounds
+                .quote_currentness(&output, &expected.producer, receipt)
                 .map_err(NativeOccurrenceError::from)?;
+            let validation = quota::revalidation(
+                quote
+                    .currentness_revalidation_quota()
+                    .map_err(NativeOccurrenceError::from)?,
+            )?;
             let payload_storage = quote
                 .retained_storage()
                 .checked_add(size_of::<Owners>())
@@ -137,6 +171,7 @@ impl RootPublicationCustodyV3 {
                     subject,
                     identity,
                     retained,
+                    validation,
                 },
                 retained,
             ))
@@ -181,6 +216,11 @@ impl RootPublicationCustodyV3 {
     }
     pub const fn retained_storage(&self) -> usize {
         self.retained
+    }
+
+    /// Complete work/extra peak above this owner and the full original trace.
+    pub const fn revalidation_quota(&self) -> RootPublicationQuotaV3 {
+        self.validation
     }
 }
 

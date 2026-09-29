@@ -865,6 +865,8 @@ dependencies = [
  "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-execution-supervisor",
+ "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-external-anchor-coordinator",
  "fe2o3-kernel-ir",
  "fe2o3-protected-service-profile",

@@ -9,7 +9,7 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_process_identity::{
     COMPILER_IMAGE_MEASUREMENT_STORAGE_V1, CompilerImageMeasurementErrorV1, CompilerImageRoleV1,
-    measure_compiler_image_file_sha256_v1,
+    compiler_image_measurement_work_v1, measure_compiler_image_file_sha256_v1,
 };
 use fe2o3_protected_service_spawn::native_spawn::{
     ProtectedServiceSpawnErrorV2, RootTaskIdentityV2, RootTaskObservationV2,
@@ -20,6 +20,9 @@ use std::mem::size_of;
 // length prefixes; no valid matching procfs record can exceed this bound.
 const PROCESS_BYTES: usize = fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3;
 const CWD_BYTES: usize = fe2o3_rustc_invocation::MAX_PATH_BYTES_V2;
+const IMAGE_WORK: usize = 8 + 64 * 1024;
+const IMAGE_SCRATCH: usize =
+    COMPILER_IMAGE_MEASUREMENT_STORAGE_V1 + size_of::<CompilerImageMeasurementErrorV1<Resource>>();
 
 #[derive(Debug)]
 pub(crate) enum NativeObservationError {
@@ -160,6 +163,82 @@ pub(crate) struct NativeObservation {
 impl NativeObservation {
     const FRAME: usize = 32 * PROCESS_BYTES + 64 * 1024;
     const WORK: usize = 4096 * PROCESS_BYTES + 128 * 1024;
+
+    pub(crate) const ROOT_RETAINED_MAX: usize =
+        RustcInvocationCapabilityV1::NATIVE_MAX_RETAINED_STORAGE
+            + size_of::<Self>()
+            + 4096
+            + RootTaskObservationV2::IDENTITY_SCRATCH;
+
+    /// All nested charges for the concrete Root source, excluding the enclosing
+    /// trace view and input-owner floors. Service-source costs are not substituted.
+    pub(crate) fn root_operation_quota(revalidate: bool) -> Result<(usize, usize)> {
+        use crate::linux::{
+            CURRENT_PROCESS_START_TIME_IO_STORAGE_V2 as TICKS_SCRATCH,
+            CURRENT_PROCESS_START_TIME_WORK_V2 as TICKS_WORK,
+        };
+        use RootTaskObservationV2 as Root;
+        use RustcInvocationCapabilityV1 as Invocation;
+        let image = compiler_image_measurement_work_v1(MAX_EXECUTABLE_BYTES_V3)
+            .ok_or(Resource::Arithmetic)?;
+        let work = [
+            Self::WORK,
+            Root::IDENTITY_WORK,
+            Root::CONTINUITY_WORK,
+            Root::CONTINUITY_WORK,
+            Root::CONTINUITY_WORK,
+            Root::CONTINUITY_WORK,
+            TICKS_WORK,
+            TICKS_WORK,
+            Root::DESCRIPTOR_WORK,
+            Root::DESCRIPTOR_WORK,
+            Root::DESCRIPTOR_WORK,
+            Invocation::NATIVE_ADMISSION_WORK,
+            IMAGE_WORK,
+            IMAGE_WORK,
+            image,
+            image,
+            8,
+            if revalidate {
+                Invocation::NATIVE_REVALIDATION_WORK
+            } else {
+                0
+            },
+        ]
+        .into_iter()
+        .try_fold(0usize, |sum, n| {
+            sum.checked_add(n).ok_or(Resource::Arithmetic)
+        })?;
+        // All returned identity/file/invocation reservations coexist through the
+        // scope. Operation frames execute sequentially, so only their maximum
+        // overlaps those owners; the complete incoming observation is additional.
+        let nested = [
+            Root::IDENTITY_SCRATCH,
+            Root::CONTINUITY_SCRATCH,
+            TICKS_SCRATCH,
+            Root::DESCRIPTOR_SCRATCH,
+            Invocation::NATIVE_OPERATION_SCRATCH,
+            IMAGE_SCRATCH,
+        ]
+        .into_iter()
+        .max()
+        .ok_or(Resource::Accounting)?;
+        let scratch = [
+            Self::FRAME,
+            Root::IDENTITY_SCRATCH,
+            3 * size_of::<(
+                File,
+                fe2o3_protected_service_spawn::native_spawn::ProtectedServiceSpawnStorageV2,
+            )>(),
+            Invocation::NATIVE_MAX_RETAINED_STORAGE,
+            nested,
+        ]
+        .into_iter()
+        .try_fold(0usize, |sum, n| {
+            sum.checked_add(n).ok_or(Resource::Arithmetic)
+        })?;
+        Ok((work, scratch))
+    }
 
     pub(crate) fn observe_from(
         source: Source<'_, '_, '_>,
@@ -359,40 +438,30 @@ fn measured(file: File, executable: bool, b: &mut Budget<'_>) -> Result<Retained
     } else {
         CompilerImageRoleV1::CodegenBackend
     };
-    let sha256 = b.with_prepaid_scope(
-        size_of::<File>(),
-        8,
-        8 + 64 * 1024,
-        COMPILER_IMAGE_MEASUREMENT_STORAGE_V1
-            + size_of::<CompilerImageMeasurementErrorV1<Resource>>(),
-        |b| {
-            let digest =
-                measure_compiler_image_file_sha256_v1(&file, role, |work| b.charge_work(work))
-                    .map_err(|error| match error {
-                        CompilerImageMeasurementErrorV1::Work(e) => {
-                            NativeObservationError::Resource(e)
-                        }
-                        CompilerImageMeasurementErrorV1::Io(source) => {
-                            CompilerExecutionSupervisionErrorV1::Io {
-                                operation: "hash observed image",
-                                source,
-                            }
-                            .into()
-                        }
-                        CompilerImageMeasurementErrorV1::Invalid(reason) => {
-                            CompilerExecutionSupervisionErrorV1::InvalidObservation(reason).into()
-                        }
-                    })?;
-            // Preserve the supervisor's stronger retained-object predicate, including
-            // owner/link metadata, around the shared streaming measurement.
-            if measure_file_snapshot(&file, "observed image", MAX_EXECUTABLE_BYTES_V3, executable)?
-                != snapshot
-            {
-                return Err(CompilerExecutionSupervisionErrorV1::IdentityChanged.into());
-            }
-            Ok::<_, NativeObservationError>(digest)
-        },
-    )?;
+    let sha256 = b.with_prepaid_scope(size_of::<File>(), 8, IMAGE_WORK, IMAGE_SCRATCH, |b| {
+        let digest = measure_compiler_image_file_sha256_v1(&file, role, |work| b.charge_work(work))
+            .map_err(|error| match error {
+                CompilerImageMeasurementErrorV1::Work(e) => NativeObservationError::Resource(e),
+                CompilerImageMeasurementErrorV1::Io(source) => {
+                    CompilerExecutionSupervisionErrorV1::Io {
+                        operation: "hash observed image",
+                        source,
+                    }
+                    .into()
+                }
+                CompilerImageMeasurementErrorV1::Invalid(reason) => {
+                    CompilerExecutionSupervisionErrorV1::InvalidObservation(reason).into()
+                }
+            })?;
+        // Preserve the supervisor's stronger retained-object predicate, including
+        // owner/link metadata, around the shared streaming measurement.
+        if measure_file_snapshot(&file, "observed image", MAX_EXECUTABLE_BYTES_V3, executable)?
+            != snapshot
+        {
+            return Err(CompilerExecutionSupervisionErrorV1::IdentityChanged.into());
+        }
+        Ok::<_, NativeObservationError>(digest)
+    })?;
     Ok(RetainedMeasuredFileV1 {
         file,
         snapshot,

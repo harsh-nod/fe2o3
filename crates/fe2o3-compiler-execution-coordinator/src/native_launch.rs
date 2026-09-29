@@ -2,7 +2,7 @@
 use crate::native::CompilerExecutionPreparationErrorV2 as Preparation;
 use fe2o3_broker_authority_service::{
     RootConnectionErrorV3 as RootConnection, RootIssuerImageErrorV3 as IssuerImage,
-    RootLaunchChannelErrorV3 as RootChannel,
+    RootLaunchChannelErrorV3 as RootChannel, RootPublicationCustodyErrorV3 as Publication,
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionCapabilityErrorV2 as Capability;
 use fe2o3_compiler_execution_lifecycle::LifecycleLeaseErrorV2 as Lifecycle;
@@ -58,6 +58,8 @@ pub enum CompilerExecutionLaunchErrorV2 {
     RootChannel(RootChannel),
     /// Original-root and measured issuer challenge refused.
     RootConnection(RootConnection),
+    /// Actual original-compiler publication observation or currentness refused.
+    Publication(Publication),
     /// Atomic spawn or child operation refused.
     Spawn(Spawn),
     /// Persistent cleanup funding refused.
@@ -120,7 +122,7 @@ errors!(Resource => Resource, Preparation => Preparation, Capability => Capabili
     Spawn => Spawn, Cleanup => Cleanup, Retained => Retained, Profile => Profile,
     observations::Error => Observation, ReadyV2 => ReadyV2, ReadyV3 => ReadyV3,
     ManifestV3 => ManifestV3, ServiceReadyV3 => ServiceReadyV3, IssuerImage => IssuerImage,
-    RootChannel => RootChannel, RootConnection => RootConnection);
+    RootChannel => RootChannel, RootConnection => RootConnection, Publication => Publication);
 
 impl From<launch_io::Failure> for Failure {
     fn from(error: launch_io::Failure) -> Self {
