@@ -13740,6 +13740,7 @@ mod runtime_materialized_completion_receipt;
 
 #[cfg(test)]
 mod tests {
+    mod dependency_source_failure_tests;
     mod dependency_source_publication_tests;
     mod runtime_completion_tests;
     mod runtime_publication_tests;

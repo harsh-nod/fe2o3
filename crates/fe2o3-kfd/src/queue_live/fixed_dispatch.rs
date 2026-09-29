@@ -3,6 +3,10 @@
 use super::*;
 
 include!("../queue_completion/source_rollback_body.rs");
+include!("dependency_source_failure_body.rs");
+
+#[cfg(test)]
+pub(super) use {dependency_source_failure_body, dependency_source_recipe_cancel_call};
 
 macro_rules! dependency_source_rust_expr {
     ($body:expr) => {
@@ -35,7 +39,7 @@ pub(super) trait DependencySourceRecipeV1<const N: usize> {
     ) -> Result<(), Gfx942DispatchBindingErrorV1>;
 }
 
-struct NativeDependencySourceRecipeV1;
+pub(super) struct NativeDependencySourceRecipeV1;
 
 impl<const N: usize> DependencySourceRecipeV1<N> for NativeDependencySourceRecipeV1 {
     fn bind(
@@ -70,11 +74,7 @@ impl<const N: usize> DependencySourceRecipeV1<N> for NativeDependencySourceRecip
         session: &mut ComputeAqlQueueSessionV1,
         identity: DispatchEpochIdentityV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        session
-            .dispatch
-            .as_mut()
-            .expect("dependency source dispatch owner remains retained")
-            .cancel_binding(identity)
+        native_dependency_source_cancel_body!(dependency_source_rust_expr, session, identity)
     }
 }
 
@@ -4483,19 +4483,14 @@ impl ComputeAqlQueueSessionV1 {
                     .map_err(|error| FixedDispatchSubmissionFailureV1::Terminal(error.into()))?;
                 published
             }
-            Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error)) => {
-                if recipe.cancel(self, identity).is_err() {
-                    return Err(FixedDispatchSubmissionFailureV1::Terminal(
-                        Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
-                    ));
-                }
-                return Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
-                    error,
+            Err(failure) => {
+                return Err(dependency_source_failure_body!(
+                    dependency_source_rust_expr,
+                    self,
+                    recipe,
+                    identity,
+                    failure
                 ));
-            }
-            Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error))
-            | Err(FixedDispatchSubmissionFailureV1::Terminal(error)) => {
-                return Err(FixedDispatchSubmissionFailureV1::Terminal(error));
             }
         };
         Ok(Gfx942ComputeDependencySourceBatchV1 {

@@ -1040,5 +1040,12 @@ fn source_native_forwarding_source_wiring_smoke() {
     );
     assert!(recipe.contains(".bind_templates::<N>(session.key)"));
     assert!(recipe.contains(".mark_published(identity,completion)"));
-    assert!(recipe.contains(".cancel_binding(identity)"));
+    assert!(recipe.contains(
+        "native_dependency_source_cancel_body!(dependency_source_rust_expr,session,identity)"
+    ));
+    let forwarding: String = include_str!("../queue_live/dependency_source_failure_body.rs")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(forwarding.contains("$session.dispatch.as_mut().expect(\"dependencysourcedispatchownerremainsretained\").cancel_binding($identity)"));
 }

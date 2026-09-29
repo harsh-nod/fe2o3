@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 
 include!("queue_dispatch_binding/epoch_cancel_body.rs");
+include!("queue_dispatch_binding/cancel_binding_body.rs");
 
 macro_rules! dispatch_rust_expr {
     ($body:expr) => {
@@ -2018,6 +2019,20 @@ pub(super) struct CpuDispatchOwnerSnapshotV1 {
 #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
 impl CpuDispatchOwnerSnapshotV1 {
     #[cfg(test)]
+    pub(super) fn expect_cancel_for_test(&mut self, identity: DispatchEpochIdentityV1) {
+        assert!(!self.poisoned);
+        assert_eq!(self.recipe_queue, Some(identity.queue));
+        assert_eq!(self.recipe_occurrence, identity.recipe_occurrence);
+        let slot = &mut self.slots[usize::from(identity.slot_index)];
+        assert_eq!(slot.slot_generation, identity.slot_generation);
+        assert!(
+            matches!(slot.phase, DispatchEpochPhaseV1::Reserved { dispatch_generation, .. }
+            if dispatch_generation == identity.dispatch_generation)
+        );
+        slot.phase = DispatchEpochPhaseV1::Vacant;
+    }
+
+    #[cfg(test)]
     pub(super) fn expect_poison_for_test(&mut self) {
         self.poisoned = true;
     }
@@ -2639,7 +2654,7 @@ impl DispatchResourceOwnerV1 {
         &mut self,
         identity: DispatchEpochIdentityV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.generation.cancel_epoch(identity)
+        dispatch_cancel_binding_body!(dispatch_rust_expr, self, identity)
     }
 
     pub(super) fn mark_published<const N: usize>(
@@ -5267,6 +5282,20 @@ pub(super) use tests::actual_persistent_control_test_program;
 
 #[cfg(test)]
 impl DispatchResourceOwnerV1 {
+    pub(super) fn source_failure_snapshot_v1(&self) -> CpuDispatchOwnerSnapshotV1 {
+        CpuDispatchOwnerSnapshotV1 {
+            next_generation: self.generation.next_generation,
+            recipe_occurrence: self.generation.recipe_occurrence,
+            recipe_queue: self.generation.recipe_queue,
+            capacity_profile: self.generation.capacity_profile,
+            slot_storage: self.generation.slots.as_ptr() as usize,
+            slots: self.generation.slots.iter().copied().collect(),
+            recycled_generation: self.generation.recycled_generation,
+            predecessor_detached_generation: self.generation.predecessor_detached_generation,
+            poisoned: self.generation.poisoned,
+        }
+    }
+
     // Exercises the real epoch table with fixture occurrences, not GPU publication.
     pub(super) fn primary_fixture_exercise_capacity_v1(
         &mut self,
