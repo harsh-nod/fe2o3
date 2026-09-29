@@ -41,6 +41,18 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The paired native V3 coordinator and provisioner mains each add one reviewed
+unsafe call block. These dedicated binaries call their existing unsafe entrypoint
+exactly once, before creating threads, handlers, environment borrows or Rust
+owners for activation FDs. The coordinator transfers unique FDs 3..16 and retains
+the external whole-cgroup termination contract; the provisioner accepts no
+activation. Both own argv/environment mutation until exit. Return or unwind
+terminates the process, with no retry or alternate entrypoint. These are ordinary
+root Rust mains, not protected-child secure-entry shims. The inventory entries
+record this source contract only: effective installed unit/LSM/cgroup custody and
+direct-root intake startup still require qualification. No other inventory
+allowance is changed by these two entry calls.
+
 The dedicated proof-helper entry owns raw FD 3 before the first fallible check,
 validates it before opening other descriptors, duplicates it with CLOEXEC and
 closes the original exactly once. Its six mechanical unsafe blocks inspect raw
