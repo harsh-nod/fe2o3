@@ -2,7 +2,7 @@
 //!
 //! The caller retains the child and channels, prepays ATTEMPT_SCRATCH throughout
 //! each phase, and reserves returned ready/descriptor storage before retaining it.
-//! Profile reads require a nonblocking pipe; bootstrap receives use DONTWAIT.
+//! Profile reads require a nonblocking pipe; bootstrap I/O uses DONTWAIT.
 //! Gate writes require the exclusively owned fresh release pipe. Logical attempt
 //! limits and deadline checks do not bound a blocking syscall's duration.
 //!
@@ -53,6 +53,15 @@ pub const MAX_WORK: usize = MAX_PHASE_ATTEMPTS
     + MAX_LIVENESS_CHECKS * Boundary::Progress.work()
     + MAX_GATE_ATTEMPTS * Boundary::GateRelease.work();
 
+/// Separate liveness allowance for one send phase, not included in MAX_LIVENESS_CHECKS.
+/// Observer::is_live has its own original-ledger quota.
+pub const MAX_SEND_LIVENESS_CHECKS: usize = MAX_PHASE_ATTEMPTS - 1;
+
+/// Complete mechanical quota for one send phase, not included in MAX_WORK.
+/// Excludes nested liveness, caller validation, deadline construction and storage.
+pub const MAX_SEND_WORK: usize = MAX_PHASE_ATTEMPTS * Boundary::ReadySend.work()
+    + MAX_SEND_LIVENESS_CHECKS * Boundary::Progress.work();
+
 /// Fixed logical frame, including payload/control, returned endpoint and failure
 /// staging. Observer state/errors and nested liveness have separate caller charges.
 pub const ATTEMPT_SCRATCH: usize = 4096
@@ -69,6 +78,8 @@ pub enum Boundary {
     GateRelease,
     /// Receive a bounded payload and control record.
     ReadyTransfer,
+    /// Send one bounded payload without descriptor rights.
+    ReadySend,
     /// Enable kernel record credentials and distinguish EOF from an empty packet.
     ExecEof,
     /// Probe a child failure stage, including control disposal.
@@ -87,6 +98,7 @@ impl Boundary {
                 2 + CONTROL_BYTES / size_of::<i32>(),
                 MAX_READY_BYTES + CONTROL_BYTES,
             ),
+            Self::ReadySend => (1, MAX_READY_BYTES),
             Self::GateRelease => (1, 1),
             Self::Progress => (1, 0),
             Self::ProfileReady => (1, 2),
@@ -149,7 +161,7 @@ pub enum Failure {
     NoncanonicalProfileReady,
     /// Gate write did not write the exact token.
     NoncanonicalGateRelease,
-    /// Ready length, rights or truncation violated the expected shape.
+    /// Ready length, rights, truncation or short send violated the expected shape.
     MalformedReadyTransfer,
     /// Status was neither a canonical stage nor actual EOF.
     MalformedExecStatus,
@@ -209,6 +221,27 @@ pub fn release_child<O: Observer>(
         deadline,
     }
     .release(gate)
+}
+
+/// Sends exactly N inert bytes in one nonblocking, SIGPIPE-suppressed packet,
+/// without descriptor rights. Requires 0 < N <= MAX_READY_BYTES and a caller-owned
+/// SEQPACKET endpoint; this transport does not admit its peer or payload.
+/// Keep ATTEMPT_SCRATCH prepaid and budget MAX_SEND_WORK plus separately metered
+/// liveness for at most MAX_SEND_LIVENESS_CHECKS observations on the original ledger.
+/// A deadline refusal after a successful syscall can follow delivery; do not replay
+/// the record on error. No receipt or positive authority is returned.
+pub fn send_ready<const N: usize, O: Observer>(
+    bootstrap: BorrowedFd<'_>,
+    payload: &[u8; N],
+    observer: &mut O,
+    deadline: Instant,
+) -> Result<(), Error<O::Error>> {
+    Scheduler {
+        observer,
+        io: SystemIo,
+        deadline,
+    }
+    .send(bootstrap, payload)
 }
 
 /// Receives exactly N inert payload bytes and either one or zero descriptor rights.
@@ -275,6 +308,7 @@ trait Io {
     fn now(&mut self) -> Instant;
     fn profile(&mut self, fd: BorrowedFd<'_>, bytes: &mut [u8; 2]) -> Result<usize, Errno>;
     fn gate(&mut self, fd: BorrowedFd<'_>) -> Result<usize, Errno>;
+    fn send(&mut self, fd: BorrowedFd<'_>, payload: &[u8]) -> Result<usize, Errno>;
     fn status(
         &mut self,
         fd: BorrowedFd<'_>,
@@ -295,6 +329,13 @@ impl Io for SystemIo {
     }
     fn gate(&mut self, fd: BorrowedFd<'_>) -> Result<usize, Errno> {
         rustix::io::write(fd, &[PROTECTED_SERVICE_GATE_RELEASE_V1])
+    }
+    fn send(&mut self, fd: BorrowedFd<'_>, payload: &[u8]) -> Result<usize, Errno> {
+        rustix::net::send(
+            fd,
+            payload,
+            rustix::net::SendFlags::DONTWAIT | rustix::net::SendFlags::NOSIGNAL,
+        )
     }
     fn status(
         &mut self,
@@ -642,6 +683,38 @@ impl<O: Observer, I: Io> Scheduler<'_, O, I> {
             }
         }
         Err(Failure::Timeout("child release gate").into())
+    }
+    fn send<const N: usize>(
+        &mut self,
+        bootstrap: BorrowedFd<'_>,
+        payload: &[u8; N],
+    ) -> Result<(), Error<O::Error>> {
+        if !(1..=MAX_READY_BYTES).contains(&N) {
+            return Err(Failure::MalformedReadyTransfer.into());
+        }
+        for attempt in 0..MAX_PHASE_ATTEMPTS {
+            self.begin(Boundary::ReadySend, "service-ready send")?;
+            let result = self.io.send(bootstrap, payload);
+            self.deadline("service-ready send")?;
+            match result {
+                Ok(bytes) if bytes == N => return Ok(()),
+                Ok(_) => return Err(Failure::MalformedReadyTransfer.into()),
+                Err(Errno::AGAIN | Errno::INTR) => {
+                    if attempt + 1 == MAX_PHASE_ATTEMPTS {
+                        break;
+                    }
+                    self.progress("service-ready send")?;
+                }
+                Err(source) => {
+                    return Err(Failure::Io {
+                        operation: "send service-ready record",
+                        source,
+                    }
+                    .into());
+                }
+            }
+        }
+        Err(Failure::Timeout("service-ready send").into())
     }
     #[cfg(test)]
     fn ready(
