@@ -18,6 +18,13 @@ use std::mem::size_of;
 mod schema;
 pub use schema::CompilerModuleHandoffErrorV5;
 use schema::{Schema, payload_storage};
+#[path = "compiler_module_handoff_v5_custody.rs"]
+mod custody;
+pub use custody::{
+    CompilerModuleHandoffCurrentnessCustodyQuoteV5,
+    acquire_compiler_module_handoff_currentness_lease_with_quote_v5,
+    quote_compiler_module_handoff_currentness_custody_v5,
+};
 #[path = "compiler_module_handoff_v5_admission.rs"]
 mod admission;
 #[path = "compiler_execution_receipt_transport_v3.rs"]
@@ -120,6 +127,7 @@ impl CompilerModuleHandoffStorageV5 {
 /// ```
 pub struct CompilerModuleHandoffCurrentnessLeaseV5 {
     binding: Arc<currentness::Current<Schema>>,
+    storage: CompilerModuleHandoffStorageV5,
 }
 impl fmt::Debug for CompilerModuleHandoffCurrentnessLeaseV5 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -133,7 +141,7 @@ impl CompilerModuleHandoffCurrentnessLeaseV5 {
         self.binding.receipt
     }
     pub const fn storage(&self) -> CompilerModuleHandoffStorageV5 {
-        CompilerModuleHandoffStorageV5(CURRENT_STORAGE + size_of::<Self>())
+        self.storage
     }
     pub const fn grants_compiler_authority(&self) -> bool {
         false
@@ -152,7 +160,15 @@ impl CompilerModuleHandoffCurrentnessLeaseV5 {
         CompilerModuleHandoffStorageV5,
     )> {
         entry(budget, self.storage().0, |resources| {
-            resources.reserve(token_headers::<Handoff>())?;
+            let headers = token_headers::<Handoff>()
+                .checked_add(
+                    self.storage
+                        .0
+                        .checked_sub(CURRENT_STORAGE + size_of::<Self>())
+                        .ok_or(Resource::Accounting)?,
+                )
+                .ok_or(Resource::Arithmetic)?;
+            resources.reserve(headers)?;
             let lock = self
                 .binding
                 .output
@@ -161,7 +177,7 @@ impl CompilerModuleHandoffCurrentnessLeaseV5 {
                 .ok_or(Error::Busy)?;
             let content = currentness::load(&self.binding, resources)?;
             let storage = CompilerModuleHandoffStorageV5(
-                token_headers::<Handoff>()
+                headers
                     .checked_add(payload_storage(&content)?)
                     .ok_or(Resource::Arithmetic)?,
             );
@@ -455,7 +471,10 @@ pub fn acquire_compiler_module_handoff_currentness_lease_v5(
         );
         resources.reserve(storage.0)?;
         let binding = currentness::mint::<Schema>(output_dir, producer, receipt, resources)?;
-        Ok((CompilerModuleHandoffCurrentnessLeaseV5 { binding }, storage))
+        Ok((
+            CompilerModuleHandoffCurrentnessLeaseV5 { binding, storage },
+            storage,
+        ))
     })
 }
 

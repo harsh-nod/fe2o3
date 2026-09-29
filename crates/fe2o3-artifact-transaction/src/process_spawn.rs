@@ -228,6 +228,16 @@ pub struct ArtifactLockRetirementBarrierV1 {
     origin_pid: u32,
 }
 
+impl ArtifactLockRetirementBarrierV1 {
+    pub(crate) fn guards_artifact_locks(&self) -> bool {
+        self.origin_pid == process::id()
+            && std::ptr::eq(
+                self.coordinator,
+                ArtifactProcessSpawnCoordinatorV1::global(),
+            )
+    }
+}
+
 impl fmt::Debug for ArtifactLockRetirementBarrierV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

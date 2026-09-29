@@ -123,6 +123,15 @@ pub(super) struct PinnedFile {
     pub(super) identity: FileIdentity,
 }
 
+pub(super) struct CurrentLocation {
+    pub(super) output: PinnedOutput,
+    pub(super) producer: ProducerIdentity,
+    pub(super) producer_identity: [u8; 32],
+    pub(super) parent: PinnedDirectory,
+    pub(super) slot_directory: PinnedDirectory,
+    pub(super) slot_identity: [u8; 32],
+}
+
 pub(super) fn shape<S: Schema>(slot: &PinnedDirectory) -> Result<()> {
     let entries = slot_entries(slot)?;
     if entries.iter().any(|entry| entry == CONSUMED_ENTRY) {
@@ -384,6 +393,45 @@ pub(super) fn load<S: Schema>(
         S::MAX_HANDOFF_BYTES,
         resources,
     )?;
+    decode_current(binding, record, bytes, resources)
+}
+
+/// Uses an already charged exact-length buffer allocated before acquiring the output lock.
+pub(super) fn load_preallocated<S: Schema>(
+    binding: &Current<S>,
+    mut bytes: Vec<u8>,
+    resources: &mut Resources<'_, '_>,
+) -> Result<S::Payload> {
+    resources.require::<S>()?;
+    resources.reserve(std::mem::size_of::<Sha256>())?;
+    let record = record(binding, resources)?;
+    validate_decode_working_set::<S>(record.length, S::MAX_DECODE_WORKING_SET_BYTES)?;
+    if bytes.len() != record.length || bytes.capacity() != record.length {
+        return Err(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into(),
+        );
+    }
+    resources.work(
+        record
+            .length
+            .checked_add(1)
+            .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
+    )?;
+    read_file_into(
+        &binding.slot_directory,
+        PAYLOAD_ENTRY,
+        &binding.payload_file,
+        &mut bytes,
+    )?;
+    decode_current(binding, record, bytes, resources)
+}
+
+fn decode_current<S: Schema>(
+    binding: &Current<S>,
+    record: HandoffRecord<S>,
+    bytes: Vec<u8>,
+    resources: &mut Resources<'_, '_>,
+) -> Result<S::Payload> {
     resources.work(
         record
             .length
@@ -520,13 +568,47 @@ pub(super) fn mint<S: Schema>(
         format!("{}{}", S::SLOT_PREFIX, hex(&slot_identity)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
+    finish_mint::<S>(
+        CurrentLocation {
+            output,
+            producer: producer.clone(),
+            producer_identity,
+            parent,
+            slot_directory,
+            slot_identity,
+        },
+        receipt,
+        resources,
+    )
+}
+
+/// Caller retains the output lock after authorization and stale-slot cleanup.
+/// Quoted callers allocate/check this location before locking; ordinary callers
+/// retain their existing lock-before-open order. Final pinned validation is shared.
+pub(super) fn finish_mint<S: Schema>(
+    location: CurrentLocation,
+    receipt: S::Receipt,
+    resources: &mut Resources<'_, '_>,
+) -> Result<Arc<Current<S>>> {
+    resources.require::<S>()?;
+    let fields = S::receipt_fields(receipt);
+    let CurrentLocation {
+        output,
+        producer,
+        producer_identity,
+        parent,
+        slot_directory,
+        slot_identity,
+    } = location;
+    parent.verify()?;
+    slot_directory.verify()?;
     recover_slot::<S>(&slot_directory, resources)?;
     shape::<S>(&slot_directory)?;
     let ready_file = pin(&slot_directory, READY_ENTRY, S::RECORD_BYTES)?;
     let payload_file = pin(&slot_directory, PAYLOAD_ENTRY, fields.length)?;
     let binding = Arc::new(Current::<S> {
         output,
-        producer: producer.clone(),
+        producer,
         producer_identity,
         parent,
         slot_directory,
