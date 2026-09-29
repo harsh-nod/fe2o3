@@ -97,7 +97,9 @@ fn owned_stdio_survives_reuse_drop_and_exec() {
         let states = [case % 3, (case / 3) % 3, case / 9];
         command_preserves_capture(states);
     }
+    missing_parent_slot_refuses_before_wrapper_setup();
     missing_parent_slot_refuses_before_installation();
+    installed_absent_and_cloexec_preserve_exec_error();
     flag_drift_refuses_before_installation_and_at_spawn();
     partial_staging_failure_closes_duplicates();
     command_drop_releases_staged_descriptors();
@@ -200,6 +202,42 @@ fn missing_parent_slot_refuses_before_installation() {
     );
     drop(saved);
     assert!(command.status().unwrap().success());
+}
+
+fn missing_parent_slot_refuses_before_wrapper_setup() {
+    for slot in 0..=2 {
+        let (capture, _sources) = capture([0; 3]);
+        let saved = SavedStdio::new();
+        // SAFETY: this isolated test exclusively owns the standard slots.
+        assert_eq!(unsafe { libc::close(slot) }, 0);
+        let error = crate::binding_wrapper::run_with_captured_stdio(
+            vec!["/proc/self/fd/-1".into(), "-vV".into()],
+            capture,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, crate::binding_wrapper::BindingWrapperError::Spawn(error)
+            if error.raw_os_error() == Some(libc::EBADF))
+        );
+        // No wrapper setup or executable pinning may have filled the hole.
+        assert_eq!(unsafe { libc::fcntl(slot, libc::F_GETFD) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+        drop(saved);
+    }
+}
+
+fn installed_absent_and_cloexec_preserve_exec_error() {
+    for states in [[0; 3], [1; 3]] {
+        let (capture, _sources) = capture(states);
+        // The negative procfd pathname cannot name a live executable. Failure
+        // occurs after the stdio hook closes every child standard descriptor.
+        let mut command = Command::new("/proc/self/fd/-1");
+        configure_captured_stdio(&mut command, &capture).unwrap();
+        assert_eq!(
+            command.spawn().unwrap_err().raw_os_error(),
+            Some(libc::ENOENT)
+        );
+    }
 }
 
 fn flag_drift_refuses_before_installation_and_at_spawn() {

@@ -1,11 +1,12 @@
 //! Installation of an already owned wrapper capture, never a late global capture.
 //!
-//! The caller must obtain CapturedStdioV1 before wrapper setup opens descriptors.
-//! Calling its unsafe capture_current at Rust main is not sufficient: the pinned
-//! Rust runtime sanitizes absent stdslots before main, and single-threaded entry
-//! cannot exclude status-flag mutation through external OFD aliases. Early capture
-//! and that exclusion must be established by the enclosing launcher. No raw-FD,
-//! pathname, environment, or root-process stdio substitutes are accepted here.
+//! The caller must obtain CapturedStdioV1 from the actual wrapper entry before
+//! wrapper setup opens descriptors. At Rust main this observes runtime-sanitized
+//! stdslots, not the original pre-runtime inherited state. Single-threaded entry
+//! alone cannot justify capture_current: its unsafe contract also excludes shared
+//! status-flag mutation through external OFD aliases. The entry adapter must
+//! establish that exclusion; no immutable-alias isolation is claimed here. No
+//! raw-FD, pathname, environment, or root-process stdio substitutes are accepted.
 
 use fe2o3_process_identity::CapturedStdioV1;
 use rustix::{fs::OFlags, io::FdFlags};
@@ -37,6 +38,22 @@ struct StagedDescriptor {
     status_flags: OFlags,
 }
 
+/// Checks the selected wrapper's entry/setup precondition without filling holes.
+/// Call before its first FD open and again before staging. Otherwise pinning may
+/// save /proc/self/fd/0 for rustc, then lose that executable when the final stdio
+/// hook replaces fd0. These three scalar probes neither capture stdio identity
+/// nor prove concurrent-slot exclusion; the entry adapter must exclude mutation
+/// throughout setup/spawn, and the wrapper itself does not close parent slots.
+pub(crate) fn require_open_parent_stdio() -> io::Result<()> {
+    for fd in 0..=2 {
+        // SAFETY: scalar inspection does not borrow an absent or reused slot.
+        if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Adds the final stdio hook to the selected wrapper's prepared Command.
 ///
 /// Command owns up to three independent CLOEXEC duplicates through spawn/drop;
@@ -66,12 +83,7 @@ pub(crate) fn configure_captured_stdio(
     command: &mut Command,
     capture: &CapturedStdioV1,
 ) -> io::Result<()> {
-    for fd in 0..=2 {
-        // SAFETY: scalar inspection does not borrow an absent or reused slot.
-        if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
+    require_open_parent_stdio()?;
     capture.revalidate()?;
     let mut staged: [Option<StagedDescriptor>; 3] = [None, None, None];
     for (slot, captured) in

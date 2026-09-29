@@ -56,7 +56,7 @@ use crate::compiler_execution_boundary::{
 };
 use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
-    stdio::configure_captured_stdio,
+    stdio::{configure_captured_stdio, require_open_parent_stdio},
 };
 use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
@@ -332,15 +332,20 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
 
 /// Enters the same wrapper path with stdio captured before any wrapper FD opens.
 ///
-/// The entry adapter must justify capture_current's unsafe exclusions and capture
-/// before Rust's startup stdio sanitization if entry-time absence matters. The
-/// current main cannot establish either and deliberately does not call it here.
+/// The entry adapter must justify capture_current's unsafe exclusions, including
+/// status-flag mutation through external OFD aliases. The current main cannot
+/// establish that exclusion and deliberately does not call it here. A capture at
+/// Rust main observes actual runtime-sanitized wrapper slots, not their original
+/// pre-runtime inherited state.
+/// Current parent stdslots must be open before setup, independently of captured
+/// absence: executable pinning must not acquire a slot the final hook replaces.
 /// This owned input adds no compiler authority or native-boundary selection.
 #[allow(dead_code)] // Entry capture remains an explicit integration prerequisite.
 pub(crate) fn run_with_captured_stdio(
     argv: Vec<OsString>,
     stdio: CapturedStdioV1,
 ) -> Result<ExitStatus, BindingWrapperError> {
+    require_open_parent_stdio().map_err(BindingWrapperError::Spawn)?;
     run_inner(argv, Some(stdio))
 }
 
