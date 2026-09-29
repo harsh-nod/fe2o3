@@ -8,6 +8,10 @@ use crate::native_launch::{
     CompilerExecutionLaunchQuotaV2 as Quota, CompilerExecutionLaunchStorageV2 as Storage,
     FILE_STORAGE, Observer, Result, sum,
 };
+use fe2o3_broker_authority_service::{
+    RootConnectionV3 as RootConnection, RootControlSessionV3 as RootSession,
+    RootLaunchChannelV3 as RootChannel,
+};
 use fe2o3_compiler_closure_capability::{
     CompilerExecutionPolicyCapabilityV3 as PolicyCap,
     CompilerExecutionServiceLaunchCapabilityV3 as ManifestCap,
@@ -123,6 +127,8 @@ impl RequestAccount {
 pub(crate) struct ManagedIssuer<'work, T: Send + 'static> {
     child: Child<T>,
     ready: Ready,
+    root: RootSession<'work>,
+    connection: RootConnection<'work>,
     retained: usize,
     continuity: Quota,
     account: RequestAccount,
@@ -130,8 +136,11 @@ pub(crate) struct ManagedIssuer<'work, T: Send + 'static> {
     _creator: PhantomData<(&'work Budget<'work>, Rc<()>)>,
 }
 impl<T: Send + 'static> ManagedIssuer<'_, T> {
-    const ENVELOPE: usize =
-        size_of::<(Self, Storage)>() - size_of::<Child<T>>() - size_of::<Ready>();
+    const ENVELOPE: usize = size_of::<(Self, Storage)>()
+        - size_of::<Child<T>>()
+        - size_of::<Ready>()
+        - size_of::<RootSession<'static>>()
+        - size_of::<RootConnection<'static>>();
     pub(crate) fn pid(&self) -> rustix::process::Pid {
         self.child.pid()
     }
@@ -147,7 +156,11 @@ impl<T: Send + 'static> ManagedIssuer<'_, T> {
 
     /// Owning attempt must check readiness/continuity before resuming its compiler.
     /// This does not perform Prepare/Issue or inspect a not-yet-created publication.
-    pub(crate) fn validate_ready(&self, b: &mut Budget<'_>) -> Result<()> {
+    pub(crate) fn validate_ready(
+        &self,
+        trace: &CompilerTrace<'_, T>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
         self.account.with(self.retained, b, |b| {
             self.child.with_resources(b, |p, b| -> Result<()> {
                 p.prepared.validate_process(self.child.pid(), b)?;
@@ -157,6 +170,16 @@ impl<T: Send + 'static> ManagedIssuer<'_, T> {
                     p.prepared.trust.policy().policy(),
                     b,
                 )?;
+                trace.with_observation(b, |original, b| -> Result<()> {
+                    Ok(self.connection.validate(
+                        &self.root,
+                        original,
+                        &self.child,
+                        p.prepared.trust.policy().policy(),
+                        p.manifest.manifest(),
+                        b,
+                    )?)
+                })?;
                 Ok(())
             })?;
             require_live(&self.child, b)
@@ -165,6 +188,23 @@ impl<T: Send + 'static> ManagedIssuer<'_, T> {
     pub(crate) fn cancel(mut self) -> CleanupPoll {
         self.child.cancel()
     }
+}
+
+// Readiness alone cannot construct ManagedIssuer. The original held compiler
+// trace must pass its scoped identity check and the actual issuer must complete the
+// fresh root challenge before this intermediate owner is consumed.
+struct ReadyIssuer<'work, T: Send + 'static> {
+    child: Child<T>,
+    ready: Ready,
+    channel: RootChannel<'work>,
+    continuity: Quota,
+    account: RequestAccount,
+}
+impl<T: Send + 'static> ReadyIssuer<'_, T> {
+    const ENVELOPE: usize = size_of::<(Self, Storage)>()
+        - size_of::<Child<T>>()
+        - size_of::<Ready>()
+        - size_of::<RootChannel<'static>>();
 }
 impl<T: Send + 'static> fmt::Debug for ManagedIssuer<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -224,22 +264,78 @@ impl Prepared {
             8,
             LOCAL_WORK,
             FRAME,
-            |b| {
+            |b| -> Result<_> {
                 let deadline = launch_io::bounded_deadline(timeout)?;
                 self.validate_cleanup_guard(cleanup, b)?;
-                attempt
-                    .trace
-                    .with_issuer_inputs(b, |client, peer, pidfd, dependency, b| {
-                        let account = RequestAccount::capture(b);
-                        // SAFETY: the caller supplies the creator/custody/Drop contract;
-                        // these inputs come only from this original confirmed root trace.
-                        unsafe {
-                            launch_inputs(
-                                self, client, peer, pidfd, dependency, account, deadline, cleanup,
-                                b,
-                            )
-                        }
-                    })
+                let (pending, growth) =
+                    attempt
+                        .trace
+                        .with_issuer_inputs(b, |client, peer, pidfd, dependency, b| {
+                            let account = RequestAccount::capture(b);
+                            // SAFETY: the caller supplies the creator/custody/Drop contract;
+                            // these inputs come only from this original confirmed root trace.
+                            unsafe {
+                                launch_inputs(
+                                    self, client, peer, pidfd, dependency, account, deadline,
+                                    cleanup, b,
+                                )
+                            }
+                        })?;
+                b.reserve_storage(growth.additional_storage())?;
+                let ReadyIssuer {
+                    child,
+                    ready,
+                    channel,
+                    continuity,
+                    account,
+                    ..
+                } = pending;
+                let (root, connection, retained) =
+                    attempt
+                        .trace
+                        .with_observation(b, |original, b| -> Result<_> {
+                            let (root, charge) = RootSession::create(original, b)?;
+                            b.reserve_storage(charge.additional_storage())?;
+                            let (connection, charge) =
+                                child.with_resources(b, |p, b| -> Result<_> {
+                                    check_deadline(deadline, "issuer root admission")?;
+                                    Ok(root.connect_after_readiness(
+                                        original,
+                                        &child,
+                                        p.prepared.trust.policy().policy(),
+                                        p.manifest.manifest(),
+                                        p.prepared.credentials,
+                                        &ready,
+                                        channel,
+                                        deadline.saturating_duration_since(Instant::now()),
+                                        b,
+                                    )?)
+                                })?;
+                            b.reserve_storage(charge.additional_storage())?;
+                            let retained = sum(&[
+                                child.retained_storage(),
+                                ready.retained_storage(),
+                                root.retained_storage(),
+                                connection.retained_storage(),
+                                ManagedIssuer::<T>::ENVELOPE,
+                            ])?;
+                            b.reserve_storage(ManagedIssuer::<T>::ENVELOPE)?;
+                            Ok((root, connection, retained))
+                        })?;
+                let growth = retained.checked_sub(input).ok_or(Resource::Accounting)?;
+                Ok((
+                    ManagedIssuer {
+                        child,
+                        ready,
+                        root,
+                        connection,
+                        retained,
+                        continuity,
+                        account,
+                        _creator: PhantomData,
+                    },
+                    Storage(growth),
+                ))
             },
         )?;
         attempt.committed = true;
@@ -257,8 +353,8 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
     account: RequestAccount,
     deadline: Instant,
     cleanup: &mut Cleanup,
-    b: &mut Budget<'_>,
-) -> Result<(ManagedIssuer<'work, T>, Storage)> {
+    b: &mut Budget<'work>,
+) -> Result<(ReadyIssuer<'work, T>, Storage)> {
     let original = prepared.retained_storage();
     let floor = sum(&[original, dependency.retained_storage()])?;
     b.with_prepaid_scope(
@@ -308,8 +404,12 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
             };
             b.reserve_storage(Channels::STORAGE)?;
             let channels = Channels::new()?;
+            // The compiler already exists and is held at its confirmed exec.
+            // Only the issuer end enters the staged descriptor table below.
+            let (mut root_channel, charge) = RootChannel::create(b)?;
+            b.reserve_storage(charge.additional_storage())?;
             let (stage, stage_charge) =
-                staging::stage(&payload, anchor, peer, pidfd, &channels, b)?;
+                staging::stage(&payload, anchor, peer, pidfd, &channels, &root_channel, b)?;
             b.reserve_storage(stage_charge)?;
             check_deadline(deadline, "issuer staging")?;
             // SAFETY: final staged image/root/policy/fresh-key/manifest/anchor Files
@@ -322,6 +422,7 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
             // Stage contains a readiness writer alias, so it must close before EOF wait.
             drop(stage);
             b.release_storage(stage_charge)?;
+            root_channel.close_parent_issuer_endpoint(b)?;
             let Readers {
                 ready,
                 profile,
@@ -386,18 +487,18 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
             let retained = sum(&[
                 child.retained_storage(),
                 charge.additional_storage(),
-                ManagedIssuer::<T>::ENVELOPE,
+                root_channel.retained_storage(),
+                ReadyIssuer::<T>::ENVELOPE,
             ])?;
             let growth = retained.checked_sub(original).ok_or(Resource::Accounting)?;
-            b.reserve_storage(ManagedIssuer::<T>::ENVELOPE)?;
+            b.reserve_storage(ReadyIssuer::<T>::ENVELOPE)?;
             Ok((
-                ManagedIssuer {
+                ReadyIssuer {
                     child,
                     ready: ready_record,
-                    retained,
+                    channel: root_channel,
                     continuity,
                     account,
-                    _creator: PhantomData,
                 },
                 Storage(growth),
             ))

@@ -40,10 +40,10 @@ impl Prepared {
     /// transfer, full overlapping dependency, fresh key/manifest, source images,
     /// frozen Stage, retained child growth, all finite transport/liveness attempts,
     /// two prepared process checks, the actual running issuer image, exact
-    /// readiness and exec confirmation.
+    /// readiness, exec confirmation and the post-readiness root challenge.
     ///
     /// Query is inert and grants no launch authority. It funds this composition,
-    /// not compiler resume/observation/issuance or production attempt setup. Keep
+    /// not compiler resume, publication observation/issuance or production attempt setup. Keep
     /// both input reservations; reserve launch's returned growth before retention.
     /// Persistent cleanup uses issuer_cleanup_quota on its existing ledger.
     pub(crate) fn issuer_launch_quota<T: Send + 'static>(
@@ -91,7 +91,7 @@ impl Prepared {
                 AnchorTransfer::INTO_DESCRIPTORS_SCRATCH,
             ])?,
         };
-        launch_quota::<T>(
+        let launch = launch_quota::<T>(
             payload,
             source,
             trace.issuer_inputs_quota()?,
@@ -110,6 +110,15 @@ impl Prepared {
             staging,
             self.process_quota()?,
             self.issuer_image_quota()?,
+        )?;
+        let gate =
+            RootConnection::handshake_quota(self.trust.policy().policy().executable().byte_len())?;
+        root_startup_quota::<T>(
+            launch,
+            Quota {
+                work: gate.work(),
+                scratch: gate.scratch(),
+            },
         )
     }
 
@@ -124,7 +133,21 @@ impl Prepared {
     }
 
     pub(crate) fn issuer_continuity_quota<T: Send + 'static>(&self) -> Result<Quota> {
-        continuity::<T>(self.process_quota()?, self.issuer_image_quota()?)
+        let base = continuity::<T>(self.process_quota()?, self.issuer_image_quota()?)?;
+        let root =
+            RootConnection::validation_quota(self.trust.policy().policy().executable().byte_len())?;
+        Ok(Quota {
+            work: sum(&[
+                base.work(),
+                CompilerTrace::<T>::OBSERVATION_WORK,
+                root.work(),
+            ])?,
+            scratch: sum(&[
+                base.scratch(),
+                CompilerTrace::<T>::OBSERVATION_SCRATCH,
+                root.scratch(),
+            ])?,
+        })
     }
 
     /// Additional finite cleanup funding, with the original pool and all existing
@@ -142,6 +165,30 @@ impl Prepared {
             cleanup_turns,
         )
     }
+}
+
+pub(super) fn root_startup_quota<T: Send + 'static>(launch: Quota, gate: Quota) -> Result<Quota> {
+    Ok(Quota {
+        work: sum(&[
+            launch.work(),
+            4 * RootChannel::WORK,
+            CompilerTrace::<T>::OBSERVATION_WORK,
+            Resources::<Payload<T>>::ACCESS_WORK,
+            RootSession::CREATE_WORK,
+            gate.work(),
+        ])?,
+        scratch: sum(&[
+            launch.scratch(),
+            RootChannel::STORAGE,
+            RootChannel::SCRATCH,
+            ReadyIssuer::<T>::ENVELOPE,
+            CompilerTrace::<T>::OBSERVATION_SCRATCH,
+            Resources::<Payload<T>>::ACCESS_SCRATCH,
+            // Retained session overlaps the subsequent connection handshake.
+            2 * RootSession::CREATE_SCRATCH,
+            gate.scratch(),
+        ])?,
+    })
 }
 
 pub(super) fn cleanup_quota<T: Send + 'static>(

@@ -1,8 +1,8 @@
 use super::*;
 
-// Existing native issuer ABI; the listener is used only for local root validation.
-pub(super) const DESTINATIONS: [i32; 9] = [3, 4, 5, 6, 7, 8, 9, 10, 11];
-pub(super) const BINDINGS_STORAGE: usize = size_of::<[Binding<'static>; 9]>();
+// Direct V3 issuer ABI. The compiler never inherits either root-control end.
+pub(super) const DESTINATIONS: [i32; 10] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+pub(super) const BINDINGS_STORAGE: usize = size_of::<[Binding<'static>; 10]>();
 // Three non-retrying status operations on the original service endpoint.
 pub(super) const PEER_PREPARE_WORK: usize = 8 + 3 * 1088 + 256;
 pub(super) const PEER_PREPARE_SCRATCH: usize = 4 * size_of::<Error>()
@@ -92,7 +92,7 @@ pub(super) fn source_storage(issuer_bytes: u64) -> Result<usize> {
         ServiceKey::FILE_STORAGE,
         ManifestCap::FILE_STORAGE,
         AnchorTransfer::STORAGE,
-        6 * FILE_STORAGE,
+        7 * FILE_STORAGE,
         BINDINGS_STORAGE,
     ])
 }
@@ -104,12 +104,14 @@ pub(super) fn stage<T: Send + 'static>(
     peer: BorrowedFd<'_>,
     pidfd: BorrowedFd<'_>,
     channels: &Channels,
+    root_channel: &RootChannel<'_>,
     b: &mut Budget<'_>,
 ) -> Result<(Stage, usize)> {
     let floor = sum(&[
         p.retained,
         AnchorTransfer::STORAGE,
         Channels::STORAGE,
+        root_channel.retained_storage(),
         2 * FILE_STORAGE,
     ])?;
     b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
@@ -145,6 +147,7 @@ pub(super) fn stage<T: Send + 'static>(
             channels.ready_writer.as_fd(),
             anchor_peer.as_fd(),
             anchor_pidfd.as_fd(),
+            root_channel.issuer_endpoint(b)?,
         ];
         let bindings = bindings(sources)?;
         let source = source_storage(prepared.programs[2].measurement().byte_len())?;
@@ -164,15 +167,24 @@ pub(super) fn stage<T: Send + 'static>(
             )
         }?;
         b.reserve_storage(c.additional_storage())?;
-        validate(p, &stage, listener.as_fd(), peer, pidfd, channels, b)?;
+        validate(
+            p,
+            &stage,
+            listener.as_fd(),
+            peer,
+            pidfd,
+            channels,
+            root_channel,
+            b,
+        )?;
         Ok((stage, c.additional_storage()))
     })
 }
 
-pub(super) fn bindings(sources: [BorrowedFd<'_>; 9]) -> Result<[Binding<'_>; 9]> {
+pub(super) fn bindings(sources: [BorrowedFd<'_>; 10]) -> Result<[Binding<'_>; 10]> {
     let mut bindings = [Binding::new(sources[0], DESTINATIONS[0])
         .map_err(|_| Error::Invalid("invalid issuer descriptor binding"))?;
-        9];
+        10];
     for ((binding, source), destination) in bindings.iter_mut().zip(sources).zip(DESTINATIONS) {
         *binding = Binding::new(source, destination)
             .map_err(|_| Error::Invalid("invalid issuer descriptor binding"))?;
@@ -188,6 +200,7 @@ fn validate<T: Send + 'static>(
     peer: BorrowedFd<'_>,
     pidfd: BorrowedFd<'_>,
     channels: &Channels,
+    root_channel: &RootChannel<'_>,
     b: &mut Budget<'_>,
 ) -> Result<()> {
     let prepared = &p.prepared;
@@ -222,6 +235,7 @@ fn validate<T: Send + 'static>(
     validate_peer(file(4)?.as_fd(), p.manifest.manifest().client())?;
     require_idle(file(5)?.as_fd())?;
     validate_duplicate(channels.ready_writer.as_fd(), file(9)?.as_fd())?;
+    validate_duplicate(root_channel.issuer_endpoint(b)?, file(12)?.as_fd())?;
     if fs::FileType::from_raw_mode(
         fs::fstat(file(9)?)
             .map_err(|e| launch::io("inspect issuer ready pipe", e))?

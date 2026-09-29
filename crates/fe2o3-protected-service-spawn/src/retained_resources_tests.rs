@@ -22,6 +22,35 @@ enum Error {
     Callback,
 }
 
+#[test]
+fn scoped_access_preserves_work_lifetime_without_exporting_the_payload_borrow() {
+    use std::marker::PhantomData;
+    struct AccountBound<'work>(u8, PhantomData<&'work Work>);
+    fn make<'work>(value: u8, _: &mut Budget<'work>) -> AccountBound<'work> {
+        AccountBound(value, PhantomData)
+    }
+    fn scoped<'work>(
+        handle: &RetainedResourcesV2<u8>,
+        b: &mut Budget<'work>,
+    ) -> Result<AccountBound<'work>, Error> {
+        handle.with(b, |value, b| Ok(make(*value, b)))
+    }
+    type Handle = RetainedResourcesV2<u8>;
+    let (handle, payload) = Handle::pair(7, 1).unwrap();
+    let floor = handle.retained_storage();
+    let mut work = Work::new(Handle::ACCESS_WORK);
+    let mut budget = Budget::new(&mut work, floor + Handle::ACCESS_SCRATCH);
+    budget.reserve_storage(floor).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    let result = scoped(&handle, &mut budget).unwrap();
+    drop(handle);
+    drop(payload);
+    assert_eq!(result.0, 7);
+    assert_eq!(budget.storage(), floor);
+    assert_eq!(budget.work(), Handle::ACCESS_WORK);
+    assert!(budget.work_ledger_identity_v1() == ledger);
+}
+
 impl From<Resource> for Error {
     fn from(error: Resource) -> Self {
         Self::Resource(error)

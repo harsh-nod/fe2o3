@@ -49,10 +49,10 @@ impl<T: Send + 'static> RootOwnedRetainedServiceChildV2<T> {
     /// Metered, read-only access to complete inputs under their exclusive mutex.
     /// The callback must preserve owned obligations and must not recursively access this view.
     /// Poison refuses; no unsafe Sync bound is imposed on the input programming model.
-    pub fn with_resources<R, E>(
+    pub fn with_resources<'budget, R, E>(
         &self,
-        b: &mut Budget<'_>,
-        operation: impl FnOnce(&T, &mut Budget<'_>) -> std::result::Result<R, E>,
+        b: &mut Budget<'budget>,
+        operation: impl FnOnce(&T, &mut Budget<'budget>) -> std::result::Result<R, E>,
     ) -> std::result::Result<R, E>
     where
         E: From<Resource> + From<crate::RetainedResourceAccessErrorV2>,
@@ -175,12 +175,12 @@ impl<'work, T: Send + 'static> RootRetainedTaskTraceV2<'work, T> {
 
     /// Scoped access through the original child, with the full backing floor.
     /// No compiler admission or consuming wait authority is transferred.
-    pub fn with_task_observation<R, E>(
+    pub fn with_task_observation<'budget, R, E>(
         &self,
-        b: &mut Budget<'_>,
+        b: &mut Budget<'budget>,
         operation: impl FnOnce(
             &RootTaskObservationV2<'_, 'work>,
-            &mut Budget<'_>,
+            &mut Budget<'budget>,
         ) -> std::result::Result<R, E>,
     ) -> std::result::Result<R, E>
     where
@@ -215,10 +215,10 @@ impl<'work, T: Send + 'static> RootRetainedTaskTraceV2<'work, T> {
     }
 
     /// Read-only access to the entire backing on the original ledger.
-    pub fn with_resources<R, E>(
+    pub fn with_resources<'budget, R, E>(
         &self,
-        b: &mut Budget<'_>,
-        operation: impl FnOnce(&T, &mut Budget<'_>) -> std::result::Result<R, E>,
+        b: &mut Budget<'budget>,
+        operation: impl FnOnce(&T, &mut Budget<'budget>) -> std::result::Result<R, E>,
     ) -> std::result::Result<R, E>
     where
         E: From<Resource> + From<crate::RetainedResourceAccessErrorV2>,

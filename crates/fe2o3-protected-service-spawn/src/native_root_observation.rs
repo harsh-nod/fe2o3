@@ -150,12 +150,12 @@ impl<'work> RootTaskTraceV2<'work> {
     ///     t.with_task_observation(b, |view, _| Ok::<_, ProtectedServiceSpawnErrorV2>(view)).unwrap()
     /// }
     /// ```
-    pub fn with_task_observation<R, E>(
+    pub fn with_task_observation<'budget, R, E>(
         &self,
-        b: &mut Budget<'_>,
+        b: &mut Budget<'budget>,
         operation: impl FnOnce(
             &RootTaskObservationV2<'_, 'work>,
-            &mut Budget<'_>,
+            &mut Budget<'budget>,
         ) -> std::result::Result<R, E>,
     ) -> std::result::Result<R, E>
     where

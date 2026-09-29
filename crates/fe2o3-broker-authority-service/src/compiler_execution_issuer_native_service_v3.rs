@@ -101,8 +101,9 @@ impl Admission<'_> {
     /// supplied records cannot replace admission or authorize compiler work.
     /// All inputs remain prepaid on the original budget. Entry storage and
     /// cumulative work/denial history are preserved on refusal and unwind.
-    /// This method is intentionally NOT wired to the inherited entrypoint until
-    /// the launch descriptor ABI and root-side connection are integrated together.
+    /// The V3 inherited entrypoint supplies its mandatory FD12 endpoint. The
+    /// direct root launcher stages that ABI; unsupported indirect launches refuse.
+    /// Root-owned publication observation and retirement are separate integrations.
     pub fn serve_native_with_root_readiness(
         self,
         manifest: &Manifest,

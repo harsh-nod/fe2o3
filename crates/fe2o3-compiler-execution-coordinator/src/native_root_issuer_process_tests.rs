@@ -185,7 +185,8 @@ fn run(case: &str) {
     assert!(b.peak_storage() <= before_peak.max(floor + quota.scratch()));
     b.release_storage(padding).unwrap();
     if case.starts_with("ready-") {
-        let (issuer, growth) = launched.expect("actual V3 issuer startup through Ready120 + EOF");
+        let (issuer, growth) =
+            launched.expect("actual V3 issuer startup through Ready120 + EOF and root challenge");
         b.reserve_storage(growth.additional_storage()).unwrap();
         assert_eq!(
             issuer.retained_storage(),
@@ -200,7 +201,7 @@ fn run(case: &str) {
         f.assert_state("ready");
         let live = b.storage();
         let used = b.work();
-        issuer.validate_ready(&mut b).unwrap();
+        issuer.validate_ready(&trace, &mut b).unwrap();
         assert_eq!(b.storage(), live);
         assert!(b.work() - used <= issuer.continuity_quota().work());
         if case == "ready-image-mismatch" {
@@ -235,22 +236,22 @@ fn run(case: &str) {
         }
         foreign.reserve_storage(live).unwrap();
         assert!(matches!(
-            issuer.validate_ready(&mut foreign),
+            issuer.validate_ready(&trace, &mut foreign),
             Err(Error::Resource(Resource::Accounting))
         ));
         // Same ledger at another address and a foreign ledger at the original
         // address must both refuse while the actual child remains live.
         std::mem::swap(&mut b, &mut foreign);
         assert!(matches!(
-            issuer.validate_ready(&mut b),
+            issuer.validate_ready(&trace, &mut b),
             Err(Error::Resource(Resource::Accounting))
         ));
         assert!(matches!(
-            issuer.validate_ready(&mut foreign),
+            issuer.validate_ready(&trace, &mut foreign),
             Err(Error::Resource(Resource::Accounting))
         ));
         std::mem::swap(&mut b, &mut foreign);
-        issuer.validate_ready(&mut b).unwrap();
+        issuer.validate_ready(&trace, &mut b).unwrap();
         assert!(
             trace.poll(&mut b).unwrap().is_exec(),
             "startup must leave compiler held"

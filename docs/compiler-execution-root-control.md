@@ -1,9 +1,11 @@
 # Root-to-Issuer Control
 
-Status: **integration pending**. The native dispatcher currently retains a local
+Status: **direct startup integrated; production issuance pending**. The native dispatcher currently retains a local
 issuer-owned occurrence, as described in [Native Issuer Session
 Custody](compiler-execution-native-session.md). The original-root observation API
-and bounded authenticated receive primitive exist. They do not yet form an
+and bounded authenticated receive primitive now join the direct launch's measured
+issuer handshake. The private launch primitive is not yet connected to the
+production owning attempt. These components do not yet form an
 end-to-end root-owned issuance path or qualify a tutorial kernel.
 
 ## Transport Boundary
@@ -71,7 +73,8 @@ required.
 ## Connection Replay
 
 The private broker `RootControlReplayWindowV3` orders inert records for one
-connection. It is not yet connected to an admitted root session. It retains a
+connection. The challenge-completed connection retains an empty window for the
+future RPC dispatcher; no publication operation uses it yet. It retains a
 binding and at most one request/reply pair, with the full maximum storage charge
 prepaid even while empty. Every operation checks the original ledger, Budget
 address, process and kernel thread. Its work and scratch quotes include nested
@@ -100,8 +103,8 @@ constructor or root-end extraction. It enables passcred on both nonblocking,
 close-on-exec endpoints before exposing an issuer-side staging borrow. It checks
 the original account, Budget address, process and kernel thread on each operation.
 Closing its parent issuer alias is idempotent, but does not certify closure of
-external stage aliases or retire a compiler occurrence. The owner is not yet
-connected to `launch_issuer` or a broker root session. Positive privileged socket
+external stage aliases or retire a compiler occurrence. The direct `launch_issuer`
+now constructs and stages this owner. Positive privileged socket
 validation remains required.
 
 Its private packet methods reuse the shared transport after checking that its
@@ -127,42 +130,62 @@ This observation is point-in-time image equality, not issuer authentication or
 policy provenance. The launcher still checks its retained deployment, process
 profile, namespaces and manifest. The image helper cannot replace those checks,
 the post-readiness control challenge, or original compiler trace custody. It does
-not activate the root-control descriptor or complete the production owning attempt.
+not by itself complete the production owning attempt.
 
-Both native issuer entrypoints now preflight the complete current FD3..11 table
-after nonallocating process hardening and before descriptor-allocating input
-admission. Missing or close-on-exec slots refuse before a policy/manifest
-duplicate can reuse them. Object-role validation still follows, and V1 is
-unchanged. This ordering fix does not activate FD12.
-
-The pair must be created inside the direct launch's confirmed, held-exec input
-callback, after the compiler clone. Neither end may enter the compiler. The
+The pair is created inside the direct launch's confirmed, held-exec input
+callback, after the compiler clone. Neither end enters the compiler. The
 compiler's FD195 is its public service channel, not a root-control bootstrap.
 
-The proposed issuer-only slot is FD12. This is **not yet the implemented ABI**:
+The V3 issuer-only slot is FD12. The descriptor contracts are:
 
-| Path | Current contract | Required change |
-| --- | --- | --- |
-| Direct V3 root launch | Nine bindings, FD3 through FD11 | Stage only the new issuer endpoint at FD12; retain the root endpoint separately |
-| Conditional issuer startup | Shared V2/V3 intake; private duplicates start at FD12 | V3-only mandatory intake before allocation can reuse missing slots; V3 duplicate floor 13 |
-| Indirect V3 launch | Stdio plus FD3 through FD11 | Transfer a real per-attempt root endpoint and update its exact tables and accounting |
-| V2 startup | Existing FD3 through FD11 ABI | Preserve its descriptor contract |
+| Path | Contract |
+| --- | --- |
+| Direct V3 root launch | Ten bindings, FD3 through FD12; only the issuer end is staged |
+| Conditional V3 issuer startup | Mandatory complete FD3..12 preflight before allocation; private duplicates start at FD13 |
+| Indirect V3 launch | Explicit refusal before staging/clone in coordinator launch and supervisor funded launch, including `run_session` |
+| V2 startup | Unchanged FD3..11 table and private duplicate floor FD12 |
 
 The indirect supervisor's own FD12 is already its lifecycle lock. It is not the
-new channel. Changing only the direct table and conditional issuer would break
-the indirect path. Migrate both V3 routes coherently, or explicitly make the
-unsupported route refuse before clone; never silently fall back to local
-observation, V2, or another binary.
+new channel. Supporting the indirect route again requires an actual original-root
+channel transfer and matching custody, staging and accounting. There is no
+fallback to local observation, V2, or another binary.
 
-The direct launch must charge ten channel descriptors instead of eight, ten
-bindings instead of nine, the extra staged source descriptor, both passcred
-operations, endpoint validation, owner overlap, and bounded RPC attempts.
-All stage and parent aliases of the issuer end must close before completion.
-Retain the full root-side state independently of the issuer connection.
+The direct launch charges the eight existing status descriptors plus the root
+pair, ten bindings, the extra staged source descriptor, both passcred operations,
+endpoint validation, owner overlap, and bounded handshake attempts. All stage
+and parent aliases of the issuer end close before readiness completes.
 
-Endpoint admission must precede readiness. Synchronous root RPC must follow
-the exact readiness frame and writer EOF, otherwise startup can deadlock while
-the root waits for readiness and the issuer waits for the root.
+Endpoint admission precedes readiness. The issuer closes the readiness writer
+before waiting for the root challenge, and cannot dispatch its first client
+request until the challenge completes. The root waits for the exact readiness
+frame and writer EOF before starting that exchange.
+
+## Admission Handshake
+
+`RootControlSessionV3` retains the actual original trace's opaque allocation
+identity, root namespaces and a fresh random epoch on the original Work lifetime,
+Budget address, process and kernel thread. It is an association owner, **not yet
+an occurrence or retirement owner**.
+
+After the one-use input callback completes, the compiler remains held. Within
+its original scoped observation, the direct launcher checks the actual retained
+issuer's pidfd, process profile, namespaces and running image against its retained
+deployment policy and launch manifest. Only then does it sample a separate fresh
+connection generation and send the fixed sequence-one gate request. An exact
+authenticated reply must join that request, policy, manifest, epoch and generation.
+The issuer answers only through its actual post-Admission, post-readiness gate.
+
+The root rechecks original custody, issuer liveness, profile, namespaces and image
+before returning `ManagedIssuer`. Subsequent readiness validation requires the
+original compiler trace again. The shared scoped APIs preserve the Budget's Work
+lifetime but still prevent borrowed payloads or observation views escaping.
+No decoded PID, policy hash, readiness frame or arbitrary descriptor can construct
+the original trace or its retained issuer child.
+
+Both ends use finite attempts and deadlines on their original resource accounts.
+Failed startup cancels the original held compiler and issuer through their funded
+cleanup owners. It acquires no publication occurrence. A successful startup is
+transport admission, not a proof, receipt, currentness check or safe GPU launch.
 
 ## Ownership and Retirement
 

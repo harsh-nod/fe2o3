@@ -144,8 +144,8 @@ mod compiler_execution_root_channel;
 mod compiler_execution_root_connection;
 #[cfg(target_os = "linux")]
 pub use compiler_execution_root_connection::{
-    RootConnectionErrorV3, RootConnectionQuotaV3, RootConnectionStorageV3,
-    RootConnectionV3, RootControlSessionV3,
+    RootConnectionErrorV3, RootConnectionQuotaV3, RootConnectionStorageV3, RootConnectionV3,
+    RootControlSessionV3,
 };
 #[cfg(target_os = "linux")]
 mod compiler_execution_root_exchange;
