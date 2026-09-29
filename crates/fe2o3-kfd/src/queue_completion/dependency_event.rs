@@ -206,6 +206,10 @@ impl CompletionSignalArenaOwnerV1 {
     /// Capacity, identity, allocation, and pin-count checks complete before
     /// the first ledger mutation, so a rejection returns the bound batch
     /// unchanged to its owner.
+    #[allow(
+        clippy::question_mark,
+        reason = "shared proof returns carry reservation observations"
+    )]
     pub(super) fn record_unbound_compute_event_batch<const N: usize>(
         &mut self,
         session_occurrence: u64,
@@ -227,6 +231,10 @@ impl CompletionSignalArenaOwnerV1 {
     /// Recording pins the exact slot. The returned occurrence is unbound until
     /// `bind_compute_event_after_publication` authenticates the published
     /// packet ID. All allocation and overflow checks precede ledger mutation.
+    #[allow(
+        clippy::question_mark,
+        reason = "shared proof returns carry reservation observations"
+    )]
     pub(super) fn record_unbound_compute_event<const N: usize>(
         &mut self,
         session_occurrence: u64,
