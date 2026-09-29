@@ -24,6 +24,17 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [exact completion-event release refinement](evidence/dev-completion-event-release-2026-09-28/README.md)
+shares the real Ready/identity/live-slot checks and release body between production
+and Verus. Its signed 23-stage campaign passes 16 verified functions, all 15
+executable negative controls, relocation and source/tool closure. Refusal returns
+the exact event unchanged; success removes one ledger entry and decrements only
+its event pin, preserving reader custody and all neighboring logical state.
+Four new CPU groups and the full 1726-test KFD suite pass, alongside 1828 runtime
+tests, 95 doctests and static checks. This closes the earlier missing full-KFD
+rerun, not A1/A2. Batch cardinality/rollback, session/runtime composition, native
+target scheduling, GPU overlap and matched HIP/HSA performance remain open.
+
 The [runtime source-event custody integration](evidence/dev-runtime-source-custody-2026-09-28/README.md)
 now roots genuine source events beside indexed ordinary dispatches, preserves
 requests through Prepared retry, resamples after no-effect ordered withdrawal,
@@ -32,9 +43,9 @@ independent; release failures retain exact returned or indeterminate custody and
 terminalize without recycling. Ten new CPU groups cover both lanes, rollback,
 out-of-order semantic gating and fault paths. All 20 CPU receipt groups, 1828
 runtime tests, 155 KFD live-queue tests and 95 doctests pass, along with strict
-Clippy, non-fixture production checks and formatting. No full KFD rerun, new
-Verus qualification, GPU execution or performance measurement is claimed. Native
-target scheduling, lane-local DATA composition and A1/A2 exit gates remain open.
+Clippy, non-fixture production checks and formatting. That packet did not include
+a full KFD rerun, Verus qualification, GPU execution or performance measurement.
+Native target scheduling, lane-local DATA composition and A1/A2 exit gates remain open.
 
 The [classified dependency-source publication](evidence/dev-source-publication-classification-2026-09-28/README.md)
 API now preserves rejection, complete-rollback retry and terminal outcomes while
