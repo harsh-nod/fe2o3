@@ -41,9 +41,11 @@ EDGES = {
             ('include!("../../fe2o3-kfd/src/queue_completion/rollback_adapters_body.rs");', ADAPTERS)],
 }
 BOUNDS_ERROR = "precondition not met: index in bounds for this access"
+ARITHMETIC_ERROR = "possible arithmetic underflow/overflow"
 BATCH = "record_unbound_compute_event_batch"
 ONE = "record_unbound_compute_event"
 BOUNDS_SELECTORS = {"*" + BATCH, "*" + ONE, "*pack_source_output"}
+ARITHMETIC_SELECTORS = {"*" + BATCH, "*" + ONE}
 
 
 def need(value, message):
@@ -170,7 +172,9 @@ def selection_notes(leaf, focus=None):
     names = free | methods | {"new"}
     need(focus is None or focus in {"*" + name for name in names}, "exact issuance selector")
     selected = names if focus is None else [focus[1:]]
-    return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS | ({BOUNDS_ERROR} if focus in BOUNDS_SELECTORS else set()),
+    return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS
+        | ({BOUNDS_ERROR} if focus in BOUNDS_SELECTORS else set())
+        | ({ARITHMETIC_ERROR} if focus in ARITHMETIC_SELECTORS else set()),
         SELECTION_NOTES={"verifying root module (selected functions)",
             *{"verifying root module, function completion_event_issue_v1::"
               + ("CompletionSignalArenaOwnerV1::" if name in methods else "CompletionDependencyLedgerV1::" if name == "new" else "")

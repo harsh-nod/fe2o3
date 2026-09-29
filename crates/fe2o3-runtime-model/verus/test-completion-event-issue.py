@@ -143,6 +143,13 @@ for mode, count in (("batch", 32), ("single", 15), ("packing", 8)):
             need(not check([dict(note, message=message + " unknown"), error]), "unknown selector rejected")
         bounds = dict(error, message=runner["BOUNDS_ERROR"])
         need(check([bounds]) == (focus in runner["BOUNDS_SELECTORS"]), "bounds restricted to indexed bodies")
+        arithmetic = dict(error, message=runner["ARITHMETIC_ERROR"])
+        need(check([arithmetic]) == (focus in runner["ARITHMETIC_SELECTORS"]), "arithmetic restricted to issuers")
+        for hostile in (dict(arithmetic, message=runner["ARITHMETIC_ERROR"] + " unknown"),
+                        dict(arithmetic, level="warning"), dict(arithmetic, children=[error]),
+                        dict(arithmetic, spans=[{"is_primary": True, "file_name": "/foreign.rs"}])):
+            need(not check([hostile]), "hostile arithmetic diagnostic rejected")
+        need(not check([arithmetic, dict(error, message="Resource limit (rlimit) exceeded")]), "mixed arithmetic/resource rejected")
         for hostile in (dict(bounds, message=runner["BOUNDS_ERROR"] + " unknown"), dict(bounds, level="warning"),
                         dict(error, children=[error]), dict(error, spans=[{"is_primary": True, "file_name": "/foreign.rs"}])):
             need(not check([hostile]), "hostile diagnostic rejected")
