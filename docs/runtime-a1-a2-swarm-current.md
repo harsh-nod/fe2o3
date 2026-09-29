@@ -9,7 +9,7 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | Milestone | Status | Remaining exit gates |
 | --- | --- | --- |
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
-| A1: single-device async | Active, incomplete | Protected generated execution, repeated async-owner scale qualification, aggregate accounting and production refinement |
+| A1: single-device async | Active, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
 | A2: dependencies and overlap | Active, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
 | A3: local multi-GPU | Partial foundations | XGMI copy witnesses exist; unified compute, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
@@ -23,6 +23,26 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [dispatch preflight and repeated async-owner qualification](evidence/dev-preflight-repeat-owner-2026-09-29/README.md)
+source-refines actual retained-fact preflight checks with exact first refusal or
+next-generation selection. Its signed campaign passes 30 stages, all 22 logical
+negative controls and 46 overlapping obligations with `--no-cheating`. The full
+KFD suite passes 1773/0 with zero ignores or exclusions; the corrected-source
+KFD rebuild is byte-identical to that executed ELF. All 24 corrected CPU/static/
+affected-proof stages pass, including runtime 1839/0 with 32 hardware ignores,
+124 doctests and strict Clippy. The exact static native-test ELF passes 1776 CPU
+tests with 32 hardware ignores.
+Both isolated MI300X owner cases pass 8192 operations across four reuse/replacement
+waves, 100663296 checked bytes and all six strict endpoints. Complete collection,
+owned cleanup, independent process/path absence and fresh archive replay pass.
+The separate repeat qualification policy leaves the frozen initial-sentinel
+policy unchanged; exact-artifact full overwrite remains trusted, not a machine-code
+proof. This qualifies the ordinary owned-engine path, not protected Worker
+execution, native recipe-occurrence authority, physical overlap, aggregate memory
+bounds or performance. Historical failures remain rejected. Complete binder
+composition, Context reconciliation and all full milestone exits remain open;
+accepted lane checkpoints and HIP/HSA parity status are unchanged.
 
 The [template preparation and async-owner attempt](evidence/dev-template-prepare-owner-attempt-2026-09-29/README.md)
 source-refines immutable packet preparation, ABI comparison and constructors,
