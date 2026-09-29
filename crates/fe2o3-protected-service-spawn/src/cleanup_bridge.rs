@@ -63,23 +63,27 @@ impl ChildCleanupV1 {
         self.release_spawn_after_exec();
     }
 
-    /// Records a successful exact consuming terminal wait before slot retirement.
+    /// Records a successful exact consuming root wait, not aggregate completion.
     ///
     /// # Safety
     /// The caller must have consumed an exited/killed/core-dumped wait status for
     /// this exact pidfd under exclusive wait ownership. NOWAIT, ECHILD, signal
-    /// success and nonterminal statuses cannot discharge this obligation.
+    /// success and nonterminal statuses cannot discharge this obligation. If a
+    /// domain is retained, continue cleanup until `step` returns `Reaped` before
+    /// retiring the slot; the root status alone releases neither domain nor inputs.
     pub unsafe fn confirm_terminal_reap(&mut self) {
         self.terminal_reaped();
     }
 }
 
 impl ReapSlotV1<'_> {
-    /// Retires a slot after its associated child's exact terminal reap.
+    /// Retires a slot after every associated cleanup obligation completed.
     ///
     /// # Safety
-    /// All associated child custody must already be terminal and dropped. A
-    /// pending or quarantined child must instead be transferred with `defer`.
+    /// All associated child custody must already be terminal and dropped, and
+    /// any retained domain must have completed aggregate cleanup. Namespace
+    /// custody stays with that record through aggregate completion. A pending or
+    /// quarantined child/domain must instead remain in its original slot.
     pub unsafe fn retire_reaped(self) {
         self.complete();
     }
@@ -90,8 +94,8 @@ impl crate::ProtectedServiceCleanupReservationV2 {
     ///
     /// # Safety
     /// Before clone, bind this slot to the attempt's exclusive cleanup custodian.
-    /// Once a child exists, never drop or retire the slot while that child is
-    /// unresolved: transfer the whole child to it on error/unwind. The precharged
+    /// Once a child or domain exists, never drop or retire the slot while either
+    /// is unresolved: transfer all custody to it on error/unwind. The precharged
     /// emergency allowance must cover each foreground cleanup/transfer operation.
     #[doc(hidden)]
     pub unsafe fn into_spawn_slot(self) -> ReapSlotV1<'static> {
@@ -105,8 +109,8 @@ impl crate::ProtectedServiceCleanupServiceV2 {
     /// Prepay the full consumed input storage on the original request account.
     /// Success preserves that reservation and returns unreserved GROWTH for the
     /// typed view. The pool independently funds the full payload until rollback
-    /// before clone or exact terminal retirement. Neither pending cleanup nor
-    /// controller loss releases that charge. The view may outlive retirement;
+    /// before domain/child creation or complete aggregate retirement. Pending
+    /// cleanup and controller loss retain that charge. The view may outlive retirement;
     /// keep its full retained_storage charged until Drop. Failure consumes the
     /// input but leaves its request reservation for caller retirement.
     ///
@@ -119,8 +123,9 @@ impl crate::ProtectedServiceCleanupServiceV2 {
     /// Shared access must preserve all transitively retained obligations; it must
     /// not extract owners through interior mutation or unlock shared lock aliases.
     /// Before clone transfer the reservation to the exclusive child custodian;
-    /// never retire it while that child is unresolved. No raw descriptor, PID,
-    /// storage number or caller value is authenticated by this operation.
+    /// never retire it while that child or its retained domain is unresolved,
+    /// including the record's retained namespace and mapping dependencies.
+    /// No raw descriptor, PID, storage number or caller value is authenticated.
     pub unsafe fn reserve_launch_retaining<T: Send + 'static>(
         &mut self,
         value: T,

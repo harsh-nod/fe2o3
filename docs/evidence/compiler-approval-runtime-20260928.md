@@ -5,6 +5,11 @@ Date: 2026-09-28. This continues the
 It does not complete an issue #272 M0-M7 milestone, activate the conditional
 production compiler, or establish 47/47 production-to-safe-GPU qualification.
 
+Later work is recorded in the
+[runtime inventory and proof-controller checkpoint](retained-runtime-controller-20260928.md).
+Its r12 failure, controller fixes and local validation are separate from the
+older successful r11 protected replay below; that replay does not qualify them.
+
 ## Implemented Boundary
 
 `CompilerApprovalPolicyV1` is an inert, fixed 352-byte record. It binds all six

@@ -7,13 +7,17 @@ use fe2o3_protected_service_profile::{
     PROTECTED_SERVICE_SECUREBITS_V1, ProtectedServiceCredentialProfileV1,
 };
 
+use crate::native_spawn::compiler_arguments::CompilerArguments;
+use crate::native_spawn::compiler_child_channel::COMPILER_SERVICE_FD;
 use crate::{
     PROTECTED_SERVICE_GATE_RELEASE_V1, PROTECTED_SERVICE_PROFILE_READY_V1,
     PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1, ProtectedServiceDescriptorBindingV1,
 };
 
 const CLONE_PIDFD: u64 = 0x0000_1000;
+const CLONE_NEWUSER: u64 = 0x1000_0000;
 const CLONE_CLEAR_SIGHAND: u64 = 0x0000_0001_0000_0000;
+const CLONE_INTO_CGROUP: u64 = 0x0000_0002_0000_0000;
 const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
 const SIGCHLD: u64 = 17;
 const SIGKILL: c_int = 9;
@@ -37,6 +41,10 @@ const PR_CAP_AMBIENT_CLEAR_ALL: c_int = 4;
 const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const FAILURE_BASE: u8 = 0xc0;
+
+#[path = "native_compiler_channel_syscall.rs"]
+mod compiler_channel;
+pub(crate) use compiler_channel::SCRATCH as COMPILER_CHANNEL_SCRATCH;
 
 pub(crate) fn has_exact_root_identity() -> bool {
     let mut uids = [u32::MAX; 3];
@@ -116,6 +124,8 @@ pub(crate) struct StagedProtectedServiceExecV1 {
     profile_ready_writer: OwnedFd,
     gate_reader: OwnedFd,
     exec_status_writer: OwnedFd,
+    compiler: Option<(File, CompilerArguments)>,
+    compiler_child_channel_transfer: Option<File>,
 }
 
 impl StagedProtectedServiceExecV1 {
@@ -126,11 +136,73 @@ impl StagedProtectedServiceExecV1 {
         gate_reader: BorrowedFd<'_>,
         exec_status_writer: BorrowedFd<'_>,
     ) -> io::Result<Self> {
+        Self::new_with_bindings(
+            executable,
+            bindings.len(),
+            bindings.iter().copied(),
+            profile_ready_writer,
+            gate_reader,
+            exec_status_writer,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_compiler(
+        executable: &File,
+        standard_io: [Option<BorrowedFd<'_>>; 3],
+        bindings: &[ProtectedServiceDescriptorBindingV1<'_>],
+        profile_ready_writer: BorrowedFd<'_>,
+        gate_reader: BorrowedFd<'_>,
+        exec_status_writer: BorrowedFd<'_>,
+        working_directory: BorrowedFd<'_>,
+        arguments: CompilerArguments,
+        child_channel_transfer: Option<BorrowedFd<'_>>,
+    ) -> io::Result<Self> {
+        let count = bindings.len() + standard_io.iter().flatten().count();
+        let streams = standard_io
+            .into_iter()
+            .enumerate()
+            .filter_map(|(destination, source)| {
+                source.map(|source| ProtectedServiceDescriptorBindingV1 {
+                    source,
+                    destination: destination as RawFd,
+                })
+            });
+        let mut staged = Self::new_with_bindings(
+            executable,
+            count,
+            streams.chain(bindings.iter().copied()),
+            profile_ready_writer,
+            gate_reader,
+            exec_status_writer,
+        )?;
+        let mut next = staged
+            .exec_status_writer
+            .as_raw_fd()
+            .checked_add(1)
+            .ok_or_else(|| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
+        let cwd = File::from(duplicate_above(working_directory, &mut next)?);
+        staged.compiler = Some((cwd, arguments));
+        if let Some(transfer) = child_channel_transfer {
+            staged.compiler_child_channel_transfer =
+                Some(File::from(duplicate_above(transfer, &mut next)?));
+        }
+        Ok(staged)
+    }
+
+    fn new_with_bindings<'a>(
+        executable: &File,
+        count: usize,
+        bindings: impl Iterator<Item = ProtectedServiceDescriptorBindingV1<'a>>,
+        profile_ready_writer: BorrowedFd<'_>,
+        gate_reader: BorrowedFd<'_>,
+        exec_status_writer: BorrowedFd<'_>,
+    ) -> io::Result<Self> {
         let mut next = PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1;
         let executable = File::from(duplicate_above(executable.as_fd(), &mut next)?);
         let mut staged_bindings = Vec::new();
         staged_bindings
-            .try_reserve_exact(bindings.len())
+            .try_reserve_exact(count)
             .map_err(|_| io::Error::from_raw_os_error(libc::ENOMEM))?;
         for binding in bindings {
             staged_bindings.push(StagedBindingV1 {
@@ -144,11 +216,38 @@ impl StagedProtectedServiceExecV1 {
             profile_ready_writer: duplicate_above(profile_ready_writer, &mut next)?,
             gate_reader: duplicate_above(gate_reader, &mut next)?,
             exec_status_writer: duplicate_above(exec_status_writer, &mut next)?,
+            compiler: None,
+            compiler_child_channel_transfer: None,
         })
     }
 
+    pub(crate) fn compiler_arguments(&self) -> Option<&CompilerArguments> {
+        self.compiler.as_ref().map(|(_, arguments)| arguments)
+    }
+
+    pub(crate) fn compiler_working_directory(&self) -> Option<&File> {
+        self.compiler.as_ref().map(|(cwd, _)| cwd)
+    }
+
+    pub(crate) fn compiler_child_channel_transfer(&self) -> Option<&File> {
+        self.compiler_child_channel_transfer.as_ref()
+    }
+
+    pub(crate) fn additional_child_work(&self) -> usize {
+        let cwd = if self.compiler.is_some() {
+            crate::native_work::COMPILER_CWD_WORK
+        } else {
+            0
+        };
+        cwd + if self.compiler_child_channel_transfer.is_some() {
+            crate::native_work::COMPILER_CHANNEL_WORK
+        } else {
+            0
+        }
+    }
+
     pub(crate) fn descriptor_count(&self) -> usize {
-        self.bindings.len()
+        self.bindings.len() + usize::from(self.compiler_child_channel_transfer.is_some())
     }
 
     pub(crate) fn executable(&self) -> &File {
@@ -213,20 +312,43 @@ pub(crate) fn clone_child(
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
 ) -> rustix::io::Result<(rustix::process::Pid, Option<OwnedFd>)> {
+    clone_child_with_cgroup(
+        staged,
+        credentials,
+        cap_last_cap,
+        expected_parent,
+        None,
+        None,
+    )
+}
+
+// Placement alone grants no protected-service or proof-isolation admission.
+// The caller retains this freshly created domain and adopts it with the child
+// before any parent-side check can fail.
+pub(crate) fn clone_child_with_cgroup(
+    staged: &StagedProtectedServiceExecV1,
+    credentials: ProtectedServiceCredentialProfileV1,
+    cap_last_cap: u32,
+    expected_parent: rustix::process::Pid,
+    cgroup: Option<BorrowedFd<'_>>,
+    mapping_gate: Option<(BorrowedFd<'_>, BorrowedFd<'_>)>,
+) -> rustix::io::Result<(rustix::process::Pid, Option<OwnedFd>)> {
+    if mapping_gate.is_some() && cgroup.is_none() {
+        return Err(rustix::io::Errno::INVAL);
+    }
+    // Defense in depth before clone, including private constructor callers.
+    if staged.compiler_child_channel_transfer.is_some()
+        && (staged.compiler.is_none()
+            || staged.descriptor_count() > crate::MAX_PROTECTED_SERVICE_DESCRIPTOR_BINDINGS_V1
+            || staged
+                .bindings
+                .iter()
+                .any(|b| b.destination == COMPILER_SERVICE_FD))
+    {
+        return Err(rustix::io::Errno::INVAL);
+    }
     let mut pidfd_raw = -1_i32;
-    let arguments = CloneArgsV1 {
-        flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
-        pidfd: (&raw mut pidfd_raw).addr() as u64,
-        child_tid: 0,
-        parent_tid: 0,
-        exit_signal: SIGCHLD,
-        stack: 0,
-        stack_size: 0,
-        tls: 0,
-        set_tid: 0,
-        set_tid_size: 0,
-        cgroup: 0,
-    };
+    let arguments = clone_arguments(&mut pidfd_raw, cgroup, mapping_gate.is_some());
     // SAFETY: clone3 receives the exact Linux ABI record without VM or file-table sharing. The
     // child executes direct syscalls only and cannot return into Rust.
     let result = unsafe {
@@ -248,6 +370,7 @@ pub(crate) fn clone_child(
                 credentials,
                 cap_last_cap,
                 expected_parent.as_raw_pid(),
+                mapping_gate,
             )
         }
     }
@@ -260,6 +383,33 @@ pub(crate) fn clone_child(
         Some(unsafe { OwnedFd::from_raw_fd(pidfd_raw) })
     };
     Ok((pid, pidfd))
+}
+
+fn clone_arguments(
+    pidfd: &mut c_int,
+    cgroup: Option<BorrowedFd<'_>>,
+    fresh_user_namespace: bool,
+) -> CloneArgsV1 {
+    CloneArgsV1 {
+        flags: CLONE_PIDFD
+            | CLONE_CLEAR_SIGHAND
+            | cgroup.map_or(0, |_| CLONE_INTO_CGROUP)
+            | if fresh_user_namespace {
+                CLONE_NEWUSER
+            } else {
+                0
+            },
+        pidfd: (pidfd as *mut c_int).addr() as u64,
+        child_tid: 0,
+        parent_tid: 0,
+        exit_signal: SIGCHLD,
+        stack: 0,
+        stack_size: 0,
+        tls: 0,
+        set_tid: 0,
+        set_tid_size: 0,
+        cgroup: cgroup.map_or(0, |fd| fd.as_raw_fd() as u64),
+    }
 }
 
 pub(crate) struct RootOwnedProtectedServiceChildV1 {
@@ -411,6 +561,7 @@ unsafe fn child_exec(
     credentials: ProtectedServiceCredentialProfileV1,
     cap_last_cap: u32,
     expected_parent: i32,
+    mapping_gate: Option<(BorrowedFd<'_>, BorrowedFd<'_>)>,
 ) -> ! {
     // SAFETY: every operation below is a direct scalar syscall over inherited storage.
     unsafe {
@@ -418,33 +569,39 @@ unsafe fn child_exec(
             child_fail(staged.exec_status_writer.as_raw_fd(), 1);
         }
         if let Err(stage) = establish_guarded_profile(expected_parent, || {
+            if let Some((reader, writer)) = mapping_gate {
+                // The child must not keep its own release writer alive. This gate
+                // precedes all ID changes and is already guarded by PDEATHSIG.
+                if await_mapping_gate(reader.as_raw_fd(), writer.as_raw_fd()) != 0 {
+                    return -1;
+                }
+            }
             establish_profile(credentials, cap_last_cap)
         }) {
             child_fail(staged.exec_status_writer.as_raw_fd(), stage);
         }
+        // Socket SO_PEERCRED must capture the final child identity, not root.
+        let compiler_client = if let Some(transfer) = &staged.compiler_child_channel_transfer {
+            let client =
+                compiler_channel::create_and_transfer(transfer.as_raw_fd(), expected_parent);
+            if client < 0 {
+                child_fail(staged.exec_status_writer.as_raw_fd(), 11);
+            }
+            client
+        } else {
+            -1
+        };
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
-        if libc::write(
+        if libc::syscall(
+            libc::SYS_write,
             staged.profile_ready_writer.as_raw_fd(),
             (&raw const ready).cast::<c_void>(),
-            1,
+            1_usize,
         ) != 1
         {
             child_fail(staged.exec_status_writer.as_raw_fd(), 4);
         }
-        let release = match crate::pre_exec::read_child_gate(|release| {
-            let count = libc::read(
-                staged.gate_reader.as_raw_fd(),
-                (release as *mut u8).cast::<c_void>(),
-                1,
-            );
-            if count < 0 {
-                Err(rustix::io::Errno::from_raw_os_error(
-                    *libc::__errno_location(),
-                ))
-            } else {
-                Ok(count as usize)
-            }
-        }) {
+        let release = match read_gate(staged.gate_reader.as_raw_fd()) {
             Ok(release) => release,
             Err(()) => child_fail(staged.exec_status_writer.as_raw_fd(), 5),
         };
@@ -454,27 +611,89 @@ unsafe fn child_exec(
         if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 7);
         }
+        // Sources are already staged above the destination range. Close all
+        // inherited streams first; compiler bindings reinstall only captured ones.
+        libc::syscall(libc::SYS_close, 0);
+        libc::syscall(libc::SYS_close, 1);
+        libc::syscall(libc::SYS_close, 2);
         for binding in &staged.bindings {
-            if libc::dup3(binding.source.as_raw_fd(), binding.destination, 0) != binding.destination
+            if libc::syscall(
+                libc::SYS_dup3,
+                binding.source.as_raw_fd(),
+                binding.destination,
+                0,
+            ) != c_long::from(binding.destination)
             {
                 child_fail(staged.exec_status_writer.as_raw_fd(), 8);
             }
         }
-        libc::close(0);
-        libc::close(1);
-        libc::close(2);
+        if compiler_client >= 0
+            && (libc::syscall(libc::SYS_dup3, compiler_client, COMPILER_SERVICE_FD, 0)
+                != c_long::from(COMPILER_SERVICE_FD)
+                || libc::syscall(libc::SYS_close, compiler_client) != 0)
+        {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 12);
+        }
         let name = c"fe2o3-protected-service";
         let arguments = [name.as_ptr().cast_mut(), std::ptr::null_mut()];
         let environment = [std::ptr::null_mut::<c_char>()];
+        let (argv, envp) = if let Some((cwd, compiler)) = &staged.compiler {
+            if libc::syscall(libc::SYS_fchdir, cwd.as_raw_fd()) != 0 {
+                child_fail(staged.exec_status_writer.as_raw_fd(), 10);
+            }
+            (compiler.argv(), compiler.envp())
+        } else {
+            (
+                arguments.as_ptr().cast::<usize>(),
+                environment.as_ptr().cast::<usize>(),
+            )
+        };
         libc::syscall(
             libc::SYS_execveat,
             staged.executable.as_raw_fd(),
             c"".as_ptr(),
-            arguments.as_ptr(),
-            environment.as_ptr(),
+            argv,
+            envp,
             libc::AT_EMPTY_PATH,
         );
         child_fail(staged.exec_status_writer.as_raw_fd(), 9)
+    }
+}
+
+// No allocation, unwinding, or unbounded interrupted-syscall retry after clone.
+unsafe fn read_gate(fd: RawFd) -> Result<u8, ()> {
+    crate::pre_exec::read_child_gate(|release| {
+        // SAFETY: one writable byte lives through the direct read syscall.
+        unsafe {
+            let count = libc::syscall(
+                libc::SYS_read,
+                fd,
+                (release as *mut u8).cast::<c_void>(),
+                1_usize,
+            );
+            if count < 0 {
+                Err(rustix::io::Errno::from_raw_os_error(
+                    *libc::__errno_location(),
+                ))
+            } else {
+                Ok(count as usize)
+            }
+        }
+    })
+}
+
+unsafe fn await_mapping_gate(reader: RawFd, writer: RawFd) -> c_int {
+    // SAFETY: the private pipe ends are consumed before descriptor installation.
+    // Use raw syscalls: libc cancellation points must not run after raw clone.
+    unsafe {
+        if libc::syscall(libc::SYS_close, writer) != 0
+            || read_gate(reader) != Ok(PROTECTED_SERVICE_GATE_RELEASE_V1)
+            || libc::syscall(libc::SYS_close, reader) != 0
+        {
+            -1
+        } else {
+            0
+        }
     }
 }
 
@@ -702,11 +921,14 @@ unsafe fn child_fail(exec_status: RawFd, stage: u8) -> ! {
     let message = FAILURE_BASE.saturating_add(stage);
     // SAFETY: exec_status is the staged seqpacket and message names one live byte.
     unsafe {
-        let _ = libc::send(
+        let _ = libc::syscall(
+            libc::SYS_sendto,
             exec_status,
             (&raw const message).cast::<c_void>(),
-            1,
+            1_usize,
             libc::MSG_NOSIGNAL,
+            std::ptr::null::<libc::sockaddr>(),
+            0_usize,
         );
         libc::_exit(126)
     }

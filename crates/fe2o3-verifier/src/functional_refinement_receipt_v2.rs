@@ -36,7 +36,8 @@ use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 
 use crate::functional_refinement_runtime_v1::{
-    FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementVerusRuntimeLeaseV1,
+    FunctionalRefinementAttemptV1, FunctionalRefinementRuntimeProcessOutputV1,
+    FunctionalRefinementVerusRuntimeLeaseV1,
 };
 use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementRuntimeErrorV1};
 
@@ -89,6 +90,7 @@ pub fn functional_refinement_verus_toolchain_identity_v2(
 /// producer deliberately supports only the reference-MIR to kernel-MIR boundary; a source hash is
 /// not evidence of source-to-MIR refinement.
 fn execute_functional_refinement_verus_and_prepare_receipt_v2(
+    attempt: &mut FunctionalRefinementAttemptV1,
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     source: CanonicalGeneratedVerusProofInputV3,
     binding: FunctionalRefinementBindingV2,
@@ -112,6 +114,7 @@ fn execute_functional_refinement_verus_and_prepare_receipt_v2(
         })?;
     let observed = runtime
         .execute_generated_rust_verify(
+            attempt,
             &source,
             deadline,
             MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2,
@@ -267,6 +270,37 @@ pub fn prepare_ranked_functional_refinement_receipt_v2(
     signer_identity: DigestV1,
     timeout_seconds: u32,
 ) -> Result<PreparedFunctionalRefinementReceiptV2, FunctionalRefinementVerusExecutionErrorV2> {
+    let mut attempt = runtime
+        .begin_attempt()
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
+    let prepared = prepare_ranked_with_attempt(
+        &mut attempt,
+        runtime,
+        kernel,
+        block_index,
+        operation_index,
+        subjects,
+        signer_identity,
+        timeout_seconds,
+    )?;
+    attempt
+        .complete()
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    attempt.before_publication();
+    Ok(prepared)
+}
+
+fn prepare_ranked_with_attempt(
+    attempt: &mut FunctionalRefinementAttemptV1,
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    subjects: FunctionalRefinementSubjectsV2,
+    signer_identity: DigestV1,
+    timeout_seconds: u32,
+) -> Result<PreparedFunctionalRefinementReceiptV2, FunctionalRefinementVerusExecutionErrorV2> {
     let (binding, source) = generate_ranked_functional_refinement_proof_v2(
         kernel,
         block_index,
@@ -274,6 +308,7 @@ pub fn prepare_ranked_functional_refinement_receipt_v2(
         subjects,
     )?;
     let unsigned = execute_functional_refinement_verus_and_prepare_receipt_v2(
+        attempt,
         runtime,
         source,
         binding,
@@ -301,7 +336,11 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
-    let (binding, retained, policy) = execute_and_retain_ranked_functional_refinement_locally_v2(
+    let mut attempt = runtime
+        .begin_attempt()
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
+    let (binding, retained, policy) = retain_ranked_with_attempt(
+        &mut attempt,
         runtime,
         kernel,
         block_index,
@@ -310,6 +349,11 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
         timeout_seconds,
     )?;
     let (proof, _) = retained.into_parts();
+    attempt
+        .complete()
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    attempt.before_publication();
     Ok((binding, proof, policy))
 }
 
@@ -317,6 +361,42 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
 /// needed by independent ranked reconstruction. No caller-authored proof source
 /// or admitted-signer authority is accepted by this producer.
 pub fn execute_and_retain_ranked_functional_refinement_locally_v2(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    subjects: FunctionalRefinementSubjectsV2,
+    timeout_seconds: u32,
+) -> Result<
+    (
+        FunctionalRefinementBindingV2,
+        RetainedImportedFunctionalRefinementReceiptV2,
+        ProductionRefinementStagingPolicyV2,
+    ),
+    FunctionalRefinementVerusExecutionErrorV2,
+> {
+    let mut attempt = runtime
+        .begin_attempt()
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
+    let retained = retain_ranked_with_attempt(
+        &mut attempt,
+        runtime,
+        kernel,
+        block_index,
+        operation_index,
+        subjects,
+        timeout_seconds,
+    )?;
+    attempt
+        .complete()
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    attempt.before_publication();
+    Ok(retained)
+}
+
+fn retain_ranked_with_attempt(
+    attempt: &mut FunctionalRefinementAttemptV1,
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     kernel: &ProductionRankedKernelV1,
     block_index: usize,
@@ -343,7 +423,8 @@ pub fn execute_and_retain_ranked_functional_refinement_locally_v2(
     let production_policy =
         ProductionRefinementStagingPolicyV2::new([policy.signer_identity()], toolchain)
             .map_err(|_| invalid_ranked_recipe())?;
-    let prepared = prepare_ranked_functional_refinement_receipt_v2(
+    let prepared = prepare_ranked_with_attempt(
+        attempt,
         runtime,
         kernel,
         block_index,
@@ -390,6 +471,10 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
+    let mut owned_attempt = runtime
+        .begin_attempt()
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
+    let attempt = &mut owned_attempt;
     let signing = SigningKey::generate(&mut OsRng);
     let verifying_key = signing.verifying_key().to_bytes();
     let toolchain = functional_refinement_verus_toolchain_identity_v2(runtime)?;
@@ -403,6 +488,7 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
         ProductionRefinementStagingPolicyV2::new([policy.signer_identity()], toolchain)
             .map_err(|_| invalid_ranked_recipe())?;
     let unsigned = execute_functional_refinement_verus_and_prepare_receipt_v2(
+        attempt,
         runtime,
         source,
         binding,
@@ -417,6 +503,11 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
     let proof = importer
         .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
         .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
+    attempt
+        .complete()
+        .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    attempt.before_publication();
     Ok((
         RetainedImportedFunctionalRefinementReceiptV2 {
             proof,

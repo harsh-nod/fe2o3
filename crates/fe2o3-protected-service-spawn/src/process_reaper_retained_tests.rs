@@ -1,13 +1,17 @@
 use super::super::super::{DEFERRED, RESERVED};
 use super::super::{Account, ProtectedServiceCleanupReservationV2 as Reservation};
 use super::*;
+use crate::process_cleanup::ChildCleanupV1;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Mutex, atomic::AtomicUsize},
 };
 
-const LIMIT: usize = 100_000_000;
+const LIMIT: usize = 100_000_000
+    + 2 * (Service::TURN_WORK + super::super::CAPACITY * Service::CELL_WORK)
+    + Service::RESERVATION_WORK
+    + Service::STORAGE;
 const INPUT: usize = 256;
 
 struct Witness(Arc<AtomicUsize>);
@@ -188,6 +192,7 @@ fn deferred_quarantine_and_controller_loss_preserve_full_dependencies() {
         .unwrap()
         .as_mut()
         .unwrap()
+        .child_mut()
         .terminal_reaped();
     reaper.cells[0].state.store(DEFERRED, Ordering::Release);
     c.pump(64).unwrap();

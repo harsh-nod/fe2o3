@@ -152,7 +152,7 @@ __attribute__((used, section(".rodata.fe2o3_test_only"))) static const char
 #define FE2O3_LAUNCHER_PATH                                                   \
   "/usr/libexec/fe2o3/cargo-fe2o3-authority-launcher"
 #define FE2O3_EXECUTABLE_PATH "/usr/libexec/fe2o3/cargo-fe2o3"
-#define FE2O3_POLICY_PATH "/etc/fe2o3/build-authority/policy-v1"
+#define FE2O3_POLICY_PATH "/etc/fe2o3/build-authority/policy-v2"
 #define FE2O3_LD_SO_PRELOAD_PATH "/etc/ld.so.preload"
 #define FE2O3_EXPECTED_UID 0
 #define FE2O3_EXPECTED_GID 0

@@ -3,6 +3,8 @@ use super::{
     Result, io,
 };
 use crate::{
+    native_cgroup::NativeCgroupDomainV1,
+    native_user_namespace::NativeUserNamespaceV1,
     process_cleanup::{ChildCleanupV1 as Child, CleanupPollV1 as Poll},
     process_reaper::ReapSlotV1,
 };
@@ -18,6 +20,10 @@ use std::{
     os::fd::{AsFd, OwnedFd},
 };
 
+#[path = "native_root_trace.rs"]
+pub(super) mod trace;
+pub use trace::{RootTaskTraceEventV2, RootTaskTraceV2};
+
 struct Custody(Option<(Child, ReapSlotV1<'static>)>);
 impl Drop for Custody {
     fn drop(&mut self) {
@@ -27,7 +33,7 @@ impl Drop for Custody {
     }
 }
 
-/// Exact direct-child custody, not readiness, exec or protected-service admission.
+/// Exact direct-child and optional domain/namespace custody, not exec or admission.
 /// One prepaid cancellation step retires a terminal child or defers the entire
 /// pidfd/lease record to its reserved shared slot. There is no raw-PID fallback,
 /// retry loop, background worker or fresh cleanup budget. Pending is not success.
@@ -51,12 +57,29 @@ pub struct RootOwnedProtectedServiceChildV2 {
     disposition: Poll,
 }
 impl RootOwnedProtectedServiceChildV2 {
-    /// Full parent-side owner/header charge; the shared service separately funds its pool.
-    pub const STORAGE: usize = size_of::<(Self, Storage)>();
+    /// Full parent-side owner and prepaid cancellation scratch; the service
+    /// separately funds the same obligations after transfer into its pool.
+    pub const STORAGE: usize = size_of::<(Self, Storage)>() + NativeCgroupDomainV1::STORAGE
+        - size_of::<NativeCgroupDomainV1>()
+        + NativeUserNamespaceV1::STORAGE
+        - size_of::<NativeUserNamespaceV1>()
+        + NativeCgroupDomainV1::STEP_SCRATCH;
     /// One observation/duplication or confirmed-exec lease-release allowance.
     pub const OPERATION_WORK: usize = ENTRY + 4 * (1024 + 64);
     /// Fixed logical control/error/descriptor staging, not generated stack or RSS.
     pub const OPERATION_SCRATCH: usize = 4 * Self::STORAGE + 1024;
+    /// Conservative GROWTH to reserve before consuming this owner into a trace.
+    /// It includes the complete trace frame in addition to the original owner.
+    pub const ROOT_TRACE_GROWTH: usize = size_of::<RootTaskTraceV2<'static>>();
+
+    /// Consumes this child into a thread-bound, root-task-only trace controller.
+    /// Reserve ROOT_TRACE_GROWTH on the original ledger before this call. Errors
+    /// cancel through the existing prepaid slot; no child owner is returned.
+    /// The caller must keep the native first-exec gate closed through this call
+    /// to observe that exec. This grants no descendant or executable admission.
+    pub fn into_root_trace<'work>(self, b: &mut Budget<'work>) -> Result<RootTaskTraceV2<'work>> {
+        RootTaskTraceV2::begin(self, Self::STORAGE + Self::ROOT_TRACE_GROWTH, b)
+    }
 
     pub(super) fn new(
         pid: Pid,
@@ -69,6 +92,59 @@ impl RootOwnedProtectedServiceChildV2 {
             pid,
             disposition: Poll::Pending,
         }
+    }
+
+    /// Transfers all launch obligations before any fallible parent operation.
+    pub(crate) fn new_with_domain(
+        pid: Pid,
+        pidfd: Option<OwnedFd>,
+        lease: Lease,
+        domain: NativeCgroupDomainV1,
+        slot: ReapSlotV1<'static>,
+    ) -> Self {
+        Self {
+            custody: Custody(Some((
+                Child::new_with_domain(pidfd, pid, Some(lease), domain),
+                slot,
+            ))),
+            pid,
+            disposition: Poll::Pending,
+        }
+    }
+
+    /// Transfers the prepared namespace with exact child/domain/lease/slot custody.
+    pub(crate) fn new_with_domain_and_namespace(
+        pid: Pid,
+        pidfd: Option<OwnedFd>,
+        lease: Lease,
+        domain: NativeCgroupDomainV1,
+        namespace: NativeUserNamespaceV1,
+        slot: ReapSlotV1<'static>,
+    ) -> Self {
+        Self {
+            custody: Custody(Some((
+                Child::new_with_domain_and_namespace(pidfd, pid, Some(lease), domain, namespace),
+                slot,
+            ))),
+            pid,
+            disposition: Poll::Pending,
+        }
+    }
+
+    /// Mechanical setup under the launch wrapper's pre-clone configuration
+    /// allowance. No new account, readiness or isolation admission is created.
+    pub(super) fn configure_namespace(&mut self) -> Result<()> {
+        self.custody
+            .0
+            .as_mut()
+            .ok_or(Error::State("native child custody was retired or deferred"))?
+            .0
+            .configure_namespace()
+    }
+
+    /// Mechanical revalidation on the original prepaid launch allowance.
+    pub(super) fn revalidate_namespace(&self) -> Result<()> {
+        self.record()?.revalidate_namespace()
     }
     fn record(&self) -> Result<&Child> {
         self.custody
@@ -167,6 +243,8 @@ impl RootOwnedProtectedServiceChildV2 {
     }
     /// Uses the launch reservation's single prepaid emergency step. Later calls
     /// return the same disposition without any signal/wait or slot release.
+    /// Root exit with unresolved domain cleanup transfers the entire record,
+    /// including namespace custody; it retires neither slot nor input charges.
     pub fn cancel(&mut self) -> Poll {
         let Some((child, _)) = self.custody.0.as_mut() else {
             return self.disposition;

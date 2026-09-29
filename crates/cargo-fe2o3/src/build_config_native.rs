@@ -116,7 +116,7 @@ impl PreparedNativeProductionBuildConfig {
     pub(crate) fn finalize_conditional_current<'a, 'b, 'w>(
         self,
         readiness: ParentCompilerExecutionReadinessCustodyV3<'b, 'w>,
-        approval: fe2o3_compiler_closure_capability::ApprovedCompilerPolicyV1,
+        approval: fe2o3_compiler_closure_capability::RetainedCompilerRuntimeV1,
         output_dir: &Path,
         producer: &ProducerIdentity,
         attempt: BuildAttempt,

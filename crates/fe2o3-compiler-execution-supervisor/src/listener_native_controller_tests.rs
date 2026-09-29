@@ -333,10 +333,11 @@ fn selected_pump_must_be_fundable_before_acceptance() {
 
 #[test]
 fn busy_shutdown_and_closed_controller_never_imply_terminal_cleanup() {
-    let mut work = Work::new(10_000);
+    let mut work = Work::new(Cleanup::RESERVATION_WORK + 2 * (ENTRY + Service::DISPATCH_TURN_WORK));
     let mut b = Budget::new(&mut work, FLOOR + Service::DISPATCH_SCRATCH);
     b.reserve_storage(FLOOR).unwrap();
-    let mut cleanup = cleanup(10_000);
+    // Admission prepays the first shutdown; one pump and two retries remain.
+    let mut cleanup = cleanup(PUMP + 2 * Cleanup::shutdown_work());
     let pending = cleanup.reserve_launch(&mut b).unwrap();
     assert!(matches!(cleanup.shutdown(), Err(CleanupError::Busy)));
     let report = dispatch_turns(FLOOR, limits(1, 1), &mut cleanup, &mut b, |_, _| {

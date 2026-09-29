@@ -3,6 +3,22 @@ use std::collections::VecDeque;
 
 use super::*;
 
+impl CleanupRecordV1 {
+    pub(crate) fn child(&self) -> &ChildCleanupV1 {
+        match self {
+            Self::Child(child) => child,
+            Self::UnspawnedDomain(_) => panic!("fixture expected child custody"),
+        }
+    }
+
+    pub(crate) fn child_mut(&mut self) -> &mut ChildCleanupV1 {
+        match self {
+            Self::Child(child) => child,
+            Self::UnspawnedDomain(_) => panic!("fixture expected child custody"),
+        }
+    }
+}
+
 #[derive(Default)]
 struct ResourceDropsV1 {
     pidfd: Cell<usize>,
@@ -60,6 +76,10 @@ impl<'a> FakeSyscallsV1<'a> {
 }
 
 impl CleanupSyscallsV1<DropProbeV1<'_>> for FakeSyscallsV1<'_> {
+    fn step_domain(&mut self, _: &mut ()) -> CleanupPollV1 {
+        panic!("no-domain fixture must not perform domain operations");
+    }
+
     fn kill(&mut self, pidfd: &DropProbeV1<'_>) -> rustix::io::Result<()> {
         assert!(std::ptr::eq(pidfd.0, self.expected_pidfd));
         self.kills += 1;
@@ -524,4 +544,501 @@ fn shared_ownership_loss_notification_preserves_send_and_sync() {
     assert_eq!(observation.last_errno(), Some(Errno::CHILD));
     assert_eq!(owner.step(), CleanupPollV1::Quarantined);
     assert_eq!(owner.last_errno(), Some(Errno::CHILD));
+}
+
+// This schedule drives the private generic state machine only. It cannot
+// construct a native domain, submit a pool record, or certify a real root wait.
+type DomainCustodyV1<'a> = CleanupCustodyV1<DropProbeV1<'a>, DropProbeV1<'a>, DropProbeV1<'a>>;
+
+struct DomainScheduleV1<'a> {
+    root: FakeSyscallsV1<'a>,
+    domain: &'a Cell<usize>,
+    polls: VecDeque<CleanupPollV1>,
+    steps: usize,
+}
+
+impl<'a> DomainScheduleV1<'a> {
+    fn new(
+        drops: &'a ResourceDropsV1,
+        domain: &'a Cell<usize>,
+        root: impl IntoIterator<Item = CallV1>,
+        polls: impl IntoIterator<Item = CleanupPollV1>,
+    ) -> Self {
+        Self {
+            root: FakeSyscallsV1::new(drops, root),
+            domain,
+            polls: polls.into_iter().collect(),
+            steps: 0,
+        }
+    }
+
+    fn assert_finished(&self, kills: usize, waits: usize, steps: usize) {
+        self.root.assert_finished(kills, waits);
+        assert!(self.polls.is_empty());
+        assert_eq!(self.steps, steps);
+    }
+}
+
+impl CleanupSyscallsV1<DropProbeV1<'_>, DropProbeV1<'_>> for DomainScheduleV1<'_> {
+    fn kill(&mut self, fd: &DropProbeV1<'_>) -> rustix::io::Result<()> {
+        self.root.kill(fd)
+    }
+
+    fn wait_exited_nohang(
+        &mut self,
+        fd: &DropProbeV1<'_>,
+    ) -> rustix::io::Result<Option<CleanupWaitV1>> {
+        self.root.wait_exited_nohang(fd)
+    }
+
+    fn step_domain(&mut self, domain: &mut DropProbeV1<'_>) -> CleanupPollV1 {
+        assert!(std::ptr::eq(domain.0, self.domain));
+        self.steps += 1;
+        self.polls.pop_front().expect("unexpected domain step")
+    }
+}
+
+fn domain_custody<'a>(drops: &'a ResourceDropsV1, domain: &'a Cell<usize>) -> DomainCustodyV1<'a> {
+    CleanupCustodyV1::with_domain(
+        Some(DropProbeV1(&drops.pidfd)),
+        Some(DropProbeV1(&drops.spawn_lease)),
+        DropProbeV1(domain),
+    )
+}
+
+#[test]
+fn root_reap_retains_lease_until_domain_completion_without_repeating_root_io() {
+    for foreground_wait in [false, true] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner = domain_custody(&drops, &domain);
+        let root = if foreground_wait {
+            owner.terminal_reaped();
+            Vec::new()
+        } else {
+            vec![
+                CallV1::Kill(Err(Errno::PERM)),
+                CallV1::Wait(Ok(Some(CleanupWaitV1::Terminal))),
+            ]
+        };
+        let mut syscalls = DomainScheduleV1::new(
+            &drops,
+            &domain,
+            root,
+            [CleanupPollV1::Pending, CleanupPollV1::Reaped],
+        );
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+        assert_eq!(owner.phase, CleanupPhaseV1::Reaped);
+        assert!(!owner.complete());
+        assert!(owner.spawn_lease.is_some());
+        assert_eq!(
+            (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+            (0, 0, 0)
+        );
+        // A later observation must not turn our consumed wait into ECHILD custody.
+        owner.ownership_lost();
+        assert!(!owner.ownership_lost.load(Ordering::Acquire));
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Reaped);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Reaped);
+        assert_eq!(drops.spawn_lease.get(), 1);
+        assert_eq!(domain.get(), 0);
+        let root_calls = usize::from(!foreground_wait);
+        syscalls.assert_finished(root_calls, root_calls, 2);
+        drop(owner);
+        assert_eq!(drops.pidfd.get(), 1);
+        assert_eq!(domain.get(), 1);
+    }
+}
+
+#[test]
+fn domain_completion_does_not_substitute_for_consuming_root_wait() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner = domain_custody(&drops, &domain);
+    let mut syscalls = DomainScheduleV1::new(
+        &drops,
+        &domain,
+        [
+            CallV1::Kill(Ok(())),
+            CallV1::Wait(Ok(None)),
+            CallV1::Wait(Ok(Some(CleanupWaitV1::Terminal))),
+        ],
+        [CleanupPollV1::Reaped],
+    );
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+    assert!(!owner.complete());
+    assert_eq!(domain.get(), 0);
+    assert_eq!(drops.spawn_lease.get(), 0);
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Reaped);
+    syscalls.assert_finished(1, 2, 1);
+    drop(owner);
+    assert_eq!((drops.pidfd.get(), drops.spawn_lease.get()), (1, 1));
+    assert_eq!(domain.get(), 1);
+}
+
+#[test]
+fn domain_quarantine_stops_all_io_and_survives_root_terminal_notification() {
+    for root_terminal in [false, true] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner = domain_custody(&drops, &domain);
+        let mut syscalls = DomainScheduleV1::new(
+            &drops,
+            &domain,
+            [
+                CallV1::Kill(Ok(())),
+                CallV1::Wait(Ok(root_terminal.then_some(CleanupWaitV1::Terminal))),
+            ],
+            [CleanupPollV1::Quarantined],
+        );
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+        owner.terminal_reaped();
+        for _ in 0..3 {
+            assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+        }
+        assert!(!owner.complete());
+        syscalls.assert_finished(1, 1, 1);
+        drop(owner);
+        assert_eq!(
+            (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[test]
+fn root_ownership_loss_prevents_domain_io_and_preserves_every_owner() {
+    for foreground in [false, true] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner = domain_custody(&drops, &domain);
+        let root = if foreground {
+            owner.ownership_lost();
+            Vec::new()
+        } else {
+            vec![CallV1::Kill(Ok(())), CallV1::Wait(Err(Errno::CHILD))]
+        };
+        let mut syscalls = DomainScheduleV1::new(&drops, &domain, root, []);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+        let root_calls = usize::from(!foreground);
+        syscalls.assert_finished(root_calls, root_calls, 0);
+        drop(owner);
+        assert_eq!(
+            (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[test]
+fn confirmed_exec_releases_only_lease_while_domain_is_pending() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner = domain_custody(&drops, &domain);
+    owner.terminal_reaped();
+    owner.release_spawn_after_exec();
+    let mut syscalls = DomainScheduleV1::new(&drops, &domain, [], [CleanupPollV1::Pending]);
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+    assert_eq!(drops.spawn_lease.get(), 1);
+    assert_eq!((drops.pidfd.get(), domain.get()), (0, 0));
+    syscalls.assert_finished(0, 0, 1);
+    drop(owner);
+    assert_eq!((drops.pidfd.get(), domain.get()), (0, 0));
+}
+
+#[test]
+fn standalone_domain_has_no_child_wait_or_lease_and_requires_actual_step_completion() {
+    for terminal in [CleanupPollV1::Reaped, CleanupPollV1::Quarantined] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner: DomainCustodyV1<'_> =
+            CleanupCustodyV1::unspawned_domain(DropProbeV1(&domain));
+        assert_eq!(owner.phase, CleanupPhaseV1::Unspawned);
+        assert!(!owner.complete());
+        assert!(owner.pidfd.is_none());
+        assert!(owner.spawn_lease.is_none());
+        let mut syscalls =
+            DomainScheduleV1::new(&drops, &domain, [], [CleanupPollV1::Pending, terminal]);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+        assert_eq!(domain.get(), 0);
+        assert_eq!(owner.step(&mut syscalls), terminal);
+        assert_eq!(owner.step(&mut syscalls), terminal);
+        syscalls.assert_finished(0, 0, 2);
+        drop(owner);
+        assert_eq!(domain.get(), usize::from(terminal == CleanupPollV1::Reaped));
+    }
+}
+
+#[test]
+fn domain_pending_move_and_unwind_never_release_unresolved_custody() {
+    for standalone in [false, true] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner = if standalone {
+            CleanupCustodyV1::unspawned_domain(DropProbeV1(&domain))
+        } else {
+            let mut owner = domain_custody(&drops, &domain);
+            owner.terminal_reaped();
+            owner
+        };
+        let mut syscalls = DomainScheduleV1::new(&drops, &domain, [], [CleanupPollV1::Pending]);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+        let mut transferred = Some(owner);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _owner = transferred.take().unwrap();
+            panic!("inert unresolved domain unwind");
+        }));
+        assert!(result.is_err());
+        assert!(transferred.is_none());
+        syscalls.assert_finished(0, 0, 1);
+        assert_eq!(
+            (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[test]
+fn missing_pidfd_with_domain_cannot_signal_or_discharge_root_custody() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner: DomainCustodyV1<'_> = CleanupCustodyV1::with_domain(
+        None,
+        Some(DropProbeV1(&drops.spawn_lease)),
+        DropProbeV1(&domain),
+    );
+    let mut syscalls = DomainScheduleV1::new(&drops, &domain, [], []);
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+    syscalls.assert_finished(0, 0, 0);
+    drop(owner);
+    assert_eq!((drops.spawn_lease.get(), domain.get()), (0, 0));
+}
+
+#[test]
+fn root_terminal_drop_before_any_domain_step_retains_all_obligations() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner = domain_custody(&drops, &domain);
+    owner.terminal_reaped();
+    owner.terminal_reaped();
+    assert!(!owner.complete());
+    drop(owner);
+    assert_eq!(
+        (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn completed_domain_still_retains_owners_if_root_wait_ownership_is_lost() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner = domain_custody(&drops, &domain);
+    let mut syscalls = DomainScheduleV1::new(
+        &drops,
+        &domain,
+        [CallV1::Kill(Ok(())), CallV1::Wait(Ok(None))],
+        [CleanupPollV1::Reaped],
+    );
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+    owner.ownership_lost();
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+    syscalls.assert_finished(1, 1, 1);
+    drop(owner);
+    assert_eq!(
+        (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn namespace_operations_refuse_absent_or_unusable_custody_without_consuming_it() {
+    for cause in 0..7 {
+        // A pipe is not a pidfd. Every operation below must refuse from local
+        // state, before any namespace syscall or actual-child observation.
+        let (reader, _writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+        let pid = Pid::from_raw(1000).unwrap();
+        let mut child = ChildCleanupV1::new(Some(reader), pid, None);
+        match cause {
+            0 => {}
+            1 => child.custody.phase = CleanupPhaseV1::AwaitingExit,
+            2 => child.custody.phase = CleanupPhaseV1::Quarantined,
+            3 => child.terminal_reaped(),
+            4 => child.ownership_lost(),
+            5 => child.custody.domain_poll = CleanupPollV1::Quarantined,
+            _ => child.custody.last_errno = Some(Errno::PERM),
+        }
+        for _ in 0..2 {
+            assert!(matches!(
+                child.configure_namespace(),
+                Err(SpawnError::State(_))
+            ));
+            assert!(matches!(
+                child.revalidate_namespace(),
+                Err(SpawnError::State(_))
+            ));
+            assert!(child.namespace.is_none());
+            assert!(rustix::io::fcntl_getfd(child.pidfd().unwrap()).is_ok());
+        }
+        // Dispose of the inert pipe explicitly, without claiming an OS wait.
+        drop(child.custody.pidfd.take());
+    }
+    let mut child = ChildCleanupV1::new(None, Pid::from_raw(1000).unwrap(), None);
+    assert!(matches!(
+        child.configure_namespace(),
+        Err(SpawnError::State(_))
+    ));
+    assert!(matches!(
+        child.revalidate_namespace(),
+        Err(SpawnError::State(_))
+    ));
+    assert_eq!(child.step(), CleanupPollV1::Quarantined);
+}
+
+#[test]
+fn namespace_child_error_records_wait_ownership_loss_before_any_cleanup() {
+    for terminal in [false, true] {
+        for errno in [Errno::CHILD, Errno::INTR, Errno::IO, Errno::PERM] {
+            let (reader, _writer) =
+                rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+            let mut child = ChildCleanupV1::new(Some(reader), Pid::from_raw(1000).unwrap(), None);
+            if terminal {
+                child.terminal_reaped(); // No actual child or wait in this fixture.
+            }
+            let result = child.observe_namespace_result(Err(SpawnError::Io {
+                operation: "inert namespace wait observation",
+                source: errno,
+            }));
+            assert!(matches!(result, Err(SpawnError::Io {
+                operation: "inert namespace wait observation", source,
+            }) if source == errno));
+            assert_eq!(
+                child.custody.ownership_lost.load(Ordering::Acquire),
+                errno == Errno::CHILD && !terminal
+            );
+            child.observe_namespace_result(Ok(())).unwrap();
+            if errno == Errno::CHILD {
+                // Local quarantine or known terminal state must prevent all
+                // signaling/waiting on the inert pipe, including repeated calls.
+                for _ in 0..2 {
+                    assert_eq!(
+                        child.step(),
+                        if terminal {
+                            CleanupPollV1::Reaped
+                        } else {
+                            CleanupPollV1::Quarantined
+                        }
+                    );
+                    assert_eq!(
+                        child.last_errno(),
+                        if terminal { None } else { Some(Errno::CHILD) }
+                    );
+                }
+            }
+            drop(child.custody.pidfd.take());
+        }
+    }
+}
+
+fn namespace_fixture() -> (ChildCleanupV1, OwnedFd) {
+    let (reader, writer) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )
+    .unwrap();
+    let child = ChildCleanupV1::new_with_domain_and_namespace(
+        None,
+        Pid::from_raw(1000).unwrap(),
+        None,
+        NativeCgroupDomainV1::quarantined_fixture_for_cleanup(),
+        NativeUserNamespaceV1::poisoned_fixture_for_cleanup(writer),
+    );
+    (child, reader)
+}
+
+#[test]
+fn namespace_setup_error_and_root_reap_keep_exact_namespace_custody() {
+    // Neither owner can admit a real namespace/domain. The fake pidfd is a pipe,
+    // and the poisoned namespace refuses before any child/map syscall.
+    let (mut child, namespace_reader) = namespace_fixture();
+    let (pidfd, _writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+    child.custody.pidfd = Some(pidfd);
+    child.custody.phase = CleanupPhaseV1::KillRequired;
+    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for _ in 0..2 {
+            assert!(child.configure_namespace().is_err());
+            assert!(child.revalidate_namespace().is_err());
+            assert!(child.namespace.is_some());
+            assert!(rustix::io::fcntl_getfd(child.pidfd().unwrap()).is_ok());
+            assert_eq!(
+                rustix::io::read(&namespace_reader, &mut [0]),
+                Err(Errno::AGAIN)
+            );
+        }
+        child.release_spawn_after_exec();
+        child.terminal_reaped(); // Pure state fixture, not an OS wait claim.
+        assert!(!child.custody.complete());
+        assert!(child.namespace.is_some());
+        for _ in 0..2 {
+            assert_eq!(child.step(), CleanupPollV1::Quarantined);
+            assert_eq!(child.custody.phase, CleanupPhaseV1::Reaped);
+            assert!(child.namespace.is_some());
+            assert_eq!(
+                rustix::io::read(&namespace_reader, &mut [0]),
+                Err(Errno::AGAIN)
+            );
+        }
+    }));
+    // Dispose inert descriptors even on assertion failure; no process/domain exists.
+    drop(child.namespace.take());
+    drop(child.custody.pidfd.take());
+    assert_eq!(rustix::io::read(&namespace_reader, &mut [0]), Ok(0));
+    if let Err(error) = checked {
+        std::panic::resume_unwind(error);
+    }
+}
+
+impl ChildCleanupV1 {
+    // Runs only through the dedicated native-child test subprocess. Its exit
+    // closes intentional fail-closed fixture leaks, with no raw-FD recovery.
+    pub(crate) fn check_namespace_drop_retention_fixture() {
+        for state in 0..5 {
+            let (mut child, reader) = namespace_fixture();
+            match state {
+                0 => {}                       // Unknown direct-child ownership remains quarantined.
+                1 => child.terminal_reaped(), // Root terminal, domain not polled.
+                2 => {
+                    child.terminal_reaped();
+                    assert_eq!(child.step(), CleanupPollV1::Quarantined);
+                }
+                3 => {
+                    child.custody.domain_poll = CleanupPollV1::Reaped;
+                    // Root wait is still unknown even if the domain is complete.
+                }
+                _ => {
+                    child.terminal_reaped();
+                    child.custody.domain_poll = CleanupPollV1::Reaped;
+                }
+            }
+            // Terminal markers apply only to inert fixtures. Existing schedule
+            // tests independently drive real cleanup decisions using fake calls.
+            assert_eq!(child.custody.complete(), state == 4);
+            assert_eq!(rustix::io::read(&reader, &mut [0]), Err(Errno::AGAIN));
+            drop(child);
+            assert_eq!(
+                rustix::io::read(&reader, &mut [0]),
+                if state == 4 { Ok(0) } else { Err(Errno::AGAIN) },
+                "namespace descriptor release disagrees with aggregate state {state}"
+            );
+        }
+        let (mut child, reader) = namespace_fixture();
+        child.terminal_reaped();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _child = child;
+            panic!("inert root-terminal namespace custody unwind");
+        }));
+        assert!(result.is_err());
+        assert_eq!(rustix::io::read(&reader, &mut [0]), Err(Errno::AGAIN));
+    }
 }

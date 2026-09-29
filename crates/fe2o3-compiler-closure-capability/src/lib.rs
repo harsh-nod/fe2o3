@@ -17,7 +17,7 @@ use std::process::Command;
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
-mod compiler_approval_v1;
+mod compiler_approval_v2;
 mod compiler_execution_client_profile;
 mod compiler_execution_client_profile_native;
 mod compiler_execution_client_profile_v2;
@@ -54,12 +54,13 @@ mod native_capability;
 #[cfg(test)]
 mod native_policy_inheritance_tests;
 mod native_secret;
+mod retained_compiler_runtime_v1;
 mod rustc_invocation;
 mod sealed_image;
 mod trusted_profile_tree;
 
-pub use compiler_approval_v1::{
-    ApprovedCompilerPolicyV1, CompilerApprovalErrorV1, CompilerApprovalStorageV1,
+pub use compiler_approval_v2::{
+    ApprovedCompilerPolicyV2, CompilerApprovalErrorV2, CompilerApprovalStorageV2,
 };
 pub use compiler_execution_client_profile::CompilerExecutionClientProfileCapabilityV1;
 pub use compiler_execution_client_profile_v2::CompilerExecutionClientProfileCapabilityV2;
@@ -106,6 +107,11 @@ pub use compiler_execution_supervisor_deployment_v2::CompilerExecutionSupervisor
 pub use compiler_execution_supervisor_deployment_v3::CompilerExecutionSupervisorDeploymentCapabilityV3;
 pub use native_capability::{
     CompilerExecutionCapabilityErrorV2, CompilerExecutionCapabilityStorageV2,
+};
+pub use retained_compiler_runtime_v1::{
+    COMPILER_RUNTIME_MANIFEST_PATH_V1, COMPILER_RUNTIME_ROOT_V1, RetainedCompilerRuntimeErrorV1,
+    RetainedCompilerRuntimeExecTransferChargeV1, RetainedCompilerRuntimeStorageV1,
+    RetainedCompilerRuntimeV1,
 };
 pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1};
 use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};

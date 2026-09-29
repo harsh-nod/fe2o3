@@ -17,7 +17,7 @@ use fe2o3_artifact_transaction::{
     consume_compiler_module_handoff_with_currentness_v5 as consume,
 };
 use fe2o3_compiler_closure_capability::{
-    ApprovedCompilerPolicyV1 as Approval, CompilerApprovalErrorV1 as ApprovalError,
+    RetainedCompilerRuntimeErrorV1 as ApprovalError, RetainedCompilerRuntimeV1 as Approval,
 };
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5 as Handoff;
 pub(crate) use fe2o3_hsaco_finalize::ConditionalWorkerRecoveryPolicyV5 as ConditionalRecoveryPolicy;

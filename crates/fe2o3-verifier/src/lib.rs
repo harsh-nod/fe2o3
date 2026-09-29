@@ -60,8 +60,14 @@ mod plan;
 pub mod portable_reference_v1;
 mod production_kir_to_llvm_replay_v1;
 mod proof_capsule;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod proof_executor_helper_v1;
 mod result;
 mod retained_functional_refinement_runtime_v1;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use proof_executor_helper_v1::{
+    ProofExecutorHelperErrorV1, run_inherited_proof_executor_helper_v1,
+};
 mod static_view_proof;
 
 pub mod compiler_native_conditional_source_proof_v2;

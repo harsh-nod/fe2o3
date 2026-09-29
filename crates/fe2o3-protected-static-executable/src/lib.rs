@@ -22,7 +22,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::PathBuf;
 
-use fe2o3_runtime_protocol::{
+use fe2o3_static_executable_format::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,
 };
 use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};

@@ -25,7 +25,7 @@ use fe2o3_hsaco_finalize::{
     publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
 };
-use fe2o3_process_identity::PinnedWorkingDirectoryV3;
+use fe2o3_process_identity::{CapturedStdioV1, PinnedWorkingDirectoryV3};
 use fe2o3_runtime_protocol::{
     RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeV2,
     recover_worker_v3_load_envelope_v2,
@@ -56,6 +56,7 @@ use crate::compiler_execution_boundary::{
 };
 use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
+    stdio::{configure_captured_stdio, require_open_parent_stdio},
 };
 use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
@@ -326,6 +327,11 @@ impl From<PinExecutableError> for BindingWrapperError {
 }
 
 pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
+    // The dedicated wrapper enters before opening files or starting workers. Keep
+    // its actual runtime-sanitized streams, not later occupants of the same slots.
+    // Shared OFD flags remain observations; this is not protected admission.
+    require_open_parent_stdio().map_err(BindingWrapperError::Spawn)?;
+    let stdio = CapturedStdioV1::capture_current().map_err(BindingWrapperError::Spawn)?;
     reject_dynamic_loader_environment()?;
     normalize_unprotected_validation_loader_environment();
     let expected_rustc_sha256 = expected_rustc_sha256()?;
@@ -341,6 +347,8 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             configure_managed_rustc_loader(command.as_command_mut());
             command.args(&argv[1..]);
             configure_build_observation_environment(command.as_command_mut(), None);
+            configure_captured_stdio(command.as_command_mut(), &stdio)
+                .map_err(BindingWrapperError::Spawn)?;
             return command.status().map_err(BindingWrapperError::Spawn);
         }
         Err(error) => return Err(error.into()),
@@ -543,7 +551,9 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             invocation.forwarded_args(),
             &managed_rustc_args,
         )?;
-        pinned_execution_directory.configure_child_fchdir(command.as_command_mut());
+        pinned_execution_directory
+            .configure_child_fchdir(command.as_command_mut())
+            .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?;
         if let Some(capabilities) = &compiler_capabilities {
             if managed_attempt.is_none() {
                 capabilities.prepare_host_dependency_command(command.as_command_mut());
@@ -660,11 +670,6 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 Ok::<_, BindingWrapperError>(capability)
             })
             .transpose()?;
-        let parent_rustc_invocation_custody = ParentRustcInvocationCustody::retain(
-            inert_rustc_invocation,
-            rustc_invocation_capability,
-        )
-        .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))?;
         let compiler_execution_boundary = if protected_kernel_root {
             let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
                 BindingWrapperError::BuildObservation(
@@ -687,6 +692,14 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         } else {
             None
         };
+        configure_captured_stdio(command.as_command_mut(), &stdio)
+            .map_err(BindingWrapperError::Spawn)?;
+        let parent_rustc_invocation_custody = ParentRustcInvocationCustody::retain(
+            inert_rustc_invocation,
+            rustc_invocation_capability,
+            Some(stdio),
+        )
+        .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))?;
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {

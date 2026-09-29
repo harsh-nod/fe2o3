@@ -1,10 +1,46 @@
 use super::*;
 use std::{
+    os::fd::IntoRawFd,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
 const MARKER: &str = "FE2O3_PRIVATE_PROFILE_TRANSITION_TEST";
+
+#[test]
+fn fresh_domain_clone_preserves_atomic_pidfd_and_signal_contract() {
+    let domain = File::open("/dev/null").unwrap();
+    let mut output = -1;
+    for (fd, userns) in [
+        (None, false),
+        (Some(domain.as_fd()), false),
+        (Some(domain.as_fd()), true),
+    ] {
+        let args = clone_arguments(&mut output, fd, userns);
+        assert_eq!(
+            args.flags,
+            CLONE_PIDFD
+                | CLONE_CLEAR_SIGHAND
+                | if fd.is_some() { CLONE_INTO_CGROUP } else { 0 }
+                | if userns { CLONE_NEWUSER } else { 0 }
+        );
+        assert_eq!(args.pidfd, (&raw mut output).addr() as u64);
+        assert_eq!(args.cgroup, fd.map_or(0, |fd| fd.as_raw_fd() as u64));
+        assert_eq!(args.exit_signal, SIGCHLD);
+        assert_eq!(
+            [
+                args.child_tid,
+                args.parent_tid,
+                args.stack,
+                args.stack_size,
+                args.tls,
+                args.set_tid,
+                args.set_tid_size
+            ],
+            [0; 7]
+        );
+    }
+}
 
 #[test]
 fn profile_guard_survives_a_transition_that_clears_parent_death() {
@@ -80,6 +116,33 @@ fn profile_subprocess() {
     };
     assert_eq!(result, Err(3));
     assert_eq!(parent_death_signal(), 0);
+
+    for payload in [Some(PROTECTED_SERVICE_GATE_RELEASE_V1), Some(0), None] {
+        let (reader, writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+        if let Some(byte) = payload {
+            assert_eq!(rustix::io::write(&writer, &[byte]).unwrap(), 1);
+        }
+        let (reader, writer) = (reader.into_raw_fd(), writer.into_raw_fd());
+        let mut installed = false;
+        // SAFETY: this deadline-bounded subprocess transfers both private pipe
+        // ends to the production mapping gate. Failure leaves only the reader.
+        let result = unsafe {
+            let result = establish_guarded_profile(parent, || {
+                if await_mapping_gate(reader, writer) != 0 {
+                    return -1;
+                }
+                installed = true;
+                0
+            });
+            if result.is_err() {
+                libc::syscall(libc::SYS_close, reader);
+            }
+            result
+        };
+        let accepted = payload == Some(PROTECTED_SERVICE_GATE_RELEASE_V1);
+        assert_eq!(result, if accepted { Ok(()) } else { Err(3) });
+        assert_eq!(installed, accepted);
+    }
 }
 
 fn parent_death_signal() -> c_int {

@@ -12,8 +12,11 @@ authority requires a broker-owned durable replay registry and session capability
 
 mod broker_v4;
 mod cargo_environment_v1;
+mod compiler_approval_policy_codec;
 mod compiler_approval_policy_v1;
+mod compiler_approval_policy_v2;
 mod compiler_closure;
+mod compiler_runtime_manifest_v1;
 
 /// Canonical `argv[0]` for the protected authority release executable.
 pub const PROTECTED_AUTHORITY_ARGV0: &[u8] = b"/usr/libexec/fe2o3/cargo-fe2o3";
@@ -52,9 +55,26 @@ pub use compiler_approval_policy_v1::{
     COMPILER_APPROVAL_POLICY_VERSION_V1, COMPILER_APPROVAL_POLICY_WORK_V1,
     CompilerApprovalPolicyErrorV1, CompilerApprovalPolicyV1,
 };
+pub use compiler_approval_policy_v2::{
+    COMPILER_APPROVAL_POLICY_BYTES_V2, COMPILER_APPROVAL_POLICY_HEADER_LEN_V2,
+    COMPILER_APPROVAL_POLICY_IDENTITY_DOMAIN_V2, COMPILER_APPROVAL_POLICY_MAGIC_V2,
+    COMPILER_APPROVAL_POLICY_RUNTIME_ENFORCEMENT_VERSION_V2, COMPILER_APPROVAL_POLICY_STORAGE_V2,
+    COMPILER_APPROVAL_POLICY_VERSION_V2, COMPILER_APPROVAL_POLICY_WORK_V2,
+    CompilerApprovalPolicyErrorV2, CompilerApprovalPolicyV2,
+};
 pub use compiler_closure::{
     CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, COMPILER_CLOSURE_IDENTITY_DOMAIN_V2,
     CompilerClosureDigestFieldV2, CompilerClosureErrorV2, CompilerClosureV2,
     derive_compiler_closure_identity_v1, derive_compiler_closure_identity_v2,
     derive_rustc_executable_runtime_identity_v1,
+};
+pub use compiler_runtime_manifest_v1::{
+    COMPILER_RUNTIME_MANIFEST_ENTRY_BYTES_V1, COMPILER_RUNTIME_MANIFEST_HEADER_BYTES_V1,
+    COMPILER_RUNTIME_MANIFEST_IDENTITY_DOMAIN_V1, COMPILER_RUNTIME_MANIFEST_MAGIC_V1,
+    COMPILER_RUNTIME_MANIFEST_MAX_BYTES_V1, COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1,
+    COMPILER_RUNTIME_MANIFEST_MAX_FILE_BYTES_V1, COMPILER_RUNTIME_MANIFEST_MAX_PATH_BYTES_V1,
+    COMPILER_RUNTIME_MANIFEST_MAX_PATH_COMPONENTS_V1, COMPILER_RUNTIME_MANIFEST_MAX_TOTAL_BYTES_V1,
+    COMPILER_RUNTIME_MANIFEST_STORAGE_V1, COMPILER_RUNTIME_MANIFEST_WORK_V1,
+    CompilerRuntimeEntryV1, CompilerRuntimeManifestErrorV1, CompilerRuntimeManifestV1,
+    CompilerRuntimeRoleV1,
 };

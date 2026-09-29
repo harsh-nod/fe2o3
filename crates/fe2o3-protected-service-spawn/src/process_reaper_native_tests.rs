@@ -48,7 +48,10 @@ fn assert_record(reaper: &DeferredReaperV1, index: usize, state: u8) {
     let cell = &reaper.cells[index];
     assert_eq!(cell.state.load(Ordering::Acquire), state);
     let record = cell.child.lock().unwrap();
-    let child = record.as_ref().expect("synthetic custody was discarded");
+    let child = record
+        .as_ref()
+        .expect("synthetic custody was discarded")
+        .child();
     assert_eq!(child.pid(), synthetic_pid(index));
     assert!(child.pidfd().is_none());
     assert!(!child.retains_spawn_lease());
@@ -302,11 +305,14 @@ fn controller_drop_and_recovery_preserve_the_original_cumulative_account() {
     assert_eq!(expected.work_limit, limit);
     assert_eq!(expected.failed_work, Some(prefix + limit));
     assert_eq!(expected.storage, Service::STORAGE);
-    assert!(expected.admission_open);
+    assert_eq!(
+        expected.admission_open,
+        limit - expected.work >= MIN_TURN_WORK
+    );
     assert_eq!(expected.peak_storage, peak);
     assert_eq!(expected.next_slot, 1);
 
-    for recovery in 1..=2 {
+    for _ in 0..2 {
         drop(service);
         {
             let mode = REAPER.mode.lock().unwrap();
@@ -322,7 +328,7 @@ fn controller_drop_and_recovery_preserve_the_original_cumulative_account() {
         assert!(REAPER.thread_started.get().is_none());
         service = Service::recover_at(&REAPER).unwrap();
         expected.work += Service::RECOVERY_WORK;
-        expected.admission_open = recovery == 1;
+        expected.admission_open &= limit - expected.work >= MIN_TURN_WORK;
         assert_eq!(service.report().unwrap(), expected);
         assert!(matches!(Service::recover_at(&REAPER), Err(Failure::State)));
         assert_eq!(service.report().unwrap(), expected);
@@ -347,7 +353,8 @@ fn controller_drop_and_recovery_preserve_the_original_cumulative_account() {
 #[test]
 fn recovery_work_one_short_retains_unleased_custody_and_cannot_reset_the_ledger() {
     static REAPER: DeferredReaperV1 = DeferredReaperV1::new();
-    let limit = Service::ADMISSION_WORK + Service::RECOVERY_WORK - 1;
+    let prefix = MIN_TURN_WORK.saturating_sub(Service::RECOVERY_WORK - 1);
+    let limit = Service::ADMISSION_WORK + prefix + Service::RECOVERY_WORK - 1;
     let mut service =
         Service::admit_at(&REAPER, Account::new(Work::new(limit), Service::STORAGE)).unwrap();
     let mut request = Account::new(Work::new(Service::RESERVATION_WORK), 0);
@@ -355,6 +362,13 @@ fn recovery_work_one_short_retains_unleased_custody_and_cannot_reset_the_ledger(
         .with_budget(|budget| service.reserve_launch(budget))
         .unwrap();
     reservation.slot.take().unwrap().defer(synthetic_child(0));
+    {
+        let mut mode = REAPER.mode.lock().unwrap();
+        let ReaperMode::Native(native) = &mut *mode else {
+            panic!("native pool")
+        };
+        native.charge(prefix).unwrap();
+    }
     let before = service.report().unwrap();
     drop(service);
 
@@ -815,13 +829,14 @@ fn dropping_an_empty_exhausted_service_retains_the_pool_when_recovery_is_unfunde
 #[test]
 fn shutdown_with_an_undercharged_storage_floor_refuses_to_discard_the_account() {
     static REAPER: DeferredReaperV1 = DeferredReaperV1::new();
-    let limit = Service::ADMISSION_WORK + SHUTDOWN_WORK;
+    let limit = Service::ADMISSION_WORK + MIN_TURN_WORK + SHUTDOWN_WORK;
     let mut service =
         Service::admit_at(&REAPER, Account::new(Work::new(limit), Service::STORAGE)).unwrap();
     let mut request = Account::new(Work::new(Service::RESERVATION_WORK), 0);
     let reserved = request
         .with_budget(|budget| service.reserve_launch(budget))
         .unwrap();
+    service.pump(1).unwrap();
     {
         let mut mode = REAPER.mode.lock().unwrap();
         let ReaperMode::Native(native) = &mut *mode else {
@@ -1057,3 +1072,71 @@ fn public_cleanup_cost_queries_match_the_bounded_pump_and_shutdown() {
     }
     assert_eq!(Service::shutdown_work(), SHUTDOWN_WORK);
 }
+
+#[test]
+fn domain_step_storage_and_work_are_prepaid_on_the_original_pool_account() {
+    use crate::native_cgroup::NativeCgroupDomainV1 as Domain;
+    use crate::native_user_namespace::NativeUserNamespaceV1 as Namespace;
+    use std::mem::size_of;
+
+    let inline_pool = size_of::<DeferredReaperV1>()
+        + size_of::<Service>()
+        + CAPACITY
+            * (size_of::<super::ProtectedServiceCleanupReservationV2>()
+                + size_of::<std::os::fd::OwnedFd>());
+    assert_eq!(
+        Service::STORAGE,
+        inline_pool
+            + CAPACITY * (Domain::STORAGE - size_of::<Domain>())
+            + CAPACITY * (Namespace::STORAGE - size_of::<Namespace>())
+            + Service::GUARD_FILE_STORAGE
+            + Domain::STEP_SCRATCH
+    );
+    assert_eq!(
+        Namespace::STORAGE - size_of::<Namespace>(),
+        13 * size_of::<usize>()
+    );
+    assert_eq!(super::NAMESPACE_RETIRE_WORK, 13 * (1024 + 64));
+    assert_eq!(
+        Service::CELL_WORK,
+        16 + Domain::STEP_WORK + super::NAMESPACE_RETIRE_WORK
+    );
+    assert_eq!(
+        Service::RESERVATION_WORK,
+        CAPACITY + 32 + Domain::STEP_WORK + super::NAMESPACE_RETIRE_WORK
+    );
+
+    static REAPER: DeferredReaperV1 = DeferredReaperV1::new();
+    let prefix = 19;
+    let limit = prefix + Service::ADMISSION_WORK + MIN_TURN_WORK + Service::RECOVERY_WORK;
+    let mut work = Work::new(limit);
+    work.charge_work(prefix).unwrap();
+    let mut service = Service::admit_at(&REAPER, Account::new(work, Service::STORAGE)).unwrap();
+    let admitted = service.report().unwrap();
+    assert_eq!(admitted.storage, Service::STORAGE);
+    assert_eq!(admitted.peak_storage, Service::STORAGE);
+    assert_work_refusal(
+        service.pump(CAPACITY).unwrap_err(),
+        admitted.work + Service::pump_work(CAPACITY).unwrap(),
+        limit,
+    );
+    assert_eq!(service.report().unwrap().next_slot, 0);
+    let pumped = service.pump(1).unwrap();
+    assert_eq!(pumped.work, admitted.work + MIN_TURN_WORK);
+    assert_eq!(pumped.storage, Service::STORAGE);
+    assert_eq!(pumped.peak_storage, Service::STORAGE);
+    drop(service);
+    let mut service = Service::recover_at(&REAPER).unwrap();
+    let recovered = service.report().unwrap();
+    assert_eq!(recovered.work, limit);
+    assert_eq!(recovered.work_limit, limit);
+    assert_eq!(recovered.storage, Service::STORAGE);
+    assert_eq!(recovered.failed_work, pumped.failed_work);
+    let returned = service.shutdown().unwrap();
+    assert_eq!(returned.storage(), 0);
+    assert_eq!(returned.work(), limit);
+    assert_eq!(returned.failed_work(), pumped.failed_work);
+}
+
+#[path = "process_reaper_namespace_tests.rs"]
+mod namespace;

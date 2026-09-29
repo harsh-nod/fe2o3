@@ -4,6 +4,15 @@ These files define the sole systemd deployment for the root coordinator,
 protected supervisor, and local reference external anchor. They require systemd
 253 or newer because the service uses ordered `OpenFile=` activation.
 
+The instructions below describe the existing **V1 deployment/qualification
+graph**, not the unfinished native compiler/helper attempt. New native compiler
+approval accepts only `/etc/fe2o3/build-authority/policy-v2`, bound to
+`client-profile-v3` and a distinct approved helper UID/GID; it has no V1 approval
+fallback. The installed provisioner and unit do not yet publish that approval or
+provision the helper role. Their record graph, entrypoints and custody admission
+must migrate together before that path can run. See the
+[current integration checkpoint](../docs/evidence/native-invocation-runtime-20260928.md).
+
 Install the files under their matching system directories:
 
 - `systemd/*.service` under the system unit directory;

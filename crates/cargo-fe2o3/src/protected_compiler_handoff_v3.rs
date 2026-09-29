@@ -16,6 +16,7 @@ use fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1;
 use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_hsaco_finalize::ProtectedFirstBuildWorkerV3Error;
+use fe2o3_process_identity::CapturedStdioV1;
 use fe2o3_rustc_invocation::RustcInvocationDescriptorV3;
 
 use crate::compiler_execution_boundary::{
@@ -37,18 +38,23 @@ mod native;
 pub(crate) struct ParentRustcInvocationCustody {
     invocation: Box<InertRustcInvocationCaptureV3>,
     capability: RustcInvocationCapabilityV1,
+    // Present only when an entry adapter supplied an actual early capture. None
+    // is missing capture, never three absent slots or root-process substitution.
+    stdio: Option<CapturedStdioV1>,
 }
 
 impl ParentRustcInvocationCustody {
     pub(crate) fn retain(
         capture: Option<InertPreparedRustcInvocationCapture>,
         capability: Option<RustcInvocationCapabilityV1>,
+        stdio: Option<CapturedStdioV1>,
     ) -> Result<Option<Self>, ParentRustcInvocationCustodyError> {
         match (capture, capability) {
             (Some(InertPreparedRustcInvocationCapture::V3(invocation)), Some(capability)) => {
                 let custody = Self {
                     invocation,
                     capability,
+                    stdio,
                 };
                 custody.revalidate()?;
                 Ok(Some(custody))
@@ -66,6 +72,11 @@ impl ParentRustcInvocationCustody {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), ParentRustcInvocationCustodyError> {
+        if let Some(stdio) = &self.stdio {
+            stdio
+                .revalidate()
+                .map_err(ParentRustcInvocationCustodyError::Stdio)?;
+        }
         self.capability
             .revalidate()
             .map_err(ParentRustcInvocationCustodyError::Capability)?;
@@ -73,6 +84,13 @@ impl ParentRustcInvocationCustody {
             return Err(ParentRustcInvocationCustodyError::DescriptorMismatch);
         }
         Ok(())
+    }
+
+    /// Borrows the retained wrapper streams without granting execution authority.
+    /// Native staging must still prepay and validate its own transfer/custody.
+    #[allow(dead_code)] // Native launch integration is owned by the boundary adapter.
+    pub(crate) const fn captured_stdio(&self) -> Option<&CapturedStdioV1> {
+        self.stdio.as_ref()
     }
 
     const fn descriptor(&self) -> &RustcInvocationDescriptorV3 {
@@ -96,6 +114,7 @@ pub(crate) enum ParentRustcInvocationCustodyError {
     CapabilityForV2,
     DescriptorMismatch,
     Capability(String),
+    Stdio(std::io::Error),
 }
 
 impl fmt::Display for ParentRustcInvocationCustodyError {
@@ -113,6 +132,7 @@ impl fmt::Display for ParentRustcInvocationCustodyError {
                 "parent invocation capture and retained sealed capability describe different rustc invocations",
             ),
             Self::Capability(error) => write!(formatter, "retained rustc invocation capability is invalid: {error}"),
+            Self::Stdio(error) => write!(formatter, "retained wrapper stdio is invalid: {error}"),
         }
     }
 }

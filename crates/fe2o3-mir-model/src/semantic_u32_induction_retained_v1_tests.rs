@@ -1069,6 +1069,7 @@ fn external_observer_error_or_panic_does_not_drop_completed_payload_early() {
 #[test]
 fn source_contract_has_no_refund_and_retains_original_stage_order() {
     let source = include_str!("semantic_u32_induction_retained_v1.rs");
+    let frame_source = include_str!("semantic_u32_induction_retained_frame_v1.rs");
     for forbidden in [
         "release_storage(",
         "catch_unwind(",
@@ -1076,7 +1077,7 @@ fn source_contract_has_no_refund_and_retains_original_stage_order() {
         "WorkBudgetV1::new(",
     ] {
         assert!(
-            !source.contains(forbidden),
+            !source.contains(forbidden) && !frame_source.contains(forbidden),
             "unexpected component operation {forbidden}"
         );
     }

@@ -1,5 +1,5 @@
 //! One account borrow from native recipe admission through child readiness.
-//! Root-policy custody precedes channel setup and survives artifact persistence.
+//! Root-policy and runtime-inventory custody survive artifact persistence.
 //! Runtime enforcement and production broker selection remain separate gates.
 use super::{
     Budget, ParentCompilerExecutionReadinessCustodyV3 as Readiness, Policy, Profile, Resource,
@@ -13,7 +13,7 @@ use crate::{
 };
 use fe2o3_artifact_transaction::{BuildAttempt, ProducerIdentity};
 use fe2o3_build_authority::CompilerClosureV2;
-use fe2o3_compiler_closure_capability::ApprovedCompilerPolicyV1 as Approval;
+use fe2o3_compiler_closure_capability::RetainedCompilerRuntimeV1 as Approval;
 use fe2o3_compiler_execution_client::PendingCompilerExecutionChildChannelV1 as Pending;
 use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV3 as PolicyRecord;
 use std::{mem::size_of, path::Path, process::Command, time::Instant};
@@ -22,6 +22,7 @@ use std::{mem::size_of, path::Path, process::Command, time::Instant};
 // executable custody, spawn/OS retries and process supervision remain separately
 // prepaid caller domains; this is neither allocator-capacity nor RSS accounting.
 const FRAME: usize = 64 * 1024;
+const APPROVED_FRAME: usize = 4 * size_of::<Approval>();
 const LOCAL_WORK: usize = 128 * 1024;
 
 pub(super) struct PreparedCompilerExecutionTransportV3<'b, 'w> {
@@ -108,8 +109,8 @@ pub(crate) struct PreparedCompilerExecutionBoundaryV3<'b, 'w> {
     approval: Approval,
 }
 
-/// No detached approval, recipe or account escape. This retains policy approval,
-/// not a completed compiler-runtime guard or artifact/launch authority.
+/// No detached approval, inventory, recipe or account escape. Approved code
+/// backing is retained, but this is not a completed compiler-runtime guard.
 pub(crate) struct ReadyCompilerExecutionAttemptV3<'b, 'w> {
     transport: ReadyCompilerExecutionTransportV3<'b, 'w>,
     approval: Approval,
@@ -130,6 +131,7 @@ impl<'b, 'w> PreparedCompilerExecutionBoundaryV3<'b, 'w> {
             .checked_add(recipe.retained_storage())
             .ok_or(Resource::Arithmetic)?;
         super::pipeline::check_account_floor(budget, floor)?;
+        budget.reserve_storage(APPROVED_FRAME)?;
         approval.require_compiler(closure, budget)?;
         // The child channel needs inert transport; only this enclosing owner
         // retains the independently loaded approval that permits continuation.
@@ -198,7 +200,7 @@ impl<'b, 'w> ReadyCompilerExecutionAttemptV3<'b, 'w> {
     }
 }
 
-const _: () = assert!(FRAME >= 2 * size_of::<PreparedCompilerExecutionBoundaryV3<'static, 'static>>()
+const _: () = assert!(FRAME + APPROVED_FRAME >= 2 * size_of::<PreparedCompilerExecutionBoundaryV3<'static, 'static>>()
     + 2 * size_of::<ReadyCompilerExecutionAttemptV3<'static, 'static>>()
     + Readiness::OWNER_STORAGE
     + fe2o3_compiler_execution_client::CompilerExecutionSupervisorReadinessV3::CHILD_LAUNCH_STORAGE);

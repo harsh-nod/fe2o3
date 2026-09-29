@@ -9,7 +9,8 @@ use std::{error::Error, fmt, path::Path, time::Instant};
 use crate::CanonicalGeneratedVerusProofInputV3;
 use crate::retained_functional_refinement_runtime_v1::{
     RetainedFunctionalRefinementRuntimeErrorV1, RetainedFunctionalRefinementRuntimeOutputV1,
-    RetainedGeneratedVerusRuntimeBackendV1, open_retained_generated_verus_runtime_v1,
+    RetainedGeneratedVerusRuntimeBackendV1, RuntimeAttemptV1,
+    open_retained_generated_verus_runtime_v1,
 };
 
 /// Domain-separated identity of the exact workload-neutral verifier runtime.
@@ -32,6 +33,18 @@ pub struct FunctionalRefinementVerusRuntimeLeaseV1 {
     backend: RetainedGeneratedVerusRuntimeBackendV1,
 }
 
+pub(crate) struct FunctionalRefinementAttemptV1(RuntimeAttemptV1);
+
+impl FunctionalRefinementAttemptV1 {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn before_publication(&self) {
+        self.0.before_publication();
+    }
+    pub(crate) fn complete(&self) -> Result<(), FunctionalRefinementRuntimeErrorV1> {
+        self.0.complete().map_err(runtime_error_from_backend)
+    }
+}
+
 impl fmt::Debug for FunctionalRefinementVerusRuntimeLeaseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -43,6 +56,14 @@ impl fmt::Debug for FunctionalRefinementVerusRuntimeLeaseV1 {
 }
 
 impl FunctionalRefinementVerusRuntimeLeaseV1 {
+    pub(crate) fn begin_attempt(
+        &self,
+    ) -> Result<FunctionalRefinementAttemptV1, FunctionalRefinementRuntimeErrorV1> {
+        self.backend
+            .begin_attempt()
+            .map(FunctionalRefinementAttemptV1)
+            .map_err(runtime_error_from_backend)
+    }
     /// Opens and retains the exact no-follow runtime closure.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
         let root = root.as_ref();
@@ -73,13 +94,14 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
 
     pub(crate) fn execute_generated_rust_verify(
         &self,
+        attempt: &mut FunctionalRefinementAttemptV1,
         source: &CanonicalGeneratedVerusProofInputV3,
         deadline: Instant,
         output_limit: usize,
     ) -> Result<FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementRuntimeErrorV1>
     {
         self.backend
-            .execute_generated_rust_verify(source, deadline, output_limit)
+            .execute_generated_rust_verify(&mut attempt.0, source, deadline, output_limit)
             .map(FunctionalRefinementRuntimeProcessOutputV1::from)
             .map_err(runtime_error_from_backend)
     }
@@ -169,8 +191,10 @@ mod tests {
             .into_bytes(),
         )
         .expect("admit canonical generated proof source");
+        let mut attempt = runtime.begin_attempt().expect("acquire diagnostic attempt");
         let output = runtime
             .execute_generated_rust_verify(
+                &mut attempt,
                 &source,
                 Instant::now() + Duration::from_secs(120),
                 64 * 1024,
@@ -179,6 +203,7 @@ mod tests {
         runtime
             .revalidate()
             .expect("revalidate after proof execution");
+        attempt.complete().expect("complete diagnostic attempt");
         output
     }
 

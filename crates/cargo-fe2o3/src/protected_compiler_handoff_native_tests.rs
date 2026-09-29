@@ -65,6 +65,7 @@ fn parent(mutation: usize) -> ParentRustcInvocationCustody {
     ParentRustcInvocationCustody::retain(
         Some(InertPreparedRustcInvocationCapture::V3(Box::new(capture))),
         Some(capability),
+        None,
     )
     .unwrap()
     .unwrap()

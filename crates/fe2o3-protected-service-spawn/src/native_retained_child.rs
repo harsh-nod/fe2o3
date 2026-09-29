@@ -1,5 +1,6 @@
 //! Typed foreground view over dependencies also owned by the child's fixed slot.
 
+use super::child::{RootTaskTraceEventV2, RootTaskTraceV2};
 use super::{
     ProtectedServiceSpawnStorageV2 as Storage, Result, RootOwnedProtectedServiceChildV2 as Child,
 };
@@ -63,6 +64,29 @@ impl<T: Send + 'static> RootOwnedRetainedServiceChildV2<T> {
         self.retained
     }
 
+    /// FULL charge required before the consuming root trace transition.
+    pub fn root_trace_storage(&self) -> Result<usize> {
+        self.retained
+            .checked_add(Child::ROOT_TRACE_GROWTH)
+            .ok_or(Resource::Arithmetic.into())
+    }
+
+    /// Consumes the exact child and complete retained backing, preserving the
+    /// original slot and ledger. Prepay root_trace_storage before this call.
+    /// Keep the native first-exec gate closed until seizure succeeds. Errors
+    /// cancel the same child; any deferred slot keeps the complete backing.
+    pub fn into_root_trace<'work>(
+        self,
+        b: &mut Budget<'work>,
+    ) -> Result<RootRetainedTaskTraceV2<'work, T>> {
+        let retained = self.root_trace_storage()?;
+        let Self {
+            child, resources, ..
+        } = self;
+        let trace = RootTaskTraceV2::begin(child, retained, b)?;
+        Ok(RootRetainedTaskTraceV2 { trace, resources })
+    }
+
     /// Scalar PID bound by atomic clone, not sufficient signal or launch authority.
     pub fn pid(&self) -> Pid {
         self.child.pid()
@@ -92,6 +116,80 @@ impl<T: Send + 'static> RootOwnedRetainedServiceChildV2<T> {
     /// One prepaid cancellation step; Pending/Quarantined are not termination.
     pub fn cancel(&mut self) -> CleanupPollV1 {
         self.child.cancel()
+    }
+}
+
+/// Exclusive originating-thread trace of one retained root task, not its tree.
+/// The trace is dropped before its foreground backing handle. Deferred cleanup
+/// retains the same backing independently in the original reserved slot.
+pub struct RootRetainedTaskTraceV2<'work, T: Send + 'static> {
+    trace: RootTaskTraceV2<'work>,
+    resources: Resources<T>,
+}
+
+impl<T: Send + 'static> RootRetainedTaskTraceV2<'_, T> {
+    /// Complete original backing and trace charge, including overlap with the pool.
+    pub fn retained_storage(&self) -> usize {
+        self.trace.retained_storage()
+    }
+
+    /// Exact root identity, not separate signal or wait authority.
+    pub fn pid(&self) -> Pid {
+        self.trace.pid()
+    }
+
+    /// One consuming root wait; terminal results already notified child cleanup.
+    pub fn poll(&mut self, b: &mut Budget<'_>) -> Result<RootTaskTraceEventV2> {
+        self.trace.poll(b)
+    }
+
+    /// Resumes only the stored observed stop, preserving signal/group-stop semantics.
+    pub fn resume(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        self.trace.resume(b)
+    }
+
+    /// Releases only the spawn lease at the owned, still-held exec observation.
+    /// The complete backing charge and original Budget address remain required.
+    /// Uses RootTaskTraceV2::CONFIRM_EXEC_WORK and CONFIRM_EXEC_SCRATCH.
+    ///
+    /// # Safety
+    /// Authenticate this exact child's successful native exec and closure of all
+    /// inherited artifact-lock aliases, including any in untraced descendants.
+    /// Retain exclusive consuming-wait ownership. Root exec observation alone
+    /// does not establish these conditions or admit the executable or its tree.
+    pub unsafe fn confirm_exec(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        // SAFETY: the caller supplies the same exec/alias-closure contract; the
+        // trace checks its full retained charge, account, thread and held stop.
+        unsafe { self.trace.confirm_exec(b) }
+    }
+
+    /// Read-only access to the entire backing on the original ledger.
+    pub fn with_resources<R, E>(
+        &self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(&T, &mut Budget<'_>) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<Resource> + From<crate::RetainedResourceAccessErrorV2>,
+    {
+        b.with_prepaid_scope(self.retained_storage(), 0, 0, 0, |b| {
+            self.trace.check_budget(b)?;
+            self.resources.with(b, operation)
+        })
+    }
+
+    /// One original prepaid cancellation step, then transfer to the same slot.
+    pub fn cancel(&mut self) -> CleanupPollV1 {
+        self.trace.cancel()
+    }
+}
+
+impl<T: Send + 'static> fmt::Debug for RootRetainedTaskTraceV2<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RootRetainedTaskTraceV2")
+            .field("trace", &self.trace)
+            .field("retained", &self.retained_storage())
+            .finish_non_exhaustive()
     }
 }
 

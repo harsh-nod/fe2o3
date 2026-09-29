@@ -309,6 +309,41 @@ pub struct RustcInvocationDescriptorV2 {
 }
 
 impl RustcInvocationDescriptorV2 {
+    /// Measures this inert owner, including unused vector and string capacity.
+    ///
+    /// The allocation-free traversal visits at most [`MAX_RUSTC_ARGUMENTS_V2`]
+    /// arguments and [`MAX_COMPILE_ENVIRONMENT_ENTRIES_V2`] entries. Callers
+    /// must fund that traversal before calling it and reserve the returned
+    /// logical backing charge while retaining this owner. `None` means checked
+    /// arithmetic overflow. This is not a reservation or execution authority.
+    pub fn retained_storage_bytes(&self) -> Option<usize> {
+        use std::mem::size_of;
+
+        let mut bytes = size_of::<Self>()
+            .checked_add(self.rustc.working_directory.0.capacity())?
+            .checked_add(
+                self.rustc
+                    .argv
+                    .capacity()
+                    .checked_mul(size_of::<Argument>())?,
+            )?
+            .checked_add(
+                self.compile_environment
+                    .entries
+                    .capacity()
+                    .checked_mul(size_of::<CompileEnvironmentEntryV2>())?,
+            )?;
+        for argument in &self.rustc.argv {
+            bytes = bytes.checked_add(argument.0.capacity())?;
+        }
+        for entry in &self.compile_environment.entries {
+            bytes = bytes
+                .checked_add(entry.key.0.capacity())?
+                .checked_add(entry.value.0.capacity())?;
+        }
+        Some(bytes)
+    }
+
     /// Constructs and structurally validates one exact V2 rustc invocation.
     ///
     /// The wrapper-assigned backend argument must be the final argv entry in
@@ -567,3 +602,7 @@ fn validate_amd_target(value: &str) -> Result<(), ValidationError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "storage_tests.rs"]
+mod storage_tests;

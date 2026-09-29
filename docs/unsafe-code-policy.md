@@ -41,6 +41,25 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The dedicated proof-helper entry owns raw FD 3 before the first fallible check,
+validates it before opening other descriptors, duplicates it with CLOEXEC and
+closes the original exactly once. Its six mechanical unsafe blocks inspect raw
+flags, borrow that live descriptor, close it, close unrelated descriptor ranges,
+and poll one initialized parent pidfd. The two unsafe mechanical functions and
+the public consuming entry require a sole dedicated secure-start process; these
+are not shared-application APIs. The binary has one call block and the entry has
+two. Four test blocks operate only in disposable subprocesses. Numeric parent
+root and startup acknowledgments do not supply host-root provenance or proof
+authority; the actual creator and outside whole-domain custodian remain required.
+The private root-side helper adapter has one unsafe consuming launch function
+and three blocks calling existing sealed staging, retained namespace spawning,
+and exec confirmation. The complete backing enters the existing cleanup slot
+before clone. Independent exec-status EOF precedes credentialed readiness.
+Its staging test has one call block and an unsafe-function signature assertion;
+neither constructs a positive runtime or deployment. The shared send test's two
+blocks reset/unblock SIGPIPE only in a disposable subprocess, checking that the
+real send uses NOSIGNAL; no application or host signal policy is changed.
+
 The gated namespace collector in `child_namespace_report.rs` uses six unsafe
 blocks and one private syscall function because post-clone observation cannot
 use allocating or TLS-dependent wrappers. Its x86-64 stat buffer layout and
@@ -521,8 +540,21 @@ before clone and adopt the returned PID, pidfd and spawn lease before fallible
 parent work. Post-clone callbacks are finite and allocation-free; credential
 changes re-arm and check parent-death signaling. Exec confirmation releases only
 the spawn lease. Pending or quarantined children retain dependencies; only a
-consuming terminal wait permits retirement. `WNOWAIT` and `ECHILD` are not that
+consuming terminal wait permits direct-child retirement. Fresh-domain custody
+additionally requires observed aggregate emptiness and successful removal of
+the exact retained cgroup. `WNOWAIT` and `ECHILD` are not terminal
 evidence. See [cleanup custody](compiler-execution-cleanup-custody.md).
+
+The optional native fresh-domain spawn extends that same clone path with
+`CLONE_INTO_CGROUP`. It reserves rollback custody before mkdir and transfers the
+actual domain, atomic pidfd, spawn lease and original cleanup slot before any
+fallible parent check. Its unsafe caller must exclude privileged cgroup/mount
+writers and must not export cgroup controls or allow child migration/delegation.
+No caller path or descriptor constructs a domain owner. Root numeric credentials
+and cgroup placement alone establish neither trusted deployment origin nor
+proof-process isolation. The child remains nondumpable; production proof gates
+are unchanged. One additional unsafe mechanical entry point and two ignored
+root-diagnostic call sites are reviewed here, not qualified by their counts.
 
 Fixed-slot, credential and process-transition fixtures run in isolated children.
 Their source descriptors stay above the destination slots; raw adoption happens
@@ -537,6 +569,95 @@ sealed-image, client, provisioner and service allowances alongside their new
 modules. Macro/include sites are counted once where written. This review covers
 OS ownership and unsafe-call contracts, not protected execution, proof-policy
 admission, native production activation, or GPU qualification.
+
+## Retained Proof Controller
+
+The gated proof launcher performs raw fork only after preparing every descriptor,
+C string and argument pointer. Its child performs syscall-only setup and exec;
+it must not allocate, unwind, acquire inherited locks or run Rust destructors.
+Successful pipe creation transfers each descriptor into exactly one owner.
+Current-thread observations use argument-free `gettid`; retained task identifiers
+are not authority to act after their terminal wait has been consumed.
+
+Stable inspection initializes register storage before ptrace writes it and
+checks status before interpreting the result. Task custody is published before
+fallible parent work; unresolved creation, cleanup or unwind remains retained
+in the original process. This does not establish external-writer isolation.
+The artifact spawn lease must separately survive the entire pre-exec interval,
+including failure quarantine: a safe pointer/descriptor inventory cannot replace
+that lifecycle obligation.
+
+Socket, mapping, stable-controller and quarantine fixtures run their raw process
+operations in owned diagnostic domains. Ancillary buffers are initialized and
+bounded. The memory-policy fixture owns one private, writable, non-executable
+mapping, mutates one valid byte, and unmaps it once; it never executes that data.
+Fixture kill/reap and raw syscall operations provide test observations, not
+production launch authority. The reviewed eight-file inventory contains 53
+unsafe blocks and eight extern blocks, including 29 test-only blocks. Its old
+controller allowance shrinks from 17 blocks to 15 as operations move into the
+private spawn and inspection modules. Counts do not qualify protected execution.
+
+## Native Compiler Exec and Root Trace
+
+The compiler mode in `fe2o3-protected-service-spawn` uses the existing raw
+clone/profile/gate/exec path. One unsafe staging function requires authenticated
+input custody and full overlapping charges. Owned CString buffers and frozen
+pointer tables survive source drops and stage moves. The existing child syscall
+block adds `fchdir` and exact argv/environment selection; no second launcher or
+unsafe Send implementation is introduced. Standard destinations preserve shared
+open-file status and offsets; `Some` clears descriptor CLOEXEC. The caller must
+map captured absent or original-CLOEXEC streams to `None` for post-exec absence.
+
+Root tracing adds one scalar ptrace block and one unsafe exec-confirmation
+function/block. The retained wrapper adds one forwarding function/block. The
+controller consumes the existing child, pidfd, cleanup slot, artifact lease and
+backing; it binds operations to the original thread, Budget address and ledger.
+Its fixed TRACEEXEC/EXITKILL options introduce no descendant or TRACEEXIT stops.
+Only the same owner's consuming terminal wait notifies cleanup. Exec observation
+alone does not release the lease: confirmation additionally requires the caller
+to authenticate native exec and closure of every inherited artifact-lock alias.
+It does not establish process-tree isolation or compiler authority.
+
+`fe2o3-process-identity/native_capture.rs` uses three blocks for scalar
+standard-slot probes, CLOEXEC duplication above FD2, and adoption of newly owned
+descriptors. Capture is safe, inert and non-atomic: concurrent slot replacement
+can mix observations, while shared flags, offsets and contents remain mutable.
+It neither creates a borrowed lifetime for a raw standard slot nor grants
+invocation provenance. The authenticated native stage's obligations are separate.
+Cwd access borrows the existing pin without reopening
+its pathname. Inode/flag comparison is not evidence of OFD provenance.
+
+Reviewed test-only additions are 12 capture blocks, two compiler staging blocks,
+two native-exec blocks, and nine trace-confirmation blocks. Isolated subprocess
+tests cover absent/CLOEXEC streams, offsets, partial capture failure, actual
+trace waits, short funding and retained cleanup. The explicit root diagnostic
+uses a static C fixture through the production clone path, with no compiler,
+proof or GPU authority. The C fixture checks inputs and descriptors and exits;
+its libc boundary remains part of the diagnostic, outside the Rust inventory.
+No unrelated inventory allowances change.
+
+## Wrapper Input Custody
+
+The cwd hook now owns its CLOEXEC duplicate through Command's lifetime, including
+reuse and failure, instead of capturing a borrowed raw descriptor. The existing
+unsafe block still performs only pre-exec fstat/fchdir; registration can refuse
+before changing Command. Six test-only blocks cover descriptor probes and an
+isolated soft-limit guard.
+
+The binding wrapper captures actual runtime-sanitized entry stdio before opening
+files, and retains it with protected parent invocation custody. Two installation
+blocks perform raw standard-slot probes and register a closure owning high-FD
+duplicates. Only bounded descriptor operations run before exec. Absent or
+original-CLOEXEC slots close; other streams preserve shared offsets/status flags.
+The wrapper keeps current parent slots open so pinning and Command's error pipe
+cannot occupy a slot the final hook replaces. Capture and sampled revalidation
+do not prove immutable aliases, pre-runtime inheritance or compiler authority.
+
+The child-channel transfer now requires kernel message credentials matching both
+the declared child PID and the service socket's creation credentials. No new
+production unsafe block is needed. Its relay test registers one existing scalar
+send helper in a child-only pre-exec hook. The original same-UID/GID relationship,
+pidfd liveness and protected-runtime refusals remain unchanged.
 
 ## Initial Reduction
 

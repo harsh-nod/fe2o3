@@ -143,7 +143,7 @@ fn run_child(
     if let Some((name, value)) = extra_environment {
         command.env(name, value);
     }
-    cwd.configure_child_fchdir(&mut command);
+    cwd.configure_child_fchdir(&mut command).unwrap();
     // SAFETY: the callback performs descriptor-only operations before exec.
     unsafe {
         command.pre_exec(move || {

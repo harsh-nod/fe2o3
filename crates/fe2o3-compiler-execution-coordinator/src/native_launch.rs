@@ -162,13 +162,15 @@ pub(crate) fn pid_u32(pid: rustix::process::Pid) -> Result<u32> {
 pub(crate) struct Channels {
     pub root: OwnedFd,
     pub child: OwnedFd,
+    pub exec_reader: OwnedFd,
+    pub exec_writer: OwnedFd,
     pub profile_reader: OwnedFd,
     pub profile_writer: OwnedFd,
     pub gate_reader: OwnedFd,
     pub gate_writer: OwnedFd,
 }
 impl Channels {
-    pub const STORAGE: usize = 6 * FILE_STORAGE;
+    pub const STORAGE: usize = 8 * FILE_STORAGE;
     // The enclosing launch prepays the complete descriptor/frame and syscall charge.
     pub fn new() -> Result<Self> {
         let (root, child) = net::socketpair(
@@ -178,6 +180,15 @@ impl Channels {
             None,
         )
         .map_err(|e| io("create native supervisor bootstrap", e))?;
+        net::sockopt::set_socket_passcred(&root, true)
+            .map_err(|e| io("enable supervisor message credentials", e))?;
+        let (exec_reader, exec_writer) = net::socketpair(
+            net::AddressFamily::UNIX,
+            net::SocketType::SEQPACKET,
+            net::SocketFlags::CLOEXEC | net::SocketFlags::NONBLOCK,
+            None,
+        )
+        .map_err(|e| io("create native supervisor exec status", e))?;
         let (profile_reader, profile_writer) =
             pipe::pipe_with(pipe::PipeFlags::CLOEXEC | pipe::PipeFlags::NONBLOCK)
                 .map_err(|e| io("create native supervisor profile channel", e))?;
@@ -186,6 +197,8 @@ impl Channels {
         Ok(Self {
             root,
             child,
+            exec_reader,
+            exec_writer,
             profile_reader,
             profile_writer,
             gate_reader,

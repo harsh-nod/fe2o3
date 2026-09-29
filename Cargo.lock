@@ -858,6 +858,7 @@ dependencies = [
  "ed25519-dalek",
  "fe2o3-artifact-transaction",
  "fe2o3-broker-authority-service",
+ "fe2o3-build-authority",
  "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-lifecycle",
  "fe2o3-compiler-execution-protocol",
@@ -868,6 +869,7 @@ dependencies = [
  "fe2o3-protected-service-spawn",
  "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
+ "fe2o3-rustc-invocation",
  "libc",
  "rustix",
  "sha2 0.11.0",
@@ -1665,7 +1667,7 @@ name = "fe2o3-protected-static-executable"
 version = "0.1.0"
 dependencies = [
  "fe2o3-kernel-ir",
- "fe2o3-runtime-protocol",
+ "fe2o3-static-executable-format",
  "libc",
  "rustix",
  "sha2 0.11.0",
@@ -1771,6 +1773,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco-finalize",
+ "fe2o3-static-executable-format",
  "sha2 0.11.0",
 ]
 
@@ -1923,6 +1926,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-static-executable-format"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-static-preexec-manifest"
 version = "0.1.0"
 
@@ -2017,6 +2027,8 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-build-authority",
+ "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
@@ -2029,8 +2041,12 @@ dependencies = [
  "fe2o3-mir-model",
  "fe2o3-pliron",
  "fe2o3-proof-contracts",
+ "fe2o3-protected-service-profile",
+ "fe2o3-protected-service-spawn",
+ "fe2o3-protected-static-executable",
  "fe2o3-rustc-front",
  "fe2o3-rustc-invocation",
+ "libc",
  "rand_core 0.6.4",
  "rustix",
  "sha2 0.11.0",

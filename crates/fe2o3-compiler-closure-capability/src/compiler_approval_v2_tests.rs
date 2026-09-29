@@ -1,7 +1,7 @@
 //! Synthetic root-policy intake only: no production approval or runtime-guard evidence.
 use super::*;
 use ed25519_dalek::SigningKey;
-use fe2o3_build_authority::COMPILER_APPROVAL_POLICY_WORK_V1 as POLICY_WORK;
+use fe2o3_build_authority::COMPILER_APPROVAL_POLICY_WORK_V2 as POLICY_WORK;
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V3 as PROFILE_STORAGE,
     COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V3 as PROFILE_WORK,
@@ -21,13 +21,14 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-type Owner = ApprovedCompilerPolicyV1;
-type Error = CompilerApprovalErrorV1;
-const POLICY_REL: &str = "etc/fe2o3/build-authority/policy-v1";
+type Owner = ApprovedCompilerPolicyV2;
+type Error = CompilerApprovalErrorV2;
+const POLICY_REL: &str = "etc/fe2o3/build-authority/policy-v2";
 const PROFILE_REL: &str = "etc/fe2o3/compiler-execution/client-profile-v3";
 const FLOOR: usize = 19;
 const LIMIT: usize = 8_000_000;
-const LOAD_WORK: usize = IO_WORK + POLICY_WORK + PROFILE_WORK + ProfileCapability::IO_WORK + 32;
+const LOAD_WORK: usize =
+    IO_WORK + POLICY_WORK + PROFILE_WORK + ProfileCapability::IO_WORK + BIND_WORK;
 const REVALIDATE_WORK: usize =
     8 + IO_WORK + ProfileCapability::IO_WORK + POLICY_BYTES + PROFILE_BYTES;
 
@@ -95,7 +96,7 @@ fn fixture_profile(seed: u8) -> Profile {
 
 struct Tree {
     root: PathBuf,
-    policy: CompilerApprovalPolicyV1,
+    policy: CompilerApprovalPolicyV2,
     profile: Profile,
 }
 impl Tree {
@@ -121,11 +122,13 @@ impl Tree {
         let profile = fixture_profile(7);
         let closure =
             CompilerClosureV2::new([1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]).unwrap();
-        let policy = CompilerApprovalPolicyV1::new(
+        let policy = CompilerApprovalPolicyV2::new(
             closure,
             *profile.identity().as_bytes(),
             [8; 32],
             1,
+            1002,
+            1002,
             |_| Ok::<_, Resource>(()),
         )
         .unwrap();
@@ -162,7 +165,7 @@ impl Tree {
         &self,
         probe: ImmutableCheck,
         budget: &mut Budget<'_>,
-    ) -> Result<(Owner, CompilerApprovalStorageV1)> {
+    ) -> Result<(Owner, CompilerApprovalStorageV2)> {
         let (uid, gid) = owners();
         Owner::load_using(|| self.open(), uid, gid, probe, budget)
     }
@@ -235,7 +238,9 @@ fn failure<T>(result: Result<T>) -> Error {
 fn resource(error: Error) -> Resource {
     match error {
         Error::Resource(error)
-        | Error::Codec(CompilerApprovalPolicyErrorV1::Charge(error))
+        | Error::Codec(CompilerApprovalPolicyErrorV2::Framing(
+            fe2o3_build_authority::CompilerApprovalPolicyErrorV1::Charge(error),
+        ))
         | Error::Capability(CapabilityError::Resource(error))
         | Error::Capability(CapabilityError::ProfileV3(ProfileError::Resource(error))) => error,
         error => panic!("expected resource refusal: {error:?}"),
@@ -369,11 +374,11 @@ fn nested_decode_and_capability_work_use_the_original_ledger_without_refunds() {
             IO_WORK + POLICY_WORK + PROFILE_WORK,
         ),
         (
-            LOAD_WORK - 33,
+            LOAD_WORK - BIND_WORK - 1,
             IO_WORK + POLICY_WORK + PROFILE_WORK + 8,
-            LOAD_WORK - 32,
+            LOAD_WORK - BIND_WORK,
         ),
-        (LOAD_WORK - 1, LOAD_WORK - 32, LOAD_WORK),
+        (LOAD_WORK - 1, LOAD_WORK - BIND_WORK, LOAD_WORK),
     ] {
         let (result, usage) = observe(limit, LIMIT, |b| tree.load(fixture_immutable, b));
         assert!(matches!(resource(failure(result)), Resource::Work(_)));
@@ -394,7 +399,7 @@ fn exact_and_one_short_storage_include_nested_profile_and_retained_owner() {
     assert_eq!(
         retained,
         size_of::<Owner>()
-            + size_of::<CompilerApprovalStorageV1>()
+            + size_of::<CompilerApprovalStorageV2>()
             + size_of::<(
                 ProfileCapability,
                 crate::CompilerExecutionCapabilityStorageV2,
@@ -803,7 +808,9 @@ fn missing_or_legacy_profile_and_malformed_policy_never_create_an_owner() {
     tree.write(POLICY_REL, &[0; POLICY_BYTES]);
     assert!(matches!(
         failure(observe(LIMIT, LIMIT, |b| tree.load(fixture_immutable, b)).0),
-        Error::Codec(CompilerApprovalPolicyErrorV1::Header)
+        Error::Codec(CompilerApprovalPolicyErrorV2::Framing(
+            fe2o3_build_authority::CompilerApprovalPolicyErrorV1::Header,
+        ))
     ));
     fs::remove_file(tree.path(POLICY_REL)).unwrap();
     assert!(matches!(
@@ -829,6 +836,9 @@ fn correctly_encoded_but_unbound_v3_profile_is_a_typed_mismatch() {
     assert_eq!(usage.work, LOAD_WORK);
     assert_eq!(usage.live, FLOOR);
 }
+
+#[path = "compiler_approval_v2_role_tests.rs"]
+mod role_tests;
 
 #[test]
 fn each_immutable_probe_is_required_during_intake_and_revalidation() {

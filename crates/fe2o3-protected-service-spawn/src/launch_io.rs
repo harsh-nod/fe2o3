@@ -2,7 +2,7 @@
 //!
 //! The caller retains the child and channels, prepays ATTEMPT_SCRATCH throughout
 //! each phase, and reserves returned ready/descriptor storage before retaining it.
-//! Profile reads require a nonblocking pipe; bootstrap receives use DONTWAIT.
+//! Profile reads require a nonblocking pipe; bootstrap I/O uses DONTWAIT.
 //! Gate writes require the exclusively owned fresh release pipe. Logical attempt
 //! limits and deadline checks do not bound a blocking syscall's duration.
 //!
@@ -10,8 +10,10 @@
 //! retry is finite, and a truncated one-byte packet cannot masquerade as a stage.
 //! Terminal status enables SO_PASSCRED before receive. Linux marks even queued
 //! empty records with SCM_CREDENTIALS; EOF carries no record. These credentials
-//! distinguish framing only and never authenticate service identity. Failure to
-//! enable the option refuses, without a hangup-only or unmarked-record fallback.
+//! distinguish framing only. Credential-bound readiness additionally compares the
+//! actual packet sender with the owning coordinator's child and deployment IDs;
+//! it does not admit those IDs, an image, or a deployment. Failure to enable the
+//! option refuses, without a hangup-only or unmarked-record fallback.
 
 use crate::{PROTECTED_SERVICE_GATE_RELEASE_V1, PROTECTED_SERVICE_PROFILE_READY_V1};
 use rustix::io::Errno;
@@ -31,7 +33,10 @@ pub const MAX_READY_BYTES: usize = 88;
 #[allow(unsafe_code)]
 // SAFETY: the fixed payload size fits c_uint and CMSG alignment cannot overflow.
 // Unlike rustix's unaligned byte-buffer allowance, this is the exact libc ABI size.
-const CONTROL_BYTES: usize = unsafe { libc::CMSG_SPACE(size_of::<libc::ucred>() as u32) as usize };
+const CONTROL_BYTES: usize = unsafe {
+    libc::CMSG_SPACE(size_of::<libc::ucred>() as u32) as usize
+        + libc::CMSG_SPACE(size_of::<i32>() as u32) as usize
+};
 
 /// Profile, ready and exec phases can each check liveness before all but their
 /// last primary attempt. Observer::is_live has its own original-ledger quota.
@@ -47,6 +52,15 @@ pub const MAX_WORK: usize = MAX_PHASE_ATTEMPTS
         + Boundary::ExecEof.work())
     + MAX_LIVENESS_CHECKS * Boundary::Progress.work()
     + MAX_GATE_ATTEMPTS * Boundary::GateRelease.work();
+
+/// Separate liveness allowance for one send phase, not included in MAX_LIVENESS_CHECKS.
+/// Observer::is_live has its own original-ledger quota.
+pub const MAX_SEND_LIVENESS_CHECKS: usize = MAX_PHASE_ATTEMPTS - 1;
+
+/// Complete mechanical quota for one send phase, not included in MAX_WORK.
+/// Excludes nested liveness, caller validation, deadline construction and storage.
+pub const MAX_SEND_WORK: usize = MAX_PHASE_ATTEMPTS * Boundary::ReadySend.work()
+    + MAX_SEND_LIVENESS_CHECKS * Boundary::Progress.work();
 
 /// Fixed logical frame, including payload/control, returned endpoint and failure
 /// staging. Observer state/errors and nested liveness have separate caller charges.
@@ -64,6 +78,8 @@ pub enum Boundary {
     GateRelease,
     /// Receive a bounded payload and control record.
     ReadyTransfer,
+    /// Send one bounded payload without descriptor rights.
+    ReadySend,
     /// Enable kernel record credentials and distinguish EOF from an empty packet.
     ExecEof,
     /// Probe a child failure stage, including control disposal.
@@ -79,9 +95,10 @@ impl Boundary {
     pub const fn work(self) -> usize {
         let (operations, bytes) = match self {
             Self::ReadyTransfer => (
-                1 + CONTROL_BYTES / size_of::<i32>(),
+                2 + CONTROL_BYTES / size_of::<i32>(),
                 MAX_READY_BYTES + CONTROL_BYTES,
             ),
+            Self::ReadySend => (1, MAX_READY_BYTES),
             Self::GateRelease => (1, 1),
             Self::Progress => (1, 0),
             Self::ProfileReady => (1, 2),
@@ -107,6 +124,21 @@ pub trait Observer {
     fn is_live(&mut self) -> Result<bool, Self::Error>;
 }
 
+/// Inert expected message credentials, not authority to admit or signal a child.
+/// The native caller derives these from its retained child and admitted profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MessageSender {
+    pid: i32,
+    uid: u32,
+    gid: u32,
+}
+impl MessageSender {
+    /// Supplies comparison values only. Each receive requires SCM_CREDENTIALS.
+    pub const fn new(pid: i32, uid: u32, gid: u32) -> Self {
+        Self { pid, uid, gid }
+    }
+}
+
 /// Fixed mechanical failure categories, with no owned diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Failure {
@@ -129,7 +161,7 @@ pub enum Failure {
     NoncanonicalProfileReady,
     /// Gate write did not write the exact token.
     NoncanonicalGateRelease,
-    /// Ready length, rights or truncation violated the expected shape.
+    /// Ready length, rights, truncation or short send violated the expected shape.
     MalformedReadyTransfer,
     /// Status was neither a canonical stage nor actual EOF.
     MalformedExecStatus,
@@ -191,11 +223,54 @@ pub fn release_child<O: Observer>(
     .release(gate)
 }
 
+/// Sends exactly N inert bytes in one nonblocking, SIGPIPE-suppressed packet,
+/// without descriptor rights. Requires 0 < N <= MAX_READY_BYTES and a caller-owned
+/// SEQPACKET endpoint; this transport does not admit its peer or payload.
+/// Keep ATTEMPT_SCRATCH prepaid and budget MAX_SEND_WORK plus separately metered
+/// liveness for at most MAX_SEND_LIVENESS_CHECKS observations on the original ledger.
+/// A deadline refusal after a successful syscall can follow delivery; do not replay
+/// the record on error. No receipt or positive authority is returned.
+pub fn send_ready<const N: usize, O: Observer>(
+    bootstrap: BorrowedFd<'_>,
+    payload: &[u8; N],
+    observer: &mut O,
+    deadline: Instant,
+) -> Result<(), Error<O::Error>> {
+    Scheduler {
+        observer,
+        io: SystemIo,
+        deadline,
+    }
+    .send(bootstrap, payload)
+}
+
 /// Receives exactly N inert payload bytes and either one or zero descriptor rights.
 /// The caller must decode the family record against its actual admitted context.
 /// Invalid shapes and all deadline/refusal paths close every received descriptor.
 pub fn receive_ready<const N: usize, const RIGHTS: bool, O: Observer>(
     bootstrap: BorrowedFd<'_>,
+    observer: &mut O,
+    deadline: Instant,
+) -> Result<([u8; N], Option<OwnedFd>), Error<O::Error>> {
+    receive_ready_inner::<N, RIGHTS, O>(bootstrap, None, observer, deadline)
+}
+
+/// Receives readiness only from the exact per-message PID/UID/GID. SO_PASSCRED
+/// must already be enabled before the child can send. Ancillary credentials are
+/// required even for failure stages; SO_PEERCRED's socket creator is not a writer.
+/// Payload decoding and image/profile/child custody remain caller obligations.
+pub fn receive_ready_from<const N: usize, const RIGHTS: bool, O: Observer>(
+    bootstrap: BorrowedFd<'_>,
+    sender: MessageSender,
+    observer: &mut O,
+    deadline: Instant,
+) -> Result<([u8; N], Option<OwnedFd>), Error<O::Error>> {
+    receive_ready_inner::<N, RIGHTS, O>(bootstrap, Some(sender), observer, deadline)
+}
+
+fn receive_ready_inner<const N: usize, const RIGHTS: bool, O: Observer>(
+    bootstrap: BorrowedFd<'_>,
+    sender: Option<MessageSender>,
     observer: &mut O,
     deadline: Instant,
 ) -> Result<([u8; N], Option<OwnedFd>), Error<O::Error>> {
@@ -207,7 +282,7 @@ pub fn receive_ready<const N: usize, const RIGHTS: bool, O: Observer>(
         io: SystemIo,
         deadline,
     }
-    .ready(bootstrap, N, RIGHTS)?;
+    .ready_from(bootstrap, N, RIGHTS, sender)?;
     let mut bytes = [0; N];
     bytes.copy_from_slice(&payload[..N]);
     Ok((bytes, fd))
@@ -233,13 +308,14 @@ trait Io {
     fn now(&mut self) -> Instant;
     fn profile(&mut self, fd: BorrowedFd<'_>, bytes: &mut [u8; 2]) -> Result<usize, Errno>;
     fn gate(&mut self, fd: BorrowedFd<'_>) -> Result<usize, Errno>;
+    fn send(&mut self, fd: BorrowedFd<'_>, payload: &[u8]) -> Result<usize, Errno>;
     fn status(
         &mut self,
         fd: BorrowedFd<'_>,
         bytes: &mut [u8; 2],
         eof: bool,
     ) -> Result<(usize, usize), Errno>;
-    fn ready(&mut self, fd: BorrowedFd<'_>) -> Result<ReadyPacket, Errno>;
+    fn ready(&mut self, fd: BorrowedFd<'_>, credentials: bool) -> Result<ReadyPacket, Errno>;
     fn pause(&mut self, duration: Duration) -> Result<(), Errno>;
 }
 
@@ -253,6 +329,13 @@ impl Io for SystemIo {
     }
     fn gate(&mut self, fd: BorrowedFd<'_>) -> Result<usize, Errno> {
         rustix::io::write(fd, &[PROTECTED_SERVICE_GATE_RELEASE_V1])
+    }
+    fn send(&mut self, fd: BorrowedFd<'_>, payload: &[u8]) -> Result<usize, Errno> {
+        rustix::net::send(
+            fd,
+            payload,
+            rustix::net::SendFlags::DONTWAIT | rustix::net::SendFlags::NOSIGNAL,
+        )
     }
     fn status(
         &mut self,
@@ -268,7 +351,10 @@ impl Io for SystemIo {
         }
         Ok(receive_packet(fd)?.status(bytes, eof))
     }
-    fn ready(&mut self, fd: BorrowedFd<'_>) -> Result<ReadyPacket, Errno> {
+    fn ready(&mut self, fd: BorrowedFd<'_>, credentials: bool) -> Result<ReadyPacket, Errno> {
+        if credentials && !rustix::net::sockopt::socket_passcred(fd)? {
+            return Err(Errno::INVAL);
+        }
         receive_packet(fd)
     }
     fn pause(&mut self, duration: Duration) -> Result<(), Errno> {
@@ -278,18 +364,13 @@ impl Io for SystemIo {
     }
 }
 
-// One credential record, or one header plus at most four descriptor integers.
-// Two payload-bearing headers cannot fit. Kernel-truncated undisclosed rights
-// are closed by recvmsg itself. Credentials carry framing only, never authority.
+// Exactly enough for credentials plus one right (alignment may fit a second
+// right, which is owned and rejected). recvmsg closes undisclosed truncated FDs.
 #[repr(C)]
 struct Control {
-    length: usize,
-    level: i32,
-    kind: i32,
-    descriptors: [i32; 4],
+    words: [usize; CONTROL_BYTES / size_of::<usize>()],
 }
 const _: () = assert!(size_of::<Control>() == CONTROL_BYTES);
-const _: () = assert!(CONTROL_BYTES <= 2 * size_of::<libc::cmsghdr>());
 // Linux UAPI SCM_PIDFD, absent from the pinned libc/rustix ancillary enums.
 const SCM_PIDFD: i32 = 0x04;
 
@@ -297,10 +378,7 @@ const SCM_PIDFD: i32 = 0x04;
 fn receive_packet(fd: BorrowedFd<'_>) -> Result<ReadyPacket, Errno> {
     let mut packet = ReadyPacket::empty();
     let mut control = Control {
-        length: 0,
-        level: 0,
-        kind: 0,
-        descriptors: [-1; 4],
+        words: [0; CONTROL_BYTES / size_of::<usize>()],
     };
     let mut vector = libc::iovec {
         iov_base: packet.payload.as_mut_ptr().cast(),
@@ -346,47 +424,67 @@ fn receive_packet(fd: BorrowedFd<'_>) -> Result<ReadyPacket, Errno> {
 /// ownership-transferring private tests), never caller-supplied untrusted bytes.
 #[allow(unsafe_code)]
 unsafe fn take_control(rights: &mut Rights, control: &Control, length: usize) {
-    if length == 0 {
-        return;
-    }
     let header_bytes = size_of::<libc::cmsghdr>();
-    let declared = control.length;
-    if length > CONTROL_BYTES
-        || length < header_bytes
-        || declared < header_bytes
-        || declared > length
-    {
+    if length > CONTROL_BYTES {
         rights.invalid = true;
     }
-    let supported = control.level == libc::SOL_SOCKET && control.kind == libc::SCM_RIGHTS;
-    let credentials = control.level == libc::SOL_SOCKET && control.kind == libc::SCM_CREDENTIALS;
-    if credentials {
-        rights.credentials = true;
-        if declared != header_bytes + size_of::<libc::ucred>() {
+    let length = length.min(CONTROL_BYTES);
+    let base = (control as *const Control).cast::<u8>();
+    let mut offset = 0;
+    while offset < length {
+        if length - offset < header_bytes {
+            rights.invalid = true;
+            break;
+        }
+        // SAFETY: the checked remaining range contains this complete initialized
+        // header. All reads are unaligned, independent of ancillary padding.
+        let header = unsafe { base.add(offset).cast::<libc::cmsghdr>().read_unaligned() };
+        let declared = header.cmsg_len as usize;
+        let remaining = length - offset;
+        if declared < header_bytes || declared > remaining {
             rights.invalid = true;
         }
-    } else if !supported {
-        rights.invalid = true;
-    }
-    let owns_fds = control.level == libc::SOL_SOCKET
-        && (control.kind == libc::SCM_RIGHTS || control.kind == SCM_PIDFD);
-    if owns_fds {
-        let payload = declared
-            .min(length)
-            .min(CONTROL_BYTES)
-            .saturating_sub(header_bytes);
-        if payload == 0 || payload % size_of::<i32>() != 0 {
-            rights.invalid = true;
-        }
-        for &raw in control.descriptors.iter().take(payload / size_of::<i32>()) {
-            if raw < 0 {
-                rights.invalid = true;
-                continue;
+        let payload = declared.min(remaining).saturating_sub(header_bytes);
+        // SAFETY: offset + header_bytes is within the initialized control buffer.
+        let data = unsafe { base.add(offset + header_bytes) };
+        match (header.cmsg_level, header.cmsg_type) {
+            (libc::SOL_SOCKET, libc::SCM_CREDENTIALS) => {
+                if payload != size_of::<libc::ucred>() || rights.credentials.is_some() {
+                    rights.invalid = true;
+                } else {
+                    // SAFETY: payload has the exact checked ucred size.
+                    let cred = unsafe { data.cast::<libc::ucred>().read_unaligned() };
+                    rights.credentials = Some(MessageSender::new(cred.pid, cred.uid, cred.gid));
+                }
             }
-            // SAFETY: successful recvmsg installed each disclosed descriptor once;
-            // push owns it or closes it immediately when the message is rejected.
-            rights.push(unsafe { OwnedFd::from_raw_fd(raw) });
+            (libc::SOL_SOCKET, kind @ (libc::SCM_RIGHTS | SCM_PIDFD)) => {
+                if kind != libc::SCM_RIGHTS || payload == 0 || payload % size_of::<i32>() != 0 {
+                    rights.invalid = true;
+                }
+                for index in 0..payload / size_of::<i32>() {
+                    // SAFETY: each complete integer is within the checked payload.
+                    let raw = unsafe { data.cast::<i32>().add(index).read_unaligned() };
+                    if raw < 0 {
+                        rights.invalid = true;
+                    } else {
+                        // SAFETY: recvmsg installed each disclosed FD exactly once.
+                        rights.push(unsafe { OwnedFd::from_raw_fd(raw) });
+                    }
+                }
+            }
+            _ => rights.invalid = true,
         }
+        if declared < header_bytes || declared > remaining {
+            break;
+        }
+        let aligned = declared.next_multiple_of(size_of::<usize>());
+        if aligned > remaining {
+            if declared != remaining {
+                rights.invalid = true;
+            }
+            break;
+        }
+        offset += aligned;
     }
 }
 
@@ -394,7 +492,7 @@ unsafe fn take_control(rights: &mut Rights, control: &Control, length: usize) {
 struct Rights {
     fd: Option<OwnedFd>,
     invalid: bool,
-    credentials: bool,
+    credentials: Option<MessageSender>,
 }
 impl Rights {
     fn push(&mut self, fd: OwnedFd) {
@@ -428,22 +526,31 @@ impl ReadyPacket {
             || self
                 .flags
                 .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
-            || (self.rights.credentials && (!eof || self.bytes == 0))
-            || (eof && self.bytes != 0 && !self.rights.credentials)
+            || (self.rights.credentials.is_some() && self.bytes == 0)
+            || (eof && self.bytes != 0 && self.rights.credentials.is_none())
         {
             return (3, 3);
         }
         bytes.copy_from_slice(&self.payload[..2]);
         (self.bytes.min(2), self.bytes)
     }
+    #[cfg(test)]
     fn validate(
         self,
         bytes: usize,
         rights: bool,
     ) -> Result<([u8; MAX_READY_BYTES], Option<OwnedFd>), Failure> {
+        self.validate_from(bytes, rights, None)
+    }
+    fn validate_from(
+        self,
+        bytes: usize,
+        rights: bool,
+        sender: Option<MessageSender>,
+    ) -> Result<([u8; MAX_READY_BYTES], Option<OwnedFd>), Failure> {
         // Dispose all received ownership before rejecting shape or returning a stage.
         if self.rights.invalid
-            || self.rights.credentials
+            || self.rights.credentials != sender
             || self
                 .flags
                 .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
@@ -577,18 +684,64 @@ impl<O: Observer, I: Io> Scheduler<'_, O, I> {
         }
         Err(Failure::Timeout("child release gate").into())
     }
+    fn send<const N: usize>(
+        &mut self,
+        bootstrap: BorrowedFd<'_>,
+        payload: &[u8; N],
+    ) -> Result<(), Error<O::Error>> {
+        if !(1..=MAX_READY_BYTES).contains(&N) {
+            return Err(Failure::MalformedReadyTransfer.into());
+        }
+        for attempt in 0..MAX_PHASE_ATTEMPTS {
+            self.begin(Boundary::ReadySend, "service-ready send")?;
+            let result = self.io.send(bootstrap, payload);
+            self.deadline("service-ready send")?;
+            match result {
+                Ok(bytes) if bytes == N => return Ok(()),
+                Ok(_) => return Err(Failure::MalformedReadyTransfer.into()),
+                Err(Errno::AGAIN | Errno::INTR) => {
+                    if attempt + 1 == MAX_PHASE_ATTEMPTS {
+                        break;
+                    }
+                    self.progress("service-ready send")?;
+                }
+                Err(source) => {
+                    return Err(Failure::Io {
+                        operation: "send service-ready record",
+                        source,
+                    }
+                    .into());
+                }
+            }
+        }
+        Err(Failure::Timeout("service-ready send").into())
+    }
+    #[cfg(test)]
     fn ready(
         &mut self,
         bootstrap: BorrowedFd<'_>,
         bytes: usize,
         rights: bool,
     ) -> Result<([u8; MAX_READY_BYTES], Option<OwnedFd>), Error<O::Error>> {
+        self.ready_from(bootstrap, bytes, rights, None)
+    }
+    fn ready_from(
+        &mut self,
+        bootstrap: BorrowedFd<'_>,
+        bytes: usize,
+        rights: bool,
+        sender: Option<MessageSender>,
+    ) -> Result<([u8; MAX_READY_BYTES], Option<OwnedFd>), Error<O::Error>> {
         for attempt in 0..MAX_PHASE_ATTEMPTS {
             self.begin(Boundary::ReadyTransfer, "service-ready transfer")?;
-            let result = self.io.ready(bootstrap);
+            let result = self.io.ready(bootstrap, sender.is_some());
             self.deadline("service-ready transfer")?;
             match result {
-                Ok(packet) => return packet.validate(bytes, rights).map_err(Error::Failure),
+                Ok(packet) => {
+                    return packet
+                        .validate_from(bytes, rights, sender)
+                        .map_err(Error::Failure);
+                }
                 Err(Errno::AGAIN | Errno::INTR) => {
                     if attempt + 1 == MAX_PHASE_ATTEMPTS {
                         break;
@@ -638,3 +791,7 @@ impl<O: Observer, I: Io> Scheduler<'_, O, I> {
 #[cfg(test)]
 #[path = "launch_io_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "launch_io_credential_tests.rs"]
+mod credential_tests;

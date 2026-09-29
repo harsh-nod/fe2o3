@@ -32,12 +32,21 @@ fe2o3-pliron = { workspace = true, features = ["internal-proof-staging"] }
 fe2o3-proof-contracts.workspace = true
 fe2o3-rustc-front.workspace = true
 fe2o3-rustc-invocation.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["event", "process", "time"] }
 sha2.workspace = true
 syn = { workspace = true, features = ["visit"] }
 toml = "1.1.4"
 ed25519-dalek = { version = "2.2.0", features = ["fast", "rand_core", "zeroize"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+fe2o3-build-authority.workspace = true
+fe2o3-compiler-closure-capability.workspace = true
+fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-protected-service-profile.workspace = true
+fe2o3-protected-service-spawn.workspace = true
+fe2o3-protected-static-executable.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 fe2o3-build-authority.workspace = true
@@ -52,3 +61,9 @@ test = false
 name = "fe2o3-verus-execution-v2-fixture"
 path = "tests/support/verus_execution_v2.rs"
 test = false
+
+[[bin]]
+name = "fe2o3-proof-executor-helper"
+path = "src/bin/proof_executor_helper.rs"
+test = false
+bench = false

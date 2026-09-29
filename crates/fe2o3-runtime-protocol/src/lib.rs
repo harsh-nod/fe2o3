@@ -2,7 +2,6 @@
 #![doc = include_str!("../README.md")]
 
 mod application_handoff_v3;
-mod static_application;
 mod worker_v3_load_envelope;
 mod worker_v3_load_envelope_v2;
 
@@ -73,7 +72,7 @@ pub use fe2o3_compiler_execution_protocol::{
     VerifiedCompilerExecutionAttestationV1, VerifiedCompilerExecutionCurrentRecordV3,
     sealed_static_issuer_runtime_measurement_v1,
 };
-pub use static_application::{
+pub use fe2o3_static_executable_format::{
     SEALED_STATIC_APPLICATION_WORKSPACE_BYTES_V1, SealedStaticApplicationErrorV1,
     sealed_static_application_identity_v1, sealed_static_application_work_bound_v1,
 };

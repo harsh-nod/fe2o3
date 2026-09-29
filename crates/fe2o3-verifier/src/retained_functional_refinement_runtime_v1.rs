@@ -14,8 +14,21 @@ use sha2::{Digest, Sha256};
 use crate::CanonicalGeneratedVerusProofInputV3;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "retained_functional_refinement_runtime_v1_resources.rs"]
+mod resources;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use resources::{
+    RetainedFunctionalRefinementRuntimeResourceErrorV1,
+    RetainedFunctionalRefinementRuntimeStorageV1, open_retained_generated_verus_runtime_bounded_v1,
+};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "retained_functional_refinement_runtime_v1_linux.rs"]
 mod linux;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "functional_refinement_executor_channel_v1.rs"]
+mod executor_channel;
 
 pub(crate) const FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME: &str =
     "FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest";
@@ -42,7 +55,7 @@ pub enum RetainedFunctionalRefinementRuntimeErrorKindV1 {
     SymlinkOrTraversal,
     /// A required object is absent or has the wrong filesystem type.
     ObjectType,
-    /// Ownership, permissions, or hard-link count differs from policy.
+    /// Ownership, permissions, hard-link count, or accounting access differs from policy.
     Protection,
     /// Directory membership differs from the exact manifest.
     InventoryMismatch,
@@ -52,6 +65,10 @@ pub enum RetainedFunctionalRefinementRuntimeErrorKindV1 {
     ClosureChanged,
     /// The lease was used by a process other than its admitting process.
     OwnerProcessChanged,
+    /// Another proof attempt holds the nonblocking execution gate.
+    Busy,
+    /// Unresolved custody permanently refuses further execution in this process.
+    Quarantined,
     /// An operating-system operation failed.
     Io,
     /// A supervised proof child exceeded its one global deadline.
@@ -113,25 +130,61 @@ pub(crate) struct RetainedGeneratedVerusRuntimeBackendV1 {
     identity: [u8; 32],
     owner_process: u32,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    retained: linux::RetainedRuntimeClosureV2,
+    accounting: Option<resources::RuntimeAccountV1>,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    retained: std::sync::Arc<linux::RetainedRuntimeClosureV2>,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use linux::AttemptV1 as RuntimeAttemptV1;
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+pub(crate) struct RuntimeAttemptV1(std::marker::PhantomData<std::rc::Rc<()>>);
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+impl RuntimeAttemptV1 {
+    fn begin() -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
+        Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
+            "proof attempt custody requires Linux x86-64",
+        ))
+    }
+    pub(crate) fn complete(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+        Self::begin().map(|_| ())
+    }
+    pub(crate) fn check(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+        self.complete()
+    }
 }
 
 pub(crate) fn open_retained_generated_verus_runtime_v1(
     root: &Path,
 ) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let manifest = runtime_manifest(root)?;
+    open_with_manifest(root, &manifest)
+}
+
+fn runtime_manifest(root: &Path) -> Result<ManifestV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     validate_absolute_path(root)?;
     validate_runtime_root_path(root)?;
-    let manifest = ManifestV2::parse_functional_refinement_runtime_v1()?;
+    ManifestV2::parse_functional_refinement_runtime_v1()
+}
+
+fn open_with_manifest(
+    root: &Path,
+    manifest: &ManifestV2,
+) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
     let identity = functional_refinement_closure_identity_v1();
     let owner_process = std::process::id();
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        let retained = linux::RetainedRuntimeClosureV2::open_protected(root, &manifest)?;
+        let retained = linux::RetainedRuntimeClosureV2::open_protected(root, manifest)?;
         Ok(RetainedGeneratedVerusRuntimeBackendV1 {
             root: root.to_path_buf(),
             identity,
             owner_process,
-            retained,
+            accounting: None,
+            retained: std::sync::Arc::new(retained),
         })
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
@@ -145,6 +198,24 @@ pub(crate) fn open_retained_generated_verus_runtime_v1(
 }
 
 impl RetainedGeneratedVerusRuntimeBackendV1 {
+    fn with_legacy_access<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, RetainedFunctionalRefinementRuntimeErrorV1>,
+    ) -> Result<T, RetainedFunctionalRefinementRuntimeErrorV1> {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let bounded = self.accounting.is_some();
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let bounded = false;
+        with_legacy_runtime_access(bounded, operation)
+    }
+
+    pub(crate) fn begin_attempt(
+        &self,
+    ) -> Result<RuntimeAttemptV1, RetainedFunctionalRefinementRuntimeErrorV1> {
+        // Existing execution/toolchain checks run under this guard. Acquiring
+        // it does not add another full runtime hash pass or grant admission.
+        self.with_legacy_access(RuntimeAttemptV1::begin)
+    }
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
@@ -154,12 +225,25 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+        self.with_legacy_access(|| {
+            self.check_owner_process().map_err(|kind| {
+                RetainedFunctionalRefinementRuntimeErrorV1::new(
+                    kind,
+                    "runtime closure lease crossed a process boundary",
+                )
+            })?;
+            self.revalidate_closure()
+        })
+    }
+
+    fn check_owner_process(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorKindV1> {
         if std::process::id() != self.owner_process {
-            return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
-                RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged,
-                "runtime closure lease crossed a process boundary",
-            ));
+            return Err(RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged);
         }
+        Ok(())
+    }
+
+    fn revalidate_closure(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         {
             self.retained.revalidate()
@@ -175,6 +259,7 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
 
     pub(crate) fn execute_generated_rust_verify(
         &self,
+        attempt: &mut RuntimeAttemptV1,
         source: &CanonicalGeneratedVerusProofInputV3,
         deadline: Instant,
         output_limit: usize,
@@ -182,22 +267,42 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
         RetainedFunctionalRefinementRuntimeOutputV1,
         RetainedFunctionalRefinementRuntimeErrorV1,
     > {
-        self.revalidate()?;
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let result = linux::execute_functional_refinement_generated_rust_verify(
-            &self.retained,
-            source,
-            deadline,
-            output_limit,
-        );
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        let result = Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
-            RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
-            "sealed generated rust_verify execution requires Linux x86-64",
-        ));
-        self.revalidate()?;
-        result
+        self.with_legacy_access(|| {
+            attempt.check()?;
+            self.revalidate()?;
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            let result = linux::execute_functional_refinement_generated_rust_verify(
+                attempt,
+                std::sync::Arc::clone(&self.retained),
+                source,
+                deadline,
+                output_limit,
+            );
+            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            let result = Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+                RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
+                "sealed generated rust_verify execution requires Linux x86-64",
+            ));
+            attempt.complete()?;
+            self.revalidate()?;
+            result
+        })
     }
+}
+
+// This gate precedes filesystem scans, attempt custody and execution dispatch.
+// Only the bounded API may operate on an original-budget-bound owner.
+fn with_legacy_runtime_access<T>(
+    bounded: bool,
+    operation: impl FnOnce() -> Result<T, RetainedFunctionalRefinementRuntimeErrorV1>,
+) -> Result<T, RetainedFunctionalRefinementRuntimeErrorV1> {
+    if bounded {
+        return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection,
+            "bounded runtime refuses legacy access without its original budget",
+        ));
+    }
+    operation()
 }
 
 fn functional_refinement_closure_identity_v1() -> [u8; 32] {
@@ -683,6 +788,35 @@ impl ByteLines for [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_legacy_access_refuses_before_operation() {
+        let error = with_legacy_runtime_access::<()>(true, || {
+            panic!("bounded owner reached legacy scan, attempt custody or execution")
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection
+        );
+    }
+
+    #[test]
+    fn legacy_access_preserves_operation_results_and_refusals() {
+        assert_eq!(with_legacy_runtime_access(false, || Ok(17)).unwrap(), 17);
+        let error = with_legacy_runtime_access::<()>(false, || {
+            Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+                RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged,
+                "scalar refusal",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged
+        );
+        assert_eq!(error.detail, "scalar refusal");
+    }
 
     #[test]
     fn manifest_has_no_workload_proof_inventory() {

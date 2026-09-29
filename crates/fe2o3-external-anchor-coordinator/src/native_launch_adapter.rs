@@ -310,7 +310,9 @@ macro_rules! launch {
                     launch_io::release_child(gate_writer.as_fd(),
                         &mut launch::Observer { child: &child, budget: b }, deadline).map_err(launch::protocol)?;
                     drop(gate_writer);
-                    let (ready, endpoint) = launch_io::receive_ready(root.as_fd(),
+                    let sender = launch_io::MessageSender::new(child.pid().as_raw_pid(),
+                        credentials.uid(), credentials.gid());
+                    let (ready, endpoint) = launch_io::receive_ready_from(root.as_fd(), sender,
                         &mut launch::Observer { child: &child, budget: b }, deadline).map_err(launch::protocol)?;
                     b.reserve_storage(launch::FILE_STORAGE)?;
                     launch_io::await_exec_eof(root.as_fd(),

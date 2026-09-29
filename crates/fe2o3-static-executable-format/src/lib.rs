@@ -1,3 +1,7 @@
+//! Loader-independent x86-64 ELF validation and canonical image identity.
+//! Parsing bytes grants no executable, process, deployment or launch authority.
+#![forbid(unsafe_code)]
+
 use core::fmt;
 
 use sha2::{Digest, Sha256};
@@ -211,9 +215,8 @@ pub fn sealed_static_application_identity_v1(
     Ok(digest.finalize().into())
 }
 
-pub(crate) fn validate_sealed_static_elf_v1(
-    bytes: &[u8],
-) -> Result<(), SealedStaticApplicationErrorV1> {
+/// Validates only the closed static ELF format, without hashing or admitting it.
+pub fn validate_sealed_static_elf_v1(bytes: &[u8]) -> Result<(), SealedStaticApplicationErrorV1> {
     let header = bytes
         .get(..ELF_HEADER_BYTES)
         .ok_or(SealedStaticApplicationErrorV1::InvalidElf)?;

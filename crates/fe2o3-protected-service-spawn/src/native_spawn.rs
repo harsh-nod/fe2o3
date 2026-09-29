@@ -50,10 +50,21 @@ use std::{
 
 #[path = "native_child.rs"]
 mod child;
-pub use child::RootOwnedProtectedServiceChildV2;
+pub use child::{RootOwnedProtectedServiceChildV2, RootTaskTraceEventV2, RootTaskTraceV2};
 #[path = "native_retained_child.rs"]
 mod retained_child;
-pub use retained_child::RootOwnedRetainedServiceChildV2;
+pub use retained_child::{RootOwnedRetainedServiceChildV2, RootRetainedTaskTraceV2};
+#[path = "native_domain_spawn.rs"]
+mod domain_spawn;
+use domain_spawn::Placement;
+#[path = "native_compiler_arguments.rs"]
+pub(crate) mod compiler_arguments;
+#[path = "native_compiler_child_channel.rs"]
+pub mod compiler_child_channel;
+#[path = "native_compiler_spawn.rs"]
+mod compiler_spawn;
+#[path = "native_namespace_spawn.rs"]
+mod namespace_spawn;
 
 pub(crate) const ENTRY: usize = 8;
 pub(crate) type Result<T> = std::result::Result<T, ProtectedServiceSpawnErrorV2>;
@@ -161,7 +172,7 @@ pub struct StagedProtectedServiceExecV2 {
     retained: usize,
 }
 impl StagedProtectedServiceExecV2 {
-    /// Fixed staging work for at most 36 duplications/closures and table validation.
+    /// Fixed descriptor work for at most 37 duplications/closures and table validation.
     pub const STAGING_WORK: usize = ENTRY + 128 * (1024 + 64) + 400;
     /// Conservative fixed staging frame, excluding source images and returned owner.
     pub const STAGING_SCRATCH: usize =
@@ -172,6 +183,7 @@ impl StagedProtectedServiceExecV2 {
     pub const SPAWN_SCRATCH: usize = 4 * size_of::<Self>()
         + 4 * RootOwnedProtectedServiceChildV2::STORAGE
         + observations::CAPABILITY_CEILING_SCRATCH
+        + syscall::COMPILER_CHANNEL_SCRATCH
         + 8192;
 
     /// Checked conservative full result charge including every duplicated image.
@@ -275,7 +287,9 @@ impl StagedProtectedServiceExecV2 {
     }
     /// Complete successful work quota for an observed supported capability ceiling.
     pub fn spawn_work(&self, cap_last_cap: u32) -> Result<usize> {
-        Self::spawn_work_for(self.inner.descriptor_count(), cap_last_cap)
+        Self::spawn_work_for(self.inner.descriptor_count(), cap_last_cap)?
+            .checked_add(self.inner.additional_child_work())
+            .ok_or(Resource::Arithmetic.into())
     }
     /// Checked pre-staging quota query; inert counts do not admit descriptors or a child.
     pub fn spawn_work_for(descriptors: usize, cap_last_cap: u32) -> Result<usize> {
@@ -298,6 +312,7 @@ impl StagedProtectedServiceExecV2 {
                 cap_last_cap,
             )?)
             .and_then(|n| n.checked_add(retention))
+            .and_then(|n| n.checked_add(self.inner.additional_child_work()))
             .ok_or(Resource::Arithmetic.into())
     }
 
@@ -322,6 +337,9 @@ impl StagedProtectedServiceExecV2 {
     /// native image/context/key/lifecycle owners, and bind credentials to that exact
     /// deployment. Retain exclusive consuming-wait ownership of this direct child.
     /// No other thread/process may steal its waits or mutate staged inputs/profile.
+    /// Keep the actual cloning thread alive until this child terminates. Linux
+    /// PDEATHSIG follows that thread, not merely the parent process; TGID readback
+    /// alone cannot enforce the caller's spawning-thread lifetime obligation.
     /// Parent must independently check profile/namespaces before gate release,
     /// enforce finite readiness deadlines, and validate readiness, exec and endpoint
     /// identity before treating the child as an admitted service. This function
@@ -347,10 +365,14 @@ impl StagedProtectedServiceExecV2 {
         RootOwnedProtectedServiceChildV2,
         ProtectedServiceSpawnStorageV2,
     )> {
-        let (child, ()) =
-            self.spawn_reserved(self.retained, credentials, cleanup, b, |cleanup, b| {
-                Ok((cleanup.reserve_launch(b)?.into_slot(), ()))
-            })?;
+        let (child, ()) = self.spawn_reserved(
+            self.retained,
+            credentials,
+            Placement::Current,
+            cleanup,
+            b,
+            |cleanup, b| Ok((cleanup.reserve_launch(b)?.into_slot(), ())),
+        )?;
         Ok((
             child,
             ProtectedServiceSpawnStorageV2(RootOwnedProtectedServiceChildV2::STORAGE),
@@ -379,6 +401,29 @@ impl StagedProtectedServiceExecV2 {
         RootOwnedRetainedServiceChildV2<T>,
         ProtectedServiceSpawnStorageV2,
     )> {
+        self.spawn_retaining_placed(
+            credentials,
+            Placement::Current,
+            resources,
+            retained_storage,
+            cleanup,
+            b,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_retaining_placed<T: Send + 'static>(
+        &self,
+        credentials: Credentials,
+        placement: Placement,
+        resources: T,
+        retained_storage: usize,
+        cleanup: &mut Cleanup,
+        b: &mut Budget<'_>,
+    ) -> Result<(
+        RootOwnedRetainedServiceChildV2<T>,
+        ProtectedServiceSpawnStorageV2,
+    )> {
         let floor = self
             .retained
             .checked_add(retained_storage)
@@ -388,7 +433,7 @@ impl StagedProtectedServiceExecV2 {
             .checked_sub(retained_storage)
             .ok_or(Resource::Accounting)?;
         let (child, resources) =
-            self.spawn_reserved(floor, credentials, cleanup, b, |cleanup, b| {
+            self.spawn_reserved(floor, credentials, placement, cleanup, b, |cleanup, b| {
                 let (reservation, view, charge) =
                     cleanup.reserve_retaining(resources, retained_storage, b)?;
                 b.reserve_storage(charge.additional_storage())?;
@@ -400,10 +445,12 @@ impl StagedProtectedServiceExecV2 {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_reserved<R>(
         &self,
         floor: usize,
         credentials: Credentials,
+        placement: Placement,
         cleanup: &mut Cleanup,
         b: &mut Budget<'_>,
         reserve: impl FnOnce(
@@ -429,11 +476,20 @@ impl StagedProtectedServiceExecV2 {
                     self.inner.descriptor_count(),
                     ceiling,
                 )?)?;
+                b.charge_work(self.inner.additional_child_work())?;
                 let (slot, resources) = reserve(cleanup, b)?;
                 let lease =
                     fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1()
                         .map_err(ProtectedServiceSpawnErrorV2::SpawnLease)?;
-                let child = clone_guarded(&self.inner, credentials, ceiling, lease, slot)?;
+                let child = domain_spawn::clone_placed(
+                    &self.inner,
+                    credentials,
+                    ceiling,
+                    lease,
+                    slot,
+                    placement,
+                    b,
+                )?;
                 Ok((child, resources))
             },
         )
