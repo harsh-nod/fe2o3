@@ -130,7 +130,8 @@ impl<C> DispatchGenerationOwnerV1<C> {
         ensures
             out.is_ok() == (!self.poisoned && reserved(self.state(), identity)),
             match out {
-                Ok(roster) => self.slots@[identity.slot_index as int].phase == DispatchEpochPhaseV1::Reserved {
+                Ok(roster) => (identity.slot_index as int) < self.slots@.len()
+                    && self.slots@[identity.slot_index as int].phase == DispatchEpochPhaseV1::Reserved {
                     dispatch_generation: identity.dispatch_generation, expected_roster: roster },
                 Err(error) => error == refusal(self.state()),
             },
