@@ -998,8 +998,15 @@
   "crates/fe2o3-process-identity/src/lib.rs": {
     "block": 3
   },
+  "crates/fe2o3-process-identity/src/native_capture.rs": {
+    "block": 3,
+    "function": 1
+  },
   "crates/fe2o3-process-identity/src/sealed_memfd.rs": {
     "block": 2
+  },
+  "crates/fe2o3-process-identity/tests/native_capture.rs": {
+    "block": 16
   },
   "crates/fe2o3-process-identity/tests/receiver_exec.rs": {
     "block": 2
@@ -1063,6 +1070,15 @@
   "crates/fe2o3-protected-service-spawn/src/native_child_tests.rs": {
     "block": 5
   },
+  "crates/fe2o3-protected-service-spawn/src/native_compiler_exec_tests.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_compiler_spawn.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_compiler_spawn_tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-protected-service-spawn/src/native_domain_spawn.rs": {
     "function": 1
   },
@@ -1073,8 +1089,15 @@
     "function": 1
   },
   "crates/fe2o3-protected-service-spawn/src/native_retained_child.rs": {
-    "block": 1,
+    "block": 2,
+    "function": 2
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_root_trace.rs": {
+    "block": 2,
     "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_root_trace_confirmation_tests.rs": {
+    "block": 9
   },
   "crates/fe2o3-protected-service-spawn/src/native_spawn.rs": {
     "function": 3

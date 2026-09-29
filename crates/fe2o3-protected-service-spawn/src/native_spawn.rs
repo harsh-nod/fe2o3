@@ -50,13 +50,17 @@ use std::{
 
 #[path = "native_child.rs"]
 mod child;
-pub use child::RootOwnedProtectedServiceChildV2;
+pub use child::{RootOwnedProtectedServiceChildV2, RootTaskTraceEventV2, RootTaskTraceV2};
 #[path = "native_retained_child.rs"]
 mod retained_child;
-pub use retained_child::RootOwnedRetainedServiceChildV2;
+pub use retained_child::{RootOwnedRetainedServiceChildV2, RootRetainedTaskTraceV2};
 #[path = "native_domain_spawn.rs"]
 mod domain_spawn;
 use domain_spawn::Placement;
+#[path = "native_compiler_arguments.rs"]
+pub(crate) mod compiler_arguments;
+#[path = "native_compiler_spawn.rs"]
+mod compiler_spawn;
 #[path = "native_namespace_spawn.rs"]
 mod namespace_spawn;
 
@@ -166,7 +170,7 @@ pub struct StagedProtectedServiceExecV2 {
     retained: usize,
 }
 impl StagedProtectedServiceExecV2 {
-    /// Fixed staging work for at most 36 duplications/closures and table validation.
+    /// Fixed descriptor work for at most 37 duplications/closures and table validation.
     pub const STAGING_WORK: usize = ENTRY + 128 * (1024 + 64) + 400;
     /// Conservative fixed staging frame, excluding source images and returned owner.
     pub const STAGING_SCRATCH: usize =
@@ -280,7 +284,9 @@ impl StagedProtectedServiceExecV2 {
     }
     /// Complete successful work quota for an observed supported capability ceiling.
     pub fn spawn_work(&self, cap_last_cap: u32) -> Result<usize> {
-        Self::spawn_work_for(self.inner.descriptor_count(), cap_last_cap)
+        Self::spawn_work_for(self.inner.descriptor_count(), cap_last_cap)?
+            .checked_add(self.inner.additional_child_work())
+            .ok_or(Resource::Arithmetic.into())
     }
     /// Checked pre-staging quota query; inert counts do not admit descriptors or a child.
     pub fn spawn_work_for(descriptors: usize, cap_last_cap: u32) -> Result<usize> {
@@ -303,6 +309,7 @@ impl StagedProtectedServiceExecV2 {
                 cap_last_cap,
             )?)
             .and_then(|n| n.checked_add(retention))
+            .and_then(|n| n.checked_add(self.inner.additional_child_work()))
             .ok_or(Resource::Arithmetic.into())
     }
 
@@ -466,6 +473,7 @@ impl StagedProtectedServiceExecV2 {
                     self.inner.descriptor_count(),
                     ceiling,
                 )?)?;
+                b.charge_work(self.inner.additional_child_work())?;
                 let (slot, resources) = reserve(cleanup, b)?;
                 let lease =
                     fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1()

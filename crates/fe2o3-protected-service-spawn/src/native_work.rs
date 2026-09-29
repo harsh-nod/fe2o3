@@ -7,6 +7,9 @@ use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 const OPERATION_WORK: usize = 1024 + 64;
 const CONTROL_WORK: usize = 256;
 
+// Compiler mode additionally changes cwd after the common stdio close/remap.
+pub(crate) const COMPILER_CWD_WORK: usize = OPERATION_WORK;
+
 /// Optional pre-profile namespace gate: bounded reads and both child-side closes.
 pub(crate) const MAPPING_GATE_WORK: usize =
     (crate::pre_exec::MAX_CHILD_GATE_ATTEMPTS_V2 + 2) * OPERATION_WORK + CONTROL_WORK;

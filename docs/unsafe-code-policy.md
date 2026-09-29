@@ -597,6 +597,42 @@ unsafe blocks and eight extern blocks, including 29 test-only blocks. Its old
 controller allowance shrinks from 17 blocks to 15 as operations move into the
 private spawn and inspection modules. Counts do not qualify protected execution.
 
+## Native Compiler Exec and Root Trace
+
+The compiler mode in `fe2o3-protected-service-spawn` uses the existing raw
+clone/profile/gate/exec path. One unsafe staging function requires authenticated
+input custody and full overlapping charges. Owned CString buffers and frozen
+pointer tables survive source drops and stage moves. The existing child syscall
+block adds `fchdir` and exact argv/environment selection; no second launcher or
+unsafe Send implementation is introduced. Standard destinations preserve shared
+open-file status and offsets; `Some` clears descriptor CLOEXEC. The caller must
+map captured absent or original-CLOEXEC streams to `None` for post-exec absence.
+
+Root tracing adds one scalar ptrace block and one unsafe exec-confirmation
+function/block. The retained wrapper adds one forwarding function/block. The
+controller consumes the existing child, pidfd, cleanup slot, artifact lease and
+backing; it binds operations to the original thread, Budget address and ledger.
+Its fixed TRACEEXEC/EXITKILL options introduce no descendant or TRACEEXIT stops.
+Only the same owner's consuming terminal wait notifies cleanup. Exec observation
+alone does not release the lease: confirmation additionally requires the caller
+to authenticate native exec and closure of every inherited artifact-lock alias.
+It does not establish process-tree isolation or compiler authority.
+
+`fe2o3-process-identity/native_capture.rs` adds one unsafe capture function and
+three blocks for scalar standard-slot probes, CLOEXEC duplication above FD2,
+and adoption of newly owned descriptors. The caller excludes concurrent slot
+and shared-flag changes. Cwd access borrows the existing pin without reopening
+its pathname. Inode/flag comparison is not evidence of OFD provenance.
+
+Reviewed test-only additions are 16 capture blocks, two compiler staging blocks,
+two native-exec blocks, and nine trace-confirmation blocks. Isolated subprocess
+tests cover absent/CLOEXEC streams, offsets, partial capture failure, actual
+trace waits, short funding and retained cleanup. The explicit root diagnostic
+uses a static C fixture through the production clone path, with no compiler,
+proof or GPU authority. The C fixture checks inputs and descriptors and exits;
+its libc boundary remains part of the diagnostic, outside the Rust inventory.
+No unrelated inventory allowances change.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

@@ -7,6 +7,7 @@ use fe2o3_protected_service_profile::{
     PROTECTED_SERVICE_SECUREBITS_V1, ProtectedServiceCredentialProfileV1,
 };
 
+use crate::native_spawn::compiler_arguments::CompilerArguments;
 use crate::{
     PROTECTED_SERVICE_GATE_RELEASE_V1, PROTECTED_SERVICE_PROFILE_READY_V1,
     PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1, ProtectedServiceDescriptorBindingV1,
@@ -118,6 +119,7 @@ pub(crate) struct StagedProtectedServiceExecV1 {
     profile_ready_writer: OwnedFd,
     gate_reader: OwnedFd,
     exec_status_writer: OwnedFd,
+    compiler: Option<(File, CompilerArguments)>,
 }
 
 impl StagedProtectedServiceExecV1 {
@@ -128,11 +130,68 @@ impl StagedProtectedServiceExecV1 {
         gate_reader: BorrowedFd<'_>,
         exec_status_writer: BorrowedFd<'_>,
     ) -> io::Result<Self> {
+        Self::new_with_bindings(
+            executable,
+            bindings.len(),
+            bindings.iter().copied(),
+            profile_ready_writer,
+            gate_reader,
+            exec_status_writer,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_compiler(
+        executable: &File,
+        standard_io: [Option<BorrowedFd<'_>>; 3],
+        bindings: &[ProtectedServiceDescriptorBindingV1<'_>],
+        profile_ready_writer: BorrowedFd<'_>,
+        gate_reader: BorrowedFd<'_>,
+        exec_status_writer: BorrowedFd<'_>,
+        working_directory: BorrowedFd<'_>,
+        arguments: CompilerArguments,
+    ) -> io::Result<Self> {
+        let count = bindings.len() + standard_io.iter().flatten().count();
+        let streams = standard_io
+            .into_iter()
+            .enumerate()
+            .filter_map(|(destination, source)| {
+                source.map(|source| ProtectedServiceDescriptorBindingV1 {
+                    source,
+                    destination: destination as RawFd,
+                })
+            });
+        let mut staged = Self::new_with_bindings(
+            executable,
+            count,
+            streams.chain(bindings.iter().copied()),
+            profile_ready_writer,
+            gate_reader,
+            exec_status_writer,
+        )?;
+        let mut next = staged
+            .exec_status_writer
+            .as_raw_fd()
+            .checked_add(1)
+            .ok_or_else(|| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
+        let cwd = File::from(duplicate_above(working_directory, &mut next)?);
+        staged.compiler = Some((cwd, arguments));
+        Ok(staged)
+    }
+
+    fn new_with_bindings<'a>(
+        executable: &File,
+        count: usize,
+        bindings: impl Iterator<Item = ProtectedServiceDescriptorBindingV1<'a>>,
+        profile_ready_writer: BorrowedFd<'_>,
+        gate_reader: BorrowedFd<'_>,
+        exec_status_writer: BorrowedFd<'_>,
+    ) -> io::Result<Self> {
         let mut next = PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1;
         let executable = File::from(duplicate_above(executable.as_fd(), &mut next)?);
         let mut staged_bindings = Vec::new();
         staged_bindings
-            .try_reserve_exact(bindings.len())
+            .try_reserve_exact(count)
             .map_err(|_| io::Error::from_raw_os_error(libc::ENOMEM))?;
         for binding in bindings {
             staged_bindings.push(StagedBindingV1 {
@@ -146,7 +205,24 @@ impl StagedProtectedServiceExecV1 {
             profile_ready_writer: duplicate_above(profile_ready_writer, &mut next)?,
             gate_reader: duplicate_above(gate_reader, &mut next)?,
             exec_status_writer: duplicate_above(exec_status_writer, &mut next)?,
+            compiler: None,
         })
+    }
+
+    pub(crate) fn compiler_arguments(&self) -> Option<&CompilerArguments> {
+        self.compiler.as_ref().map(|(_, arguments)| arguments)
+    }
+
+    pub(crate) fn compiler_working_directory(&self) -> Option<&File> {
+        self.compiler.as_ref().map(|(cwd, _)| cwd)
+    }
+
+    pub(crate) fn additional_child_work(&self) -> usize {
+        if self.compiler.is_some() {
+            crate::native_work::COMPILER_CWD_WORK
+        } else {
+            0
+        }
     }
 
     pub(crate) fn descriptor_count(&self) -> usize {
@@ -492,6 +568,11 @@ unsafe fn child_exec(
         if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 7);
         }
+        // Sources are already staged above the destination range. Close all
+        // inherited streams first; compiler bindings reinstall only captured ones.
+        libc::syscall(libc::SYS_close, 0);
+        libc::syscall(libc::SYS_close, 1);
+        libc::syscall(libc::SYS_close, 2);
         for binding in &staged.bindings {
             if libc::syscall(
                 libc::SYS_dup3,
@@ -503,18 +584,26 @@ unsafe fn child_exec(
                 child_fail(staged.exec_status_writer.as_raw_fd(), 8);
             }
         }
-        libc::syscall(libc::SYS_close, 0);
-        libc::syscall(libc::SYS_close, 1);
-        libc::syscall(libc::SYS_close, 2);
         let name = c"fe2o3-protected-service";
         let arguments = [name.as_ptr().cast_mut(), std::ptr::null_mut()];
         let environment = [std::ptr::null_mut::<c_char>()];
+        let (argv, envp) = if let Some((cwd, compiler)) = &staged.compiler {
+            if libc::syscall(libc::SYS_fchdir, cwd.as_raw_fd()) != 0 {
+                child_fail(staged.exec_status_writer.as_raw_fd(), 10);
+            }
+            (compiler.argv(), compiler.envp())
+        } else {
+            (
+                arguments.as_ptr().cast::<usize>(),
+                environment.as_ptr().cast::<usize>(),
+            )
+        };
         libc::syscall(
             libc::SYS_execveat,
             staged.executable.as_raw_fd(),
             c"".as_ptr(),
-            arguments.as_ptr(),
-            environment.as_ptr(),
+            argv,
+            envp,
             libc::AT_EMPTY_PATH,
         );
         child_fail(staged.exec_status_writer.as_raw_fd(), 9)
