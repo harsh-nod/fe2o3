@@ -83,7 +83,7 @@ fn actual_pair_retains_locks_on_refusal_and_unwind() {
     if isolated() {
         return;
     }
-    for mode in ["success", "scope-refusal", "unwind"] {
+    for mode in ["success", "scope-refusal", "unwind", "token-work-refusal"] {
         let directory = tempfile::tempdir().unwrap();
         let mut work = Work::new(usize::MAX);
         let mut b = Budget::new(&mut work, LIMIT);
@@ -109,10 +109,26 @@ fn actual_pair_retains_locks_on_refusal_and_unwind() {
         b.reserve_storage(bound + size_of::<Owners>()).unwrap();
         let floor = b.storage();
         let ledger = b.work_ledger_identity_v1();
+        let lease_work = if mode == "token-work-refusal" {
+            let barrier = retirement_barrier().unwrap();
+            let before = b.work();
+            let (lease, charge) =
+                acquire_quoted(directory.path(), &producer, &quote, &barrier, &mut b).unwrap();
+            let work = b.work() - before;
+            b.reserve_storage(charge.retained_storage()).unwrap();
+            drop(lease);
+            b.release_storage(charge.retained_storage()).unwrap();
+            work
+        } else {
+            0
+        };
         let mut owners = Owners::new(quote);
         let result = catch_unwind(AssertUnwindSafe(|| {
             b.with_prepaid_scope(floor, ENTRY, LOCAL_WORK, FRAME, |b| -> Result<()> {
                 let entry = b.storage();
+                if mode == "token-work-refusal" {
+                    b.charge_work(usize::MAX - b.work() - lease_work)?;
+                }
                 owners.acquire(directory.path(), &producer, receipt, b)?;
                 if mode == "unwind" {
                     panic!("post-acquisition fixture unwind");
@@ -131,27 +147,37 @@ fn actual_pair_retains_locks_on_refusal_and_unwind() {
                     NativeOccurrenceError::Resource(Resource::Accounting)
                 ))))
             )),
+            "token-work-refusal" => assert!(result.unwrap().is_err()),
             _ => assert!(result.is_err()),
         }
         assert_eq!(b.storage(), floor);
         assert!(b.work_ledger_identity_v1() == ledger);
-        let (lease, token) = owners.current().unwrap();
-        lease.validate_current_token(token).unwrap();
-        assert!(lease.storage().retained_storage() + token.storage().retained_storage() <= bound);
-        kernel_lock(directory.path(), true);
+        let locked = mode != "token-work-refusal";
+        if locked {
+            let (lease, token) = owners.current().unwrap();
+            lease.validate_current_token(token).unwrap();
+            assert!(
+                lease.storage().retained_storage() + token.storage().retained_storage() <= bound
+            );
+        } else {
+            assert!(owners.publication.is_some());
+            assert!(owners.token.is_none());
+            assert_eq!(b.work(), usize::MAX);
+        }
+        kernel_lock(directory.path(), locked);
         assert!(
             owners
                 .acquire(directory.path(), &producer, receipt, &mut b)
                 .is_err()
         );
-        kernel_lock(directory.path(), true);
+        kernel_lock(directory.path(), locked);
 
         let competing = spawn_lease().unwrap();
         assert!(owners.try_prepare_retirement().is_none());
-        kernel_lock(directory.path(), true);
+        kernel_lock(directory.path(), locked);
         drop(competing);
         drop(owners.try_prepare_retirement().unwrap());
-        kernel_lock(directory.path(), true);
+        kernel_lock(directory.path(), locked);
         let prepared = owners.try_prepare_retirement().unwrap();
         assert!(spawn_lease().is_err());
         owners.retire(prepared);
