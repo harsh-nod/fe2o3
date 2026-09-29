@@ -65,6 +65,23 @@ impl<'work> Admission<'work> {
     }
 
     fn serve_native(self, ready: Option<(&Manifest, OwnedFd)>, b: &mut Budget<'_>) -> Result<()> {
+        self.serve_native_after_readiness(
+            ready,
+            b,
+            COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1,
+            |_, _, _| Ok(()),
+        )
+    }
+
+    // Only concrete internal consumers supply this gate. It runs after the
+    // readiness writer has closed and before the first client receive/dispatch.
+    fn serve_native_after_readiness(
+        self,
+        ready: Option<(&Manifest, OwnedFd)>,
+        b: &mut Budget<'_>,
+        timeout: std::time::Duration,
+        gate: impl FnOnce(&Self, Instant, &mut Budget<'_>) -> Result<()>,
+    ) -> Result<()> {
         // Reject a foreign ledger before any directory or transport I/O.
         self.validate_continuity(b)?;
         let floor = self
@@ -91,7 +108,7 @@ impl<'work> Admission<'work> {
             let mut anchor = NativeAnchor::new(&self.anchor, &self.policy, b)?;
             b.reserve_storage(anchor.retained_storage())?;
             let deadline = Instant::now()
-                .checked_add(COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1)
+                .checked_add(timeout)
                 .ok_or_else(|| Error::rejected("native service deadline overflow"))?;
             let mut attempts = 0;
             let mut session = Session::default();
@@ -105,6 +122,7 @@ impl<'work> Admission<'work> {
                     Ok(())
                 })?;
             }
+            gate(&self, deadline, b)?;
             for _ in 0..MAX_COMPILER_EXECUTION_SERVICE_PACKETS_V1 {
                 let retained = session.retained_storage();
                 let floor = self
