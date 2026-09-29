@@ -1772,3 +1772,13 @@ there is no historical host-path fallback or silent skip.
 
 Neither component activates the genuine whole-root caller or physical debugger
 capture. Broad accepted exits remain M1/V1/V2/U1/U2/U3 (6/18).
+
+## Portable bounded loaded-input reader — 2026-09-29
+
+The inactive reader is available with 50 passing fixture-free protocol controls
+and ten passing historical bridge controls, without skips or host-path fallback.
+Its final sibling imports preserve all original algorithms and test bodies.
+[Qualification and limits](bounded-loaded-input-reader-qualification-20260929.md).
+The operational filesystem entry remains unactivated; complete successor
+input/policy/currentness qualification and physical capture remain open.
+Broad accepted exits remain 6/18.
