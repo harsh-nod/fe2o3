@@ -35,6 +35,8 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
 /// Largest inert readiness payload accepted by this fixed-size transport.
 pub const MAX_READY_BYTES: usize = 88;
+/// Largest inert authenticated packet; independent of the readiness ABI.
+pub const AUTHENTICATED_PACKET_MAX_BYTES: usize = 4096;
 /// Largest inert exact pipe frame; independent of the SEQPACKET limit.
 pub const MAX_PIPE_READY_BYTES: usize = 120;
 /// Per pipe attempt: fstat, F_GETFL, and one nonblocking read, without retries.
@@ -89,6 +91,31 @@ pub const ATTEMPT_SCRATCH: usize = 4096
     + 8 * size_of::<Failure>()
     + 4 * size_of::<ReadyPacket>()
     + 4 * size_of::<([u8; MAX_READY_BYTES], Option<OwnedFd>)>();
+
+/// Prepaid mechanical work for one authenticated packet receive attempt.
+/// Includes SO_PASSCRED observation, one recvmsg, disposal of every disclosed FD,
+/// and byte work over the full scratch envelope. Excludes caller validation,
+/// clocks, retries and retained storage. Oversized quotes saturate, never wrap.
+pub const fn packet_receive_work(n: usize) -> usize {
+    let operations = 2 + CONTROL_BYTES / size_of::<i32>();
+    (8 + operations * (1024 + 64) + 256)
+        .saturating_add(packet_receive_scratch(n).saturating_mul(64))
+}
+
+/// Scratch held throughout one authenticated packet receive, including refusal.
+/// Covers eight payload copies, four complete packet/control/iovec/msghdr stack
+/// envelopes, eight failures, and 4096 bytes for scalar/result/alignment staging.
+/// This is conservative logical accounting, not compiler-specific stack or RSS
+/// measurement. Caller-retained bytes need a separate reservation. Saturates.
+pub const fn packet_receive_scratch(n: usize) -> usize {
+    let fixed = 4096
+        + 8 * size_of::<Failure>()
+        + 4 * (size_of::<Packet<0>>()
+            + size_of::<Control>()
+            + size_of::<libc::iovec>()
+            + size_of::<libc::msghdr>());
+    fixed.saturating_add(n.saturating_mul(8))
+}
 
 /// Mechanical attempt charged before clock or descriptor observations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -318,6 +345,46 @@ pub fn receive_ready_from<const N: usize, const RIGHTS: bool, O: Observer>(
     receive_ready_inner::<N, RIGHTS, O>(bootstrap, Some(sender), observer, deadline)
 }
 
+/// Attempts one nonblocking receive of exactly N inert authenticated bytes.
+/// Requires 2 <= N <= AUTHENTICATED_PACKET_MAX_BYTES and a caller-owned SEQPACKET
+/// receiver with SO_PASSCRED already enabled before any sender can enqueue data.
+/// Exactly one SCM_CREDENTIALS must match sender's PID/UID/GID; rights, unknown or
+/// truncated ancillary data, EOF, short/extra payloads and stage bytes all refuse
+/// as MalformedReadyTransfer. Every disclosed FD is closed before refusal returns.
+/// EAGAIN/EINTR return None without retrying. No readiness/stage interpretation,
+/// clock, fresh budget, or admission authority is supplied by this primitive.
+/// The caller must charge packet_receive_work(N) before EVERY attempt and keep
+/// packet_receive_scratch(N) prepaid through return/unwind, including None/error.
+pub fn receive_authenticated_packet<const N: usize>(
+    fd: BorrowedFd<'_>,
+    sender: MessageSender,
+) -> Result<Option<[u8; N]>, Failure> {
+    if !(2..=AUTHENTICATED_PACKET_MAX_BYTES).contains(&N) {
+        return Err(Failure::MalformedReadyTransfer);
+    }
+    let result = rustix::net::sockopt::socket_passcred(fd).and_then(|enabled| {
+        if !enabled {
+            return Err(Errno::INVAL);
+        }
+        receive_fixed_packet::<N>(fd)
+    });
+    authenticated_packet_result(result, sender)
+}
+
+fn authenticated_packet_result<const N: usize>(
+    result: Result<Packet<N>, Errno>,
+    sender: MessageSender,
+) -> Result<Option<[u8; N]>, Failure> {
+    match result {
+        Ok(packet) => packet.authenticate(sender).map(Some),
+        Err(Errno::AGAIN | Errno::INTR) => Ok(None),
+        Err(source) => Err(Failure::Io {
+            operation: "receive authenticated packet",
+            source,
+        }),
+    }
+}
+
 fn receive_ready_inner<const N: usize, const RIGHTS: bool, O: Observer>(
     bootstrap: BorrowedFd<'_>,
     sender: Option<MessageSender>,
@@ -427,15 +494,19 @@ const _: () = assert!(size_of::<Control>() == CONTROL_BYTES);
 // Linux UAPI SCM_PIDFD, absent from the pinned libc/rustix ancillary enums.
 const SCM_PIDFD: i32 = 0x04;
 
-#[allow(unsafe_code)]
 fn receive_packet(fd: BorrowedFd<'_>) -> Result<ReadyPacket, Errno> {
-    let mut packet = ReadyPacket::empty();
+    receive_fixed_packet::<MAX_READY_BYTES>(fd)
+}
+
+#[allow(unsafe_code)]
+fn receive_fixed_packet<const N: usize>(fd: BorrowedFd<'_>) -> Result<Packet<N>, Errno> {
+    let mut packet = Packet::<N>::empty();
     let mut control = Control {
         words: [0; CONTROL_BYTES / size_of::<usize>()],
     };
     let mut vector = libc::iovec {
         iov_base: packet.payload.as_mut_ptr().cast(),
-        iov_len: MAX_READY_BYTES,
+        iov_len: N,
     };
     // SAFETY: all-zero msghdr is valid; this also initializes libc's musl padding.
     let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
@@ -500,20 +571,13 @@ unsafe fn take_control(rights: &mut Rights, control: &Control, length: usize) {
         let payload = declared.min(remaining).saturating_sub(header_bytes);
         // SAFETY: offset + header_bytes is within the initialized control buffer.
         let data = unsafe { base.add(offset + header_bytes) };
-        match (header.cmsg_level, header.cmsg_type) {
-            (libc::SOL_SOCKET, libc::SCM_CREDENTIALS) => {
-                if payload != size_of::<libc::ucred>() || rights.credentials.is_some() {
-                    rights.invalid = true;
-                } else {
-                    // SAFETY: payload has the exact checked ucred size.
-                    let cred = unsafe { data.cast::<libc::ucred>().read_unaligned() };
-                    rights.credentials = Some(MessageSender::new(cred.pid, cred.uid, cred.gid));
-                }
+        match rights.header(header.cmsg_level, header.cmsg_type, payload) {
+            ControlKind::Credentials => {
+                // SAFETY: payload has the exact checked ucred size.
+                let cred = unsafe { data.cast::<libc::ucred>().read_unaligned() };
+                rights.credentials = Some(MessageSender::new(cred.pid, cred.uid, cred.gid));
             }
-            (libc::SOL_SOCKET, kind @ (libc::SCM_RIGHTS | SCM_PIDFD)) => {
-                if kind != libc::SCM_RIGHTS || payload == 0 || payload % size_of::<i32>() != 0 {
-                    rights.invalid = true;
-                }
+            ControlKind::Descriptors => {
                 for index in 0..payload / size_of::<i32>() {
                     // SAFETY: each complete integer is within the checked payload.
                     let raw = unsafe { data.cast::<i32>().add(index).read_unaligned() };
@@ -525,7 +589,7 @@ unsafe fn take_control(rights: &mut Rights, control: &Control, length: usize) {
                     }
                 }
             }
-            _ => rights.invalid = true,
+            ControlKind::Rejected => {}
         }
         if declared < header_bytes || declared > remaining {
             break;
@@ -541,6 +605,13 @@ unsafe fn take_control(rights: &mut Rights, control: &Control, length: usize) {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum ControlKind {
+    Credentials,
+    Descriptors,
+    Rejected,
+}
+
 #[derive(Default)]
 struct Rights {
     fd: Option<OwnedFd>,
@@ -548,6 +619,27 @@ struct Rights {
     credentials: Option<MessageSender>,
 }
 impl Rights {
+    // Invalid descriptor headers must still expose every complete FD to owners.
+    fn header(&mut self, level: i32, kind: i32, payload: usize) -> ControlKind {
+        match (level, kind) {
+            (libc::SOL_SOCKET, libc::SCM_CREDENTIALS)
+                if payload == size_of::<libc::ucred>() && self.credentials.is_none() =>
+            {
+                ControlKind::Credentials
+            }
+            (libc::SOL_SOCKET, kind @ (libc::SCM_RIGHTS | SCM_PIDFD)) => {
+                if kind != libc::SCM_RIGHTS || payload == 0 || payload % size_of::<i32>() != 0 {
+                    self.invalid = true;
+                }
+                ControlKind::Descriptors
+            }
+            _ => {
+                self.invalid = true;
+                ControlKind::Rejected
+            }
+        }
+    }
+
     fn push(&mut self, fd: OwnedFd) {
         if self.fd.is_some() || self.invalid {
             self.invalid = true;
@@ -558,21 +650,39 @@ impl Rights {
     }
 }
 
-struct ReadyPacket {
-    payload: [u8; MAX_READY_BYTES],
+type ReadyPacket = Packet<MAX_READY_BYTES>;
+
+struct Packet<const N: usize> {
+    payload: [u8; N],
     bytes: usize,
     flags: ReturnFlags,
     rights: Rights,
 }
-impl ReadyPacket {
+impl<const N: usize> Packet<N> {
     fn empty() -> Self {
         Self {
-            payload: [0; MAX_READY_BYTES],
+            payload: [0; N],
             bytes: 0,
             flags: ReturnFlags::empty(),
             rights: Rights::default(),
         }
     }
+    fn authenticate(self, sender: MessageSender) -> Result<[u8; N], Failure> {
+        if self.bytes != N
+            || self.rights.invalid
+            || self.rights.fd.is_some()
+            || self.rights.credentials != Some(sender)
+            || self
+                .flags
+                .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+        {
+            return Err(Failure::MalformedReadyTransfer);
+        }
+        Ok(self.payload)
+    }
+}
+
+impl ReadyPacket {
     fn status(self, bytes: &mut [u8; 2], eof: bool) -> (usize, usize) {
         if self.rights.invalid
             || self.rights.fd.is_some()
@@ -861,3 +971,7 @@ mod tests;
 #[cfg(test)]
 #[path = "launch_io_credential_tests.rs"]
 mod credential_tests;
+
+#[cfg(test)]
+#[path = "launch_io_packet_tests.rs"]
+mod packet_tests;
