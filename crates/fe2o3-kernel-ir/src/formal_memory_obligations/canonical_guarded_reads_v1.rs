@@ -15,6 +15,10 @@ use std::cell::RefCell;
 mod queries;
 pub use queries::*;
 
+#[path = "canonical_guarded_stores_v24.rs"]
+mod stores_v24;
+pub use stores_v24::*;
+
 /// Local caps, distinct from the caller's cumulative live ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CanonicalGuardedGlobalReadLimitsV1 {
@@ -258,7 +262,7 @@ pub fn with_canonical_guarded_global_reads_v1<'g, 'w, T>(
         &mut Budget<'w>,
     ) -> Result<T>,
 ) -> Result<T> {
-    with_owner(owner, owner.module(), limits, budget, consume)
+    with_owner::<false, _, _>(owner, owner.module(), limits, budget, consume)
 }
 
 /// Derives paid local guarded-read facts from the exact borrowed V18 owner.
@@ -275,10 +279,10 @@ pub fn with_canonical_guarded_global_reads_v18<'g, 'w, T>(
         &mut Budget<'w>,
     ) -> Result<T>,
 ) -> Result<T> {
-    with_owner(owner, owner.module(), limits, budget, consume)
+    with_owner::<false, _, _>(owner, owner.module(), limits, budget, consume)
 }
 
-fn with_owner<'g, 'w, O, T>(
+fn with_owner<'g, 'w, const STORE: bool, O, T>(
     owner: &'g O,
     module: &'g Module,
     limits: CanonicalGuardedGlobalReadLimitsV1,
@@ -306,7 +310,7 @@ fn with_owner<'g, 'w, O, T>(
             .and_then(|n| n.checked_add(origin_query_headers))
             .ok_or(ResourceError::Arithmetic)?;
         budget.reserve_storage(headers)?;
-        let facts = build(owner, module, limits, budget)?;
+        let facts = build::<STORE, _>(owner, module, limits, budget)?;
         let accounting = Accounting {
             slot,
             ledger,
@@ -375,7 +379,7 @@ fn with_owner<'g, 'w, O, T>(
     result
 }
 
-fn build<'g, O>(
+fn build<'g, const STORE: bool, O>(
     owner: &'g O,
     module: &'g Module,
     limits: CanonicalGuardedGlobalReadLimitsV1,
@@ -408,12 +412,14 @@ fn build<'g, O>(
         budget.charge_work(1)?;
         let coordinate =
             FunctionCoordinate(u32::try_from(ordinal).map_err(|_| ResourceError::Arithmetic)?);
-        functions.push(build_function(function, coordinate, limits, budget)?);
+        functions.push(build_function::<STORE>(
+            function, coordinate, limits, budget,
+        )?);
     }
     Ok(Facts { owner, functions })
 }
 
-fn build_function<'g>(
+fn build_function<'g, const STORE: bool>(
     function: &'g Function,
     coordinate: FunctionCoordinate,
     limits: CanonicalGuardedGlobalReadLimitsV1,
@@ -454,8 +460,11 @@ fn build_function<'g>(
         // Prepay the complete returned state, including the unselected owned
         // meter. The selected analysis keeps its existing independent header.
         meter.storage(size_of::<GuardedControlCollectionV1<LiveGuardMeter<'_, '_>>>())?;
-        let seed =
-            GuardedControlV1::collect_preserving_ledger(function, flow.indexed_v15(), meter)?;
+        let seed = GuardedControlV1::collect_preserving_ledger_v24::<STORE>(
+            function,
+            flow.indexed_v15(),
+            meter,
+        )?;
         match seed {
             GuardedControlCollectionV1::Selected(seed) => {
                 let entry = seed.entry;
@@ -464,12 +473,17 @@ fn build_function<'g>(
                 collect_actual_origins(&mut analysis, function, flow.indexed_v15())?;
                 analysis.collect_parameters_and_carried_truths(function, entry)?;
                 result.predicates = analysis.expanded_predicates()?;
-                analysis.collect_runtime_read_guards(function)?;
-                collect_effects(&mut result, coordinate, body, Some(&mut analysis))?;
+                analysis.collect_runtime_access_guards_v24::<STORE>(function)?;
+                collect_effects::<STORE, _>(&mut result, coordinate, body, Some(&mut analysis))?;
                 result.controls = std::mem::take(&mut analysis.control);
             }
             GuardedControlCollectionV1::Unselected(mut meter) => {
-                collect_effects_without_reads(&mut result, coordinate, body, &mut meter)?;
+                collect_effects_without_reads_profile_v24::<STORE, _>(
+                    &mut result,
+                    coordinate,
+                    body,
+                    &mut meter,
+                )?;
             }
         }
     }
@@ -632,7 +646,7 @@ fn operation_coordinate(
     })
 }
 
-fn effect_counts<M: GuardMeter>(
+fn effect_counts<const STORE: bool, M: GuardMeter>(
     result: &mut FunctionFacts<'_>,
     operation: &Operation,
     generic_may_be_global: bool,
@@ -651,12 +665,35 @@ fn effect_counts<M: GuardMeter>(
         match effect {
             KirLocalMemoryEffectRefV1::Read(space)
             | KirLocalMemoryEffectRefV1::VolatileRead(space)
-                if space == AddressSpace::Global
-                    || (space == AddressSpace::Generic && generic_may_be_global) =>
+                if !STORE
+                    && (space == AddressSpace::Global
+                        || (space == AddressSpace::Generic && generic_may_be_global)) =>
             {
                 read = true;
                 result.global_read_occurrences = result
                     .global_read_occurrences
+                    .checked_add(1)
+                    .ok_or(ResourceError::Arithmetic)?;
+            }
+            KirLocalMemoryEffectRefV1::Write(space)
+            | KirLocalMemoryEffectRefV1::VolatileWrite(space)
+                if STORE
+                    && (space == AddressSpace::Global
+                        || (space == AddressSpace::Generic && generic_may_be_global)) =>
+            {
+                read = true;
+                result.global_read_occurrences = result
+                    .global_read_occurrences
+                    .checked_add(1)
+                    .ok_or(ResourceError::Arithmetic)?;
+            }
+            KirLocalMemoryEffectRefV1::Read(space)
+            | KirLocalMemoryEffectRefV1::VolatileRead(space)
+                if space == AddressSpace::Global
+                    || (space == AddressSpace::Generic && generic_may_be_global) =>
+            {
+                result.other_global_effects = result
+                    .other_global_effects
                     .checked_add(1)
                     .ok_or(ResourceError::Arithmetic)?;
             }
@@ -703,7 +740,7 @@ fn effect_counts<M: GuardMeter>(
     Ok(read)
 }
 
-fn collect_effects<'g, M: GuardMeter>(
+fn collect_effects<'g, const STORE: bool, M: GuardMeter>(
     result: &mut FunctionFacts<'g>,
     function: FunctionCoordinate,
     body: &'g crate::FunctionBody,
@@ -731,7 +768,7 @@ fn collect_effects<'g, M: GuardMeter>(
                     }),
                 _ => true,
             };
-            if !effect_counts(
+            if !effect_counts::<STORE, _>(
                 result,
                 operation,
                 generic_may_be_global,
@@ -742,17 +779,38 @@ fn collect_effects<'g, M: GuardMeter>(
             let coordinate = operation_coordinate(function, block_ordinal, ordinal)?;
             let (conditions, reason) = match operation.kind {
                 OperationKind::Load { pointer, access }
-                    if !access.volatile
+                    if !STORE
+                        && !access.volatile
                         && matches!(
                             access.address_space,
                             AddressSpace::Global | AddressSpace::Generic
                         ) =>
                 {
                     (
-                        analysis.runtime_slice_read_conditions(
+                        analysis.runtime_slice_access_conditions_v24::<false>(
                             FunctionOperationLocation::new(block.id, ordinal),
                             pointer,
                             FormalMemoryAccessKind::Read,
+                            access,
+                            None,
+                        )?,
+                        CanonicalGuardedGlobalReadReasonV1::MissingBoundOrProvenance,
+                    )
+                }
+                OperationKind::Store {
+                    pointer, access, ..
+                } if STORE
+                    && !access.volatile
+                    && matches!(
+                        access.address_space,
+                        AddressSpace::Global | AddressSpace::Generic
+                    ) =>
+                {
+                    (
+                        analysis.runtime_slice_access_conditions_v24::<true>(
+                            FunctionOperationLocation::new(block.id, ordinal),
+                            pointer,
+                            FormalMemoryAccessKind::Write,
                             access,
                             None,
                         )?,
@@ -777,7 +835,17 @@ fn collect_effects<'g, M: GuardMeter>(
     Ok(())
 }
 
+#[cfg(test)]
 fn collect_effects_without_reads<M: GuardMeter>(
+    result: &mut FunctionFacts<'_>,
+    function: FunctionCoordinate,
+    body: &crate::FunctionBody,
+    meter: &mut M,
+) -> Result<()> {
+    collect_effects_without_reads_profile_v24::<false, _>(result, function, body, meter)
+}
+
+fn collect_effects_without_reads_profile_v24<const STORE: bool, M: GuardMeter>(
     result: &mut FunctionFacts<'_>,
     function: FunctionCoordinate,
     body: &crate::FunctionBody,
@@ -787,7 +855,7 @@ fn collect_effects_without_reads<M: GuardMeter>(
     for (block_ordinal, block) in body.blocks.iter().enumerate() {
         meter.charge(1)?;
         for (ordinal, operation) in block.operations.iter().enumerate() {
-            if effect_counts(result, operation, true, meter)? {
+            if effect_counts::<STORE, _>(result, operation, true, meter)? {
                 let coordinate = operation_coordinate(function, block_ordinal, ordinal)?;
                 meter.push(
                     &mut result.reads,

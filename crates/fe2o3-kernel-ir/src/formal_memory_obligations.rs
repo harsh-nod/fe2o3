@@ -50,6 +50,12 @@ pub use guarded_access_v1::{
     CheckedCanonicalGuardedGlobalReadsV1, CheckedCanonicalGuardedGlobalReadsV18,
     with_canonical_guarded_global_reads_v1, with_canonical_guarded_global_reads_v18,
 };
+pub use guarded_access_v1::{
+    CanonicalGuardedGlobalStoreDomainV24, CanonicalGuardedGlobalStoreFactV24,
+    CanonicalGuardedGlobalStoreOutcomeV24, CanonicalGuardedGlobalStoreReasonV24,
+    CanonicalGuardedStoreInjectivityV24, CheckedCanonicalGuardedGlobalStoresV24,
+    with_canonical_guarded_global_stores_v24,
+};
 pub use ordered_composition_v1::*;
 pub use physical_entry_v20::{
     PhysicalEntryKernargAbiRequirementV20, PhysicalEntryKernargReadV20,

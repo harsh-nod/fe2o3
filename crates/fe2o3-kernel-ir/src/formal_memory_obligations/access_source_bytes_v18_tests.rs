@@ -423,6 +423,108 @@ fn paid_accesses_preserve_runtime_read_fallback_and_volatile_refusal() {
 }
 
 #[test]
+fn paid_accesses_preserve_legacy_write_only_guard_accounting() {
+    fn reference<const STORES: bool>(owner: &VerifiedCanonicalKernelIrModuleV18) -> (usize, usize) {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.reserve_storage(23).unwrap();
+        let mut affine =
+            ActualOwnerAffineV18::build(owner, 0, ControlFlowLimits::DEFAULT, &mut budget).unwrap();
+        let mut slots = affine.private_slots(owner, 0, &mut budget).unwrap();
+        let pointers = slots.pointers(owner, 0, &mut budget).unwrap();
+        let parent_floor = budget.storage();
+        type Owner = accesses::ActualOwnerAccessesV18<'static, 'static, 'static, 'static, 'static>;
+        let frame = size_of::<Owner>()
+            + size_of::<Result<Owner>>()
+            + size_of::<std::thread::Result<Result<Option<GuardedAnalysisV1<'static, ()>>>>>()
+            + size_of::<(
+                &mut ActualOwnerPointersV18<'static, 'static, 'static, 'static>,
+                &mut Budget<'static>,
+                &VerifiedCanonicalKernelIrModuleV18,
+                usize,
+            )>();
+        budget.reserve_storage(frame).unwrap();
+        budget.charge_work(4).unwrap();
+        let retained_affine = &mut pointers.slots.affine;
+        let source = retained_affine.source;
+        let (flow, origins) = retained_affine
+            .context
+            .guarded_inputs(source, &mut budget)
+            .unwrap();
+        let mut meter = meter::LiveGuardMeter::new(&mut budget, usize::MAX, usize::MAX, usize::MAX);
+        meter
+            .storage(size_of::<
+                GuardedControlCollectionV1<meter::LiveGuardMeter<'_, '_>>,
+            >())
+            .unwrap();
+        let GuardedControlCollectionV1::Selected(seed) =
+            GuardedControlV1::collect_preserving_ledger(source, flow, meter).unwrap()
+        else {
+            panic!("the genuine Load must select the historical guarded analysis");
+        };
+        let entry = seed.entry;
+        let mut guarded = GuardedAnalysisV1::empty(seed, true);
+        canonical_reads::collect_actual_definitions(&mut guarded, source).unwrap();
+        guarded
+            .collect_parameters_and_truths(source, entry)
+            .unwrap();
+        guarded
+            .ledger
+            .reserve(&mut guarded.runtime_reads.origins, origins.len())
+            .unwrap();
+        guarded.ledger.charge(origins.len()).unwrap();
+        guarded.runtime_reads.origins.extend_from_slice(origins);
+        guarded
+            .collect_runtime_access_guards_v24::<STORES>(source)
+            .unwrap();
+        guarded.collect_recipes().unwrap();
+        // Retire the real borrowed reference facts before refunding their scope.
+        drop(guarded);
+        budget.rollback_storage(parent_floor).unwrap();
+        pointers.release(&mut budget).unwrap();
+        slots.release(&mut budget).unwrap();
+        affine.release(&mut budget).unwrap();
+        assert_eq!(budget.storage(), 23);
+        (budget.work(), budget.peak_storage())
+    }
+
+    let mut module =
+        crate::formal_memory_obligations::guarded_access_v1::runtime_slice_read_v1::tests::fixture(
+            ScalarType::U32,
+            AccessMode::ReadOnly,
+        );
+    // A real read keeps the historical constructor selected, but its dominating
+    // condition concerns a different, WriteOnly slice. It is not a read bound.
+    module.functions[0].signature.parameters[3] = Type::slice(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        AccessMode::WriteOnly,
+    );
+    module.functions[0].body.as_mut().unwrap().blocks[0].operations[0].kind =
+        OperationKind::SliceLength { slice: ValueId(3) };
+    with_owner(&module, |owner| {
+        let expected = reference::<false>(owner);
+        let stores = reference::<true>(owner);
+        assert!(
+            stores.0 > expected.0,
+            "the counterfactual must exercise the extra guard"
+        );
+        let (observed, work, storage) = run(owner, &[], usize::MAX, usize::MAX);
+        assert!(observed.unwrap().is_empty());
+        assert_eq!((work, storage), expected);
+        assert!(run(owner, &[], expected.0, expected.1).0.is_ok());
+        assert!(matches!(
+            run(owner, &[], expected.0 - 1, expected.1).0,
+            Err(Failure::Resource(ResourceError::Work(_)))
+        ));
+        assert!(matches!(
+            run(owner, &[], expected.0, expected.1 - 1).0,
+            Err(Failure::Resource(ResourceError::Storage { .. }))
+        ));
+    });
+}
+
+#[test]
 fn paid_accesses_unselected_constructor_has_independent_exact_frame_and_work_bounds() {
     const LIMIT: usize = 100_000_000;
     let mut block = BasicBlock::new(BlockId(0));

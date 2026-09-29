@@ -241,6 +241,14 @@ impl<M: GuardMeter> GuardedControlV1<M> {
     fn collect_preserving_ledger(
         function: &Function,
         flow: &IndexedControlFlow,
+        ledger: M,
+    ) -> Result<GuardedControlCollectionV1<M>, ResourceError> {
+        Self::collect_preserving_ledger_v24::<false>(function, flow, ledger)
+    }
+
+    fn collect_preserving_ledger_v24<const STORE: bool>(
+        function: &Function,
+        flow: &IndexedControlFlow,
         mut ledger: M,
     ) -> Result<GuardedControlCollectionV1<M>, ResourceError> {
         let body = function.body.as_ref().ok_or(ResourceError::Accounting)?;
@@ -251,9 +259,15 @@ impl<M: GuardMeter> GuardedControlV1<M> {
             for operation in &block.operations {
                 ledger.charge(2)?;
                 selected |= matches!(operation.kind, OperationKind::Select { .. })
-                    || matches!(operation.kind, OperationKind::Load { access, .. }
-                        if matches!(access.address_space, AddressSpace::Global | AddressSpace::Generic)
-                            && !access.volatile);
+                    || if STORE {
+                        matches!(operation.kind, OperationKind::Store { access, .. }
+                            if matches!(access.address_space, AddressSpace::Global | AddressSpace::Generic)
+                                && !access.volatile)
+                    } else {
+                        matches!(operation.kind, OperationKind::Load { access, .. }
+                            if matches!(access.address_space, AddressSpace::Global | AddressSpace::Generic)
+                                && !access.volatile)
+                    };
             }
         }
         if !selected {

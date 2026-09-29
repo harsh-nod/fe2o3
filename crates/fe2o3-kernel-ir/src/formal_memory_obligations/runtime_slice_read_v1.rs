@@ -149,10 +149,10 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
             .sort(&mut self.runtime_reads.origins, 1, |a, b| {
                 a.value.cmp(&b.value)
             })?;
-        self.collect_runtime_read_guards(function)
+        self.collect_runtime_access_guards_v24::<false>(function)
     }
 
-    pub(super) fn collect_runtime_read_guards(
+    pub(super) fn collect_runtime_access_guards_v24<const STORES: bool>(
         &mut self,
         function: &'module Function,
     ) -> Result<(), ResourceError> {
@@ -196,7 +196,7 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
             let OperationKind::SliceLength { slice } = length_op.kind else {
                 continue;
             };
-            let Some((parameter, _)) = self.runtime_slice_parameter(slice)? else {
+            let Some((parameter, _)) = self.runtime_slice_parameter_v24::<STORES>(slice)? else {
                 continue;
             };
             self.runtime_reads.guards.push(ReadGuard {
@@ -505,7 +505,7 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         })
     }
 
-    fn runtime_slice_parameter(
+    fn runtime_slice_parameter_v24<const STORES: bool>(
         &mut self,
         value: ValueId,
     ) -> Result<Option<(ParameterRow<'module>, &'module crate::SliceType)>, ResourceError> {
@@ -515,7 +515,8 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         if !matches!(
             actual.address_space,
             AddressSpace::Global | AddressSpace::Generic
-        ) || !matches!(actual.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
+        ) || !(matches!(actual.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
+            || STORES && actual.access == AccessMode::WriteOnly)
             || actual
                 .element
                 .as_scalar()
@@ -589,11 +590,13 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         predicate: Option<ValueId>,
     ) -> Result<Option<FormalRuntimeSliceReadDomainV1>, ResourceError> {
         Ok(self
-            .runtime_slice_read_conditions(location, pointer, kind, access, predicate)?
+            .runtime_slice_access_conditions_v24::<false>(
+                location, pointer, kind, access, predicate,
+            )?
             .map(|conditions| conditions.domain))
     }
 
-    pub(super) fn runtime_slice_read_conditions(
+    pub(super) fn runtime_slice_access_conditions_v24<const STORE: bool>(
         &mut self,
         location: FunctionOperationLocation,
         pointer: ValueId,
@@ -602,7 +605,12 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         predicate: Option<ValueId>,
     ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
         self.ledger.charge(24)?;
-        if kind != FormalMemoryAccessKind::Read
+        if kind
+            != if STORE {
+                FormalMemoryAccessKind::Write
+            } else {
+                FormalMemoryAccessKind::Read
+            }
             || !matches!(
                 access.address_space,
                 AddressSpace::Global | AddressSpace::Generic
@@ -650,10 +658,13 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
                 pointer_type.address_space,
                 AddressSpace::Global | AddressSpace::Generic
             )
-            || !matches!(
-                pointer_type.access,
-                AccessMode::ReadOnly | AccessMode::ReadWrite
-            )
+            || !(pointer_type.access == AccessMode::ReadWrite
+                || pointer_type.access
+                    == if STORE {
+                        AccessMode::WriteOnly
+                    } else {
+                        AccessMode::ReadOnly
+                    })
             || !matches!(element_bytes, 1 | 2 | 4 | 8)
             || !access.alignment.is_power_of_two()
             || u64::from(access.alignment) > element_bytes
@@ -703,7 +714,8 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         let Type::Pointer(data_type) = &data_result.ty else {
             return Ok(None);
         };
-        let Some((parameter, slice_type)) = self.runtime_slice_parameter(slice)? else {
+        let Some((parameter, slice_type)) = self.runtime_slice_parameter_v24::<STORE>(slice)?
+        else {
             return Ok(None);
         };
         self.ledger.charge(8)?;
