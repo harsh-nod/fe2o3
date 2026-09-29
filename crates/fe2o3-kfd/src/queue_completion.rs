@@ -26,6 +26,7 @@ use crate::shared_memory::SharedGttMappedResourceFactsV1;
 use crate::wait::MonotonicWaitV1;
 
 include!("queue_completion/event_release_body.rs");
+include!("queue_completion/bound_cancel_body.rs");
 
 macro_rules! completion_rust_expr {
     ($body:expr) => {
@@ -1606,12 +1607,7 @@ impl CompletionSignalArenaOwnerV1 {
         &self,
         retention: &CompletionBatchRetentionV1<N>,
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        if retention.last_packet_id.is_some() {
-            return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
-        }
-        self.validate_retention(retention, |batch_id| CompletionSlotPhaseV1::Bound {
-            batch_id,
-        })
+        completion_validate_bound_body!(completion_rust_expr, self, retention)
     }
 
     pub(super) fn cancel_bound<const N: usize>(
@@ -1629,16 +1625,7 @@ impl CompletionSignalArenaOwnerV1 {
         &mut self,
         retention: CompletionBatchRetentionV1<N>,
     ) -> Result<(), (Gfx942CompletionErrorV1, CompletionBatchRetentionV1<N>)> {
-        if let Err(error) = self.validate_bound(&retention) {
-            return Err((error, retention));
-        }
-        if let Err(error) = self.require_unpinned(&retention.slots) {
-            return Err((error, retention));
-        }
-        for slot in retention.slots.iter() {
-            self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Available;
-        }
-        Ok(())
+        completion_cancel_bound_retaining_body!(completion_rust_expr, self, retention, N)
     }
 
     pub(super) fn mark_published<const N: usize>(
@@ -2102,17 +2089,7 @@ impl CompletionSignalArenaOwnerV1 {
         &self,
         slots: &[CompletionSlotLeaseV1; N],
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        for slot in slots {
-            let record = &self.slots[slot.index as usize];
-            if record.event_pins != 0 || record.native_reader_pins != 0 {
-                return Err(Gfx942CompletionErrorV1::SignalPinned {
-                    slot: slot.index,
-                    event_pins: record.event_pins,
-                    native_reader_pins: record.native_reader_pins,
-                });
-            }
-        }
-        Ok(())
+        completion_require_unpinned_body!(completion_rust_expr, self, slots, N)
     }
 
     fn validate_published<const N: usize>(
@@ -2122,9 +2099,12 @@ impl CompletionSignalArenaOwnerV1 {
         if retention.last_packet_id.is_none() {
             return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
         }
-        self.validate_retention(retention, |batch_id| CompletionSlotPhaseV1::Published {
-            batch_id,
-        })
+        self.validate_retention(
+            retention,
+            CompletionSlotPhaseV1::Published {
+                batch_id: retention.batch_id,
+            },
+        )
     }
 
     fn validate_completed<const N: usize>(
@@ -2134,40 +2114,20 @@ impl CompletionSignalArenaOwnerV1 {
         if retention.last_packet_id.is_none() {
             return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
         }
-        self.validate_retention(retention, |batch_id| CompletionSlotPhaseV1::Completed {
-            batch_id,
-        })
+        self.validate_retention(
+            retention,
+            CompletionSlotPhaseV1::Completed {
+                batch_id: retention.batch_id,
+            },
+        )
     }
 
     fn validate_retention<const N: usize>(
         &self,
         retention: &CompletionBatchRetentionV1<N>,
-        expected: impl Fn(u64) -> CompletionSlotPhaseV1,
+        expected: CompletionSlotPhaseV1,
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        validate_packet_count::<N>()?;
-        if retention.queue != self.queue || retention.signal_mapping != self.signal_mapping {
-            return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
-        }
-        let mut seen_slots = [0_u64; COMPLETION_SIGNAL_CAPACITY_V1.div_ceil(64)];
-        for (batch_index, slot) in retention.slots.iter().enumerate() {
-            let Some(record) = self.slots.get(slot.index as usize) else {
-                return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
-            };
-            let word = &mut seen_slots[slot.index as usize / 64];
-            let bit = 1_u64 << (slot.index % 64);
-            if record.generation != slot.generation
-                || record.phase != expected(retention.batch_id)
-                || retention.dispatches[batch_index].queue != retention.queue
-                || retention.dispatches[batch_index].dispatch_generation == 0
-                || retention.dispatches[batch_index].code.allocation.vm != retention.queue.vm
-                || retention.dispatches[batch_index].kernarg.allocation.vm != retention.queue.vm
-                || *word & bit != 0
-            {
-                return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
-            }
-            *word |= bit;
-        }
-        Ok(())
+        completion_validate_retention_body!(completion_rust_expr, self, retention, expected, N)
     }
 
     fn validate_barrier_probe(
@@ -2690,16 +2650,7 @@ pub(super) fn initialize_pending_completion_signal_arena(
 }
 
 fn validate_packet_count<const N: usize>() -> Result<(), Gfx942CompletionErrorV1> {
-    if N == 0 {
-        return Err(Gfx942CompletionErrorV1::ZeroPacketCount);
-    }
-    if N > COMPLETION_SIGNAL_CAPACITY_V1 {
-        return Err(Gfx942CompletionErrorV1::PacketCountExceedsMaximum {
-            requested: N,
-            maximum: COMPLETION_SIGNAL_CAPACITY_V1,
-        });
-    }
-    Ok(())
+    completion_packet_count_body!(completion_rust_expr, N)
 }
 
 #[cfg(test)]

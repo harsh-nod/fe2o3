@@ -2,6 +2,8 @@ mod release_tests {
     use super::super::super::{CompletionCustodySnapshotV1, CompletionOwnerPhaseV1};
     use super::*;
 
+    include!("bound_cancel_tests.rs");
+
     #[derive(Debug, Eq, PartialEq)]
     struct Snapshot {
         custody: CompletionCustodySnapshotV1,
