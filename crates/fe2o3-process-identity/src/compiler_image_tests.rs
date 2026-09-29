@@ -111,6 +111,40 @@ fn executable_role_requires_execute_bits_but_backend_does_not() {
 }
 
 #[test]
+fn measurement_work_quote_matches_exact_and_one_short_budgets() {
+    for length in [1, HASH_CHUNK_BYTES, HASH_CHUNK_BYTES + 1] {
+        let image = Image::new(&vec![7; length]);
+        let quote = compiler_image_measurement_work_v1(length as u64).unwrap();
+        for available in [quote - 1, quote] {
+            let mut remaining = available;
+            let result = measure_compiler_image_file_sha256_v1(
+                &image.file,
+                CompilerImageRoleV1::CodegenBackend,
+                |work| {
+                    remaining = remaining.checked_sub(work).ok_or("work exhausted")?;
+                    Ok::<_, &'static str>(())
+                },
+            );
+            if available == quote {
+                assert!(result.is_ok());
+                assert_eq!(remaining, 0);
+            } else {
+                assert!(matches!(result, Err(Failure::Work("work exhausted"))));
+            }
+        }
+    }
+}
+
+#[test]
+fn measurement_work_quote_rejects_invalid_extents_and_arithmetic_overflow() {
+    for length in [0, MAX_EXECUTABLE_BYTES_V3 + 1, u64::MAX] {
+        assert_eq!(compiler_image_measurement_work_v1(length), None);
+    }
+    assert!(compiler_image_measurement_work_v1(MAX_EXECUTABLE_BYTES_V3).is_some());
+    assert_eq!(measurement_payload_work(usize::MAX), None);
+}
+
+#[test]
 fn each_prepaid_boundary_propagates_denial_without_further_work() {
     let image = Image::new(b"image");
     for stop in 1..=5 {

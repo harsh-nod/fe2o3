@@ -33,7 +33,8 @@ mod sealed_memfd;
 
 pub use compiler_image::{
     COMPILER_IMAGE_MEASUREMENT_STORAGE_V1, CompilerImageMeasurementErrorV1, CompilerImageRoleV1,
-    measure_compiler_image_file_sha256_v1, measure_compiler_image_sha256_v1,
+    compiler_image_measurement_work_v1, measure_compiler_image_file_sha256_v1,
+    measure_compiler_image_sha256_v1,
 };
 pub use native_capture::{CapturedStdioDescriptorV1, CapturedStdioV1};
 

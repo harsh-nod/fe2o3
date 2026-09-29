@@ -25,6 +25,24 @@ pub const COMPILER_IMAGE_MEASUREMENT_STORAGE_V1: usize = HASH_CHUNK_BYTES
     + 8 * size_of::<File>()
     + 4096;
 
+/// Complete descriptor-pinned measurement work for a nonempty image extent.
+/// This is an inert resource quote, not an observation of a file's current size.
+/// Path-based callers must separately cover path validation and opening the file.
+pub fn compiler_image_measurement_work_v1(byte_len: u64) -> Option<usize> {
+    if byte_len == 0 || byte_len > MAX_EXECUTABLE_BYTES_V3 {
+        return None;
+    }
+    measurement_payload_work(usize::try_from(byte_len).ok()?)?.checked_add(IO_WORK)
+}
+
+fn measurement_payload_work(length: usize) -> Option<usize> {
+    length
+        .div_ceil(HASH_CHUNK_BYTES)
+        .checked_add(2)?
+        .checked_mul(IO_WORK)?
+        .checked_add(length)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum CompilerImageRoleV1 {
     Executable,
@@ -139,11 +157,7 @@ pub(super) fn measure_open<E>(
     }
     let length = usize::try_from(initial.size)
         .map_err(|_| Failure::Invalid("image length is not representable"))?;
-    let work = length
-        .div_ceil(HASH_CHUNK_BYTES)
-        .checked_add(2)
-        .and_then(|calls| calls.checked_mul(IO_WORK))
-        .and_then(|io| io.checked_add(length))
+    let work = measurement_payload_work(length)
         .ok_or(Failure::Invalid("image measurement work overflow"))?;
     charge(work)?;
     let mut digest = Sha256::new();

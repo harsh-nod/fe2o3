@@ -585,6 +585,63 @@ mod tests {
     }
 
     #[test]
+    fn native_invocation_quotes_cover_nested_costs_and_preserve_owner_floor() {
+        use crate::native_capability::{CompilerExecutionCapabilityErrorV2 as Error, tests::run};
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+        type Cap = RustcInvocationCapabilityV1;
+
+        fn check(
+            floor: usize,
+            work: usize,
+            scratch: usize,
+            operation: impl Fn(&mut Budget<'_>) -> Result<(), Error>,
+        ) {
+            let floor = floor + 19;
+            let (result, used, retained, peak) = run(floor, work, floor + scratch, &operation);
+            result.unwrap();
+            assert_eq!(retained, floor);
+            assert!(used <= work);
+            assert!(peak <= floor + scratch);
+            // The measured fixture boundary is exact even though the public
+            // quote covers every possible admitted descriptor length.
+            for (work, storage, succeeds) in [
+                (used, peak, true),
+                (used - 1, peak, false),
+                (used, peak - 1, false),
+            ] {
+                let (result, _, retained, _) = run(floor, work, storage, &operation);
+                assert_eq!(result.is_ok(), succeeds);
+                assert_eq!(retained, floor);
+            }
+        }
+
+        let bytes = encode_descriptor_v3(&invocation()).unwrap();
+        check(
+            Cap::NATIVE_FILE_STORAGE,
+            Cap::NATIVE_ADMISSION_WORK,
+            Cap::NATIVE_OPERATION_SCRATCH,
+            |b| {
+                let file = sealed_file(&bytes, 0o400, REQUIRED_SEALS, true);
+                let (admitted, growth) = Cap::from_file_native(file, b)?;
+                assert_eq!(
+                    admitted.native_retained_storage()?,
+                    Cap::NATIVE_FILE_STORAGE + growth.additional_storage()
+                );
+                assert!(admitted.native_retained_storage()? <= Cap::NATIVE_MAX_RETAINED_STORAGE);
+                assert_eq!(admitted.descriptor(), &invocation());
+                Ok(())
+            },
+        );
+        let admitted = Cap::create(invocation()).unwrap();
+        check(
+            admitted.native_retained_storage().unwrap(),
+            Cap::NATIVE_REVALIDATION_WORK,
+            Cap::NATIVE_OPERATION_SCRATCH,
+            |b| admitted.revalidate_native(b),
+        );
+    }
+
+    #[test]
     fn invocation_rejects_every_truncation_and_header_bit_mutation() {
         let bytes = encode_descriptor_v3(&invocation()).unwrap();
         for length in 0..bytes.len() {

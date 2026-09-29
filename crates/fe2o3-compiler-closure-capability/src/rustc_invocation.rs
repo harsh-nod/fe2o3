@@ -42,6 +42,22 @@ impl RustcInvocationCapabilityV1 {
     pub const NATIVE_FILE_STORAGE: usize = size_of::<(File, NativeStorage)>();
     const NATIVE_IO_WORK: usize = 64 * 1024;
     const NATIVE_FRAME: usize = 8192 + 4 * size_of::<Self>();
+    const NATIVE_DECODE_WORK_PER_BYTE: usize = 4096;
+    const NATIVE_COMPARE_WORK_PER_BYTE: usize = 8;
+    const NATIVE_STORAGE_PER_BYTE: usize = 64;
+
+    /// Conservative full owner bound for any admitted canonical V3 descriptor.
+    pub const NATIVE_MAX_RETAINED_STORAGE: usize =
+        Self::NATIVE_STORAGE_PER_BYTE * MAX_DESCRIPTOR_BYTES_V3 + Self::NATIVE_FRAME;
+    /// Complete nested admission work; the input File owner is prepaid separately.
+    pub const NATIVE_ADMISSION_WORK: usize =
+        2 * Self::NATIVE_IO_WORK + Self::NATIVE_DECODE_WORK_PER_BYTE * MAX_DESCRIPTOR_BYTES_V3;
+    /// Complete nested currentness work, excluding the retained owner floor.
+    pub const NATIVE_REVALIDATION_WORK: usize =
+        2 * Self::NATIVE_IO_WORK + Self::NATIVE_COMPARE_WORK_PER_BYTE * MAX_DESCRIPTOR_BYTES_V3;
+    /// Peak nested operation scratch, above the input/retained owner floor.
+    pub const NATIVE_OPERATION_SCRATCH: usize =
+        Self::NATIVE_FRAME + Self::NATIVE_MAX_RETAINED_STORAGE;
 
     /// Fresh metered admission of the existing canonical V3 invocation format.
     /// No V1 compiler-execution subject, service or policy owner is constructed.
@@ -113,7 +129,7 @@ impl RustcInvocationCapabilityV1 {
         // environment headers consume at least 6. Includes both vector stages,
         // immutable bytes, repeated encoder buffers and result envelopes.
         length
-            .checked_mul(64)
+            .checked_mul(Self::NATIVE_STORAGE_PER_BYTE)
             .and_then(|n| n.checked_add(Self::NATIVE_FRAME))
             .ok_or_else(|| Resource::Arithmetic.into())
     }
@@ -132,7 +148,11 @@ impl RustcInvocationCapabilityV1 {
         // 4096 covers per-byte scanning/copying and the bounded V2-body/V3
         // validator/encoder passes; fixed closure hashing is separately covered.
         let work = length
-            .checked_mul(if decode { 4096 } else { 8 })
+            .checked_mul(if decode {
+                Self::NATIVE_DECODE_WORK_PER_BYTE
+            } else {
+                Self::NATIVE_COMPARE_WORK_PER_BYTE
+            })
             .and_then(|n| n.checked_add(Self::NATIVE_IO_WORK))
             .ok_or(Resource::Arithmetic)?;
         budget.with_prepaid_scope(0, 8, work, Self::native_storage_for(length)?, operation)
