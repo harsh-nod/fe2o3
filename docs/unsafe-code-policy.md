@@ -60,6 +60,18 @@ neither constructs a positive runtime or deployment. The shared send test's two
 blocks reset/unblock SIGPIPE only in a disposable subprocess, checking that the
 real send uses NOSIGNAL; no application or host signal policy is changed.
 
+The private root-to-V3-issuer composition has two unsafe functions and four call
+blocks: delegation with the original confirmed compiler trace, sealed staging,
+retained spawning, and exec confirmation. These calls retain the actual prepared
+owners and compiler backing in the funded cleanup slot before clone. Final
+descriptor checks, profile validation, independent exec EOF, exact readiness plus
+EOF, and liveness checks do not remove the caller's creator-thread, exclusive-wait,
+bounded-Drop and inherited-lock-alias obligations. Its one test-only unsafe block
+stages inert files to check the fixed descriptor map; it never spawns or admits
+them. The shared pipe framer and socket-mode normalization use safe descriptor
+APIs. This inventory does not establish installed production integration, an
+authorized compiler occurrence, protected proof execution or GPU qualification.
+
 The gated namespace collector in `child_namespace_report.rs` uses six unsafe
 blocks and one private syscall function because post-clone observation cannot
 use allocating or TLS-dependent wrappers. Its x86-64 stat buffer layout and
