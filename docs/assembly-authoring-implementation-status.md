@@ -1841,3 +1841,18 @@ Whole-function rvalue/statement processing, original source/SSA and backend join
 remain open. This private component does not activate ordinary compilation,
 native debugging or GPU dispatch. Broad accepted exits remain
 M1/V1/V2/U1/U2/U3 (6/18).
+
+## Retained Shared statement-driven engine — 2026-09-29
+
+Original rvalue, installation, statement/terminator, liveness and complete
+analyze-observed processing now run through an attached retained owner.
+Fourteen controls passed within the broad CPU regression, including complete
+original-data/work comparisons and storage-refusal sweeps with all six partial
+state witnesses. The initial 13/14 fixture failure remains archived; its
+test-only correction adds two-alias aggregate coverage without weakening checks.
+See [qualification and limits](retained-shared-source-engine-qualification-20260929.md).
+
+Actual source/SSA construction, canonical/backend integration and genuine
+Shared-first whole-root preparation remain open. Ordinary compilation, native
+debugging and GPU dispatch are not activated. Broad accepted exits remain
+M1/V1/V2/U1/U2/U3 (6/18).
