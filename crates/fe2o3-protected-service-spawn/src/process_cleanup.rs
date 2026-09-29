@@ -2,8 +2,8 @@
 //! Consumed by native issuer and root coordinator launches through one shared pool.
 //!
 //! The caller supplies exclusive consuming-wait ownership and retains this record
-//! in its existing reserved slot until terminal reaping. This module creates no
-//! worker, reserves no slot, and supplies no persistent native ledger accounting.
+//! in its existing reserved slot until root reaping and domain cleanup. This
+//! module creates no worker, reserves no slot, and supplies no persistent ledger.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,19 +12,22 @@ use fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1;
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 
+use crate::native_cgroup::NativeCgroupDomainV1;
+
 /// Disposition of one finite cleanup attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
 pub enum CleanupPollV1 {
     /// Retain the record and its slot for a later cleanup attempt.
     Pending,
-    /// An exact consuming terminal wait succeeded; the caller may retire custody.
+    /// Every required root wait and retained domain cleanup completed.
+    /// A domain-only rollback has no child wait obligation.
     Reaped,
     /// Retain custody and capacity without further signaling or waiting.
     Quarantined,
 }
 
-/// Move-only custody of one child and its inherited artifact-spawn obligation.
+/// Move-only child, optional domain and inherited artifact-spawn custody.
 ///
 /// Transfer the whole value to the existing deferred table on uncertainty. Drop
 /// deliberately preserves unresolved resources; it is not a cleanup service or
@@ -32,7 +35,7 @@ pub enum CleanupPollV1 {
 #[must_use]
 pub struct ChildCleanupV1 {
     pid: Pid,
-    custody: CleanupCustodyV1<OwnedFd, ArtifactProcessSpawnLeaseV1>,
+    custody: CleanupCustodyV1<OwnedFd, ArtifactProcessSpawnLeaseV1, NativeCgroupDomainV1>,
 }
 
 impl ChildCleanupV1 {
@@ -52,6 +55,20 @@ impl ChildCleanupV1 {
         }
     }
 
+    /// Adopts the launch's concrete domain along with its exact child and lease.
+    /// This mechanical transfer grants no deployment or isolation admission.
+    pub(crate) fn new_with_domain(
+        pidfd: Option<OwnedFd>,
+        pid: Pid,
+        spawn_lease: Option<ArtifactProcessSpawnLeaseV1>,
+        domain: NativeCgroupDomainV1,
+    ) -> Self {
+        Self {
+            pid,
+            custody: CleanupCustodyV1::with_domain(pidfd, spawn_lease, domain),
+        }
+    }
+
     /// Returns the scalar identity bound by the trusted adoption protocol.
     pub fn pid(&self) -> Pid {
         self.pid
@@ -68,7 +85,7 @@ impl ChildCleanupV1 {
         self.custody.spawn_lease.is_some()
     }
 
-    /// Returns the most recent syscall errno, retained across successful calls.
+    /// Returns the most recent root-cleanup errno, retained across successful calls.
     ///
     /// This includes signal `SRCH`. Missing-pidfd quarantine invents no errno.
     /// A recorded ownership loss reports `CHILD` before the next cleanup step.
@@ -98,7 +115,8 @@ impl ChildCleanupV1 {
     /// The caller must have consumed an exited, killed, or core-dumped status
     /// for this child under exclusive wait ownership. A `NOWAIT` observation,
     /// nonterminal status, `ECHILD`, or a signal result does not qualify. Call
-    /// this immediately after the wait, before dropping or completing the slot.
+    /// this immediately after the wait. A retained domain must still complete
+    /// before dropping this record or completing its slot.
     pub(crate) fn terminal_reaped(&mut self) {
         self.custody.terminal_reaped();
     }
@@ -107,32 +125,80 @@ impl ChildCleanupV1 {
     ///
     /// There is no retry loop, allocation, or raw-PID fallback. Pending and
     /// quarantined records retain their descriptor and any unverified spawn
-    /// lease. Terminal reaping releases that lease but leaves descriptor and
-    /// slot retirement to the caller. Repeated terminal calls perform no I/O.
+    /// lease. A retained domain receives at most one additional finite step.
+    /// Root reaping stops root I/O, but only complete cleanup releases an
+    /// unverified spawn lease. Repeated complete calls perform no I/O.
     pub fn step(&mut self) -> CleanupPollV1 {
         self.custody.step(&mut PidfdCleanupSyscallsV1)
     }
 }
 
+/// A reserved slot can retain a created domain even when no child was created.
+/// Neither variant supplies launch or isolation authority.
+pub(crate) enum CleanupRecordV1 {
+    Child(ChildCleanupV1),
+    UnspawnedDomain(UnspawnedDomainCleanupV1),
+}
+
+impl CleanupRecordV1 {
+    pub(crate) fn unspawned_domain(domain: NativeCgroupDomainV1) -> Self {
+        Self::UnspawnedDomain(UnspawnedDomainCleanupV1 {
+            custody: CleanupCustodyV1::unspawned_domain(domain),
+        })
+    }
+
+    pub(crate) fn step(&mut self) -> CleanupPollV1 {
+        match self {
+            Self::Child(child) => child.step(),
+            Self::UnspawnedDomain(domain) => domain.custody.step(&mut PidfdCleanupSyscallsV1),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn child(&self) -> &ChildCleanupV1 {
+        match self {
+            Self::Child(child) => child,
+            Self::UnspawnedDomain(_) => panic!("fixture expected child custody"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn child_mut(&mut self) -> &mut ChildCleanupV1 {
+        match self {
+            Self::Child(child) => child,
+            Self::UnspawnedDomain(_) => panic!("fixture expected child custody"),
+        }
+    }
+}
+
+pub(crate) struct UnspawnedDomainCleanupV1 {
+    custody: CleanupCustodyV1<OwnedFd, ArtifactProcessSpawnLeaseV1, NativeCgroupDomainV1>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CleanupPhaseV1 {
+    /// Domain rollback before any child was created, not a fabricated root reap.
+    Unspawned,
     KillRequired,
     AwaitingExit,
     Quarantined,
+    /// The direct root was reaped; any retained domain is still independently owed.
     Reaped,
 }
 
 // Generic resource ownership lets fake schedules exercise the same lease and
 // descriptor retention paths without constructing OS descriptors or children.
-struct CleanupCustodyV1<F, L> {
+struct CleanupCustodyV1<F, L, D = ()> {
     pidfd: Option<F>,
     spawn_lease: Option<L>,
+    domain: Option<D>,
+    domain_poll: CleanupPollV1,
     phase: CleanupPhaseV1,
     last_errno: Option<Errno>,
     ownership_lost: AtomicBool,
 }
 
-impl<F, L> CleanupCustodyV1<F, L> {
+impl<F, L, D> CleanupCustodyV1<F, L, D> {
     fn new(pidfd: Option<F>, spawn_lease: Option<L>) -> Self {
         let phase = if pidfd.is_some() {
             CleanupPhaseV1::KillRequired
@@ -142,10 +208,35 @@ impl<F, L> CleanupCustodyV1<F, L> {
         Self {
             pidfd,
             spawn_lease,
+            domain: None,
+            domain_poll: CleanupPollV1::Pending,
             phase,
             last_errno: None,
             ownership_lost: AtomicBool::new(false),
         }
+    }
+
+    fn with_domain(pidfd: Option<F>, spawn_lease: Option<L>, domain: D) -> Self {
+        let mut custody = Self::new(pidfd, spawn_lease);
+        custody.domain = Some(domain);
+        custody
+    }
+
+    fn unspawned_domain(domain: D) -> Self {
+        let mut custody = Self::with_domain(None, None, domain);
+        custody.phase = CleanupPhaseV1::Unspawned;
+        custody
+    }
+
+    fn root_complete(&self) -> bool {
+        matches!(
+            self.phase,
+            CleanupPhaseV1::Reaped | CleanupPhaseV1::Unspawned
+        )
+    }
+
+    fn complete(&self) -> bool {
+        self.root_complete() && (self.domain.is_none() || self.domain_poll == CleanupPollV1::Reaped)
     }
 
     fn last_errno(&self) -> Option<Errno> {
@@ -157,7 +248,7 @@ impl<F, L> CleanupCustodyV1<F, L> {
     }
 
     fn ownership_lost(&self) {
-        if self.phase != CleanupPhaseV1::Reaped {
+        if !self.root_complete() {
             self.ownership_lost.store(true, Ordering::Release);
         }
     }
@@ -168,21 +259,45 @@ impl<F, L> CleanupCustodyV1<F, L> {
 
     fn terminal_reaped(&mut self) {
         self.phase = CleanupPhaseV1::Reaped;
-        drop(self.spawn_lease.take());
+        if self.complete() {
+            drop(self.spawn_lease.take());
+        }
     }
 
-    fn step(&mut self, syscalls: &mut impl CleanupSyscallsV1<F>) -> CleanupPollV1 {
-        if self.phase == CleanupPhaseV1::Reaped {
+    fn step(&mut self, syscalls: &mut impl CleanupSyscallsV1<F, D>) -> CleanupPollV1 {
+        if self.complete() {
             return CleanupPollV1::Reaped;
         }
-        if self.ownership_lost.load(Ordering::Acquire) {
+        if !self.root_complete() && self.ownership_lost.load(Ordering::Acquire) {
             self.phase = CleanupPhaseV1::Quarantined;
             self.last_errno = Some(Errno::CHILD);
             return CleanupPollV1::Quarantined;
         }
-        if self.phase == CleanupPhaseV1::Quarantined {
+        if self.phase == CleanupPhaseV1::Quarantined
+            || self.domain_poll == CleanupPollV1::Quarantined
+        {
             return CleanupPollV1::Quarantined;
         }
+        if !self.root_complete() && self.step_root(syscalls) == CleanupPollV1::Quarantined {
+            return CleanupPollV1::Quarantined;
+        }
+        if self.domain_poll == CleanupPollV1::Pending {
+            if let Some(domain) = self.domain.as_mut() {
+                self.domain_poll = syscalls.step_domain(domain);
+            }
+        }
+        if self.domain.is_some() && self.domain_poll != CleanupPollV1::Reaped {
+            return self.domain_poll;
+        }
+        if self.complete() {
+            drop(self.spawn_lease.take());
+            CleanupPollV1::Reaped
+        } else {
+            CleanupPollV1::Pending
+        }
+    }
+
+    fn step_root(&mut self, syscalls: &mut impl CleanupSyscallsV1<F, D>) -> CleanupPollV1 {
         let Some(pidfd) = self.pidfd.as_ref() else {
             self.phase = CleanupPhaseV1::Quarantined;
             return CleanupPollV1::Quarantined;
@@ -218,13 +333,14 @@ impl<F, L> CleanupCustodyV1<F, L> {
     }
 }
 
-impl<F, L> Drop for CleanupCustodyV1<F, L> {
+impl<F, L, D> Drop for CleanupCustodyV1<F, L, D> {
     fn drop(&mut self) {
-        if self.phase != CleanupPhaseV1::Reaped {
+        if !self.complete() {
             // An owner dropped before transfer must not falsely release the
             // pre-exec obligation. This fail-closed leak cannot provide progress.
             std::mem::forget(self.pidfd.take());
             std::mem::forget(self.spawn_lease.take());
+            std::mem::forget(self.domain.take());
         }
     }
 }
@@ -244,14 +360,18 @@ impl CleanupWaitV1 {
     }
 }
 
-trait CleanupSyscallsV1<F> {
+trait CleanupSyscallsV1<F, D = ()> {
     fn kill(&mut self, pidfd: &F) -> rustix::io::Result<()>;
     fn wait_exited_nohang(&mut self, pidfd: &F) -> rustix::io::Result<Option<CleanupWaitV1>>;
+    fn step_domain(&mut self, domain: &mut D) -> CleanupPollV1;
 }
 
 struct PidfdCleanupSyscallsV1;
 
-impl CleanupSyscallsV1<OwnedFd> for PidfdCleanupSyscallsV1 {
+impl CleanupSyscallsV1<OwnedFd, NativeCgroupDomainV1> for PidfdCleanupSyscallsV1 {
+    fn step_domain(&mut self, domain: &mut NativeCgroupDomainV1) -> CleanupPollV1 {
+        domain.step()
+    }
     fn kill(&mut self, pidfd: &OwnedFd) -> rustix::io::Result<()> {
         rustix::process::pidfd_send_signal(pidfd, Signal::KILL)
     }

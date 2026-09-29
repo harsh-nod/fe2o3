@@ -37,7 +37,7 @@ impl Drop for FakePipeCleanup<'_> {
         if let Some(mut child) = record.take() {
             // This synthetic pipe has no actual child. Retire it explicitly so
             // unresolved-custody Drop does not intentionally leak the test FD.
-            child.terminal_reaped();
+            child.child_mut().terminal_reaped();
         }
     }
 }
@@ -59,7 +59,10 @@ fn pending_cleanup_retains_its_descriptor_and_full_pool_capacity() {
         reaper.pump();
         assert_eq!(cell.state.load(Ordering::Acquire), DEFERRED);
         let record = cell.child.lock().unwrap();
-        let child = record.as_ref().expect("pending custody was discarded");
+        let child = record
+            .as_ref()
+            .expect("pending custody was discarded")
+            .child();
         assert_eq!(child.pid(), getpid());
         assert_eq!(child.pidfd().unwrap().as_raw_fd(), descriptor);
         assert!(fcntl_getfd(child.pidfd().unwrap()).is_ok());
@@ -86,7 +89,10 @@ fn missing_pidfd_quarantine_retains_capacity_across_every_pump() {
         reaper.pump();
         assert_eq!(cell.state.load(Ordering::Acquire), QUARANTINED);
         let record = cell.child.lock().unwrap();
-        let child = record.as_ref().expect("quarantined custody was discarded");
+        let child = record
+            .as_ref()
+            .expect("quarantined custody was discarded")
+            .child();
         assert_eq!(child.pid(), getpid());
         assert!(child.pidfd().is_none());
         assert_eq!(child.last_errno(), None);
@@ -142,7 +148,7 @@ impl Drop for LiveChildGuard<'_> {
                         .lock()
                         .unwrap_or_else(|error| error.into_inner());
                     if let Some(mut child) = record.take() {
-                        child.terminal_reaped();
+                        child.child_mut().terminal_reaped();
                     }
                     self.cell.state.store(EMPTY, Ordering::Release);
                     return;
@@ -188,7 +194,7 @@ fn terminal_cleanup_reclaims_exactly_its_slot_after_spawn_lease_transfer() {
     assert_eq!(cell.state.load(Ordering::Acquire), DEFERRED);
     {
         let record = cell.child.lock().unwrap();
-        let queued_cleanup = record.as_ref().unwrap();
+        let queued_cleanup = record.as_ref().unwrap().child();
         assert_eq!(queued_cleanup.pid(), pid);
         assert!(queued_cleanup.retains_spawn_lease());
     }

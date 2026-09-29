@@ -16,7 +16,12 @@ use std::{
 };
 
 type Owner = RootOwnedProtectedServiceChildV2;
-const LIMIT: usize = 1_000_000;
+const CLEANUP_TURNS: usize = 512;
+const LIMIT: usize = 1_000_000
+    + CLEANUP_TURNS * (Service::TURN_WORK + 64 * Service::CELL_WORK)
+    + 65 * Service::RESERVATION_WORK
+    + Service::STORAGE
+    + Owner::OPERATION_SCRATCH;
 const MARKER: &str = "FE2O3_PRIVATE_NATIVE_ROOT_CHILD_TEST";
 fn pool() -> Service {
     crate::process_reaper::isolated_cleanup(Account::new(Work::new(LIMIT), Service::STORAGE))
@@ -184,7 +189,7 @@ fn subprocess(mode: &str) {
 struct Drain(Service);
 impl Drop for Drain {
     fn drop(&mut self) {
-        for _ in 0..512 {
+        for _ in 0..CLEANUP_TURNS {
             if self.0.shutdown().is_ok() {
                 return;
             }

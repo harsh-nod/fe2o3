@@ -9,7 +9,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const LIMIT: usize = 1 << 20;
+const MIN_TURN: usize = Service::TURN_WORK + Service::CELL_WORK;
+const LIMIT: usize = (1 << 20)
+    + 2 * (Service::TURN_WORK + CAPACITY * Service::CELL_WORK)
+    + Service::RESERVATION_WORK
+    + Service::STORAGE;
 const MARKER: &str = "FE2O3_PRIVATE_CLEANUP_GUARD_TEST";
 
 struct GuardChild(Option<Child>);
@@ -173,6 +177,7 @@ fn late_error_unwind_and_post_exec_quarantine_preserve_guard_until_terminal_reti
             .unwrap()
             .as_mut()
             .unwrap()
+            .child_mut()
             .terminal_reaped();
         reaper.cells[0]
             .state
@@ -331,8 +336,17 @@ fn assert_guard_clone(file: &File, observer: &File) {
 }
 
 fn guard_clone_exact_accounts_and_independent_retention() {
-    let service_limit = Service::ADMISSION_WORK + Service::GUARD_WORK + Service::GUARD_CLONE_WORK;
-    let (_, mut service, observer) = installed_pool(service_limit);
+    let prefix = MIN_TURN.saturating_sub(Service::GUARD_CLONE_WORK);
+    let service_limit =
+        Service::ADMISSION_WORK + Service::GUARD_WORK + prefix + Service::GUARD_CLONE_WORK;
+    let (reaper, mut service, observer) = installed_pool(service_limit);
+    {
+        let mut mode = reaper.mode.lock().unwrap();
+        let ReaperMode::Native(native) = &mut *mode else {
+            panic!("native pool")
+        };
+        native.charge(prefix).unwrap();
+    }
     let mut w = Work::new(17 + Service::GUARD_CLONE_WORK);
     let peak = 37 + Service::GUARD_CLONE_SCRATCH + Service::GUARD_FILE_STORAGE;
     let mut b = Budget::new(&mut w, peak);
@@ -369,13 +383,25 @@ fn guard_clone_exact_accounts_and_independent_retention() {
 
 fn guard_clone_short_quotas_precede_duplication() {
     for cause in 0..4 {
-        let initial = Service::ADMISSION_WORK + Service::GUARD_WORK;
+        let prefix = if cause == 3 {
+            MIN_TURN.saturating_sub(Service::GUARD_CLONE_WORK - 1)
+        } else {
+            0
+        };
+        let initial = Service::ADMISSION_WORK + Service::GUARD_WORK + prefix;
         let limit = if cause == 3 {
             initial + Service::GUARD_CLONE_WORK - 1
         } else {
             LIMIT
         };
-        let (_, mut service, observer) = installed_pool(limit);
+        let (reaper, mut service, observer) = installed_pool(limit);
+        {
+            let mut mode = reaper.mode.lock().unwrap();
+            let ReaperMode::Native(native) = &mut *mode else {
+                panic!("native pool")
+            };
+            native.charge(prefix).unwrap();
+        }
         let work = if cause == 0 {
             17 + Service::GUARD_CLONE_WORK - 1
         } else {

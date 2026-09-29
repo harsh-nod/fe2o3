@@ -1,7 +1,7 @@
-//! Dependencies stay in the already-funded slot from reservation through reap.
+//! Dependencies stay in the funded slot through root reap and domain cleanup.
 
 use super::super::{
-    ChildCleanupV1, DeferredReaperV1, EMPTY, QUARANTINED, RETIRING, ReapCellV1, ReaperMode,
+    CleanupRecordV1, DeferredReaperV1, EMPTY, QUARANTINED, RETIRING, ReapCellV1, ReaperMode,
 };
 use super::{Budget, Failure, Resource, Service, Storage};
 use crate::RetainedResourcesV2 as Retained;
@@ -95,7 +95,7 @@ impl DeferredReaperV1 {
     pub(in crate::process_reaper) fn retire_cell(
         &self,
         cell: &ReapCellV1,
-        child: Option<ChildCleanupV1>,
+        child: Option<CleanupRecordV1>,
     ) {
         cell.state.store(RETIRING, Ordering::Release);
         let mut retirement = Retirement {

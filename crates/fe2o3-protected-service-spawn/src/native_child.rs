@@ -3,6 +3,7 @@ use super::{
     Result, io,
 };
 use crate::{
+    native_cgroup::NativeCgroupDomainV1,
     process_cleanup::{ChildCleanupV1 as Child, CleanupPollV1 as Poll},
     process_reaper::ReapSlotV1,
 };
@@ -27,7 +28,7 @@ impl Drop for Custody {
     }
 }
 
-/// Exact direct-child custody, not readiness, exec or protected-service admission.
+/// Exact direct-child and optional domain custody, not readiness, exec or admission.
 /// One prepaid cancellation step retires a terminal child or defers the entire
 /// pidfd/lease record to its reserved shared slot. There is no raw-PID fallback,
 /// retry loop, background worker or fresh cleanup budget. Pending is not success.
@@ -51,8 +52,11 @@ pub struct RootOwnedProtectedServiceChildV2 {
     disposition: Poll,
 }
 impl RootOwnedProtectedServiceChildV2 {
-    /// Full parent-side owner/header charge; the shared service separately funds its pool.
-    pub const STORAGE: usize = size_of::<(Self, Storage)>();
+    /// Full parent-side owner and prepaid cancellation scratch; the service
+    /// separately funds the same obligations after transfer into its pool.
+    pub const STORAGE: usize = size_of::<(Self, Storage)>() + NativeCgroupDomainV1::STORAGE
+        - size_of::<NativeCgroupDomainV1>()
+        + NativeCgroupDomainV1::STEP_SCRATCH;
     /// One observation/duplication or confirmed-exec lease-release allowance.
     pub const OPERATION_WORK: usize = ENTRY + 4 * (1024 + 64);
     /// Fixed logical control/error/descriptor staging, not generated stack or RSS.
@@ -66,6 +70,24 @@ impl RootOwnedProtectedServiceChildV2 {
     ) -> Self {
         Self {
             custody: Custody(Some((Child::new(pidfd, pid, Some(lease)), slot))),
+            pid,
+            disposition: Poll::Pending,
+        }
+    }
+
+    /// Transfers all launch obligations before any fallible parent operation.
+    pub(crate) fn new_with_domain(
+        pid: Pid,
+        pidfd: Option<OwnedFd>,
+        lease: Lease,
+        domain: NativeCgroupDomainV1,
+        slot: ReapSlotV1<'static>,
+    ) -> Self {
+        Self {
+            custody: Custody(Some((
+                Child::new_with_domain(pidfd, pid, Some(lease), domain),
+                slot,
+            ))),
             pid,
             disposition: Poll::Pending,
         }
@@ -167,6 +189,8 @@ impl RootOwnedProtectedServiceChildV2 {
     }
     /// Uses the launch reservation's single prepaid emergency step. Later calls
     /// return the same disposition without any signal/wait or slot release.
+    /// Root exit with unresolved domain cleanup transfers the entire record;
+    /// it does not retire the slot or any retained input charge.
     pub fn cancel(&mut self) -> Poll {
         let Some((child, _)) = self.custody.0.as_mut() else {
             return self.disposition;

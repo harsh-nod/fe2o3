@@ -5,7 +5,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY;
-use crate::process_cleanup::{ChildCleanupV1, CleanupPollV1};
+use crate::native_cgroup::NativeCgroupDomainV1;
+use crate::process_cleanup::{ChildCleanupV1, CleanupPollV1, CleanupRecordV1};
 use crate::retained_resources::RetainedPayload;
 
 #[path = "process_reaper_native.rs"]
@@ -42,7 +43,7 @@ pub enum LegacyCleanupReservationErrorV1 {
 
 struct ReapCellV1 {
     state: AtomicU8,
-    child: Mutex<Option<ChildCleanupV1>>,
+    child: Mutex<Option<CleanupRecordV1>>,
     retained: Mutex<Option<RetainedPayload>>,
     retained_storage: AtomicUsize,
 }
@@ -132,7 +133,7 @@ impl DeferredReaperV1 {
             return;
         }
         let mut child = cell.child.lock().unwrap_or_else(|error| error.into_inner());
-        let next_state = match child.as_mut().map(ChildCleanupV1::step) {
+        let next_state = match child.as_mut().map(CleanupRecordV1::step) {
             Some(CleanupPollV1::Pending) => None,
             Some(CleanupPollV1::Reaped) => {
                 let terminal = child.take();
@@ -166,11 +167,21 @@ impl ReapSlotV1<'_> {
 
     /// Transfers complete unresolved custody into this slot without further I/O.
     pub fn defer(mut self, child: ChildCleanupV1) {
+        self.install(CleanupRecordV1::Child(child));
+    }
+
+    /// Retains a pre-clone domain and the original inputs/capacity on uncertainty.
+    /// The caller must establish that no child was created for this reservation.
+    pub(crate) fn defer_domain(mut self, domain: NativeCgroupDomainV1) {
+        self.install(CleanupRecordV1::unspawned_domain(domain));
+    }
+
+    fn install(&mut self, record: CleanupRecordV1) {
         *self
             .cell
             .child
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(child);
+            .unwrap_or_else(|error| error.into_inner()) = Some(record);
         self.cell.state.store(DEFERRED, Ordering::Release);
         self.armed = false;
     }

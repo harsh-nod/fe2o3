@@ -60,6 +60,10 @@ impl<'a> FakeSyscallsV1<'a> {
 }
 
 impl CleanupSyscallsV1<DropProbeV1<'_>> for FakeSyscallsV1<'_> {
+    fn step_domain(&mut self, _: &mut ()) -> CleanupPollV1 {
+        panic!("no-domain fixture must not perform domain operations");
+    }
+
     fn kill(&mut self, pidfd: &DropProbeV1<'_>) -> rustix::io::Result<()> {
         assert!(std::ptr::eq(pidfd.0, self.expected_pidfd));
         self.kills += 1;
@@ -524,4 +528,311 @@ fn shared_ownership_loss_notification_preserves_send_and_sync() {
     assert_eq!(observation.last_errno(), Some(Errno::CHILD));
     assert_eq!(owner.step(), CleanupPollV1::Quarantined);
     assert_eq!(owner.last_errno(), Some(Errno::CHILD));
+}
+
+// This schedule drives the private generic state machine only. It cannot
+// construct a native domain, submit a pool record, or certify a real root wait.
+type DomainCustodyV1<'a> = CleanupCustodyV1<DropProbeV1<'a>, DropProbeV1<'a>, DropProbeV1<'a>>;
+
+struct DomainScheduleV1<'a> {
+    root: FakeSyscallsV1<'a>,
+    domain: &'a Cell<usize>,
+    polls: VecDeque<CleanupPollV1>,
+    steps: usize,
+}
+
+impl<'a> DomainScheduleV1<'a> {
+    fn new(
+        drops: &'a ResourceDropsV1,
+        domain: &'a Cell<usize>,
+        root: impl IntoIterator<Item = CallV1>,
+        polls: impl IntoIterator<Item = CleanupPollV1>,
+    ) -> Self {
+        Self {
+            root: FakeSyscallsV1::new(drops, root),
+            domain,
+            polls: polls.into_iter().collect(),
+            steps: 0,
+        }
+    }
+
+    fn assert_finished(&self, kills: usize, waits: usize, steps: usize) {
+        self.root.assert_finished(kills, waits);
+        assert!(self.polls.is_empty());
+        assert_eq!(self.steps, steps);
+    }
+}
+
+impl CleanupSyscallsV1<DropProbeV1<'_>, DropProbeV1<'_>> for DomainScheduleV1<'_> {
+    fn kill(&mut self, fd: &DropProbeV1<'_>) -> rustix::io::Result<()> {
+        self.root.kill(fd)
+    }
+
+    fn wait_exited_nohang(
+        &mut self,
+        fd: &DropProbeV1<'_>,
+    ) -> rustix::io::Result<Option<CleanupWaitV1>> {
+        self.root.wait_exited_nohang(fd)
+    }
+
+    fn step_domain(&mut self, domain: &mut DropProbeV1<'_>) -> CleanupPollV1 {
+        assert!(std::ptr::eq(domain.0, self.domain));
+        self.steps += 1;
+        self.polls.pop_front().expect("unexpected domain step")
+    }
+}
+
+fn domain_custody<'a>(drops: &'a ResourceDropsV1, domain: &'a Cell<usize>) -> DomainCustodyV1<'a> {
+    CleanupCustodyV1::with_domain(
+        Some(DropProbeV1(&drops.pidfd)),
+        Some(DropProbeV1(&drops.spawn_lease)),
+        DropProbeV1(domain),
+    )
+}
+
+#[test]
+fn root_reap_retains_lease_until_domain_completion_without_repeating_root_io() {
+    for foreground_wait in [false, true] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner = domain_custody(&drops, &domain);
+        let root = if foreground_wait {
+            owner.terminal_reaped();
+            Vec::new()
+        } else {
+            vec![
+                CallV1::Kill(Err(Errno::PERM)),
+                CallV1::Wait(Ok(Some(CleanupWaitV1::Terminal))),
+            ]
+        };
+        let mut syscalls = DomainScheduleV1::new(
+            &drops,
+            &domain,
+            root,
+            [CleanupPollV1::Pending, CleanupPollV1::Reaped],
+        );
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+        assert_eq!(owner.phase, CleanupPhaseV1::Reaped);
+        assert!(!owner.complete());
+        assert!(owner.spawn_lease.is_some());
+        assert_eq!(
+            (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+            (0, 0, 0)
+        );
+        // A later observation must not turn our consumed wait into ECHILD custody.
+        owner.ownership_lost();
+        assert!(!owner.ownership_lost.load(Ordering::Acquire));
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Reaped);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Reaped);
+        assert_eq!(drops.spawn_lease.get(), 1);
+        assert_eq!(domain.get(), 0);
+        let root_calls = usize::from(!foreground_wait);
+        syscalls.assert_finished(root_calls, root_calls, 2);
+        drop(owner);
+        assert_eq!(drops.pidfd.get(), 1);
+        assert_eq!(domain.get(), 1);
+    }
+}
+
+#[test]
+fn domain_completion_does_not_substitute_for_consuming_root_wait() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner = domain_custody(&drops, &domain);
+    let mut syscalls = DomainScheduleV1::new(
+        &drops,
+        &domain,
+        [
+            CallV1::Kill(Ok(())),
+            CallV1::Wait(Ok(None)),
+            CallV1::Wait(Ok(Some(CleanupWaitV1::Terminal))),
+        ],
+        [CleanupPollV1::Reaped],
+    );
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+    assert!(!owner.complete());
+    assert_eq!(domain.get(), 0);
+    assert_eq!(drops.spawn_lease.get(), 0);
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Reaped);
+    syscalls.assert_finished(1, 2, 1);
+    drop(owner);
+    assert_eq!((drops.pidfd.get(), drops.spawn_lease.get()), (1, 1));
+    assert_eq!(domain.get(), 1);
+}
+
+#[test]
+fn domain_quarantine_stops_all_io_and_survives_root_terminal_notification() {
+    for root_terminal in [false, true] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner = domain_custody(&drops, &domain);
+        let mut syscalls = DomainScheduleV1::new(
+            &drops,
+            &domain,
+            [
+                CallV1::Kill(Ok(())),
+                CallV1::Wait(Ok(root_terminal.then_some(CleanupWaitV1::Terminal))),
+            ],
+            [CleanupPollV1::Quarantined],
+        );
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+        owner.terminal_reaped();
+        for _ in 0..3 {
+            assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+        }
+        assert!(!owner.complete());
+        syscalls.assert_finished(1, 1, 1);
+        drop(owner);
+        assert_eq!(
+            (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[test]
+fn root_ownership_loss_prevents_domain_io_and_preserves_every_owner() {
+    for foreground in [false, true] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner = domain_custody(&drops, &domain);
+        let root = if foreground {
+            owner.ownership_lost();
+            Vec::new()
+        } else {
+            vec![CallV1::Kill(Ok(())), CallV1::Wait(Err(Errno::CHILD))]
+        };
+        let mut syscalls = DomainScheduleV1::new(&drops, &domain, root, []);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+        let root_calls = usize::from(!foreground);
+        syscalls.assert_finished(root_calls, root_calls, 0);
+        drop(owner);
+        assert_eq!(
+            (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[test]
+fn confirmed_exec_releases_only_lease_while_domain_is_pending() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner = domain_custody(&drops, &domain);
+    owner.terminal_reaped();
+    owner.release_spawn_after_exec();
+    let mut syscalls = DomainScheduleV1::new(&drops, &domain, [], [CleanupPollV1::Pending]);
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+    assert_eq!(drops.spawn_lease.get(), 1);
+    assert_eq!((drops.pidfd.get(), domain.get()), (0, 0));
+    syscalls.assert_finished(0, 0, 1);
+    drop(owner);
+    assert_eq!((drops.pidfd.get(), domain.get()), (0, 0));
+}
+
+#[test]
+fn standalone_domain_has_no_child_wait_or_lease_and_requires_actual_step_completion() {
+    for terminal in [CleanupPollV1::Reaped, CleanupPollV1::Quarantined] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner: DomainCustodyV1<'_> =
+            CleanupCustodyV1::unspawned_domain(DropProbeV1(&domain));
+        assert_eq!(owner.phase, CleanupPhaseV1::Unspawned);
+        assert!(!owner.complete());
+        assert!(owner.pidfd.is_none());
+        assert!(owner.spawn_lease.is_none());
+        let mut syscalls =
+            DomainScheduleV1::new(&drops, &domain, [], [CleanupPollV1::Pending, terminal]);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+        assert_eq!(domain.get(), 0);
+        assert_eq!(owner.step(&mut syscalls), terminal);
+        assert_eq!(owner.step(&mut syscalls), terminal);
+        syscalls.assert_finished(0, 0, 2);
+        drop(owner);
+        assert_eq!(domain.get(), usize::from(terminal == CleanupPollV1::Reaped));
+    }
+}
+
+#[test]
+fn domain_pending_move_and_unwind_never_release_unresolved_custody() {
+    for standalone in [false, true] {
+        let drops = ResourceDropsV1::default();
+        let domain = Cell::new(0);
+        let mut owner = if standalone {
+            CleanupCustodyV1::unspawned_domain(DropProbeV1(&domain))
+        } else {
+            let mut owner = domain_custody(&drops, &domain);
+            owner.terminal_reaped();
+            owner
+        };
+        let mut syscalls = DomainScheduleV1::new(&drops, &domain, [], [CleanupPollV1::Pending]);
+        assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+        let mut transferred = Some(owner);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _owner = transferred.take().unwrap();
+            panic!("inert unresolved domain unwind");
+        }));
+        assert!(result.is_err());
+        assert!(transferred.is_none());
+        syscalls.assert_finished(0, 0, 1);
+        assert_eq!(
+            (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[test]
+fn missing_pidfd_with_domain_cannot_signal_or_discharge_root_custody() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner: DomainCustodyV1<'_> = CleanupCustodyV1::with_domain(
+        None,
+        Some(DropProbeV1(&drops.spawn_lease)),
+        DropProbeV1(&domain),
+    );
+    let mut syscalls = DomainScheduleV1::new(&drops, &domain, [], []);
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+    syscalls.assert_finished(0, 0, 0);
+    drop(owner);
+    assert_eq!((drops.spawn_lease.get(), domain.get()), (0, 0));
+}
+
+#[test]
+fn root_terminal_drop_before_any_domain_step_retains_all_obligations() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner = domain_custody(&drops, &domain);
+    owner.terminal_reaped();
+    owner.terminal_reaped();
+    assert!(!owner.complete());
+    drop(owner);
+    assert_eq!(
+        (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn completed_domain_still_retains_owners_if_root_wait_ownership_is_lost() {
+    let drops = ResourceDropsV1::default();
+    let domain = Cell::new(0);
+    let mut owner = domain_custody(&drops, &domain);
+    let mut syscalls = DomainScheduleV1::new(
+        &drops,
+        &domain,
+        [CallV1::Kill(Ok(())), CallV1::Wait(Ok(None))],
+        [CleanupPollV1::Reaped],
+    );
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Pending);
+    owner.ownership_lost();
+    assert_eq!(owner.step(&mut syscalls), CleanupPollV1::Quarantined);
+    syscalls.assert_finished(1, 1, 1);
+    drop(owner);
+    assert_eq!(
+        (drops.pidfd.get(), drops.spawn_lease.get(), domain.get()),
+        (0, 0, 0)
+    );
 }
