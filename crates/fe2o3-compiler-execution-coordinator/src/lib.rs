@@ -82,6 +82,7 @@ mod native_trust_v3;
 mod native_v2;
 mod native_v3;
 mod proof_helper_backing;
+mod proof_helper_launch;
 mod provisioning;
 #[allow(unsafe_code)]
 mod provisioning_entrypoint;

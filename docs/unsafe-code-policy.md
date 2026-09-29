@@ -51,6 +51,14 @@ are not shared-application APIs. The binary has one call block and the entry has
 two. Four test blocks operate only in disposable subprocesses. Numeric parent
 root and startup acknowledgments do not supply host-root provenance or proof
 authority; the actual creator and outside whole-domain custodian remain required.
+The private root-side helper adapter has one unsafe consuming launch function
+and three blocks calling existing sealed staging, retained namespace spawning,
+and exec confirmation. The complete backing enters the existing cleanup slot
+before clone. Independent exec-status EOF precedes credentialed readiness.
+Its staging test has one call block and an unsafe-function signature assertion;
+neither constructs a positive runtime or deployment. The shared send test's two
+blocks reset/unblock SIGPIPE only in a disposable subprocess, checking that the
+real send uses NOSIGNAL; no application or host signal policy is changed.
 
 The gated namespace collector in `child_namespace_report.rs` uses six unsafe
 blocks and one private syscall function because post-clone observation cannot

@@ -267,6 +267,14 @@
   "crates/fe2o3-compiler-execution-coordinator/src/native_tests.rs": {
     "block": 1
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/proof_helper_launch.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/proof_helper_launch_tests.rs": {
+    "block": 1,
+    "function": 1
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/provisioning_entrypoint.rs": {
     "block": 5
   },
