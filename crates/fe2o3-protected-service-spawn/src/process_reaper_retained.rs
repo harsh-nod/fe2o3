@@ -114,6 +114,9 @@ impl DeferredReaperV1 {
             // The original child/domain is already terminal. Failed funding or
             // readiness keeps the same payload and charge, without another wait.
             if self.fund_late_retirement(late.work).is_err() || !late.try_retire() {
+                // Publishing permits a concurrent pump to retire this slot's
+                // persistent charge. Retire our temporary backing alias first.
+                drop(late);
                 retirement.complete = true;
                 cell.state.store(TERMINAL_PENDING, Ordering::Release);
                 return;
