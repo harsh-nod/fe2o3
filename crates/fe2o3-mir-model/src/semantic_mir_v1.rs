@@ -18528,6 +18528,7 @@ fn encode_compiler_intrinsic_operation(
             | SemanticMirWireVersionV1::V32
             | SemanticMirWireVersionV1::V33
             | SemanticMirWireVersionV1::V34
+            | SemanticMirWireVersionV1::V35
             | SemanticMirWireVersionV1::V36
             | SemanticMirWireVersionV1::V37
             | SemanticMirWireVersionV1::V38
