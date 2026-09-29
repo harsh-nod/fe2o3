@@ -9,6 +9,13 @@ use fe2o3_kernel_ir::{
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 mod contextual_control;
+mod diagnostic_control_v1794;
+
+/// Temporary opt-in bounded diagnostic; confers no analysis or admission result.
+#[doc(hidden)]
+pub fn trace_original_uniformity_input_v1794(module: &Module) {
+    diagnostic_control_v1794::original(module);
+}
 
 /// Conservatively classifies SSA values and barrier control in one function.
 ///
@@ -558,6 +565,7 @@ impl<'a> Analyzer<'a> {
         self.solve();
         self.diagnose_nonuniform_helper_calls();
         self.diagnose_barriers();
+        diagnostic_control_v1794::analyzed(&self);
         self.report
     }
 

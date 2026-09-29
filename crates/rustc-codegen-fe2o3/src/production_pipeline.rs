@@ -1202,6 +1202,9 @@ impl FormalMemoryAdmittedProductionCompilation {
             )
             .map_err(ProductionPipelineError::Geometry)?;
         }
+        fe2o3_kernel_analysis::trace_original_uniformity_input_v1794(
+            admitted.semantic_kir().module(),
+        );
         let optimized = RetainedProductionTargetV30::try_lower(&admitted, target_profile)?;
         let target_module = optimized.module();
         let workgroups = exact_target_workgroup_roster_v1(target_module)?;
