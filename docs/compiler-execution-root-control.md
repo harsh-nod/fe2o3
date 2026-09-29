@@ -89,6 +89,12 @@ can replace that pair; changed content, direction or association, skipped/stale
 sequences, and sequence overflow refuse without altering state. Send failure or
 caller unwind does not clear this separately retained window.
 
+Completion now has an internal prepare/commit split. Preparation validates the
+original account and exact pending request while exclusively borrowing its empty
+reply slot. Dropping that token leaves the request pending. Its infallible commit
+only installs the already funded reply, after all enclosing fallible accounting
+scopes have succeeded. It does not retire publication custody.
+
 This is ordering, not permission to execute an operation. Authentication,
 operation-specific validation and bounded cumulative attempts remain session
 obligations. In particular the window is **not a retirement tombstone**: the
@@ -104,8 +110,15 @@ close-on-exec endpoints before exposing an issuer-side staging borrow. It checks
 the original account, Budget address, process and kernel thread on each operation.
 Closing its parent issuer alias is idempotent, but does not certify closure of
 external stage aliases or retire a compiler occurrence. The direct `launch_issuer`
-now constructs and stages this owner. Positive privileged socket
-validation remains required.
+now constructs and stages this owner. The isolated MI350 startup matrix passes
+all ten cases, including the actual measured-issuer handshake and terminal
+cleanup. This does not cover the still-separate protected compiler/proof path.
+
+Linux automatically binds a PASSCRED socket to an abstract address on its first
+send. Endpoint checks accept unnamed addresses or the exact five-lowercase-hex
+autobind shape, without treating that shape as provenance. Retained descriptors,
+exact creator/packet credentials, and the fresh measured-issuer challenge remain
+mandatory. No name is used to connect, discover, or reopen an endpoint.
 
 Its private packet methods reuse the shared transport after checking that its
 own parent issuer alias is closed and the root endpoint still has the exact
@@ -251,3 +264,6 @@ The [running-image evidence](evidence/root-issuer-image-20260929.md) records the
 direct-launch image check, lifecycle test coverage and remaining privileged gates.
 The [packet/replay evidence](evidence/root-control-replay-20260929.md) records the
 private packet operations, inert replay window and still-unexecuted socket cases.
+The [native startup evidence](evidence/root-control-startup-20260929.md) records
+the autobind correction, ten-case MI350 result, current component suites, and
+the remaining production and retirement integration gates.
