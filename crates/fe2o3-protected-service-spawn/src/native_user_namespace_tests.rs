@@ -105,6 +105,23 @@ fn identity_map_readback_rejects_nonexact_or_ambiguous_rows() {
 }
 
 #[test]
+fn identity_map_installation_does_not_require_a_seekable_control() {
+    let (reader, writer) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )
+    .unwrap();
+    let map = IdentityMap::new(10, 20).unwrap();
+    // A pipe models the control's lack of positioned writes, not namespace admission.
+    map.write_once(&writer).unwrap();
+    drop(writer);
+    let mut bytes = [0; MAP_BYTES];
+    let count = rustix::io::read(&reader, &mut bytes).unwrap();
+    assert_eq!(&bytes[..count], b"0 0 1\n10 10 1\n20 20 1\n");
+    map.require_record(&bytes[..count]).unwrap();
+    assert_eq!(rustix::io::read(&reader, &mut bytes).unwrap(), 0);
+}
+
+#[test]
 fn proc_numeric_components_are_single_bounded_c_strings() {
     for (value, expected) in [(0, c"0"), (1, c"1"), (u32::MAX, c"4294967295")] {
         let mut bytes = [0xff; 11];

@@ -614,7 +614,9 @@ impl IdentityMap {
     fn write_once(&self, fd: &OwnedFd) -> Result<()> {
         let mut bytes = [0; MAP_BYTES];
         let count = self.encode(&mut bytes)?;
-        if rustix::io::pwrite(fd, &bytes[..count], 0)
+        // A newly opened map is at offset zero; pread validation does not move
+        // that offset. proc ID-map controls reject pwrite with ESPIPE.
+        if rustix::io::write(fd, &bytes[..count])
             .map_err(|e| io("install exact child identity map", e))?
             != count
         {
