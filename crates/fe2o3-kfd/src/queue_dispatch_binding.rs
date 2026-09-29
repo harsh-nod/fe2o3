@@ -7,6 +7,14 @@
 
 #![allow(dead_code)]
 
+include!("queue_dispatch_binding/epoch_cancel_body.rs");
+
+macro_rules! dispatch_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+
 #[path = "queue_dispatch_binding/control_release.rs"]
 pub(crate) mod control_release;
 
@@ -31,6 +39,10 @@ pub(super) use pristine_abort::{
 #[cfg(test)]
 #[path = "queue_dispatch_binding/capacity_tests.rs"]
 mod capacity_tests;
+
+#[cfg(test)]
+#[path = "queue_dispatch_binding/epoch_cancel_tests.rs"]
+mod epoch_cancel_tests;
 
 use core::fmt;
 use fe2o3_resource_accounting::{HostMetadataTableV1, ResourceCreditAccountV1};
@@ -1716,15 +1728,7 @@ impl DispatchGenerationOwnerV1 {
         &mut self,
         identity: DispatchEpochIdentityV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.require_identity(
-            identity,
-            DispatchEpochPhaseV1::Reserved {
-                dispatch_generation: identity.dispatch_generation,
-                expected_roster: self.expected_roster(identity)?,
-            },
-        )?;
-        self.slots[identity.slot_index as usize].phase = DispatchEpochPhaseV1::Vacant;
-        Ok(())
+        dispatch_cancel_epoch_body!(dispatch_rust_expr, self, identity)
     }
 
     fn complete_epoch(
@@ -1795,11 +1799,7 @@ impl DispatchGenerationOwnerV1 {
     }
 
     fn ensure_not_poisoned(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        if self.poisoned {
-            Err(Gfx942DispatchBindingErrorV1::Poisoned)
-        } else {
-            Ok(())
-        }
+        dispatch_not_poisoned_body!(dispatch_rust_expr, self)
     }
 
     fn ensure_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
@@ -1820,36 +1820,14 @@ impl DispatchGenerationOwnerV1 {
         identity: DispatchEpochIdentityV1,
         expected: DispatchEpochPhaseV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.ensure_not_poisoned()?;
-        if identity.recipe_occurrence != self.recipe_occurrence
-            || Some(identity.queue) != self.recipe_queue
-            || identity.slot_index as usize >= self.slots.len()
-        {
-            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
-        }
-        let slot = self.slots[identity.slot_index as usize];
-        if slot.slot_generation != identity.slot_generation || slot.phase != expected {
-            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
-        }
-        Ok(())
+        dispatch_require_identity_body!(dispatch_rust_expr, self, identity, expected)
     }
 
     fn expected_roster(
         &self,
         identity: DispatchEpochIdentityV1,
     ) -> Result<CompletionDispatchRosterV1, Gfx942DispatchBindingErrorV1> {
-        self.ensure_not_poisoned()?;
-        let slot = self
-            .slots
-            .get(identity.slot_index as usize)
-            .ok_or(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)?;
-        match slot.phase {
-            DispatchEpochPhaseV1::Reserved {
-                dispatch_generation,
-                expected_roster,
-            } if dispatch_generation == identity.dispatch_generation => Ok(expected_roster),
-            _ => Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration),
-        }
+        dispatch_expected_roster_body!(dispatch_rust_expr, self, identity)
     }
 
     #[cfg(test)]
@@ -2023,24 +2001,33 @@ pub(super) struct TestOnlyMultiInflightDispatchOwnerV1 {
     owner: DispatchGenerationOwnerV1,
 }
 
-#[cfg(feature = "cpu-runtime-fixtures")]
+#[cfg(any(test, feature = "cpu-runtime-fixtures"))]
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct CpuDispatchOwnerSnapshotV1 {
     next_generation: u64,
     recipe_occurrence: u64,
     recipe_queue: Option<QueueKeyV1>,
+    capacity_profile: FixedDispatchCapacityProfileV1,
+    slot_storage: usize,
     slots: Vec<DispatchEpochSlotV1>,
     recycled_generation: Option<u64>,
     predecessor_detached_generation: Option<u64>,
     poisoned: bool,
 }
 
-#[cfg(feature = "cpu-runtime-fixtures")]
+#[cfg(any(test, feature = "cpu-runtime-fixtures"))]
 impl CpuDispatchOwnerSnapshotV1 {
+    #[cfg(test)]
+    pub(super) fn expect_poison_for_test(&mut self) {
+        self.poisoned = true;
+    }
+
     pub(super) fn same_custody(&self, other: &Self) -> bool {
         self.next_generation == other.next_generation
             && self.recipe_occurrence == other.recipe_occurrence
             && self.recipe_queue == other.recipe_queue
+            && self.capacity_profile == other.capacity_profile
+            && self.slot_storage == other.slot_storage
             && self.slots == other.slots
             && self.recycled_generation == other.recycled_generation
             && self.predecessor_detached_generation == other.predecessor_detached_generation
@@ -2049,12 +2036,13 @@ impl CpuDispatchOwnerSnapshotV1 {
 
 #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
 impl TestOnlyMultiInflightDispatchOwnerV1 {
-    #[cfg(feature = "cpu-runtime-fixtures")]
     pub(super) fn cpu_snapshot(&self) -> CpuDispatchOwnerSnapshotV1 {
         CpuDispatchOwnerSnapshotV1 {
             next_generation: self.owner.next_generation,
             recipe_occurrence: self.owner.recipe_occurrence,
             recipe_queue: self.owner.recipe_queue,
+            capacity_profile: self.owner.capacity_profile,
+            slot_storage: self.owner.slots.as_ptr() as usize,
             slots: self.owner.slots.iter().copied().collect(),
             recycled_generation: self.owner.recycled_generation,
             predecessor_detached_generation: self.owner.predecessor_detached_generation,

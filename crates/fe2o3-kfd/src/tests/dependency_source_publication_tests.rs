@@ -4,6 +4,7 @@ use super::runtime_completion_tests::CpuSignals;
 use super::runtime_publication_tests::{fixture, owner, restored};
 use super::*;
 use crate::queue::completion::ComputeDependencyOccurrenceIdentityV1;
+use crate::queue::dispatch_binding::CpuDispatchOwnerSnapshotV1;
 use crate::queue::dispatch_binding::TestOnlyMultiInflightDispatchOwnerV1 as DispatchOwner;
 use fe2o3_aql::{AqlCompletionObservationV1, AqlRingReservationError};
 
@@ -11,6 +12,8 @@ struct Recipe {
     owner: DispatchOwner,
     fail_publish: bool,
     fail_cancel: bool,
+    bound: Option<(DispatchEpochIdentityV1, CpuDispatchOwnerSnapshotV1)>,
+    cancellations: Vec<DispatchEpochIdentityV1>,
 }
 
 impl Recipe {
@@ -19,6 +22,8 @@ impl Recipe {
             owner: DispatchOwner::new(),
             fail_publish: false,
             fail_cancel: false,
+            bound: None,
+            cancellations: Vec::new(),
         }
     }
 
@@ -37,6 +42,7 @@ impl<const N: usize> super::super::fixed_dispatch::DependencySourceRecipeV1<N> f
     > {
         let templates = [test_completion_template(session.key, self.owner().next_generation()); N];
         let identity = self.owner().reserve_batch(session.key, &templates)?;
+        self.bound = Some((identity, self.owner.cpu_snapshot()));
         Ok((templates, identity))
     }
 
@@ -57,6 +63,7 @@ impl<const N: usize> super::super::fixed_dispatch::DependencySourceRecipeV1<N> f
         _: &mut ComputeAqlQueueSessionV1,
         identity: DispatchEpochIdentityV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.cancellations.push(identity);
         if self.fail_cancel {
             self.owner().poison();
         }
@@ -478,6 +485,149 @@ enum Fault {
     EventBind,
     DispatchPublish,
     Unwind,
+}
+
+#[test]
+fn source_terminal_rollback_preserves_exact_prefix_neighbors_and_burned_identities() {
+    for auxiliary in [false, true] {
+        for fault in [
+            Fault::EventRelease,
+            Fault::CompletionCancel,
+            Fault::DispatchCancel,
+        ] {
+            assert!(!take_dispatch_terminal_process_gate_record_v1());
+            let (mut session, lane) = fixture(auxiliary);
+            let ordinal = usize::from(auxiliary);
+            let other_lane = if auxiliary {
+                session.primary_compute_lane_v1()
+            } else {
+                ComputeAqlQueueLaneV1 {
+                    session: session.key,
+                    ordinal: 1,
+                    generation: 7,
+                }
+            };
+            let mut recipe = Recipe::new();
+            let mut other_recipe = Recipe::new();
+            let _neighbor = publish(&mut session, lane, &mut recipe, 72);
+            let _other = publish(&mut session, other_lane, &mut other_recipe, 82);
+            let untouched = owner(&session, 1 - ordinal).source_rollback_snapshot_for_test();
+            let other_dispatch = other_recipe.owner.cpu_snapshot();
+            let before = owner(&session, ordinal).state_snapshot_for_test();
+            let event_id = owner(&session, ordinal)
+                .dependency_ledger_counts_for_test()
+                .0;
+            let mut expected_dependency = session.dependency_owner.custody_snapshot_for_test();
+            let epoch = expected_dependency.1.unwrap();
+            expected_dependency.1 = Some(epoch + 1);
+            let generation = recipe.owner.next_generation();
+            recipe.fail_cancel = matches!(fault, Fault::DispatchCancel);
+            let mut expected = None;
+            let failure = session
+                .with_compute_lane_v1(lane, |selected| {
+                    submit(selected, &mut recipe, |session, packets| {
+                        assert_eq!(packets.packet_count(), 3);
+                        match fault {
+                            Fault::EventRelease => session.completion_owner.poison_owner(),
+                            Fault::CompletionCancel => session
+                                .completion_owner
+                                .invalidate_last_bound_phase_for_test(before.0),
+                            Fault::DispatchCancel => (),
+                            _ => unreachable!(),
+                        }
+                        expected =
+                            Some(session.completion_owner.source_rollback_snapshot_for_test());
+                        Err(ring_full())
+                    })
+                })
+                .unwrap()
+                .unwrap_err();
+            assert!(matches!(
+                failure,
+                Gfx942FixedDispatchSubmissionFailureV1::Terminal(_)
+            ));
+            match fault {
+                Fault::DispatchCancel => assert!(matches!(
+                    failure.into_error(),
+                    ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                        Gfx942DispatchBindingErrorV1::StaleDispatchGeneration
+                    )
+                )),
+                _ => assert!(matches!(
+                    failure.into_error(),
+                    ComputeAqlQueueSessionErrorV1::Completion(
+                        Gfx942CompletionErrorV1::StaleEventOccurrence
+                    )
+                )),
+            }
+            let release = !matches!(fault, Fault::EventRelease);
+            let cancel = matches!(fault, Fault::DispatchCancel);
+            let mut expected = expected.unwrap();
+            expected.expect_terminal_prefix(before.0, release, cancel);
+            assert_eq!(
+                owner(&session, ordinal).source_rollback_snapshot_for_test(),
+                expected
+            );
+            assert_eq!(
+                owner(&session, 1 - ordinal).source_rollback_snapshot_for_test(),
+                untouched
+            );
+            assert_eq!(other_recipe.owner.cpu_snapshot(), other_dispatch);
+            let (identity, mut expected_dispatch) = recipe.bound.take().unwrap();
+            if cancel {
+                expected_dispatch.expect_poison_for_test();
+                assert_eq!(recipe.cancellations, [identity]);
+            } else {
+                assert!(recipe.cancellations.is_empty());
+            }
+            assert_eq!(recipe.owner.cpu_snapshot(), expected_dispatch);
+            assert_eq!(recipe.owner.next_generation(), generation + 1);
+            assert_eq!(recipe.owner.live_epoch_count(), 2);
+            assert_eq!(
+                owner(&session, ordinal).state_snapshot_for_test(),
+                (before.0 + 1, before.1 - if cancel { 0 } else { 3 })
+            );
+            assert_eq!(
+                owner(&session, ordinal).dependency_ledger_counts_for_test(),
+                (event_id + 3, if release { 3 } else { 6 }, 0)
+            );
+            assert_eq!(
+                session.dependency_owner.custody_snapshot_for_test(),
+                expected_dependency
+            );
+            assert!(session.terminal_poisoned);
+            assert!(take_dispatch_terminal_process_gate_record_v1());
+            let terminal_dependency = session.dependency_owner.custody_snapshot_for_test();
+            for rejected_lane in [lane, other_lane, lane] {
+                let error = session
+                    .with_compute_lane_v1(rejected_lane, |_| panic!("terminal lane cannot run"))
+                    .unwrap_err();
+                assert!(matches!(
+                    error,
+                    ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                        Gfx942DispatchBindingErrorV1::Poisoned
+                    )
+                ));
+                assert_eq!(
+                    owner(&session, ordinal).source_rollback_snapshot_for_test(),
+                    expected
+                );
+                assert_eq!(
+                    owner(&session, 1 - ordinal).source_rollback_snapshot_for_test(),
+                    untouched
+                );
+                assert_eq!(recipe.owner.cpu_snapshot(), expected_dispatch);
+                assert_eq!(other_recipe.owner.cpu_snapshot(), other_dispatch);
+                assert_eq!(
+                    session.dependency_owner.custody_snapshot_for_test(),
+                    terminal_dependency
+                );
+                assert_eq!(recipe.cancellations.len(), usize::from(cancel));
+            }
+            restored(&session);
+            // CPU-only owners retain terminal metadata; this is not native disposal.
+        }
+    }
 }
 
 #[test]

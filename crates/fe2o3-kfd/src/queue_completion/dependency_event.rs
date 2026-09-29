@@ -15,6 +15,10 @@ use std::collections::{HashMap, HashSet};
 include!("release_pin_budget_body.rs");
 include!("batch_event_release_body.rs");
 
+#[cfg(test)]
+#[path = "source_rollback_test_support.rs"]
+mod source_rollback_test_support;
+
 use fe2o3_aql::{AMD_SIGNAL_BYTES_V1, AqlDependencySignalObservationV1};
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 
