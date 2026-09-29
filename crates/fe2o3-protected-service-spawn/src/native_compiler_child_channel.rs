@@ -22,14 +22,15 @@ pub struct Transfer {
     pub parent_pid: u32,
 }
 
-/// Encodes only positive Linux PID values; establishes no identity or authority.
+/// Encodes distinct positive Linux PIDs; establishes no identity or authority.
 /// Fixed arrays keep this helper allocation-, panic- and destructor-free for the
 /// raw child. Caller accounts for the fixed record work and storage.
-pub fn encode(child_pid: u32, parent_pid: u32) -> Option<[u8; TRANSFER_BYTES]> {
+pub fn encode_transfer(child_pid: u32, parent_pid: u32) -> Option<[u8; TRANSFER_BYTES]> {
     if child_pid == 0
         || child_pid > i32::MAX as u32
         || parent_pid == 0
         || parent_pid > i32::MAX as u32
+        || child_pid == parent_pid
     {
         return None;
     }
@@ -44,13 +45,13 @@ pub fn encode(child_pid: u32, parent_pid: u32) -> Option<[u8; TRANSFER_BYTES]> {
     ])
 }
 
-/// Checks exact magic, version, fixed destination and positive Linux PID ranges.
+/// Checks exact magic, version, fixed destination and distinct positive Linux PIDs.
 /// Length, SCM_RIGHTS, SCM_CREDENTIALS, peer identity and original pidfd custody
 /// remain separate receiver obligations. Caller funds this fixed 24-byte scan.
 pub fn decode(bytes: &[u8; TRANSFER_BYTES]) -> Option<Transfer> {
     let child_pid = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
     let parent_pid = u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
-    if encode(child_pid, parent_pid)? != *bytes {
+    if encode_transfer(child_pid, parent_pid)? != *bytes {
         return None;
     }
     Some(Transfer {
@@ -60,12 +61,9 @@ pub fn decode(bytes: &[u8; TRANSFER_BYTES]) -> Option<Transfer> {
 }
 
 /// Compares the canonical wire with expected inert PIDs; admits no authority.
-pub fn matches(bytes: &[u8; TRANSFER_BYTES], child_pid: u32, parent_pid: u32) -> bool {
-    encode(child_pid, parent_pid).as_ref() == Some(bytes)
+pub fn transfer_matches(bytes: &[u8; TRANSFER_BYTES], child_pid: u32, parent_pid: u32) -> bool {
+    encode_transfer(child_pid, parent_pid).as_ref() == Some(bytes)
 }
-
-pub use encode as encode_transfer;
-pub use matches as transfer_matches;
 
 // Three shape observations, one high-FD duplicate and its eventual/partial close.
 pub(crate) const STAGING_WORK: usize = 5 * (1024 + 64) + 256;

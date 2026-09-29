@@ -186,8 +186,9 @@ delivered transfer, so receipt or READY alone must never confer authority.
 The root-level `compiler_service_channel` module exports `TRANSFER_BYTES`,
 `COMPILER_SERVICE_FD`, `encode_transfer(child_pid, parent_pid)` and
 `transfer_matches(&wire, child_pid, parent_pid)`. Encoding returns `Option` and
-refuses zero or out-of-range Linux PIDs. These are inert, bounded wire helpers,
-also available as `native_spawn::compiler_child_channel`; decoding a `Transfer`
+refuses zero, out-of-range or equal child/parent Linux PIDs. These are inert,
+bounded wire helpers, also available as `native_spawn::compiler_child_channel`;
+decoding a `Transfer`
 does not create process or endpoint authority. The root coordinator separately
 receives with `launch_io::receive_ready_from::<24, true, _>`, binds actual
 SCM_CREDENTIALS and service SO_PEERCRED to admitted credentials and its retained

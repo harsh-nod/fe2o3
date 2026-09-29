@@ -2,7 +2,7 @@
 //! cleanup: exit closes all partially constructed descriptors without retry.
 
 use crate::PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1 as FLOOR;
-use crate::native_spawn::compiler_child_channel::{TRANSFER_BYTES, encode};
+use crate::native_spawn::compiler_child_channel::{TRANSFER_BYTES, encode_transfer};
 use std::{mem::size_of, os::fd::RawFd, ptr};
 
 // Exact Linux x86-64 SCM_RIGHTS ABI, including CMSG_SPACE's trailing alignment.
@@ -74,7 +74,7 @@ pub(super) unsafe fn create_and_transfer(control: RawFd, expected_parent: i32) -
         if pid <= 0 || pid > i64::from(i32::MAX) || parent != i64::from(expected_parent) {
             return -1;
         }
-        let Some(mut payload) = encode(pid as u32, parent as u32) else {
+        let Some(mut payload) = encode_transfer(pid as u32, parent as u32) else {
             return -1;
         };
         let mut peers = [-1_i32; 2];
