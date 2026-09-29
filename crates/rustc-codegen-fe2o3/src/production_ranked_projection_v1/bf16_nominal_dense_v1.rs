@@ -842,3 +842,16 @@ fn replay(
 #[cfg(test)]
 #[path = "bf16_nominal_dense_v1_tests.rs"]
 mod tests;
+
+// Inert original FIFO pass DATA only; no new genuine/ordinary route.
+#[allow(dead_code)]
+#[path = "bf16_nominal_retained_capability_fifo_v1.rs"]
+mod retained_capability_fifo_v1;
+
+// Retained original-order two-pass observation only; no ordinary/genuine route.
+#[path = "bf16_nominal_retained_capability_driver_v1.rs"]
+mod retained_capability_driver_v1;
+#[allow(unused_imports)]
+pub(super) use retained_capability_driver_v1::{
+    CompletedNominalFifoDriverV1, RetainedNominalCapabilityDriverV1,
+};

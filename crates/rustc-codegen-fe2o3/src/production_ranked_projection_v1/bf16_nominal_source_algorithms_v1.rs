@@ -628,3 +628,22 @@ mod retained_origin_worklist;
 pub(super) use retained_origin_worklist::{
     RetainedExactOriginWorklistV1, retained_origin_worklist_frame_v1,
 };
+
+#[path = "bf16_nominal_retained_local_provenance_v1.rs"]
+mod retained_local_provenance;
+#[allow(unused_imports)]
+pub(super) use retained_local_provenance::{
+    RetainedLocalProvenanceV1, retained_provenance_frame_v1,
+};
+
+#[path = "bf16_nominal_retained_allocation_contracts_v1.rs"]
+mod retained_allocation_contracts;
+#[allow(unused_imports)]
+pub(super) use retained_allocation_contracts::{
+    RetainedAllocationContractsV1, retained_allocation_frame_v1,
+};
+
+#[path = "bf16_nominal_retained_constant_locals_v1.rs"]
+mod retained_constants;
+#[allow(unused_imports)]
+pub(super) use retained_constants::{RetainedConstantLocalsV1, retained_constant_frame_v1};

@@ -1608,3 +1608,124 @@ See [qualification and limits](retained-exclusive-carrier-qualification-20260928
 This is an isolated analysis component, not a genuine source checkpoint.
 Provenance/allocation/capability integration, authenticated continuation,
 argument writers and production admission remain open. Broad exits remain 6/18.
+
+## Retained local-provenance component — 2026-09-28
+
+The carrier owner, three result tables, three edge tables and three distinct
+FIFO worklists now remain attached through partial failures. All 11 controls
+and full 356-model / 3,256-backend regressions passed (197 ignored), plus builds.
+See [qualification and limits](retained-local-provenance-qualification-20260928.md).
+
+This component supports a later BeforeAllocation continuation, not the earlier
+Option → enum → scalar BeforeProvenance boundary. Genuine source connections,
+allocation/capability integration and production admission remain open.
+Broad accepted exits remain 6/18.
+
+## Authenticated Option → enum → scalar checkpoint — 2026-09-28
+
+The separate source-owned entry now reaches BeforeProvenance with actual scalar
+analysis on the original owner and budget. All 13 new controls and full
+356-model / 3,269-backend regressions passed (197 ignored), plus builds and five
+actual Rust-source sessions; the two positive sources completed 36 numerical
+helper runs. Complete scalar tables match independent unchanged original APIs.
+See [qualification and limits](option-enum-scalar-preparation-qualification-20260928.md).
+
+This stops before provenance and does not change the ordinary production route.
+Later provenance/allocation/capability integration, argument writers and
+production admission remain open. Broad accepted exits remain 6/18.
+
+## Authenticated Option → enum → scalar → provenance checkpoint — 2026-09-28
+
+A separate genuine source-owned entry now reaches BeforeAllocation using the
+actual retained scalar inputs and original budget. All 15 new controls and
+full 356-model / 3,284-backend regressions passed (197 ignored), plus builds and
+five actual Rust-source sessions. The two positive sources completed 36
+numerical helper runs. All provenance DATA matches independent original APIs.
+See [qualification and limits](option-enum-scalar-provenance-preparation-qualification-20260928.md).
+
+This stops before allocation contracts. Capability preparation, later writers,
+joint bounds and ordinary production admission remain open.
+Broad accepted exits remain 6/18.
+
+## Authenticated allocation-contract checkpoint — 2026-09-28
+
+The private source-owned prefix now reaches BeforeCapabilities: actual Option,
+enum, scalar, provenance and allocation analysis share the original owner and
+budget. All 14 component and 17 checkpoint controls passed, with 356 model and
+3,315 backend tests (197 ignored), builds and five actual Rust-source sessions.
+The two positive sources completed 36 numerical helper runs.
+See [qualification and limits](option-enum-scalar-provenance-allocation-preparation-qualification-20260928.md).
+
+Capability preparation, the earlier constant-analysis position, later argument
+writers, joint bounds and ordinary production admission remain open.
+Broad accepted exits remain 6/18.
+
+## Retained original-order capability FIFO — 2026-09-28
+
+The private single-pass capability component now preserves duplicate FIFO
+visits, sorted successors, original semantic charge order and attached partial
+state through failure. All 11 controls and the full 356-model / 3,326-backend
+regression passed (197 ignored), plus authority/policy tests and builds.
+See [qualification and limits](retained-capability-fifo-qualification-20260928.md).
+
+This is not the genuine two-pass capability driver or production admission.
+Actual nominal-query integration, earlier constants and the outer shared-owner
+continuation remain open. Broad accepted exits remain 6/18.
+
+## Retained nominal capability driver — 2026-09-28
+
+The private two-pass driver now compiles and preserves both FIFO owners,
+actual no-pipeline scans, the real nominal-query call path, source-index replay
+and partial effect/read-binding storage. All 11 helper/source controls and the
+356-model / 3,337-backend regression passed (197 ignored), plus builds.
+See [qualification and limits](retained-capability-driver-qualification-20260928.md).
+
+These helper tests do not establish genuine full-driver execution.
+The actual-source shared-owner join, earlier whole-root analyses, argument
+writers, joint bounds and production admission remain open.
+Broad accepted exits remain 6/18.
+
+## Debugger startup input-closure checkpoint — 2026-09-28
+
+Fresh source/helper generation, CPU tests, five benign supervision cases and
+the complete 1,024-file selection passed. The selected symlink refusal is
+resolved with three exact alias rules; all 879 duties are retained.
+See [qualification and limits](debugger-startup-input-closure-qualification-20260928.md).
+
+This is not debugger startup, a loaded-file closure or physical GPU capture.
+V4 and the remaining native producer/adapter work remain open.
+Broad accepted exits remain 6/18.
+
+## Retained original constant analysis — 2026-09-28
+
+The private constants component now retains definitions, visited states,
+resolved values and reusable alias paths on partial failure. All 12 controls,
+356 model tests, 3,349 backend tests (197 ignored), authority/policy checks and
+builds passed. See [qualification](retained-constant-analysis-qualification-20260928.md).
+
+The genuine actual-source capability join remains separate work, as do earlier
+whole-root analyses, argument writers, joint bounds and production admission.
+Broad accepted exits remain 6/18.
+
+## Supervised debugger startup — 2026-09-28
+
+The fixed MI2 startup now passes under owned service supervision, with all
+1,024 selected inputs revalidated and both process censuses within their
+unchanged bounds. Root checked cleanup and 193 loaded-file observations.
+See [qualification and limits](debugger-supervised-startup-qualification-20260928.md).
+
+The earlier failed census is preserved. A loaded-file profile still needs
+separate review; no inferior, attach, dispatch or physical register capture ran.
+V4/U4 remain open. Broad accepted exits remain 6/18.
+
+## Retained complete-CFG induction preparation — 2026-09-28
+
+The new model owner retains partial CFG, inventory, reachability, certificates
+and full meter errors through refusal/unwind without changing the old report
+APIs. All 12 new controls, 368 model tests, 3,349 backend tests (197 ignored),
+authority/policy checks and builds passed.
+See [qualification and limits](retained-induction-analysis-qualification-20260928.md).
+
+This is not the canonical compiler-ledger connection or a genuine Rust loop
+proof. Whole-root preparation and production admission remain unfinished;
+broad accepted exits remain 6/18.
