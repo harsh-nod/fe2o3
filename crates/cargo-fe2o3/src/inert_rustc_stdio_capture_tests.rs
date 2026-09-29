@@ -104,6 +104,130 @@ fn owned_stdio_survives_reuse_drop_and_exec() {
     parent_custody_keeps_the_original_capture();
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn binding_wrapper_query_preserves_entry_stdio() {
+    use crate::pinned_executable::PinnedExecutable;
+    use std::path::Path;
+
+    const SENTINEL: &str = "FE2O3_WRAPPER_QUERY_STDIO_TEST";
+    const TEST: &str =
+        "inert_rustc_invocation_capture::stdio::tests::binding_wrapper_query_preserves_entry_stdio";
+    if std::env::var_os(SENTINEL).is_none() {
+        let rustc = PinnedExecutable::open(Path::new("/bin/echo")).unwrap();
+        let digest = rustc
+            .sha256()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env_clear()
+            .env(SENTINEL, "1")
+            .env(crate::EXPECTED_RUSTC_SHA256_ENV, digest);
+        // SAFETY: the child hook only marks nonstdio descriptors CLOEXEC,
+        // excluding unrelated inherited handles from this isolated fixture.
+        unsafe {
+            command.pre_exec(crate::application_exec::protect_all_nonstdio_descriptors);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "wrapper query fixture failed: {:?}\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
+    // Ordinary wrapper mechanics only: the sealed echo image supplies a query
+    // response, with no compiler capabilities, managed attempt or authority.
+    let image = PinnedExecutable::open(Path::new("/bin/echo"))
+        .unwrap()
+        .seal_executable_image()
+        .unwrap();
+    let source = image.try_clone_for_transfer().unwrap();
+    let descriptor = rustix::io::fcntl_dupfd_cloexec(&source, crate::RUSTC_CHILD_FD).unwrap();
+    assert_eq!(descriptor.as_raw_fd(), crate::RUSTC_CHILD_FD);
+    let argv = vec![
+        format!("/proc/self/fd/{}", crate::RUSTC_CHILD_FD).into(),
+        "-vV".into(),
+    ];
+    let sources: [_; 3] = std::array::from_fn(|_| private_stream());
+    let expected = sources.each_ref().map(|source| {
+        let stat = rustix::fs::fstat(source).unwrap();
+        (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_mode,
+            rustix::fs::fcntl_getfl(source).unwrap(),
+        )
+    });
+    let saved = SavedStdio::new();
+    let flags = [FdFlags::CLOEXEC, FdFlags::empty(), FdFlags::empty()];
+    for (slot, source) in sources.iter().enumerate() {
+        install(source, slot as RawFd, flags[slot]).unwrap();
+    }
+    // Exercise the actual wrapper entry and prepared Command, not the installer helper.
+    let status = crate::binding_wrapper::run(argv);
+    let observed: [_; 3] = std::array::from_fn(|slot| -> io::Result<_> {
+        // SAFETY: scalar inspection also permits a missing slot on regression.
+        let descriptor_flags = unsafe { libc::fcntl(slot as RawFd, libc::F_GETFD) };
+        if descriptor_flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the preceding probe confirmed presence; only this isolated
+        // test controls the standard slots, and no mutation occurs during use.
+        let fd = unsafe { BorrowedFd::borrow_raw(slot as RawFd) };
+        let stat = rustix::fs::fstat(fd)?;
+        Ok((
+            (
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_mode,
+                rustix::fs::fcntl_getfl(fd)?,
+            ),
+            descriptor_flags,
+            rustix::fs::seek(fd, rustix::fs::SeekFrom::Current(0))?,
+        ))
+    });
+    // Restore harness streams before reporting failures or inspecting output.
+    drop(saved);
+    assert!(status.unwrap().success());
+    for (slot, observation) in observed.into_iter().enumerate() {
+        let (object_and_status, descriptor_flags, offset) = observation.unwrap();
+        let expected_length = if slot == 1 { 4 } else { 0 };
+        assert_eq!(object_and_status, expected[slot]);
+        assert_eq!(descriptor_flags, flags[slot].bits() as i32);
+        assert_eq!(offset, expected_length);
+        assert_eq!(
+            rustix::fs::seek(&sources[slot], rustix::fs::SeekFrom::Current(0)).unwrap(),
+            expected_length,
+        );
+        assert_eq!(
+            rustix::fs::fstat(&sources[slot]).unwrap().st_size,
+            expected_length as i64
+        );
+        assert_eq!(
+            rustix::fs::fcntl_getfl(&sources[slot]).unwrap(),
+            expected[slot].3
+        );
+        assert_eq!(
+            rustix::io::fcntl_getfd(&sources[slot]).unwrap(),
+            FdFlags::CLOEXEC
+        );
+    }
+    let mut bytes = [0_u8; 8];
+    let count = rustix::io::pread(&sources[1], &mut bytes, 0).unwrap();
+    assert_eq!(&bytes[..count], b"-vV\n");
+    assert_eq!(
+        rustix::fs::seek(&sources[1], rustix::fs::SeekFrom::Current(0)).unwrap(),
+        4,
+    );
+}
+
 fn command_preserves_capture(states: [u8; 3]) {
     let (capture, sources) = capture(states);
     let saved = SavedStdio::new();
