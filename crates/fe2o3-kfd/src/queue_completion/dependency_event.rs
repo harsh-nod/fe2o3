@@ -12,6 +12,8 @@
 use core::fmt;
 use std::collections::{HashMap, HashSet};
 
+include!("release_pin_budget_body.rs");
+
 use fe2o3_aql::{AMD_SIGNAL_BYTES_V1, AqlDependencySignalObservationV1};
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 
@@ -668,6 +670,13 @@ impl CompletionSignalArenaOwnerV1 {
                     return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
                 }
             }
+            validate_release_pin_budgets(
+                events.iter().map(|event| {
+                    let index = event.exact.slot.index;
+                    (index, self.slots[index as usize].event_pins)
+                }),
+                Gfx942CompletionErrorV1::StaleEventOccurrence,
+            )?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -768,6 +777,13 @@ impl CompletionSignalArenaOwnerV1 {
                     return Err(Gfx942CompletionErrorV1::StaleDependencyReader);
                 }
             }
+            validate_release_pin_budgets(
+                retained.iter().map(|(_, lease)| {
+                    let index = lease.source.slot.index;
+                    (index, self.slots[index as usize].native_reader_pins)
+                }),
+                Gfx942CompletionErrorV1::StaleDependencyReader,
+            )?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -836,6 +852,14 @@ impl CompletionSignalArenaOwnerV1 {
                     return Err(Gfx942CompletionErrorV1::StaleDependencyReader);
                 }
             }
+            validate_release_pin_budgets(
+                retained.iter().map(|(_, lease)| {
+                    let index = lease.source.slot.index;
+                    let record = &self.slots[index as usize];
+                    (index, record.event_pins.min(record.native_reader_pins))
+                }),
+                Gfx942CompletionErrorV1::StaleDependencyReader,
+            )?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -961,6 +985,42 @@ impl CompletionSignalArenaOwnerV1 {
         }
         Ok(())
     }
+}
+
+// Call only after authenticating the whole roster. Repeated indices observe the
+// same immutable slot budget; scratch changes never alter owner or token custody.
+fn validate_release_pin_budgets(
+    budgets: impl ExactSizeIterator<Item = (u32, u32)>,
+    insufficient: Gfx942CompletionErrorV1,
+) -> Result<(), Gfx942CompletionErrorV1> {
+    if budgets.len() <= 1 {
+        return validate_single_release_pin_budget(budgets, insufficient);
+    }
+    let mut remaining = HashMap::new();
+    remaining
+        .try_reserve(budgets.len())
+        .map_err(|_| Gfx942CompletionErrorV1::DependencyLedgerAllocation)?;
+    validate_reserved_release_pin_budgets(budgets, remaining, insufficient)
+}
+
+fn validate_single_release_pin_budget(
+    mut budgets: impl Iterator<Item = (u32, u32)>,
+    insufficient: Gfx942CompletionErrorV1,
+) -> Result<(), Gfx942CompletionErrorV1> {
+    completion_single_release_pin_budget_body!(completion_rust_expr, budgets, insufficient)
+}
+
+fn validate_reserved_release_pin_budgets(
+    mut budgets: impl Iterator<Item = (u32, u32)>,
+    mut remaining: HashMap<u32, u32>,
+    insufficient: Gfx942CompletionErrorV1,
+) -> Result<(), Gfx942CompletionErrorV1> {
+    completion_reserved_release_pin_budgets_body!(
+        completion_rust_expr,
+        budgets,
+        remaining,
+        insufficient
+    )
 }
 
 fn validate_logical_identity(

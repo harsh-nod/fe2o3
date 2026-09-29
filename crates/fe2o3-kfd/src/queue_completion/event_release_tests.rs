@@ -31,6 +31,299 @@ mod release_tests {
         owner.ensure_releasable().unwrap();
     }
 
+    struct AliasedRoster {
+        owner: CompletionSignalArenaOwnerV1,
+        neighbor: CompletionBatchRetentionV1<1>,
+        neighbor_event: Gfx942ComputeEventOccurrenceV1,
+        batch: Gfx942CompletionBatchV1<1>,
+        retained: Gfx942ComputeDependencyReaderBatchV1,
+    }
+
+    fn aliased_roster() -> AliasedRoster {
+        let mut owner = owner();
+        let (neighbor, neighbor_event) = unbound(&mut owner);
+        let (retention, first) = unbound(&mut owner);
+        let second = owner
+            .record_unbound_compute_event(SESSION, SOURCE_EPOCH, &retention, 0)
+            .unwrap();
+        let batch = owner.mark_published(retention, 101).unwrap();
+        let first = owner
+            .bind_compute_event_after_publication(first, &batch, 0)
+            .unwrap();
+        let second = owner
+            .bind_compute_event_after_publication(second, &batch, 0)
+            .unwrap();
+        let first = owner
+            .retain_compute_dependency_reader(first, SESSION, DEPENDENT_EPOCH)
+            .unwrap();
+        let second = owner
+            .retain_compute_dependency_reader(second, SESSION, DEPENDENT_EPOCH)
+            .unwrap();
+        assert_ne!(first.0.event_id, second.0.event_id);
+        assert_ne!(first.1.lease_id, second.1.lease_id);
+        assert_eq!(first.0.exact.slot, second.0.exact.slot);
+        assert_eq!(first.0.exact.slot.index, 1);
+        assert_eq!(owner.slots[1].event_pins, 2);
+        assert_eq!(owner.slots[1].native_reader_pins, 2);
+        AliasedRoster {
+            owner,
+            neighbor,
+            neighbor_event,
+            batch,
+            retained: vec![second, first],
+        }
+    }
+
+    type PairFacts = (
+        u64,
+        ExactCompletionOccurrenceV1,
+        u64,
+        u64,
+        u64,
+        ExactCompletionOccurrenceV1,
+    );
+
+    fn pair_facts(retained: &Gfx942ComputeDependencyReaderBatchV1) -> Vec<PairFacts> {
+        retained
+            .iter()
+            .map(|(event, lease)| {
+                (
+                    event.event_id,
+                    event.exact,
+                    lease.lease_id,
+                    lease.event_id,
+                    lease.dependent_acceptance_epoch,
+                    lease.source,
+                )
+            })
+            .collect()
+    }
+
+    fn remove_expected_reader(
+        expected: &mut Snapshot,
+        lease: &Gfx942ComputeDependencyReaderLeaseV1,
+    ) {
+        expected.readers.remove(&DependencyReaderUseKeyV1 {
+            event_id: lease.event_id,
+            dependent_acceptance_epoch: lease.dependent_acceptance_epoch,
+        });
+        expected.custody.slots[lease.source.slot.index as usize].native_reader_pins -= 1;
+    }
+
+    fn finish_aliases(
+        owner: &mut CompletionSignalArenaOwnerV1,
+        neighbor: CompletionBatchRetentionV1<1>,
+        neighbor_event: Gfx942ComputeEventOccurrenceV1,
+        batch: Gfx942CompletionBatchV1<1>,
+    ) {
+        owner.release_compute_event(neighbor_event).unwrap();
+        owner.cancel_bound_retaining(neighbor).unwrap();
+        finish(owner, batch);
+    }
+
+    #[test]
+    fn batch_release_aggregate_refusal_is_atomic_and_valid_aliases_succeed() {
+        for case in 0..4 {
+            let AliasedRoster {
+                mut owner,
+                neighbor,
+                neighbor_event,
+                batch,
+                retained,
+            } = aliased_roster();
+            if matches!(case, 0 | 2) {
+                owner.slots[1].event_pins = 1;
+            } else {
+                owner.slots[1].native_reader_pins = 1;
+            }
+            let before = snapshot(&owner);
+            if case == 0 {
+                let (events, readers): (Vec<_>, Vec<_>) = retained.into_iter().unzip();
+                let facts = events
+                    .iter()
+                    .map(|e| (e.event_id, e.exact))
+                    .collect::<Vec<_>>();
+                let storage = (events.as_ptr(), events.capacity());
+                let (error, events) = owner.release_compute_event_batch(events).unwrap_err();
+                assert_eq!(error, Gfx942CompletionErrorV1::StaleEventOccurrence);
+                assert_eq!((events.as_ptr(), events.capacity()), storage);
+                assert_eq!(
+                    events
+                        .iter()
+                        .map(|e| (e.event_id, e.exact))
+                        .collect::<Vec<_>>(),
+                    facts
+                );
+                assert_eq!(snapshot(&owner), before);
+                owner.slots[1].event_pins = 2;
+                let mut expected = snapshot(&owner);
+                for event in &events {
+                    expected.events.remove(&event.event_id);
+                }
+                expected.custody.slots[1].event_pins = 0;
+                assert_eq!(owner.release_compute_event_batch(events).unwrap(), 2);
+                assert_eq!(snapshot(&owner), expected);
+                for reader in readers {
+                    owner.release_compute_dependency_reader(reader).unwrap();
+                }
+            } else {
+                let facts = pair_facts(&retained);
+                let storage = (retained.as_ptr(), retained.capacity());
+                let (error, retained) = if case == 1 {
+                    owner
+                        .release_compute_dependency_reader_batch(retained)
+                        .unwrap_err()
+                } else {
+                    owner
+                        .release_compute_dependency_reader_event_batch(retained)
+                        .unwrap_err()
+                };
+                assert_eq!(error, Gfx942CompletionErrorV1::StaleDependencyReader);
+                assert_eq!((retained.as_ptr(), retained.capacity()), storage);
+                assert_eq!(pair_facts(&retained), facts);
+                assert_eq!(snapshot(&owner), before);
+                owner.slots[1].event_pins = 2;
+                owner.slots[1].native_reader_pins = 2;
+                let mut expected = snapshot(&owner);
+                for (event, lease) in &retained {
+                    remove_expected_reader(&mut expected, lease);
+                    if case != 1 {
+                        expected.events.remove(&event.event_id);
+                        expected.custody.slots[1].event_pins -= 1;
+                    }
+                }
+                if case == 1 {
+                    let events = owner
+                        .release_compute_dependency_reader_batch(retained)
+                        .unwrap();
+                    assert_eq!(
+                        events
+                            .iter()
+                            .map(|e| (e.event_id, e.exact))
+                            .collect::<Vec<_>>(),
+                        facts.iter().map(|f| (f.0, f.1)).collect::<Vec<_>>()
+                    );
+                    assert_eq!(snapshot(&owner), expected);
+                    assert_eq!(owner.release_compute_event_batch(events).unwrap(), 2);
+                } else {
+                    assert_eq!(
+                        owner
+                            .release_compute_dependency_reader_event_batch(retained)
+                            .unwrap(),
+                        2
+                    );
+                    assert_eq!(snapshot(&owner), expected);
+                }
+            }
+            finish_aliases(&mut owner, neighbor, neighbor_event, batch);
+        }
+    }
+
+    #[test]
+    fn batch_release_legacy_errors_precede_aggregate_deficits() {
+        for operation in 0..3 {
+            for stale in [false, true] {
+                let AliasedRoster {
+                    mut owner,
+                    neighbor,
+                    neighbor_event,
+                    batch,
+                    mut retained,
+                } = aliased_roster();
+                let mut hostile = (
+                    duplicate_event(&retained[0].0),
+                    duplicate_reader(&retained[0].1),
+                );
+                if stale {
+                    hostile.0.event_id += 100;
+                    hostile.1.lease_id += 100;
+                }
+                retained.push(hostile);
+                owner.slots[1].event_pins = 1;
+                owner.slots[1].native_reader_pins = 1;
+                let before = snapshot(&owner);
+                let expected_error = if stale {
+                    Gfx942CompletionErrorV1::StaleEventOccurrence
+                } else {
+                    Gfx942CompletionErrorV1::DuplicateDependency
+                };
+                let mut retained = if operation == 0 {
+                    let (events, readers): (Vec<_>, Vec<_>) = retained.into_iter().unzip();
+                    let facts = events
+                        .iter()
+                        .map(|e| (e.event_id, e.exact))
+                        .collect::<Vec<_>>();
+                    let storage = (events.as_ptr(), events.capacity());
+                    let (error, events) = owner.release_compute_event_batch(events).unwrap_err();
+                    assert_eq!(error, expected_error);
+                    assert_eq!((events.as_ptr(), events.capacity()), storage);
+                    assert_eq!(
+                        events
+                            .iter()
+                            .map(|e| (e.event_id, e.exact))
+                            .collect::<Vec<_>>(),
+                        facts
+                    );
+                    events.into_iter().zip(readers).collect()
+                } else {
+                    let facts = pair_facts(&retained);
+                    let storage = (retained.as_ptr(), retained.capacity());
+                    let (error, retained) = if operation == 1 {
+                        owner
+                            .release_compute_dependency_reader_batch(retained)
+                            .unwrap_err()
+                    } else {
+                        owner
+                            .release_compute_dependency_reader_event_batch(retained)
+                            .unwrap_err()
+                    };
+                    assert_eq!(error, expected_error);
+                    assert_eq!((retained.as_ptr(), retained.capacity()), storage);
+                    assert_eq!(pair_facts(&retained), facts);
+                    retained
+                };
+                assert_eq!(snapshot(&owner), before);
+                drop(retained.pop().unwrap());
+                owner.slots[1].event_pins = 2;
+                owner.slots[1].native_reader_pins = 2;
+                owner
+                    .release_compute_dependency_reader_event_batch(retained)
+                    .unwrap();
+                finish_aliases(&mut owner, neighbor, neighbor_event, batch);
+            }
+        }
+    }
+
+    #[test]
+    fn release_budget_empty_single_and_multi_paths_match_counts() {
+        for (budgets, success) in [
+            (vec![], true),
+            (vec![(7, 0)], false),
+            (vec![(7, 1)], true),
+            (vec![(7, u32::MAX)], true),
+            (vec![(7, 1), (7, 1)], false),
+            (vec![(7, 2), (7, 2)], true),
+            (vec![(7, 1), (8, 1)], true),
+            (vec![(7, 2), (8, 1), (7, 2)], true),
+            // The raw helper retains the first budget for each slot key.
+            (vec![(7, 2), (7, 0)], true),
+            (vec![(7, 1), (7, 9)], false),
+            (vec![(7, 2), (8, 1), (7, 0)], true),
+        ] {
+            assert_eq!(
+                validate_release_pin_budgets(
+                    budgets.into_iter(),
+                    Gfx942CompletionErrorV1::StaleEventOccurrence
+                ),
+                if success {
+                    Ok(())
+                } else {
+                    Err(Gfx942CompletionErrorV1::StaleEventOccurrence)
+                }
+            );
+        }
+    }
+
     #[test]
     fn release_authenticates_every_occurrence_field_without_mutation() {
         for case in 0..18 {
