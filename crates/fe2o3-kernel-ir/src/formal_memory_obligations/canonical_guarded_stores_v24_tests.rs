@@ -3,6 +3,12 @@ use crate::{BasicBlock, IntrinsicOperation, Kernel, Signature, StorageLayoutLimi
 
 include!("canonical_conditional_slice_domains_v26_tests.rs");
 
+#[path = "canonical_generic_effect_census_v26_tests.rs"]
+mod generic_effect_census_v26;
+
+#[path = "canonical_trap_effect_census_v26_tests.rs"]
+mod trap_effect_census_v26;
+
 fn op(id: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(id), ty), kind)
 }

@@ -257,8 +257,18 @@ impl<M: GuardMeter> GuardedControlV1<M> {
         for block in &body.blocks {
             ledger.charge(2)?;
             for operation in &block.operations {
-                ledger.charge(2)?;
+                // Include the additional kind/space/profile selection checks.
+                ledger.charge(8)?;
                 selected |= matches!(operation.kind, OperationKind::Select { .. })
+                    // The opposite access family still contributes to the
+                    // effect census. Generic pointers need origin analysis
+                    // even when no selected-family global access exists.
+                    || matches!(operation.kind,
+                        OperationKind::Load { access, .. }
+                        | OperationKind::Store { access, .. }
+                        | OperationKind::GuardedLoad { access, .. }
+                        | OperationKind::GuardedStore { access, .. }
+                        if access.address_space == AddressSpace::Generic)
                     || if STORE {
                         matches!(operation.kind, OperationKind::Store { access, .. }
                             if matches!(access.address_space, AddressSpace::Global | AddressSpace::Generic)

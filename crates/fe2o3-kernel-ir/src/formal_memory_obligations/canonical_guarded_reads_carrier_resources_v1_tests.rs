@@ -52,10 +52,11 @@ fn minimal_carrier_graph() -> VerifiedCanonicalKernelIrModuleV12 {
 }
 
 // Independently counted from the four-block/two-operation/one-carrier graph:
+// selection costs 32 + 4 * 2 + 2 * 8, including both operation profiles.
 // local width-one lookups cost 5, 4 and 3 for 4, 2 and 1 indexed rows.
 // Each of the three reachable incoming edges also queries its source's
 // dominator interval: ceil_log2(4) + 4 lookup work, then four comparisons.
-const CONTROL_WORK: usize = 44 + 2 + 4 * 20 + 3 * 14 + 3 * (2 + 4 + 4) + 32;
+const CONTROL_WORK: usize = (32 + 4 * 2 + 2 * 8) + 2 + 4 * 20 + 3 * 14 + 3 * (2 + 4 + 4) + 32;
 const DEFINITION_WORK: usize = 4 * 7 + 2 * 2 + 4 + 8;
 const ORIGIN_ADAPTER_BEFORE_SCC: usize = 4 * 7 + 4 + 6 + 8 + 5 + 3 + 3 + 3;
 // Twenty reserves, twelve one-row fills, one input and its external seed,
@@ -79,7 +80,7 @@ const FUNCTION_WORK: usize = SCC_END
 fn actual_nonempty_scc_and_carrier_lookup_have_source_derived_local_work_cuts() {
     assert_eq!(
         (SCC_WORK, SCC_END, ROOT_HELPER_END, FUNCTION_WORK),
-        (89, 423, 522, 737)
+        (89, 435, 534, 749)
     );
     let graph = minimal_carrier_graph();
     // Exact interior cuts admit their last event, then reject the next phase.

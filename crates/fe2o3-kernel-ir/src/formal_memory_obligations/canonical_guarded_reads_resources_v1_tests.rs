@@ -7,6 +7,7 @@ use std::sync::{
 fn headers<T>() -> usize {
     size_of::<Facts<'_>>()
         + size_of::<Accounting>()
+        + size_of::<Cell<bool>>()
         + size_of::<CheckedCanonicalGuardedGlobalReadsV1<'_, '_>>()
         + size_of::<std::thread::Result<Result<T>>>()
         + size_of::<std::thread::Result<Result<T>>>()
@@ -181,9 +182,9 @@ fn no_selected_read_census_uses_one_source_derived_local_work_limit() {
             .collect();
         body.blocks[0].terminator = Some(Terminator::Return { values: vec![] });
         let graph = owner(module);
-        // Selection: 32 + 2 per block + 2 per operation. Census: 1 per
+        // Selection: 32 + 2 per block + 8 per operation. Census: 1 per
         // block + 2 per effect-free operation. No read/effect rows are built.
-        let exact = 35 + 4 * operations as usize;
+        let exact = 35 + 10 * operations as usize;
         for limit in [exact - 1, exact] {
             let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
             let mut budget = Budget::new(&mut work, 1 << 20);
@@ -327,10 +328,8 @@ fn first_query_failure_survives_foreign_budget_then_nested_callback_panic() {
                 let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(100);
                 let mut foreign = Budget::new(&mut foreign_work, 100);
                 foreign.reserve_storage(7).unwrap();
-                assert!(matches!(
-                    view.owner(&mut foreign),
-                    Err(Failure::Resource(ResourceError::Accounting))
-                ));
+                // A later foreign-ledger query cannot replace the first error.
+                assert_eq!(view.owner(&mut foreign).err(), Some(expected.clone()));
                 assert_eq!(foreign.work(), 0);
                 assert_eq!(foreign.storage(), 7);
                 assert_eq!(budget.work(), before);

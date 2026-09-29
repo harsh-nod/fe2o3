@@ -55,9 +55,21 @@ pub struct CanonicalGuardedGlobalStoreFactV24<'scope, 'g> {
     inner: CanonicalGuardedGlobalReadFactV18<'scope, 'g>,
     invocations: &'scope [InvocationRow],
     accounting: &'scope Accounting,
+    parent_accounting: &'scope Accounting,
 }
 
 impl<'scope, 'g> CanonicalGuardedGlobalStoreFactV24<'scope, 'g> {
+    fn enter(&self, budget: &mut Budget<'_>) -> Result<()> {
+        if !self.parent_accounting.valid(budget) {
+            return self
+                .accounting
+                .save(Err(self.parent_accounting.accounting_failure()));
+        }
+        if let Some(error) = self.parent_accounting.failure.borrow().as_ref() {
+            return self.accounting.save(Err(error.clone()));
+        }
+        self.accounting.enter(budget)
+    }
     pub const fn owner(&self) -> &VerifiedCanonicalKernelIrModuleV18 {
         self.inner.owner()
     }
@@ -83,7 +95,7 @@ impl<'scope, 'g> CanonicalGuardedGlobalStoreFactV24<'scope, 'g> {
         &self,
         budget: &mut Budget<'_>,
     ) -> Result<Option<(Axis, ValueId)>> {
-        self.accounting.enter(budget)?;
+        self.enter(budget)?;
         self.accounting.save((|| {
             let CanonicalGuardedReadIndexOriginV1::ProvenOrigin(value) =
                 self.normalized_index_origin()
@@ -106,7 +118,7 @@ impl<'scope, 'g> CanonicalGuardedGlobalStoreFactV24<'scope, 'g> {
         width: FormalIndexWidth,
         budget: &mut Budget<'_>,
     ) -> Result<Option<CanonicalGuardedStoreInjectivityV24<'fact, 'scope, 'g>>> {
-        self.accounting.enter(budget)?;
+        self.enter(budget)?;
         self.accounting.save((|| {
             budget.charge_work(20)?;
             let ExplicitLaunchExtent::Exact { rank, extents } = launch else {
@@ -182,12 +194,50 @@ pub enum CanonicalGuardedGlobalStoreOutcomeV24<'scope, 'g> {
 pub struct CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g> {
     inner: &'scope CheckedCanonicalGuardedGlobalReadsV18<'scope, 'g>,
     invocations: &'scope [InvocationRow],
+    accounting: &'scope Accounting,
 }
 impl<'scope, 'g> CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g> {
+    pub(super) fn retained_custody_is_intact(&self, budget: &Budget<'_>) -> bool {
+        let local = self.accounting.valid(budget);
+        let parent = self.inner.accounting.valid(budget);
+        local && parent
+    }
+    pub(super) fn retained_refund_is_denied(&self) -> bool {
+        self.accounting.refund_denied.get() || self.inner.accounting.refund_denied.get()
+    }
+    fn check(&self, budget: &Budget<'_>) -> Result<()> {
+        if !self.retained_custody_is_intact(budget) {
+            return Err(if self.retained_refund_is_denied() {
+                self.refuse_retained_custody()
+            } else {
+                self.accounting.accounting_failure()
+            });
+        }
+        if let Some(error) = self.accounting.failure.borrow().as_ref() {
+            return Err(error.clone());
+        }
+        if let Some(error) = self.inner.accounting.failure.borrow().as_ref() {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
+    /// Propagate a child's lost retained floor through the Store backing owner.
+    pub fn refuse_retained_custody(&self) -> Failure {
+        self.refuse_retained_failure(ResourceError::Accounting.into())
+    }
+    pub(super) fn refuse_retained_failure(&self, failure: Failure) -> Failure {
+        let failure = self.accounting.refuse_retained_failure(failure);
+        self.inner
+            .accounting
+            .refuse_retained_failure(failure.clone());
+        failure
+    }
     pub fn owner(&self, budget: &mut Budget<'_>) -> Result<&'g VerifiedCanonicalKernelIrModuleV18> {
+        self.check(budget)?;
         self.inner.owner(budget)
     }
     pub fn function_count(&self, budget: &mut Budget<'_>) -> Result<usize> {
+        self.check(budget)?;
         self.inner.function_count(budget)
     }
     /// Store occurrences, all other global effects, unresolved calls.
@@ -196,6 +246,7 @@ impl<'scope, 'g> CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g> {
         function: FunctionCoordinate,
         budget: &mut Budget<'_>,
     ) -> Result<(usize, usize, usize)> {
+        self.check(budget)?;
         self.inner.function_effects(function, budget)
     }
     pub fn store_at(
@@ -203,13 +254,15 @@ impl<'scope, 'g> CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g> {
         at: Coordinate,
         budget: &mut Budget<'_>,
     ) -> Result<CanonicalGuardedGlobalStoreOutcomeV24<'_, 'g>> {
+        self.check(budget)?;
         Ok(match self.inner.read_at(at, budget)? {
             CanonicalGuardedGlobalReadOutcomeV1::ProvedLocalConditions(inner) => {
                 CanonicalGuardedGlobalStoreOutcomeV24::ProvedLocalConditions(
                     CanonicalGuardedGlobalStoreFactV24 {
                         inner,
                         invocations: self.invocations,
-                        accounting: self.inner.accounting,
+                        accounting: self.accounting,
+                        parent_accounting: self.inner.accounting,
                     },
                 )
             }
@@ -230,6 +283,7 @@ impl<'scope, 'g> CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g> {
         value: ValueId,
         budget: &mut Budget<'_>,
     ) -> Result<Option<CanonicalGuardedPredicateFactV18<'_, 'g>>> {
+        self.check(budget)?;
         self.inner.true_at(at, value, budget)
     }
     pub fn no_wrap_at(
@@ -238,6 +292,7 @@ impl<'scope, 'g> CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g> {
         checked: Coordinate,
         budget: &mut Budget<'_>,
     ) -> Result<Option<CanonicalGuardedNoWrapFactV18<'_, 'g>>> {
+        self.check(budget)?;
         self.inner.no_wrap_at(at, checked, budget)
     }
     /// Project a read from this exact owner, without granting write authority.
@@ -247,8 +302,9 @@ impl<'scope, 'g> CheckedCanonicalGuardedGlobalStoresV24<'scope, 'g> {
         read: &CanonicalGuardedGlobalReadFactV18<'_, '_>,
         budget: &mut Budget<'_>,
     ) -> Result<Option<(Axis, ValueId)>> {
-        self.inner.accounting.enter(budget)?;
-        self.inner.accounting.save((|| {
+        self.check(budget)?;
+        self.accounting.enter(budget)?;
+        self.accounting.save((|| {
             budget.charge_work(2)?;
             if !std::ptr::eq(self.inner.facts.owner, read.owner()) {
                 return Err(ResourceError::Accounting.into());
@@ -355,9 +411,12 @@ pub fn with_canonical_guarded_global_stores_v24<'g, 'w, T>(
 ) -> Result<T> {
     with_owner::<true, _, _>(owner, owner.module(), limits, budget, |inner, budget| {
         let floor = budget.storage();
+        let retained = Cell::new(floor);
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let headers = size_of::<Vec<InvocationRow>>()
                 .checked_add(size_of::<CheckedCanonicalGuardedGlobalStoresV24<'_, '_>>())
+                .and_then(|n| n.checked_add(size_of::<Accounting>()))
+                .and_then(|n| n.checked_add(size_of::<Cell<usize>>()))
                 .and_then(|n| {
                     n.checked_add(size_of::<CanonicalGuardedGlobalStoreOutcomeV24<'_, '_>>())
                 })
@@ -378,15 +437,45 @@ pub fn with_canonical_guarded_global_stores_v24<'g, 'w, T>(
                 .ok_or(ResourceError::Arithmetic)?;
             budget.reserve_storage(headers)?;
             let rows = invocation_index(owner, budget)?;
+            retained.set(budget.storage());
+            let accounting = Accounting {
+                slot: std::ptr::from_ref(&*budget) as usize,
+                ledger: budget.work_ledger_identity_v1(),
+                floor: retained.get(),
+                failure: RefCell::new(None),
+                refund_denied: Cell::new(false),
+            };
             let view = CheckedCanonicalGuardedGlobalStoresV24 {
                 inner,
                 invocations: &rows,
+                accounting: &accounting,
             };
-            let callback_floor = budget.storage();
-            let result = consume(&view, budget);
-            if !inner.accounting.valid(budget) || budget.storage() != callback_floor {
-                drain(result);
-                return Err(ResourceError::Accounting.into());
+            let caught =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)));
+            let mut result = match caught {
+                Ok(result) => result,
+                Err(payload) => {
+                    drain(payload);
+                    Err(accounting
+                        .failure
+                        .borrow()
+                        .clone()
+                        .unwrap_or(Failure::Panicked))
+                }
+            };
+            let checked = if !accounting.valid(budget) || !inner.accounting.valid(budget) {
+                Err(view.refuse_retained_custody())
+            } else if budget.storage() != retained.get() {
+                Err(ResourceError::Accounting.into())
+            } else {
+                view.check(budget)
+            };
+            if let Err(error) = checked {
+                drain(std::mem::replace(&mut result, Err(error)));
+            }
+            if !accounting.valid(budget) || !inner.accounting.valid(budget) {
+                let error = view.refuse_retained_custody();
+                drain(std::mem::replace(&mut result, Err(error)));
             }
             result
         }));
@@ -397,9 +486,9 @@ pub fn with_canonical_guarded_global_stores_v24<'g, 'w, T>(
                 Err(Failure::Panicked)
             }
         };
-        if !inner.accounting.valid(budget) || budget.storage() < floor {
-            drain(result);
-            return Err(ResourceError::Accounting.into());
+        if !inner.accounting.valid(budget) || budget.storage() < retained.get() {
+            let error = inner.refuse_retained_custody();
+            return refused_retained_result(Ok(result), error);
         }
         if let Err(error) = budget.release_storage(budget.storage() - floor) {
             drain(result);

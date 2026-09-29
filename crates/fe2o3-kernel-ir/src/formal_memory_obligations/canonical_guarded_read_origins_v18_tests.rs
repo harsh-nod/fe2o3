@@ -609,6 +609,7 @@ fn normalized_read_origin_getter_bundle_is_paid_by_the_outer_scope() {
     );
     let headers = size_of::<Facts<'_, VerifiedCanonicalKernelIrModuleV18>>()
         + size_of::<Accounting>()
+        + size_of::<Cell<bool>>()
         + size_of::<CheckedCanonicalGuardedGlobalReadsV18<'_, '_>>()
         + 2 * size_of::<std::thread::Result<Result<()>>>()
         + size_of::<std::thread::Result<()>>()

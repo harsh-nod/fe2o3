@@ -1,3 +1,6 @@
+#[path = "canonical_conditional_slice_retained_v26_tests.rs"]
+mod retained_custody_tests;
+
 fn batch_launch_v26() -> ExplicitLaunchExtent {
     ExplicitLaunchExtent::Exact {
         rank: 3,

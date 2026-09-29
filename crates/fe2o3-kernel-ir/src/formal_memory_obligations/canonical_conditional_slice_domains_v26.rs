@@ -174,19 +174,52 @@ pub struct CheckedCanonicalConditionalSliceDomainsV26<'s, 'g> {
     accesses: &'s [CanonicalConditionalSliceAccessV26],
     width: FormalIndexWidth,
     accounting: &'s Accounting,
+    reads: &'s CheckedCanonicalGuardedGlobalReadsV18<'s, 'g>,
+    stores: &'s CheckedCanonicalGuardedGlobalStoresV24<'s, 'g>,
 }
 
 impl CheckedCanonicalConditionalSliceDomainsV26<'_, '_> {
+    fn retained_custody_is_intact(&self, budget: &Budget<'_>) -> bool {
+        let local = self.accounting.valid(budget);
+        let reads = self.reads.accounting.valid(budget);
+        let stores = self.stores.retained_custody_is_intact(budget);
+        local && reads && stores
+    }
+    /// A composing child may report lost retained custody. This irreversibly
+    /// refuses this batch and both fact owners; it cannot create authority.
+    pub fn refuse_retained_custody(&self) -> Failure {
+        let failure = self.accounting.refuse_retained_custody();
+        self.reads
+            .accounting
+            .refuse_retained_failure(failure.clone());
+        self.stores.refuse_retained_failure(failure.clone());
+        failure
+    }
+    fn enter(&self, budget: &mut Budget<'_>) -> Result<()> {
+        if !self.retained_custody_is_intact(budget) {
+            return Err(
+                if self.accounting.refund_denied.get()
+                    || self.reads.accounting.refund_denied.get()
+                    || self.stores.retained_refund_is_denied()
+                {
+                    self.refuse_retained_custody()
+                } else {
+                    self.accounting.accounting_failure()
+                },
+            );
+        }
+        self.accounting.enter(budget)
+    }
     pub fn owner(&self, budget: &mut Budget<'_>) -> Result<&VerifiedCanonicalKernelIrModuleV18> {
-        self.accounting.enter(budget)?;
+        self.enter(budget)?;
         Ok(self.owner)
     }
     pub fn function_count(&self, budget: &mut Budget<'_>) -> Result<usize> {
-        self.accounting.enter(budget)?;
+        self.enter(budget)?;
         Ok(self.functions.len())
     }
     pub fn access_count(&self, budget: &mut Budget<'_>) -> Result<usize> {
-        self.accounting.enter(budget)?;
+        self.enter(budget)?;
         Ok(self.accesses.len())
     }
     pub fn access_at(
@@ -194,7 +227,7 @@ impl CheckedCanonicalConditionalSliceDomainsV26<'_, '_> {
         at: Coordinate,
         budget: &mut Budget<'_>,
     ) -> Result<Option<&CanonicalConditionalSliceAccessV26>> {
-        self.accounting.enter(budget)?;
+        self.enter(budget)?;
         self.accounting.save((|| {
             let row = verification_find_last_by_v1(self.accesses, 3, budget, |row| {
                 row.operation.cmp(&at)
@@ -208,7 +241,7 @@ impl CheckedCanonicalConditionalSliceDomainsV26<'_, '_> {
         parameter: u32,
         budget: &mut Budget<'_>,
     ) -> Result<Option<&CanonicalConditionalSliceParameterV26>> {
-        self.accounting.enter(budget)?;
+        self.enter(budget)?;
         self.accounting.save((|| {
             budget.charge_work(8)?;
             let Some(function) = self.functions.get(function.0 as usize) else {
@@ -230,7 +263,7 @@ impl CheckedCanonicalConditionalSliceDomainsV26<'_, '_> {
         function: FunctionCoordinate,
         budget: &mut Budget<'_>,
     ) -> Result<Option<(ExplicitLaunchExtent, FormalIndexWidth, usize, usize)>> {
-        self.accounting.enter(budget)?;
+        self.enter(budget)?;
         self.accounting.save((|| {
             budget.charge_work(4)?;
             Ok(self
@@ -264,6 +297,7 @@ pub fn with_canonical_conditional_slice_domains_v26<'g, 'w, T>(
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
     let slot = std::ptr::from_ref(&*budget) as usize;
+    let refund_denied = Cell::new(false);
     let mut consume = Some(consume);
     let mut returned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let owner = reads.owner(budget)?;
@@ -284,6 +318,7 @@ pub fn with_canonical_conditional_slice_domains_v26<'g, 'w, T>(
             ledger,
             floor: budget.storage(),
             failure: RefCell::new(None),
+            refund_denied: Cell::new(false),
         };
         let view = CheckedCanonicalConditionalSliceDomainsV26 {
             owner,
@@ -292,13 +327,17 @@ pub fn with_canonical_conditional_slice_domains_v26<'g, 'w, T>(
             accesses: &accesses,
             width,
             accounting: &accounting,
+            reads,
+            stores,
         };
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             consume.take().ok_or(ResourceError::Accounting)?(&view, budget)
         }));
         let result = match caught {
             Ok(mut result) => {
-                let local = if !accounting.valid(budget) || budget.storage() != accounting.floor {
+                let local = if !view.retained_custody_is_intact(budget) {
+                    Err(view.refuse_retained_custody())
+                } else if budget.storage() != accounting.floor {
                     Err(ResourceError::Accounting.into())
                 } else {
                     accounting
@@ -313,8 +352,8 @@ pub fn with_canonical_conditional_slice_domains_v26<'g, 'w, T>(
             }
             Err(payload) => {
                 drain(payload);
-                Err(if !accounting.valid(budget) {
-                    ResourceError::Accounting.into()
+                Err(if !view.retained_custody_is_intact(budget) {
+                    view.refuse_retained_custody()
                 } else if let Some(error) = accounting.failure.borrow().clone() {
                     error
                 } else {
@@ -326,6 +365,15 @@ pub fn with_canonical_conditional_slice_domains_v26<'g, 'w, T>(
                 })
             }
         };
+        let result = if !view.retained_custody_is_intact(budget) {
+            let failure = view.refuse_retained_custody();
+            drain(result);
+            Err(failure)
+        } else {
+            result
+        };
+        refund_denied.set(accounting.refund_denied.get());
+        drop(view);
         drop(accesses);
         drop(parameters);
         drop(functions);
@@ -334,12 +382,14 @@ pub fn with_canonical_conditional_slice_domains_v26<'g, 'w, T>(
     // An uncalled capture may itself panic in Drop. Destroy it while the frame
     // remains paid, without replacing an earlier typed construction refusal.
     drain(consume.take());
-    if slot != std::ptr::from_ref(&*budget) as usize
+    if refund_denied.get()
+        || slot != std::ptr::from_ref(&*budget) as usize
         || ledger != budget.work_ledger_identity_v1()
         || budget.storage() < floor
     {
-        drain(returned);
-        return Err(ResourceError::Accounting.into());
+        reads.refuse_retained_custody();
+        stores.refuse_retained_custody();
+        return refused_retained_result(returned, ResourceError::Accounting.into());
     }
     if returned.is_err() {
         drain(std::mem::replace(&mut returned, Ok(Err(Failure::Panicked))));
@@ -551,6 +601,7 @@ fn slice_batch_headers_v26<T>(capture: usize, alignment: usize) -> Result<usize>
         &'a CheckedCanonicalGuardedGlobalStoresV24<'a, 'a>,
         CheckedCanonicalConditionalSliceDomainsV26<'a, 'a>,
         Accounting,
+        Cell<bool>,
         SliceBatchRowsV26,
         Option<SliceBatchRowsV26>,
         SliceFunctionV26,

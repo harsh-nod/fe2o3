@@ -568,8 +568,8 @@ fn paid_accesses_unselected_constructor_has_independent_exact_frame_and_work_bou
                     usize,
                 )>()
                 + size_of::<GuardedControlCollectionV1<meter::LiveGuardMeter<'static, 'static>>>();
-            // Entry 4, control census 32, one block 2 and two operations 4.
-            let needed_work = 4 + 32 + 2 + 2 * 2;
+            // Entry 4, control selection 32, one block 2 and two operations 16.
+            let needed_work = 4 + 32 + 2 + 2 * 8;
             budget
                 .charge_work(LIMIT - budget.work() - needed_work + usize::from(boundary == 1))
                 .unwrap();

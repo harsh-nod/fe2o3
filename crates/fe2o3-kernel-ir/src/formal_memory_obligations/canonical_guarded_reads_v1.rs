@@ -9,7 +9,7 @@ use crate::{
 use meter::LiveGuardMeter;
 use predicates::PredicateRow;
 use runtime_slice_read_v1::RuntimeSliceReadConditionsV1;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 #[path = "canonical_conditional_slice_domains_v26.rs"]
 mod conditional_slice_domains_v26;
@@ -160,12 +160,33 @@ struct Accounting {
     ledger: CanonicalKernelIrWorkLedgerIdentityV1,
     floor: usize,
     failure: RefCell<Option<Failure>>,
+    refund_denied: Cell<bool>,
 }
 impl Accounting {
     fn valid(&self, budget: &Budget<'_>) -> bool {
-        self.slot == std::ptr::from_ref(budget) as usize
+        let same_slot = self.slot == std::ptr::from_ref(budget) as usize;
+        let intact = same_slot
             && self.ledger == budget.work_ledger_identity_v1()
-            && budget.storage() >= self.floor
+            && budget.storage() >= self.floor;
+        // A foreign query poisons the query scope, but did not consume the
+        // actual owner's credit. A replaced/undercut original slot did.
+        if same_slot && !intact {
+            self.refuse_retained_custody();
+        }
+        intact && !self.refund_denied.get()
+    }
+    fn refuse_retained_custody(&self) -> Failure {
+        self.refuse_retained_failure(ResourceError::Accounting.into())
+    }
+    fn refuse_retained_failure(&self, failure: Failure) -> Failure {
+        self.refund_denied.set(true);
+        self.failure.borrow_mut().get_or_insert(failure).clone()
+    }
+    fn accounting_failure(&self) -> Failure {
+        let mut first = self.failure.borrow_mut();
+        first
+            .get_or_insert_with(|| ResourceError::Accounting.into())
+            .clone()
     }
     fn save<T>(&self, result: Result<T>) -> Result<T> {
         if let Err(error) = &result {
@@ -177,7 +198,7 @@ impl Accounting {
     }
     fn enter(&self, budget: &mut Budget<'_>) -> Result<()> {
         if !self.valid(budget) {
-            return self.save(Err(ResourceError::Accounting.into()));
+            return Err(self.accounting_failure());
         }
         if let Some(error) = self.failure.borrow().as_ref() {
             return Err(error.clone());
@@ -197,6 +218,14 @@ pub struct CheckedCanonicalGuardedGlobalReadsV1<'scope, 'g, O = VerifiedCanonica
 {
     facts: &'scope Facts<'g, O>,
     accounting: &'scope Accounting,
+}
+
+impl<O> CheckedCanonicalGuardedGlobalReadsV1<'_, '_, O> {
+    /// A composing child may only refuse retained custody, never grant it.
+    /// Every ancestor must retain its credits after this irreversible refusal.
+    pub fn refuse_retained_custody(&self) -> Failure {
+        self.accounting.refuse_retained_custody()
+    }
 }
 
 /// Borrowed local guarded-read facts from one actual V18 graph and table.
@@ -250,6 +279,19 @@ fn drain<T>(value: T) {
     }
 }
 
+fn refused_retained_result<T>(
+    returned: std::thread::Result<Result<T>>,
+    fallback: Failure,
+) -> Result<T> {
+    match returned {
+        Ok(Err(error)) => Err(error),
+        other => {
+            drain(other);
+            Err(fallback)
+        }
+    }
+}
+
 /// Derives every defined function on this actual owner, retaining declarations
 /// and all unresolved calls/effects. No external truth, extent or launch input.
 ///
@@ -299,12 +341,14 @@ fn with_owner<'g, 'w, const STORE: bool, O, T>(
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
     let slot = std::ptr::from_ref(&*budget) as usize;
+    let refund_denied = Cell::new(false);
     let mut returned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Getter carriers must remain paid through the external callback,
         // after each function's construction scratch has been refunded.
         let origin_query_headers = read_origin_query_frame_bytes::<O>()?;
         let headers = size_of::<Facts<'_, O>>()
             .checked_add(size_of::<Accounting>())
+            .and_then(|n| n.checked_add(size_of::<Cell<bool>>()))
             .and_then(|n| {
                 n.checked_add(size_of::<CheckedCanonicalGuardedGlobalReadsV1<'_, '_, O>>())
             })
@@ -320,6 +364,7 @@ fn with_owner<'g, 'w, const STORE: bool, O, T>(
             ledger,
             floor: budget.storage(),
             failure: RefCell::new(None),
+            refund_denied: Cell::new(false),
         };
         let view = CheckedCanonicalGuardedGlobalReadsV1 {
             facts: &facts,
@@ -330,7 +375,9 @@ fn with_owner<'g, 'w, const STORE: bool, O, T>(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)));
         let result = match caught {
             Ok(mut result) => {
-                let local = if !accounting.valid(budget) || budget.storage() != accounting.floor {
+                let local = if !accounting.valid(budget) {
+                    Err(accounting.refuse_retained_custody())
+                } else if budget.storage() != accounting.floor {
                     Err(ResourceError::Accounting.into())
                 } else {
                     accounting.enter(budget)
@@ -345,7 +392,7 @@ fn with_owner<'g, 'w, const STORE: bool, O, T>(
                 // Unwind may leave paid scratch credit; the outer scope refunds it
                 // only after all payload and fact backing has been destroyed.
                 Err(if !accounting.valid(budget) {
-                    ResourceError::Accounting.into()
+                    accounting.refuse_retained_custody()
                 } else {
                     accounting
                         .failure
@@ -355,15 +402,25 @@ fn with_owner<'g, 'w, const STORE: bool, O, T>(
                 })
             }
         };
+        // The child refusal survives destruction of its query state and facts.
+        // Rejected values are drained while every backing still has its credit.
+        let result = if !accounting.valid(budget) {
+            let failure = accounting.refuse_retained_custody();
+            drain(result);
+            Err(failure)
+        } else {
+            result
+        };
+        refund_denied.set(accounting.refund_denied.get());
         drop(facts);
         result
     }));
-    if slot != std::ptr::from_ref(&*budget) as usize
+    if refund_denied.get()
+        || slot != std::ptr::from_ref(&*budget) as usize
         || ledger != budget.work_ledger_identity_v1()
         || budget.storage() < floor
     {
-        drain(returned);
-        return Err(ResourceError::Accounting.into());
+        return refused_retained_result(returned, ResourceError::Accounting.into());
     }
     let result = match &returned {
         Ok(_) => None,
@@ -657,11 +714,46 @@ fn effect_counts<const STORE: bool, M: GuardMeter>(
     meter: &mut M,
 ) -> Result<bool> {
     meter.charge(2)?;
-    if matches!(operation.kind, OperationKind::Call { .. }) {
-        result.unresolved_calls = result
-            .unresolved_calls
-            .checked_add(1)
-            .ok_or(ResourceError::Arithmetic)?;
+    if let OperationKind::Call { callee, arguments } = &operation.kind {
+        type Frame<'a> = (
+            &'a crate::FunctionId,
+            &'a [ValueId],
+            Option<crate::AmdGpuDiagnosticIntrinsicDescriptorV1>,
+            usize,
+            Option<usize>,
+            bool,
+        );
+        meter.storage(
+            size_of::<Frame<'_>>()
+                .checked_add(
+                    size_of::<Result<Frame<'_>>>()
+                        .checked_mul(2)
+                        .ok_or(ResourceError::Arithmetic)?,
+                )
+                .ok_or(ResourceError::Arithmetic)?,
+        )?;
+        meter.charge(
+            crate::AmdGpuDiagnosticOperation::intrinsic_descriptor_lookup_work_v1(callee)
+                .and_then(|work| work.checked_add(5))
+                .ok_or(ResourceError::Arithmetic)?,
+        )?;
+        // These operations come from the verified owner: its reserved-call
+        // verifier binds this descriptor to the exact external declaration,
+        // signature, capability and terminating continuation. A Trap has no
+        // global memory effects, but remains a terminating control effect; this
+        // memory census grants neither source provenance nor native authority.
+        let trap = arguments.is_empty()
+            && operation.results.is_empty()
+            && matches!(
+                crate::AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(callee),
+                Some(crate::AmdGpuDiagnosticIntrinsicDescriptorV1::Trap)
+            );
+        if !trap {
+            result.unresolved_calls = result
+                .unresolved_calls
+                .checked_add(1)
+                .ok_or(ResourceError::Arithmetic)?;
+        }
     }
     let mut read = false;
     operation.try_visit_local_memory_effects_v1(|effect| -> Result<()> {

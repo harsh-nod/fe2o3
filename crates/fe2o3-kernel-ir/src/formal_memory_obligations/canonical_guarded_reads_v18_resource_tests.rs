@@ -7,6 +7,7 @@ use std::sync::{
 fn headers<T>() -> usize {
     size_of::<Facts<'_, VerifiedCanonicalKernelIrModuleV18>>()
         + size_of::<Accounting>()
+        + size_of::<Cell<bool>>()
         + size_of::<CheckedCanonicalGuardedGlobalReadsV18<'_, '_>>()
         + 2 * size_of::<std::thread::Result<Result<T>>>()
         + size_of::<std::thread::Result<()>>()

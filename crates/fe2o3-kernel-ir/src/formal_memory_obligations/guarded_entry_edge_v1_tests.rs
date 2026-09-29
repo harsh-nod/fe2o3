@@ -129,17 +129,19 @@ fn real_control_collection_has_independent_exact_work_and_storage_boundaries() {
     const EDGES: usize = 4;
     const LOOKUP: usize = 2 + 4; // ceil_log2(3) plus the existing query envelope.
     const SORT: usize = 4 * BLOCKS * 2;
-    // Start, block/op selection (one Load), empty-vector reserve, block queries,
+    // Start, block/op selection (one Load at eight units), empty-vector reserve, block queries,
     // all incoming-edge queries, NEW reachable-source interval query, and sort.
     const WORK: usize = 32
         + 2 * BLOCKS
-        + 2
+        + 8
         + 2
         + BLOCKS * (2 * LOOKUP + 8)
         + EDGES * (LOOKUP + 8)
         + EDGES * (LOOKUP + 4)
         + SORT;
-    assert_eq!(WORK, 222);
+    assert_eq!(WORK, 228);
+    const BEFORE_INTERVAL: usize = 32 + 2 * BLOCKS + 8 + 2 + 2 * (2 * LOOKUP + 8) + LOOKUP + 8;
+    assert_eq!(BEFORE_INTERVAL, 102);
     #[allow(dead_code)]
     struct IndependentEdge {
         source: BlockId,
@@ -160,10 +162,10 @@ fn real_control_collection_has_independent_exact_work_and_storage_boundaries() {
     for prior_denial in [false, true] {
         for cut in 0..4 {
             // Cut 3 stops BEFORE the first new interval query. Entry and header
-            // queries plus the header's first old edge debit have cost 96.
+            // queries plus the header's first old edge debit have cost 102.
             let limit = match cut {
                 1 => WORK - 1,
-                3 => 96 + LOOKUP + 4 - 1,
+                3 => BEFORE_INTERVAL + LOOKUP + 4 - 1,
                 _ => WORK,
             };
             let mut work = CanonicalKernelIrWorkBudgetV1::new(PRIOR + limit);
@@ -209,7 +211,12 @@ fn real_control_collection_has_independent_exact_work_and_storage_boundaries() {
                     drop(result);
                     assert_eq!(
                         budget.work(),
-                        PRIOR + if cut == 1 { WORK - SORT } else { 96 }
+                        PRIOR
+                            + if cut == 1 {
+                                WORK - SORT
+                            } else {
+                                BEFORE_INTERVAL
+                            }
                     );
                     assert_eq!(budget.storage(), FLOOR + storage);
                 }
@@ -219,7 +226,7 @@ fn real_control_collection_has_independent_exact_work_and_storage_boundaries() {
                         if actual == FLOOR + storage && limit + 1 == actual)
                     );
                     drop(result);
-                    assert_eq!(budget.work(), PRIOR + 32 + 2 * BLOCKS + 2 + 2);
+                    assert_eq!(budget.work(), PRIOR + 32 + 2 * BLOCKS + 8 + 2);
                     assert_eq!(budget.storage(), FLOOR + headers);
                 }
                 _ => unreachable!(),
@@ -239,7 +246,7 @@ fn real_control_collection_has_independent_exact_work_and_storage_boundaries() {
                 work.failed_work(),
                 earlier_work.or(match cut {
                     1 => Some(PRIOR + WORK),
-                    3 => Some(PRIOR + 96 + LOOKUP + 4),
+                    3 => Some(PRIOR + BEFORE_INTERVAL + LOOKUP + 4),
                     _ => None,
                 })
             );
