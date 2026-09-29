@@ -113,7 +113,12 @@ impl Error for CanonicalKernelIrVerificationResourceErrorV1 {
 pub struct CanonicalKernelIrVerificationResourceBudgetV1<'work> {
     work: &'work mut CanonicalKernelIrWorkBudgetV1,
     storage: Storage<'work>,
+    window: Option<&'work window::WindowState>,
 }
+
+#[path = "verification_resource_window_v1.rs"]
+mod window;
+pub use window::CanonicalKernelIrStorageAccountIdentityV1;
 
 struct StorageState {
     storage: usize,
@@ -181,6 +186,7 @@ impl Storage<'_> {
 pub struct CanonicalKernelIrOwnedVerificationResourceBudgetV1 {
     work: CanonicalKernelIrWorkBudgetV1,
     storage: StorageState,
+    window: window::WindowState,
 }
 
 impl CanonicalKernelIrOwnedVerificationResourceBudgetV1 {
@@ -190,6 +196,7 @@ impl CanonicalKernelIrOwnedVerificationResourceBudgetV1 {
         Self {
             work,
             storage: StorageState::new(storage_limit),
+            window: window::WindowState::new(),
         }
     }
 
@@ -229,6 +236,7 @@ impl CanonicalKernelIrOwnedVerificationResourceBudgetV1 {
         let mut budget = CanonicalKernelIrVerificationResourceBudgetV1 {
             work: &mut self.work,
             storage: Storage::Borrowed(&mut self.storage),
+            window: Some(&self.window),
         };
         operation(&mut budget)
     }
@@ -284,6 +292,7 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         Self {
             work,
             storage: Storage::Inline(StorageState::new(storage_limit)),
+            window: None,
         }
     }
 
@@ -304,17 +313,19 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         &mut self,
         amount: usize,
     ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+        let window_limit = self.window.map_or(usize::MAX, window::WindowState::ceiling);
         let state = self.storage.state_mut();
+        let limit = state.storage_limit.min(window_limit);
         let Some(storage) = state.storage.checked_add(amount) else {
             state.failed_storage.get_or_insert(usize::MAX);
             return Err(CanonicalKernelIrVerificationResourceErrorV1::Storage(
-                CanonicalKernelIrVerificationStorageLimitV1::new(usize::MAX, state.storage_limit),
+                CanonicalKernelIrVerificationStorageLimitV1::new(usize::MAX, limit),
             ));
         };
-        if storage > state.storage_limit {
+        if storage > limit {
             state.failed_storage.get_or_insert(storage);
             return Err(CanonicalKernelIrVerificationResourceErrorV1::Storage(
-                CanonicalKernelIrVerificationStorageLimitV1::new(storage, state.storage_limit),
+                CanonicalKernelIrVerificationStorageLimitV1::new(storage, limit),
             ));
         }
         state.storage = storage;
@@ -328,10 +339,14 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         &mut self,
         amount: usize,
     ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+        let floor = self.window.map_or(0, window::WindowState::floor);
         let state = self.storage.state_mut();
         let Some(storage) = state.storage.checked_sub(amount) else {
             return Err(CanonicalKernelIrVerificationResourceErrorV1::Accounting);
         };
+        if storage < floor {
+            return Err(CanonicalKernelIrVerificationResourceErrorV1::Accounting);
+        }
         state.storage = storage;
         Ok(())
     }

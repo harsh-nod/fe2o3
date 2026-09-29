@@ -123,11 +123,24 @@ fn join_subject(
     token: &Token,
     b: &mut Budget<'_>,
 ) -> Result<(Subject, [u8; 32])> {
+    require_joined_invocation(observation, token)?;
+    let (subject, storage) = Subject::from_publication(receipt, token.handoff(), b)?;
+    b.reserve_storage(storage.retained_storage())?;
+    finish_join_subject(observation, expected, subject)
+}
+
+fn require_joined_invocation(observation: &NativeObservation, token: &Token) -> Result<()> {
     if published_invocation(token) != observation.descriptor() {
         return Err(NativeOccurrenceError::Mismatch);
     }
-    let (subject, storage) = Subject::from_publication(receipt, token.handoff(), b)?;
-    b.reserve_storage(storage.retained_storage())?;
+    Ok(())
+}
+
+fn finish_join_subject(
+    observation: &NativeObservation,
+    expected: &Expected,
+    subject: Subject,
+) -> Result<(Subject, [u8; 32])> {
     if subject.attempt() != expected.attempt
         || subject.rustc_invocation_sha256() != &expected.invocation_digest
         || subject.compiler_closure() != *observation.descriptor().compiler_closure()

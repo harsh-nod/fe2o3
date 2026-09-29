@@ -59,20 +59,40 @@ pub fn try_recover_compiler_module_handoff_receipt_with_limit_v5(
     quota::validate_length(maximum_handoff_bytes)?;
     let dynamic = dynamic_bound(output, producer)?;
     entry(budget, 0, |resources| {
-        if !barrier.guards_artifact_locks() {
-            return Err(Resource::Accounting.into());
-        }
-        quota::filesystem(dynamic, quota::Operation::Recovery)?.prepay(resources)?;
-        Ok(currentness::try_recover::<Schema>(
+        recover_limited(
             output,
             producer,
             attempt,
-            CompilerModuleHandoffSlotV5::Production,
             maximum_handoff_bytes,
-            Some(dynamic),
+            dynamic,
+            barrier,
             resources,
-        )?)
+        )
     })
+}
+
+pub(super) fn recover_limited(
+    output: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    maximum_handoff_bytes: usize,
+    dynamic: usize,
+    barrier: &Barrier,
+    resources: &mut Resources<'_, '_>,
+) -> Result<CompilerModuleHandoffReceiptV5> {
+    if !barrier.guards_artifact_locks() {
+        return Err(Resource::Accounting.into());
+    }
+    quota::filesystem(dynamic, quota::Operation::Recovery)?.prepay(resources)?;
+    Ok(currentness::try_recover::<Schema>(
+        output,
+        producer,
+        attempt,
+        CompilerModuleHandoffSlotV5::Production,
+        maximum_handoff_bytes,
+        Some(dynamic),
+        resources,
+    )?)
 }
 
 /// Inert allocation quote for one exact receipt and input allocation shape.
@@ -149,7 +169,7 @@ pub fn quote_compiler_module_handoff_currentness_custody_v5(
     })
 }
 
-fn dynamic_bound(output: &Path, producer: &ProducerIdentity) -> Result<usize> {
+pub(super) fn dynamic_bound(output: &Path, producer: &ProducerIdentity) -> Result<usize> {
     dynamic_bound_for_lengths(
         output.as_os_str().len(),
         producer.stable_source.capacity(),
@@ -218,27 +238,37 @@ pub fn acquire_compiler_module_handoff_currentness_lease_with_quote_v5(
     CompilerModuleHandoffStorageV5,
 )> {
     entry(budget, 0, |resources| {
-        if !barrier.guards_artifact_locks()
-            || quote_compiler_module_handoff_currentness_custody_v5(
-                output,
-                producer,
-                quote.receipt,
-            )? != *quote
-        {
-            return Err(Resource::Accounting.into());
-        }
-        quota::filesystem(quote.dynamic, quota::Operation::Lease)?.prepay(resources)?;
-        resources.reserve(quote.lease.0)?;
-        resources.work(quote.dynamic.checked_mul(4).ok_or(Resource::Arithmetic)?)?;
-        let binding = mint_quoted(output, producer, quote, resources)?;
-        Ok((
-            CompilerModuleHandoffCurrentnessLeaseV5 {
-                binding,
-                storage: quote.lease,
-            },
-            quote.lease,
-        ))
+        acquire_quoted(output, producer, quote, barrier, resources)
     })
+}
+
+pub(super) fn acquire_quoted(
+    output: &Path,
+    producer: &ProducerIdentity,
+    quote: &CompilerModuleHandoffCurrentnessCustodyQuoteV5,
+    barrier: &Barrier,
+    resources: &mut Resources<'_, '_>,
+) -> Result<(
+    CompilerModuleHandoffCurrentnessLeaseV5,
+    CompilerModuleHandoffStorageV5,
+)> {
+    if !barrier.guards_artifact_locks()
+        || quote_compiler_module_handoff_currentness_custody_v5(output, producer, quote.receipt)?
+            != *quote
+    {
+        return Err(Resource::Accounting.into());
+    }
+    quota::filesystem(quote.dynamic, quota::Operation::Lease)?.prepay(resources)?;
+    resources.reserve(quote.lease.0)?;
+    resources.work(quote.dynamic.checked_mul(4).ok_or(Resource::Arithmetic)?)?;
+    let binding = mint_quoted(output, producer, quote, resources)?;
+    Ok((
+        CompilerModuleHandoffCurrentnessLeaseV5 {
+            binding,
+            storage: quote.lease,
+        },
+        quote.lease,
+    ))
 }
 
 fn dynamic_storage(
@@ -323,41 +353,53 @@ impl CompilerModuleHandoffCurrentnessLeaseV5 {
         CompilerModuleHandoffStorageV5,
     )> {
         entry(budget, self.storage.0, |resources| {
-            if !barrier.guards_artifact_locks()
-                || self.receipt() != quote.receipt
-                || self.storage != quote.lease
-            {
-                return Err(Resource::Accounting.into());
-            }
-            quota::filesystem(quote.dynamic, quota::Operation::Token)?.prepay(resources)?;
-            let headers = quote
-                .token
-                .0
-                .checked_sub(quote.receipt.length)
-                .and_then(|n| n.checked_sub(METADATA))
-                .ok_or(Resource::Accounting)?;
-            resources.reserve(headers)?;
-            let mut bytes = resources.exact_buffer(quote.receipt.length)?;
-            resources.work(quote.receipt.length)?;
-            bytes.resize(quote.receipt.length, 0);
-            let lock = self
-                .binding
-                .output
-                .try_lock()
-                .map_err(HandoffEngineError::from)?
-                .ok_or(Error::Busy)?;
-            let content = currentness::load_preallocated(&self.binding, bytes, resources)?;
-            Ok((
-                CompilerModuleHandoffConsumptionTokenV5 {
-                    binding: Arc::clone(&self.binding),
-                    backing: backing_snapshot(&content),
-                    content,
-                    storage: quote.token,
-                    _lock: lock,
-                },
-                quote.token,
-            ))
+            self.acquire_quoted_in(quote, barrier, resources)
         })
+    }
+
+    pub(super) fn acquire_quoted_in(
+        &self,
+        quote: &CompilerModuleHandoffCurrentnessCustodyQuoteV5,
+        barrier: &Barrier,
+        resources: &mut Resources<'_, '_>,
+    ) -> Result<(
+        CompilerModuleHandoffConsumptionTokenV5,
+        CompilerModuleHandoffStorageV5,
+    )> {
+        if !barrier.guards_artifact_locks()
+            || self.receipt() != quote.receipt
+            || self.storage != quote.lease
+        {
+            return Err(Resource::Accounting.into());
+        }
+        quota::filesystem(quote.dynamic, quota::Operation::Token)?.prepay(resources)?;
+        let headers = quote
+            .token
+            .0
+            .checked_sub(quote.receipt.length)
+            .and_then(|n| n.checked_sub(METADATA))
+            .ok_or(Resource::Accounting)?;
+        resources.reserve(headers)?;
+        let mut bytes = resources.exact_buffer(quote.receipt.length)?;
+        resources.work(quote.receipt.length)?;
+        bytes.resize(quote.receipt.length, 0);
+        let lock = self
+            .binding
+            .output
+            .try_lock()
+            .map_err(HandoffEngineError::from)?
+            .ok_or(Error::Busy)?;
+        let content = currentness::load_preallocated(&self.binding, bytes, resources)?;
+        Ok((
+            CompilerModuleHandoffConsumptionTokenV5 {
+                binding: Arc::clone(&self.binding),
+                backing: backing_snapshot(&content),
+                content,
+                storage: quote.token,
+                _lock: lock,
+            },
+            quote.token,
+        ))
     }
 }
 

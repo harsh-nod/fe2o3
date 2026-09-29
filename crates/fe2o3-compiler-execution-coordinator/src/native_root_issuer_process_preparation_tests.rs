@@ -33,6 +33,7 @@ pub(super) fn prepare(
     pool: &mut Cleanup,
     b: &mut Budget<'_>,
 ) -> Prepared {
+    let floor = b.storage();
     for root in [&f.service_root, &f.anchor_root] {
         drop(fs::openat(root, "..", fs::OFlags::RDONLY | fs::OFlags::DIRECTORY | fs::OFlags::CLOEXEC, fs::Mode::empty())
             .expect("actual lifecycle requires CAP_DAC_READ_SEARCH or CAP_DAC_OVERRIDE in the isolated container"));
@@ -152,7 +153,14 @@ pub(super) fn prepare(
     );
     assert_eq!(
         b.storage(),
-        Prepared::prepare_input_storage(&trust, &inputs, &supervisor_lease, &root_lease, &anchor)
+        floor
+            + Prepared::prepare_input_storage(
+                &trust,
+                &inputs,
+                &supervisor_lease,
+                &root_lease,
+                &anchor
+            )
             .unwrap()
     );
     let prepared = charged!(
@@ -167,7 +175,7 @@ pub(super) fn prepare(
             b
         )
     );
-    assert_eq!(b.storage(), prepared.retained_storage());
+    assert_eq!(b.storage(), floor + prepared.retained_storage());
     prepared.validate_cleanup_guard(pool, b).unwrap();
     prepared
 }

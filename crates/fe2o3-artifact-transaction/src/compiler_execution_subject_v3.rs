@@ -164,6 +164,25 @@ impl InertCompilerExecutionSubjectV3 {
         })
     }
 
+    // Only exact-pair custody composition enters here, under its full-owner
+    // local window. The codec and post-entry fees are shared with legacy entry.
+    pub(crate) fn from_publication_in_custody(
+        receipt: CompilerModuleHandoffReceiptV5,
+        handoff: &Handoff,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, InertCompilerExecutionSubjectStorageV3)> {
+        let floor = handoff_floor(handoff)?;
+        crate::compiler_module_handoff::resources::with_budget(budget, |budget| {
+            budget.charge_work(8)?;
+            metered_after_entry(budget, floor, || {
+                Ok((
+                    Self::from_receipt(receipt, handoff)?,
+                    InertCompilerExecutionSubjectStorageV3(RETAINED),
+                ))
+            })
+        })?
+    }
+
     /// Concrete raw consumed transport only. For a verified owner use
     /// `from_publication(consumed.receipt(), owner.handoff(), budget)` with all
     /// owner storage prepaid. This fixed codec never calls user-defined `AsRef`.
@@ -421,15 +440,24 @@ fn subject(
 fn metered<T>(budget: &mut Budget<'_>, floor: usize, f: impl FnOnce() -> Result<T>) -> Result<T> {
     crate::compiler_module_handoff::resources::with_budget(budget, |budget| {
         budget.charge_work(8)?;
-        if budget.storage_limit() > MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5
-            || budget.storage() < floor
-        {
+        if budget.storage_limit() > MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5 {
             return Err(Resource::Accounting.into());
         }
-        budget.reserve_storage(INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V3)?;
-        budget.charge_work(INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3 - 8)?;
-        f()
+        metered_after_entry(budget, floor, f)
     })?
+}
+
+fn metered_after_entry<T>(
+    budget: &mut Budget<'_>,
+    floor: usize,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if budget.storage() < floor {
+        return Err(Resource::Accounting.into());
+    }
+    budget.reserve_storage(INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V3)?;
+    budget.charge_work(INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3 - 8)?;
+    f()
 }
 
 #[cfg(test)]

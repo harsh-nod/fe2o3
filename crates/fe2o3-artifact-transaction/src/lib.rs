@@ -85,12 +85,14 @@ pub use compiler_module_handoff::conditional_v5::receipt_transport_v3::{
     recover_compiler_execution_receipt_transport_with_currentness_v3,
 };
 pub use compiler_module_handoff::conditional_v5::{
-    CompilerModuleHandoffAdmissionCauseV5, CompilerModuleHandoffAdmissionErrorV5,
-    CompilerModuleHandoffConsumptionTokenV5, CompilerModuleHandoffCurrentnessCustodyQuoteV5,
-    CompilerModuleHandoffCurrentnessLeaseV5, CompilerModuleHandoffCustodyQuotaV5,
-    CompilerModuleHandoffErrorV5, CompilerModuleHandoffOperationQuotaV5,
-    CompilerModuleHandoffPublicationV5, CompilerModuleHandoffReceiptV5,
-    CompilerModuleHandoffSlotV5, CompilerModuleHandoffStorageV5,
+    COMPILER_MODULE_HANDOFF_CUSTODY_COMPOSITION_SCRATCH_V5,
+    COMPILER_MODULE_HANDOFF_CUSTODY_COMPOSITION_WORK_V5, CompilerModuleHandoffAdmissionCauseV5,
+    CompilerModuleHandoffAdmissionErrorV5, CompilerModuleHandoffConsumptionTokenV5,
+    CompilerModuleHandoffCurrentnessCustodyQuoteV5, CompilerModuleHandoffCurrentnessLeaseV5,
+    CompilerModuleHandoffCustodyQuotaV5, CompilerModuleHandoffCustodyResourcesV5,
+    CompilerModuleHandoffCustodyScopeV5, CompilerModuleHandoffErrorV5,
+    CompilerModuleHandoffOperationQuotaV5, CompilerModuleHandoffPublicationV5,
+    CompilerModuleHandoffReceiptV5, CompilerModuleHandoffSlotV5, CompilerModuleHandoffStorageV5,
     CompilerModuleHandoffTransactionIdentityV5, ConsumedCompilerModuleHandoffV5,
     MAX_COMPILER_MODULE_HANDOFF_BYTES_V5, MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5,
     acquire_compiler_module_handoff_currentness_lease_v5,
@@ -102,6 +104,7 @@ pub use compiler_module_handoff::conditional_v5::{
     quote_compiler_module_handoff_currentness_custody_v5,
     recover_compiler_module_handoff_receipt_v5,
     rederive_compiler_module_handoff_receipt_for_replay_v5,
+    try_recover_compiler_module_handoff_receipt_in_root_budget_v5,
     try_recover_compiler_module_handoff_receipt_v5,
     try_recover_compiler_module_handoff_receipt_with_limit_v5,
 };

@@ -1,6 +1,8 @@
 //! Composition of the concrete observation, artifact and original-slot schedules.
 use super::*;
 use fe2o3_artifact_transaction::{
+    COMPILER_MODULE_HANDOFF_CUSTODY_COMPOSITION_SCRATCH_V5 as COMPOSITION_SCRATCH,
+    COMPILER_MODULE_HANDOFF_CUSTODY_COMPOSITION_WORK_V5 as COMPOSITION_WORK,
     CompilerModuleHandoffCustodyQuotaV5 as CustodyBounds,
     CompilerModuleHandoffOperationQuotaV5 as ArtifactQuota,
     INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V3 as SUBJECT_SCRATCH,
@@ -64,6 +66,9 @@ impl RootPublicationCustodyV3 {
             FRAME,
             // Returned lease/token charges accumulate in the builder scope.
             bounds.retained_storage(),
+            // No Holder floor is excluded: full quote overlaps AGAIN locally.
+            bounds.retained_storage(),
+            COMPOSITION_SCRATCH,
             subject,
             validate_scratch
                 .max(lease.scratch())
@@ -94,11 +99,13 @@ impl RootPublicationCustodyV3 {
                 token.work(),
                 SUBJECT_WORK,
                 current.work(),
+                4 * COMPOSITION_WORK,
+                CustodyResources::PREPARE_WORK,
             ])?,
             scratch: sum(&[
                 FRAME,
                 sum(&[RootObservation::VIEW_SCRATCH, observe_scratch])?
-                    .max(sum(&[observed, recover.scratch()])?)
+                    .max(sum(&[observed, COMPOSITION_SCRATCH, recover.scratch()])?)
                     .max(sum(&[observed, late.scratch()])?)
                     .max(construction),
             ])?,
@@ -114,7 +121,10 @@ impl RootPublicationCustodyV3 {
     }
 }
 
-pub(super) fn revalidation(current: ArtifactQuota) -> Result<RootPublicationQuotaV3> {
+pub(super) fn revalidation(
+    current: ArtifactQuota,
+    owners: usize,
+) -> Result<RootPublicationQuotaV3> {
     let (work, scratch) = NativeObservation::root_operation_quota(true)?;
     Ok(RootPublicationQuotaV3 {
         work: sum(&[
@@ -124,13 +134,14 @@ pub(super) fn revalidation(current: ArtifactQuota) -> Result<RootPublicationQuot
             LOCAL_WORK,
             work,
             current.work(),
+            COMPOSITION_WORK,
         ])?,
         scratch: sum(&[
             FRAME,
             RootObservation::VIEW_SCRATCH,
             Holder::<Owners>::ATTACH_SCRATCH,
             FRAME,
-            scratch.max(current.scratch()),
+            scratch.max(sum(&[owners, COMPOSITION_SCRATCH, current.scratch()])?),
         ])?,
     })
 }

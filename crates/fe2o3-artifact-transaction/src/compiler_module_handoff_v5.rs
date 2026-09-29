@@ -18,6 +18,14 @@ use std::mem::size_of;
 mod schema;
 pub use schema::CompilerModuleHandoffErrorV5;
 use schema::{Schema, payload_storage};
+#[path = "compiler_module_handoff_v5_composition.rs"]
+mod composition;
+pub use composition::{
+    COMPILER_MODULE_HANDOFF_CUSTODY_COMPOSITION_SCRATCH_V5,
+    COMPILER_MODULE_HANDOFF_CUSTODY_COMPOSITION_WORK_V5, CompilerModuleHandoffCustodyResourcesV5,
+    CompilerModuleHandoffCustodyScopeV5,
+    try_recover_compiler_module_handoff_receipt_in_root_budget_v5,
+};
 #[path = "compiler_module_handoff_v5_custody.rs"]
 mod custody;
 pub use custody::{
@@ -288,10 +296,14 @@ impl<T> CompilerModuleHandoffConsumptionTokenV5<T> {
     }
     pub fn revalidate_locked_currentness(&self, budget: &mut Budget<'_>) -> Result<()> {
         entry(budget, self.storage.0, |resources| {
-            custody::prepay_currentness(&self.binding, resources)?;
-            currentness::metadata(&self.binding, resources)?;
-            Ok(())
+            self.revalidate_locked_in(resources)
         })
+    }
+
+    fn revalidate_locked_in(&self, resources: &mut Resources<'_, '_>) -> Result<()> {
+        custody::prepay_currentness(&self.binding, resources)?;
+        currentness::metadata(&self.binding, resources)?;
+        Ok(())
     }
 }
 impl<T: AsRef<Handoff>> CompilerModuleHandoffConsumptionTokenV5<T> {

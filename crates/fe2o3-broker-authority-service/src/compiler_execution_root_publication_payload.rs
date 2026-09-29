@@ -2,20 +2,20 @@
 use super::*;
 
 pub(super) struct Owners {
-    quote: Quote,
+    resources: CustodyResources,
     started: bool,
     publication: Option<Lease>,
     token: Option<Token>,
 }
 
 impl Owners {
-    pub(super) fn new(quote: Quote) -> Self {
-        Self {
-            quote,
+    pub(super) fn new(quote: Quote, b: &mut Budget<'_>) -> Result<Self> {
+        Ok(Self {
+            resources: CustodyResources::prepare(quote, b).map_err(NativeOccurrenceError::from)?,
             started: false,
             publication: None,
             token: None,
-        }
+        })
     }
 
     fn acquire(
@@ -30,28 +30,31 @@ impl Owners {
                 "publication acquisition already started",
             ));
         }
-        if receipt != self.quote.receipt() {
+        if receipt != self.resources.quote().receipt() {
             return Err(RootPublicationCustodyErrorV3::state(
                 "publication quote changed receipt",
             ));
         }
         self.started = true;
         let barrier = retirement_barrier()?;
-        let (publication, storage) = acquire_quoted(output, producer, &self.quote, &barrier, b)
+        let Self {
+            resources,
+            publication,
+            token,
+            ..
+        } = self;
+        resources
+            .with_acquisition(&barrier, b, |scope| {
+                let (lease, storage) = scope.acquire_lease(output, producer)?;
+                *publication = Some(lease);
+                scope.reserve_retained(storage)?;
+                let lease = publication.as_ref().expect("installed publication lease");
+                let (current, storage) = scope.acquire_token(lease)?;
+                *token = Some(current);
+                scope.reserve_retained(storage)?;
+                Ok(())
+            })
             .map_err(NativeOccurrenceError::from)?;
-        self.publication = Some(publication);
-        b.reserve_storage(storage.retained_storage())?;
-        let publication = self
-            .publication
-            .as_ref()
-            .ok_or(RootPublicationCustodyErrorV3::state(
-                "publication lease absent",
-            ))?;
-        let (token, storage) = publication
-            .acquire_current_token_with_quote(&self.quote, &barrier, b)
-            .map_err(NativeOccurrenceError::from)?;
-        self.token = Some(token);
-        b.reserve_storage(storage.retained_storage())?;
         Ok(())
     }
 
@@ -108,9 +111,15 @@ unsafe impl Build<Acquire<'_, '_, '_>> for Owners {
         publication
             .validate_current_token(token)
             .map_err(NativeOccurrenceError::from)?;
-        let observed = join_subject(op.observation, op.expected, op.receipt, token, b)?;
-        token
-            .revalidate_locked_currentness(b)
+        require_joined_invocation(op.observation, token)?;
+        let (subject, storage) = self
+            .resources
+            .subject(publication, token, b)
+            .map_err(NativeOccurrenceError::from)?;
+        b.reserve_storage(storage.retained_storage())?;
+        let observed = finish_join_subject(op.observation, op.expected, subject)?;
+        self.resources
+            .revalidate(publication, token, b)
             .map_err(NativeOccurrenceError::from)?;
         op.observation.revalidate_from(Source::Root(op.root), b)?;
         *op.output = Some(observed);
@@ -135,8 +144,8 @@ unsafe impl Build<Validate<'_, '_, '_>> for Owners {
             .validate_current_token(token)
             .map_err(NativeOccurrenceError::from)?;
         op.observation.revalidate_from(Source::Root(op.root), b)?;
-        token
-            .revalidate_locked_currentness(b)
+        self.resources
+            .revalidate(publication, token, b)
             .map_err(NativeOccurrenceError::from)?;
         Ok(())
     }

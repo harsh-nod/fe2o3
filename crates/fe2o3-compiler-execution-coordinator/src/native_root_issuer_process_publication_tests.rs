@@ -6,6 +6,7 @@ use fe2o3_artifact_transaction::{
     enable_same_mount_namespace_artifact_path_guard_v1,
     try_acquire_artifact_process_spawn_lease_v1 as spawn_lease, with_artifact_process_spawn_v1,
 };
+use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as PublicationAccount;
 use std::{
     os::fd::AsRawFd,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
@@ -14,14 +15,23 @@ use std::{
 };
 
 const PUBLICATION_CASE: &str = "FE2O3_NATIVE_ROOT_PUBLICATION_CASE";
-const PUBLICATION_CASES: [&str; 6] = [
+const PUBLICATION_CASES: [&str; 7] = [
     "drop",
     "issuer-removed",
     "unwind",
     "outer-accounting",
     "invocation-mismatch",
     "short-ceiling",
+    "large-root",
 ];
+// Logical ownership shape only, not allocated bytes or an approved runtime.
+const EXTERNAL_RUNTIME_SHAPE: usize = 352_457_184;
+type Prepublished = (
+    fixtures::Fixture,
+    publication_fixture::Publication,
+    compiler::PublicationInputs,
+    usize,
+);
 
 pub(super) fn matrix() {
     fixtures::require_environment();
@@ -65,13 +75,29 @@ pub(super) fn case() {
         (0, 0, 0o700)
     );
     enable_same_mount_namespace_artifact_path_guard_v1();
-    let mut work = Work::new(WORK);
+    // Inert fixture publication is a prior writer transaction, not a request
+    // reset or a bypass of legacy publication's strict whole-account cap.
+    let prepublished = (case == "large-root").then(|| {
+        let f = fixtures::Fixture::new(false);
+        let mut work = Work::new(WORK);
+        let mut writer = Budget::new(&mut work, REQUEST_STORAGE);
+        let (publication, inputs) = publication_fixture::Publication::new(&f, false, &mut writer);
+        (f, publication, inputs, writer.storage())
+    });
+    let external = if prepublished.is_some() {
+        EXTERNAL_RUNTIME_SHAPE
+    } else {
+        0
+    };
+    let total = external + REQUEST_STORAGE;
     // This is the ORIGINAL account used by preparation, clone, session and
     // publication. Never replace it or raise the artifact schema's 256 MiB cap.
-    let mut b = Budget::new(&mut work, REQUEST_STORAGE);
+    let mut account = PublicationAccount::new(Work::new(WORK), total);
+    account.with_budget(|b| {
+    b.reserve_storage(external).unwrap();
     let ledger = b.work_ledger_identity_v1();
-    let address = &b as *const Budget<'_> as usize;
-    let result = catch_unwind(AssertUnwindSafe(|| run(&case, &mut b)));
+    let address = b as *const Budget<'_> as usize;
+    let result = catch_unwind(AssertUnwindSafe(|| run(&case, prepublished, b)));
     eprintln!(
         "NATIVE_ROOT_PUBLICATION_ACCOUNT case={case} limit={} work={} storage={} peak={} failed_work={:?} failed_storage={:?}",
         b.storage_limit(),
@@ -81,9 +107,10 @@ pub(super) fn case() {
         b.failed_work(),
         b.failed_storage()
     );
-    assert_eq!(b.storage_limit(), REQUEST_STORAGE);
+    assert_eq!(b.storage_limit(), total);
+    assert!(b.storage() >= external);
     assert!(b.work_ledger_identity_v1() == ledger);
-    assert_eq!(&b as *const Budget<'_> as usize, address);
+    assert_eq!(b as *const Budget<'_> as usize, address);
     let (used, quote, cleanup_peak) = match result {
         Ok(stats) => stats,
         Err(panic) => resume_unwind(panic),
@@ -94,11 +121,22 @@ pub(super) fn case() {
         "NATIVE_ROOT_PUBLICATION_V3_OK case={case} work={used}/{quote} peak={} cleanup_peak={cleanup_peak}",
         b.peak_storage()
     );
+    });
 }
 
 #[allow(unsafe_code)]
-fn run(case: &str, b: &mut Budget<'_>) -> (usize, usize, usize) {
-    let mut f = fixtures::Fixture::new(false);
+fn run(
+    case: &str,
+    prepublished: Option<Prepublished>,
+    b: &mut Budget<'_>,
+) -> (usize, usize, usize) {
+    let (mut f, prepublished) = match prepublished {
+        Some((f, p, inputs, storage)) => {
+            b.reserve_storage(storage).unwrap();
+            (f, Some((p, inputs)))
+        }
+        None => (fixtures::Fixture::new(false), None),
+    };
     // Paths outlive the original cleanup controller even when any assertion
     // unwinds. The controller itself outlives every foreground attempt below.
     let publication;
@@ -106,7 +144,9 @@ fn run(case: &str, b: &mut Budget<'_>) -> (usize, usize, usize) {
     report("before-preparation", b);
     let prepared = preparation::prepare(&mut f, &mut cleanup.pool, b);
     report("after-preparation", b);
-    let (p, inputs) = publication_fixture::Publication::new(&f, case == "invocation-mismatch", b);
+    let (p, inputs) = prepublished.unwrap_or_else(|| {
+        publication_fixture::Publication::new(&f, case == "invocation-mismatch", b)
+    });
     publication = p;
     report("after-inert-publication", b);
     let (trace, exit, drops) = compiler::confirmed_publication(&f, inputs, &mut cleanup.pool, b);
@@ -146,7 +186,7 @@ fn run(case: &str, b: &mut Budget<'_>) -> (usize, usize, usize) {
     // held first exec and authenticated peer. No compiler instruction resumes.
     let (mut attempt, growth) =
         unsafe { prepared.launch_root_attempt(trace, TIMEOUT, &mut cleanup.pool, b) }
-            .expect("genuine original trace/session startup within original 256 MiB cap");
+            .expect("genuine original trace/session startup within original request cap");
     b.reserve_storage(growth.additional_storage()).unwrap();
     assert_eq!(
         attempt.retained_storage(),
@@ -341,7 +381,7 @@ fn assert_publication(
     );
     assert!(kernel_locked(publication.directory.path()));
     let mut foreign_work = Work::new(WORK);
-    let mut foreign = Budget::new(&mut foreign_work, REQUEST_STORAGE);
+    let mut foreign = Budget::new(&mut foreign_work, b.storage_limit());
     foreign.reserve_storage(b.storage()).unwrap();
     assert!(matches!(
         attempt.revalidate_publication(&mut foreign),

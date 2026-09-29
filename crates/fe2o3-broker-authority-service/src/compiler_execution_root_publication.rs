@@ -4,10 +4,11 @@ use super::*;
 use fe2o3_artifact_transaction::{
     ArtifactLockRetirementBarrierErrorV1 as BarrierError,
     ArtifactLockRetirementBarrierV1 as Barrier,
-    CompilerModuleHandoffCurrentnessCustodyQuoteV5 as Quote, MAX_COMPILER_MODULE_HANDOFF_BYTES_V5,
-    acquire_compiler_module_handoff_currentness_lease_with_quote_v5 as acquire_quoted,
+    CompilerModuleHandoffCurrentnessCustodyQuoteV5 as Quote,
+    CompilerModuleHandoffCustodyResourcesV5 as CustodyResources,
+    MAX_COMPILER_MODULE_HANDOFF_BYTES_V5,
     try_acquire_artifact_lock_retirement_barrier_v1 as retirement_barrier,
-    try_recover_compiler_module_handoff_receipt_with_limit_v5 as try_recover,
+    try_recover_compiler_module_handoff_receipt_in_root_budget_v5 as try_recover,
 };
 use fe2o3_protected_service_spawn::{
     LateRetainedCustodyV2 as Holder, ProtectedServiceCleanupServiceV2 as Cleanup,
@@ -68,6 +69,9 @@ impl RootPublicationCustodyV3 {
     /// used throughout. Returned storage is FULL and unreserved; the independent
     /// persistent cleanup charge is paid before any long-lived lock is acquired.
     /// The compiler must have completed its authenticated exec/alias closure.
+    /// Use the same original Owned::with_budget view through observation and
+    /// revalidation. Its whole-request cap is unchanged; artifact operations
+    /// additionally enforce their local 256 MiB working-set windows.
     pub fn observe<T: Send + 'static>(
         trace: &mut Trace<'_, T>,
         cleanup: &mut Cleanup,
@@ -122,6 +126,7 @@ impl RootPublicationCustodyV3 {
                 quote
                     .currentness_revalidation_quota()
                     .map_err(NativeOccurrenceError::from)?,
+                quote.retained_storage(),
             )?;
             let payload_storage = quote
                 .retained_storage()
@@ -133,9 +138,8 @@ impl RootPublicationCustodyV3 {
             let (owners, charge) =
                 unsafe { trace.reserve_late_custody::<Owners>(cleanup, payload_storage, b) }?;
             b.reserve_storage(charge.additional_storage())?;
-            trace
-                .prepare_late_attachment(&owners, b)?
-                .commit(Owners::new(quote));
+            let payload = Owners::new(quote, b)?;
+            trace.prepare_late_attachment(&owners, b)?.commit(payload);
             let mut observed = None;
             trace.with_task_observation(b, |root, b| {
                 // SAFETY: the operation borrows this trace's own observation and
