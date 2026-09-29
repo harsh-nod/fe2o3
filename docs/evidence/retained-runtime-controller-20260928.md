@@ -5,6 +5,9 @@ This continues the [compiler approval checkpoint](compiler-approval-runtime-2026
 It is not a release report and completes no issue #272 M0-M7 milestone or 47/47
 launch gate.
 
+The next [native aggregate cleanup checkpoint](native-domain-cleanup-20260928.md)
+adds retained cgroup custody and actual Linux descendant cleanup validation.
+
 ## Implemented Boundaries
 
 Commit `63c52c43eb69cbd5e9d145eec57de3bed3dafed4` adds a canonical, inert compiler
