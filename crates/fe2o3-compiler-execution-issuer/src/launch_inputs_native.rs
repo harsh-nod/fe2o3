@@ -41,15 +41,14 @@ macro_rules! launch_inputs {
                 budget.with_prepaid_scope(
                     Self::INPUT_STORAGE,
                     ENTRY_WORK,
-                    ENTRY_WORK,
+                    READ_WORK,
                     Self::FRAME_STORAGE,
                     |budget| {
-                        let (policy, charge) =
-                            PolicyCapability::from_inherited_at(policy_fd, budget)?;
-                        budget.reserve_storage(charge.additional_storage())?;
-                        let (launch, charge) =
-                            LaunchCapability::from_inherited_at(launch_fd, budget)?;
-                        budget.reserve_storage(charge.additional_storage())?;
+                        preflight_inputs(policy_fd, launch_fd)?;
+                        let (policy, charge) = read_policy(policy_fd, budget)?;
+                        budget.reserve_storage(charge)?;
+                        let (launch, charge) = read_launch(launch_fd, budget)?;
+                        budget.reserve_storage(charge)?;
                         let inputs = Self { policy, launch };
                         inputs.check(budget)?;
                         Ok((inputs, $Storage(RETAINED)))

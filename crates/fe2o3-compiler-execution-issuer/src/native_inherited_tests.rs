@@ -15,15 +15,16 @@ fn descriptor_flags(fd: i32) -> i32 {
 fn inherited_child_case(mode: &str, slot: i32) {
     use crate::CompilerExecutionIssuerEntrypointErrorV1 as DescriptorError;
 
-    assert_eq!(
-        crate::NATIVE_INHERITED_DESCRIPTORS,
-        [3, 4, 5, 6, 7, 8, 9, 10, 11]
-    );
-    assert_eq!(crate::PRIVATE_DESCRIPTOR_FLOOR, 12);
-    for fd in crate::NATIVE_INHERITED_DESCRIPTORS {
+    for (i, fd) in INHERITED_DESCRIPTORS.into_iter().enumerate() {
+        assert_eq!(fd, 3 + i as i32);
         assert_eq!(descriptor_flags(fd), 0);
     }
-    let private_flags: [i32; 20] = std::array::from_fn(|i| descriptor_flags(12 + i as i32));
+    assert_eq!(
+        PRIVATE_DESCRIPTOR_FLOOR,
+        3 + INHERITED_DESCRIPTORS.len() as i32
+    );
+    let private_flags: [i32; 20] =
+        std::array::from_fn(|i| descriptor_flags(PRIVATE_DESCRIPTOR_FLOOR + i as i32));
     let prefix = 17;
     let floor = 19;
     let limit = prefix + IO_WORK;
@@ -57,7 +58,7 @@ fn inherited_child_case(mode: &str, slot: i32) {
     if mode == "valid" {
         b.with_prepaid_scope(floor, 8, IO_WORK, FRAME, |_| -> Result<()> {
             let _process = Process::harden().map_err(Error::Process)?;
-            crate::require_native_inherited()?;
+            require_inherited_table()?;
             Ok(())
         })
         .unwrap();
@@ -77,7 +78,7 @@ fn inherited_child_case(mode: &str, slot: i32) {
     assert_eq!(b.storage(), floor);
     assert!(b.work_ledger_identity_v1() == ledger);
     assert_eq!((b.failed_work(), b.failed_storage()), denial);
-    for fd in crate::NATIVE_INHERITED_DESCRIPTORS {
+    for fd in INHERITED_DESCRIPTORS {
         let expected = if fd == slot && mode == "missing" {
             -1
         } else if fd == slot && mode == "cloexec" {
@@ -88,20 +89,25 @@ fn inherited_child_case(mode: &str, slot: i32) {
         assert_eq!(descriptor_flags(fd), expected);
     }
     for (i, flags) in private_flags.into_iter().enumerate() {
-        assert_eq!(descriptor_flags(12 + i as i32), flags);
+        assert_eq!(descriptor_flags(PRIVATE_DESCRIPTOR_FLOOR + i as i32), flags);
     }
     if mode == "valid" {
-        // Each accepted raw slot remains available for the unchanged consuming
-        // take. This tests descriptor intake, not admission of these /dev/null files.
-        for fd in crate::NATIVE_INHERITED_DESCRIPTORS {
-            let owned = crate::take_inherited(fd).unwrap();
-            assert!(owned.as_raw_fd() >= crate::PRIVATE_DESCRIPTOR_FLOOR);
-            assert_eq!(descriptor_flags(owned.as_raw_fd()), libc::FD_CLOEXEC);
+        // Consuming intake cannot reuse holes left by earlier takes, including
+        // FD12 on V3. These /dev/null owners do not stand in for admission.
+        for fd in INHERITED_DESCRIPTORS {
+            let owned = take_inherited(fd).unwrap();
+            let duplicate = owned.as_raw_fd();
+            assert!(duplicate >= PRIVATE_DESCRIPTOR_FLOOR);
+            assert_eq!(descriptor_flags(duplicate), libc::FD_CLOEXEC);
             assert_eq!(descriptor_flags(fd), -1);
+            for remaining in INHERITED_DESCRIPTORS.into_iter().filter(|slot| *slot > fd) {
+                assert_eq!(descriptor_flags(remaining), 0);
+            }
             drop(owned);
+            assert_eq!(descriptor_flags(duplicate), -1);
         }
         for (i, flags) in private_flags.into_iter().enumerate() {
-            assert_eq!(descriptor_flags(12 + i as i32), flags);
+            assert_eq!(descriptor_flags(PRIVATE_DESCRIPTOR_FLOOR + i as i32), flags);
         }
     }
     println!("NATIVE_INHERITED_TABLE_CHECKED {mode} {slot}");
@@ -124,7 +130,7 @@ fn inherited_matrix(test: &str, mode: &str, slots: &[i32]) {
         let mut occupied = Vec::new();
         loop {
             let fd = rustix::io::fcntl_dupfd_cloexec(&source, 3).unwrap();
-            let above_table = fd.as_raw_fd() >= crate::PRIVATE_DESCRIPTOR_FLOOR;
+            let above_table = fd.as_raw_fd() >= PRIVATE_DESCRIPTOR_FLOOR;
             occupied.push(fd);
             if above_table {
                 break;
@@ -147,7 +153,7 @@ fn inherited_matrix(test: &str, mode: &str, slots: &[i32]) {
         // table. Every mandatory slot stays occupied across exec and test startup.
         unsafe {
             command.pre_exec(move || {
-                for fd in crate::NATIVE_INHERITED_DESCRIPTORS {
+                for fd in INHERITED_DESCRIPTORS {
                     if libc::dup2(source.as_raw_fd(), fd) < 0 {
                         return Err(std::io::Error::last_os_error());
                     }
@@ -190,7 +196,7 @@ fn native_inherited_table_rejects_each_missing_slot_before_input_io() {
     inherited_matrix(
         "native_inherited_table_rejects_each_missing_slot_before_input_io",
         "missing",
-        &crate::NATIVE_INHERITED_DESCRIPTORS,
+        &INHERITED_DESCRIPTORS,
     );
 }
 
@@ -199,7 +205,7 @@ fn native_inherited_table_rejects_each_cloexec_slot_before_input_io() {
     inherited_matrix(
         "native_inherited_table_rejects_each_cloexec_slot_before_input_io",
         "cloexec",
-        &crate::NATIVE_INHERITED_DESCRIPTORS,
+        &INHERITED_DESCRIPTORS,
     );
 }
 
@@ -216,8 +222,11 @@ fn native_inherited_table_preserves_valid_slots_for_consuming_intake() {
 fn native_inherited_table_work_is_prepaid_before_entrypoint_io() {
     let prefix = 17;
     let floor = 19;
-    assert_eq!(crate::NATIVE_INHERITED_CHECK_WORK, 9 * (1024 + 64));
-    assert_eq!(IO_WORK, 8 + 64 * 1024 + crate::NATIVE_INHERITED_CHECK_WORK);
+    assert_eq!(
+        INHERITED_CHECK_WORK,
+        INHERITED_DESCRIPTORS.len() * (1024 + 64)
+    );
+    assert_eq!(IO_WORK, 8 + 64 * 1024 + INHERITED_CHECK_WORK);
     let mut work = Work::new(prefix + IO_WORK - 1);
     let mut b = Budget::new(&mut work, floor + FRAME);
     b.charge_work(prefix).unwrap();
@@ -231,4 +240,19 @@ fn native_inherited_table_work_is_prepaid_before_entrypoint_io() {
     assert_eq!(b.failed_work(), Some(prefix + IO_WORK));
     assert_eq!(b.storage(), floor);
     assert!(b.work_ledger_identity_v1() == ledger);
+}
+
+#[test]
+fn v3_root_slot_does_not_change_the_v1_v2_descriptor_abi() {
+    assert_eq!(
+        crate::NATIVE_INHERITED_DESCRIPTORS,
+        [3, 4, 5, 6, 7, 8, 9, 10, 11]
+    );
+    assert_eq!(crate::PRIVATE_DESCRIPTOR_FLOOR, 12);
+    assert_eq!(
+        crate::NATIVE_INHERITED_DESCRIPTORS_V3,
+        [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    );
+    assert_eq!(crate::COMPILER_EXECUTION_ISSUER_ROOT_CONTROL_FD_V3, 12);
+    assert_eq!(crate::PRIVATE_DESCRIPTOR_FLOOR_V3, 13);
 }

@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const TOTAL_WORK: usize = ENTRY_WORK
+const TOTAL_WORK: usize = READ_WORK
     + 2 * PolicyCapability::IO_WORK
     + 2 * LaunchCapability::IO_WORK
     + POLICY_WORK
@@ -212,6 +212,9 @@ fn admission_and_revalidation_keep_original_ledger_and_full_output_charge() {
     let floor = Inputs::INPUT_STORAGE + 19;
     b.reserve_storage(floor).unwrap();
     let ledger = b.work_ledger_identity_v1();
+    assert!(b.charge_work(TOTAL_WORK + recheck_work + 1).is_err());
+    assert!(b.reserve_storage(1_000_001).is_err());
+    let denial = (b.failed_work(), b.failed_storage());
     let (inputs, charge) = Inputs::read_at(p.as_raw_fd(), m.as_raw_fd(), &mut b).unwrap();
     let retained = inputs.policy.retained_storage() + inputs.launch.retained_storage();
     assert_eq!(inputs.retained_storage(), retained);
@@ -222,12 +225,62 @@ fn admission_and_revalidation_keep_original_ledger_and_full_output_charge() {
     assert_eq!(b.storage(), floor + retained);
     assert_eq!(b.work(), TOTAL_WORK + recheck_work);
     assert!(b.work_ledger_identity_v1() == ledger);
+    assert_eq!((b.failed_work(), b.failed_storage()), denial);
     drop(inputs);
     b.release_storage(retained).unwrap();
     assert_eq!(b.storage(), floor);
     drop((p, m));
     b.release_storage(Inputs::INPUT_STORAGE).unwrap();
     assert_eq!(b.storage(), 19);
+}
+
+#[test]
+fn reader_preflight_quotes_deny_before_descriptor_io() {
+    let prefix = 17;
+    let floor = Inputs::INPUT_STORAGE + 19;
+    for mode in 0..3 {
+        let mut w = Work::new(prefix + READ_WORK - usize::from(mode == 0));
+        let mut b = Budget::new(
+            &mut w,
+            floor + Inputs::FRAME_STORAGE - usize::from(mode == 1),
+        );
+        b.charge_work(prefix).unwrap();
+        let retained = if mode == 2 {
+            Inputs::INPUT_STORAGE - 1
+        } else {
+            floor
+        };
+        b.reserve_storage(retained).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let error = Inputs::read_at(-1, -1, &mut b).unwrap_err();
+        match mode {
+            0 => {
+                assert!(matches!(error, InputError::Resource(Resource::Work(_))));
+                assert_eq!(
+                    b.work(),
+                    prefix
+                        + if READ_WORK > ENTRY_WORK {
+                            ENTRY_WORK
+                        } else {
+                            0
+                        }
+                );
+                assert_eq!(b.failed_work(), Some(prefix + READ_WORK));
+                assert_eq!(b.failed_storage(), None);
+            }
+            1 => {
+                assert!(matches!(error, InputError::Resource(Resource::Storage(_))));
+                assert_eq!(b.work(), prefix + READ_WORK);
+                assert_eq!(b.failed_storage(), Some(floor + Inputs::FRAME_STORAGE));
+            }
+            _ => {
+                assert!(matches!(error, InputError::Resource(Resource::Accounting)));
+                assert_eq!(b.work(), prefix + ENTRY_WORK);
+            }
+        }
+        assert_eq!(b.storage(), retained);
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
 }
 
 #[test]
@@ -264,7 +317,7 @@ fn native_consumer_refuses_mixed_families_and_wrong_policy_without_fallback() {
                 ));
                 assert_eq!(
                     b.work(),
-                    ENTRY_WORK + PolicyCapability::IO_WORK + POLICY_WORK
+                    READ_WORK + PolicyCapability::IO_WORK + POLICY_WORK
                 );
             }
             "corrupt" => assert!(matches!(
@@ -360,6 +413,7 @@ fn fixed_native_slots_are_admitted_after_a_real_process_exec() {
     let _fork_guard = crate::TEST_FORK_FD_LOCK.lock().unwrap();
     for mode in [
         "valid",
+        "descriptor-floor",
         "consistent-other",
         "wrong-policy",
         "legacy-manifest",
@@ -482,12 +536,43 @@ fn inherited_slot_child() {
         },
     );
     b.reserve_storage(Inputs::INPUT_STORAGE).unwrap();
+    if mode == "descriptor-floor" {
+        // Own every destination in this isolated child before making controlled
+        // holes. The real sealed inputs stay at 6/8; /dev/null is only a guard.
+        let guard = rustix::io::fcntl_dupfd_cloexec(&File::open("/dev/null").unwrap(), 32).unwrap();
+        for fd in 3..=14 {
+            if fd != POLICY_FD && fd != LAUNCH_FD {
+                // SAFETY: no Rust owner borrows these fixture slots in this child.
+                assert_eq!(unsafe { libc::dup2(guard.as_raw_fd(), fd) }, fd);
+            }
+        }
+        for fd in 12..=14 {
+            // SAFETY: the preceding dup2 installed the fixture-owned raw slot.
+            assert_eq!(unsafe { libc::close(fd) }, 0);
+        }
+    }
     let result = Inputs::from_inherited(&mut b);
     if matches!(
         mode.as_str(),
-        "valid" | "consistent-other" | "policy-mode-change" | "manifest-mode-change"
+        "valid"
+            | "descriptor-floor"
+            | "consistent-other"
+            | "policy-mode-change"
+            | "manifest-mode-change"
     ) {
         let (inputs, charge) = result.unwrap();
+        if mode == "descriptor-floor" {
+            for fd in 12..=14 {
+                let expected =
+                    if (EXPECTED_PRIVATE_FLOOR..=EXPECTED_PRIVATE_FLOOR + 1).contains(&fd) {
+                        libc::FD_CLOEXEC
+                    } else {
+                        -1
+                    };
+                // SAFETY: F_GETFD only inspects the controlled scalar slot.
+                assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, expected);
+            }
+        }
         b.reserve_storage(charge.additional_storage()).unwrap();
         let generation = if mode == "consistent-other" { 8 } else { 7 };
         assert_eq!(
@@ -516,6 +601,12 @@ fn inherited_slot_child() {
         let retained = inputs.retained_storage();
         drop(inputs);
         b.release_storage(retained).unwrap();
+        if mode == "descriptor-floor" {
+            for fd in 12..=14 {
+                // SAFETY: F_GETFD does not adopt the closed private slots.
+                assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
+            }
+        }
     } else {
         assert!(result.is_err());
     }

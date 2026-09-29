@@ -7,7 +7,9 @@ use crate::{
     COMPILER_EXECUTION_ISSUER_PEER_FD_V1 as PEER, COMPILER_EXECUTION_ISSUER_POLICY_FD_V1 as POLICY,
     COMPILER_EXECUTION_ISSUER_READY_FD_V1 as READY, COMPILER_EXECUTION_ISSUER_ROOT_FD_V1 as ROOT,
     COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1 as KEY,
-    CompilerExecutionIssuerLaunchInputsV2 as Inputs, close_inherited, take_inherited,
+    CompilerExecutionIssuerLaunchInputsV2 as Inputs,
+    NATIVE_INHERITED_CHECK_WORK as INHERITED_CHECK_WORK, close_inherited,
+    require_native_inherited as require_inherited_table, take_inherited,
 };
 use fe2o3_broker_authority_service::{
     ExpectedClientProcessIdentityV1 as Expected, LiveClientPidfdIdentityV2 as Client,
@@ -21,7 +23,27 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
-use std::{fmt, fs::File};
+use std::{fmt, fs::File, os::fd::OwnedFd};
+
+#[cfg(test)]
+use crate::{NATIVE_INHERITED_DESCRIPTORS as INHERITED_DESCRIPTORS, PRIVATE_DESCRIPTOR_FLOOR};
+
+const ROOT_CONTROL_STORAGE: usize = 0;
+type RootControl = ();
+
+fn take_root_control() -> Result<RootControl> {
+    Ok(())
+}
+
+fn serve(
+    admission: Admission<'_>,
+    inputs: &Inputs,
+    writer: OwnedFd,
+    (): RootControl,
+    b: &mut Budget<'_>,
+) -> Result<()> {
+    Ok(admission.serve_native_with_readiness(inputs.manifest(), writer, b)?)
+}
 
 type Error = CompilerExecutionIssuerEntrypointErrorV2;
 type Result<T> = std::result::Result<T, Error>;
