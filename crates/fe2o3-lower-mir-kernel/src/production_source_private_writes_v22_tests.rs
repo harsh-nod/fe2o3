@@ -3,6 +3,42 @@ use super::*;
 #[path = "production_source_wrapping_value_v23_tests.rs"]
 mod wrapping_value_v23;
 
+fn with_private_expression_result_v24(
+    factory: fn() -> ProductionSemanticSsaOwnerV1,
+    consume: impl for<'scope, 'work> FnOnce(
+        &ProductionSourceCorrespondenceV18<'scope>,
+        &ProductionOptimizedSourceCorrespondenceV18<'scope>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> SourceOwnedResultV18<()>,
+) -> ProductionOptimizerTestResultV18 {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let prepared = scalar_payload_prepared_from_v18(factory, &mut budget);
+    let result = with_production_optimizer_result_v18(prepared, &mut budget, consume);
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+    result
+}
+
+fn private_expression_selected_resource_v24(
+    result: &ProductionOptimizerTestResultV18,
+) -> Option<ArgumentResourceV1> {
+    match result {
+        Err(ProductionSourceOptimizationErrorV18::Source(
+            ProductionSourceOwnedViewErrorV18::Resource(error),
+        ))
+        | Err(ProductionSourceOptimizationErrorV18::Adoption(
+            fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+                ProductionSourceOwnedViewErrorV18::Resource(error),
+            ),
+        ))
+        | Err(ProductionSourceOptimizationErrorV18::Adoption(
+            fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
+        )) => Some(*error),
+        _ => None,
+    }
+}
+
 fn private_cross_block_owner_v22() -> ProductionSemanticSsaOwnerV1 {
     let base = private_entry_neutral_owner_v20();
     let semantic = base.source_semantic();
@@ -441,7 +477,7 @@ fn expression_boundary_v22(cut: ExpressionCutV22) -> (usize, usize) {
     let completed = std::cell::Cell::new(false);
     let observed = std::cell::Cell::new(None);
     let selected_resource = std::cell::Cell::new(None);
-    let result = with_entry_fixture_v18(
+    let result = with_private_expression_result_v24(
         private_cross_block_owner_v22,
         |original, optimized, budget| {
             let floor = budget.storage();
@@ -567,18 +603,21 @@ fn expression_boundary_v22(cut: ExpressionCutV22) -> (usize, usize) {
         "boundary assertions and cleanup must complete"
     );
     if let Some(selected) = selected_resource.get() {
-        assert!(
-            matches!(result,
-                Err(ProductionSourceOwnedViewErrorV18::Resource(error)) if error == selected
-            ),
+        assert_eq!(
+            private_expression_selected_resource_v24(&result),
+            Some(selected),
             "{result:?}"
         );
     } else {
         assert!(
             matches!(
                 result,
-                Err(ProductionSourceOwnedViewErrorV18::Binding(
-                    "test stops after exact source expression boundary"
+                Err(ProductionSourceOptimizationErrorV18::Adoption(
+                    fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+                        ProductionSourceOwnedViewErrorV18::Binding(
+                            "test stops after exact source expression boundary"
+                        )
+                    )
                 ))
             ),
             "{result:?}"

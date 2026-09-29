@@ -175,7 +175,7 @@ fn wrapping_value_source_contract_excludes_checked_tuple_and_noninteger_arithmet
 fn wrapping_value_original_rows_reject_wrong_site_result_and_operator() {
     for fault in 0..5 {
         let completed = std::cell::Cell::new(false);
-        let result = with_entry_fixture_v18(
+        let result = with_private_expression_result_v24(
             private_entry_non_neutral_owner_v20,
             |original, optimized, budget| {
                 original.with_optimized_scalar_leaf_namespace_v18(optimized, 0,
@@ -460,7 +460,7 @@ fn wrapping_query_cut_v23(cut: Option<(bool, usize, bool)>) -> usize {
     let completed = std::cell::Cell::new(false);
     let measured = std::cell::Cell::new(0);
     let selected = std::cell::Cell::new(None);
-    let result = with_entry_fixture_v18(
+    let result = with_private_expression_result_v24(
         private_entry_non_neutral_owner_v20,
         |original, optimized, budget| {
             original.with_optimized_scalar_leaf_namespace_v18(
@@ -530,14 +530,18 @@ fn wrapping_query_cut_v23(cut: Option<(bool, usize, bool)>) -> usize {
     );
     assert!(completed.get());
     if let Some(error) = selected.get() {
-        assert!(
-            matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(actual)) if actual == error)
+        assert_eq!(
+            private_expression_selected_resource_v24(&result),
+            Some(error),
+            "{result:?}"
         );
     } else {
         assert!(matches!(
             result,
-            Err(ProductionSourceOwnedViewErrorV18::Binding(
-                "test stops after wrapping query"
+            Err(ProductionSourceOptimizationErrorV18::Adoption(
+                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+                    ProductionSourceOwnedViewErrorV18::Binding("test stops after wrapping query")
+                )
             ))
         ));
     }
