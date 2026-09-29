@@ -49,6 +49,9 @@ struct Tree {
 }
 impl Tree {
     fn new(helper_length: usize) -> Self {
+        Self::with_lengths([helper_length, 64, 64, 64, 64, 64])
+    }
+    fn with_lengths(lengths: [usize; 6]) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
             "compiler-helper-transfer-{}-{}",
@@ -70,8 +73,7 @@ impl Tree {
             fs::create_dir(root.join(path)).unwrap();
             chmod(&root.join(path), 0o755);
         }
-        let bytes: [Vec<u8>; 6] =
-            std::array::from_fn(|i| vec![i as u8 + 1; if i == 0 { helper_length } else { 64 }]);
+        let bytes: [Vec<u8>; 6] = std::array::from_fn(|i| vec![i as u8 + 1; lengths[i]]);
         let digests: [[u8; 32]; 6] = std::array::from_fn(|i| Sha256::digest(&bytes[i]).into());
         let closure =
             CompilerClosureV2::new([1; 32], [2; 32], [3; 32], digests[1], [5; 32], digests[4])
@@ -150,8 +152,8 @@ impl Tree {
         b: &mut Budget<'_>,
     ) -> Result<(File, RetainedCompilerRuntimeExecTransferChargeV1)> {
         let (uid, gid) = owners();
-        v.clone_executable_using(
-            ExecRole::ProofExecutor,
+        v.clone_image_using(
+            TransferRole::ProofExecutor,
             uid,
             gid,
             synthetic_immutable,
@@ -161,8 +163,8 @@ impl Tree {
     }
     fn validate(&self, v: &Inventory, file: &File, b: &mut Budget<'_>) -> Result<()> {
         let (uid, gid) = owners();
-        v.validate_executable_using(
-            ExecRole::ProofExecutor,
+        v.validate_image_using(
+            TransferRole::ProofExecutor,
             file,
             uid,
             gid,
@@ -255,7 +257,7 @@ fn transfer_rejects_wrong_role_same_content_other_inode_and_descriptor_flags() {
     assert!(matches!(
         t.validate(&v, wrong_role, &mut b),
         Err(RetainedCompilerRuntimeErrorV1::Mismatch(
-            "executable transfer origin differs from retained entry"
+            "image transfer origin differs from retained entry"
         ))
     ));
     let copy_path = t.root.join("same-content-other-inode");
@@ -311,7 +313,7 @@ fn private_transfer_check_requires_digest_and_protection_not_only_matching_inode
     b.reserve_storage(APPROVAL_STORAGE).unwrap();
     let v = t.retain(&mut b);
     b.reserve_storage(TRANSFER_SCRATCH).unwrap();
-    let mut selected = v.executable(ExecRole::ProofExecutor, &mut b).unwrap();
+    let mut selected = v.image(TransferRole::ProofExecutor, &mut b).unwrap();
     let file = &selected.retained.file;
     let (uid, gid) = owners();
     // Alter only the private test comparison, not public approval or custody.
@@ -345,8 +347,8 @@ fn post_duplicate_origin_revalidation_is_required_and_custody_charge_rolls_back(
     let charge = size_of::<(File, RetainedCompilerRuntimeExecTransferChargeV1)>() + 64;
     let (uid, gid) = owners();
     let mut calls = 0;
-    let result = v.clone_executable_using(
-        ExecRole::ProofExecutor,
+    let result = v.clone_image_using(
+        TransferRole::ProofExecutor,
         uid,
         gid,
         synthetic_immutable,
@@ -377,8 +379,8 @@ fn final_transfer_validation_rechecks_origins_after_file_inspection() {
     let before = b.storage();
     let (uid, gid) = owners();
     let mut calls = 0;
-    let result = v.validate_executable_using(
-        ExecRole::ProofExecutor,
+    let result = v.validate_image_using(
+        TransferRole::ProofExecutor,
         &file,
         uid,
         gid,
@@ -409,7 +411,7 @@ fn missing_retained_helper_refuses_before_origin_io() {
     assert!(matches!(
         t.duplicate(&v, &mut b),
         Err(RetainedCompilerRuntimeErrorV1::Mismatch(
-            "executable custody absent"
+            "image custody absent"
         ))
     ));
     assert_eq!(PROBES.with(Cell::get), 0);
@@ -529,8 +531,8 @@ fn post_duplicate_unwind_preserves_original_account_and_work() {
     let (uid, gid) = owners();
     let mut calls = 0;
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = v.clone_executable_using(
-            ExecRole::ProofExecutor,
+        let _ = v.clone_image_using(
+            TransferRole::ProofExecutor,
             uid,
             gid,
             synthetic_immutable,

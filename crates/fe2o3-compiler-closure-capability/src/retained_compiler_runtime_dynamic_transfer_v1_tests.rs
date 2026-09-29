@@ -1,16 +1,21 @@
 //! Reuse private synthetic inventory mechanics, never public runtime approval.
 use super::*;
 
-const ROLES: [ExecRole; 2] = [ExecRole::Rustc, ExecRole::Interpreter];
+const ROLES: [(usize, TransferRole); 4] = [
+    (1, TransferRole::Rustc),
+    (2, TransferRole::Interpreter),
+    (4, TransferRole::CodegenBackend),
+    (5, TransferRole::Fe2o3ProcMacro),
+];
 
 fn duplicate(
     t: &Tree,
     v: &Inventory,
-    role: ExecRole,
+    role: TransferRole,
     b: &mut Budget<'_>,
 ) -> Result<(File, RetainedCompilerRuntimeExecTransferChargeV1)> {
     let (uid, gid) = owners();
-    v.clone_executable_using(role, uid, gid, synthetic_immutable, b, |b| {
+    v.clone_image_using(role, uid, gid, synthetic_immutable, b, |b| {
         t.revalidate(v, b)
     })
 }
@@ -18,38 +23,39 @@ fn duplicate(
 fn validate(
     t: &Tree,
     v: &Inventory,
-    role: ExecRole,
+    role: TransferRole,
     file: &File,
     b: &mut Budget<'_>,
 ) -> Result<()> {
     let (uid, gid) = owners();
-    v.validate_executable_using(role, file, uid, gid, synthetic_immutable, b, |b| {
+    v.validate_image_using(role, file, uid, gid, synthetic_immutable, b, |b| {
         t.revalidate(v, b)
     })
 }
 
 #[test]
-fn rustc_and_interpreter_transfers_keep_separate_full_backing_charges() {
-    let t = Tree::new(64);
-    let mut work = Work::new(LIMIT);
+fn exec_and_load_transfers_keep_separate_full_actual_length_charges() {
+    let lengths = [64, 137, 193, 64, CHUNK + 1, 251];
+    let t = Tree::with_lengths(lengths);
+    let mut work = Work::new(ROLES.len() * LIMIT);
     let mut b = Budget::new(&mut work, LIMIT);
     b.reserve_storage(APPROVAL_STORAGE).unwrap();
     let v = t.retain(&mut b);
     let floor = b.storage();
     let mut transfers = Vec::new();
-    for (index, role) in ROLES.into_iter().enumerate() {
+    for (index, role) in ROLES {
         let before = b.storage();
         let (file, charge) = duplicate(&t, &v, role, &mut b).unwrap();
         assert_eq!(b.storage(), before);
         assert_eq!(
             charge.full_storage(),
-            size_of::<(File, RetainedCompilerRuntimeExecTransferChargeV1)>() + 64
+            size_of::<(File, RetainedCompilerRuntimeExecTransferChargeV1)>() + lengths[index]
         );
         b.reserve_storage(charge.full_storage()).unwrap();
         validate(&t, &v, role, &file, &mut b).unwrap();
         assert_eq!(
             Snapshot::read(&file).unwrap(),
-            v.files[index + 1].as_ref().unwrap().snapshot
+            v.files[index].as_ref().unwrap().snapshot
         );
         assert!(
             rustix::io::fcntl_getfd(&file)
@@ -81,7 +87,7 @@ fn rustc_and_interpreter_transfers_keep_separate_full_backing_charges() {
 
 #[test]
 fn dynamic_transfers_refuse_every_other_role_and_equal_bytes_at_another_inode() {
-    for (index, role) in ROLES.into_iter().enumerate() {
+    for (index, role) in ROLES {
         let t = Tree::new(64);
         let mut work = Work::new(LIMIT);
         let mut b = Budget::new(&mut work, LIMIT);
@@ -90,21 +96,154 @@ fn dynamic_transfers_refuse_every_other_role_and_equal_bytes_at_another_inode() 
         let (file, charge) = duplicate(&t, &v, role, &mut b).unwrap();
         b.reserve_storage(charge.full_storage()).unwrap();
         for (other, (_, retained)) in v.manifest.entries().zip(&v.files).enumerate() {
-            if other != index + 1 {
+            if other != index {
                 assert!(validate(&t, &v, role, &retained.as_ref().unwrap().file, &mut b).is_err());
             }
         }
         let copy_path = t.root.join("same-bytes");
-        fs::write(&copy_path, vec![index as u8 + 2; 64]).unwrap();
-        chmod(&copy_path, 0o555);
+        fs::write(&copy_path, vec![index as u8 + 1; 64]).unwrap();
+        chmod(&copy_path, role.role().protected_mode());
         assert!(validate(&t, &v, role, &File::open(copy_path).unwrap(), &mut b).is_err());
         validate(&t, &v, role, &file, &mut b).unwrap();
     }
 }
 
 #[test]
+fn transfers_enforce_distinct_exec_and_load_modes() {
+    for (index, role) in ROLES {
+        let t = Tree::new(64);
+        let mut work = Work::new(LIMIT);
+        let mut b = Budget::new(&mut work, LIMIT);
+        b.reserve_storage(APPROVAL_STORAGE).unwrap();
+        let v = t.retain(&mut b);
+        let (file, charge) = duplicate(&t, &v, role, &mut b).unwrap();
+        b.reserve_storage(charge.full_storage()).unwrap();
+        let before = b.storage();
+        let expected = if index < 3 { 0o555 } else { 0o444 };
+        assert_eq!(Snapshot::read(&file).unwrap().mode & 0o7777, expected);
+        validate(&t, &v, role, &file, &mut b).unwrap();
+        chmod(&t.code(PATHS[index]), expected ^ 0o111);
+        assert!(matches!(
+            validate(&t, &v, role, &file, &mut b),
+            Err(RetainedCompilerRuntimeErrorV1::Mismatch(
+                "invalid protected code file"
+            ))
+        ));
+        assert!(duplicate(&t, &v, role, &mut b).is_err());
+        assert_eq!(b.storage(), before);
+    }
+}
+
+#[test]
+fn transfers_refuse_writable_path_only_and_non_cloexec_descriptors() {
+    for (index, role) in ROLES {
+        let t = Tree::new(64);
+        // The synthetic fixture allows a writable alias before admission. That
+        // alias is never eligible for transfer, even with the same inode/bytes.
+        let path = t.code(PATHS[index]);
+        chmod(&path, 0o600);
+        let writable = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        chmod(&path, role.role().protected_mode());
+        let path_only = File::from(
+            rustix::fs::open(&path, OFlags::PATH | OFlags::CLOEXEC, Mode::empty()).unwrap(),
+        );
+        let mut work = Work::new(LIMIT);
+        let mut b = Budget::new(&mut work, LIMIT);
+        b.reserve_storage(APPROVAL_STORAGE).unwrap();
+        let v = t.retain(&mut b);
+        let (file, charge) = duplicate(&t, &v, role, &mut b).unwrap();
+        b.reserve_storage(charge.full_storage()).unwrap();
+        let before = b.storage();
+        for invalid in [&writable, &path_only] {
+            assert!(matches!(
+                validate(&t, &v, role, invalid, &mut b),
+                Err(RetainedCompilerRuntimeErrorV1::Mismatch(
+                    "invalid protected code file"
+                ))
+            ));
+        }
+        rustix::io::fcntl_setfd(&file, rustix::io::FdFlags::empty()).unwrap();
+        assert!(matches!(
+            validate(&t, &v, role, &file, &mut b),
+            Err(RetainedCompilerRuntimeErrorV1::Mismatch(
+                "invalid protected code file"
+            ))
+        ));
+        assert_eq!(b.storage(), before);
+    }
+}
+
+#[test]
+fn load_transfers_recheck_unselected_inventory_and_fixed_manifest_origins() {
+    for (index, role) in ROLES.into_iter().filter(|(i, _)| *i >= 4) {
+        for attack in 0..3 {
+            let t = Tree::new(64);
+            let mut work = Work::new(LIMIT);
+            let mut b = Budget::new(&mut work, LIMIT);
+            b.reserve_storage(APPROVAL_STORAGE).unwrap();
+            let v = t.retain(&mut b);
+            let (file, charge) = duplicate(&t, &v, role, &mut b).unwrap();
+            b.reserve_storage(charge.full_storage()).unwrap();
+            let before = b.storage();
+            let path = match attack {
+                0 => t.code(PATHS[3]), // Unselected shared library remains required.
+                1 => t.manifest_path(),
+                _ => t.code(PATHS[index]),
+            };
+            let previous = t.root.join("previous-origin");
+            fs::rename(&path, &previous).unwrap();
+            if attack == 2 {
+                symlink(&previous, &path).unwrap();
+            } else {
+                fs::write(&path, fs::read(&previous).unwrap()).unwrap();
+                chmod(&path, 0o444);
+            }
+            assert!(duplicate(&t, &v, role, &mut b).is_err());
+            assert!(validate(&t, &v, role, &file, &mut b).is_err());
+            assert_eq!(b.storage(), before);
+        }
+    }
+}
+
+#[test]
+fn load_transfer_checks_digest_and_immutability_in_addition_to_snapshot() {
+    for (_, role) in ROLES.into_iter().filter(|(i, _)| *i >= 4) {
+        let t = Tree::new(64);
+        let mut work = Work::new(LIMIT);
+        let mut b = Budget::new(&mut work, LIMIT);
+        b.reserve_storage(APPROVAL_STORAGE).unwrap();
+        let v = t.retain(&mut b);
+        b.reserve_storage(TRANSFER_SCRATCH).unwrap();
+        let mut image = v.image(role, &mut b).unwrap();
+        let file = &image.retained.file;
+        let (uid, gid) = owners();
+        image.entry.sha256[0] ^= 1;
+        assert!(matches!(
+            image.check_file(file, uid, gid, synthetic_immutable, &mut b),
+            Err(RetainedCompilerRuntimeErrorV1::Mismatch(
+                "code bytes differ from approved digest"
+            ))
+        ));
+        image.entry.sha256[0] ^= 1;
+        fn refuse_immutable(_: &File) -> Result<()> {
+            Err(mismatch("synthetic load protection refusal"))
+        }
+        assert!(matches!(
+            image.check_file(file, uid, gid, refuse_immutable, &mut b),
+            Err(RetainedCompilerRuntimeErrorV1::Mismatch(
+                "synthetic load protection refusal"
+            ))
+        ));
+    }
+}
+
+#[test]
 fn dynamic_transfer_revalidates_fixed_origins_after_duplication_and_final_check() {
-    for (index, role) in ROLES.into_iter().enumerate() {
+    for (index, role) in ROLES {
         for final_check in [false, true] {
             let t = Tree::new(64);
             let mut work = Work::new(LIMIT);
@@ -119,26 +258,18 @@ fn dynamic_transfer_revalidates_fixed_origins_after_duplication_and_final_check(
             let recheck = |b: &mut Budget<'_>| {
                 calls += 1;
                 if calls == 2 {
-                    let source = t.code(PATHS[index + 1]);
+                    let source = t.code(PATHS[index]);
                     let bytes = fs::read(&source).unwrap();
                     fs::rename(&source, t.root.join("old-source")).unwrap();
                     fs::write(&source, bytes).unwrap();
-                    chmod(&source, 0o555);
+                    chmod(&source, role.role().protected_mode());
                 }
                 t.revalidate(&v, b)
             };
             let result = if final_check {
-                v.validate_executable_using(
-                    role,
-                    &file,
-                    uid,
-                    gid,
-                    synthetic_immutable,
-                    &mut b,
-                    recheck,
-                )
+                v.validate_image_using(role, &file, uid, gid, synthetic_immutable, &mut b, recheck)
             } else {
-                v.clone_executable_using(role, uid, gid, synthetic_immutable, &mut b, recheck)
+                v.clone_image_using(role, uid, gid, synthetic_immutable, &mut b, recheck)
                     .map(drop)
             };
             assert!(result.is_err());
@@ -150,18 +281,18 @@ fn dynamic_transfer_revalidates_fixed_origins_after_duplication_and_final_check(
 
 #[test]
 fn missing_dynamic_source_refuses_before_origin_io() {
-    for (index, role) in ROLES.into_iter().enumerate() {
+    for (index, role) in ROLES {
         let t = Tree::new(64);
         let mut work = Work::new(LIMIT);
         let mut b = Budget::new(&mut work, LIMIT);
         b.reserve_storage(APPROVAL_STORAGE).unwrap();
         let mut v = t.retain(&mut b);
-        v.files[index + 1] = None;
+        v.files[index] = None;
         PROBES.with(|v| v.set(0));
         assert!(matches!(
             duplicate(&t, &v, role, &mut b),
             Err(RetainedCompilerRuntimeErrorV1::Mismatch(
-                "executable custody absent"
+                "image custody absent"
             ))
         ));
         assert_eq!(PROBES.with(Cell::get), 0);
@@ -170,7 +301,7 @@ fn missing_dynamic_source_refuses_before_origin_io() {
 
 #[test]
 fn dynamic_transfers_require_original_account_and_full_reservation_before_io() {
-    for role in ROLES {
+    for (_, role) in ROLES {
         let t = Tree::new(64);
         let mut work = Work::new(LIMIT);
         let mut other = Work::new(LIMIT);
@@ -195,7 +326,12 @@ fn dynamic_transfers_require_original_account_and_full_reservation_before_io() {
     }
 }
 
-fn bounded(role: ExecRole, validation: bool, work: usize, storage: usize) -> (Result<()>, Usage) {
+fn bounded(
+    role: TransferRole,
+    validation: bool,
+    work: usize,
+    storage: usize,
+) -> (Result<()>, Usage) {
     let t = Tree::new(64);
     let mut work = Work::new(work);
     let mut b = Budget::new(&mut work, storage);
@@ -228,7 +364,7 @@ fn bounded(role: ExecRole, validation: bool, work: usize, storage: usize) -> (Re
 
 #[test]
 fn dynamic_transfer_and_final_check_exact_and_one_short_limits() {
-    for role in ROLES {
+    for (_, role) in ROLES {
         for validation in [false, true] {
             let (result, used) = bounded(role, validation, LIMIT, LIMIT);
             result.unwrap();
