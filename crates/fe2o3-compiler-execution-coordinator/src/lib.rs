@@ -58,6 +58,7 @@ use rustix::net::{
 };
 use rustix::pipe::{PipeFlags, pipe_with};
 
+mod compiler_invocation_staging;
 #[allow(unsafe_code)]
 mod entrypoint;
 #[allow(unsafe_code)]

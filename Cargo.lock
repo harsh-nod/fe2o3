@@ -869,6 +869,7 @@ dependencies = [
  "fe2o3-protected-service-spawn",
  "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
+ "fe2o3-rustc-invocation",
  "libc",
  "rustix",
  "sha2 0.11.0",
