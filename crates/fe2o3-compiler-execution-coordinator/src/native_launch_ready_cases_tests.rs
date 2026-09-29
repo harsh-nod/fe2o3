@@ -223,3 +223,103 @@ fn maximum_compiler_launch_costs_are_inert_checked_and_cover_retention() {
     assert!(Prepared::transfer_source_storage_for([0, 1, 1]).is_err());
     assert!(Prepared::transfer_source_storage_for([1, u64::MAX, 1]).is_err());
 }
+
+#[test]
+fn indirect_launch_entry_is_nominal_and_refuses_before_any_staging() {
+    use std::{any::TypeId, cell::Cell};
+    assert_eq!(
+        REQUIRES_ORIGINAL_ROOT_CONTROL,
+        TypeId::of::<Prepared>() == TypeId::of::<crate::PreparedCompilerExecutionSupervisorV3>()
+    );
+    struct Input<'a>(&'a Cell<usize>);
+    impl Drop for Input<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    // Inert drop probe only; no fabricated Prepared or native authority.
+    for fault in ["none", "floor", "work"] {
+        let floor = 23;
+        let paid = floor - usize::from(fault == "floor");
+        let mut work = Work::new(5 + LAUNCH_ENTRY - usize::from(fault == "work"));
+        let mut b = Budget::new(&mut work, paid);
+        assert!(b.reserve_storage(paid + 1).is_err());
+        b.reserve_storage(paid).unwrap();
+        b.charge_work(5).unwrap();
+        assert!(b.charge_work(LAUNCH_ENTRY + 1).is_err());
+        let ledger = b.work_ledger_identity_v1();
+        let drops = Cell::new(0);
+        let reached_staging = Cell::new(false);
+        let result = (|| -> Result<()> {
+            let _input = Input(&drops);
+            launch_entry(floor, &mut b)?;
+            reached_staging.set(true);
+            Ok(())
+        })();
+        match fault {
+            "floor" => assert!(matches!(result, Err(Error::Resource(Resource::Accounting)))),
+            "work" => assert!(matches!(result, Err(Error::Resource(Resource::Work(_))))),
+            _ if REQUIRES_ORIGINAL_ROOT_CONTROL => assert!(matches!(
+                result,
+                Err(Error::Invalid(
+                    "native V3 indirect launch requires the original-root FD12 route"
+                ))
+            )),
+            _ => result.unwrap(),
+        }
+        assert_eq!(
+            reached_staging.get(),
+            fault == "none" && !REQUIRES_ORIGINAL_ROOT_CONTROL
+        );
+        assert_eq!(drops.get(), 1);
+        // Coordinator consumes the owner, not the caller's input reservation.
+        assert_eq!(b.storage(), paid);
+        assert_eq!(b.peak_storage(), paid);
+        assert_eq!(b.work(), 5 + if fault == "work" { 0 } else { LAUNCH_ENTRY });
+        assert_eq!(b.failed_work(), Some(5 + LAUNCH_ENTRY + 1));
+        assert_eq!(b.failed_storage(), Some(paid + 1));
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+}
+
+#[test]
+fn v2_indirect_launch_keeps_original_outer_scope_quota() {
+    if REQUIRES_ORIGINAL_ROOT_CONTROL {
+        return;
+    }
+    let floor = 23;
+    let scratch = FRAME + launch_io::ATTEMPT_SCRATCH;
+    for fault in ["none", "work", "scratch"] {
+        let mut work = Work::new(LOCAL_WORK - usize::from(fault == "work"));
+        let mut b = Budget::new(&mut work, floor + scratch - usize::from(fault == "scratch"));
+        b.reserve_storage(floor).unwrap();
+        let mut reached = false;
+        let result = (|| -> Result<()> {
+            launch_entry(floor, &mut b)?;
+            b.with_prepaid_scope(floor, 0, LOCAL_WORK - LAUNCH_ENTRY, scratch, |_| {
+                reached = true;
+                Ok(())
+            })
+        })();
+        match fault {
+            "work" => assert!(matches!(result, Err(Error::Resource(Resource::Work(_))))),
+            "scratch" => assert!(matches!(result, Err(Error::Resource(Resource::Storage(_))))),
+            _ => result.unwrap(),
+        }
+        assert_eq!(reached, fault == "none");
+        assert_eq!(b.storage(), floor);
+        assert_eq!(
+            b.work(),
+            if fault == "work" {
+                LAUNCH_ENTRY
+            } else {
+                LOCAL_WORK
+            }
+        );
+        assert_eq!(b.failed_work(), (fault == "work").then_some(LOCAL_WORK));
+        assert_eq!(
+            b.failed_storage(),
+            (fault == "scratch").then_some(floor + scratch)
+        );
+    }
+}
