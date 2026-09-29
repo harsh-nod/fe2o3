@@ -13,6 +13,7 @@ use core::fmt;
 use std::collections::{HashMap, HashSet};
 
 include!("release_pin_budget_body.rs");
+include!("batch_event_release_body.rs");
 
 use fe2o3_aql::{AMD_SIGNAL_BYTES_V1, AqlDependencySignalObservationV1};
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
@@ -654,41 +655,7 @@ impl CompletionSignalArenaOwnerV1 {
         &mut self,
         events: Vec<Gfx942ComputeEventOccurrenceV1>,
     ) -> Result<usize, (Gfx942CompletionErrorV1, Vec<Gfx942ComputeEventOccurrenceV1>)> {
-        let result = (|| {
-            self.require_ready()?;
-            let mut event_ids = HashSet::new();
-            event_ids
-                .try_reserve(events.len())
-                .map_err(|_| Gfx942CompletionErrorV1::DependencyLedgerAllocation)?;
-            for event in &events {
-                if !event_ids.insert(event.event_id) {
-                    return Err(Gfx942CompletionErrorV1::DuplicateDependency);
-                }
-                self.validate_active_event(event)?;
-                self.validate_live_occurrence(event.exact)?;
-                if self.slots[event.exact.slot.index as usize].event_pins == 0 {
-                    return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
-                }
-            }
-            validate_release_pin_budgets(
-                events.iter().map(|event| {
-                    let index = event.exact.slot.index;
-                    (index, self.slots[index as usize].event_pins)
-                }),
-                Gfx942CompletionErrorV1::StaleEventOccurrence,
-            )?;
-            Ok(())
-        })();
-        if let Err(error) = result {
-            return Err((error, events));
-        }
-        let released = events.len();
-        for event in events {
-            let removed = self.dependency_ledger.events.remove(&event.event_id);
-            debug_assert_eq!(removed, Some(event.exact));
-            self.slots[event.exact.slot.index as usize].event_pins -= 1;
-        }
-        Ok(released)
+        completion_release_event_batch_body!(completion_rust_expr, self, events)
     }
 
     /// Explicitly releases one reader pin.

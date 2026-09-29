@@ -3,6 +3,7 @@ mod release_tests {
     use super::*;
 
     include!("bound_cancel_tests.rs");
+    include!("batch_event_release_tests.rs");
 
     #[derive(Debug, Eq, PartialEq)]
     struct Snapshot {
