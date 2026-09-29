@@ -1,5 +1,5 @@
-//! Inert retained alias-state primitives; no whole Shared construction or routing.
-//! The real statement/rvalue/install producer and source/SSA join remain separate.
+//! Retained alias ownership, including source-driven producers; no ordinary routing.
+//! Actual Shared source/SSA admission and whole-root preparation remain separate.
 use super::super::super::shared_primitive_reads_v1::RetainedSharedObserverV1;
 use super::*;
 use fe2o3_kernel_ir::{
@@ -99,6 +99,12 @@ pub(super) struct RetainedAliasStateV1<'a> {
     operand: Option<&'a SemanticOperandV1>,
     observer: RetainedSharedObserverV1<'a>,
     site: Option<SemanticTransparentBorrowSiteV1>,
+    rhs: Vec<Alias>,
+    installed: Option<Vec<Alias>>,
+    replacement: Vec<u32>,
+    value: Option<&'a SemanticRvalueV1>,
+    statement: Option<&'a SemanticStatementKindV1>,
+    terminator: Option<&'a SemanticTerminatorKindV1>,
 }
 impl<'a> RetainedAliasStateV1<'a> {
     pub(super) fn new() -> Self {
@@ -128,6 +134,12 @@ impl<'a> RetainedAliasStateV1<'a> {
             operand: None,
             observer: RetainedSharedObserverV1::new(),
             site: None,
+            rhs: Vec::new(),
+            installed: None,
+            replacement: Vec::new(),
+            value: None,
+            statement: None,
+            terminator: None,
         }
     }
     pub(super) fn prepare_observer_into(
@@ -783,8 +795,8 @@ fn frame() -> std::result::Result<usize, Resource> {
             &mut Resource,
         )>(),
         size_of::<(
-            [usize; 18],
-            std::array::IntoIter<usize, 18>,
+            [usize; 19],
+            std::array::IntoIter<usize, 19>,
             usize,
             usize,
             std::result::Result<usize, Resource>,
@@ -792,15 +804,20 @@ fn frame() -> std::result::Result<usize, Resource> {
         )>(),
         place_ops::frame()?,
         read_ops::frame()?,
+        engine_ops::frame()?,
     ];
     rows.into_iter().try_fold(0usize, |sum, bytes| {
         sum.checked_add(bytes).ok_or(Resource::Arithmetic)
     })
 }
+#[path = "adapter_shared_primitive_engine_retained_v1.rs"]
+mod engine_ops;
 #[path = "adapter_shared_primitive_place_retained_v1.rs"]
 mod place_ops;
 #[path = "adapter_shared_primitive_read_retained_v1.rs"]
 mod read_ops;
+#[allow(unused_imports)]
+pub(super) use engine_ops::RetainedSharedEngineV1;
 #[cfg(test)]
 #[path = "adapter_shared_primitive_alias_retained_v1_tests.rs"]
 mod tests;

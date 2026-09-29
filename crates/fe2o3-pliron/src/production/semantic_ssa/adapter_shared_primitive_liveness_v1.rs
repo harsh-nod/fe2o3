@@ -310,3 +310,8 @@ impl<M: BorrowWork, O: ReadObserver> Visitor for Expire<'_, '_, '_, M, O> {
 mod retained;
 #[allow(unused_imports)]
 pub(super) use retained::{RetainedLivenessErrorV1, RetainedSharedLivenessV1};
+
+// Fixed retained expiry bridge; the ordinary Schedule path is unchanged.
+#[allow(dead_code)]
+#[path = "adapter_shared_primitive_liveness_expiry_retained_v1.rs"]
+pub(super) mod retained_expiry;
