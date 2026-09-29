@@ -28,6 +28,7 @@ use fe2o3_external_anchor_coordinator::ExternalAnchorSupervisorTransferV3 as Anc
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
 };
 use fe2o3_protected_service_spawn::{
     ProtectedServiceCleanupServiceV2 as Cleanup, ProtectedServiceDescriptorBindingV1 as Binding,
@@ -82,17 +83,51 @@ impl<T: Send + 'static> Payload<T> {
         - size_of::<ManifestCap>();
 }
 
+// Accounting identity only, meaningful while the original Work borrow remains
+// live. Captured in the authenticated trace callback, never from decoded input.
+struct RequestAccount {
+    ledger: Ledger,
+    address: usize,
+}
+impl RequestAccount {
+    fn capture(b: &Budget<'_>) -> Self {
+        Self {
+            ledger: b.work_ledger_identity_v1(),
+            address: b as *const Budget<'_> as usize,
+        }
+    }
+
+    fn with<R>(
+        &self,
+        retained: usize,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(&mut Budget<'_>) -> Result<R>,
+    ) -> Result<R> {
+        b.with_prepaid_scope(retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.ledger != b.work_ledger_identity_v1()
+                || self.address != b as *const Budget<'_> as usize
+            {
+                return Err(Resource::Accounting.into());
+            }
+            operation(b)
+        })
+    }
+}
+
 /// Move-only originating-thread issuer custody, not production occurrence admission.
 /// The actual compiler trace stays with the caller; this owner cannot resume it.
 /// Keep the creator thread and original cleanup controller alive until termination,
 /// including deferred/quarantined cleanup. Retire the FULL charge only after Drop.
+/// Keep the original Work borrow live and Budget at its admitting address until
+/// this owner drops; address equality is not persistent identity after that borrow.
 pub(crate) struct ManagedIssuer<'work, T: Send + 'static> {
     child: Child<T>,
     ready: Ready,
     retained: usize,
     continuity: Quota,
+    account: RequestAccount,
     // Never send the foreground launch owner or imply a Send escape for the trace.
-    _creator: PhantomData<(&'work mut (), Rc<()>)>,
+    _creator: PhantomData<(&'work Budget<'work>, Rc<()>)>,
 }
 impl<T: Send + 'static> ManagedIssuer<'_, T> {
     const ENVELOPE: usize =
@@ -113,7 +148,7 @@ impl<T: Send + 'static> ManagedIssuer<'_, T> {
     /// Owning attempt must check readiness/continuity before resuming its compiler.
     /// This does not perform Prepare/Issue or inspect a not-yet-created publication.
     pub(crate) fn validate_ready(&self, b: &mut Budget<'_>) -> Result<()> {
-        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+        self.account.with(self.retained, b, |b| {
             self.child.with_resources(b, |p, b| -> Result<()> {
                 p.prepared.validate_process(self.child.pid(), b)?;
                 match_ready(&self.ready, self.child.pid(), &p.manifest, &p.prepared, b)
@@ -189,11 +224,13 @@ impl Prepared {
                 attempt
                     .trace
                     .with_issuer_inputs(b, |client, peer, pidfd, dependency, b| {
+                        let account = RequestAccount::capture(b);
                         // SAFETY: the caller supplies the creator/custody/Drop contract;
                         // these inputs come only from this original confirmed root trace.
                         unsafe {
                             launch_inputs(
-                                self, client, peer, pidfd, dependency, deadline, cleanup, b,
+                                self, client, peer, pidfd, dependency, account, deadline, cleanup,
+                                b,
                             )
                         }
                     })
@@ -211,6 +248,7 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
     peer: BorrowedFd<'_>,
     pidfd: BorrowedFd<'_>,
     dependency: Dependency<T>,
+    account: RequestAccount,
     deadline: Instant,
     cleanup: &mut Cleanup,
     b: &mut Budget<'_>,
@@ -345,6 +383,7 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
                     ready: ready_record,
                     retained,
                     continuity,
+                    account,
                     _creator: PhantomData,
                 },
                 Storage(growth),

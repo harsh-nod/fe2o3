@@ -8,6 +8,90 @@ use std::fs::File;
 
 const LIMIT: usize = 1 << 30;
 
+#[test]
+fn issuer_account_scope_preserves_original_charges_and_history() {
+    let floor = 256;
+    let prefix = 17;
+    let mut work = Work::new(prefix + LOCAL_WORK);
+    let mut b = Budget::new(&mut work, floor + FRAME);
+    b.charge_work(prefix).unwrap();
+    b.reserve_storage(floor).unwrap();
+    assert!(b.reserve_storage(FRAME + 1).is_err());
+    let denial = b.failed_storage();
+    let account = RequestAccount::capture(&b);
+    let mut accessed = false;
+    account
+        .with(floor, &mut b, |b| {
+            accessed = true;
+            assert!(b.work_ledger_identity_v1() == account.ledger);
+            assert_eq!(b as *const Budget<'_> as usize, account.address);
+            assert_eq!(b.storage(), floor + FRAME);
+            Ok(())
+        })
+        .unwrap();
+    assert!(accessed);
+    assert_eq!(b.storage(), floor);
+    assert_eq!(b.work(), prefix + LOCAL_WORK);
+    assert_eq!(b.peak_storage(), floor + FRAME);
+    assert_eq!(b.failed_storage(), denial);
+    assert!(ManagedIssuer::<()>::ENVELOPE >= size_of::<RequestAccount>());
+    assert!(FRAME >= 4 * size_of::<ManagedIssuer<'_, ()>>());
+}
+
+#[test]
+fn issuer_account_scope_rejects_funded_foreign_ledger_before_access() {
+    let floor = 256;
+    let mut original_work = Work::new(LOCAL_WORK);
+    let mut foreign_work = Work::new(LOCAL_WORK);
+    let mut original = Budget::new(&mut original_work, floor + FRAME);
+    let mut foreign = Budget::new(&mut foreign_work, floor + FRAME);
+    original.reserve_storage(floor).unwrap();
+    foreign.reserve_storage(floor).unwrap();
+    let account = RequestAccount::capture(&original);
+    let mut accessed = false;
+    let result = account.with(floor, &mut foreign, |_| {
+        accessed = true;
+        Ok(())
+    });
+    assert!(matches!(result, Err(Error::Resource(Resource::Accounting))));
+    assert!(!accessed);
+    assert_eq!(original.work(), 0);
+    assert_eq!(original.storage(), floor);
+    assert_eq!(foreign.work(), LOCAL_WORK);
+    assert_eq!(foreign.storage(), floor);
+}
+
+#[test]
+fn issuer_account_scope_requires_both_original_work_and_budget_address() {
+    let floor = 256;
+    let mut first_work = Work::new(3 * LOCAL_WORK);
+    let mut second_work = Work::new(3 * LOCAL_WORK);
+    let mut first = Budget::new(&mut first_work, floor + FRAME);
+    let mut second = Budget::new(&mut second_work, floor + FRAME);
+    first.reserve_storage(floor).unwrap();
+    second.reserve_storage(floor).unwrap();
+    let account = RequestAccount::capture(&first);
+    let other_address = &second as *const Budget<'_> as usize;
+    assert_ne!(account.address, other_address);
+    std::mem::swap(&mut first, &mut second);
+    // Same budget address now contains a different (equally funded) Work ledger.
+    assert_eq!(&first as *const Budget<'_> as usize, account.address);
+    assert!(first.work_ledger_identity_v1() != account.ledger);
+    // Original Work ledger is still live, but at another Budget address.
+    assert_eq!(&second as *const Budget<'_> as usize, other_address);
+    assert!(second.work_ledger_identity_v1() == account.ledger);
+    for b in [&mut first, &mut second] {
+        let result = account.with::<()>(floor, b, |_| panic!("foreign account reached issuer I/O"));
+        assert!(matches!(result, Err(Error::Resource(Resource::Accounting))));
+        assert_eq!(b.storage(), floor);
+        assert_eq!(b.work(), LOCAL_WORK);
+    }
+    std::mem::swap(&mut first, &mut second);
+    account.with(floor, &mut first, |_| Ok(())).unwrap();
+    assert_eq!(first.work(), 2 * LOCAL_WORK);
+    assert_eq!(first.storage(), floor);
+}
+
 // Inert records only: no fabricated Prepared, dependency, protected admission or
 // successful provisioning. These tests cannot provide production launch evidence.
 fn records() -> (Policy, Manifest, [u8; READY_BYTES]) {
