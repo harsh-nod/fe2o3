@@ -1,8 +1,9 @@
 //! Shared readiness mechanics, not child, deployment or endpoint admission.
 //!
-//! The caller retains the child and channels, prepays ATTEMPT_SCRATCH throughout
-//! each phase, and reserves returned ready/descriptor storage before retaining it.
-//! Profile reads require a nonblocking pipe; bootstrap I/O uses DONTWAIT.
+//! The caller retains the child and channels, prepays ATTEMPT_SCRATCH (or
+//! PIPE_ATTEMPT_SCRATCH for readiness pipes) throughout each phase, and reserves
+//! returned ready/descriptor storage before retaining it. Profile reads require
+//! a nonblocking pipe; bootstrap I/O uses DONTWAIT.
 //! Gate writes require the exclusively owned fresh release pipe. Logical attempt
 //! limits and deadline checks do not bound a blocking syscall's duration.
 //!
@@ -22,6 +23,10 @@ use std::mem::size_of;
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
+#[path = "launch_io_pipe.rs"]
+mod pipe;
+pub use pipe::{ExactPipeFrame, PipeFrameError};
+
 /// Finite primary attempts in each readiness phase.
 pub const MAX_PHASE_ATTEMPTS: usize = 120_001;
 /// Finite interrupted writes to the exclusive release gate.
@@ -30,6 +35,22 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
 /// Largest inert readiness payload accepted by this fixed-size transport.
 pub const MAX_READY_BYTES: usize = 88;
+/// Largest inert exact pipe frame; independent of the SEQPACKET limit.
+pub const MAX_PIPE_READY_BYTES: usize = 120;
+/// Per pipe attempt: fstat, F_GETFL, and one nonblocking read, without retries.
+pub const MAX_PIPE_ATTEMPT_SYSCALLS: usize = 3;
+/// Separate original-ledger liveness allowance, not included in MAX_LIVENESS_CHECKS.
+pub const MAX_PIPE_LIVENESS_CHECKS: usize = MAX_PHASE_ATTEMPTS - 1;
+/// Transport and pause syscalls; excludes clock and separately metered liveness.
+pub const MAX_PIPE_SYSCALLS: usize =
+    MAX_PHASE_ATTEMPTS * MAX_PIPE_ATTEMPT_SYSCALLS + MAX_PIPE_LIVENESS_CHECKS;
+/// Complete pipe-phase mechanical work, not included in MAX_WORK. Excludes
+/// nested liveness, deadline construction, caller validation and retained storage.
+pub const MAX_PIPE_WORK: usize = MAX_PHASE_ATTEMPTS * Boundary::ReadyPipe.work()
+    + MAX_PIPE_LIVENESS_CHECKS * Boundary::Progress.work();
+/// Prepaid logical pipe frame/stat/result scratch; not RSS or a stack bound.
+/// Observer state/errors and nested liveness require separate caller charges.
+pub const PIPE_ATTEMPT_SCRATCH: usize = 8192;
 #[allow(unsafe_code)]
 // SAFETY: the fixed payload size fits c_uint and CMSG alignment cannot overflow.
 // Unlike rustix's unaligned byte-buffer allowance, this is the exact libc ABI size.
@@ -80,6 +101,8 @@ pub enum Boundary {
     ReadyTransfer,
     /// Send one bounded payload without descriptor rights.
     ReadySend,
+    /// Validate the nonblocking pipe read end, then read frame bytes or exact EOF.
+    ReadyPipe,
     /// Enable kernel record credentials and distinguish EOF from an empty packet.
     ExecEof,
     /// Probe a child failure stage, including control disposal.
@@ -99,6 +122,10 @@ impl Boundary {
                 MAX_READY_BYTES + CONTROL_BYTES,
             ),
             Self::ReadySend => (1, MAX_READY_BYTES),
+            Self::ReadyPipe => (
+                MAX_PIPE_ATTEMPT_SYSCALLS,
+                MAX_PIPE_READY_BYTES + 1 + size_of::<rustix::fs::Stat>(),
+            ),
             Self::GateRelease => (1, 1),
             Self::Progress => (1, 0),
             Self::ProfileReady => (1, 2),
@@ -118,7 +145,9 @@ pub trait Observer {
     type Error;
 
     /// Debit this attempt on the original ledger before any clock/I/O work.
-    /// The caller keeps ATTEMPT_SCRATCH prepaid until the phase returns/unwinds.
+    /// The caller keeps ATTEMPT_SCRATCH (PIPE_ATTEMPT_SCRATCH for the pipe phase)
+    /// prepaid until the phase returns/unwinds. ReadyPipe's exact mechanical quote
+    /// is 8 + 3 * (1024 + 64) + (121 + size_of::<rustix::fs::Stat>()) * 64 + 256.
     fn before_attempt(&mut self, boundary: Boundary) -> Result<(), Self::Error>;
     /// Native adapters invoke the real retained child's metered observation.
     fn is_live(&mut self) -> Result<bool, Self::Error>;
@@ -244,6 +273,26 @@ pub fn send_ready<const N: usize, O: Observer>(
     .send(bootstrap, payload)
 }
 
+/// Receives exactly N inert pipe bytes followed by EOF, with 0 < N <= 120.
+/// Requires a private pipe read end whose aliases cannot change status flags
+/// during this call. Each attempt validates FIFO, RDONLY and NONBLOCK before
+/// reading; the transport does not admit the payload, pipe provenance or child.
+/// Keep PIPE_ATTEMPT_SCRATCH prepaid and budget MAX_PIPE_WORK plus separately
+/// metered MAX_PIPE_LIVENESS_CHECKS observations on the original account.
+/// Partial bytes, errors and late success never return readiness evidence.
+pub fn receive_ready_pipe<const N: usize, O: Observer>(
+    reader: BorrowedFd<'_>,
+    observer: &mut O,
+    deadline: Instant,
+) -> Result<[u8; N], Error<O::Error>> {
+    Scheduler {
+        observer,
+        io: SystemIo,
+        deadline,
+    }
+    .pipe(reader)
+}
+
 /// Receives exactly N inert payload bytes and either one or zero descriptor rights.
 /// The caller must decode the family record against its actual admitted context.
 /// Invalid shapes and all deadline/refusal paths close every received descriptor.
@@ -316,6 +365,9 @@ trait Io {
         eof: bool,
     ) -> Result<(usize, usize), Errno>;
     fn ready(&mut self, fd: BorrowedFd<'_>, credentials: bool) -> Result<ReadyPacket, Errno>;
+    fn pipe(&mut self, fd: BorrowedFd<'_>, bytes: &mut [u8]) -> Result<usize, Errno> {
+        pipe::read_nonblocking(fd, bytes)
+    }
     fn pause(&mut self, duration: Duration) -> Result<(), Errno>;
 }
 

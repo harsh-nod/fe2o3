@@ -273,6 +273,71 @@ fn namespace_frame_and_eof_use_separate_finite_attempts() {
 }
 
 #[test]
+fn readiness_uses_shared_frame_and_requires_a_separate_eof_attempt() {
+    for count in [1, 2] {
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
+        assert_eq!(
+            rustix::io::write(&writer, &[7; READY_BYTES]).unwrap(),
+            READY_BYTES
+        );
+        drop(writer);
+        let limits = Wait::new(count, Wait::MAX_TIMEOUT).unwrap();
+        let mut frame = ExactPipeFrame::default();
+        let mut calls = 0;
+        let result = attempts(
+            limits,
+            limits.deadline().unwrap(),
+            Boundary::Readiness,
+            || {
+                calls += 1;
+                read_readiness(&mut frame, &reader)
+            },
+        );
+        assert_eq!(calls, count);
+        if count == 1 {
+            assert!(matches!(result, Err(Error::Attempts(Boundary::Readiness))));
+        } else {
+            assert_eq!(result.unwrap(), [7; READY_BYTES]);
+        }
+    }
+}
+
+#[test]
+fn shared_readiness_preserves_native_pending_and_framing_errors() {
+    let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
+    let mut frame = ExactPipeFrame::default();
+    assert!(read_readiness(&mut frame, &reader).unwrap().is_none());
+    rustix::io::write(&writer, &[7; READY_BYTES - 1]).unwrap();
+    assert!(read_readiness(&mut frame, &reader).unwrap().is_none());
+    drop(writer);
+    assert!(matches!(
+        read_readiness(&mut frame, &reader),
+        Err(Error::State("native readiness is truncated"))
+    ));
+
+    let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
+    let mut frame = ExactPipeFrame::default();
+    rustix::io::write(&writer, &[7; READY_BYTES]).unwrap();
+    assert!(read_readiness(&mut frame, &reader).unwrap().is_none());
+    assert!(read_readiness(&mut frame, &reader).unwrap().is_none());
+    rustix::io::write(&writer, &[8]).unwrap();
+    assert!(matches!(
+        read_readiness(&mut frame, &reader),
+        Err(Error::State("native readiness has trailing bytes"))
+    ));
+
+    for eof in [false, true] {
+        let mut frame = ExactPipeFrame::<READY_BYTES>::default();
+        if eof {
+            assert!(frame.read_with(|_| Ok(READY_BYTES)).unwrap().is_none());
+        }
+        let error = read_readiness(&mut frame, &writer).unwrap_err();
+        assert!(matches!(error, Error::Io { operation, errno: Errno::BADF }
+            if operation == if eof { "read native readiness EOF" } else { "read native readiness" }));
+    }
+}
+
+#[test]
 fn pending_observations_exhaust_exactly_the_finite_attempt_count() {
     let limits = Wait::new(3, Wait::MAX_TIMEOUT).unwrap();
     for boundary in BOUNDARIES {
