@@ -172,3 +172,5 @@ properties. They do not substitute for the later gates.
 
 The [checkpoint evidence](evidence/root-control-foundations-20260929.md) records
 the tested source, observed failures, and remaining validation limits.
+The subsequent [envelope/intake evidence](evidence/root-control-envelope-20260929.md)
+records the framing, root-channel owner and complete-table preflight checkpoint.
