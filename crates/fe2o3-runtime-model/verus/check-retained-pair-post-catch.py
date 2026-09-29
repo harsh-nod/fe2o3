@@ -24,7 +24,7 @@ PROOF = V / "retained_pair_post_catch_v1.rs"
 FILES = [PROOF, BODY]
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "dd418154fcf10fa98db460acd44a9fcafedff75f261693203bd21c7072e23c3a"
+SOURCE_TREE_SHA = "cffee466b5f108e1327fb218b11173d1a68a67e94bdbb903cc97447387c8a7ea"
 PROOF_SHA = "683d4988fe3658d7679bab7bd1bec22d30504f59870a0a5e4e3770174a67f91d"
 # Populate only from a strict accepted positive measurement, never an estimate.
 EXPECTED_VERIFIED = None
