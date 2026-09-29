@@ -130,7 +130,7 @@ fn native_child_channel_joins_original_pidfd_before_trace() {
         }
     }
     let mut pool = Drain(Cleanup::admit(Account::new(Work::new(LIMIT), LIMIT)).unwrap());
-    for case in 0..6 {
+    for case in 0..8 {
         run_native(case, &mut pool.0);
     }
 }
@@ -143,7 +143,18 @@ fn run_native(case: usize, pool: &mut Cleanup) {
         cleanup_bridge::CleanupPollV1 as CleanupPoll,
         native_spawn::StagedProtectedServiceExecV2 as Stage,
     };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::{ffi::CString, fs::File, os::unix::fs::PermissionsExt, time::Duration};
+    struct DropWitness(Arc<AtomicUsize>);
+    impl Drop for DropWitness {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let drops = Arc::new(AtomicUsize::new(0));
     let dir = tempfile::tempdir().unwrap();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     // The isolated container can mount /tmp noexec. Use the explicit executable
@@ -184,9 +195,16 @@ fn run_native(case: usize, pool: &mut Cleanup) {
     let credentials = Credentials::new(65534, 65534).unwrap();
     // SAFETY: all source backing survives in the original cleanup slot; no
     // process is admitted as a compiler. The test retains this creator thread.
-    let (child, growth) =
-        unsafe { stage.spawn_retaining(credentials, (image, cwd, unused), source, pool, &mut b) }
-            .unwrap();
+    let (child, growth) = unsafe {
+        stage.spawn_retaining(
+            credentials,
+            (image, cwd, unused, DropWitness(Arc::clone(&drops))),
+            source,
+            pool,
+            &mut b,
+        )
+    }
+    .unwrap();
     b.reserve_storage(growth.additional_storage()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     launch_io::await_profile_ready(
@@ -234,11 +252,16 @@ fn run_native(case: usize, pool: &mut Cleanup) {
     let before_fds = fd_count();
     let before_storage = b.storage();
     let before_work = b.work();
-    let received =
-        CompilerChildChannel::receive(&child, root, receive_credentials, receive_deadline, &mut b);
-    assert_eq!(b.storage(), before_storage);
-    assert!(b.work() > before_work);
-    if case != 0 {
+    if (1..=5).contains(&case) {
+        let received = CompilerChildChannel::receive(
+            &child,
+            root,
+            receive_credentials,
+            receive_deadline,
+            &mut b,
+        );
+        assert_eq!(b.storage(), before_storage);
+        assert!(b.work() > before_work);
         let error = match received {
             Ok(_) => panic!("refusal case {case} succeeded"),
             Err(error) => error,
@@ -266,16 +289,28 @@ fn run_native(case: usize, pool: &mut Cleanup) {
         drain_child(pool, exit_observer.as_fd());
         return;
     }
-    let (channel, full) = received.unwrap();
+    let child_pid = child.pid().as_raw_pid() as u32;
+    let consumed = child.retained_storage() + native::FILE_STORAGE;
+    let (mut trace, full) =
+        CompilerTrace::receive(child, root, credentials, deadline, &mut b).unwrap();
+    assert_eq!(b.storage(), before_storage);
+    b.release_storage(consumed).unwrap();
     b.reserve_storage(full).unwrap();
-    assert_eq!(full, channel.retained);
-    assert_eq!(channel.client.pid(), child.pid().as_raw_pid() as u32);
-    assert_eq!(channel.client.uid(), 65534);
-    require_idle(channel.client_pidfd.as_fd()).unwrap();
-    require_idle(channel.service_peer.as_fd()).unwrap();
-    let trace_charge = child.root_trace_storage().unwrap() - child.retained_storage();
-    b.reserve_storage(trace_charge).unwrap();
-    let mut trace = child.into_root_trace(&mut b).unwrap();
+    assert_eq!(full, trace.retained_storage());
+    assert_eq!(trace.pid().as_raw_pid() as u32, child_pid);
+    trace
+        .with_backing(&mut b, |(_, cwd, _, _), same| -> Result<()> {
+            assert!(same.storage() >= full);
+            assert!(cwd.metadata().unwrap().is_dir());
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        trace
+            .with_issuer_inputs::<()>(&mut b, |_, _, _, _, _| panic!("gated child exposed inputs"))
+            .is_err()
+    );
+    assert!(trace.resume(&mut b).is_err());
     drop(stage);
     drop((
         sender,
@@ -310,12 +345,91 @@ fn run_native(case: usize, pool: &mut Cleanup) {
         net::recv(&exec_reader, &mut [0; 1], net::RecvFlags::DONTWAIT).unwrap(),
         (0, 0)
     );
-    require_idle(channel.client_pidfd.as_fd()).unwrap();
-    require_idle(channel.service_peer.as_fd()).unwrap();
+    assert!(
+        trace
+            .with_issuer_inputs::<()>(&mut b, |_, _, _, _, _| panic!(
+                "unconfirmed exec exposed inputs"
+            ))
+            .is_err()
+    );
+    // SAFETY: the owned raw child has run only the audited non-forking native
+    // stage. Exact held exec and CLOEXEC status EOF were observed; all parent
+    // writer aliases are closed. No fixture instruction has executed yet.
+    unsafe {
+        trace.confirm_exec(&mut b).unwrap();
+        assert!(trace.confirm_exec(&mut b).is_err());
+    }
+    let mut other_work = Work::new(LIMIT);
+    let mut other = Budget::new(&mut other_work, LIMIT);
+    other.reserve_storage(full).unwrap();
+    assert!(
+        trace
+            .with_backing::<(), Error>(&mut other, |_, _| panic!("foreign account exposed backing"))
+            .is_err()
+    );
+    assert!(
+        trace
+            .with_issuer_inputs::<()>(&mut other, |_, _, _, _, _| panic!(
+                "foreign account exposed inputs"
+            ))
+            .is_err()
+    );
+    let transfer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        trace.with_issuer_inputs(&mut b, |client, peer, pidfd, dependency, same| {
+            assert_eq!(client.pid(), child_pid);
+            assert_eq!((client.uid(), client.gid()), (65534, 65534));
+            assert!(same.storage() >= full + dependency.retained_storage());
+            require_idle(peer)?;
+            require_idle(pidfd)?;
+            if case == 6 {
+                return Err(Error::Invalid("diagnostic transfer refusal"));
+            }
+            if case == 7 {
+                panic!("diagnostic transfer unwind");
+            }
+            Ok(dependency)
+        })
+    }));
+    let dependency = if case == 7 {
+        assert!(transfer.is_err());
+        None
+    } else {
+        let transferred = transfer.unwrap();
+        assert_eq!(transferred.is_ok(), case == 0);
+        transferred.ok()
+    };
+    if let Some(dependency) = &dependency {
+        b.reserve_storage(dependency.retained_storage()).unwrap();
+    }
+    assert!(
+        trace
+            .with_issuer_inputs::<()>(&mut b, |_, _, _, _, _| panic!("issuer inputs replayed"))
+            .is_err()
+    );
+    if case == 0 {
+        trace.resume(&mut b).unwrap();
+        assert!(
+            trace
+                .with_issuer_inputs::<()>(&mut b, |_, _, _, _, _| panic!(
+                    "resumed compiler exposed inputs"
+                ))
+                .is_err()
+        );
+    } else {
+        assert!(trace.resume(&mut b).is_err());
+    }
     assert_ne!(trace.cancel(), CleanupPoll::Quarantined);
     drain_child(pool, exit_observer.as_fd());
-    assert!(require_idle(channel.client_pidfd.as_fd()).is_err());
-    drop((trace, channel));
+    assert!(require_idle(exit_observer.as_fd()).is_err());
+    drop(trace);
+    // The actual compiler is reaped and foreground trace is gone. Independent
+    // issuer payload retention still owns the same transitive resources.
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        usize::from(dependency.is_none())
+    );
+    drop(dependency);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 fn drain_child(pool: &mut Cleanup, pidfd: BorrowedFd<'_>) {
