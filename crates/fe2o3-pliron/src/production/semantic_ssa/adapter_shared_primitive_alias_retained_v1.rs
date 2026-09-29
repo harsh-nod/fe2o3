@@ -90,6 +90,9 @@ pub(super) struct RetainedAliasStateV1<'a> {
     drain: Option<std::vec::IntoIter<Alias>>,
     current: Option<Alias>,
     failure: Option<Resource>,
+    output: Vec<Alias>,
+    place: Option<&'a SemanticPlaceV1>,
+    path: Option<Path<'a>>,
 }
 impl<'a> RetainedAliasStateV1<'a> {
     pub(super) fn new() -> Self {
@@ -111,6 +114,9 @@ impl<'a> RetainedAliasStateV1<'a> {
             drain: None,
             current: None,
             failure: None,
+            output: Vec::new(),
+            place: None,
+            path: None,
         }
     }
     fn check(
@@ -734,18 +740,21 @@ fn frame() -> std::result::Result<usize, Resource> {
             &mut Resource,
         )>(),
         size_of::<(
-            [usize; 16],
-            std::array::IntoIter<usize, 16>,
+            [usize; 17],
+            std::array::IntoIter<usize, 17>,
             usize,
             usize,
             std::result::Result<usize, Resource>,
             Resource,
         )>(),
+        place_ops::frame()?,
     ];
     rows.into_iter().try_fold(0usize, |sum, bytes| {
         sum.checked_add(bytes).ok_or(Resource::Arithmetic)
     })
 }
+#[path = "adapter_shared_primitive_place_retained_v1.rs"]
+mod place_ops;
 #[cfg(test)]
 #[path = "adapter_shared_primitive_alias_retained_v1_tests.rs"]
 mod tests;

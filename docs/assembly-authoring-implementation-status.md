@@ -1813,3 +1813,16 @@ controls and 13 separately supplied historical integration controls. Its
 structural plans from actual IO, admission and physical capture. The operational
 adapter and bounded evidence writer remain separate work.
 Broad accepted exits remain M1/V1/V2/U1/U2/U3 (6/18).
+
+## Retained Shared place operations — 2026-09-29
+
+The retained alias-state owner now supports original place/path matching,
+deinitialization and write-place transformations with attached partial state
+and terminal refusal. Its 17 new controls passed within 1,722 pliron tests,
+alongside the full model/backend, authority, policy, broker/coordinator/spawn
+and build regression. See [qualification and limits](retained-shared-place-qualification-20260929.md).
+
+Concrete read production, rvalue/statement processing, original source/SSA and
+backend joins remain open. This private component does not activate ordinary
+compilation, native debugging or GPU dispatch. Broad accepted exits remain
+M1/V1/V2/U1/U2/U3 (6/18).
