@@ -12,7 +12,7 @@ use std::sync::Mutex;
 
 use rustix::fs::{
     AtFlags, FileType, MemfdFlags, Mode, OFlags, ResolveFlags, SealFlags, fchmod, fcntl_add_seals,
-    fcntl_get_seals, fstat, inotify, memfd_create, open, openat, openat2, readlinkat, statat,
+    fcntl_get_seals, fstat, inotify, memfd_create, open, openat, openat2, readlinkat_raw, statat,
 };
 use sha2::{Digest, Sha256};
 
@@ -24,15 +24,34 @@ use crate::authenticated_verus_execution_v2::{
 #[cfg(test)]
 use super::{DirectorySpecV2, FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME};
 use super::{
-    EntryKindV2, FileSpecV2, InterpreterSpecV2, MAX_TARGET_FILE_BYTES, ManifestV2,
-    RetainedFunctionalRefinementRuntimeErrorKindV1, RetainedFunctionalRefinementRuntimeErrorV1,
-    RetainedFunctionalRefinementRuntimeOutputV1,
+    EntryKindV2, FileSpecV2, InterpreterSpecV2, MAX_RELATIVE_PATH_BYTES, MAX_TARGET_FILE_BYTES,
+    ManifestV2, RetainedFunctionalRefinementRuntimeErrorKindV1,
+    RetainedFunctionalRefinementRuntimeErrorV1, RetainedFunctionalRefinementRuntimeOutputV1,
 };
 #[path = "functional_refinement_process_tree_v1_linux.rs"]
 mod functional_refinement_process_tree_v1;
 pub(crate) use functional_refinement_process_tree_v1::AttemptV1;
-const MAX_DIRECTORY_ENTRIES: usize = 256;
-const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
+pub(super) const MAX_DIRECTORY_ENTRIES: usize = 256;
+pub(super) const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
+
+// Logical container capacity, including sparse B-tree nodes, vector growth,
+// both anchor chains, path payloads, interpreter links and Arc/control headers.
+// File contents are charged separately, including both interpreter descriptors.
+pub(super) const RETAINED_METADATA_STORAGE: usize = {
+    use super::resources::MAX_ABSOLUTE_PATH_BYTES as P;
+    use super::{MAX_RUNTIME_DIRECTORIES as D, MAX_RUNTIME_FILES as F};
+    use std::mem::size_of;
+    4 * size_of::<super::RetainedGeneratedVerusRuntimeBackendV1>()
+        + 4 * size_of::<RetainedRuntimeClosureV2>()
+        + 4 * size_of::<super::resources::RetainedFunctionalRefinementRuntimeStorageV1>()
+        + 4 * (P + 1) * size_of::<PathAnchorV2>()
+        + 8 * P
+        + 16 * (D + 1) * (size_of::<(PathBuf, RetainedDirectoryV2)>() + 2 * P)
+        + 16 * (F + D + 1) * (size_of::<(PathBuf, EntryKindV2)>() + P)
+        + 2 * (F + 1) * (size_of::<RetainedFileV2>() + P)
+        + 4 * (size_of::<RetainedSymlinkV2>() + 4 * P)
+        + size_of::<RetainedInterpreterV2>()
+};
 
 #[cfg(test)]
 static RUNTIME_CLOSURE_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -176,6 +195,29 @@ impl std::fmt::Debug for RetainedRuntimeClosureV2 {
 }
 
 impl RetainedRuntimeClosureV2 {
+    pub(super) fn backing_storage_v1(
+        &self,
+    ) -> Result<usize, fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1> {
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        let mut bytes = 0_usize;
+        for retained in &self.files {
+            bytes = bytes
+                .checked_add(
+                    usize::try_from(retained.snapshot.size).map_err(|_| Resource::Arithmetic)?,
+                )
+                .ok_or(Resource::Arithmetic)?;
+        }
+        if let Some(interpreter) = &self.interpreter {
+            // The final file anchor and its retained file clone coexist.
+            let size = usize::try_from(interpreter.file.snapshot.size)
+                .map_err(|_| Resource::Arithmetic)?;
+            bytes = bytes
+                .checked_add(size.checked_mul(2).ok_or(Resource::Arithmetic)?)
+                .ok_or(Resource::Arithmetic)?;
+        }
+        Ok(bytes)
+    }
+
     pub(super) fn open_protected(
         root: &Path,
         manifest: &ManifestV2,
@@ -475,7 +517,7 @@ impl RetainedRuntimeClosureV2 {
     }
 
     #[cfg(test)]
-    fn open_for_test(
+    pub(super) fn open_for_test(
         root: &Path,
         manifest: &ManifestV2,
     ) -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
@@ -938,13 +980,23 @@ fn scan_inventory(
             error,
         )
     })?;
-    let mut entries = rustix::fs::Dir::read_from(&scan)
-        .map_err(|error| io_error(format!("scan directory {}", path.display()), error))?;
+    // RawDir uses this fixed buffer and returns EINTR instead of retrying inside
+    // an unmetered iterator. Count even ignored dot entries against the scan.
+    let mut storage = [std::mem::MaybeUninit::uninit(); 64 * 1024];
+    let mut entries = rustix::fs::RawDir::new(&scan, &mut storage);
+    let mut visited = 0;
     let mut actual = BTreeMap::new();
-    for entry in &mut entries {
+    while let Some(entry) = entries.next() {
         let entry =
             entry.map_err(|error| io_error(format!("read directory {}", path.display()), error))?;
         let bytes = entry.file_name().to_bytes();
+        if visited >= MAX_DIRECTORY_ENTRIES + 2 || bytes.len() > MAX_RELATIVE_PATH_BYTES {
+            return Err(error(
+                RetainedFunctionalRefinementRuntimeErrorKindV1::InventoryMismatch,
+                format!("directory scan exceeds its bound: {}", path.display()),
+            ));
+        }
+        visited += 1;
         if matches!(bytes, b"." | b"..") {
             continue;
         }
@@ -1121,9 +1173,16 @@ fn read_link(
     parent: &File,
     name: &OsStr,
 ) -> Result<PathBuf, RetainedFunctionalRefinementRuntimeErrorV1> {
-    let target = readlinkat(parent, Path::new(name), Vec::new())
+    let mut target = [0_u8; MAX_RELATIVE_PATH_BYTES + 1];
+    let length = readlinkat_raw(parent, Path::new(name), &mut target[..])
         .map_err(|error| io_error(format!("read interpreter symlink: {name:?}"), error))?;
-    Ok(PathBuf::from(OsString::from_vec(target.into_bytes())))
+    if length > MAX_RELATIVE_PATH_BYTES {
+        return Err(error(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal,
+            "interpreter symlink target exceeds its reviewed path bound",
+        ));
+    }
+    Ok(PathBuf::from(OsString::from_vec(target[..length].to_vec())))
 }
 
 struct MutationJournalV2 {
@@ -1415,6 +1474,47 @@ mod tests {
             RetainedFunctionalRefinementRuntimeErrorKindV1::ObjectType
                 | RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal
         ));
+    }
+
+    #[test]
+    fn interpreter_link_read_has_a_fixed_target_bound() {
+        let tree = TestClosure::new();
+        tree.make_parent_writable("empty");
+        let directory = File::open(tree.root.join("empty")).unwrap();
+        let accepted = "a".repeat(MAX_RELATIVE_PATH_BYTES);
+        symlink(&accepted, tree.root.join("empty/link")).unwrap();
+        assert_eq!(
+            read_link(&directory, OsStr::new("link")).unwrap(),
+            Path::new(&accepted)
+        );
+        fs::remove_file(tree.root.join("empty/link")).unwrap();
+        symlink(
+            "a".repeat(MAX_RELATIVE_PATH_BYTES + 1),
+            tree.root.join("empty/link"),
+        )
+        .unwrap();
+        assert_eq!(
+            read_link(&directory, OsStr::new("link"))
+                .unwrap_err()
+                .kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal
+        );
+    }
+
+    #[test]
+    fn inventory_scan_refuses_the_first_excess_entry() {
+        let tree = TestClosure::new();
+        tree.make_parent_writable("empty");
+        for index in 0..=MAX_DIRECTORY_ENTRIES {
+            fs::write(tree.root.join(format!("empty/entry-{index}")), b"").unwrap();
+        }
+        let directory = File::open(tree.root.join("empty")).unwrap();
+        assert_eq!(
+            scan_inventory(&directory, Path::new("empty"))
+                .unwrap_err()
+                .kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::InventoryMismatch
+        );
     }
 
     #[test]

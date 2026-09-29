@@ -14,6 +14,15 @@ use sha2::{Digest, Sha256};
 use crate::CanonicalGeneratedVerusProofInputV3;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "retained_functional_refinement_runtime_v1_resources.rs"]
+mod resources;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use resources::{
+    RetainedFunctionalRefinementRuntimeResourceErrorV1,
+    RetainedFunctionalRefinementRuntimeStorageV1, open_retained_generated_verus_runtime_bounded_v1,
+};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "retained_functional_refinement_runtime_v1_linux.rs"]
 mod linux;
 
@@ -121,6 +130,8 @@ pub(crate) struct RetainedGeneratedVerusRuntimeBackendV1 {
     identity: [u8; 32],
     owner_process: u32,
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    accounting: Option<resources::RuntimeAccountV1>,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     retained: std::sync::Arc<linux::RetainedRuntimeClosureV2>,
 }
 
@@ -149,18 +160,30 @@ impl RuntimeAttemptV1 {
 pub(crate) fn open_retained_generated_verus_runtime_v1(
     root: &Path,
 ) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let manifest = runtime_manifest(root)?;
+    open_with_manifest(root, &manifest)
+}
+
+fn runtime_manifest(root: &Path) -> Result<ManifestV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     validate_absolute_path(root)?;
     validate_runtime_root_path(root)?;
-    let manifest = ManifestV2::parse_functional_refinement_runtime_v1()?;
+    ManifestV2::parse_functional_refinement_runtime_v1()
+}
+
+fn open_with_manifest(
+    root: &Path,
+    manifest: &ManifestV2,
+) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
     let identity = functional_refinement_closure_identity_v1();
     let owner_process = std::process::id();
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        let retained = linux::RetainedRuntimeClosureV2::open_protected(root, &manifest)?;
+        let retained = linux::RetainedRuntimeClosureV2::open_protected(root, manifest)?;
         Ok(RetainedGeneratedVerusRuntimeBackendV1 {
             root: root.to_path_buf(),
             identity,
             owner_process,
+            accounting: None,
             retained: std::sync::Arc::new(retained),
         })
     }
@@ -191,12 +214,23 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-        if std::process::id() != self.owner_process {
-            return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
-                RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged,
+        self.check_owner_process().map_err(|kind| {
+            RetainedFunctionalRefinementRuntimeErrorV1::new(
+                kind,
                 "runtime closure lease crossed a process boundary",
-            ));
+            )
+        })?;
+        self.revalidate_closure()
+    }
+
+    fn check_owner_process(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorKindV1> {
+        if std::process::id() != self.owner_process {
+            return Err(RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged);
         }
+        Ok(())
+    }
+
+    fn revalidate_closure(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         {
             self.retained.revalidate()
