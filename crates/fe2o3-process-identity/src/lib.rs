@@ -181,16 +181,43 @@ impl PinnedWorkingDirectoryV3 {
         self.object
     }
 
-    /// Installs a final descriptor-based `fchdir` immediately before exec.
-    pub fn configure_child_fchdir(&self, command: &mut Command) {
-        let descriptor = self.file.as_raw_fd();
+    /// Registers a descriptor-based cwd hook run before exec, in registration order.
+    ///
+    /// Validates `native_source()`, then uses F_DUPFD_CLOEXEC with a floor of 3 to
+    /// retain the same open-file description without reopening any pathname or
+    /// occupying an absent standard slot. The hook owns that duplicate: this owner
+    /// may be dropped and its original pathname replaced before spawning. Source
+    /// validation or duplication errors are returned without modifying `command`.
+    ///
+    /// Syscall counts here assume Linux x86_64 and rustix's direct fstat backend.
+    /// Registration performs at most four descriptor syscalls (fstat, F_GETFL,
+    /// F_GETFD, F_DUPFD_CLOEXEC), with no retries. Each successful registration
+    /// retains one additional kernel descriptor until `command` is dropped,
+    /// including across successful or failed spawns and command reuse. The child's
+    /// copy closes on successful exec or child exit. Dropping an unspawned command
+    /// also releases its duplicate.
+    ///
+    /// Each hook invocation performs at most two syscalls: fstat checks the
+    /// recorded device/inode/mode, then fchdir selects the retained directory.
+    /// Mismatch returns ESTALE; syscall errors propagate. The hook allocates no
+    /// Rust heap storage, performs no pathname lookup and does not retry. These
+    /// bounds exclude Command's own allocation, setup, exec and cleanup; registering
+    /// a pre_exec closure may allocate. Callers must prepay registration, closure
+    /// storage, each invocation, descriptor lifetime and cleanup on their existing
+    /// account. This method creates no accounting credit or execution authority.
+    ///
+    /// As with `native_source()`, exclude descriptor/flag mutation while staging.
+    /// Other pre_exec hooks must preserve this descriptor; later hooks can change
+    /// cwd again. Retention does not freeze shared status flags, directory contents,
+    /// or namespace mappings, and does not establish protected admission.
+    pub fn configure_child_fchdir(&self, command: &mut Command) -> std::io::Result<()> {
+        let directory = rustix::io::fcntl_dupfd_cloexec(self.native_source()?, 3)?;
         let expected = self.object;
-        // SAFETY: `self` remains borrowed through spawn; the callback performs async-signal-safe
-        // descriptor operations and does not allocate.
+        // SAFETY: the callback owns its CLOEXEC duplicate for as long as Command retains
+        // the hook. It performs only async-signal-safe descriptor operations, without allocation.
         unsafe {
             command.pre_exec(move || {
-                let stat = rustix::fs::fstat(BorrowedFd::borrow_raw(descriptor))
-                    .map_err(std::io::Error::from)?;
+                let stat = rustix::fs::fstat(&directory).map_err(std::io::Error::from)?;
                 let observed =
                     LinuxObjectIdentityV3::from_linux_stat(stat.st_dev, stat.st_ino, stat.st_mode);
                 if observed != expected {
@@ -198,12 +225,13 @@ impl PinnedWorkingDirectoryV3 {
                         rustix::io::Errno::STALE.raw_os_error(),
                     ));
                 }
-                if libc::fchdir(descriptor) != 0 {
+                if libc::fchdir(directory.as_raw_fd()) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
             });
         }
+        Ok(())
     }
 
     /// Measures one canonical relative source beneath this exact directory object.
