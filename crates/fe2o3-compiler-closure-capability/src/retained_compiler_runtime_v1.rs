@@ -38,11 +38,16 @@ const FRAME: usize = 2 * CODEC_STORAGE + 2 * size_of::<Inventory>() + 2 * CHUNK 
 type Result<T> = std::result::Result<T, RetainedCompilerRuntimeErrorV1>;
 type ImmutableCheck = fn(&File) -> Result<()>;
 
+#[path = "retained_compiler_runtime_transfer_v1.rs"]
+mod transfer;
+pub use transfer::RetainedCompilerRuntimeExecTransferChargeV1;
+
 /// Move-only custody of independently approved, immutable compiler code files.
 ///
 /// The sole public positive loader consumes fixed-root compiler approval. No
 /// caller-supplied bytes, FD, alternate path, PID, successful exit or callback
-/// can manufacture this owner. No descriptors are exported for substitution.
+/// can manufacture this owner. Only the admitted proof executor may be duplicated
+/// as an inert exec source, with its own full charge and final origin recheck.
 /// This is inventory custody only: no ELF dependency-resolution, process launch,
 /// mapping history, protected sibling association or completed-guard claim.
 ///
