@@ -20,6 +20,9 @@ const MAX_NAME_BYTES: usize = 96;
 static ORIGINAL_DUMPS: AtomicUsize = AtomicUsize::new(0);
 static ANALYZED_DUMPS: AtomicUsize = AtomicUsize::new(0);
 
+#[path = "diagnostic_selector_slice_v1794.rs"]
+mod selector_slice;
+
 fn enabled() -> bool {
     std::env::var_os("FE2O3_DIAG_UNIFORMITY_V1794").as_deref() == Some(std::ffi::OsStr::new("1"))
 }
@@ -425,7 +428,9 @@ pub(super) fn original(module: &Module) {
                 .find(|f| f.id == kernel.entry)
             {
                 Some(function) => match &function.body {
-                    Some(body) => out.body(body, Some(&function.signature.parameters), None),
+                    Some(body) => {
+                        out.selector_slice(body, Some(&function.signature.parameters), None)
+                    }
                     None => out.row(format_args!("MISSING body=1")),
                 },
                 None => {
@@ -498,7 +503,7 @@ pub(super) fn analyzed(analyzer: &Analyzer<'_>) {
                 }
             }
         }
-        out.body(analyzer.body, None, Some(&analyzer.report));
+        out.selector_slice(analyzer.body, None, Some(&analyzer.report));
         out.finish("analyzed", dump);
     }));
 }
