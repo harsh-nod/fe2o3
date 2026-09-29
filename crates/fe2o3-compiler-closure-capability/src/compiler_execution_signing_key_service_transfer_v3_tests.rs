@@ -293,6 +293,122 @@ fn service_transfer_isolated_root_positive_and_owner_checks() {
     assert_eq!(budget.storage(), EXTRA);
 }
 
+/// MUST run alone in an isolated single-test process using the full test name
+/// with --exact --ignored --test-threads=1. This irreversibly changes real,
+/// effective and saved process credentials; never run it with the suite/prefix.
+/// Requires root UID/GID 0:0 and CAP_CHOWN, CAP_SETGID, CAP_SETUID only.
+#[test]
+#[ignore = "irreversible credentials; isolated process, full name --exact --ignored --test-threads=1; CHOWN/SETGID/SETUID"]
+fn service_transfer_isolated_root_receiver_adopts_exact_service_image() {
+    const TEST_NAME: &str = "compiler_execution_signing_key_v3::service_transfer::tests::service_transfer_isolated_root_receiver_adopts_exact_service_image";
+    assert!(
+        [TEST_NAME, "--exact", "--test-threads=1"]
+            .iter()
+            .all(|required| std::env::args().any(|arg| arg == *required)),
+        "run only {TEST_NAME} --exact --ignored --test-threads=1 in an isolated process"
+    );
+    require_root().unwrap();
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    budget.reserve_storage(EXTRA).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    let policy = policy(7, &mut budget);
+    let deployment = deployment(&policy, 0, &mut budget);
+    let root_key = key(&policy, &mut budget);
+    let (source_alias, charge) = root_key.try_clone_for_transfer(&mut budget).unwrap();
+    assert_eq!(charge.additional_storage(), Key::FILE_STORAGE);
+    budget.reserve_storage(charge.additional_storage()).unwrap();
+    let root_floor = budget.storage();
+    let before = budget.work();
+    let (transfer, charge) = root_key
+        .reissue_for_deployed_service(&deployment, &policy, &mut budget)
+        .unwrap();
+    assert_eq!(budget.storage(), root_floor);
+    assert_eq!(charge.additional_storage(), transfer.retained_storage());
+    budget.reserve_storage(charge.additional_storage()).unwrap();
+    let (final_file, charge) = transfer
+        .try_clone_for_transfer(&root_key, &deployment, &policy, &mut budget)
+        .unwrap();
+    assert_eq!(budget.storage(), root_floor + transfer.retained_storage());
+    assert_eq!(charge.additional_storage(), Key::FILE_STORAGE);
+    budget.reserve_storage(charge.additional_storage()).unwrap();
+    transfer
+        .validate_transfer(&final_file, &root_key, &deployment, &policy, &mut budget)
+        .unwrap();
+    assert_eq!(budget.work(), before + 3 * Transfer::WORK);
+    assert_eq!(
+        budget.storage(),
+        root_floor + transfer.retained_storage() + Key::FILE_STORAGE
+    );
+    let metadata = final_file.metadata().unwrap();
+    let final_identity = (metadata.dev(), metadata.ino());
+    let uid = deployment.service_uid();
+    let gid = deployment.service_gid();
+    assert_eq!((metadata.uid(), metadata.gid()), (uid, gid));
+    let root_charge = root_key.retained_storage() + Key::FILE_STORAGE + transfer.retained_storage();
+    drop((root_key, source_alias, transfer));
+    budget.release_storage(root_charge).unwrap();
+    let configuration = policy.retained_storage() + deployment.retained_storage();
+    let receiver_floor = EXTRA + configuration + Key::FILE_STORAGE;
+    assert_eq!(budget.storage(), receiver_floor);
+
+    // Rustix's thread setters are not enabled here. These scalar libc calls
+    // drop all process IDs in this exact isolated test, GID before UID.
+    // SAFETY: no pointers; no other test may run in this disposable process.
+    assert_eq!(
+        unsafe { libc::setresgid(gid, gid, gid) },
+        0,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: same isolation as above; permanently retire saved root UID too.
+    assert_eq!(
+        unsafe { libc::setresuid(uid, uid, uid) },
+        0,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+    assert_eq!(
+        (
+            rustix::process::getgid().as_raw(),
+            rustix::process::getegid().as_raw()
+        ),
+        (gid, gid)
+    );
+    assert_eq!(
+        (
+            rustix::process::getuid().as_raw(),
+            rustix::process::geteuid().as_raw()
+        ),
+        (uid, uid)
+    );
+
+    let before = budget.work();
+    let (receiver, growth) = Key::from_file(final_file, &policy, &mut budget).unwrap();
+    assert_eq!(
+        (budget.storage(), budget.work()),
+        (receiver_floor, before + Key::ADMISSION_WORK)
+    );
+    assert_eq!(
+        Key::FILE_STORAGE + growth.additional_storage(),
+        receiver.retained_storage()
+    );
+    budget.reserve_storage(growth.additional_storage()).unwrap();
+    let retained = receiver.retained_storage();
+    receiver.revalidate(&policy, &mut budget).unwrap();
+    assert_eq!(budget.storage(), EXTRA + configuration + retained);
+    assert_eq!(budget.work(), before + Key::ADMISSION_WORK + Key::IO_WORK);
+    assert!(budget.work_ledger_identity_v1() == ledger);
+    assert_eq!(receiver.policy_identity(), policy.identity());
+    assert_eq!(&receiver.verifying_key(), policy.verifying_key());
+    let metadata = receiver.image.as_file().metadata().unwrap();
+    assert_eq!((metadata.dev(), metadata.ino()), final_identity);
+    assert_eq!((metadata.uid(), metadata.gid()), (uid, gid));
+    drop((receiver, policy, deployment));
+    budget.release_storage(retained + configuration).unwrap();
+    assert_eq!(budget.storage(), EXTRA);
+}
+
 #[test]
 #[ignore = "requires isolated root UID/GID 0:0; run this test filter with --ignored --test-threads=1"]
 fn service_transfer_isolated_root_substitution_and_staged_metadata_refuse() {
