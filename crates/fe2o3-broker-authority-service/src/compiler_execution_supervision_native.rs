@@ -12,7 +12,7 @@ use fe2o3_process_identity::{
     measure_compiler_image_file_sha256_v1,
 };
 use fe2o3_protected_service_spawn::native_spawn::{
-    ProtectedServiceSpawnErrorV2, RootTaskObservationV2,
+    ProtectedServiceSpawnErrorV2, RootTaskIdentityV2, RootTaskObservationV2,
 };
 use std::mem::size_of;
 
@@ -72,6 +72,42 @@ impl NativeObservationSource<'_, '_, '_> {
         }
     }
 
+    fn retain_root_identity(self, b: &mut Budget<'_>) -> Result<Option<RootTaskIdentityV2>> {
+        match self {
+            Self::Service(_) => Ok(None),
+            Self::Root(root) => {
+                let (identity, storage) = root.retain_identity(b)?;
+                b.reserve_storage(storage.additional_storage())?;
+                Ok(Some(identity))
+            }
+        }
+    }
+
+    fn validate_root_identity(
+        self,
+        expected: Option<&RootTaskIdentityV2>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        match (self, expected) {
+            (Self::Service(_), None) => Ok(()),
+            (Self::Root(_), Some(expected)) => {
+                let actual = self.retain_root_identity(b)?;
+                if actual
+                    .as_ref()
+                    .is_some_and(|actual| expected.matches(actual))
+                {
+                    Ok(())
+                } else {
+                    Err(CompilerExecutionSupervisionErrorV1::ProcessIdentityChanged.into())
+                }
+            }
+            _ => Err(CompilerExecutionSupervisionErrorV1::InvalidObservation(
+                "native observation changed its custody source",
+            )
+            .into()),
+        }
+    }
+
     fn client_identity(self, b: &mut Budget<'_>) -> Result<(u32, u64)> {
         match self {
             Self::Service(service) => {
@@ -112,6 +148,7 @@ use NativeObservationSource as Source;
 
 pub(crate) struct NativeObservation {
     client: (u32, u64),
+    root_identity: Option<RootTaskIdentityV2>,
     proc_dir: RetainedDirectoryV1,
     invocation: RustcInvocationCapabilityV1,
     rustc: RetainedMeasuredFileV1,
@@ -129,6 +166,7 @@ impl NativeObservation {
         b: &mut Budget<'_>,
     ) -> Result<(Self, usize)> {
         b.with_prepaid_scope(source.retained_storage(), 8, Self::WORK, Self::FRAME, |b| {
+            let root_identity = source.retain_root_identity(b)?;
             let client = source.client_identity(b)?;
             let proc_dir = open_process_directory(client.0)?;
             let invocation = native_invocation(source, b)?;
@@ -141,6 +179,7 @@ impl NativeObservation {
             )?;
             let mut observed = Self {
                 client,
+                root_identity,
                 proc_dir,
                 invocation,
                 rustc,
@@ -173,6 +212,9 @@ impl NativeObservation {
             .checked_add(source.retained_storage())
             .ok_or(Resource::Arithmetic)?;
         b.with_prepaid_scope(floor, 8, Self::WORK, Self::FRAME, |b| {
+            // Numeric process facts cannot substitute another trace owner, even
+            // on the same account. A root observation never falls back to Service.
+            source.validate_root_identity(self.root_identity.as_ref(), b)?;
             source.validate_client(self.client, b)?;
             self.proc_dir.revalidate("client procfs", true)?;
             self.invocation.revalidate_native(b)?;
@@ -245,6 +287,13 @@ impl NativeObservation {
         self.invocation
             .native_retained_storage()?
             .checked_add(size_of::<Self>() + 4096)
+            .and_then(|n| {
+                n.checked_add(
+                    self.root_identity
+                        .as_ref()
+                        .map_or(0, RootTaskIdentityV2::retained_storage),
+                )
+            })
             .ok_or_else(|| Resource::Arithmetic.into())
     }
     pub(crate) fn descriptor(&self) -> &RustcInvocationDescriptorV3 {

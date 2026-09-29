@@ -93,6 +93,107 @@ fn transient_syscall_results_return_none_and_other_errors_remain_io_failures() {
 }
 
 #[test]
+fn packet_send_requires_exact_length_and_preserves_retryable_results() {
+    for length in [2, 88, 89, 4096] {
+        for actual in [0, length - 1, length, length + 1] {
+            assert_eq!(
+                packet_send_result(Ok(actual), length),
+                if actual == length {
+                    Ok(Some(()))
+                } else {
+                    Err(Failure::MalformedReadyTransfer)
+                }
+            );
+        }
+        for source in [Errno::AGAIN, Errno::INTR, Errno::PIPE, Errno::BADF] {
+            assert_eq!(
+                packet_send_result(Err(source), length),
+                if matches!(source, Errno::AGAIN | Errno::INTR) {
+                    Ok(None)
+                } else {
+                    Err(Failure::Io {
+                        operation: "send packet",
+                        source,
+                    })
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn packet_send_is_exact_and_rejects_invalid_sizes_on_default_sockets() {
+    fn check<const N: usize>() {
+        let (sender, receiver) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        for payload in [[0xa5; N], [0x5a; N]] {
+            assert_eq!(send_packet(sender.as_fd(), &payload), Ok(Some(())));
+            let packet = receive_fixed_packet::<N>(receiver.as_fd()).unwrap();
+            assert_eq!(packet.bytes, N);
+            assert_eq!(packet.payload, payload);
+            assert_eq!(packet.rights.credentials, None);
+            assert!(!packet.rights.invalid && packet.rights.fd.is_none());
+            assert!(packet.flags.is_empty());
+        }
+        for result in [
+            send_packet(sender.as_fd(), &[]),
+            send_packet(sender.as_fd(), &[0]),
+            send_packet(sender.as_fd(), &[0; 4097]),
+        ] {
+            assert_eq!(result, Err(Failure::MalformedReadyTransfer));
+        }
+        assert!(matches!(
+            receive_fixed_packet::<N>(receiver.as_fd()),
+            Err(Errno::AGAIN)
+        ));
+        drop(receiver);
+        assert!(matches!(
+            send_packet(sender.as_fd(), &[0xa5; N]),
+            Err(Failure::Io { .. })
+        ));
+    }
+    check::<2>();
+    check::<88>();
+    check::<89>();
+    check::<4096>();
+}
+
+#[test]
+fn packet_send_preserves_confirmed_backpressure_without_blocking() {
+    let (sender, _receiver) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    rustix::net::sockopt::set_socket_send_buffer_size(&sender, 4096).unwrap();
+    let capacity = rustix::net::sockopt::socket_send_buffer_size(&sender).unwrap();
+    assert!((4096..=8192).contains(&capacity), "unexpected send buffer");
+    let payload = [0xa5; 1024];
+    for _ in 0..64 {
+        match SystemIo.send(sender.as_fd(), &payload) {
+            Ok(n) => assert_eq!(n, payload.len()),
+            Err(Errno::INTR) => (),
+            Err(Errno::AGAIN) => {
+                // The peer never reads: establish actual EAGAIN before testing
+                // the public wrapper's transient result on the same full queue.
+                assert_eq!(send_packet(sender.as_fd(), &payload), Ok(None));
+                assert_eq!(SystemIo.send(sender.as_fd(), &payload), Err(Errno::AGAIN));
+                return;
+            }
+            Err(error) => panic!("send prerequisite failed: {error}"),
+        }
+    }
+    panic!("bounded send buffer never reached EAGAIN");
+}
+
+#[test]
 fn packet_validation_requires_exact_shape_without_stage_or_eof_interpretation() {
     for bytes in [0, 1, 15, 16, 17] {
         for flags in [

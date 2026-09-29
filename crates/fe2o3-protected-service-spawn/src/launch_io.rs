@@ -385,6 +385,37 @@ fn authenticated_packet_result<const N: usize>(
     }
 }
 
+/// Attempts one nonblocking send of 2..=AUTHENTICATED_PACKET_MAX_BYTES inert
+/// bytes on a caller-validated SEQPACKET endpoint. Reuses the readiness sender's
+/// DONTWAIT/NOSIGNAL syscall; no descriptors, retry, clock or budget are supplied.
+/// Some(()) means the exact record was sent, NOT acknowledged or admitted.
+/// EAGAIN/EINTR return None; a short send or permanent error refuses.
+/// The receive-side packet_receive_work(N)/packet_receive_scratch(N) quotes
+/// conservatively cover this smaller operation too; prepay them on EVERY attempt.
+/// Peer authentication, exclusive endpoint custody and output/replay retention
+/// remain caller obligations, including after None or error.
+pub fn send_packet<const N: usize>(
+    fd: BorrowedFd<'_>,
+    payload: &[u8; N],
+) -> Result<Option<()>, Failure> {
+    if !(2..=AUTHENTICATED_PACKET_MAX_BYTES).contains(&N) {
+        return Err(Failure::MalformedReadyTransfer);
+    }
+    packet_send_result(SystemIo.send(fd, payload), N)
+}
+
+fn packet_send_result(result: Result<usize, Errno>, length: usize) -> Result<Option<()>, Failure> {
+    match result {
+        Ok(n) if n == length => Ok(Some(())),
+        Ok(_) => Err(Failure::MalformedReadyTransfer),
+        Err(Errno::AGAIN | Errno::INTR) => Ok(None),
+        Err(source) => Err(Failure::Io {
+            operation: "send packet",
+            source,
+        }),
+    }
+}
+
 fn receive_ready_inner<const N: usize, const RIGHTS: bool, O: Observer>(
     bootstrap: BorrowedFd<'_>,
     sender: Option<MessageSender>,

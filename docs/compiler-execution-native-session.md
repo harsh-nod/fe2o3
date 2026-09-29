@@ -44,6 +44,9 @@ The channel must be created after compiler clone/exec and never inherited by the
 compiler. Each message needs actual sender credentials, manifest/policy/launch
 binding, sequence checks, and cumulative resource bounds. Readiness must precede
 synchronous observation. Existing public handoff and UID rules remain unchanged.
+The [root-control integration contract](compiler-execution-root-control.md)
+records the available transport primitive, pending startup migration, and
+retirement acceptance gates.
 
 Journal fixture tests do not construct an `Admission` or `NativeOccurrence`.
 They test refusal predicates and durable recovery, not actual-owner lock lifetime,

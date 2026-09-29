@@ -497,6 +497,41 @@ impl Ledger {
         )
     }
 
+    /// Private durable-completion gate for occurrence retirement, not a carriage
+    /// decoder or remote assertion. A previous completed Worker may coexist with
+    /// the next pending issuer record: that is recoverable but cannot retire it.
+    /// Returns the FULL UNRESERVED carriage charge, like recover_carriage.
+    pub(super) fn retirement_carriage(
+        &self,
+        publication: &Publication,
+        ack: &Ack,
+        b: &mut Budget<'_>,
+    ) -> Result<Carriage> {
+        b.with_prepaid_scope(
+            Self::STORAGE + publication.retained_storage() + ack.retained_storage(),
+            8,
+            1024 * Self::STORAGE,
+            16 * Self::STORAGE,
+            |b| {
+                self.validate(b)?;
+                if !matches!(self.record.body, Body::Ready) {
+                    return Err(Error::rejected("native retirement requires a ready issuer"));
+                }
+                let worker = self.completed_worker(b)?.ok_or_else(|| {
+                    Error::rejected("native retirement precedes completed durable publication")
+                })?;
+                let carriage = worker.carriage(b)?;
+                if carriage.publication().canonical_bytes() != publication.canonical_bytes()
+                    || carriage.acknowledgment().canonical_bytes() != ack.canonical_bytes()
+                {
+                    return Err(Error::rejected("native retirement changed durable carriage"));
+                }
+                self.validate(b)?;
+                Ok(carriage)
+            },
+        )
+    }
+
     // A valid crash position is not a completed publication. No ACK carriage or
     // currentness signature may escape between Worker commit and issuer advance.
     fn completed_worker(&self, b: &mut Budget<'_>) -> Result<Option<&WorkerRecord>> {

@@ -78,33 +78,14 @@ impl Session {
         ack: &Ack,
         b: &mut Budget<'_>,
     ) -> Result<()> {
-        ack.matches_publication(publication, b)?;
-        if !matches!(ledger.record.body, Body::Ready)
-            || ledger.record.last_ack.as_ref().map(Ack::canonical_bytes)
-                != Some(ack.canonical_bytes())
-        {
-            return Err(Error::rejected(
-                "native retirement precedes durable publication",
-            ));
-        }
-        ledger.validate(b)?;
+        let carriage = ledger.retirement_carriage(publication, ack, b)?;
+        b.reserve_storage(carriage.retained_storage())?;
         if let Some(occurrence) = &self.occurrence {
-            if publication.compiler_occurrence_identity() != *occurrence.identity() {
-                return Err(Error::rejected("native retirement changed occurrence"));
-            }
-            occurrence.revalidate(&a.service, b)?;
-            let carriage = ledger
-                .recover_carriage(occurrence.subject(), b)?
-                .ok_or_else(|| {
-                    Error::rejected("native retirement has no exact durable carriage")
-                })?;
-            b.reserve_storage(carriage.retained_storage())?;
-            if carriage.publication().canonical_bytes() != publication.canonical_bytes()
-                || carriage.acknowledgment().canonical_bytes() != ack.canonical_bytes()
+            if publication.compiler_occurrence_identity() != *occurrence.identity()
+                || carriage.request().subject().canonical_bytes()
+                    != occurrence.subject().canonical_bytes()
             {
-                return Err(Error::rejected(
-                    "native retirement changed durable carriage",
-                ));
+                return Err(Error::rejected("native retirement changed occurrence"));
             }
             occurrence.revalidate(&a.service, b)?;
         }
