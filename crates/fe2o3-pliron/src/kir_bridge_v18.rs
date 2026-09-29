@@ -138,7 +138,10 @@ type ExportResult = Result<
 
 #[path = "kir_bridge_v18_optimization.rs"]
 mod optimization;
-pub(crate) use optimization::{ExecutedV18Parts, optimize_integer_v18_graph, optimize_v18_graph};
+pub(crate) use optimization::{
+    ExecutedV18Parts, optimize_integer_v18_graph, optimize_integer_worklist_v18_graph,
+    optimize_v18_graph,
+};
 #[path = "kir_bridge_private_memory_v18.rs"]
 mod private_policy;
 #[path = "kir_bridge_canonical_ranked_v18.rs"]

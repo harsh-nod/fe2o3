@@ -104,6 +104,9 @@ impl<'input> KirPlironGraphV12<'input> {
             | crate::fixed_policy_v3::FixedPolicy::Integer6 => {
                 crate::kir_occurrence_capture_v1::Capture::new_for_policy
             }
+            crate::fixed_policy_v3::FixedPolicy::IntegerWorklist9 => {
+                return Err(crate::KirOptimizationMapErrorV12::Passes);
+            }
         };
         create(
             &self.session.context,

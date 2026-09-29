@@ -1716,6 +1716,24 @@ impl Capture {
         )
     }
 
+    pub(crate) fn finish_integer_worklist_v18(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapIntegerWorklistV18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::IntegerWorklist9,
+            budget,
+        )
+    }
+
     fn finish_admitted_v18<I>(
         &self,
         ctx: &Context,

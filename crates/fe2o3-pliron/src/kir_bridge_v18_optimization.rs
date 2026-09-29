@@ -76,6 +76,21 @@ pub(crate) fn optimize_integer_v18_graph(
     optimize_graph::<IntegerPolicyV18>(input, layouts, wrapper, budget)
 }
 
+pub(crate) fn optimize_integer_worklist_v18_graph(
+    input: &VerifiedCanonicalKernelIrModuleV18,
+    layouts: StorageLayoutLimitsV1,
+    wrapper: usize,
+    budget: &mut Budget<'_>,
+) -> Result<
+    ExecutedV18Parts<
+        crate::KirOptimizationMapIntegerWorklistV18,
+        crate::IntegerWorklistExecutionWitnessV18,
+    >,
+    Failure,
+> {
+    optimize_graph::<IntegerWorklistPolicyV18>(input, layouts, wrapper, budget)
+}
+
 fn optimize_graph<P: ExecutionPolicyV18>(
     input: &VerifiedCanonicalKernelIrModuleV18,
     layouts: StorageLayoutLimitsV1,
@@ -412,4 +427,12 @@ execution_policy_v18!(
     crate::IntegerContinuationExecutionWitnessV18,
     crate::optimization_v12::integer_execution_resources_v18,
     finish_integer_v18
+);
+execution_policy_v18!(
+    IntegerWorklistPolicyV18,
+    IntegerWorklist9,
+    crate::KirOptimizationMapIntegerWorklistV18,
+    crate::IntegerWorklistExecutionWitnessV18,
+    crate::optimization_v12::integer_execution_resources_v18,
+    finish_integer_worklist_v18
 );

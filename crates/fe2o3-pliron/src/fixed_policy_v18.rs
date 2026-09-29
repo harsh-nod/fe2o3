@@ -4,6 +4,12 @@ use fe2o3_kernel_ir::{
     CanonicalStorageTableIdentityV18, VerifiedCanonicalKernelIrModuleV18 as Owner18,
 };
 
+#[path = "fixed_integer_worklist_v18.rs"]
+mod worklist;
+pub use worklist::{
+    INTEGER_WORKLIST_EXECUTION_RECORD_BYTES_V18, IntegerWorklistExecutionWitnessV18,
+};
+
 /// Existing policy-3 frame plus the exact 40-byte storage-table identity.
 /// The final control word names graph schema 18, not V12's reserved zero.
 pub const POLICY3_EXECUTION_RECORD_BYTES_V18: usize = POLICY3_EXECUTION_RECORD_BYTES_V1 + 40;

@@ -344,6 +344,12 @@ mod checked_neutral_optimization_v1;
 mod integer_continuation;
 #[path = "neutral_integer_continuation_v18.rs"]
 mod integer_continuation_v18;
+#[path = "neutral_integer_worklist_v18.rs"]
+mod integer_worklist_v18;
+pub use integer_worklist_v18::{
+    CheckedNeutralKernelIrOwnerIntegerWorklistV18, KirNeutralOptimizationOutputIntegerWorklistV18,
+    optimize_neutral_kernel_ir_integer_worklist_v18,
+};
 #[path = "neutral_optimization_policy3_v1.rs"]
 mod policy3;
 #[path = "neutral_optimization_v18.rs"]

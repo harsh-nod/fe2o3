@@ -1,25 +1,15 @@
-//! Nominal storage-aware header over the same observed event relation.
+//! Nominal V18 header for the actual fixed integer-neutral continuation.
 use super::*;
-use fe2o3_kernel_ir::{
-    VerifiedCanonicalKernelIrIdentityV18 as Identity18,
-    VerifiedCanonicalKernelIrModuleV18 as Owner18,
-};
 
-const DOMAIN: &[u8] = b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-3/OBSERVED-V1\0";
+const INTEGER_DOMAIN: &[u8] = b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-9/INTEGER-WORKLIST-V1\0";
 
-/// Immutable observations from actual fixed execution. This map is not a
-/// semantic, source, final-safety or executable certificate.
-///
-/// ```compile_fail
-/// use fe2o3_pliron::{KirOptimizationMapPolicy3V18, KirOptimizationMapPolicy3V12};
-/// fn erase(map: KirOptimizationMapPolicy3V18) -> KirOptimizationMapPolicy3V12 { map }
-/// ```
+/// Actual execution observations, not semantic or publication authority.
 #[derive(Debug, Eq, PartialEq)]
-pub struct KirOptimizationMapPolicy3V18 {
+pub struct KirOptimizationMapIntegerWorklistV18 {
     data: MapData<Identity18>,
 }
 
-impl KirOptimizationMapPolicy3V18 {
+impl KirOptimizationMapIntegerWorklistV18 {
     pub const fn input_identity(&self) -> &Identity18 {
         &self.data.input
     }
@@ -44,6 +34,10 @@ impl KirOptimizationMapPolicy3V18 {
     pub fn matches_execution(&self, report: &crate::PlironOptimizationReportV1) -> bool {
         self.data.matches_execution(report)
     }
+    pub(crate) const fn neutral_data_v18(&self) -> &MapData<Identity18> {
+        &self.data
+    }
+
     pub fn check_against(
         &self,
         input: &Owner18,
@@ -58,19 +52,16 @@ impl KirOptimizationMapPolicy3V18 {
             output.module(),
             input.canonical_bytes().len(),
             budget,
-            FixedPolicy::Checked3,
-            digest,
+            FixedPolicy::IntegerWorklist9,
+            integer_digest,
             true,
         )
     }
-    pub(crate) const fn neutral_data_v18(&self) -> &MapData<Identity18> {
-        &self.data
-    }
 }
 
-fn digest(data: &MapData<Identity18>, _policy: FixedPolicy) -> [u8; 32] {
+fn integer_digest(data: &MapData<Identity18>, _policy: FixedPolicy) -> [u8; 32] {
     data.compute_digest_with_header(
-        DOMAIN,
+        INTEGER_DOMAIN,
         [
             (data.input.digest(), data.input.canonical_length()),
             (data.output.digest(), data.output.canonical_length()),
@@ -79,35 +70,23 @@ fn digest(data: &MapData<Identity18>, _policy: FixedPolicy) -> [u8; 32] {
 }
 
 impl CaptureV12 {
-    pub(crate) fn finish_policy3_v18(
+    pub(crate) fn finish_integer_worklist_v18(
         &self,
         input: &Owner18,
         output: &Owner18,
         roster: &LiveRosterV12,
         budget: &mut Budget<'_>,
-    ) -> Result<(KirOptimizationMapPolicy3V18, usize)> {
+    ) -> Result<(KirOptimizationMapIntegerWorklistV18, usize)> {
         self.finish_header_data_admitted(
             input.module(),
             output.module(),
             [*input.identity(), *output.identity()],
             roster,
             budget,
-            FixedPolicy::Checked3,
-            digest,
+            FixedPolicy::IntegerWorklist9,
+            integer_digest,
             true,
         )
-        .map(|(data, storage)| (KirOptimizationMapPolicy3V18 { data }, storage))
+        .map(|(data, storage)| (KirOptimizationMapIntegerWorklistV18 { data }, storage))
     }
 }
-
-#[cfg(test)]
-#[path = "kir_optimization_map_v18_tests.rs"]
-mod tests;
-
-#[path = "kir_optimization_map_integer_v18.rs"]
-mod integer;
-pub use integer::KirOptimizationMapIntegerContinuationV18;
-
-#[path = "kir_optimization_map_integer_worklist_v18.rs"]
-mod worklist;
-pub use worklist::KirOptimizationMapIntegerWorklistV18;

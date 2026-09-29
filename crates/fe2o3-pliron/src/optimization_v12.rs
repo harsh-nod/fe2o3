@@ -552,6 +552,13 @@ pub(crate) fn execute_captured_fixed_policy_v1(
                 occurrences,
                 &mut ledger,
             ),
+            FixedPolicy::IntegerWorklist9 => session.execute_fixed_integer_worklist_v18(
+                root,
+                plan,
+                capture,
+                occurrences,
+                &mut ledger,
+            ),
             FixedPolicy::Historical2 => unreachable!(),
         };
         // Preserve the original ledger denial even when the pass

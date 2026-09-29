@@ -15,6 +15,9 @@ use pliron::{
 };
 use std::sync::{Arc, Mutex};
 
+#[path = "integer_identity_worklist_v2_tests.rs"]
+mod worklist_tests;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Denied {
     storage: bool,

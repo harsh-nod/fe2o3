@@ -295,10 +295,13 @@ impl Capture {
         admission: ObserverAdmissionV18,
         policy: FixedPolicy,
     ) -> Result<Self> {
-        // Integer6 creates at most one false constant per checked binary and
+        // Integer6 and IntegerWorklist9 create at most one false constant per checked binary and
         // otherwise only replaces values or erases nodes. Two traversals fit
         // the existing scalar/CFG envelope without increasing any cap.
-        if !matches!(policy, FixedPolicy::Checked3 | FixedPolicy::Integer6) {
+        if !matches!(
+            policy,
+            FixedPolicy::Checked3 | FixedPolicy::Integer6 | FixedPolicy::IntegerWorklist9
+        ) {
             return Err(E::Passes);
         }
         Ok(Self(Arc::new(Shared {

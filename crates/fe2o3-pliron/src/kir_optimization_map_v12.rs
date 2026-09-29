@@ -134,7 +134,9 @@ impl CaptureLimitsV12 {
         match policy {
             FixedPolicy::Historical2 => Ok(historical),
             FixedPolicy::Checked3 => historical.for_policy3_nodes(historical.nodes),
-            FixedPolicy::Integer6 => historical.for_policy3_nodes(historical.nodes),
+            FixedPolicy::Integer6 | FixedPolicy::IntegerWorklist9 => {
+                historical.for_policy3_nodes(historical.nodes)
+            }
         }
     }
     pub(crate) fn for_policy3_nodes(self, bound: usize) -> Result<Self> {
@@ -266,7 +268,10 @@ use replay_work::ReplayCensusV12;
 
 #[path = "kir_optimization_map_v18.rs"]
 mod storage_v18;
-pub use storage_v18::{KirOptimizationMapIntegerContinuationV18, KirOptimizationMapPolicy3V18};
+pub use storage_v18::{
+    KirOptimizationMapIntegerContinuationV18, KirOptimizationMapIntegerWorklistV18,
+    KirOptimizationMapPolicy3V18,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct MapData<I = Identity> {
@@ -556,13 +561,15 @@ impl<I> MapData<I> {
             FixedPolicy::Historical2 => {
                 validate_lifecycle(&self.nodes, &self.events, &self.terminal, &self.passes)?
             }
-            FixedPolicy::Checked3 | FixedPolicy::Integer6 => validate_lifecycle_for_policy(
-                &self.nodes,
-                &self.events,
-                &self.terminal,
-                &self.passes,
-                policy,
-            )?,
+            FixedPolicy::Checked3 | FixedPolicy::Integer6 | FixedPolicy::IntegerWorklist9 => {
+                validate_lifecycle_for_policy(
+                    &self.nodes,
+                    &self.events,
+                    &self.terminal,
+                    &self.passes,
+                    policy,
+                )?
+            }
         }
         // An immutable candidate cannot validly derive more targets than its
         // claimed exact target roster. Refuse a mismatch before allocating it.

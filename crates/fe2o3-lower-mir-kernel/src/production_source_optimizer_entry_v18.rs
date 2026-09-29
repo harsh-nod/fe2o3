@@ -605,3 +605,5 @@ source_optimizer_policy_v18!(
     CheckedNeutralKernelIrOwnerIntegerContinuationV18,
     optimize_neutral_kernel_ir_integer_continuation_v18
 );
+
+include!("production_source_integer_worklist_v18.rs");

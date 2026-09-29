@@ -8,6 +8,11 @@ mod formal_path_tests_v20 {
     include!("production_optimized_source_formal_paths_v20_tests.rs");
 }
 
+mod worklist_tests_v18 {
+    use super::*;
+    include!("production_optimized_source_integer_worklist_v18_tests.rs");
+}
+
 fn integer_identity_source_v18(
     operation: SemanticBinaryOpV1,
     neutral: u128,

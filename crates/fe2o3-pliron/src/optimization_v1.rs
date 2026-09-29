@@ -51,6 +51,8 @@ pub enum PlironOptimizationPassV1 {
     DominancePureCommonSubexpressionElimination,
     /// Only the fixed Policy6 continuation can invoke this same-ledger pass.
     IntegerNeutralCanonicalization,
+    /// Only the fixed V18 Policy9 continuation executes the def-use worklist.
+    IntegerNeutralWorklistCanonicalization,
 }
 
 impl PlironOptimizationPassV1 {
@@ -67,6 +69,9 @@ impl PlironOptimizationPassV1 {
                 "dominance-pure-common-subexpression-elimination"
             }
             Self::IntegerNeutralCanonicalization => "integer-neutral-canonicalization",
+            Self::IntegerNeutralWorklistCanonicalization => {
+                "integer-neutral-worklist-canonicalization"
+            }
         }
     }
 }
@@ -470,6 +475,7 @@ impl PlironSession {
             for pass in [
                 PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination,
                 PlironOptimizationPassV1::IntegerNeutralCanonicalization,
+                PlironOptimizationPassV1::IntegerNeutralWorklistCanonicalization,
             ] {
                 if plan.passes.contains(&pass) {
                     return Err(PlironOptimizationErrorV1::PassRejected(pass));
@@ -812,7 +818,8 @@ fn run_trusted_pass(
         }
         PlironOptimizationPassV1::SimplifyControlFlow => passes.add_pass(SimplifyCFGPass),
         PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination
-        | PlironOptimizationPassV1::IntegerNeutralCanonicalization => {
+        | PlironOptimizationPassV1::IntegerNeutralCanonicalization
+        | PlironOptimizationPassV1::IntegerNeutralWorklistCanonicalization => {
             return Err(TrustedPassFailure);
         }
     }
@@ -832,6 +839,15 @@ fn run_observed_pass_v12(
     observer: Box<dyn pliron::irbuild::observer::RewriteObserver>,
     cse: Option<&mut crate::fixed_policy_v3::CseLedger<'_, '_>>,
 ) -> Result<bool, TrustedPassFailure> {
+    if pass == PlironOptimizationPassV1::IntegerNeutralWorklistCanonicalization {
+        return run_observed_integer_identity::<true>(
+            pointer,
+            context,
+            analyses,
+            observer,
+            cse.ok_or(TrustedPassFailure)?,
+        );
+    }
     if pass == PlironOptimizationPassV1::IntegerNeutralCanonicalization {
         return run_observed_integer_identity_v1(
             pointer,
@@ -872,6 +888,9 @@ fn run_observed_pass_v12(
                 PlironOptimizationPassV1::IntegerNeutralCanonicalization => {
                     "gpu-integer-neutral-v1"
                 }
+                PlironOptimizationPassV1::IntegerNeutralWorklistCanonicalization => {
+                    "gpu-integer-neutral-worklist-v2"
+                }
             }
         }
         fn run(
@@ -905,7 +924,8 @@ fn run_observed_pass_v12(
                     dialect_gpu::cse_v1::local_pure_cse_with_observer_v12(root, context, observer)
                 }
                 PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination
-                | PlironOptimizationPassV1::IntegerNeutralCanonicalization => {
+                | PlironOptimizationPassV1::IntegerNeutralCanonicalization
+                | PlironOptimizationPassV1::IntegerNeutralWorklistCanonicalization => {
                     return Err(pliron::input_error_noloc!("missing policy-3 ledger"));
                 }
             };
