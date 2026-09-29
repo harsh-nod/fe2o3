@@ -265,15 +265,21 @@ fn one_window_pair_and_full_quote_revalidation_on_small_and_large_roots() {
             drop(subject);
             b.release_storage(subject_storage.retained_storage())
                 .unwrap();
-            let q = quote.currentness_revalidation_quota().unwrap();
+            // The retained token has the exact location footprint; the original
+            // pre-acquisition quote conservatively allows unused path capacity.
+            let q = current.currentness_revalidation_quota().unwrap();
+            let bound = quote.currentness_revalidation_quota().unwrap();
+            assert!(q.work() <= bound.work());
+            assert!(q.scratch() <= bound.scratch());
             let needed = quote.retained_storage() + FRAME + q.scratch();
             // One short includes the complete stored Q, not just decoder scratch.
             let filler = total - floor - needed + 1;
             b.reserve_storage(filler).unwrap();
-            assert!(matches!(
-                resources.revalidate(lease, current, b),
-                Err(Error::Resource(Resource::Storage(_)))
-            ));
+            let result = resources.revalidate(lease, current, b);
+            assert!(
+                matches!(result, Err(Error::Resource(Resource::Storage(_)))),
+                "one-short exact revalidation: {result:?}"
+            );
             assert_eq!(b.storage(), floor + filler);
             locked(&f, true);
             let denial = b.failed_storage();

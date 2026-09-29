@@ -151,10 +151,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bounded_publication_plan_fits_without_using_the_canonical_maximum() {
+    fn bounded_publication_plan_covers_whole_request_custody_overlap() {
         let q = RootPublicationCustodyV3::observation_quota(1024 * 1024).unwrap();
         let late = RootPublicationCustodyV3::observation_cleanup_quota(1024 * 1024).unwrap();
-        assert!(q.scratch() < fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5);
+        let bounds = custody_bounds(1024 * 1024).unwrap();
+        // The enclosing request retains its Holder while the local window pays
+        // the full quoted owners again and both constructor outputs accumulate.
+        // Its aggregate peak is not the artifact-local 256 MiB ceiling.
+        let overlap = sum(&[
+            late.retained_storage(),
+            bounds.retained_storage(),
+            bounds.retained_storage(),
+            COMPOSITION_SCRATCH,
+            bounds
+                .lease_acquisition_quota()
+                .scratch()
+                .max(bounds.token_acquisition_quota().scratch())
+                .max(bounds.currentness_revalidation_quota().scratch())
+                .max(SUBJECT_SCRATCH),
+        ])
+        .unwrap();
+        assert!(q.scratch() >= overlap);
         assert!(q.work() > late.request_work());
         assert!(q.scratch() > late.retained_storage());
         let larger = RootPublicationCustodyV3::observation_quota(2 * 1024 * 1024).unwrap();

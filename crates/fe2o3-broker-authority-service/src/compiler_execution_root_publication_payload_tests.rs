@@ -173,9 +173,11 @@ fn actual_pair_retains_locks_on_refusal_and_unwind() {
                     b.reserve_storage(storage.retained_storage())?;
                     assert_eq!(subject, expected);
                     if mode == "currentness-work-refusal" {
-                        let remaining = COMPOSITION_WORK
-                            + quote.currentness_revalidation_quota().unwrap().work()
-                            - 1;
+                        let exact = token.currentness_revalidation_quota().unwrap();
+                        assert!(
+                            exact.work() <= quote.currentness_revalidation_quota().unwrap().work()
+                        );
+                        let remaining = COMPOSITION_WORK + exact.work() - 1;
                         b.charge_work(usize::MAX - b.work() - remaining)?;
                         let (lease, token) = owners.current()?;
                         owners
