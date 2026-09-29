@@ -74,7 +74,7 @@ macro_rules! native_entrypoint {
 
         // Prepay the common process-hardening and fixed FD take/close mechanics. Each
         // native capability, image, transport and durable operation charges separately.
-        const IO_WORK: usize = 8 + 64 * 1024;
+        const IO_WORK: usize = 8 + 64 * 1024 + crate::NATIVE_INHERITED_CHECK_WORK;
         const FRAME: usize = 16 * 1024
             + Admission::PROCESS_STORAGE
             + Service::FD_PAIR_STORAGE
@@ -103,7 +103,9 @@ macro_rules! native_entrypoint {
         }
 
         fn run(b: &mut Budget<'_>) -> Result<()> {
+            // harden uses only setrlimit/getrlimit and prctl, never allocating FDs.
             let process = Process::harden().map_err(Error::Process)?;
+            crate::require_native_inherited()?;
             b.reserve_storage(Admission::PROCESS_STORAGE + Inputs::INPUT_STORAGE)?;
             let (inputs, charge) = Inputs::from_inherited(b)?;
             b.reserve_storage(charge.additional_storage())?;
@@ -161,6 +163,12 @@ macro_rules! native_entrypoint {
         mod tests {
             use super::*;
             use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+            fn entrypoint(b: &mut Budget<'_>) -> Result<()> {
+                $entrypoint(b)
+            }
+
+            include!("native_inherited_tests.rs");
 
             #[test]
             fn native_entrypoint_denies_work_before_hardening_or_inherited_io() {

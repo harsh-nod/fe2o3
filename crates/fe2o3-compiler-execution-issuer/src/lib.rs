@@ -75,6 +75,20 @@ pub const COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1: RawFd = 11;
 
 const PRIVATE_DESCRIPTOR_FLOOR: RawFd = 12;
 
+const NATIVE_INHERITED_DESCRIPTORS: [RawFd; 9] = [
+    COMPILER_EXECUTION_ISSUER_ROOT_FD_V1,
+    COMPILER_EXECUTION_ISSUER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_POLICY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1,
+    COMPILER_EXECUTION_ISSUER_READY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
+];
+// One non-retrying F_GETFD (1024) and fixed table/flag checks (64) per slot.
+const NATIVE_INHERITED_CHECK_WORK: usize = NATIVE_INHERITED_DESCRIPTORS.len() * (1024 + 64);
+
 const _: () = assert!(COMPILER_EXECUTION_ISSUER_ROOT_FD_V1 > libc::STDERR_FILENO);
 const _: () = assert!(COMPILER_EXECUTION_ISSUER_ROOT_FD_V1 < COMPILER_EXECUTION_ISSUER_PEER_FD_V1);
 const _: () =
@@ -286,6 +300,16 @@ fn require_inherited(descriptor: RawFd) -> Result<(), CompilerExecutionIssuerEnt
     }
     if flags & libc::FD_CLOEXEC != 0 {
         return Err(CompilerExecutionIssuerEntrypointErrorV1::UnexpectedCloseOnExec(descriptor));
+    }
+    Ok(())
+}
+
+// Native entrypoints prepay NATIVE_INHERITED_CHECK_WORK on their original budget.
+// Check the complete table before any duplication can reuse a missing input slot.
+// This only borrows the fixed slots; object admission and consuming takes follow.
+fn require_native_inherited() -> Result<(), CompilerExecutionIssuerEntrypointErrorV1> {
+    for descriptor in NATIVE_INHERITED_DESCRIPTORS {
+        require_inherited(descriptor)?;
     }
     Ok(())
 }
