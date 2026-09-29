@@ -166,14 +166,16 @@ fn stdio_capture_preserves_actual_slots_ofds_and_flags() {
         match case.as_str() {
             "partial-failure" => partial_failure(),
             "pipe" => capture_pipe(),
+            "cloexec" => capture_cloexec(),
             _ => capture_mask(case.parse().unwrap()),
         }
         return;
     }
-    for case in (0..8)
-        .map(|n| n.to_string())
-        .chain(["partial-failure".to_owned(), "pipe".to_owned()])
-    {
+    for case in (0..8).map(|n| n.to_string()).chain([
+        "partial-failure".to_owned(),
+        "pipe".to_owned(),
+        "cloexec".to_owned(),
+    ]) {
         let output = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
             .env(CHILD_CASE, &case)
@@ -185,6 +187,82 @@ fn stdio_capture_preserves_actual_slots_ofds_and_flags() {
             output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+fn capture_cloexec() {
+    let root = Directory::new();
+    let source = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(root.0.join("stdio"))
+        .unwrap();
+    let flags = rustix::fs::fcntl_getfl(&source).unwrap() | OFlags::APPEND | OFlags::NONBLOCK;
+    rustix::fs::fcntl_setfl(&source, flags).unwrap();
+    let status_flags = rustix::fs::fcntl_getfl(&source).unwrap();
+    rustix::fs::seek(&source, rustix::fs::SeekFrom::Start(2)).unwrap();
+    let states = [None, Some(FdFlags::CLOEXEC), Some(FdFlags::empty())];
+    // Rotate all three states through each slot; all open slots share one OFD.
+    for rotation in 0..3 {
+        let _saved = SavedStdio::new();
+        for slot in 0..3 {
+            match states[(slot + rotation) % 3] {
+                Some(flags) => {
+                    install(source.as_raw_fd(), slot as RawFd, flags.bits() as i32).unwrap();
+                }
+                None => {
+                    // SAFETY: this isolated test exclusively controls standard slots.
+                    assert_eq!(unsafe { libc::close(slot as RawFd) }, 0);
+                }
+            }
+        }
+        // SAFETY: only this test controls the slots, their flags and this private OFD.
+        let captured = unsafe { CapturedStdioV1::capture_current() }.unwrap();
+        let streams = [captured.stdin(), captured.stdout(), captured.stderr()];
+        for (slot, stream) in streams.into_iter().enumerate() {
+            let expected = states[(slot + rotation) % 3];
+            assert_eq!(stream.map(|s| s.descriptor_flags()), expected);
+            // Future adapter contract: Stage Some clears CLOEXEC, None closes.
+            let stage_source = stream
+                .filter(|s| !s.descriptor_flags().contains(FdFlags::CLOEXEC))
+                .map(|s| s.source());
+            assert_eq!(stage_source.is_some(), expected == Some(FdFlags::empty()));
+            match stream {
+                None => assert_eq!(
+                    raw_descriptor_flags(slot as RawFd)
+                        .unwrap_err()
+                        .raw_os_error(),
+                    Some(libc::EBADF)
+                ),
+                Some(stream) => {
+                    assert_eq!(
+                        raw_descriptor_flags(slot as RawFd).unwrap(),
+                        expected.unwrap().bits() as i32
+                    );
+                    assert_eq!(stream.status_flags(), status_flags);
+                    assert_eq!(
+                        rustix::fs::fcntl_getfl(stream.source()).unwrap(),
+                        status_flags
+                    );
+                    assert_eq!(
+                        rustix::io::fcntl_getfd(stream.source()).unwrap(),
+                        FdFlags::CLOEXEC
+                    );
+                    // An unfiltered Stage Some would turn original CLOEXEC into
+                    // inheritance. Destination FD flags do not affect the OFD or
+                    // the captured original flags, nor the retained copy's flags.
+                    install(stream.source().as_raw_fd(), slot as RawFd, 0).unwrap();
+                    assert_eq!(raw_descriptor_flags(slot as RawFd).unwrap(), 0);
+                    assert_eq!(stream.descriptor_flags(), expected.unwrap());
+                    captured.revalidate().unwrap();
+                }
+            }
+        }
+        assert_eq!(
+            rustix::fs::seek(&source, rustix::fs::SeekFrom::Current(0)).unwrap(),
+            2
         );
     }
 }

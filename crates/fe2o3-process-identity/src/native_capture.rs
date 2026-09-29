@@ -26,7 +26,9 @@ impl PinnedWorkingDirectoryV3 {
     ///
     /// The adapter must duplicate `native_source()` and retain exclusive custody
     /// of that transfer. Matching inode/flags alone cannot prove how a supplied
-    /// descriptor was obtained or that it shares an open-file description.
+    /// descriptor was obtained, that it shares an open-file description, or that
+    /// its offset is shared. Only the adapter's duplicate/custody chain supplies
+    /// that provenance; reopening the same inode is not a substitute.
     /// Both sources must remain read-only, directory-backed and CLOEXEC. A rename
     /// of the original pathname does not replace this object. At most six
     /// descriptor syscalls; no Rust heap allocation or retry. This grants no authority.
@@ -73,19 +75,25 @@ pub struct CapturedStdioDescriptorV1 {
 impl CapturedStdioDescriptorV1 {
     /// Retained source for descriptor-only staging or an inert SCM_RIGHTS transfer.
     /// Do not mutate its shared status flags or offset while preparing the child.
+    /// Do not blindly pass this as native Stage `Some`: that installs with
+    /// `dup3(..., 0)`, clearing CLOEXEC. Consult `descriptor_flags()` first.
     pub fn source(&self) -> BorrowedFd<'_> {
         self.source.as_fd()
     }
 
-    /// Original F_GETFD result, to restore on the child's destination slot.
-    /// In particular, original CLOEXEC means that slot must close on exec; the
-    /// CLOEXEC flag on `source()` is only transfer hygiene, not this observation.
+    /// Original F_GETFD result, distinct from the shared open-file status flags.
+    /// Original CLOEXEC means this slot must close on exec. Restore these flags
+    /// on the child's destination, or select native Stage `None` for CLOEXEC to
+    /// obtain the same post-exec absence. Stage `Some` clears CLOEXEC intentionally.
+    /// The CLOEXEC flag on `source()` is only transfer hygiene, not this observation.
     pub const fn descriptor_flags(&self) -> FdFlags {
         self.descriptor_flags
     }
 
-    /// Original F_GETFL result. These flags belong to the shared open-file
-    /// description: staging must preserve them, never restore them using F_SETFL.
+    /// Original F_GETFL result, including access mode and status flags such as
+    /// APPEND/NONBLOCK, not the per-descriptor FD_CLOEXEC flag. These belong to the
+    /// shared open-file description: staging must preserve them, never restore
+    /// them using F_SETFL.
     /// This is an observation, not an immutable guarantee against other aliases.
     pub const fn status_flags(&self) -> OFlags {
         self.status_flags
@@ -105,7 +113,13 @@ impl CapturedStdioDescriptorV1 {
 ///
 /// `None` records an absent slot, not /dev/null or an instruction to inherit the
 /// future launcher's slot. A present slot with original CLOEXEC remains distinct
-/// from absence before exec. The compiler adapter must apply both observations.
+/// from absence before exec. For Command-style inherited stdio at exec, an adapter
+/// to native Stage's `Some = dup3(..., 0)` / `None = close destination` contract
+/// must map absent and original-CLOEXEC slots to `None`, and only open slots
+/// without original CLOEXEC to `Some(source)`. If pre-exec presence matters, the
+/// installer must instead preserve original CLOEXEC explicitly. Never normalize
+/// open-CLOEXEC to absence in this capture or infer inheritance from the retained
+/// copy's CLOEXEC bit: every retained copy has that bit set.
 /// Original slots can close or be reused after capture: the duplicates retain
 /// their original open-file descriptions. No supplied FD/PID constructor exists.
 /// This is inert transfer input, not compiler approval or invocation provenance.
