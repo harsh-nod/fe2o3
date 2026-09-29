@@ -46,7 +46,21 @@ pub const PROTECTED_SERVICE_SECUREBITS_V1: u32 = SECBIT_NOROOT
 
 #[allow(unsafe_code)]
 mod secure_start {
-    core::arch::global_asm!(include_str!("secure_start_x86_64.S"), options(att_syntax));
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // Written once by the ELF entrypoint, before libc or any thread exists.
+    static DESCRIPTOR_INVOCATION: AtomicBool = AtomicBool::new(false);
+
+    core::arch::global_asm!(
+        include_str!("secure_start_x86_64.S"),
+        invocation = sym DESCRIPTOR_INVOCATION,
+        max_argv0 = const crate::observations::MAX_DESCRIPTOR_ARGV0_BYTES,
+        options(att_syntax)
+    );
+
+    pub(super) fn descriptor_invocation_checked() -> bool {
+        DESCRIPTOR_INVOCATION.load(Ordering::Acquire)
+    }
 
     unsafe extern "C" {
         fn fe2o3_secure_start_v1();
@@ -56,7 +70,9 @@ mod secure_start {
     ///
     /// Static protected binaries reference this function and select the returned symbol as their
     /// ELF entry address. The assembly repeats nondumpability, `no_new_privs`, and the zero core
-    /// limit before libc or Rust startup can inspect inherited descriptors.
+    /// limit, then bounds the initial argv0 and requires an empty environment, before libc or
+    /// Rust startup can inspect inherited descriptors. Bypassing this entrypoint leaves the
+    /// private invocation observation unset and descriptor-only admission fails closed.
     #[inline(never)]
     pub fn protected_service_secure_start_address_v1() -> usize {
         fe2o3_secure_start_v1 as *const () as usize

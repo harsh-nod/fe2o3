@@ -106,6 +106,14 @@ keep every owner valid while checking continuity refusal. The audit inventory
 also accounts for moved socket/pidfd inspection sites without treating relocation
 as removal of their safety obligations.
 
+The shared x86-64 secure entrypoint restores confinement before inspecting the
+kernel's initial argument table. It requires one nonempty, bounded argv0 and an
+empty initial environment, then writes a private atomic once before libc startup.
+No public setter exists. Rust admission requires that observation and rechecks
+bounded command bytes; it never restores dumpability to read root-owned procfs
+environment data. This extends the existing reviewed assembly boundary without
+adding an unsafe Rust site or granting service identity or proof authority.
+
 The native profile and compiler-execution subject test allocators forward all
 pointer/layout operations unchanged to `System`. Their thread-local counters
 use saturating increments so exhaustion cannot unwind through `GlobalAlloc`;

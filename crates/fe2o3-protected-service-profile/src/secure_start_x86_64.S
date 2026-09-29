@@ -58,6 +58,28 @@ fe2o3_secure_start_v1:
     jne .Lfe2o3_secure_start_fail
 
     popq %rdx
+
+    # The kernel's initial stack is argc, argv[argc], NULL, envp, NULL.
+    # Inspect only after hardening, still before libc: no allocation or proc access.
+    cmpq $1, (%rsp)
+    jne .Lfe2o3_secure_start_fail
+    movq 8(%rsp), %rdi
+    testq %rdi, %rdi
+    je .Lfe2o3_secure_start_fail
+    cmpq $0, 16(%rsp)
+    jne .Lfe2o3_secure_start_fail
+    cmpq $0, 24(%rsp)
+    jne .Lfe2o3_secure_start_fail
+    cmpb $0, (%rdi)
+    je .Lfe2o3_secure_start_fail
+    movl ${max_argv0}, %ecx
+    xorl %eax, %eax
+    cld
+    repne scasb
+    jne .Lfe2o3_secure_start_fail
+
+    # Private atomic flag is published only after every startup check succeeds.
+    movb $1, {invocation}(%rip)
     jmp _start
 
 .Lfe2o3_secure_start_fail:

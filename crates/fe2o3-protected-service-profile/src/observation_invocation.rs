@@ -7,16 +7,22 @@ use rustix::{
 
 /// Maximum argv0 size including its terminating NUL.
 pub const MAX_DESCRIPTOR_ARGV0_BYTES: usize = 4096;
-/// Two opens, three reads, two closes and fixed bounded byte/control work.
+/// Conservative quote for startup observation and bounded command inspection.
 pub const DESCRIPTOR_INVOCATION_WORK: usize =
     8 * 1024 + 32 * (MAX_DESCRIPTOR_ARGV0_BYTES + 1) + 256;
-/// Fixed command buffer, EOF/environment sentinel and conservative control/error slots.
+/// Fixed command buffer, EOF sentinel and conservative control/error slots.
 pub const DESCRIPTOR_INVOCATION_SCRATCH: usize = MAX_DESCRIPTOR_ARGV0_BYTES + 1 + 4096;
 
-/// Requires one nonempty bounded argv0 and an empty environment. Prepay WORK/SCRATCH
+/// Requires secure-entry inspection of the initial empty environment and one
+/// nonempty bounded argv0, then rechecks the current command. Prepay WORK/SCRATCH
 /// before entry. Opens/reads are single attempts; short or interrupted reads reject.
 /// This observes invocation shape, not executable identity or deployment provenance.
 pub fn require_descriptor_only_invocation() -> Result<(), Error> {
+    if !crate::secure_start::descriptor_invocation_checked() {
+        return Err(Error::InvalidState(
+            "descriptor-only secure entry was not observed",
+        ));
+    }
     let io = |source| Error::Io {
         operation: "inspect descriptor-only invocation",
         source,
@@ -32,15 +38,6 @@ pub fn require_descriptor_only_invocation() -> Result<(), Error> {
     let mut extra = [0_u8; 1];
     if !canonical_argv0(&bytes[..n]) || read(&command, &mut extra).map_err(io)? != 0 {
         return Err(Error::InvalidState("expected one bounded nonempty argv0"));
-    }
-    let environment = open(
-        c"/proc/self/environ",
-        OFlags::RDONLY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(io)?;
-    if read(&environment, &mut extra).map_err(io)? != 0 {
-        return Err(Error::InvalidState("expected empty environment"));
     }
     Ok(())
 }
