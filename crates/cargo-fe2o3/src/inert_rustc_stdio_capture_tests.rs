@@ -68,9 +68,7 @@ fn capture(states: [u8; 3]) -> (CapturedStdioV1, [OwnedFd; 3]) {
             _ => unreachable!(),
         }
     }
-    // SAFETY: only this isolated test controls slots and the private OFD aliases.
-    // No signals/foreign code mutate them, and no wrapper setup has run yet.
-    let capture = unsafe { CapturedStdioV1::capture_current() }.unwrap();
+    let capture = CapturedStdioV1::capture_current().unwrap();
     drop(saved);
     (capture, sources)
 }
@@ -206,15 +204,11 @@ fn missing_parent_slot_refuses_before_installation() {
 
 fn missing_parent_slot_refuses_before_wrapper_setup() {
     for slot in 0..=2 {
-        let (capture, _sources) = capture([0; 3]);
         let saved = SavedStdio::new();
         // SAFETY: this isolated test exclusively owns the standard slots.
         assert_eq!(unsafe { libc::close(slot) }, 0);
-        let error = crate::binding_wrapper::run_with_captured_stdio(
-            vec!["/proc/self/fd/-1".into(), "-vV".into()],
-            capture,
-        )
-        .unwrap_err();
+        let error =
+            crate::binding_wrapper::run(vec!["/proc/self/fd/-1".into(), "-vV".into()]).unwrap_err();
         assert!(
             matches!(error, crate::binding_wrapper::BindingWrapperError::Spawn(error)
             if error.raw_os_error() == Some(libc::EBADF))

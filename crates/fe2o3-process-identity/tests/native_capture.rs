@@ -218,8 +218,7 @@ fn capture_cloexec() {
                 }
             }
         }
-        // SAFETY: only this test controls the slots, their flags and this private OFD.
-        let captured = unsafe { CapturedStdioV1::capture_current() }.unwrap();
+        let captured = CapturedStdioV1::capture_current().unwrap();
         let streams = [captured.stdin(), captured.stdout(), captured.stderr()];
         for (slot, stream) in streams.into_iter().enumerate() {
             let expected = states[(slot + rotation) % 3];
@@ -280,9 +279,7 @@ fn capture_pipe() {
     install(reader.as_raw_fd(), 0, 0).unwrap();
     install(writer.as_raw_fd(), 1, 0).unwrap();
     install(writer.as_raw_fd(), 2, libc::FD_CLOEXEC).unwrap();
-    // SAFETY: the selected test exclusively controls all standard slots and the
-    // private pipe. No other process or handler holds an alias to this pipe.
-    let captured = unsafe { CapturedStdioV1::capture_current() }.unwrap();
+    let captured = CapturedStdioV1::capture_current().unwrap();
     drop(saved);
     drop((reader, writer));
     captured.revalidate().unwrap();
@@ -328,9 +325,7 @@ fn capture_mask(mask: u8) {
             assert_eq!(unsafe { libc::close(slot as RawFd) }, 0);
         }
     }
-    // SAFETY: no other test runs in this process; its harness is waiting for this
-    // test. All backing files are private and no handler mutates their flags.
-    let captured = unsafe { CapturedStdioV1::capture_current() }.unwrap();
+    let captured = CapturedStdioV1::capture_current().unwrap();
     captured.revalidate().unwrap();
     let streams = [captured.stdin(), captured.stdout(), captured.stderr()];
     for (slot, stream) in streams.iter().enumerate() {
@@ -474,9 +469,8 @@ fn partial_failure() {
     assert!(occupied.len() >= 2);
     drop(occupied.pop());
     drop(occupied.pop());
-    // SAFETY: this exact isolated test exclusively owns all three standard slots
-    // and the private backing; the first two captures fit, the third must refuse.
-    let error = match unsafe { CapturedStdioV1::capture_current() } {
+    // The first two captures fit; the third must refuse without leaking either.
+    let error = match CapturedStdioV1::capture_current() {
         Ok(_) => panic!("three duplicates unexpectedly fit in two free slots"),
         Err(error) => error,
     };

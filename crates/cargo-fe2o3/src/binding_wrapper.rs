@@ -326,33 +326,12 @@ impl From<PinExecutableError> for BindingWrapperError {
     }
 }
 
-pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
-    run_inner(argv, None)
-}
-
-/// Enters the same wrapper path with stdio captured before any wrapper FD opens.
-///
-/// The entry adapter must justify capture_current's unsafe exclusions, including
-/// status-flag mutation through external OFD aliases. The current main cannot
-/// establish that exclusion and deliberately does not call it here. A capture at
-/// Rust main observes actual runtime-sanitized wrapper slots, not their original
-/// pre-runtime inherited state.
-/// Current parent stdslots must be open before setup, independently of captured
-/// absence: executable pinning must not acquire a slot the final hook replaces.
-/// This owned input adds no compiler authority or native-boundary selection.
-#[allow(dead_code)] // Entry capture remains an explicit integration prerequisite.
-pub(crate) fn run_with_captured_stdio(
-    argv: Vec<OsString>,
-    stdio: CapturedStdioV1,
-) -> Result<ExitStatus, BindingWrapperError> {
+pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
+    // The dedicated wrapper enters before opening files or starting workers. Keep
+    // its actual runtime-sanitized streams, not later occupants of the same slots.
+    // Shared OFD flags remain observations; this is not protected admission.
     require_open_parent_stdio().map_err(BindingWrapperError::Spawn)?;
-    run_inner(argv, Some(stdio))
-}
-
-fn run_inner(
-    mut argv: Vec<OsString>,
-    stdio: Option<CapturedStdioV1>,
-) -> Result<ExitStatus, BindingWrapperError> {
+    let stdio = CapturedStdioV1::capture_current().map_err(BindingWrapperError::Spawn)?;
     reject_dynamic_loader_environment()?;
     normalize_unprotected_validation_loader_environment();
     let expected_rustc_sha256 = expected_rustc_sha256()?;
@@ -368,10 +347,8 @@ fn run_inner(
             configure_managed_rustc_loader(command.as_command_mut());
             command.args(&argv[1..]);
             configure_build_observation_environment(command.as_command_mut(), None);
-            if let Some(stdio) = &stdio {
-                configure_captured_stdio(command.as_command_mut(), stdio)
-                    .map_err(BindingWrapperError::Spawn)?;
-            }
+            configure_captured_stdio(command.as_command_mut(), &stdio)
+                .map_err(BindingWrapperError::Spawn)?;
             return command.status().map_err(BindingWrapperError::Spawn);
         }
         Err(error) => return Err(error.into()),
@@ -715,14 +692,12 @@ fn run_inner(
         } else {
             None
         };
-        if let Some(stdio) = &stdio {
-            configure_captured_stdio(command.as_command_mut(), stdio)
-                .map_err(BindingWrapperError::Spawn)?;
-        }
+        configure_captured_stdio(command.as_command_mut(), &stdio)
+            .map_err(BindingWrapperError::Spawn)?;
         let parent_rustc_invocation_custody = ParentRustcInvocationCustody::retain(
             inert_rustc_invocation,
             rustc_invocation_capability,
-            stdio,
+            Some(stdio),
         )
         .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))?;
         let mut child = match command.spawn() {

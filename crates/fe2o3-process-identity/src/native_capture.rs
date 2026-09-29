@@ -61,7 +61,7 @@ fn inspect_cwd(fd: BorrowedFd<'_>, expected: LinuxObjectIdentityV3) -> io::Resul
 
 /// One actual open standard descriptor, retained through a CLOEXEC duplicate.
 ///
-/// The duplicate shares the original open-file description (including offset,
+/// The duplicate retains the open-file description selected at duplication (including offset,
 /// access mode and status flags). It is not a reopened procfs path. Original
 /// descriptor flags are recorded separately because duplication sets CLOEXEC on
 /// the retained copy. Borrowing this value supplies no process or I/O authority
@@ -81,7 +81,9 @@ impl CapturedStdioDescriptorV1 {
         self.source.as_fd()
     }
 
-    /// Original F_GETFD result, distinct from the shared open-file status flags.
+    /// F_GETFD observation before duplication, distinct from shared status flags.
+    /// Concurrent slot replacement can make it refer to a different object;
+    /// capture alone does not authenticate an atomic process snapshot.
     /// Original CLOEXEC means this slot must close on exec. Restore these flags
     /// on the child's destination, or select native Stage `None` for CLOEXEC to
     /// obtain the same post-exec absence. Stage `Some` clears CLOEXEC intentionally.
@@ -90,7 +92,7 @@ impl CapturedStdioDescriptorV1 {
         self.descriptor_flags
     }
 
-    /// Original F_GETFL result, including access mode and status flags such as
+    /// F_GETFL observation on the retained duplicate, including flags such as
     /// APPEND/NONBLOCK, not the per-descriptor FD_CLOEXEC flag. These belong to the
     /// shared open-file description: staging must preserve them, never restore
     /// them using F_SETFL.
@@ -109,9 +111,9 @@ impl CapturedStdioDescriptorV1 {
     }
 }
 
-/// Move-only, fixed-size capture of this process's actual standard descriptors.
+/// Move-only, fixed-size, non-atomic observation of this process's standard slots.
 ///
-/// `None` records an absent slot, not /dev/null or an instruction to inherit the
+/// `None` records EBADF from that slot's flag probe, not /dev/null or an instruction to inherit the
 /// future launcher's slot. A present slot with original CLOEXEC remains distinct
 /// from absence before exec. For Command-style inherited stdio at exec, an adapter
 /// to native Stage's `Some = dup3(..., 0)` / `None = close destination` contract
@@ -137,7 +139,7 @@ pub struct CapturedStdioV1 {
 }
 
 impl CapturedStdioV1 {
-    /// Captures only the actual slots 0, 1 and 2, without altering them.
+    /// Observes and duplicates only actual slots 0, 1 and 2, without altering them.
     ///
     /// Every duplicate is allocated at FD >= 3, so capturing an open stream never
     /// fills an absent standard slot before that slot is inspected. Only EBADF
@@ -148,16 +150,20 @@ impl CapturedStdioV1 {
     /// the lifetime of up to three retained kernel descriptors on their account;
     /// no account credit or charge is manufactured here.
     ///
-    /// # Safety
-    /// The caller must exclusively control slots 0..=2 throughout capture: no
-    /// thread, signal handler or foreign code may close, replace or change their
-    /// descriptor flags. Exclude status-flag changes through ANY alias to their
-    /// open-file descriptions. The caller must independently establish that these
-    /// are the intended wrapper's streams. Capture is not an atomic snapshot and
-    /// cannot enforce those exclusions. Retaining custody through the future
-    /// native staging/exec and accounting for external aliases remain obligations
-    /// of that adapter; this function does not authorize a process launch.
-    pub unsafe fn capture_current() -> io::Result<Self> {
+    /// This is safe inert observation, not an atomic snapshot or authenticated
+    /// invocation. Concurrent slot replacement may mix descriptor flags from
+    /// one object with a duplicate of another, or cause a syscall refusal. Shared
+    /// status flags and offsets remain mutable through external aliases. Each
+    /// successful duplicate is independently owned regardless of later changes
+    /// to the original slot. Revalidation detects observed drift, not isolation.
+    ///
+    /// A wrapper adapter must capture before its own descriptor-opening setup
+    /// and prevent local slot replacement through preparation. At Rust main this
+    /// observes runtime-sanitized slots, not their pre-runtime inherited state.
+    /// Protected invocation admission must independently establish provenance,
+    /// permitted aliases and final staged-object custody. This function creates
+    /// none of those guarantees and does not authorize a process launch.
+    pub fn capture_current() -> io::Result<Self> {
         let mut result = Self {
             slots: [None, None, None],
         };
@@ -167,8 +173,8 @@ impl CapturedStdioV1 {
                 Err(error) if error.raw_os_error() == Some(libc::EBADF) => continue,
                 Err(error) => return Err(error),
             };
-            // SAFETY: fcntl takes only scalar arguments. The caller excludes
-            // source replacement, and the floor cannot occupy an absent stdio slot.
+            // SAFETY: scalar fcntl permits even a concurrently closed/reused source.
+            // Success returns a new FD; the floor never fills an absent stdio slot.
             let duplicate = unsafe { libc::fcntl(destination, libc::F_DUPFD_CLOEXEC, 3) };
             if duplicate < 0 {
                 return Err(io::Error::last_os_error());
@@ -201,6 +207,7 @@ impl CapturedStdioV1 {
     }
 
     /// Rechecks retained-copy CLOEXEC and captured shared status flags only.
+    /// Successful samples do not prove continuous stability or an atomic snapshot.
     /// Does not inspect the original 0/1/2 slots, compare offsets, authenticate
     /// writers, or prove OFD identity for any later received duplicate. At most
     /// six descriptor syscalls; no mutation, Rust heap allocation or retry.

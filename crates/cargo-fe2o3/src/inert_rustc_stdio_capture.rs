@@ -2,10 +2,9 @@
 //!
 //! The caller must obtain CapturedStdioV1 from the actual wrapper entry before
 //! wrapper setup opens descriptors. At Rust main this observes runtime-sanitized
-//! stdslots, not the original pre-runtime inherited state. Single-threaded entry
-//! alone cannot justify capture_current: its unsafe contract also excludes shared
-//! status-flag mutation through external OFD aliases. The entry adapter must
-//! establish that exclusion; no immutable-alias isolation is claimed here. No
+//! stdslots, not the original pre-runtime inherited state. Capture is inert and
+//! non-atomic; external OFD aliases can change shared flags and offsets. Neither
+//! capture nor revalidation establishes immutable-alias isolation. No
 //! raw-FD, pathname, environment, or root-process stdio substitutes are accepted.
 
 use fe2o3_process_identity::CapturedStdioV1;
