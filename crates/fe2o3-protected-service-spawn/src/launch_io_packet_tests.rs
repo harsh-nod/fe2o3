@@ -345,6 +345,75 @@ fn socket_refusals_close_rights_including_ancillary_overflow() {
 }
 
 #[test]
+fn default_socket_without_options_refuses_missing_credentials_and_closes_received_rights() {
+    fn check<const N: usize>() {
+        // No setsockopt or pair() helper: exercise raw receive and refusal with
+        // missing credentials, independently of the SO_PASSCRED end-to-end tests.
+        let (sender, receiver) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let metadata = file.as_file().metadata().unwrap();
+        let payload = vec![0xa5; N + 1];
+        for length in [0, N - 1, N, N + 1] {
+            for count in [0, 1, 2, 12] {
+                let context = format!("N={N}, length={length}, rights={count}");
+                let fds = [file.as_fd(); 12];
+                let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(12))];
+                let mut control = SendAncillaryBuffer::new(&mut space);
+                if count != 0 {
+                    assert!(control.push(SendAncillaryMessage::ScmRights(&fds[..count])));
+                }
+                assert_eq!(
+                    sendmsg(
+                        &sender,
+                        &[IoSlice::new(&payload[..length])],
+                        &mut control,
+                        SendFlags::NOSIGNAL | SendFlags::DONTWAIT,
+                    )
+                    .unwrap(),
+                    length,
+                    "{context}"
+                );
+                let packet = receive_fixed_packet::<N>(receiver.as_fd()).unwrap();
+                assert_eq!(packet.rights.credentials, None, "{context}");
+                assert_eq!(packet.bytes, length.min(N), "{context}");
+                assert_eq!(
+                    packet.flags.contains(ReturnFlags::TRUNC),
+                    length > N,
+                    "{context}"
+                );
+                assert_eq!(
+                    packet.flags.contains(ReturnFlags::CTRUNC),
+                    count == 12,
+                    "{context}"
+                );
+                assert_eq!(packet.rights.invalid, count > 1, "{context}");
+                assert_eq!(packet.rights.fd.is_some(), count != 0, "{context}");
+                // The first disclosed FD is owned; extras and kernel-truncated
+                // rights must not leave any other installed descriptors behind.
+                assert_eq!(refs(&metadata), 1 + usize::from(count != 0), "{context}");
+                assert_eq!(
+                    packet.authenticate(this_sender()),
+                    Err(Failure::MalformedReadyTransfer),
+                    "{context}"
+                );
+                assert_eq!(refs(&metadata), 1, "leaked received FD: {context}");
+            }
+        }
+    }
+    // Keep the entire boundary/shape/rights matrix serial within this test.
+    check::<2>();
+    check::<88>();
+    check::<89>();
+    check::<4096>();
+}
+
+#[test]
 fn parser_disposes_rights_and_pidfds_even_after_an_unknown_header() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let metadata = file.as_file().metadata().unwrap();
