@@ -2,6 +2,9 @@
 
 Date: 2026-09-29 UTC. Tested code: `70aa4bfd4b17b9f195a82fc84adcd9c47cd01618`.
 
+Follow-up: [private root-to-issuer launch checkpoint](native-root-issuer-20260929.md).
+The results and remaining work below describe this earlier tested code.
+
 [Issue #272](https://github.com/harsh-nod/fe2o3/issues/272) remains incomplete.
 This checkpoint establishes wrapper input custody and native process/key-transfer
 mechanics, not a production compiler transaction, protected proof execution,
