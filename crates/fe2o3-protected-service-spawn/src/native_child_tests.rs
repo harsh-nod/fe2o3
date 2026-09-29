@@ -141,6 +141,50 @@ fn terminal_record_retires_exactly_one_slot_and_cancel_is_idempotent() {
 }
 
 #[test]
+fn namespace_setup_refusal_keeps_original_custody_and_deferred_state() {
+    let mut service = pool();
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    let mut child = synthetic(&mut service, &mut budget);
+    let report = service.report().unwrap();
+    let original_work = budget.work();
+    assert!(matches!(child.configure_namespace(), Err(Error::State(_))));
+    assert!(matches!(child.revalidate_namespace(), Err(Error::State(_))));
+    assert!(child.custody.0.is_some());
+    assert_eq!(service.report().unwrap(), report);
+    assert_eq!(budget.work(), original_work);
+    assert_eq!(child.cancel(), Poll::Quarantined);
+    assert!(child.custody.0.is_none());
+    assert!(matches!(child.configure_namespace(), Err(Error::State(_))));
+    assert!(matches!(child.revalidate_namespace(), Err(Error::State(_))));
+    assert_eq!(child.cancel(), Poll::Quarantined);
+    assert_eq!(service.report().unwrap(), report);
+    assert!(matches!(service.shutdown(), Err(Failure::Busy)));
+}
+
+#[test]
+fn namespace_fd_storage_and_close_only_retirement_are_prepaid() {
+    use crate::native_user_namespace::NativeUserNamespaceV1 as Namespace;
+
+    assert_eq!(
+        Owner::STORAGE,
+        size_of::<(Owner, Storage)>() + NativeCgroupDomainV1::STORAGE
+            - size_of::<NativeCgroupDomainV1>()
+            + Namespace::STORAGE
+            - size_of::<Namespace>()
+            + NativeCgroupDomainV1::STEP_SCRATCH
+    );
+    assert_eq!(
+        Namespace::STORAGE - size_of::<Namespace>(),
+        13 * size_of::<usize>()
+    );
+    assert_eq!(
+        Service::CELL_WORK,
+        16 + NativeCgroupDomainV1::STEP_WORK + 13 * (1024 + 64)
+    );
+}
+
+#[test]
 fn exact_pidfd_exec_confirmation_cancellation_and_drop_in_subprocess() {
     subprocess("lifecycle");
 }
@@ -148,6 +192,11 @@ fn exact_pidfd_exec_confirmation_cancellation_and_drop_in_subprocess() {
 #[test]
 fn atomic_clone_and_guard_adoption_in_subprocess() {
     subprocess("clone");
+}
+
+#[test]
+fn namespace_drop_and_pool_retain_until_aggregate_completion_in_subprocess() {
+    subprocess("namespace");
 }
 
 fn subprocess(mode: &str) {
@@ -205,6 +254,16 @@ impl Drop for Drain {
 #[test]
 fn native_child_subprocess() {
     if std::env::var_os(MARKER).is_none() {
+        return;
+    }
+    if std::env::var_os(MARKER).as_deref() == Some(std::ffi::OsStr::new("namespace")) {
+        Child::check_namespace_drop_retention_fixture();
+        Service::check_namespace_pool_retention_fixture();
+        std::fs::write(
+            std::env::var_os("FE2O3_NATIVE_CHILD_COMPLETION").unwrap(),
+            b"complete",
+        )
+        .unwrap();
         return;
     }
     let mut service =

@@ -4,6 +4,7 @@ use super::{DeferredReaperV1, EMPTY, ReapSlotV1, ReaperMode, deferred_reaper};
 use crate::MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY;
 use crate::native_cgroup::NativeCgroupDomainV1 as Domain;
 use crate::native_spawn::ProtectedServiceSpawnStorageV2 as Storage;
+use crate::native_user_namespace::NativeUserNamespaceV1 as Namespace;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -14,6 +15,9 @@ use std::{error::Error, fmt, fs::File, mem::size_of, sync::atomic::Ordering};
 
 const CONTROL_WORK: usize = 8;
 const SHUTDOWN_WORK: usize = CONTROL_WORK + CAPACITY;
+// The concrete namespace owner retains at most thirteen close-only descriptors.
+// Both foreground retirement and deferred retirement need their own allowance.
+const NAMESPACE_RETIRE_WORK: usize = 13 * (1024 + 64);
 
 pub(super) struct NativeAccount {
     ledger: Account,
@@ -148,7 +152,7 @@ impl Service {
     ///
     /// Includes capacity for one deployment guard retained until empty shutdown.
     /// Embedded records, mutexes, phase state, lease and account metadata are
-    /// included by `size_of`. Each cell also funds the domain's non-inline
+    /// included by `size_of`. Each cell also funds domain/namespace non-inline
     /// storage; one serialized pump scratch allowance stays prepaid even with
     /// no controller. This is logical retention, not RSS.
     pub const STORAGE: usize = size_of::<DeferredReaperV1>()
@@ -157,7 +161,9 @@ impl Service {
             * (size_of::<ProtectedServiceCleanupReservationV2>()
                 + size_of::<std::os::fd::OwnedFd>()
                 + Domain::STORAGE
-                - size_of::<Domain>())
+                - size_of::<Domain>()
+                + Namespace::STORAGE
+                - size_of::<Namespace>())
         + Self::GUARD_FILE_STORAGE
         + Domain::STEP_SCRATCH;
     /// Full logical input charge for a deployment guard descriptor, excluding file data.
@@ -179,13 +185,14 @@ impl Service {
     pub const TURN_WORK: usize = CONTROL_WORK;
     /// Per-cell scan, lock, signal/wait, terminal retirement and descriptor/lease release.
     ///
-    /// At most one pidfd signal/wait and one finite domain step per visited cell.
-    pub const CELL_WORK: usize = 16 + Domain::STEP_WORK;
+    /// At most one pidfd signal/wait and one finite domain step per visited cell,
+    /// plus final close-only namespace retirement after aggregate completion.
+    pub const CELL_WORK: usize = 16 + Domain::STEP_WORK + NAMESPACE_RETIRE_WORK;
     /// Request-local pre-clone scan plus emergency transfer and finalization allowance.
     ///
-    /// Includes one signal, one wait, one finite domain step, retirement and publication;
-    /// it does not fund later deferred turns or parent/child protocol execution.
-    pub const RESERVATION_WORK: usize = CAPACITY + 32 + Domain::STEP_WORK;
+    /// Includes one signal, one wait, one finite domain step, namespace retirement
+    /// and publication; not later deferred turns or parent/child protocol work.
+    pub const RESERVATION_WORK: usize = CAPACITY + 32 + Domain::STEP_WORK + NAMESPACE_RETIRE_WORK;
 
     /// Inert complete cost of one finite pool scan, using the same turn bounds as
     /// pump. Funding a scan does not guarantee that any child is terminal.

@@ -13,6 +13,8 @@ use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 
 use crate::native_cgroup::NativeCgroupDomainV1;
+use crate::native_spawn::{ProtectedServiceSpawnErrorV2 as SpawnError, Result as SpawnResult};
+use crate::native_user_namespace::NativeUserNamespaceV1;
 
 /// Disposition of one finite cleanup attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,7 +29,7 @@ pub enum CleanupPollV1 {
     Quarantined,
 }
 
-/// Move-only child, optional domain and inherited artifact-spawn custody.
+/// Move-only child, optional domain/namespace and inherited artifact-spawn custody.
 ///
 /// Transfer the whole value to the existing deferred table on uncertainty. Drop
 /// deliberately preserves unresolved resources; it is not a cleanup service or
@@ -36,6 +38,7 @@ pub enum CleanupPollV1 {
 pub struct ChildCleanupV1 {
     pid: Pid,
     custody: CleanupCustodyV1<OwnedFd, ArtifactProcessSpawnLeaseV1, NativeCgroupDomainV1>,
+    namespace: Option<NativeUserNamespaceV1>,
 }
 
 impl ChildCleanupV1 {
@@ -52,6 +55,7 @@ impl ChildCleanupV1 {
         Self {
             pid,
             custody: CleanupCustodyV1::new(pidfd, spawn_lease),
+            namespace: None,
         }
     }
 
@@ -66,7 +70,86 @@ impl ChildCleanupV1 {
         Self {
             pid,
             custody: CleanupCustodyV1::with_domain(pidfd, spawn_lease, domain),
+            namespace: None,
         }
+    }
+
+    /// Retains the prepared namespace before any fallible post-clone operation.
+    /// The caller supplies the same gated child/domain/pidfd from controlled clone.
+    pub(crate) fn new_with_domain_and_namespace(
+        pidfd: Option<OwnedFd>,
+        pid: Pid,
+        spawn_lease: Option<ArtifactProcessSpawnLeaseV1>,
+        domain: NativeCgroupDomainV1,
+        namespace: NativeUserNamespaceV1,
+    ) -> Self {
+        Self {
+            pid,
+            custody: CleanupCustodyV1::with_domain(pidfd, spawn_lease, domain),
+            namespace: Some(namespace),
+        }
+    }
+
+    /// Mechanical map setup only, not proof or namespace-isolation admission.
+    /// The launch wrapper must prepay CONFIGURE_WORK/SCRATCH on its original
+    /// ledger before clone, and keep the exact child behind its mapping gate.
+    /// Errors never extract the namespace or discharge cleanup custody.
+    pub(crate) fn configure_namespace(&mut self) -> SpawnResult<()> {
+        self.require_namespace_setup_custody()?;
+        let pidfd = self
+            .custody
+            .pidfd
+            .as_ref()
+            .ok_or(SpawnError::State("atomic native child pidfd is absent"))?;
+        let result = self
+            .namespace
+            .as_mut()
+            .ok_or(SpawnError::State("native child has no namespace custody"))?
+            .configure_child(self.pid, pidfd);
+        self.observe_namespace_result(result)
+    }
+
+    /// Rechecks only the exact retained child and namespace. The launch wrapper
+    /// prepays REVALIDATE_WORK/SCRATCH; this creates no budget or admission.
+    pub(crate) fn revalidate_namespace(&self) -> SpawnResult<()> {
+        self.require_namespace_setup_custody()?;
+        let pidfd = self
+            .custody
+            .pidfd
+            .as_ref()
+            .ok_or(SpawnError::State("atomic native child pidfd is absent"))?;
+        let result = self
+            .namespace
+            .as_ref()
+            .ok_or(SpawnError::State("native child has no namespace custody"))?
+            .revalidate_child(self.pid, pidfd);
+        self.observe_namespace_result(result)
+    }
+
+    fn observe_namespace_result(&self, result: SpawnResult<()>) -> SpawnResult<()> {
+        if matches!(
+            &result,
+            Err(SpawnError::Io {
+                source: Errno::CHILD,
+                ..
+            })
+        ) {
+            self.custody.ownership_lost();
+        }
+        result
+    }
+
+    fn require_namespace_setup_custody(&self) -> SpawnResult<()> {
+        if self.custody.phase != CleanupPhaseV1::KillRequired
+            || self.custody.domain_poll != CleanupPollV1::Pending
+            || self.custody.last_errno.is_some()
+            || self.custody.ownership_lost.load(Ordering::Acquire)
+        {
+            return Err(SpawnError::State(
+                "native child cleanup already started or lost ownership",
+            ));
+        }
+        Ok(())
     }
 
     /// Returns the scalar identity bound by the trusted adoption protocol.
@@ -130,6 +213,16 @@ impl ChildCleanupV1 {
     /// unverified spawn lease. Repeated complete calls perform no I/O.
     pub fn step(&mut self) -> CleanupPollV1 {
         self.custody.step(&mut PidfdCleanupSyscallsV1)
+    }
+}
+
+impl Drop for ChildCleanupV1 {
+    fn drop(&mut self) {
+        if !self.custody.complete() {
+            // Losing the outer owner cannot retire the namespace while domain
+            // descendants may survive. Reachable progress still requires its slot.
+            std::mem::forget(self.namespace.take());
+        }
     }
 }
 

@@ -81,7 +81,8 @@ impl ReapSlotV1<'_> {
     ///
     /// # Safety
     /// All associated child custody must already be terminal and dropped, and
-    /// any retained domain must have completed aggregate cleanup. A pending or
+    /// any retained domain must have completed aggregate cleanup. Namespace
+    /// custody stays with that record through aggregate completion. A pending or
     /// quarantined child/domain must instead remain in its original slot.
     pub unsafe fn retire_reaped(self) {
         self.complete();
@@ -122,7 +123,8 @@ impl crate::ProtectedServiceCleanupServiceV2 {
     /// Shared access must preserve all transitively retained obligations; it must
     /// not extract owners through interior mutation or unlock shared lock aliases.
     /// Before clone transfer the reservation to the exclusive child custodian;
-    /// never retire it while that child or its retained domain is unresolved.
+    /// never retire it while that child or its retained domain is unresolved,
+    /// including the record's retained namespace and mapping dependencies.
     /// No raw descriptor, PID, storage number or caller value is authenticated.
     pub unsafe fn reserve_launch_retaining<T: Send + 'static>(
         &mut self,

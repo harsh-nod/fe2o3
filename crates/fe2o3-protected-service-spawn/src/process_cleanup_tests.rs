@@ -852,3 +852,193 @@ fn completed_domain_still_retains_owners_if_root_wait_ownership_is_lost() {
         (0, 0, 0)
     );
 }
+
+#[test]
+fn namespace_operations_refuse_absent_or_unusable_custody_without_consuming_it() {
+    for cause in 0..7 {
+        // A pipe is not a pidfd. Every operation below must refuse from local
+        // state, before any namespace syscall or actual-child observation.
+        let (reader, _writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+        let pid = Pid::from_raw(1000).unwrap();
+        let mut child = ChildCleanupV1::new(Some(reader), pid, None);
+        match cause {
+            0 => {}
+            1 => child.custody.phase = CleanupPhaseV1::AwaitingExit,
+            2 => child.custody.phase = CleanupPhaseV1::Quarantined,
+            3 => child.terminal_reaped(),
+            4 => child.ownership_lost(),
+            5 => child.custody.domain_poll = CleanupPollV1::Quarantined,
+            _ => child.custody.last_errno = Some(Errno::PERM),
+        }
+        for _ in 0..2 {
+            assert!(matches!(
+                child.configure_namespace(),
+                Err(SpawnError::State(_))
+            ));
+            assert!(matches!(
+                child.revalidate_namespace(),
+                Err(SpawnError::State(_))
+            ));
+            assert!(child.namespace.is_none());
+            assert!(rustix::io::fcntl_getfd(child.pidfd().unwrap()).is_ok());
+        }
+        // Dispose of the inert pipe explicitly, without claiming an OS wait.
+        drop(child.custody.pidfd.take());
+    }
+    let mut child = ChildCleanupV1::new(None, Pid::from_raw(1000).unwrap(), None);
+    assert!(matches!(
+        child.configure_namespace(),
+        Err(SpawnError::State(_))
+    ));
+    assert!(matches!(
+        child.revalidate_namespace(),
+        Err(SpawnError::State(_))
+    ));
+    assert_eq!(child.step(), CleanupPollV1::Quarantined);
+}
+
+#[test]
+fn namespace_child_error_records_wait_ownership_loss_before_any_cleanup() {
+    for terminal in [false, true] {
+        for errno in [Errno::CHILD, Errno::INTR, Errno::IO, Errno::PERM] {
+            let (reader, _writer) =
+                rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+            let mut child = ChildCleanupV1::new(Some(reader), Pid::from_raw(1000).unwrap(), None);
+            if terminal {
+                child.terminal_reaped(); // No actual child or wait in this fixture.
+            }
+            let result = child.observe_namespace_result(Err(SpawnError::Io {
+                operation: "inert namespace wait observation",
+                source: errno,
+            }));
+            assert!(matches!(result, Err(SpawnError::Io {
+                operation: "inert namespace wait observation", source,
+            }) if source == errno));
+            assert_eq!(
+                child.custody.ownership_lost.load(Ordering::Acquire),
+                errno == Errno::CHILD && !terminal
+            );
+            child.observe_namespace_result(Ok(())).unwrap();
+            if errno == Errno::CHILD {
+                // Local quarantine or known terminal state must prevent all
+                // signaling/waiting on the inert pipe, including repeated calls.
+                for _ in 0..2 {
+                    assert_eq!(
+                        child.step(),
+                        if terminal {
+                            CleanupPollV1::Reaped
+                        } else {
+                            CleanupPollV1::Quarantined
+                        }
+                    );
+                    assert_eq!(
+                        child.last_errno(),
+                        if terminal { None } else { Some(Errno::CHILD) }
+                    );
+                }
+            }
+            drop(child.custody.pidfd.take());
+        }
+    }
+}
+
+fn namespace_fixture() -> (ChildCleanupV1, OwnedFd) {
+    let (reader, writer) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )
+    .unwrap();
+    let child = ChildCleanupV1::new_with_domain_and_namespace(
+        None,
+        Pid::from_raw(1000).unwrap(),
+        None,
+        NativeCgroupDomainV1::quarantined_fixture_for_cleanup(),
+        NativeUserNamespaceV1::poisoned_fixture_for_cleanup(writer),
+    );
+    (child, reader)
+}
+
+#[test]
+fn namespace_setup_error_and_root_reap_keep_exact_namespace_custody() {
+    // Neither owner can admit a real namespace/domain. The fake pidfd is a pipe,
+    // and the poisoned namespace refuses before any child/map syscall.
+    let (mut child, namespace_reader) = namespace_fixture();
+    let (pidfd, _writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+    child.custody.pidfd = Some(pidfd);
+    child.custody.phase = CleanupPhaseV1::KillRequired;
+    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for _ in 0..2 {
+            assert!(child.configure_namespace().is_err());
+            assert!(child.revalidate_namespace().is_err());
+            assert!(child.namespace.is_some());
+            assert!(rustix::io::fcntl_getfd(child.pidfd().unwrap()).is_ok());
+            assert_eq!(
+                rustix::io::read(&namespace_reader, &mut [0]),
+                Err(Errno::AGAIN)
+            );
+        }
+        child.release_spawn_after_exec();
+        child.terminal_reaped(); // Pure state fixture, not an OS wait claim.
+        assert!(!child.custody.complete());
+        assert!(child.namespace.is_some());
+        for _ in 0..2 {
+            assert_eq!(child.step(), CleanupPollV1::Quarantined);
+            assert_eq!(child.custody.phase, CleanupPhaseV1::Reaped);
+            assert!(child.namespace.is_some());
+            assert_eq!(
+                rustix::io::read(&namespace_reader, &mut [0]),
+                Err(Errno::AGAIN)
+            );
+        }
+    }));
+    // Dispose inert descriptors even on assertion failure; no process/domain exists.
+    drop(child.namespace.take());
+    drop(child.custody.pidfd.take());
+    assert_eq!(rustix::io::read(&namespace_reader, &mut [0]), Ok(0));
+    if let Err(error) = checked {
+        std::panic::resume_unwind(error);
+    }
+}
+
+impl ChildCleanupV1 {
+    // Runs only through the dedicated native-child test subprocess. Its exit
+    // closes intentional fail-closed fixture leaks, with no raw-FD recovery.
+    pub(crate) fn check_namespace_drop_retention_fixture() {
+        for state in 0..5 {
+            let (mut child, reader) = namespace_fixture();
+            match state {
+                0 => {}                       // Unknown direct-child ownership remains quarantined.
+                1 => child.terminal_reaped(), // Root terminal, domain not polled.
+                2 => {
+                    child.terminal_reaped();
+                    assert_eq!(child.step(), CleanupPollV1::Quarantined);
+                }
+                3 => {
+                    child.custody.domain_poll = CleanupPollV1::Reaped;
+                    // Root wait is still unknown even if the domain is complete.
+                }
+                _ => {
+                    child.terminal_reaped();
+                    child.custody.domain_poll = CleanupPollV1::Reaped;
+                }
+            }
+            // Terminal markers apply only to inert fixtures. Existing schedule
+            // tests independently drive real cleanup decisions using fake calls.
+            assert_eq!(child.custody.complete(), state == 4);
+            assert_eq!(rustix::io::read(&reader, &mut [0]), Err(Errno::AGAIN));
+            drop(child);
+            assert_eq!(
+                rustix::io::read(&reader, &mut [0]),
+                if state == 4 { Ok(0) } else { Err(Errno::AGAIN) },
+                "namespace descriptor release disagrees with aggregate state {state}"
+            );
+        }
+        let (mut child, reader) = namespace_fixture();
+        child.terminal_reaped();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _child = child;
+            panic!("inert root-terminal namespace custody unwind");
+        }));
+        assert!(result.is_err());
+        assert_eq!(rustix::io::read(&reader, &mut [0]), Err(Errno::AGAIN));
+    }
+}

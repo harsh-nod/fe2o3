@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{
     native_cgroup::NativeCgroupDomainV1,
+    native_user_namespace::NativeUserNamespaceV1,
     process_cleanup::{ChildCleanupV1 as Child, CleanupPollV1 as Poll},
     process_reaper::ReapSlotV1,
 };
@@ -28,7 +29,7 @@ impl Drop for Custody {
     }
 }
 
-/// Exact direct-child and optional domain custody, not readiness, exec or admission.
+/// Exact direct-child and optional domain/namespace custody, not exec or admission.
 /// One prepaid cancellation step retires a terminal child or defers the entire
 /// pidfd/lease record to its reserved shared slot. There is no raw-PID fallback,
 /// retry loop, background worker or fresh cleanup budget. Pending is not success.
@@ -56,6 +57,8 @@ impl RootOwnedProtectedServiceChildV2 {
     /// separately funds the same obligations after transfer into its pool.
     pub const STORAGE: usize = size_of::<(Self, Storage)>() + NativeCgroupDomainV1::STORAGE
         - size_of::<NativeCgroupDomainV1>()
+        + NativeUserNamespaceV1::STORAGE
+        - size_of::<NativeUserNamespaceV1>()
         + NativeCgroupDomainV1::STEP_SCRATCH;
     /// One observation/duplication or confirmed-exec lease-release allowance.
     pub const OPERATION_WORK: usize = ENTRY + 4 * (1024 + 64);
@@ -91,6 +94,41 @@ impl RootOwnedProtectedServiceChildV2 {
             pid,
             disposition: Poll::Pending,
         }
+    }
+
+    /// Transfers the prepared namespace with exact child/domain/lease/slot custody.
+    pub(crate) fn new_with_domain_and_namespace(
+        pid: Pid,
+        pidfd: Option<OwnedFd>,
+        lease: Lease,
+        domain: NativeCgroupDomainV1,
+        namespace: NativeUserNamespaceV1,
+        slot: ReapSlotV1<'static>,
+    ) -> Self {
+        Self {
+            custody: Custody(Some((
+                Child::new_with_domain_and_namespace(pidfd, pid, Some(lease), domain, namespace),
+                slot,
+            ))),
+            pid,
+            disposition: Poll::Pending,
+        }
+    }
+
+    /// Mechanical setup under the launch wrapper's pre-clone configuration
+    /// allowance. No new account, readiness or isolation admission is created.
+    pub(super) fn configure_namespace(&mut self) -> Result<()> {
+        self.custody
+            .0
+            .as_mut()
+            .ok_or(Error::State("native child custody was retired or deferred"))?
+            .0
+            .configure_namespace()
+    }
+
+    /// Mechanical revalidation on the original prepaid launch allowance.
+    pub(super) fn revalidate_namespace(&self) -> Result<()> {
+        self.record()?.revalidate_namespace()
     }
     fn record(&self) -> Result<&Child> {
         self.custody
@@ -189,8 +227,8 @@ impl RootOwnedProtectedServiceChildV2 {
     }
     /// Uses the launch reservation's single prepaid emergency step. Later calls
     /// return the same disposition without any signal/wait or slot release.
-    /// Root exit with unresolved domain cleanup transfers the entire record;
-    /// it does not retire the slot or any retained input charge.
+    /// Root exit with unresolved domain cleanup transfers the entire record,
+    /// including namespace custody; it retires neither slot nor input charges.
     pub fn cancel(&mut self) -> Poll {
         let Some((child, _)) = self.custody.0.as_mut() else {
             return self.disposition;
