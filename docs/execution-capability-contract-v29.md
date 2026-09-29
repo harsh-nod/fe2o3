@@ -1,7 +1,9 @@
 # Execution Capability Integration Contract
 
 Status: the inert semantic MIR V29 types and callable codec are implemented;
-executable capability integration is not complete. M0 and M1 remain incomplete. The production
+executable capability integration is not complete. The
+[M0 contract and baseline](issue272-capability-adr-v1.md) are accepted; M1 remains
+incomplete. The production
 importer still rejects staged context/tile terminals. The implementation must
 use the one production graph and existing verification and launch gates.
 

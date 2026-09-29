@@ -10,7 +10,8 @@ no admitted owner is converted between families.
 It materializes and revalidates inputs to the static launcher. It does **not**
 create a process, establish child confinement, execute the issuer, publish
 readiness, serve requests, run a protected proof, or qualify a GPU kernel.
-M0-M7 and 47/47 remain incomplete.
+M1-M7 and 47/47 remain incomplete. The separate
+[M0 contract and baseline](issue272-capability-adr-v1.md) are accepted.
 
 The implementation is in
 [`launch_v2.rs`](../crates/fe2o3-compiler-execution-supervisor/src/launch_v2.rs)

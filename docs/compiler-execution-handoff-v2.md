@@ -111,4 +111,5 @@ producer activation. Fixed static-manifest codec reuse is inert data reuse,
 not conversion from admitted V1 custody; see the
 [prepared-launch contract](compiler-execution-prepared-launch-v2.md) for exact
 invariants and composite work/retained/scratch accounting.
-M0-M7 and 47/47 remain incomplete; these tests grant no kernel qualification.
+M1-M7 and 47/47 remain incomplete; these tests grant no kernel qualification.
+The separate [M0 contract and baseline](issue272-capability-adr-v1.md) are accepted.

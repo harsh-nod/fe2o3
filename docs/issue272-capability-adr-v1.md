@@ -1,7 +1,7 @@
 # Issue 272 Capability Contract Adoption V1
 
-Status: proposed freeze for primary/owner review. **Not yet approved; no issue
-checkbox is closed by this patch.** This records the M0 decision separately from
+Status: **accepted for M0 on 2026-09-29** by the #272 implementation primary.
+This freezes the contract and descriptive baseline, separately from
 the M1 production vertical and later qualification milestones in
 [issue #272](https://github.com/harsh-nod/fe2o3/issues/272).
 
@@ -261,10 +261,21 @@ mismatched archive fails the explicit audit rather than substituting current
 bytes or silently claiming correspondence. Commit/tree labels and content
 digests do not independently authenticate execution or reviewer identity.
 
-These checks establish consistency, not human approval, execution provenance or
-semantic correctness. Primary must review and record explicit acceptance of
-this decision and baseline, with owner decisions linked for any schema/code
-changes. Review must distinguish outstanding implementation from a missing
-contract decision. Until then this ADR is proposed. M1-M7 and the issue itself
-remain independently open; native startup/cleanup or a library test count
-cannot substitute for their required kernel evidence.
+These checks establish consistency, not execution provenance, semantic
+correctness or approval by themselves. The implementation primary accepts this
+decision after independent agent review and inspection of the linked owner
+allocations, normative contracts, diagnostic implementations and exact baseline.
+No additional wire tags, source admission, proof authority or launch authority
+are allocated. Future executable extensions still require their owning stages'
+versioned contracts and tests.
+
+The nine M0 consistency tests, explicit pinned-source audit and unchanged
+original47-obligation check passed. Before acceptance, four stale current
+lockfile bindings and their derived digests were refreshed; the proposed
+baseline was then pinned to the corrected `a542ff66f` source. Its status remains
+unqualified. The accepted baseline's canonical JSON SHA-256 is
+`f001edc70466cb9d282309a65b5f00aef1d4811a9294d7850f1bf7802b787a16`.
+
+This completes M0's contract decision and baseline recording, not executable
+coverage. M1-M7 and the issue itself remain open; native custody tests or a
+library test count cannot substitute for their required kernel evidence.
