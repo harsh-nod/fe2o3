@@ -13,6 +13,9 @@ use fe2o3_kernel_ir::{
 };
 use std::cell::Cell;
 
+#[path = "formal_path_paid_owned_session_v21_tests.rs"]
+mod owned_session_v21_tests;
+
 const LIMIT: usize = 20_000_000;
 const FLOOR: usize = 37;
 

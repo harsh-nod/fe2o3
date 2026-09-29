@@ -1,6 +1,9 @@
 //! Caller-owned relation inputs, paid separately from V2/V3 solver scratch.
 use super::*;
-use crate::{PresburgerAffineNarrowingDecisionV3, PresburgerQueryErrorV2, PresburgerQueryScopeV2};
+use crate::{
+    PresburgerAffineNarrowingDecisionV3, PresburgerQueryErrorV2, PresburgerQueryScopeV2,
+    PresburgerQueryScopeV4, PresburgerQueryUsageV2,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
@@ -9,6 +12,46 @@ use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 type QueryResult<T> = std::result::Result<T, PresburgerQueryErrorV2>;
+
+pub(super) trait SolverQueries {
+    fn usage(&mut self, budget: &mut Budget<'_>) -> QueryResult<PresburgerQueryUsageV2>;
+    fn affine_empty(&mut self, set: &PresburgerSetV1, budget: &mut Budget<'_>)
+    -> QueryResult<bool>;
+}
+impl SolverQueries for PresburgerQueryScopeV2<'_> {
+    fn usage(&mut self, budget: &mut Budget<'_>) -> QueryResult<PresburgerQueryUsageV2> {
+        PresburgerQueryScopeV2::usage(self, budget)
+    }
+    fn affine_empty(
+        &mut self,
+        set: &PresburgerSetV1,
+        budget: &mut Budget<'_>,
+    ) -> QueryResult<bool> {
+        self.with_affine_narrowing_v3(set, budget, |decision, _| {
+            Ok(matches!(
+                decision,
+                PresburgerAffineNarrowingDecisionV3::Empty
+            ))
+        })
+    }
+}
+impl SolverQueries for PresburgerQueryScopeV4<'_> {
+    fn usage(&mut self, budget: &mut Budget<'_>) -> QueryResult<PresburgerQueryUsageV2> {
+        PresburgerQueryScopeV4::usage(self, budget)
+    }
+    fn affine_empty(
+        &mut self,
+        set: &PresburgerSetV1,
+        budget: &mut Budget<'_>,
+    ) -> QueryResult<bool> {
+        self.with_affine_narrowing_v4(set, budget, |decision, _| {
+            Ok(matches!(
+                decision,
+                PresburgerAffineNarrowingDecisionV3::Empty
+            ))
+        })
+    }
+}
 
 pub(super) struct InputCredit {
     pub(super) bytes: usize,
@@ -157,7 +200,7 @@ fn one_order(
     left: &[Fact],
     right: &[Fact],
     order: [i128; 2],
-    queries: &mut PresburgerQueryScopeV2<'_>,
+    queries: &mut impl SolverQueries,
     budget: &mut Budget<'_>,
 ) -> QueryResult<bool> {
     budget.check_prior_denials_v1()?;
@@ -167,12 +210,7 @@ fn one_order(
     let mut credit = InputCredit { bytes: 0 };
     let mut construct = |credit: &mut InputCredit, budget: &mut Budget<'_>| {
         let set = relation(left, right, order, credit, budget)?;
-        queries.with_affine_narrowing_v3(&set, budget, |decision, _| {
-            Ok(matches!(
-                decision,
-                PresburgerAffineNarrowingDecisionV3::Empty
-            ))
-        })
+        queries.affine_empty(&set, budget)
         // `set` and all its owned coefficient/constraint/bound vectors drop
         // before any of their reservation is returned below.
     };
@@ -224,7 +262,7 @@ fn one_order(
 pub(super) fn exclude(
     left: &[Fact],
     right: &[Fact],
-    queries: &mut PresburgerQueryScopeV2<'_>,
+    queries: &mut impl SolverQueries,
     budget: &mut Budget<'_>,
 ) -> QueryResult<bool> {
     // This observes the original cumulative session identity before allocating

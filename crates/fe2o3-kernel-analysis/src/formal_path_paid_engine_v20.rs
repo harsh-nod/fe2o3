@@ -1,7 +1,7 @@
 //! Paid indexes and cached facts over one existing original source facade.
 use super::paid_relations_v20::InputCredit;
 use super::*;
-use crate::{PresburgerQueryErrorV2, PresburgerQueryScopeV2};
+use crate::PresburgerQueryErrorV2;
 use fe2o3_kernel_ir::{
     BasicBlock, CanonicalFormalLaunchInputV19, CanonicalFormalReportErrorV19,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -373,7 +373,7 @@ impl<'query, 'owner, 'budget, 'work, Q: Queries<'owner>>
 
     pub(super) fn run(
         &mut self,
-        queries: &mut PresburgerQueryScopeV2<'_>,
+        queries: &mut impl paid_relations_v20::SolverQueries,
     ) -> PathResult<Vec<FormalPaidPathObservationV20>> {
         let source = self.source;
         let conflicts = source.analysis().obligations().inter_invocation_conflicts();

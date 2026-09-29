@@ -189,6 +189,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
 }
 
 include!("production_optimized_source_formal_reports_v19.rs");
+include!("production_optimized_source_formal_paths_v20.rs");
 
 #[cfg(test)]
 mod formal_resource_mapping_tests_v1760 {

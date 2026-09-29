@@ -3,9 +3,9 @@ use super::paid_engine_v20::{
     FormalPaidPathErrorV20 as Error, FormalPaidPathObservationV20 as Observation, PaidEngine,
     Queries,
 };
-use super::paid_relations_v20::InputCredit;
+use super::paid_relations_v20::{InputCredit, SolverQueries};
 use super::*;
-use crate::PresburgerQueryScopeV2;
+use crate::{PresburgerQueryScopeV2, PresburgerQueryScopeV4};
 use fe2o3_kernel_ir::{
     BasicBlock, CanonicalFormalLaunchInputV19, CanonicalFormalSourceScopeV20,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -151,6 +151,24 @@ pub fn with_formal_path_observations_v20<'work>(
     with_queries(source, queries, budget, consume)
 }
 
+/// Runs the unchanged original-owner path grammar on an existing cumulative
+/// V4 owned-scratch solver session. The report, retained CFG, relation inputs
+/// and path backing are still separately paid on the same original ledger.
+/// This lets one session span complete original/output report construction
+/// without counting that caller backing as solver-local scratch.
+///
+/// Every original row/reason and the V20 conditional observation meaning is
+/// preserved. No session is reset, copied owner admitted, residual cleared or
+/// final memory/native/publication authority created.
+pub fn with_formal_path_observations_v21<'work>(
+    source: &CanonicalFormalSourceScopeV20<'_, '_>,
+    queries: &mut PresburgerQueryScopeV4<'_>,
+    budget: &mut Budget<'work>,
+    consume: impl for<'view> FnOnce(&FormalPaidPathViewV20<'view>, &mut Budget<'work>) -> PathResult<()>,
+) -> PathResult<()> {
+    with_queries(source, queries, budget, consume)
+}
+
 // Logical typed carriers of the shared original bounded-recursion grammar.
 // The old depth-32 limit permits 33 live frames per grammar; a predicate can
 // call affine while all its own frames remain live. This is not native stack
@@ -189,14 +207,15 @@ pub(super) fn drain<T>(value: T) -> bool {
     panicked
 }
 
-pub(super) fn with_queries<'owner, 'work, Q, F>(
+pub(super) fn with_queries<'owner, 'work, Q, S, F>(
     source: &Q,
-    queries: &mut PresburgerQueryScopeV2<'_>,
+    queries: &mut S,
     budget: &mut Budget<'work>,
     consume: F,
 ) -> PathResult<()>
 where
     Q: Queries<'owner>,
+    S: SolverQueries,
     F: for<'view> FnOnce(&FormalPaidPathViewV20<'view>, &mut Budget<'work>) -> PathResult<()>,
 {
     let floor = budget.storage();
@@ -206,32 +225,30 @@ where
     let mut credit = InputCredit { bytes: 0 };
     let mut required = None;
     let mut authenticated = false;
-    let mut construct = |queries: &mut PresburgerQueryScopeV2<'_>,
-                         budget: &mut Budget<'work>,
-                         credit: &mut InputCredit|
-     -> PathResult<()> {
-        source.check(budget)?;
-        let mut engine = PaidEngine::build(source, budget, credit)?;
-        let observations = engine.run(queries)?;
-        drop(engine);
-        // Scratch backing has died, but remains conservatively charged through
-        // this fixed lexical callback. Output rows stay live until it returns.
-        required = Some(budget.storage());
-        let view = FormalPaidPathViewV20 {
-            owner: source.original_owner(),
-            function: source.original_function(),
-            root_index: source.root_index(),
-            launch: source.launch(),
-            width: source.width(),
-            report: source.analysis(),
-            observations: &observations,
+    let mut construct =
+        |queries: &mut S, budget: &mut Budget<'work>, credit: &mut InputCredit| -> PathResult<()> {
+            source.check(budget)?;
+            let mut engine = PaidEngine::build(source, budget, credit)?;
+            let observations = engine.run(queries)?;
+            drop(engine);
+            // Scratch backing has died, but remains conservatively charged through
+            // this fixed lexical callback. Output rows stay live until it returns.
+            required = Some(budget.storage());
+            let view = FormalPaidPathViewV20 {
+                owner: source.original_owner(),
+                function: source.original_function(),
+                root_index: source.root_index(),
+                launch: source.launch(),
+                width: source.width(),
+                report: source.analysis(),
+                observations: &observations,
+            };
+            let consumer = pending.take().ok_or(Error::InconsistentOriginalReport)?;
+            consumer(&view, budget)?;
+            source.check(budget)?;
+            budget.check_prior_denials_v1()?;
+            Ok(())
         };
-        let consumer = pending.take().ok_or(Error::InconsistentOriginalReport)?;
-        consumer(&view, budget)?;
-        source.check(budget)?;
-        budget.check_prior_denials_v1()?;
-        Ok(())
-    };
     let construct_bytes = std::mem::size_of_val(&construct);
     let result = catch_unwind(AssertUnwindSafe(|| -> PathResult<()> {
         // Authenticate the genuine original source account before reserving
@@ -250,12 +267,7 @@ where
             size_of::<Vec<Observation>>(),
             size_of::<std::thread::Result<PathResult<()>>>() * 2,
             size_of::<std::thread::Result<()>>(),
-            size_of::<(
-                &mut PresburgerQueryScopeV2<'_>,
-                &mut Budget<'_>,
-                &mut InputCredit,
-                &usize,
-            )>(),
+            size_of::<(&mut S, &mut Budget<'_>, &mut InputCredit, &usize)>(),
             grammar_frames()?,
         ]
         .into_iter()

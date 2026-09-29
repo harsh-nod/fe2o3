@@ -50,6 +50,7 @@ pub(crate) enum Error {
     BoundScalarHandoff(ProductionBoundScalarHandoffErrorV19),
     TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
     FormalReports(Box<formal_context_v19::ReportOptimizationErrorV19>),
+    FormalPaths(Box<formal_context_v19::PathOptimizationErrorV20>),
     Resource(Resource),
     Unsupported(&'static str),
 }
@@ -70,6 +71,7 @@ impl std::error::Error for Error {
             Self::BoundScalarHandoff(error) => Some(error),
             Self::TargetLlvm(error) => Some(error),
             Self::FormalReports(error) => Some(error.as_ref()),
+            Self::FormalPaths(error) => Some(error.as_ref()),
             Self::Resource(error) => Some(error),
             Self::Unsupported(_) => None,
         }

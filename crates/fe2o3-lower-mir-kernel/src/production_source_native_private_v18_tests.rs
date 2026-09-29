@@ -1,3 +1,5 @@
+include!("production_source_private_completion_v20_tests.rs");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrivateNativeCaseV18 {
     Complete,

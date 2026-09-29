@@ -8,6 +8,8 @@ mod array_index_tests;
 mod borrowed_helper_tests;
 #[path = "production_rustc_driver_formal_context_v19_tests.rs"]
 mod formal_context_tests;
+#[path = "production_rustc_driver_formal_paths_v20_tests.rs"]
+mod formal_paths_tests;
 use crate::production_pipeline::source_owned_v29::{
     start_preparation_observation_v29, take_preparation_observation_v29,
 };

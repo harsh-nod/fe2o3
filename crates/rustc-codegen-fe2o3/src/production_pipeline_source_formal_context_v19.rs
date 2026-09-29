@@ -12,6 +12,13 @@ use fe2o3_lower_mir_kernel::{
 pub(super) type ReportOptimizationErrorV19 =
     ProductionSourceOptimizationErrorV18<ReportsError<Error>>;
 
+pub(super) type PathOptimizationErrorV20 = ProductionSourceOptimizationErrorV18<
+    fe2o3_lower_mir_kernel::ProductionOptimizedSourcePathsErrorV20<Error>,
+>;
+
+#[path = "production_pipeline_source_formal_paths_v20.rs"]
+mod formal_paths_v20;
+
 /// Retains a trusted compiler callback through preparation and header refusals.
 /// Its destructor cannot replace an already selected compiler error.
 pub(super) struct PendingConsumerV19<F>(Option<F>);

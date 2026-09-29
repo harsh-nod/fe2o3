@@ -194,7 +194,10 @@ fn wide_loop_owner(
         blocks[2] = block(192, vec![], goto(7));
         for offset in 0..width {
             let mut identity = [0; 32];
-            identity[..4].copy_from_slice(&(3000 + offset as u32).to_le_bytes());
+            // Fixed blocks use repeated bytes 190..=196. Keep every appended
+            // identity after those rows and numerically ordered past 255.
+            identity[0] = 197;
+            identity[1..5].copy_from_slice(&u32::try_from(offset).unwrap().to_be_bytes());
             blocks.push(
                 SemanticBasicBlockV1::new(
                     SemanticBlockIdentityV1::from_sha256(identity),
@@ -213,7 +216,7 @@ fn wide_loop_owner(
             );
         }
     }
-    let function = assertion_root_with_access(
+    let mut function = assertion_root_with_access(
         vec![
             (A_UNIT, SemanticLocalRoleV1::Return),
             (A_U64, SemanticLocalRoleV1::Temporary),
@@ -226,6 +229,51 @@ fn wide_loop_owner(
         blocks,
         false,
     );
+    if bits < 32 {
+        // GpuKernel is a foreign-classified ABI: the narrow unsigned source
+        // argument needs ZeroExtend, unlike the shared fixture's u64 argument.
+        let original = function.abi();
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            original.identity(),
+            original.layout_identity(),
+            original.canon_abi(),
+            original.extern_abi(),
+            original.can_unwind(),
+            original.c_variadic(),
+            original.fixed_count(),
+            vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                A_U64,
+                SemanticAbiPassModeV1::Direct(
+                    SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                        SemanticAbiExtensionV1::ZeroExtend,
+                        0,
+                        None,
+                    )
+                    .unwrap(),
+                ),
+            ))],
+            original.return_value().clone(),
+        )
+        .unwrap()
+        .with_source_argument_ownership(original.source_argument_ownership().to_vec())
+        .unwrap();
+        function = SemanticFunctionDeclV1::new(
+            function.identity(),
+            function.role(),
+            function.item_definition_identity(),
+            function.monomorphization_identity(),
+            function.generic_type_arguments_identity(),
+            function.const_generic_arguments_identity(),
+            function.source(),
+            abi,
+            function.locals().to_vec(),
+            function.entry(),
+            function.blocks().to_vec(),
+        )
+        .unwrap()
+        .with_kernel_entry(function.kernel_entry().unwrap().clone());
+    }
     let mut types = assertion_types();
     if bits != 64 {
         let size = u64::from(bits / 8);

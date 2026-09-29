@@ -3,6 +3,11 @@ mod formal_report_tests_v19 {
     include!("production_optimized_source_formal_reports_v19_tests.rs");
 }
 
+mod formal_path_tests_v20 {
+    use super::*;
+    include!("production_optimized_source_formal_paths_v20_tests.rs");
+}
+
 fn integer_identity_source_v18(
     operation: SemanticBinaryOpV1,
     neutral: u128,

@@ -96,7 +96,9 @@ mod paid_scope_v20;
 pub use paid_engine_v20::{
     FormalPaidPathDecisionV20, FormalPaidPathErrorV20, FormalPaidPathObservationV20,
 };
-pub use paid_scope_v20::{FormalPaidPathViewV20, with_formal_path_observations_v20};
+pub use paid_scope_v20::{
+    FormalPaidPathViewV20, with_formal_path_observations_v20, with_formal_path_observations_v21,
+};
 
 /// Observations about this report's exact conflict ordinal, never launch authority.
 #[derive(Clone, Debug, Eq, PartialEq)]

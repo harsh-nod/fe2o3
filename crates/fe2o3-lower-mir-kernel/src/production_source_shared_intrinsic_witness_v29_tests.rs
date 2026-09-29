@@ -1,8 +1,8 @@
 use super::*;
 
 const SHARED: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(9);
-const BOOL: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
-const OTHER_WITNESS: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(11);
+const BOOL: SemanticTypeIdV1 = REFERENCE;
+const OTHER_WITNESS: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(10);
 const LIMIT: usize = 20_000_000;
 
 #[derive(Clone, Copy, Debug)]
@@ -108,6 +108,7 @@ fn witness_abi(
     inputs: &[SemanticTypeIdV1],
     output: SemanticTypeIdV1,
     witness: Witness,
+    other_witness: SemanticTypeIdV1,
 ) -> SemanticFunctionAbiV1 {
     let plain = SemanticAbiValueAttributesV1::new(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
@@ -141,7 +142,9 @@ fn witness_abi(
         .map(|&ty| {
             SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
                 ty,
-                if ty == CARRIER || (ty == WITNESS && matches!(witness, Witness::Block)) {
+                if ty == CARRIER
+                    || ((ty == WITNESS || ty == other_witness) && matches!(witness, Witness::Block))
+                {
                     SemanticAbiPassModeV1::Pair {
                         first: plain,
                         second: plain,
@@ -283,27 +286,48 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
             ),
         ),
     );
-    types.push(declaration(
-        11,
-        SemanticTypeLayoutV1::new_with_backend_repr(
-            Some(1),
-            1,
-            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
-                SemanticBackendPrimitiveV1::integer(false, 8, 1),
-                SemanticScalarValidityRangeV1::new(0, 1),
-            )),
-            false,
-        )
-        .unwrap(),
-        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
-    ));
-    types.push(declaration(
+    // Write-only calls have neither the reference nor Option return subtree.
+    // Reuse those dense slots rather than retaining unreachable declarations.
+    if write {
+        types[BOOL.index() as usize] = declaration(
+            11,
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(1),
+                1,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                    SemanticScalarValidityRangeV1::new(0, 1),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
+        );
+    }
+    let other_witness = if write { OPTIONAL } else { OTHER_WITNESS };
+    let other = declaration(
         12,
         types[WITNESS.index() as usize].layout().clone(),
         types[WITNESS.index() as usize].shape().clone(),
-    ));
+    );
+    if write {
+        types[other_witness.index() as usize] = other;
+    } else {
+        assert_eq!(types.len(), other_witness.index() as usize);
+        types.push(other);
+    }
     let result = if write { BOOL } else { OPTIONAL };
-    let local_types = [UNIT, CARRIER, WITNESS, BORROW, SHARED, result];
+    // The hostile same-shape identity has a genuine independent source ABI
+    // argument, never an unreachable type appended just for a plan mutation.
+    let local_types = [
+        UNIT,
+        CARRIER,
+        WITNESS,
+        BORROW,
+        SHARED,
+        result,
+        other_witness,
+    ];
     let locals = local_types
         .into_iter()
         .enumerate()
@@ -315,6 +339,7 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
                     0 => SemanticLocalRoleV1::Return,
                     1 => SemanticLocalRoleV1::Argument(0),
                     2 => SemanticLocalRoleV1::Argument(1),
+                    6 => SemanticLocalRoleV1::Argument(2),
                     _ => SemanticLocalRoleV1::Temporary,
                 },
                 provenance(),
@@ -389,7 +414,14 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
         SemanticGenericTypeArgumentsIdentityV1::from_sha256([20; 32]),
         SemanticConstGenericArgumentsIdentityV1::from_sha256([20; 32]),
         provenance(),
-        witness_abi(20, true, &[CARRIER, WITNESS], UNIT, witness),
+        witness_abi(
+            20,
+            true,
+            &[CARRIER, WITNESS, other_witness],
+            UNIT,
+            witness,
+            other_witness,
+        ),
         locals,
         SemanticBlockIdV1::from_index(0),
         blocks,
@@ -412,7 +444,7 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
             SemanticCallableDeclV1::defined(ROOT),
             intrinsic(
                 21,
-                witness_abi(21, false, &inputs, result, witness),
+                witness_abi(21, false, &inputs, result, witness, other_witness),
                 witness.operation(write),
             ),
         ],

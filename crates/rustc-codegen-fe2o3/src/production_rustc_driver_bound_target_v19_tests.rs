@@ -65,18 +65,29 @@ impl Callbacks for BoundCallbacks {
                                 .extents()
                                 .any(|axis| matches!(axis, fe2o3_kernel_ir::LaunchExtent::Dynamic))
                         }));
-                        let nominal_roots = original
-                            .module()
-                            .functions
-                            .iter()
-                            .filter(|function| {
-                                function.signature.parameters
-                                    == [fe2o3_kernel_ir::Type::Scalar(
-                                        fe2o3_kernel_ir::ScalarType::Index,
-                                    )]
-                            })
-                            .count();
+                        let nominal_roots = source.root_count(budget)?;
                         assert_eq!(nominal_roots, 2);
+                        let semantic = source.source_semantic(budget)?;
+                        for ordinal in 0..nominal_roots {
+                            let (root, function_ordinal) = source.root(ordinal, budget)?;
+                            let inputs = semantic.functions()[root.index() as usize]
+                                .abi()
+                                .source_input_types();
+                            assert_eq!(inputs.len(), 1);
+                            assert_eq!(
+                                semantic.types()[inputs[0].index() as usize].rust_type_kind(),
+                                SemanticRustTypeKindV1::Usize
+                            );
+                            let function = &original.module().functions[function_ordinal];
+                            assert_eq!(original.module().kernels[ordinal].entry, function.id);
+                            // Nominal source identity survives independently of its lowered width.
+                            assert_eq!(
+                                function.signature.parameters,
+                                [fe2o3_kernel_ir::Type::Scalar(
+                                    fe2o3_kernel_ir::ScalarType::U64
+                                )]
+                            );
+                        }
                         let (launches, width) = handoff.formal_context_v19(budget)?;
                         assert_eq!(width, fe2o3_kernel_ir::FormalIndexWidth::Bits64);
                         let mut physical_extents =
