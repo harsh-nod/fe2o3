@@ -3,6 +3,10 @@
 Date: 2026-09-28 (Pacific). Continues the
 [namespace checkpoint](native-user-namespace-20260928.md).
 
+Follow-up: [native proof helper bootstrap checkpoint](native-proof-helper-bootstrap-20260928.md)
+implements the private retained helper launch and dedicated entry described below.
+It does not complete a production compiler attempt or close any milestone.
+
 **M0-M7 and the 47/47 production-to-safe-GPU-launch gate remain incomplete.**
 No tutorial kernel changes classification in this checkpoint. The new Linux
 diagnostic establishes five paired memory-access observations, not a production
