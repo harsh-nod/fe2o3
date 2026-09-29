@@ -235,3 +235,108 @@ pub(crate) use root_prefix_indices_v1::observe_actual_root_retired_fixed_proof_f
 
 #[cfg(test)]
 pub(crate) use root_prefix_indices_v1::observe_actual_root_fixed_prefix_comparison_for_test_v1;
+
+#[cfg(test)]
+pub(in crate::production_ranked_projection_v1) fn with_nominal_source_preparation_v1<'g, 'w, R, F>(
+    facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, 'g, '_, 'w>,
+    expected_function: &SemanticFunctionDeclV1,
+    expected_ledger: (usize, CanonicalKernelIrWorkLedgerIdentityV1),
+    owned: &mut usize,
+    inspect: F,
+) -> Result<R>
+where
+    F: FnOnce(&mut PreparationResourcesV1<'_, '_>) -> Result<R>,
+{
+    // Sequential narrow borrower only. It neither constructs Rich tables nor
+    // releases callback storage. The outer pending outlives this whole loan.
+    if facts.masked.is_some() {
+        return Err(Error::Incomplete(
+            "source-ordered preparation requires unmasked real facts",
+        ));
+    }
+    let function = facts
+        .owner
+        .semantic_ssa()
+        .source_semantic()
+        .functions()
+        .get(facts.semantic_function.index() as usize)
+        .ok_or(Error::Incomplete(
+            "source-ordered preparation function absent",
+        ))?;
+    require_same_source_v1(function, expected_function)?;
+    let state = ReservationState::new(facts.budget, *owned)?;
+    if (state.slot, state.ledger) != expected_ledger {
+        return Err(resource(Resource::Accounting));
+    }
+    let bytes = source_preparation_frame::<R, F>()?;
+    with_resource_borrow(facts.budget, owned, state, |resources| {
+        resources.work(32)?;
+        resources.reserve_storage(bytes)
+    })?;
+    let materialized = facts.is_materialized_block(function.entry().index() as usize);
+    state.check(facts.budget, *owned)?;
+    if !materialized? {
+        return Err(Error::Incomplete(
+            "source-ordered preparation entry is not materialized",
+        ));
+    }
+    with_resource_borrow(facts.budget, owned, state, inspect)
+}
+#[cfg(test)]
+fn source_preparation_frame<R, F>() -> Result<usize> {
+    let rows = [
+        size_of::<(
+            &mut CanonicalSourceAssertionFactsV1<'static, 'static, 'static, 'static, 'static>,
+            &SemanticFunctionDeclV1,
+            (usize, CanonicalKernelIrWorkLedgerIdentityV1),
+            &mut usize,
+            F,
+        )>(),
+        size_of::<(
+            ReservationState,
+            &SemanticFunctionDeclV1,
+            Option<&SemanticFunctionDeclV1>,
+            &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+            &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+        )>(),
+        size_of::<(
+            usize,
+            Result<usize>,
+            Result<bool>,
+            bool,
+            fe2o3_mir_model::semantic_mir_v1::SemanticBlockIdV1,
+            u32,
+            usize,
+        )>(),
+        size_of::<(
+            &mut PreparationResourcesV1<'static, 'static>,
+            usize,
+            PreparationResourcesV1<'static, 'static>,
+            &mut Budget<'static>,
+            &mut usize,
+            ReservationState,
+            Result<()>,
+            Result<R>,
+            R,
+            F,
+        )>(),
+        size_of::<(usize, usize, Option<usize>, Resource, Error, Result<usize>)>(),
+        size_of::<(
+            [usize; 6],
+            std::array::IntoIter<usize, 6>,
+            usize,
+            usize,
+            Option<usize>,
+        )>(),
+    ];
+    rows.into_iter().try_fold(0usize, |sum, row| {
+        sum.checked_add(row)
+            .ok_or_else(|| resource(Resource::Arithmetic))
+    })
+}
+
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use root_prefix_indices_v1::{
+    ActualSelectedInputsV1, select_actual_capability_prefix_inputs_v1,
+};

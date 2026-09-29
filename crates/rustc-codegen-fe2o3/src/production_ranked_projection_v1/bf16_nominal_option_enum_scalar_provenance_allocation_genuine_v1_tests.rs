@@ -566,3 +566,10 @@ pub(crate) fn observe_option_enum_scalar_provenance_allocation_before_capabiliti
         result
     })
 }
+
+#[cfg(test)]
+#[path = "bf16_nominal_actual_capability_prefix_v1_tests.rs"]
+mod actual_prefix;
+
+#[cfg(test)]
+pub(crate) use actual_prefix::observe_actual_capability_prefix_for_test_v1;

@@ -366,3 +366,9 @@ pub(super) fn with_scalar_private_singletons_v1<T, F: ProjectedAssertionFactsV1>
         Err(payload) => std::panic::resume_unwind(payload),
     }
 }
+
+#[allow(dead_code)]
+#[path = "retained_scalar_singleton_v1.rs"]
+mod retained_singleton;
+#[allow(unused_imports)]
+pub(super) use retained_singleton::RetainedScalarSingletonV1;

@@ -308,3 +308,6 @@ pub(in crate::production_ranked_projection_v1) use option_first_prelude::{
     BeforeCapabilitiesV1,
     with_nominal_option_enum_scalar_provenance_allocation_before_capabilities_v1,
 };
+
+#[cfg(test)]
+pub(crate) use option_first_prelude::observe_actual_capability_prefix_for_test_v1;
