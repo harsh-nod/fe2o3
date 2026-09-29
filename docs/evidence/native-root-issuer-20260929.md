@@ -2,6 +2,8 @@
 
 Date: 2026-09-29 UTC. Tested code: `8087ca6f06302194d3f287f5b893c27d8f4a50d9`.
 
+Follow-up: [actual startup matrix and root observation](native-root-observation-20260929.md).
+
 [Issue #272](https://github.com/harsh-nod/fe2o3/issues/272) and
 [compiler occurrence #218](https://github.com/harsh-nod/fe2o3/issues/218) remain
 incomplete. This checkpoint implements a private launch primitive and shared
