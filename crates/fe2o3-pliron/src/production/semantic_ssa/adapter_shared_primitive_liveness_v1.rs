@@ -303,3 +303,10 @@ impl<M: BorrowWork, O: ReadObserver> Visitor for Expire<'_, '_, '_, M, O> {
         Ok(())
     }
 }
+
+// Inert retained constructor only; the ordinary Schedule path is unchanged.
+#[allow(dead_code)]
+#[path = "adapter_shared_primitive_liveness_retained_v1.rs"]
+mod retained;
+#[allow(unused_imports)]
+pub(super) use retained::{RetainedLivenessErrorV1, RetainedSharedLivenessV1};

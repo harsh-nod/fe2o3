@@ -1782,3 +1782,17 @@ Its final sibling imports preserve all original algorithms and test bodies.
 The operational filesystem entry remains unactivated; complete successor
 input/policy/currentness qualification and physical capture remain open.
 Broad accepted exits remain 6/18.
+
+## Retained Shared-liveness component — 2026-09-29
+
+The private retained lexical-liveness constructor now keeps locals, indegrees
+and ready capacity attached through refusal and caller unwind, binds the original
+source/Budget/work ledger/credit counter, and preserves original traversal/work
+order. Its 15 controls passed within 1,689 pliron tests, alongside 370 model,
+3,390 backend, 270 authority and 20 policy/runtime-manifest tests and backend/
+extractor builds. Separately gated ignored tests were not silently counted as run.
+
+See [qualification and boundaries](retained-shared-liveness-qualification-20260929.md).
+This is not complete retained Shared analysis or ordinary whole-root activation:
+alias/transient ownership, statement-driven construction, source/SSA/query joins
+and the backend bridge remain. Broad accepted exits stay 6/18.
