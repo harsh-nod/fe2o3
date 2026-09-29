@@ -176,6 +176,110 @@ fn issuer_staged_sources_charge_full_image_and_checked_overflow() {
 }
 
 #[test]
+fn issuer_prepares_actual_blocking_bootstrap_peer_without_changing_compiler_end() {
+    let (client, peer) = net::socketpair(
+        net::AddressFamily::UNIX,
+        net::SocketType::SEQPACKET,
+        net::SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    let expected = Client::new(
+        rustix::process::getpid().as_raw_pid() as u32,
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+    assert_eq!(fs::fcntl_getfl(&client).unwrap(), fs::OFlags::RDWR);
+    assert_eq!(fs::fcntl_getfl(&peer).unwrap(), fs::OFlags::RDWR);
+    assert!(staging::validate_peer(peer.as_fd(), expected).is_err());
+    let original = fs::fstat(&peer).unwrap();
+    let mut work = Work::new(2 * staging::PEER_PREPARE_WORK);
+    let mut b = Budget::new(&mut work, FILE_STORAGE + staging::PEER_PREPARE_SCRATCH);
+    b.reserve_storage(FILE_STORAGE).unwrap();
+    let ledger = b.work_ledger_identity_v1();
+    for attempt in 1..=2 {
+        staging::prepare_peer(peer.as_fd(), &mut b).unwrap();
+        staging::validate_peer(peer.as_fd(), expected).unwrap();
+        assert_eq!(fs::fcntl_getfl(&client).unwrap(), fs::OFlags::RDWR);
+        assert_eq!(
+            fs::fcntl_getfl(&peer).unwrap(),
+            fs::OFlags::RDWR | fs::OFlags::NONBLOCK
+        );
+        let current = fs::fstat(&peer).unwrap();
+        assert_eq!(
+            (original.st_dev, original.st_ino),
+            (current.st_dev, current.st_ino)
+        );
+        assert_eq!(b.storage(), FILE_STORAGE);
+        assert_eq!(b.work(), attempt * staging::PEER_PREPARE_WORK);
+        assert_eq!(
+            b.peak_storage(),
+            FILE_STORAGE + staging::PEER_PREPARE_SCRATCH
+        );
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+    let staged = io::fcntl_dupfd_cloexec(&peer, 256).unwrap();
+    staging::validate_duplicate(peer.as_fd(), staged.as_fd()).unwrap();
+    staging::validate_peer(staged.as_fd(), expected).unwrap();
+}
+
+#[test]
+fn issuer_peer_preparation_refuses_short_budget_before_mutation() {
+    for mode in 0..3 {
+        let (_client, peer) = net::socketpair(
+            net::AddressFamily::UNIX,
+            net::SocketType::SEQPACKET,
+            net::SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let floor = FILE_STORAGE - usize::from(mode == 0);
+        let mut work = Work::new(staging::PEER_PREPARE_WORK - usize::from(mode == 1));
+        let mut b = Budget::new(
+            &mut work,
+            floor + staging::PEER_PREPARE_SCRATCH - usize::from(mode == 2),
+        );
+        b.reserve_storage(floor).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let result = staging::prepare_peer(peer.as_fd(), &mut b);
+        assert!(result.is_err());
+        assert_eq!(fs::fcntl_getfl(&peer).unwrap(), fs::OFlags::RDWR);
+        assert_eq!(b.storage(), floor);
+        assert!(b.work_ledger_identity_v1() == ledger);
+        match mode {
+            0 => assert!(matches!(result, Err(Error::Resource(Resource::Accounting)))),
+            1 => assert!(b.failed_work().is_some()),
+            _ => assert!(b.failed_storage().is_some()),
+        }
+    }
+}
+
+#[test]
+fn issuer_peer_preparation_rejects_unexpected_status_without_clearing_it() {
+    let (_client, peer) = net::socketpair(
+        net::AddressFamily::UNIX,
+        net::SocketType::SEQPACKET,
+        net::SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    fs::fcntl_setfl(&peer, fs::OFlags::RDWR | fs::OFlags::APPEND).unwrap();
+    let original = fs::fcntl_getfl(&peer).unwrap();
+    assert!(original.contains(fs::OFlags::APPEND));
+    let mut work = Work::new(staging::PEER_PREPARE_WORK);
+    let mut b = Budget::new(&mut work, FILE_STORAGE + staging::PEER_PREPARE_SCRATCH);
+    b.reserve_storage(FILE_STORAGE).unwrap();
+    assert!(matches!(
+        staging::prepare_peer(peer.as_fd(), &mut b),
+        Err(Error::Invalid(_))
+    ));
+    assert_eq!(fs::fcntl_getfl(&peer).unwrap(), original);
+    assert_eq!(b.storage(), FILE_STORAGE);
+    assert_eq!(b.work(), staging::PEER_PREPARE_WORK);
+}
+
+#[test]
 #[allow(unsafe_code)]
 fn issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close() {
     let channels = Channels::new().unwrap();

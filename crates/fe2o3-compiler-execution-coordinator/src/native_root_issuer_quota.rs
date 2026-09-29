@@ -63,6 +63,7 @@ impl Prepared {
         let staging = Quota {
             work: sum(&[
                 LOCAL_WORK,
+                staging::PEER_PREPARE_WORK,
                 repeated(2, validation.work())?,
                 repeated(2, image.work())?,
                 repeated(2, Inputs::WORK)?,
@@ -75,6 +76,7 @@ impl Prepared {
             ])?,
             scratch: sum(&[
                 FRAME,
+                staging::PEER_PREPARE_SCRATCH,
                 source,
                 repeated(2, Stage::storage_for_sources(source)?)?,
                 Stage::STAGING_SCRATCH,

@@ -3,6 +3,12 @@ use super::*;
 // Existing native issuer ABI; the listener is used only for local root validation.
 pub(super) const DESTINATIONS: [i32; 9] = [3, 4, 5, 6, 7, 8, 9, 10, 11];
 pub(super) const BINDINGS_STORAGE: usize = size_of::<[Binding<'static>; 9]>();
+// Three non-retrying status operations on the original service endpoint.
+pub(super) const PEER_PREPARE_WORK: usize = 8 + 3 * 1088 + 256;
+pub(super) const PEER_PREPARE_SCRATCH: usize = 4 * size_of::<Error>()
+    + 4 * size_of::<fs::OFlags>()
+    + 4 * size_of::<BorrowedFd<'static>>()
+    + 1024;
 const _: () = {
     assert!(READY_BYTES == 120);
     assert!(READY_BYTES == launch_io::MAX_PIPE_READY_BYTES);
@@ -109,6 +115,7 @@ pub(super) fn stage<T: Send + 'static>(
     b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
         let prepared = &p.prepared;
         prepared.revalidate(b)?;
+        prepare_peer(peer, b)?;
         let (issuer, c) = prepared.programs[2].try_clone_for_exec(b)?;
         b.reserve_storage(c.additional_storage())?;
         let ((listener, root), c) = prepared.service_inputs.try_clone_ordered_for_spawn(b)?;
@@ -263,8 +270,7 @@ pub(super) fn validate_peer(peer: BorrowedFd<'_>, client: Client) -> Result<()> 
     if net::sockopt::socket_type(peer).map_err(|e| launch::io("inspect issuer client socket", e))?
         != net::SocketType::SEQPACKET
         || fs::fcntl_getfl(peer).map_err(|e| launch::io("inspect issuer client access", e))?
-            & fs::OFlags::ACCMODE
-            != fs::OFlags::RDWR
+            != fs::OFlags::RDWR | fs::OFlags::NONBLOCK
         || u32::try_from(actual.pid.as_raw_nonzero().get()).ok() != Some(client.pid())
         || actual.uid.as_raw() != client.uid()
         || actual.gid.as_raw() != client.gid()
@@ -272,6 +278,35 @@ pub(super) fn validate_peer(peer: BorrowedFd<'_>, client: Client) -> Result<()> 
         return Err(Error::Invalid("issuer client peer identity changed"));
     }
     require_idle(peer)
+}
+
+// Compiler bootstrap creates a blocking pair. Only the service endpoint enters
+// this exclusive callback; its opposite compiler endpoint must remain unchanged.
+// Normalize BEFORE Stage duplicates it, then enforce unchanged receiver admission.
+pub(super) fn prepare_peer(peer: BorrowedFd<'_>, b: &mut Budget<'_>) -> Result<()> {
+    b.with_prepaid_scope(
+        FILE_STORAGE,
+        8,
+        PEER_PREPARE_WORK,
+        PEER_PREPARE_SCRATCH,
+        |_| {
+            let flags = fs::fcntl_getfl(peer)
+                .map_err(|e| launch::io("inspect issuer peer transfer status", e))?;
+            let expected = fs::OFlags::RDWR | fs::OFlags::NONBLOCK;
+            if flags != fs::OFlags::RDWR && flags != expected {
+                return Err(Error::Invalid("unexpected issuer peer transfer status"));
+            }
+            fs::fcntl_setfl(peer, expected)
+                .map_err(|e| launch::io("prepare nonblocking issuer peer", e))?;
+            if fs::fcntl_getfl(peer)
+                .map_err(|e| launch::io("recheck issuer peer transfer status", e))?
+                != expected
+            {
+                return Err(Error::Invalid("issuer peer transfer status changed"));
+            }
+            Ok(())
+        },
+    )
 }
 fn require_idle(fd: BorrowedFd<'_>) -> Result<()> {
     let mut fds = [event::PollFd::new(&fd, event::PollFlags::IN)];
