@@ -354,6 +354,11 @@ fn private_nine_oracle_literal_native_census_and_real_source_fixture() {
                         ..Census::default()
                     }
                 );
+                assert_eq!(crate::production_analysis::pliron_progress::MAX_PLIRON_PROGRESS_REGIONS_V1, 4096);
+                let graph = crate::production_analysis::pliron_progress::preflight_progress_graph_resource_upper_bound_v2(
+                    session.input_census_v1(), Limits::production_hard_ceiling(),
+                ).unwrap();
+                assert_eq!(triple(graph), numbers::progress_graph(s));
                 drop(session);
             })?;
         }
@@ -364,7 +369,10 @@ fn private_nine_oracle_literal_native_census_and_real_source_fixture() {
 
 #[test]
 fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stages() {
-    assert_eq!(PROFILE, "PRIVATE35_NATIVE_DIRECT_SSA_RANK1_CALLER2_HELPER5");
+    assert_eq!(
+        PROFILE,
+        "PRIVATE35_NATIVE_DIRECT_SSA_RANK1_CALLER2_HELPER5_GRAPH_FIRST"
+    );
     for ordinal in 0..2 {
         let o = Oracle::derive(ordinal);
         assert_eq!(
@@ -375,30 +383,38 @@ fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stage
             o.complete,
             [
                 Triple {
-                    w: 126649055,
-                    r: 39447,
+                    w: 126720717,
+                    r: 39462,
                     p: 19940272
                 },
                 Triple {
-                    w: 212835230,
-                    r: 57305,
+                    w: 212920668,
+                    r: 57320,
                     p: 19956297
                 },
             ][ordinal]
         );
         assert_eq!(o.stages.len(), 9);
-        assert_eq!(o.gates.len(), [185, 215][ordinal]);
-        assert_eq!(o.gates.iter().filter(|gate| gate.work_cut).count(), 84);
+        assert_eq!(o.gates.len(), [186, 216][ordinal]);
+        assert_eq!(o.gates.iter().filter(|gate| gate.work_cut).count(), 85);
         assert_eq!(o.identity.structural[0].w, 512 * (o.shape.o + 1).pow(2) + 1);
         assert_eq!(o.shape.coverage().w, 32 * (o.shape.o + 1).pow(2) + 32);
+        assert_eq!(o.progress, Triple::new(2112, 1056, 1072));
         assert_eq!(
-            o.progress,
-            if ordinal == 0 {
-                Triple::new(4483, 1041, 242)
-            } else {
-                Triple::new(5347, 1041, 299)
-            }
+            numbers::progress_graph(o.shape),
+            [
+                Triple::new(74033, 1152, 9326),
+                Triple::new(88673, 1176, 9380)
+            ][ordinal]
         );
+        let graph = o
+            .gates
+            .iter()
+            .position(|gate| gate.name == "progress graph")
+            .unwrap();
+        assert_eq!(o.gates[graph - 1].name, "pipeline prerequisite");
+        assert_eq!(o.gates[graph + 1].name, "private prepare");
+        assert_eq!(o.gates[graph + 1].phase, Phase::BarrierConvergence);
         assert!(
             o.identity.complete.w > o.identity.text.w + o.identity.closure.w + o.shape.lookup()
         );
@@ -430,9 +446,9 @@ fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stage
     assert_eq!(
         numbers::module(),
         Triple {
-            w: 339484285,
-            r: 96752,
-            p: 19995744
+            w: 339641385,
+            r: 96782,
+            p: 19995759
         }
     );
 }

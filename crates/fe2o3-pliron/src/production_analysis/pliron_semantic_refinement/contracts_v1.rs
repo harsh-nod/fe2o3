@@ -985,6 +985,7 @@ pub(crate) fn require_pliron_semantic_refinement_with_scoped_input_v1(
 }
 
 #[allow(clippy::result_large_err)]
+#[cfg(test)]
 pub(crate) fn require_pliron_semantic_refinement_with_scoped_observation_v1(
     input: crate::production_analysis::pliron_pass_contract::ScopedVerifiedProgressInputV1<'_>,
     analyses: &mut PlironAnalysisManagerV1,
@@ -993,10 +994,23 @@ pub(crate) fn require_pliron_semantic_refinement_with_scoped_observation_v1(
     Result<PlironSemanticRefinementReportV1, PlironSemanticRefinementCheckErrorV1>,
     crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
 > {
+    require_pliron_semantic_refinement_with_prepared_graph_v2(input, analyses, None, observer)
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn require_pliron_semantic_refinement_with_prepared_graph_v2(
+    input: crate::production_analysis::pliron_pass_contract::ScopedVerifiedProgressInputV1<'_>,
+    analyses: &mut PlironAnalysisManagerV1,
+    graph: Option<&crate::production_analysis::pliron_progress::PreparedProgressGraphV2<'_>>,
+    observer: SemanticObserverV1<'_, '_, '_>,
+) -> Result<
+    Result<PlironSemanticRefinementReportV1, PlironSemanticRefinementCheckErrorV1>,
+    crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
+> {
     let run = || {
         let scoped =
-            crate::production_analysis::pliron_progress::run_pliron_progress_with_scoped_observation_v1(
-                input, observer,
+            crate::production_analysis::pliron_progress::run_pliron_progress_with_prepared_graph_v2(
+                input, graph, observer,
             )?;
         let report = run_pliron_semantic_refinement_after_progress_with_observation_v1(
             scoped.context,

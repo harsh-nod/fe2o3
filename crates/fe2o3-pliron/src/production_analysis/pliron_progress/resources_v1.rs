@@ -59,10 +59,12 @@ pub(crate) fn preflight_scoped_progress_resource_upper_bound_v1(
     )
 }
 
+#[derive(Clone, Copy)]
 enum ProgressVerifierCostV1 {
     #[cfg(test)]
     Standalone,
     Scoped,
+    PreparedGraph,
 }
 
 fn preflight_progress_execution_resource_upper_bound_v1(
@@ -113,6 +115,7 @@ fn preflight_progress_execution_resource_upper_bound_v1(
             0,
             crate::production_analysis::pliron_pass_contract::SCOPED_PROGRESS_INPUT_STORAGE_V1,
         ),
+        ProgressVerifierCostV1::PreparedGraph => (0, 0),
     };
     let charged_work = checked_progress_sum_v1(
         &[
@@ -132,6 +135,17 @@ fn preflight_progress_execution_resource_upper_bound_v1(
     )?;
     if charged_work > MAX_PLIRON_PROGRESS_WORK_UNITS_V1 {
         return Err(progress_resource_error_v1("progress work hard limit"));
+    }
+
+    if matches!(verifier, ProgressVerifierCostV1::PreparedGraph) {
+        // The shared census has no region count. An operation may own several
+        // or empty regions, so the new recursive traversal pays the existing
+        // full region ceiling rather than assuming one region per operation.
+        let graph_structure = structural_items
+            .checked_sub(regions)
+            .and_then(|items| items.checked_add(MAX_PLIRON_PROGRESS_REGIONS_V1))
+            .ok_or_else(|| progress_resource_error_v1("progress graph region upper bound"))?;
+        return progress_graph_resources_v2(census, graph_structure, limits);
     }
 
     let block_square = checked_progress_product_v1(

@@ -564,3 +564,4 @@ include!("production_source_closed_unit_constants_v1765_tests.rs");
 include!("production_source_helper_credit_v1766_tests.rs");
 
 include!("production_source_scalar_cfg_handoff_v18_tests.rs");
+include!("production_source_bound_scalar_handoff_v19_tests.rs");

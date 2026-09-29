@@ -10,35 +10,49 @@ impl ProductionGeometryV1 {
     pub(crate) fn formal_coordinate_envelope_v2(
         self,
     ) -> Result<[u64; 3], ProductionGeometryErrorV1> {
-        let mut extents = [1_u64; 3];
-        if !(1..=3).contains(&self.rank) {
+        coordinate_envelope(self.rank, self.workgroup, self.max_grid)
+    }
+}
+
+impl ProductionCoordinateGeometryV19 {
+    /// Coordinates only; full reachable resource/capability admission is separate.
+    pub(crate) fn formal_coordinate_envelope_v19(
+        self,
+    ) -> Result<[u64; 3], ProductionGeometryErrorV1> {
+        coordinate_envelope(self.rank, self.workgroup, self.max_grid)
+    }
+}
+
+fn coordinate_envelope(
+    rank: u8,
+    workgroup: [u32; 3],
+    max_grid: [u32; 3],
+) -> Result<[u64; 3], ProductionGeometryErrorV1> {
+    let mut extents = [1_u64; 3];
+    if !(1..=3).contains(&rank) {
+        return Err(ProductionGeometryErrorV1::KernelClosure);
+    }
+    for (axis, extent) in extents.iter_mut().enumerate() {
+        *extent = u64::from(workgroup[axis])
+            .checked_mul(u64::from(max_grid[axis]))
+            .ok_or(ProductionGeometryErrorV1::ArithmeticOverflow(
+                "formal global coordinate envelope",
+            ))?;
+        if *extent == 0 || (axis >= usize::from(rank) && *extent != 1) {
             return Err(ProductionGeometryErrorV1::KernelClosure);
         }
-        for (axis, extent) in extents.iter_mut().enumerate() {
-            *extent = u64::from(self.workgroup[axis])
-                .checked_mul(u64::from(self.max_grid[axis]))
-                .ok_or(ProductionGeometryErrorV1::ArithmeticOverflow(
-                    "formal global coordinate envelope",
-                ))?;
-            if *extent == 0 || (axis >= usize::from(self.rank) && *extent != 1) {
-                return Err(ProductionGeometryErrorV1::KernelClosure);
-            }
-        }
-        // D1 lowering zero-extends group/local IDs and computes group*WG+local
-        // in i64. The checked product bounds every legal coordinate without
-        // overflow. Higher-rank lowering uses live dispatch strides: do not
-        // infer X uniqueness for padded multidimensional launches. Singleton
-        // remaining axes are enough, regardless of the declared source rank.
-        if extents[1] != 1 || extents[2] != 1 {
-            return Err(
-                ProductionGeometryErrorV1::UnsupportedFormalCoordinateEnvelope {
-                    rank: self.rank,
-                    extents,
-                },
-            );
-        }
-        Ok(extents)
     }
+    // D1 lowering zero-extends group/local IDs and computes group*WG+local
+    // in i64. The checked product bounds every legal coordinate without
+    // overflow. Higher-rank lowering uses live dispatch strides: do not
+    // infer X uniqueness for padded multidimensional launches. Singleton
+    // remaining axes are enough, regardless of the declared source rank.
+    if extents[1] != 1 || extents[2] != 1 {
+        return Err(
+            ProductionGeometryErrorV1::UnsupportedFormalCoordinateEnvelope { rank, extents },
+        );
+    }
+    Ok(extents)
 }
 
 #[cfg(test)]

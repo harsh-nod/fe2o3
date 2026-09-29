@@ -300,6 +300,8 @@ impl PlironProgressReportV1 {
 }
 
 include!("pliron_progress/nested_loops_v1.rs");
+include!("pliron_progress/prepared_graph_v2.rs");
+include!("pliron_progress/prepared_graph_v2_tests.rs");
 include!("pliron_progress/scoped_input_v67.rs");
 include!("pliron_progress/scoped_resource_v67_tests.rs");
 include!("pliron_progress/structural_inventory_v1.rs");

@@ -154,6 +154,132 @@ fn nominal_v35_literal_tags_and_old_scalar_bytes_are_exact() {
 }
 
 #[test]
+fn nominal_v35_trap_request_preserves_nominality_and_canonical_custody() {
+    for signed in [false, true] {
+        let mut original = non_scan_trap_request();
+        original.types[0] = request(signed).types[0].clone();
+        let admitted = original
+            .clone()
+            .admit_exact_v35(SemanticMirLimitsV1::default())
+            .unwrap();
+        assert_eq!(admitted.wire_version(), V35);
+        for decoded in [
+            original
+                .clone()
+                .admit(SemanticMirLimitsV1::default())
+                .unwrap(),
+            original
+                .clone()
+                .admit_current_production(SemanticMirLimitsV1::default())
+                .unwrap(),
+            AdmittedInertSemanticMirV1::decode_exact_v35_canonical(
+                admitted.canonical_encoding(),
+                SemanticMirLimitsV1::default(),
+            )
+            .unwrap(),
+            AdmittedInertSemanticMirV1::decode_minimal_compatible_canonical(
+                admitted.canonical_encoding(),
+                SemanticMirLimitsV1::default(),
+            )
+            .unwrap(),
+            AdmittedInertSemanticMirV1::decode_current_production_canonical(
+                admitted.canonical_encoding(),
+                SemanticMirLimitsV1::default(),
+            )
+            .unwrap(),
+        ] {
+            assert_eq!(decoded.wire_version(), V35);
+            assert_eq!(decoded.types(), original.types.as_ref());
+            assert_eq!(decoded.callables(), original.callables.as_ref());
+            assert_eq!(decoded.functions(), original.functions.as_ref());
+            assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+            assert_eq!(decoded.semantic_sha256(), admitted.semantic_sha256());
+        }
+    }
+}
+
+#[test]
+fn nominal_v35_legacy_intrinsics_retain_v15_tags_and_payloads() {
+    let id = SemanticTypeIdV1::from_index;
+    for (operation, tag) in [
+        (
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+                scope: id(0),
+                pipeline: id(1),
+                buffers: 3,
+                elements: 64,
+                prefetch_distance: 2,
+            },
+            55,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                kind: SemanticBf16ConversionKindV1::FromBits,
+                input: id(0),
+                output: id(1),
+            },
+            59,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupReduceSum {
+                context: id(0),
+                dynamic_lds: id(1),
+                element_storage: id(2),
+                element: id(3),
+            },
+            62,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::NeutralWorkgroupScanSum {
+                context: id(0),
+                dynamic_lds: id(1),
+                element_storage: id(2),
+                element: id(3),
+                kind: SemanticWorkgroupScanKindV1::Inclusive,
+            },
+            63,
+        ),
+        (SemanticCompilerIntrinsicOperationV1::Trap, 64),
+        (
+            SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element: id(4) },
+            65,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope: id(5) },
+            66,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+                block_witness: id(6),
+                raw_index: id(7),
+                index_space: SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: 16,
+                    elements_per_lane: 4,
+                },
+                lanes_per_block: 16,
+                elements_per_lane: 4,
+            },
+            67,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewColumnMajor {
+                result: id(7),
+                view: id(8),
+                error: id(9),
+            },
+            68,
+        ),
+    ] {
+        let encoded = compiler_intrinsic_round_trip(operation, V35);
+        assert_eq!(encoded[0], tag);
+        assert_eq!(
+            encoded,
+            compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V15)
+        );
+    }
+}
+
+#[test]
 fn nominal_v35_old_versions_refuse_before_any_type_bytes_are_written() {
     for signed in [false, true] {
         for version in legacy_versions() {
@@ -296,6 +422,16 @@ fn nominal_v35_specialized_schema_selection_never_erases_nominality() {
     // Schema checks intentionally precede semantic callable validation: these
     // are refusal fixtures, not claims of an admitted execution operation.
     for (operation, required) in operations {
+        let mut writer = CanonicalWriterV1::new(4096);
+        writer.raw(&[71, 72]).unwrap();
+        assert_eq!(
+            encode_compiler_intrinsic_operation(&mut writer, operation, V35),
+            Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: V35,
+                required,
+            })
+        );
+        assert_eq!(writer.finish(), [71, 72]);
         let mut mixed = version_selection_request([operation]);
         mixed.types[0] = request(false).types[0].clone();
         assert_eq!(minimum_wire_version(&mixed), V35);

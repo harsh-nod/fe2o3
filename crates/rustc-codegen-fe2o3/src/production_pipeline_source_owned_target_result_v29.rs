@@ -1,5 +1,5 @@
 //! Backend-private checked source/adopted-owner continuation to inert target LLVM.
-use super::{Budget, Handoff, Resource, Source, TargetProfile};
+use super::{BoundHandoff, Budget, Handoff, Resource, Source, TargetProfile};
 use fe2o3_lower_mir_kernel::ProductionScalarCfgOutputHandoffV18 as CfgHandoff;
 use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
 use std::mem::{align_of, size_of};
@@ -48,6 +48,8 @@ pub(crate) type ClosedScalarTargetLlvmV29<'handoff, 'view, 'source> =
     TargetLlvmV29<'handoff, 'view, 'source, Handoff<'view, 'source>>;
 pub(crate) type ScalarCfgTargetLlvmV29<'handoff, 'view, 'source> =
     TargetLlvmV29<'handoff, 'view, 'source, CfgHandoff<'view, 'source>>;
+pub(crate) type BoundScalarTargetLlvmV19<'handoff, 'view, 'source> =
+    TargetLlvmV29<'handoff, 'view, 'source, BoundHandoff<'view, 'source>>;
 
 /// Inert LLVM IR, not final ISA, worker/default compilation or launch authority.
 /// The result cannot outlive either real source or adopted V18 handoff.
@@ -223,6 +225,15 @@ pub(crate) fn check_and_lower_scalar_cfg_target_llvm_v18<'handoff, 'view, 'sourc
     check_and_lower_target_llvm(source, handoff, target, budget)
 }
 
+pub(crate) fn check_and_lower_bound_scalar_target_llvm_v19<'handoff, 'view, 'source>(
+    source: &'view Source<'source>,
+    handoff: &'handoff BoundHandoff<'view, 'source>,
+    target: TargetProfile,
+    budget: &mut Budget<'_>,
+) -> Result<BoundScalarTargetLlvmV19<'handoff, 'view, 'source>, Error> {
+    check_and_lower_target_llvm(source, handoff, target, budget)
+}
+
 fn check_and_lower_target_llvm<'handoff, 'view, 'source, H: TargetOutputHandoffV29>(
     source: &'view Source<'source>,
     handoff: &'handoff H,
@@ -266,8 +277,8 @@ fn check_and_lower_target_llvm<'handoff, 'view, 'source, H: TargetOutputHandoffV
                     return Err(Error::Unsupported("changed target root or geometry"));
                 }
             }
-            H::formal(original, budget)?;
-            H::formal(output, budget)?;
+            handoff.formal(original, budget)?;
+            handoff.formal(output, budget)?;
             let text = match target {
                 TargetProfile::Gfx942 => fe2o3_amdgcn_model::lower_canonical_v18_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(output),
                 TargetProfile::Gfx950 => fe2o3_amdgcn_model::lower_canonical_v18_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(output),

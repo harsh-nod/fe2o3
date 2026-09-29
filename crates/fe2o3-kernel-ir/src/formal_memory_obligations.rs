@@ -860,6 +860,11 @@ mod body_engine_v19;
 #[path = "formal_memory_obligations/body_legacy_v19.rs"]
 mod body_legacy_v19;
 
+pub use guarded_access_v1::affine_source_bytes_v18::canonical_owner_report_v19::{
+    CanonicalFormalLaunchInputV19, CanonicalFormalReportErrorV19, CanonicalFormalReportViewV19,
+    CanonicalFormalSourceScopeV20, with_canonical_owner_formal_report_v19,
+};
+
 #[derive(Clone, Copy)]
 enum PhysicalLaunchInterpretationV2 {
     Exact,

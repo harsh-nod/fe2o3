@@ -37,6 +37,9 @@ impl From<MeteredControlFlowErrorV1> for SourceContextErrorV2 {
 }
 type ContextResult<T> = std::result::Result<T, SourceContextErrorV2>;
 
+#[path = "retained_report_source_v20.rs"]
+pub(in crate::formal_memory_obligations) mod report_source_v20;
+
 #[must_use = "dropping the source context without release retains its resource charge"]
 pub(in crate::formal_memory_obligations) struct ByteSourceContextV2<'source, 'work> {
     source: &'source Function,

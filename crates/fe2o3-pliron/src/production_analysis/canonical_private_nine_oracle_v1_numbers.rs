@@ -2,7 +2,7 @@
 //! No production bound helper, observed total, or profile auto-detection is used.
 use super::{Pass, Phase};
 
-pub(crate) const PROFILE: &str = "PRIVATE35_NATIVE_DIRECT_SSA_RANK1_CALLER2_HELPER5";
+pub(crate) const PROFILE: &str = "PRIVATE35_NATIVE_DIRECT_SSA_RANK1_CALLER2_HELPER5_GRAPH_FIRST";
 pub(crate) const N: usize = 1 << 20;
 pub(crate) const WORK: &str = "work upper bound";
 pub(crate) const PEAK: &str = "peak storage upper bound";
@@ -85,6 +85,20 @@ impl Shape {
     pub fn coverage(self) -> Triple {
         Triple::new(32 * (self.o + 1) * (self.o + 1) + 32, 0, 6)
     }
+}
+
+pub(crate) fn progress_graph(s: Shape) -> Triple {
+    // Both literal definitions have one root block and no edges/arguments.
+    // The shared census has no region field, so pay all 4096 allowed regions,
+    // not the fixture's one region. Every pointer-map lookup includes its full
+    // collision-safe bucket/control-group scan and geometric reinsertion.
+    let structural = 4096 + 1 + s.o + s.a + s.r + s.attrs;
+    let lookup = |entries| 64 + (4 * entries + 20) * 32;
+    Triple::new(
+        64 + 16 * structural + 64 + 1 + 3 * s.o * lookup(s.o) + 3 * lookup(1),
+        64 + 1024 + 48 + 8 * s.o,
+        64 + 1024 + 16 + 8 * s.o + 2 * structural,
+    )
 }
 
 // Literal encoder transcript, including concrete imported symbols, actual callee,
@@ -584,12 +598,11 @@ impl Oracle {
             barrier_local.r,
             barrier_local.p - barrier_local.r,
         );
-        let structural = (o + 1) + 1 + o + a + r + attrs;
-        let progress = Triple::new(
-            4 * structural + (structural + 8 + 4) + 2 + (1 + a + o) + 8 * (552 + 32 * r),
-            1041,
-            2 * structural + 14 + (structural + 1 + a) + 3 + 194,
-        );
+        let graph = progress_graph(s);
+        // A genuine prepared DAG has only bounded diagnostic/report work left;
+        // graph ownership remains live until final exclusive-cache disposal.
+        let diagnostic = 1024 + 32;
+        let progress = Triple::new(2 * diagnostic, diagnostic, diagnostic + 16);
         let semantic = Triple::new(2 * o + progress.w, progress.r, progress.p - progress.r);
         let validation = Triple::new(49 + 2080, 2049, 1025);
         let conservative = Triple::new(32 + 2080, 2049, 1025);
@@ -655,6 +668,7 @@ impl Oracle {
                     false,
                     true,
                 );
+                walk.cache("progress graph", Phase::Progress, graph);
             }
             if position == 7 {
                 walk.cache("memory order", Phase::MemoryOrder, Triple::new(4, 1024, 8));
@@ -867,7 +881,7 @@ impl Oracle {
             Phase::ReportValidation,
             Triple::new(116, 0, 4),
         );
-        let cache_release = sparse.r + 2 + 10 + trace.r + 3 + 1 + 1024;
+        let cache_release = sparse.r + 2 + 10 + trace.r + 3 + 1 + 1024 + graph.r;
         let complete = walk.current.replace(cache_release, Triple::ZERO);
         walk.commit(complete);
         Self {

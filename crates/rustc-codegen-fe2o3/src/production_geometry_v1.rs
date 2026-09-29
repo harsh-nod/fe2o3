@@ -61,6 +61,27 @@ pub(crate) fn derive_production_geometry_v1(
     source_launch: &LaunchContract,
     device_target: &str,
 ) -> Result<ProductionGeometryV1, ProductionGeometryErrorV1> {
+    let (required, maximum) = source_workgroup_v19(semantic_function, source_launch)?;
+    derive_production_geometry_from_launch_for_target_v1(
+        module,
+        kernel_id,
+        required,
+        maximum,
+        source_launch,
+        device_target,
+    )
+}
+
+fn source_workgroup_v19(
+    semantic_function: &SemanticFunctionDeclV1,
+    source_launch: &LaunchContract,
+) -> Result<
+    (
+        Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
+        Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
+    ),
+    ProductionGeometryErrorV1,
+> {
     let entry = semantic_function
         .kernel_entry()
         .ok_or(ProductionGeometryErrorV1::MissingSemanticKernelEntry)?;
@@ -90,24 +111,49 @@ pub(crate) fn derive_production_geometry_v1(
             descriptor_dynamic: descriptor_resources.1,
         });
     }
-    derive_production_geometry_from_launch_for_target_v1(
-        module,
-        kernel_id,
-        semantic_launch.required(),
-        semantic_launch.maximum(),
-        source_launch,
-        device_target,
-    )
+    Ok((semantic_launch.required(), semantic_launch.maximum()))
 }
 
-fn derive_production_geometry_from_launch_for_target_v1(
-    module: &Module,
-    kernel_id: &str,
+/// Source/descriptor/target coordinates only. This does not admit reachable
+/// resource usage, target capabilities, memory effects, or executable output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProductionCoordinateGeometryV19 {
+    rank: u8,
+    workgroup: [u32; 3],
+    max_grid: [u32; 3],
+    max_flat_workgroup_size: u32,
+}
+
+pub(crate) fn derive_original_coordinate_geometry_v19(
+    kernel: &fe2o3_kernel_ir::Kernel,
+    semantic_function: &SemanticFunctionDeclV1,
+    source_launch: &LaunchContract,
+    target: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+) -> Result<ProductionCoordinateGeometryV19, ProductionGeometryErrorV1> {
+    let (required, maximum) = source_workgroup_v19(semantic_function, source_launch)?;
+    coordinate_geometry_v19(
+        || Ok(kernel),
+        required,
+        maximum,
+        source_launch,
+        target.device_target(),
+    )
+    .map(|(coordinates, _)| coordinates)
+}
+
+fn coordinate_geometry_v19<'kernel>(
+    kernel: impl FnOnce() -> Result<&'kernel fe2o3_kernel_ir::Kernel, ProductionGeometryErrorV1>,
     required: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
     maximum: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
     source_launch: &LaunchContract,
     device_target: &str,
-) -> Result<ProductionGeometryV1, ProductionGeometryErrorV1> {
+) -> Result<
+    (
+        ProductionCoordinateGeometryV19,
+        fe2o3_amd_target::AmdTargetCapabilities,
+    ),
+    ProductionGeometryErrorV1,
+> {
     let required = required.ok_or(ProductionGeometryErrorV1::DynamicSourceWorkgroup)?;
     if maximum.is_some_and(|maximum| maximum != required) {
         return Err(ProductionGeometryErrorV1::DynamicSourceWorkgroup);
@@ -134,13 +180,9 @@ fn derive_production_geometry_from_launch_for_target_v1(
     let source_grid = source_launch.max_grid();
     let max_grid = [source_grid.x(), source_grid.y(), source_grid.z()];
 
-    let Some(kernel) = module
-        .kernels
-        .iter()
-        .find(|kernel| kernel.id.as_str() == kernel_id)
-    else {
-        return Err(ProductionGeometryErrorV1::KernelClosure);
-    };
+    // Preserve the original failure ordering: kernel lookup follows descriptor
+    // workgroup/resource validation, even for callers using the legacy search.
+    let kernel = kernel()?;
     let kir_workgroup = kernel
         .workgroup_size
         .ok_or(ProductionGeometryErrorV1::MissingKirWorkgroup)?;
@@ -170,6 +212,45 @@ fn derive_production_geometry_from_launch_for_target_v1(
         .capabilities()
         .map_err(|_| ProductionGeometryErrorV1::MissingTargetCapabilities)?;
     validate_target_workgroup(workgroup, target.workgroup_limits())?;
+
+    Ok((
+        ProductionCoordinateGeometryV19 {
+            rank,
+            workgroup,
+            max_grid,
+            max_flat_workgroup_size,
+        },
+        target,
+    ))
+}
+
+fn derive_production_geometry_from_launch_for_target_v1(
+    module: &Module,
+    kernel_id: &str,
+    required: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
+    maximum: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
+    source_launch: &LaunchContract,
+    device_target: &str,
+) -> Result<ProductionGeometryV1, ProductionGeometryErrorV1> {
+    let (coordinates, target) = coordinate_geometry_v19(
+        || {
+            module
+                .kernels
+                .iter()
+                .find(|kernel| kernel.id.as_str() == kernel_id)
+                .ok_or(ProductionGeometryErrorV1::KernelClosure)
+        },
+        required,
+        maximum,
+        source_launch,
+        device_target,
+    )?;
+    let ProductionCoordinateGeometryV19 {
+        rank,
+        workgroup,
+        max_grid,
+        max_flat_workgroup_size,
+    } = coordinates;
 
     let static_shared_memory_bytes = static_workgroup_memory_bytes(module, kernel_id)?;
     if source_launch.static_shared_memory_bytes() != static_shared_memory_bytes {
@@ -575,6 +656,10 @@ impl std::error::Error for ProductionGeometryErrorV1 {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod coordinate_v19_tests {
+        include!("production_geometry_coordinate_v19_tests.rs");
+    }
     use fe2o3_artifacts::Dimensions;
     use fe2o3_kernel_ir::{
         AccessMode, BasicBlock, BlockId, Function, Kernel, LaunchDomain, Operation, Signature,

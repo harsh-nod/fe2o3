@@ -249,7 +249,12 @@ fn source_owned_entry_header_pays_owned_aligned_capture_and_result_independently
             + size_of::<ProductionKernelArgumentAbiInputV18<'_>>()
             + size_of::<ProductionExecutionSourceInputV29<'_>>()
             + size_of::<Work>()
-            + size_of::<Budget<'_>>();
+            + size_of::<Budget<'_>>()
+            + size_of::<SourceBindingContextV29<'_>>()
+            + align_of::<SourceBindingContextV29<'_>>()
+            + size_of::<&SourceBindingContextV29<'_>>()
+            + size_of::<formal_context_v19::PendingConsumerV19<F>>()
+            + align_of::<formal_context_v19::PendingConsumerV19<F>>();
         assert_eq!(entry_headers::<R, F>().unwrap(), expected);
         expected
     }
@@ -262,4 +267,53 @@ fn source_owned_entry_header_pays_owned_aligned_capture_and_result_independently
     assert!(capture > small + 2 * size_of::<Large>());
     assert!(result > small + 2 * size_of::<Large>());
     assert_eq!(large().0[0], 7);
+}
+
+#[test]
+fn source_owned_bound_policy_pays_pending_consumer_and_physical_context_frames() {
+    macro_rules! policy_header {
+        ($policy:ident, $handoff:ident, $extra:expr) => {{
+            type Consumer = for<'view, 'source, 'abi, 'work> fn(
+                &'view Source<'source>,
+                &$handoff<'view, 'source>,
+                &[AbiRoot<'abi>],
+                TargetProfile,
+                &mut Budget<'work>,
+            ) -> Result<(), Error>;
+            let expected = entry_headers_for_handoff::<(), Consumer, $handoff<'static, 'static>>()
+                .unwrap()
+                + size_of::<formal_context_v19::PendingConsumerV19<Consumer>>()
+                + align_of::<formal_context_v19::PendingConsumerV19<Consumer>>()
+                + $extra;
+            let actual = <$policy as SourceHandoffPolicyV29<(), Consumer>>::entry_headers().unwrap();
+            assert_eq!(actual, expected);
+            for short in [false, true] {
+                let mut work = Work::new(actual);
+                let mut budget = Budget::new(&mut work, actual - usize::from(short));
+                budget.charge_work(actual).unwrap();
+                let result = budget.reserve_storage(actual);
+                if short {
+                    assert!(matches!(result, Err(Resource::Storage(error)) if error.actual() == actual && error.limit() == actual - 1));
+                    assert_eq!(budget.storage(), 0);
+                } else {
+                    result.unwrap();
+                    assert_eq!(budget.storage(), actual);
+                }
+            }
+        }};
+    }
+    policy_header!(ClosedScalar, Handoff, 0);
+    policy_header!(ScalarCfg, CfgHandoff, 0);
+    policy_header!(UnqualifiedInteger, IntegerHandoff, 0);
+    policy_header!(
+        BoundScalar,
+        BoundHandoff,
+        size_of::<Vec<fe2o3_kernel_ir::CanonicalFormalLaunchInputV19>>()
+            + size_of::<crate::production_geometry_v1::ProductionCoordinateGeometryV19>()
+            + size_of::<fe2o3_amd_target::AmdTargetCapabilities>()
+            + size_of::<ProductionPipelineError>()
+            + align_of::<ProductionPipelineError>()
+            + size_of::<fe2o3_kernel_ir::FormalIndexWidth>()
+            + size_of::<ProductionBoundScalarHandoffErrorV19>()
+    );
 }

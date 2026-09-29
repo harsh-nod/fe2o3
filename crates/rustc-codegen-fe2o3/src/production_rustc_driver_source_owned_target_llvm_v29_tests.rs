@@ -1,4 +1,6 @@
 //! Actual original Rust to checked adopted V18 output to parsed target LLVM IR.
+#[path = "production_rustc_driver_bound_target_v19_tests.rs"]
+mod bound_target_tests;
 use super::*;
 use crate::production_pipeline::source_owned_v29::target_result::ClosedScalarTargetLlvmErrorV29 as LlvmError;
 use crate::production_pipeline::source_owned_v29::target_result::tests::{Mode, genuine_case};

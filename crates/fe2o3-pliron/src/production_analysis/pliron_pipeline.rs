@@ -30,7 +30,7 @@ use crate::production_analysis::pliron_atomic_legality::{
 use crate::production_analysis::pliron_barrier::{
     admit_barrier_progress_probe_v1, compose_barrier_dependencies_v1,
     preflight_barrier_convergence_resource_upper_bound_v1,
-    require_pliron_barrier_with_scoped_observation_v1 as require_observed_barrier_v1,
+    require_pliron_barrier_with_prepared_graph_v2 as require_observed_barrier_v1,
 };
 use crate::production_analysis::pliron_effect_refinement::preflight_effect_refinement_resource_upper_bound_v1;
 use crate::production_analysis::pliron_hierarchical_ownership::{
@@ -88,7 +88,7 @@ use crate::production_analysis::pliron_resource_envelope::{
 };
 use crate::production_analysis::pliron_semantic_refinement::{
     preflight_semantic_refinement_resource_upper_bound_v1,
-    require_pliron_semantic_refinement_with_scoped_observation_v1 as require_observed_semantic_v1,
+    require_pliron_semantic_refinement_with_prepared_graph_v2 as require_observed_semantic_v1,
 };
 use crate::production_analysis::pliron_simt_protocol::preflight_simt_protocol_resource_upper_bound_v1;
 #[cfg(test)]
@@ -751,3 +751,4 @@ pub(crate) fn require_production_pliron_checks_with_identity_observation_v18<'a>
 
 include!("pliron_pipeline/resource_tests.rs");
 include!("pliron_pipeline/progress_scoped_pipeline_v67_tests.rs");
+include!("pliron_pipeline/progress_graph_release_v2_tests.rs");

@@ -130,6 +130,13 @@ fn scalar_cfg_check_envelopes_v18() -> Result<usize, ArgumentResourceV1> {
         >(),
         size_of::<fe2o3_kernel_ir::FormalMemoryObligations>(),
         size_of::<[u64; 3]>(),
+        size_of::<(
+            &ProductionSourceCorrespondenceV18<'_>,
+            &ProductionOptimizedSourceCorrespondenceV18<'_>,
+            &Inventory<'_>,
+            usize,
+            &mut ArgumentBudgetV1<'_>,
+        )>(),
     ])
 }
 
@@ -252,10 +259,7 @@ fn scalar_cfg_source_checks_v18(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionScalarCfgCheckErrorV18> {
     use ProductionScalarCfgCheckErrorV18 as Error;
-    use fe2o3_kernel_analysis::{
-        CanonicalRankedMetadataV18, CanonicalRankedViewErrorV1,
-        build_canonical_ranked_candidate_v18, with_checked_canonical_ranked_view_v18,
-    };
+    use fe2o3_kernel_analysis::CanonicalRankedViewErrorV1;
     let floor = budget.storage();
     scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
         let scratch_floor = budget.storage();
@@ -266,59 +270,7 @@ fn scalar_cfg_source_checks_v18(
         scalar_cfg_formal_owner_v18(original, original.inventory(budget)?.owner(), budget)?;
         let output = optimized.output_inventory(budget)?;
         scalar_cfg_formal_owner_v18(original, output.owner(), budget)?;
-        let metadata = CanonicalRankedMetadataV18::new(output.owner(), &[]);
-        let metadata_storage = metadata.storage_extent(budget).map_err(Error::Ranked)?;
-        original.retain_query(budget.reserve_storage(metadata_storage).map_err(Into::into))?;
-        let (candidate, receipt) = build_canonical_ranked_candidate_v18(output, &metadata, budget)
-            .map_err(Error::Ranked)?;
-        original.retain_query(
-            budget
-                .reserve_storage(receipt.retained_storage())
-                .map_err(Into::into),
-        )?;
-        let layouts = original.source.limits(budget)?.storage_layout_limits();
-        let result = with_checked_canonical_ranked_view_v18(
-            output,
-            &metadata,
-            &candidate,
-            budget,
-            |checked, budget| {
-                Ok::<_, CanonicalRankedViewErrorV1>(optimized.with_lifecycle_native_policies_v18(
-                    checked,
-                    layouts,
-                    budget,
-                    |policies, budget| {
-                        policies.check_source_subject_v18(original, optimized, budget)?;
-                        for ordinal in 0..policies.function_count(budget)? {
-                            if policies
-                                .report(ordinal, budget)?
-                                .is_none_or(|report| !report.is_clean())
-                                || policies.history(ordinal, budget)?.is_none()
-                            {
-                                return Err(original
-                                    .source
-                                    .missing::<()>("scalar CFG incomplete native report")
-                                    .unwrap_err()
-                                    .into());
-                            }
-                        }
-                        Ok(())
-                    },
-                ))
-            },
-        )
-        .map_err(Error::Ranked)?;
-        drop(candidate);
-        drop(metadata);
-        result.map_err(Error::Native)?;
-        optimized_source_endpoints_v18(original, optimized, budget)?;
-        let paid = argument_sum_v1(&[metadata_storage, receipt.retained_storage()])?;
-        if scratch_floor.checked_add(paid) != Some(budget.storage()) {
-            original.source.cleanup.deny_refund();
-            return Err(ArgumentResourceV1::Accounting.into());
-        }
-        original.retain_query(budget.release_storage(paid).map_err(Into::into))?;
-        Ok(())
+        source_output_ranked_native_checks_v19(original, optimized, output, scratch_floor, budget)
     })
     .map_err(|error| {
         if let Error::Source(ProductionSourceOwnedViewErrorV18::Resource(resource))
@@ -328,4 +280,73 @@ fn scalar_cfg_source_checks_v18(
         }
         error
     })
+}
+
+// Shared actual-owner candidate/native check. Callers retain their distinct
+// formal policy and scoped cleanup; no caller supplies completion booleans.
+fn source_output_ranked_native_checks_v19(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    output: &Inventory<'_>,
+    scratch_floor: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionScalarCfgCheckErrorV18> {
+    use ProductionScalarCfgCheckErrorV18 as Error;
+    use fe2o3_kernel_analysis::{
+        CanonicalRankedMetadataV18, CanonicalRankedViewErrorV1,
+        build_canonical_ranked_candidate_v18, with_checked_canonical_ranked_view_v18,
+    };
+    let metadata = CanonicalRankedMetadataV18::new(output.owner(), &[]);
+    let metadata_storage = metadata.storage_extent(budget).map_err(Error::Ranked)?;
+    original.retain_query(budget.reserve_storage(metadata_storage).map_err(Into::into))?;
+    let (candidate, receipt) =
+        build_canonical_ranked_candidate_v18(output, &metadata, budget).map_err(Error::Ranked)?;
+    original.retain_query(
+        budget
+            .reserve_storage(receipt.retained_storage())
+            .map_err(Into::into),
+    )?;
+    let layouts = original.source.limits(budget)?.storage_layout_limits();
+    let result = with_checked_canonical_ranked_view_v18(
+        output,
+        &metadata,
+        &candidate,
+        budget,
+        |checked, budget| {
+            Ok::<_, CanonicalRankedViewErrorV1>(optimized.with_lifecycle_native_policies_v18(
+                checked,
+                layouts,
+                budget,
+                |policies, budget| {
+                    policies.check_source_subject_v18(original, optimized, budget)?;
+                    for ordinal in 0..policies.function_count(budget)? {
+                        if policies
+                            .report(ordinal, budget)?
+                            .is_none_or(|report| !report.is_clean())
+                            || policies.history(ordinal, budget)?.is_none()
+                        {
+                            return Err(original
+                                .source
+                                .missing::<()>("scalar CFG incomplete native report")
+                                .unwrap_err()
+                                .into());
+                        }
+                    }
+                    Ok(())
+                },
+            ))
+        },
+    )
+    .map_err(Error::Ranked)?;
+    drop(candidate);
+    drop(metadata);
+    result.map_err(Error::Native)?;
+    optimized_source_endpoints_v18(original, optimized, budget)?;
+    let paid = argument_sum_v1(&[metadata_storage, receipt.retained_storage()])?;
+    if scratch_floor.checked_add(paid) != Some(budget.storage()) {
+        original.source.cleanup.deny_refund();
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    original.retain_query(budget.release_storage(paid).map_err(Into::into))?;
+    Ok(())
 }

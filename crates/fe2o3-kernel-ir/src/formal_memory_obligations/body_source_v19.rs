@@ -1,10 +1,12 @@
 //! Paid operation-row consumer. Final report construction is layered below.
 use super::*;
+use crate::formal_memory_obligations::guarded_access_v1::source_context_bytes_v2::report_source_v20;
 use crate::formal_memory_obligations::{
     body_engine_v19, gfx942_inline_u32_v30, report_construction_v18,
 };
 use crate::{CanonicalEffectErrorV19, CanonicalEffectScopeV19};
 use report_construction_v18::{LiveReportMeterV18, ReportMeterV18};
+use report_source_v20::{BorrowedReportSourceV20, RetainedSourceQueriesV20, frame_bytes_v20};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::formal_memory_obligations) enum BodyErrorV19 {
@@ -45,9 +47,15 @@ pub(in crate::formal_memory_obligations) struct ActualOwnerReportViewV19<'view, 
     launch_extent: ExplicitLaunchExtent,
     interpretation: PhysicalLaunchInterpretationV2,
     report: &'view FormalMemoryObligationAnalysis,
+    source_queries: &'view dyn RetainedSourceQueriesV20<'owner>,
 }
 
-impl ActualOwnerReportViewV19<'_, '_> {
+impl<'view, 'owner> ActualOwnerReportViewV19<'view, 'owner> {
+    pub(in crate::formal_memory_obligations) fn source_queries_v20(
+        &self,
+    ) -> &(dyn RetainedSourceQueriesV20<'owner> + 'view) {
+        self.source_queries
+    }
     pub(in crate::formal_memory_obligations) fn original_owner(
         &self,
     ) -> &VerifiedCanonicalKernelIrModuleV18 {
@@ -451,6 +459,7 @@ fn frame_v19<F>() -> BodyResult<usize> {
     [
         size_of::<ReportScopeStateV19>(),
         size_of::<ActualOwnerReportViewV19<'_, '_>>(),
+        frame_bytes_v20(),
         size_of::<FormalMemoryObligationAnalysis>(),
         size_of::<BodyResult<FormalMemoryObligationAnalysis>>(),
         size_of::<std::thread::Result<BodyResult<()>>>() * 2,
@@ -531,16 +540,29 @@ impl<'pointer, 'borrow, 'affine, 'owner, 'work>
             let report =
                 construct_report_v19(self, effects, launch, width, interpretation, budget)?;
             state.required = Some(budget.storage());
+            let original_owner = self.pointers.slots.affine.owner;
+            let original_source = self.pointers.slots.affine.source;
+            let source_queries = BorrowedReportSourceV20::new(
+                &mut self.pointers.slots.affine.context,
+                original_owner,
+                root_index,
+                budget,
+            );
             let view = ActualOwnerReportViewV19 {
-                owner: self.pointers.slots.affine.owner,
-                source: self.pointers.slots.affine.source,
+                owner: original_owner,
+                source: original_source,
                 root_index,
                 launch_extent: launch,
                 interpretation,
                 report: &report,
+                source_queries: &source_queries,
             };
             let consume = pending.take().ok_or(ResourceError::Accounting)?;
             let result = consume(&view, budget);
+            // Ignoring a same-account query refusal cannot complete a report.
+            let source_result = source_queries.check(original_owner, root_index, budget);
+            drop(source_queries);
+            source_result?;
             if result.is_ok() {
                 // A consumer can query the same outer effects scope. An
                 // ignored denial there cannot complete this report scope.

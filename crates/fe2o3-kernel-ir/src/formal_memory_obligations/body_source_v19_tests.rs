@@ -4,6 +4,9 @@ use crate::formal_memory_obligations::PhysicalLaunchInterpretationV2 as Interpre
 use crate::{CanonicalEffectErrorV19, with_canonical_effects_v19};
 use std::result::Result;
 
+#[path = "canonical_owner_report_v19_tests.rs"]
+mod public_adapter_tests;
+
 const LIMIT: usize = 50_000_000;
 const FLOOR: usize = 23;
 

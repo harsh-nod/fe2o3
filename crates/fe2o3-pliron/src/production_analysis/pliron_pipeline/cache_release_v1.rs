@@ -48,27 +48,61 @@ fn finish_exclusive_analysis_caches_v1(
     finish_exclusive_analysis_caches_with_observation_v1(analyses, reservations, None)
 }
 
+#[cfg(test)]
 fn finish_exclusive_analysis_caches_with_observation_v1(
     analyses: PlironAnalysisManagerV1,
     reservations: ExclusiveAnalysisCacheReservationsV1,
     receipt: Option<&mut invocation_receipt_v1::InvocationReceiptV1>,
 ) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    finish_exclusive_analysis_caches_with_progress_v2(analyses, reservations, None, receipt)
+}
+
+fn finish_exclusive_analysis_caches_with_progress_v2(
+    analyses: PlironAnalysisManagerV1,
+    reservations: ExclusiveAnalysisCacheReservationsV1,
+    progress: Option<(
+        crate::production_analysis::pliron_progress::PreparedProgressGraphV2<'_>,
+        ProductionAnalysisResourceUpperBoundV1,
+    )>,
+    receipt: Option<&mut invocation_receipt_v1::InvocationReceiptV1>,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
     let complete_invocation = analyses.resource_upper_bound();
+    let progress_retained = progress
+        .as_ref()
+        .map_or(0, |(_, bound)| bound.retained_storage_upper_bound());
+    let settle = || {
+        let (released, returned) =
+            settle_exclusive_cache_reservations_v1(complete_invocation, reservations)?;
+        let phase = ProductionAnalysisResourcePhaseV1::PipelineVerification;
+        let released =
+            released
+                .checked_add(progress_retained)
+                .ok_or(ProductionAnalysisResourceLimitV1 {
+                    phase,
+                    resource: "exclusive progress graph retained storage upper bound",
+                })?;
+        let returned = returned.checked_then_replace_retained(
+            progress_retained,
+            ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 0, 0, 0)?,
+            phase,
+        )?;
+        Ok((released, returned))
+    };
     // None of these seven exclusive cache owners crosses this boundary.
     // Independent report copies keep their separate phase reservations.
     let Some(receipt) = receipt else {
-        drop(analyses);
-        return settle_exclusive_cache_reservations_v1(complete_invocation, reservations)
-            .map(|(_, returned)| returned);
+        let settled = settle();
+        drop((analyses, progress));
+        return settled.map(|(_, returned)| returned);
     };
     let phase_kind = ProductionAnalysisResourcePhaseV1::PipelineVerification;
     let phase = receipt.phase(phase_kind, 0)?;
     let (released, returned) =
         invocation_receipt_v1::observe_resource_preflight_v1(Some(&phase.observer(&Ok)), |_| {
-            settle_exclusive_cache_reservations_v1(complete_invocation, reservations)
+            settle()
         })?;
     drop(phase);
-    receipt.drop_owner(phase_kind, analyses, released)?;
+    receipt.drop_owner(phase_kind, (analyses, progress), released)?;
     Ok(returned)
 }
 

@@ -328,3 +328,6 @@ mod exact_source_origin_v18;
 
 #[path = "private_slots_bytes_v18.rs"]
 pub(in crate::formal_memory_obligations) mod private_slots_bytes_v18;
+
+#[path = "canonical_owner_report_v19.rs"]
+pub(in crate::formal_memory_obligations) mod canonical_owner_report_v19;

@@ -9346,11 +9346,26 @@ impl PipelineScalarProjectorV1<'_, '_, '_, '_, '_> {
             return Ok(ProjectedPipelineScalarV1::Value(index.value));
         }
         let definition = if let Some((index, facts)) = self.scalar_ssa.as_mut() {
-            match index.resolve(self.function, local, use_site, &mut **facts)? {
-                pipeline_scalar_ssa_v1::Origin::Argument { argument, .. } => {
+            match index.resolve_projected(
+                self.function,
+                local,
+                use_site,
+                self.uniform_inductions,
+                &self.assertion_proofs,
+                &mut self.work,
+                &mut **facts,
+            )? {
+                pipeline_scalar_ssa_v1::Resolution::LiveOut(value) => {
+                    return self.constant(value);
+                }
+                pipeline_scalar_ssa_v1::Resolution::Origin(
+                    pipeline_scalar_ssa_v1::Origin::Argument { argument, .. },
+                ) => {
                     return self.argument(argument as usize);
                 }
-                pipeline_scalar_ssa_v1::Origin::Assignment { site, .. } => site,
+                pipeline_scalar_ssa_v1::Resolution::Origin(
+                    pipeline_scalar_ssa_v1::Origin::Assignment { site, .. },
+                ) => site,
             }
         } else {
             match self.assertion_proofs.definition_counts.get(local).copied() {

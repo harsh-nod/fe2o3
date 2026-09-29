@@ -8,6 +8,7 @@ pub(crate) use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
 use fe2o3_lower_mir_kernel::{
+    ProductionBoundScalarHandoffErrorV19, ProductionBoundScalarOutputHandoffV19 as BoundHandoff,
     ProductionClosedScalarHandoffErrorV18, ProductionClosedScalarOutputHandoffV18 as Handoff,
     ProductionExecutionSourceInputV29, ProductionKernelArgumentAbiInputV18,
     ProductionKernelArgumentAbiRootV18 as AbiRoot,
@@ -23,6 +24,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[path = "production_pipeline_original_source_v18.rs"]
 mod original_source_v18;
 
+#[path = "production_pipeline_source_formal_context_v19.rs"]
+mod formal_context_v19;
+
+/// Borrows the original compiler bindings through the lexical source visit.
+/// A copied ABI roster or target string cannot construct this private context.
+struct SourceBindingContextV29<'bindings> {
+    bindings: &'bindings AuthenticatedProductionBindings,
+}
+
 pub(super) enum ImportProfile {
     Current,
     NominalV35,
@@ -37,7 +47,9 @@ pub(crate) enum Error {
     Handoff(ProductionClosedScalarHandoffErrorV18),
     IntegerHandoff(ProductionUnqualifiedIntegerHandoffErrorV18),
     ScalarCfgHandoff(ProductionScalarCfgHandoffErrorV18),
+    BoundScalarHandoff(ProductionBoundScalarHandoffErrorV19),
     TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
+    FormalReports(Box<formal_context_v19::ReportOptimizationErrorV19>),
     Resource(Resource),
     Unsupported(&'static str),
 }
@@ -55,7 +67,9 @@ impl std::error::Error for Error {
             Self::Handoff(error) => Some(error),
             Self::IntegerHandoff(error) => Some(error),
             Self::ScalarCfgHandoff(error) => Some(error),
+            Self::BoundScalarHandoff(error) => Some(error),
             Self::TargetLlvm(error) => Some(error),
+            Self::FormalReports(error) => Some(error.as_ref()),
             Self::Resource(error) => Some(error),
             Self::Unsupported(_) => None,
         }
@@ -94,6 +108,11 @@ impl From<ProductionUnqualifiedIntegerHandoffErrorV18> for Error {
 impl From<ProductionScalarCfgHandoffErrorV18> for Error {
     fn from(error: ProductionScalarCfgHandoffErrorV18) -> Self {
         Self::ScalarCfgHandoff(error)
+    }
+}
+impl From<ProductionBoundScalarHandoffErrorV19> for Error {
+    fn from(error: ProductionBoundScalarHandoffErrorV19) -> Self {
+        Self::BoundScalarHandoff(error)
     }
 }
 impl From<target_result::ClosedScalarTargetLlvmErrorV29> for Error {
@@ -163,6 +182,16 @@ fn entry_headers<R, F>() -> Result<usize, Resource> {
     entry_headers_for_handoff::<R, F, Handoff<'static, 'static>>()
 }
 
+fn pay_source_visit_capture_v19<F>(visit: &F, budget: &mut Budget<'_>) -> Result<(), Resource> {
+    budget.check_prior_denials_v1()?;
+    let headers = std::mem::size_of_val(visit)
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(std::mem::align_of_val(visit)))
+        .ok_or(Resource::Arithmetic)?;
+    budget.charge_work(headers)?;
+    budget.reserve_storage(headers)
+}
+
 fn entry_headers_for_handoff<R, F, H>() -> Result<usize, Resource> {
     type Invoke<'a, 'source, 'work, F, H> = (
         F,
@@ -195,6 +224,11 @@ fn entry_headers_for_handoff<R, F, H>() -> Result<usize, Resource> {
         size_of::<ProductionExecutionSourceInputV29<'_>>(),
         size_of::<Work>(),
         size_of::<Budget<'_>>(),
+        size_of::<SourceBindingContextV29<'_>>(),
+        align_of::<SourceBindingContextV29<'_>>(),
+        size_of::<&SourceBindingContextV29<'_>>(),
+        size_of::<formal_context_v19::PendingConsumerV19<F>>(),
+        align_of::<formal_context_v19::PendingConsumerV19<F>>(),
     ]
     .into_iter()
     .try_fold(0usize, |sum, value| {
@@ -207,7 +241,7 @@ trait SourceHandoffPolicyV29<R, F> {
     fn consume<'view, 'source, 'abi, 'work>(
         source: &'view Source<'source>,
         roots: &[AbiRoot<'abi>],
-        target: TargetProfile,
+        context: &SourceBindingContextV29<'_>,
         budget: &mut Budget<'work>,
         consume: F,
     ) -> Result<R, Error>;
@@ -215,6 +249,15 @@ trait SourceHandoffPolicyV29<R, F> {
 
 macro_rules! source_handoff_policy_v29 {
     ($policy:ident, $handoff:ident, $prepare:ident) => {
+        source_handoff_policy_v29!(@impl $policy, $handoff,
+            |source, roots, context, budget, handoff| {
+                let handoff = source.$prepare(ProductionKernelArgumentAbiInputV18 { roots }, budget)?;
+            }, []
+        );
+    };
+    (@impl $policy:ident, $handoff:ident,
+        |$source:ident, $roots:ident, $context:ident, $budget:ident, $value:ident|
+        { $($prepare:tt)* }, [$($header:expr),*]) => {
         struct $policy;
         impl<R, F> SourceHandoffPolicyV29<R, F> for $policy
         where
@@ -227,31 +270,45 @@ macro_rules! source_handoff_policy_v29 {
             ) -> Result<R, Error>,
         {
             fn entry_headers() -> Result<usize, Resource> {
-                entry_headers_for_handoff::<R, F, $handoff<'static, 'static>>()
+                [
+                    entry_headers_for_handoff::<R, F, $handoff<'static, 'static>>()?,
+                    size_of::<formal_context_v19::PendingConsumerV19<F>>(),
+                    align_of::<formal_context_v19::PendingConsumerV19<F>>(),
+                    $($header),*
+                ].into_iter().try_fold(0usize, |sum, bytes| {
+                    sum.checked_add(bytes).ok_or(Resource::Arithmetic)
+                })
             }
 
             fn consume<'view, 'source, 'abi, 'work>(
-                source: &'view Source<'source>,
-                roots: &[AbiRoot<'abi>],
-                target: TargetProfile,
-                budget: &mut Budget<'work>,
+                $source: &'view Source<'source>,
+                $roots: &[AbiRoot<'abi>],
+                $context: &SourceBindingContextV29<'_>,
+                $budget: &mut Budget<'work>,
                 consume: F,
             ) -> Result<R, Error> {
-                let handoff =
-                    source.$prepare(ProductionKernelArgumentAbiInputV18 { roots }, budget)?;
-                handoff.check_original_source(source.source_ssa(budget)?, budget)?;
-                let borrowed = &handoff;
-                let callback_budget = &mut *budget;
+                let mut pending = formal_context_v19::PendingConsumerV19::new(consume);
+                $($prepare)*
+                $value.check_original_source($source.source_ssa($budget)?, $budget)?;
+                let borrowed = &$value;
+                let callback_budget = &mut *$budget;
+                let target = $context.bindings.rustc_target.profile();
+                let consume = pending.take();
                 // Concrete nominal handoffs carry the source/view outlives
                 // relationship into the callback without a quantified GAT.
                 let result = catch_unwind(AssertUnwindSafe(move || {
-                    consume(source, borrowed, roots, target, callback_budget)
+                    consume($source, borrowed, $roots, target, callback_budget)
                 }));
-                let settled = handoff.discard(budget);
+                let settled = $value.discard($budget);
                 match result {
                     Ok(Ok(value)) => {
-                        settled?;
-                        Ok(value)
+                        match settled {
+                            Ok(()) => Ok(value),
+                            Err(error) => {
+                                discard(value);
+                                Err(error.into())
+                            }
+                        }
                     }
                     Ok(Err(error)) => Err(error),
                     Err(payload) => resume_unwind(payload),
@@ -267,6 +324,19 @@ source_handoff_policy_v29!(
     UnqualifiedInteger,
     IntegerHandoff,
     unqualified_integer_output_v18
+);
+
+source_handoff_policy_v29!(@impl BoundScalar, BoundHandoff,
+    |source, roots, context, budget, handoff| {
+        let (launches, width) = context.launches(source, budget)?;
+        let handoff = source.checked_bound_scalar_output_v19(
+            ProductionKernelArgumentAbiInputV18 { roots }, &launches, width, budget,
+        )?;
+    }, [
+        formal_context_v19::launch_context_headers_v19()?,
+        size_of::<fe2o3_kernel_ir::FormalIndexWidth>(),
+        size_of::<ProductionBoundScalarHandoffErrorV19>(),
+    ]
 );
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
@@ -392,6 +462,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         storage_limit: usize,
         consume: F,
     ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error> {
+        let mut consume = formal_context_v19::PendingConsumerV19::new(consume);
         let ssa = self
             .import_semantic_mir_with_profile_v29(import_profile)?
             .construct_semantic_middle_end()?
@@ -464,7 +535,9 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             })?;
         let original_sha = *semantic_ssa.source_semantic_sha256();
         let original_ssa = semantic_ssa.identity();
-        let target = bindings.rustc_target.profile();
+        let binding_context = SourceBindingContextV29 {
+            bindings: &bindings,
+        };
         let abi = crate::compiler_descriptor::source_owned_v29::SourceAbi::capture(
             &bindings.typed_descriptor_roots,
             &mut budget,
@@ -479,7 +552,8 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         )?;
         #[cfg(test)]
         tests::observe_prepared_source_v29(&roots, contexts.is_some());
-        let result = source.with_source_consumer_v18(&mut budget, move |source, budget| {
+        let binding_context = &binding_context;
+        let visit = move |source: &Source<'_>, budget: &mut Budget<'_>| {
             if source.source_ssa(budget)?.identity() != original_ssa
                 || source.source_semantic(budget)?.semantic_sha256().as_bytes() != &original_sha
             {
@@ -487,8 +561,12 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             }
             #[cfg(test)]
             tests::observe_materialized_source_v29();
-            P::consume(source, &roots, target, budget, consume)
-        });
+            P::consume(source, &roots, binding_context, budget, consume.take())
+        };
+        // Measure the real source-visit capture, including the borrowed compiler
+        // context and owned ABI-root vector. It stays paid for this root phase.
+        pay_source_visit_capture_v19(&visit, &mut budget)?;
+        let result = source.with_source_consumer_v18(&mut budget, visit);
         drop((contexts, abi, ranked_roots));
         let observation = result?;
         Ok(SourceOwnedCompilationContinuationV29 {

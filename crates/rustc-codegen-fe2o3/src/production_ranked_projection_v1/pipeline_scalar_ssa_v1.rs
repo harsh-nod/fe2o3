@@ -12,10 +12,14 @@ use fe2o3_pliron::{
     ProductionSemanticSsaOperandRoleV1 as OperandRole, ProductionSemanticSsaOwnerV1,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     mem::size_of,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
 };
+
+#[path = "pipeline_scalar_live_out_v1.rs"]
+mod live_out_v1;
+pub(super) use live_out_v1::Resolution;
 
 type Result<T> = std::result::Result<T, ProductionRankedProjectionErrorV1>;
 
@@ -80,6 +84,8 @@ pub(super) struct Index<'s> {
     identity: (usize, Ledger),
     minimum: usize,
     failure: Cell<Option<Failure>>,
+    live_out: RefCell<Option<live_out_v1::State>>,
+    extra_owned: Cell<usize>,
 }
 
 impl Index<'_> {
@@ -143,7 +149,7 @@ impl Index<'_> {
         if facts
             .scalar_private_storage_v1()
             .inspect_err(|error| self.record(error))?
-            < self.minimum
+            < sum(self.minimum, self.extra_owned.get())?
         {
             self.failure
                 .set(Some(Failure::Resource(Resource::Accounting)));
@@ -180,13 +186,13 @@ impl Index<'_> {
         Ok((block, statement))
     }
 
-    pub(super) fn resolve(
+    fn resolved_value(
         &self,
         function: &SemanticFunctionDeclV1,
         local: usize,
         use_site: ScalarAssignmentSiteV1,
         facts: &mut dyn ProjectedAssertionFactsV1,
-    ) -> Result<Origin> {
+    ) -> Result<SsaValueV1> {
         self.charge(facts, 4)?;
         if !std::ptr::eq(function, self.function)
             || !std::ptr::eq(self.occurrences.owner(), self.source.owner)
@@ -238,6 +244,21 @@ impl Index<'_> {
         let Some(value) = value else {
             return self.fail("a pipeline scalar has no captured use at its exact source site");
         };
+        Ok(value)
+    }
+
+    pub(super) fn resolve(
+        &self,
+        function: &SemanticFunctionDeclV1,
+        local: usize,
+        use_site: ScalarAssignmentSiteV1,
+        facts: &mut dyn ProjectedAssertionFactsV1,
+    ) -> Result<Origin> {
+        let value = self.resolved_value(function, local, use_site, facts)?;
+        self.origin(local, value)
+    }
+
+    fn origin(&self, local: usize, value: SsaValueV1) -> Result<Origin> {
         let SsaValueV1::Definition(id) = value else {
             return self.fail("a pipeline scalar requires an unsupported SSA block argument");
         };
@@ -365,6 +386,8 @@ fn construct<'s>(
         identity,
         minimum: sum(floor, *owned)?,
         failure: Cell::new(None),
+        live_out: RefCell::new(None),
+        extra_owned: Cell::new(0),
     };
     let mut previous = None;
     for row in index.occurrences.events() {
@@ -489,16 +512,23 @@ where
         drain(result);
         result = Ok(Err(failure.error()));
     }
-    let custody = facts.helper_value_ledger_v1().and_then(|actual| {
-        if actual != identity || facts.scalar_private_storage_v1()? < sum(floor, owned)? {
-            Err(resource(Resource::Accounting))
-        } else {
-            Ok(())
-        }
-    });
+    let total_owned = owned.checked_add(index.as_ref().map_or(0, |index| index.extra_owned.get()));
+    let custody = total_owned
+        .ok_or_else(|| resource(Resource::Arithmetic))
+        .and_then(|total| {
+            facts.helper_value_ledger_v1().and_then(|actual| {
+                if actual != identity || facts.scalar_private_storage_v1()? < sum(floor, total)? {
+                    Err(resource(Resource::Accounting))
+                } else {
+                    Ok(())
+                }
+            })
+        });
     drop(index);
     let cleanup = match custody {
-        Ok(()) => facts.release_scalar_private_storage_v1(owned),
+        Ok(()) => {
+            facts.release_scalar_private_storage_v1(total_owned.expect("checked owned credit"))
+        }
         Err(error) => {
             if matches!(result, Ok(Ok(_))) {
                 drain(result);

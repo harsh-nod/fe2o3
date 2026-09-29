@@ -33,7 +33,7 @@ pub(crate) trait TargetOutputHandoffV29: target_handoff_sealed::Sealed {
         required: usize,
         budget: &Budget<'_>,
     ) -> Result<(), SourceError>;
-    fn formal(owner: &CanonicalOwner, budget: &mut Budget<'_>) -> Result<(), Error>;
+    fn formal(&self, owner: &CanonicalOwner, budget: &mut Budget<'_>) -> Result<(), Error>;
     fn formal_headers() -> Result<usize, Resource>;
 }
 
@@ -70,7 +70,7 @@ macro_rules! target_output_policy_v29 {
             ) -> Result<(), SourceError> {
                 self.observe_retained_storage_v18(required, budget)
             }
-            fn formal(owner: &CanonicalOwner, budget: &mut Budget<'_>) -> Result<(), Error> {
+            fn formal(&self, owner: &CanonicalOwner, budget: &mut Budget<'_>) -> Result<(), Error> {
                 let scope = $scope::new(owner).map_err(Error::$variant)?;
                 formal(scope, owner, budget)
             }
@@ -99,3 +99,34 @@ target_output_policy_v29!(
     ScalarCfgFormal,
     "scalar CFG formal obligations remain"
 );
+
+impl target_handoff_sealed::Sealed for BoundHandoff<'_, '_> {}
+impl TargetOutputHandoffV29 for BoundHandoff<'_, '_> {
+    fn check_original(
+        &self,
+        source: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), SourceError> {
+        self.check_original_source(source, budget)
+    }
+    fn owner(&self, budget: &Budget<'_>) -> Result<&CanonicalOwner, SourceError> {
+        self.output(budget).map(|output| output.owner())
+    }
+    fn observe_retained_storage(
+        &self,
+        required: usize,
+        budget: &Budget<'_>,
+    ) -> Result<(), SourceError> {
+        self.observe_retained_storage_v18(required, budget)
+    }
+    fn formal(&self, owner: &CanonicalOwner, budget: &mut Budget<'_>) -> Result<(), Error> {
+        // This nominal handoff already consumed complete fresh paired reports,
+        // then the actual ranked/native checks, before adopting this same owner.
+        // It is constructed only with the private binding context in this lane.
+        self.check_reported_owner_v19(owner, budget)?;
+        Ok(())
+    }
+    fn formal_headers() -> Result<usize, Resource> {
+        Ok(size_of::<Result<(), SourceError>>())
+    }
+}

@@ -1,4 +1,5 @@
 //! Explicit source-owned target LLVM continuation, not default compilation.
+use super::target_result::BoundScalarTargetLlvmV19 as BoundTargetLlvm;
 use super::target_result::ClosedScalarTargetLlvmV29 as TargetLlvm;
 use super::target_result::ScalarCfgTargetLlvmV29 as CfgTargetLlvm;
 use super::*;
@@ -18,6 +19,8 @@ fn callback_headers_for<R, F, H, T>() -> Result<usize, Resource> {
         align_of::<Result<R, Error>>(),
         size_of::<AssertUnwindSafe<Result<R, Error>>>(),
         size_of::<std::thread::Result<Result<R, Error>>>(),
+        size_of::<formal_context_v19::PendingConsumerV19<F>>(),
+        align_of::<formal_context_v19::PendingConsumerV19<F>>(),
     ]
     .into_iter()
     .try_fold(0usize, |sum, bytes| {
@@ -45,6 +48,7 @@ macro_rules! source_target_llvm_continuation_v29 {
                     WORK_LIMIT,
                     STORAGE_LIMIT,
                     move |source, handoff, _, target, budget| {
+                        let mut pending = formal_context_v19::PendingConsumerV19::new(consume);
                         // F is already owned by the outer source/handoff catch. These
                         // additional invocation frames stay paid to the root ledger's
                         // end, independently of the target String's exact receipt.
@@ -55,15 +59,19 @@ macro_rules! source_target_llvm_continuation_v29 {
                         let native = target_result::$lower(source, handoff, target, budget)?;
                         let borrowed = &native;
                         let callback_budget = &mut *budget;
+                        let consume = pending.take();
                         let result = catch_unwind(AssertUnwindSafe(move || {
                             consume(source, handoff, borrowed, callback_budget)
                         }));
                         let settled = native.discard(budget).map_err(Error::from);
                         match result {
-                            Ok(Ok(value)) => {
-                                settled?;
-                                Ok(value)
-                            }
+                            Ok(Ok(value)) => match settled {
+                                Ok(()) => Ok(value),
+                                Err(error) => {
+                                    discard(value);
+                                    Err(error)
+                                }
+                            },
                             Ok(Err(error)) => Err(error),
                             Err(payload) => resume_unwind(payload),
                         }
@@ -88,8 +96,39 @@ source_target_llvm_continuation_v29!(
     CfgTargetLlvm,
     check_and_lower_scalar_cfg_target_llvm_v18
 );
+source_target_llvm_continuation_v29!(
+    with_original_source_bound_scalar_target_llvm_v19,
+    with_original_source_bound_scalar_limits_v19,
+    BoundHandoff,
+    BoundTargetLlvm,
+    check_and_lower_bound_scalar_target_llvm_v19
+);
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    fn with_original_source_bound_scalar_limits_v19<R, F>(
+        self,
+        work_limit: usize,
+        storage_limit: usize,
+        consume: F,
+    ) -> Result<R, Error>
+    where
+        F: for<'view, 'source, 'abi, 'work> FnOnce(
+            &'view Source<'source>,
+            &BoundHandoff<'view, 'source>,
+            &[AbiRoot<'abi>],
+            TargetProfile,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    {
+        self.with_source_owned_custody_policy_v29::<BoundScalar, R, F>(
+            ImportProfile::NominalV35,
+            work_limit,
+            storage_limit,
+            consume,
+        )
+        .map(SourceOwnedCompilationContinuationV29::into_observation)
+    }
+
     fn with_original_source_scalar_cfg_limits_v18<R, F>(
         self,
         work_limit: usize,
@@ -139,7 +178,9 @@ mod tests {
                 + size_of::<Result<R, Error>>()
                 + align_of::<Result<R, Error>>()
                 + size_of::<AssertUnwindSafe<Result<R, Error>>>()
-                + size_of::<std::thread::Result<Result<R, Error>>>();
+                + size_of::<std::thread::Result<Result<R, Error>>>()
+                + size_of::<formal_context_v19::PendingConsumerV19<F>>()
+                + align_of::<formal_context_v19::PendingConsumerV19<F>>();
             assert_eq!(callback_headers::<R, F>().unwrap(), expected);
             expected
         }
@@ -170,7 +211,9 @@ mod tests {
                 + size_of::<Result<R, Error>>()
                 + align_of::<Result<R, Error>>()
                 + size_of::<AssertUnwindSafe<Result<R, Error>>>()
-                + size_of::<std::thread::Result<Result<R, Error>>>();
+                + size_of::<std::thread::Result<Result<R, Error>>>()
+                + size_of::<formal_context_v19::PendingConsumerV19<F>>()
+                + align_of::<formal_context_v19::PendingConsumerV19<F>>();
             assert_eq!(
                 callback_headers_for::<R, F, CfgHandoff<'_, '_>, CfgTargetLlvm<'_, '_, '_>>()
                     .unwrap(),

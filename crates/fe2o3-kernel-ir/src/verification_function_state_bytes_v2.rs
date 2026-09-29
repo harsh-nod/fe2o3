@@ -153,6 +153,27 @@ impl<'source, 'work> ByteFunctionStateV2<'source, 'work> {
             .map(|position| position.map(|position| self.definitions[position].value))
     }
 
+    pub(crate) fn definition_count_v20(
+        &self,
+        source: &Function,
+        budget: &mut Budget<'_>,
+    ) -> Result<usize, Error> {
+        self.check(source, budget)?;
+        budget.charge_work(1)?;
+        Ok(self.definitions.len())
+    }
+
+    pub(crate) fn definition_ordinal_v20(
+        &self,
+        source: &Function,
+        value: ValueId,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<(usize, VerificationDefinitionV1<'source>)>, Error> {
+        self.check(source, budget)?;
+        verification_find_last_by_v1(&self.definitions, 1, budget, |row| row.key.cmp(&value.0))
+            .map(|position| position.map(|position| (position, self.definitions[position].value)))
+    }
+
     pub(crate) fn release(self, budget: &mut Budget<'_>) -> Result<(), Error> {
         self.same_identity(budget)?;
         if budget.storage()

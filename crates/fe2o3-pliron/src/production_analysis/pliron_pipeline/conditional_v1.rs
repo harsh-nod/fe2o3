@@ -420,11 +420,24 @@ impl PipelineFamilyV1<'_> {
         clippy::result_large_err,
         reason = "preserve inline error custody without an unadmitted error-path allocation"
     )]
+    #[cfg(test)]
     fn prepare_semantic_stage_v1(
         self,
         analyses: &mut PlironAnalysisManagerV1,
         census: ProductionAnalysisInputCensusV1,
         ownership: ProductionAnalysisResourceUpperBoundV1,
+        observer: PipelineObservationV1<'_, '_, '_>,
+    ) -> Result<PreparedProductionStageV1<()>, PipelineErrorV1> {
+        self.prepare_semantic_with_graph_v2(analyses, census, ownership, None, observer)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn prepare_semantic_with_graph_v2(
+        self,
+        analyses: &mut PlironAnalysisManagerV1,
+        census: ProductionAnalysisInputCensusV1,
+        ownership: ProductionAnalysisResourceUpperBoundV1,
+        graph: Option<&crate::production_analysis::pliron_progress::PreparedProgressGraphV2<'_>>,
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<PreparedProductionStageV1<()>, PipelineErrorV1> {
         use ProductionAnalysisResourcePhaseV1 as Phase;
@@ -450,10 +463,12 @@ impl PipelineFamilyV1<'_> {
             observed_remaining_resource_limits_v1(analyses, Phase::SemanticRefinement, observer)?,
         )
         .map_err(resource_error)?;
-        let progress = preflight_scoped_progress_resource_upper_bound_v1(
-            census,
-            observed_remaining_resource_limits_v1(analyses, Phase::Progress, observer)?,
-        )
+        let progress_limits =
+            observed_remaining_resource_limits_v1(analyses, Phase::Progress, observer)?;
+        let progress = match graph {
+            Some(graph) => graph.continuation_bound(census, progress_limits),
+            None => preflight_scoped_progress_resource_upper_bound_v1(census, progress_limits),
+        }
         .map_err(resource_error)?;
         let bound = semantic
             .checked_with_nested_sequence_retain(&[progress, effect], Phase::SemanticRefinement)

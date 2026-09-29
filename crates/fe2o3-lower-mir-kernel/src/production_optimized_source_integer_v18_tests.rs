@@ -1,3 +1,8 @@
+mod formal_report_tests_v19 {
+    use super::*;
+    include!("production_optimized_source_formal_reports_v19_tests.rs");
+}
+
 fn integer_identity_source_v18(
     operation: SemanticBinaryOpV1,
     neutral: u128,

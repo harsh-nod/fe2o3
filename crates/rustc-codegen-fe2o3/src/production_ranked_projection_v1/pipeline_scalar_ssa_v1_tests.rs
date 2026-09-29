@@ -7,6 +7,11 @@ use fe2o3_kernel_ir::{
 use pipeline_scalar_ssa_v1::{Index, Origin, Source, with_index};
 use std::cell::Cell;
 
+mod live_out_tests {
+    use super::*;
+    include!("pipeline_scalar_live_out_v1_tests.rs");
+}
+
 type R<T> = Result<T, ProductionRankedProjectionErrorV1>;
 const WORD: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);

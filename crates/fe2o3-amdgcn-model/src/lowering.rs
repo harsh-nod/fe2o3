@@ -9588,6 +9588,23 @@ fn llvm_width(scalar: ScalarType) -> u16 {
     scalar.bit_width().unwrap_or(64)
 }
 
+/// Returns the mathematical `Index` width used by this AMD lowering contract.
+///
+/// This reads the same scalar spelling/width helpers as the emitter. It is not
+/// device-pointer width, launch authority, or attestation of executable bytes.
+/// Callers must separately bind the genuine source and retained target profile.
+pub fn production_logical_index_width_v19() -> fe2o3_kernel_ir::FormalIndexWidth {
+    use fe2o3_kernel_ir::FormalIndexWidth;
+    match (
+        llvm_scalar(ScalarType::Index),
+        llvm_width(ScalarType::Index),
+    ) {
+        ("i32", 32) => FormalIndexWidth::Bits32,
+        ("i64", 64) => FormalIndexWidth::Bits64,
+        _ => FormalIndexWidth::Unknown,
+    }
+}
+
 fn constant_value(constant: &Constant) -> Option<String> {
     match constant {
         Constant::Bool(value) => Some(value.to_string()),
@@ -9738,6 +9755,64 @@ fn cast_opcode(kind: CastKind, from: &Type) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_formal_index_width_uses_actual_scalar_and_global_id_lowering() {
+        assert_eq!(
+            production_logical_index_width_v19(),
+            fe2o3_kernel_ir::FormalIndexWidth::Bits64
+        );
+        assert_eq!(llvm_scalar(ScalarType::Index), "i64");
+        assert_eq!(llvm_width(ScalarType::Index), 64);
+        let module = Module::new("formal_index_width");
+        let mut block = BasicBlock::new(BlockId(0));
+        block.terminator = Some(Terminator::Return { values: Vec::new() });
+        let function = Function::kernel_entry(
+            "entry",
+            fe2o3_kernel_ir::Signature::new(Vec::new(), Vec::new()),
+            Vec::new(),
+            vec![block],
+        );
+        let symbols = BTreeMap::new();
+        for target in [
+            LoweringTarget::Gfx942XnackMinusV1,
+            LoweringTarget::Gfx950XnackMinusV1,
+        ] {
+            for group in [1, 64, 1024] {
+                let mut kernel = Kernel::new(
+                    "entry",
+                    "entry",
+                    LaunchDomain::D1 {
+                        x: LaunchExtent::Dynamic,
+                    },
+                );
+                let workgroup = WorkgroupSize::new(group, 1, 1);
+                kernel.workgroup_size = Some(workgroup);
+                let lowerer = FunctionLowerer::compiler_module_kernel(
+                    &module,
+                    &kernel,
+                    &function,
+                    workgroup,
+                    Some(WaveWidth::Wave64),
+                    &symbols,
+                    target,
+                    None,
+                    SemanticAnchorEmissionV1::Disabled,
+                )
+                .unwrap();
+                let mut output = String::new();
+                lowerer
+                    .emit_logical_global_id(&mut output, "%index")
+                    .unwrap();
+                assert_eq!(
+                    output,
+                    format!(
+                        "  %index.local.i32 = call i32 @llvm.amdgcn.workitem.id.x()\n  %index.group.i32 = call i32 @llvm.amdgcn.workgroup.id.x()\n  %index.local = zext i32 %index.local.i32 to i64\n  %index.group = zext i32 %index.group.i32 to i64\n  %index.base = mul i64 %index.group, {group}\n  %index = add i64 %index.base, %index.local\n"
+                    )
+                );
+            }
+        }
+    }
 
     #[test]
     fn semantic_anchor_manifest_limits_have_exact_boundaries() {
