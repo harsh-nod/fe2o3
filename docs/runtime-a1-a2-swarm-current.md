@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [aggregate batch-release pin budget check](evidence/dev-batch-release-pin-budget-2026-09-28/README.md)
+now prevents partial pin decrements for undercounted aliasing rosters in all three
+batch release paths, preserving legacy validation precedence and exact refusal
+custody. The shared helper's final signed 17-stage campaign passes 8 obligations
+and all nine executable negatives. Completion tests pass 19/0, broader KFD
+regressions 1409/0 (320 construction tests explicitly excluded), full runtime
+1828/0 with 30 hardware ignores, and doctests 124/0; static checks pass. The helper
+proof excludes allocation/selection, mapped slot/min projections and batch commit.
+The first mixed-diagnostic campaign remains failed evidence. Full source rollback,
+native target scheduling, protected Worker execution and matched performance are
+still open; A1/A2 and accepted lane checkpoints are unchanged.
+
 The [exact completion-event release refinement](evidence/dev-completion-event-release-2026-09-28/README.md)
 shares the real Ready/identity/live-slot checks and release body between production
 and Verus. Its signed 23-stage campaign passes 16 verified functions, all 15
