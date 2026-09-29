@@ -131,7 +131,10 @@ impl<D> CompletionSignalArenaOwnerV1<D> {
             }],
             [proof {
                 assert(preparation_error(initial, templates.values@[index as int], slots@[index as int]).is_none());
-                assert(prepared@[index as int] == prepared_packet(initial, templates.values@[index as int], slots@[index as int]));
+                assert(prepared.len() == index + 1);
+                if index < prepared.len() {
+                    assert(prepared@[index as int] == prepared_packet(initial, templates.values@[index as int], slots@[index as int]));
+                }
             }],
             [invariant 0 <= index <= N, dispatches.len() == index,
                 0 < N <= 8192, self.owner_state() == old(self).owner_state(),
