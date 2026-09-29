@@ -58,6 +58,7 @@ use rustix::net::{
 };
 use rustix::pipe::{PipeFlags, pipe_with};
 
+mod compiler_child_channel;
 mod compiler_invocation_backing;
 mod compiler_invocation_staging;
 #[allow(unsafe_code)]
