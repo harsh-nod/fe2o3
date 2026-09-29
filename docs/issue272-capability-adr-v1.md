@@ -5,8 +5,8 @@ checkbox is closed by this patch.** This records the M0 decision separately from
 the M1 production vertical and later qualification milestones in
 [issue #272](https://github.com/harsh-nod/fe2o3/issues/272).
 
-Source examined: `91d4b0a2675f5f8b4449768ae89060c06f83689e`, tree
-`7812f802abbd265d10d8dc5e24308692b9fba301`. The companion
+Source examined: `a542ff66f89200b083613c24a8a62f15844367e8`, tree
+`c2871396806ecc10b6de7ddd9f3163cf933a8dbf`. The companion
 [M0 baseline](../config/issue272-m0-baseline-v1.json) records an inventory and
 honest unavailable/not-run observations, not executable authority or a release.
 
@@ -248,7 +248,7 @@ Exact historical source correspondence is a separate, explicit offline audit:
 
 ```sh
 python3 -I -B scripts/tests/issue272_m0_contract.py \
-  --pinned-manifest /absolute/path/to/91d4b0a26-tutorial-kernel-manifest-v1.json
+  --pinned-manifest /absolute/path/to/a542ff66f-tutorial-kernel-manifest-v1.json
 ```
 
 That mode reuses the existing bounded strict JSON parser and original47

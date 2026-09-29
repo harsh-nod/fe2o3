@@ -19,7 +19,7 @@ BASELINE = ROOT / "config/issue272-m0-baseline-v1.json"
 MANIFEST = ROOT / "config/tutorial-kernel-manifest-v1.json"
 MAX_BASELINE_BYTES = 128 * 1024
 # Canonical JSON of the historical baseline itself, not the evolving source manifest.
-BASELINE_SHA256 = "d0390b1abd025eced0b9c8efe0a74e08c3b9799ad9cab928c7b18ac2fbebee9a"
+BASELINE_SHA256 = "f001edc70466cb9d282309a65b5f00aef1d4811a9294d7850f1bf7802b787a16"
 
 
 def load_source_contract_tools():
