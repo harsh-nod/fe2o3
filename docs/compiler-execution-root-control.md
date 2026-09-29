@@ -79,6 +79,21 @@ external stage aliases or retire a compiler occurrence. The owner is not yet
 connected to `launch_issuer` or a broker root session. Positive privileged socket
 validation remains required.
 
+The direct launcher now independently checks the actual retained issuer's running
+image after exact readiness and EOF, before returning the child. The same check
+runs during `ManagedIssuer::validate_ready`, inside its original account and
+retained-policy view. Broker image mechanics are shared with V2/V3 self-admission:
+the policy length is enforced before payload reads, the static image/runtime are
+measured, and the current executable is reopened for an exact snapshot join.
+Original-child liveness brackets the observation. Launch and continuity quotas
+include the image-sized work and scratch; inspection denial remains terminal.
+
+This observation is point-in-time image equality, not issuer authentication or
+policy provenance. The launcher still checks its retained deployment, process
+profile, namespaces and manifest. The image helper cannot replace those checks,
+the post-readiness control challenge, or original compiler trace custody. It does
+not activate the root-control descriptor or complete the production owning attempt.
+
 Both native issuer entrypoints now preflight the complete current FD3..11 table
 after nonallocating process hardening and before descriptor-allocating input
 admission. Missing or close-on-exec slots refuse before a policy/manifest
@@ -174,3 +189,5 @@ The [checkpoint evidence](evidence/root-control-foundations-20260929.md) records
 the tested source, observed failures, and remaining validation limits.
 The subsequent [envelope/intake evidence](evidence/root-control-envelope-20260929.md)
 records the framing, root-channel owner and complete-table preflight checkpoint.
+The [running-image evidence](evidence/root-issuer-image-20260929.md) records the
+direct-launch image check, lifecycle test coverage and remaining privileged gates.
