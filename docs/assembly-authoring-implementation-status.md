@@ -1756,3 +1756,19 @@ The inert retained singleton component adds 14 passing controls and read-only
 physical-ledger/counter custody snapshots. It is not yet a whole-root caller.
 See [singleton qualification](retained-scalar-singleton-qualification-20260929.md).
 Broad accepted exits remain 6/18; no GPU or physical debugger capture is claimed.
+
+## Retained scalar borrows and portable debugger review — 2026-09-29
+
+The retained scalar-borrow prerequisite passes 16 new controls, 370 model tests
+and 3,390 backend tests (197 ignored), plus 270 authority/capability tests
+(four ignored), 20 policy/runtime-manifest controls and builds.
+[Qualification and limits](retained-scalar-borrow-qualification-20260929.md).
+
+The portable historical debugger profile/planner package preserves all 250
+historical controls, now passing with explicit external fixtures, alongside
+32 passing fixture-free controls. Missing fixture configuration refuses;
+there is no historical host-path fallback or silent skip.
+[Qualification and commands](portable-loaded-debugger-review-qualification-20260929.md).
+
+Neither component activates the genuine whole-root caller or physical debugger
+capture. Broad accepted exits remain M1/V1/V2/U1/U2/U3 (6/18).

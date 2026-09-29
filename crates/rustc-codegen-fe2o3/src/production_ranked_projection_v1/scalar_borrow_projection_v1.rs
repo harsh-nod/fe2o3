@@ -705,3 +705,9 @@ pub(super) fn with_scalar_private_borrows_v1<T, F: ProjectedAssertionFactsV1>(
         Err(payload) => std::panic::resume_unwind(payload),
     }
 }
+
+#[allow(dead_code)]
+#[path = "retained_scalar_borrow_v1.rs"]
+mod retained_borrows;
+#[allow(unused_imports)]
+pub(super) use retained_borrows::RetainedScalarBorrowsV1;
