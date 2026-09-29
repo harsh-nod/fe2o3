@@ -64,16 +64,14 @@ chmod 0700 -- "${target_root}"
 
 FE2O3_STATIC_COORDINATOR_TARGET_DIR="${target_root}/coordinator" \
   "${repo_root}/scripts/build-static-compiler-execution-coordinator.sh"
-FE2O3_STATIC_CLIENT_CHECK_TARGET_DIR="${target_root}/client-check" \
-  "${repo_root}/scripts/build-static-compiler-execution-client-check.sh"
 FE2O3_STATIC_SUPERVISOR_TARGET_DIR="${target_root}/supervisor" \
-  "${repo_root}/scripts/build-static-compiler-execution-supervisor.sh"
-FE2O3_STATIC_ISSUER_TARGET_DIR="${target_root}/issuer" \
-  "${repo_root}/scripts/build-static-compiler-execution-issuer.sh"
+  "${repo_root}/scripts/build-static-compiler-execution-supervisor.sh" v3
+FE2O3_STATIC_CONDITIONAL_ISSUER_TARGET_DIR="${target_root}/issuer" \
+  "${repo_root}/scripts/build-static-compiler-execution-issuer.sh" --conditional
 FE2O3_STATIC_ANCHOR_HELPER_TARGET_DIR="${target_root}/anchor-helper" \
-  "${repo_root}/scripts/build-static-external-anchor-provisioning-helper.sh"
+  "${repo_root}/scripts/build-static-external-anchor-provisioning-helper.sh" v3
 FE2O3_STATIC_ANCHOR_TARGET_DIR="${target_root}/anchor" \
-  "${repo_root}/scripts/build-static-external-anchor-service.sh"
+  "${repo_root}/scripts/build-static-external-anchor-service.sh" v3
 FE2O3_STATIC_PROVISIONER_TARGET_DIR="${target_root}/provisioner" \
   "${repo_root}/scripts/build-static-compiler-execution-provisioner.sh"
 FE2O3_STATIC_DEPLOYMENT_VERIFIER_TARGET_DIR="${target_root}/deployment-verifier" \
@@ -107,23 +105,20 @@ install -m 0555 -- \
   "${target_root}/coordinator/${target}/release/fe2o3-compiler-execution-coordinator" \
   "${image_dir}/fe2o3-compiler-execution-coordinator"
 install -m 0555 -- \
-  "${target_root}/client-check/${target}/release/fe2o3-compiler-execution-client-check" \
-  "${image_dir}/fe2o3-compiler-execution-client-check"
-install -m 0555 -- \
-  "${target_root}/supervisor/${target}/release/fe2o3-compiler-execution-supervisor" \
-  "${image_dir}/fe2o3-compiler-execution-supervisor"
+  "${target_root}/supervisor/${target}/release/fe2o3-compiler-execution-supervisor-v3" \
+  "${image_dir}/fe2o3-compiler-execution-supervisor-v3"
 install -m 0555 -- \
   "${target_root}/launcher/fe2o3-static-preexec-launcher" \
   "${image_dir}/fe2o3-static-preexec-launcher"
 install -m 0555 -- \
-  "${target_root}/issuer/${target}/release/fe2o3-compiler-execution-issuer" \
-  "${image_dir}/fe2o3-compiler-execution-issuer"
+  "${target_root}/issuer/${target}/release/fe2o3-compiler-execution-issuer-conditional" \
+  "${image_dir}/fe2o3-compiler-execution-issuer-conditional"
 install -m 0555 -- \
-  "${target_root}/anchor-helper/${target}/release/fe2o3-external-anchor-provisioning-helper" \
-  "${image_dir}/fe2o3-external-anchor-provisioning-helper"
+  "${target_root}/anchor-helper/${target}/release/fe2o3-external-anchor-provisioning-helper-v3" \
+  "${image_dir}/fe2o3-external-anchor-provisioning-helper-v3"
 install -m 0555 -- \
-  "${target_root}/anchor/${target}/release/fe2o3-external-anchor-service" \
-  "${image_dir}/fe2o3-external-anchor-service"
+  "${target_root}/anchor/${target}/release/fe2o3-external-anchor-service-v3" \
+  "${image_dir}/fe2o3-external-anchor-service-v3"
 install -m 0555 -- \
   "${target_root}/provisioner/${target}/release/fe2o3-compiler-execution-provision" \
   "${image_dir}/fe2o3-compiler-execution-provision"
@@ -138,7 +133,7 @@ install -m 0444 -- \
   "${repo_root}/deployment/tmpfiles.d/fe2o3-compiler-execution.conf" \
   "${tmpfiles_dir}/fe2o3-compiler-execution.conf"
 
-printf 'schema_version=1\ngit_commit=%s\nsource_date_epoch=%s\ntarget=%s\n' \
+printf 'schema_version=3\ngit_commit=%s\nsource_date_epoch=%s\ntarget=%s\n' \
   "${commit}" "${source_epoch}" "${target}" >"${partial}/BUILD-INFO"
 chmod 0444 "${partial}/BUILD-INFO"
 
@@ -155,7 +150,7 @@ chmod 0444 "${partial}/SHA256SUMS"
   sha256sum --check --strict SHA256SUMS
 )
 
-manifest_report="$("${manifest_generator}" "${partial}" "${commit}" "${target}")"
+manifest_report="$("${manifest_generator}" --v3 "${partial}" "${commit}" "${target}")"
 readonly manifest_report
 manifest_sha256="$(
   printf '%s\n' "${manifest_report}" \
@@ -173,10 +168,10 @@ if [[ -z "${manifest_sha256}" || -z "${manifest_byte_len}" \
   exit 1
 fi
 
-verification_report="$("${deployment_verifier}" "${partial}" "${manifest_sha256}" "${commit}")"
+verification_report="$("${deployment_verifier}" --v3 "${partial}" "${manifest_sha256}" "${commit}")"
 readonly verification_report
 expected_verification_report="$(
-  printf 'verified_git_commit=%s\nverified_target=%s\nverified_manifest_sha256=%s\nverified_file_count=13' \
+  printf 'verified_git_commit=%s\nverified_target=%s\nverified_manifest_sha256=%s\nverified_file_count=12' \
     "${commit}" "${target}" "${manifest_sha256}"
 )"
 readonly expected_verification_report

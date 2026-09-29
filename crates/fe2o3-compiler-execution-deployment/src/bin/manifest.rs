@@ -2,10 +2,15 @@ use std::path::Path;
 
 use fe2o3_compiler_execution_deployment::{
     encode_sha256_lower_hex_v1, generate_compiler_execution_install_manifest_v1,
+    generate_compiler_execution_install_manifest_v3,
 };
 
 fn main() {
-    let arguments: Vec<_> = std::env::args_os().collect();
+    let mut arguments: Vec<_> = std::env::args_os().collect();
+    let native = arguments.get(1).is_some_and(|arg| arg == "--v3");
+    if native {
+        arguments.remove(1);
+    }
     if arguments.len() != 4 {
         eprintln!("usage: fe2o3-compiler-execution-manifest BUNDLE_ROOT GIT_COMMIT TARGET");
         std::process::exit(2);
@@ -18,8 +23,12 @@ fn main() {
         eprintln!("target must be UTF-8");
         std::process::exit(2);
     };
-    match generate_compiler_execution_install_manifest_v1(Path::new(&arguments[1]), commit, target)
-    {
+    let generate = if native {
+        generate_compiler_execution_install_manifest_v3
+    } else {
+        generate_compiler_execution_install_manifest_v1
+    };
+    match generate(Path::new(&arguments[1]), commit, target) {
         Ok(report) => {
             println!(
                 "manifest_sha256={}",

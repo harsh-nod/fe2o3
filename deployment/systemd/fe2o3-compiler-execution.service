@@ -1,6 +1,6 @@
 [Unit]
-Description=fe2o3 protected compiler-execution coordinator
-Documentation=https://github.com/harsh-nod/fe2o3/blob/main/docs/compiler-execution-service-v1.md
+Description=fe2o3 native V3 compiler-execution coordinator
+Documentation=https://github.com/harsh-nod/fe2o3/blob/main/docs/compiler-execution-service-v3.md
 StartLimitIntervalSec=0
 
 [Service]
@@ -15,19 +15,21 @@ RuntimeDirectoryMode=0755
 OpenFile=/run/fe2o3:runtime-root:read-only
 OpenFile=/var/lib/fe2o3/compiler-execution:supervisor-root:read-only
 OpenFile=/var/lib/fe2o3/external-anchor:anchor-root:read-only
-OpenFile=/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor:supervisor:read-only
+OpenFile=/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor-v3:supervisor:read-only
 OpenFile=/usr/libexec/fe2o3/fe2o3-static-preexec-launcher:launcher:read-only
-OpenFile=/usr/libexec/fe2o3/fe2o3-compiler-execution-issuer:issuer:read-only
-OpenFile=/usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper:anchor-helper:read-only
-OpenFile=/usr/libexec/fe2o3/fe2o3-external-anchor-service:anchor-daemon:read-only
-OpenFile=/etc/fe2o3/compiler-execution/supervisor-deployment-v1:supervisor-deployment:read-only
-OpenFile=/etc/fe2o3/compiler-execution/issuer-policy-v1:issuer-policy:read-only
-OpenFile=/etc/fe2o3/compiler-execution/anchor-deployment-v1:anchor-deployment:read-only
-OpenFile=/etc/fe2o3/compiler-execution/anchor-provisioning-v1:anchor-provisioning:read-only
-OpenFile=/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v1:issuer-key-seed:read-only
-OpenFile=/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v1:anchor-key-seed:read-only
+OpenFile=/usr/libexec/fe2o3/fe2o3-compiler-execution-issuer-conditional:issuer:read-only
+OpenFile=/usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper-v3:anchor-helper:read-only
+OpenFile=/usr/libexec/fe2o3/fe2o3-external-anchor-service-v3:anchor-daemon:read-only
+OpenFile=/etc/fe2o3/compiler-execution/supervisor-deployment-v3:supervisor-deployment:read-only
+OpenFile=/etc/fe2o3/compiler-execution/issuer-policy-v3:issuer-policy:read-only
+OpenFile=/etc/fe2o3/compiler-execution/anchor-deployment-v3:anchor-deployment:read-only
+OpenFile=/etc/fe2o3/compiler-execution/anchor-provisioning-v3:anchor-provisioning:read-only
+OpenFile=/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v3:issuer-key-seed:read-only
+OpenFile=/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v3:anchor-key-seed:read-only
 
-CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID
+# Lifecycle '..' traversal through service-owned 0700 roots needs read/search.
+# Exact namespace observation of the distinct-UID, nondumpable anchor needs ptrace.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
 AmbientCapabilities=
 NoNewPrivileges=no
 PrivateDevices=yes

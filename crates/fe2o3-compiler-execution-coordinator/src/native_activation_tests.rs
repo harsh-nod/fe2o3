@@ -104,6 +104,152 @@ fn descriptor_roles_match_existing_fourteen_role_entrypoint() {
 }
 
 #[test]
+fn paired_native_executables_and_unit_keep_exact_roles_without_legacy_fallback() {
+    let unit = include_str!("../../../deployment/systemd/fe2o3-compiler-execution.service");
+    let expected = [
+        "/run/fe2o3:runtime-root:read-only",
+        "/var/lib/fe2o3/compiler-execution:supervisor-root:read-only",
+        "/var/lib/fe2o3/external-anchor:anchor-root:read-only",
+        "/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor-v3:supervisor:read-only",
+        "/usr/libexec/fe2o3/fe2o3-static-preexec-launcher:launcher:read-only",
+        "/usr/libexec/fe2o3/fe2o3-compiler-execution-issuer-conditional:issuer:read-only",
+        "/usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper-v3:anchor-helper:read-only",
+        "/usr/libexec/fe2o3/fe2o3-external-anchor-service-v3:anchor-daemon:read-only",
+        "/etc/fe2o3/compiler-execution/supervisor-deployment-v3:supervisor-deployment:read-only",
+        "/etc/fe2o3/compiler-execution/issuer-policy-v3:issuer-policy:read-only",
+        "/etc/fe2o3/compiler-execution/anchor-deployment-v3:anchor-deployment:read-only",
+        "/etc/fe2o3/compiler-execution/anchor-provisioning-v3:anchor-provisioning:read-only",
+        "/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v3:issuer-key-seed:read-only",
+        "/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v3:anchor-key-seed:read-only",
+    ];
+    let actual: Vec<_> = unit
+        .lines()
+        .filter_map(|l| l.strip_prefix("OpenFile="))
+        .collect();
+    assert_eq!(actual, expected);
+    let roles: Vec<_> = actual
+        .iter()
+        .map(|line| line.split(':').nth(1).unwrap())
+        .collect();
+    validate_roles(roles.join(":").as_bytes()).unwrap();
+    assert!(unit.lines().any(|l| l == "KillMode=mixed"));
+    assert!(unit.lines().any(|l| l == "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"));
+    for (source, function) in [
+        (
+            include_str!("main.rs"),
+            "run_inherited_compiler_execution_coordinator",
+        ),
+        (
+            include_str!("provision_main.rs"),
+            "run_compiler_execution_reference_provisioner",
+        ),
+    ] {
+        assert_eq!(source.matches(&format!("{function}_v3()")).count(), 1);
+        assert!(!source.contains(&format!("{function}_v1")));
+        assert!(!source.contains(&format!("{function}_v2")));
+        assert!(source.contains("match unsafe"));
+        assert!(source.contains("std::process::ExitCode::FAILURE"));
+    }
+    // Installation is not a substitute for the missing original-root direct route.
+    assert!(
+        include_str!("native_launch_adapter.rs")
+            .contains("native V3 indirect launch requires the original-root FD12 route")
+    );
+}
+
+#[test]
+fn genuine_old_public_records_refuse_native_decoders_without_upgrade() {
+    use crate::{
+        CompilerExecutionProvisioningBundleV1 as OldBundle,
+        CompilerExecutionProvisioningBundleV3 as Bundle,
+        CompilerExecutionProvisioningInputsV1 as OldInputs,
+        CompilerExecutionProvisioningInputsV3 as Inputs,
+    };
+    use fe2o3_compiler_execution_protocol::*;
+    let measurement = |n| CompilerExecutionIssuerMeasurementV1::new([n; 32], 4096).unwrap();
+    let key = |n| {
+        ed25519_dalek::SigningKey::from_bytes(&[n; 32])
+            .verifying_key()
+            .to_bytes()
+    };
+    let old = OldBundle::new(
+        OldInputs::new(
+            1,
+            1001,
+            1002,
+            2001,
+            2002,
+            measurement(1),
+            measurement(2),
+            measurement(3),
+            measurement(4),
+            measurement(5),
+            key(6),
+            key(7),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let inputs = Inputs {
+        generation: 1,
+        compiler_service_uid: 1001,
+        compiler_service_gid: 1002,
+        external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1::new(2001, 2002)
+            .unwrap(),
+        supervisor: measurement(1),
+        launcher: measurement(2),
+        issuer: measurement(3),
+        anchor_helper: measurement(4),
+        anchor_daemon: measurement(5),
+        issuer_verifying_key: key(6),
+        anchor_verifying_key: key(7),
+    };
+    let mut work = Work::new(16 * Bundle::WORK);
+    let mut b = Budget::new(&mut work, inputs.retained_storage() + 16 * Bundle::SCRATCH);
+    b.reserve_storage(inputs.retained_storage()).unwrap();
+    let (current, charge) = Bundle::new(&inputs, &mut b).unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    let floor = b.storage();
+    assert!(
+        CompilerExecutionIssuerPolicyV3::decode(old.policy().canonical_bytes(), &mut b).is_err()
+    );
+    assert!(
+        CompilerExecutionSupervisorDeploymentV3::decode(
+            old.supervisor().canonical_bytes(),
+            current.policy(),
+            &mut b
+        )
+        .is_err()
+    );
+    assert!(
+        CompilerExecutionExternalAnchorDeploymentV3::decode(
+            old.anchor_deployment().canonical_bytes(),
+            current.supervisor(),
+            current.policy(),
+            &mut b
+        )
+        .is_err()
+    );
+    assert!(
+        CompilerExecutionExternalAnchorProvisioningV3::decode(
+            old.anchor_provisioning().canonical_bytes(),
+            current.anchor_deployment(),
+            &mut b
+        )
+        .is_err()
+    );
+    assert!(
+        CompilerExecutionClientProfileV3::decode(old.client_profile().canonical_bytes(), &mut b)
+            .is_err()
+    );
+    assert_eq!(b.storage(), floor);
+    assert_eq!(b.failed_storage(), None);
+    assert_eq!(b.work_budget_v1().failed_work(), None);
+    CompilerExecutionIssuerPolicyV3::decode(current.policy().canonical_bytes(), &mut b).unwrap();
+    assert!(b.work() > Bundle::WORK);
+}
+
+#[test]
 fn pid_is_exact_positive_decimal_without_aliases() {
     for pid in [1, 10, 1234, i32::MAX] {
         let text = pid.to_string();

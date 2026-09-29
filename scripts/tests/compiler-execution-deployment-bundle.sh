@@ -19,7 +19,6 @@ set -e
 
 for helper in \
   build-static-compiler-execution-coordinator.sh \
-  build-static-compiler-execution-client-check.sh \
   build-static-compiler-execution-supervisor.sh \
   build-static-compiler-execution-issuer.sh \
   build-static-external-anchor-provisioning-helper.sh \
@@ -30,16 +29,30 @@ for helper in \
 done
 
 for image in \
-  fe2o3-compiler-execution-client-check \
   fe2o3-compiler-execution-coordinator \
-  fe2o3-compiler-execution-supervisor \
+  fe2o3-compiler-execution-supervisor-v3 \
   fe2o3-static-preexec-launcher \
-  fe2o3-compiler-execution-issuer \
-  fe2o3-external-anchor-provisioning-helper \
-  fe2o3-external-anchor-service \
+  fe2o3-compiler-execution-issuer-conditional \
+  fe2o3-external-anchor-provisioning-helper-v3 \
+  fe2o3-external-anchor-service-v3 \
   fe2o3-compiler-execution-provision; do
   grep -Fq -- "${image}\"" "${builder}" || fail "missing image ${image}"
 done
+
+for selection in \
+  'scripts/build-static-compiler-execution-supervisor.sh" v3' \
+  'scripts/build-static-compiler-execution-issuer.sh" --conditional' \
+  'scripts/build-static-external-anchor-provisioning-helper.sh" v3' \
+  'scripts/build-static-external-anchor-service.sh" v3' \
+  '"${manifest_generator}" --v3' \
+  '"${deployment_verifier}" --v3' \
+  'verified_file_count=12' \
+  'schema_version=3'; do
+  grep -Fq -- "${selection}" "${builder}" || fail "missing V3 selection ${selection}"
+done
+if grep -Fq -- 'fe2o3-compiler-execution-client-check' "${builder}"; then
+  fail 'V1-only diagnostic must not be packaged as a native client'
+fi
 
 grep -Fq -- 'ctest --test-dir' "${builder}" || fail 'launcher CTest qualification is missing'
 grep -Fq -- 'sha256sum --check --strict SHA256SUMS' "${builder}" ||
@@ -244,4 +257,4 @@ grep -Fq -- '-C link-arg=-static' "${verifier_builder}" ||
 grep -Fq -- "'INTERP|DYNAMIC|\\(NEEDED\\)|\\(RPATH\\)|\\(RUNPATH\\)'" "${verifier_builder}" ||
   fail 'static verifier loader-independence gate is missing'
 
-printf 'compiler-execution deployment-bundle inputs are complete\n'
+printf 'V3 deployment-bundle source contract and frozen V1 qualification contract checked\n'

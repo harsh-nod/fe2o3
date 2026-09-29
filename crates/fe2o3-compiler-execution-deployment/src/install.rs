@@ -17,17 +17,16 @@ use super::staging::{
 };
 use super::{
     AdmittedSourceV1, DeploymentVerificationErrorKindV1, DeploymentVerificationErrorV1,
-    ManifestEntryV1, ObjectSnapshotV1, SealedDeploymentFileV1,
-    VerifiedCompilerExecutionDeploymentV1, admit_source_file, changed, io_error, lower_hex,
-    open_beneath, parse_lower_hex_exact, parse_manifest, random_staging_name, snapshot,
-    std_io_error, validate_build_info, validate_directory_mode, validate_sealed_file,
-    validate_sealed_files, validate_sha256sums, verify_directory_children,
+    ManifestEntryV1, ObjectSnapshotV1, Profile, SealedDeploymentFileV1,
+    VerifiedCompilerExecutionDeploymentV1, VerifiedCompilerExecutionDeploymentV3,
+    VerifiedDeployment, admit_source_file, changed, io_error, lower_hex, open_beneath,
+    parse_lower_hex_exact, parse_manifest, random_staging_name, snapshot, std_io_error,
+    validate_build_info, validate_directory_mode, validate_sealed_file, validate_sealed_files,
+    validate_sha256sums, verify_directory_children,
 };
 
 const INSTALL_PARENT_MODE_V1: u32 = 0o700;
 const INSTALLED_DIRECTORY_MODE_V1: u32 = 0o755;
-const INSTALL_ROOT_PREFIX_V1: &str = "compiler-execution-v1-";
-const STAGING_PREFIX_V1: &str = ".compiler-execution-v1-staging-";
 const COPY_BUFFER_BYTES_V1: usize = 64 * 1024;
 
 const INSTALL_ROOT_CHILDREN_V1: &[&str] = &["usr"];
@@ -209,16 +208,32 @@ pub enum CompilerExecutionInstallRecoveryV1 {
 /// require_as_fd::<InstalledCompilerExecutionDeploymentV1>();
 /// ```
 pub struct InstalledCompilerExecutionDeploymentV1 {
-    deployment: VerifiedCompilerExecutionDeploymentV1,
+    inner: InstalledDeployment,
+}
+
+/// Move-only native V3 offline-root custody. Grants no service readiness or execution authority.
+///
+/// ```compile_fail
+/// use fe2o3_compiler_execution_deployment::{InstalledCompilerExecutionDeploymentV1 as V1,
+///     InstalledCompilerExecutionDeploymentV3 as V3};
+/// fn convert(value: V3) -> V1 { value.into() }
+/// ```
+pub struct InstalledCompilerExecutionDeploymentV3 {
+    inner: InstalledDeployment,
+}
+
+struct InstalledDeployment {
+    deployment: VerifiedDeployment,
     root_name: String,
     publication: CompilerExecutionInstalledRootPublicationV1,
     root: File,
 }
 
-impl fmt::Debug for InstalledCompilerExecutionDeploymentV1 {
+impl fmt::Debug for InstalledDeployment {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("InstalledCompilerExecutionDeploymentV1")
+            .debug_struct("InstalledDeployment")
+            .field("profile", &self.deployment.profile)
             .field("git_commit", &self.deployment.git_commit)
             .field("target", &self.deployment.target)
             .field(
@@ -232,53 +247,75 @@ impl fmt::Debug for InstalledCompilerExecutionDeploymentV1 {
     }
 }
 
+macro_rules! installed_metadata {
+    ($owner:ident) => {
+        impl fmt::Debug for $owner {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.inner.fmt(f)
+            }
+        }
+        impl $owner {
+            /// Returns the exact source commit bound by the installed root.
+            pub fn git_commit(&self) -> &str {
+                &self.inner.deployment.git_commit
+            }
+
+            /// Returns the exact target bound by the installed root.
+            pub fn target(&self) -> &str {
+                &self.inner.deployment.target
+            }
+
+            /// Returns the manifest digest that deterministically names the installed root.
+            pub const fn manifest_sha256(&self) -> [u8; 32] {
+                self.inner.deployment.manifest_sha256
+            }
+
+            /// Returns the deterministic final name beneath the caller's retained install parent.
+            pub fn root_name(&self) -> &str {
+                &self.inner.root_name
+            }
+
+            /// Returns whether this call created or reacquired the exact installed root.
+            pub const fn publication(&self) -> CompilerExecutionInstalledRootPublicationV1 {
+                self.inner.publication
+            }
+
+            /// Returns the exact manifest-plus-content file count in the installed root.
+            pub const fn file_count(&self) -> usize {
+                self.inner.deployment.profile.files().len() + 1
+            }
+
+            /// Revalidates the complete root-owned tree against its retained sealed sources.
+            ///
+            /// This does not expose the retained root or source descriptors and grants no execution or
+            /// service authority.
+            pub fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
+                revalidate_installed(&self.inner, (0, 0))
+            }
+        }
+    };
+}
+installed_metadata!(InstalledCompilerExecutionDeploymentV1);
+installed_metadata!(InstalledCompilerExecutionDeploymentV3);
+
 impl InstalledCompilerExecutionDeploymentV1 {
-    /// Returns the exact source commit bound by the installed root.
-    pub fn git_commit(&self) -> &str {
-        &self.deployment.git_commit
-    }
-
-    /// Returns the exact target bound by the installed root.
-    pub fn target(&self) -> &str {
-        &self.deployment.target
-    }
-
-    /// Returns the manifest digest that deterministically names the installed root.
-    pub const fn manifest_sha256(&self) -> [u8; 32] {
-        self.deployment.manifest_sha256
-    }
-
-    /// Returns the deterministic final name beneath the caller's retained install parent.
-    pub fn root_name(&self) -> &str {
-        &self.root_name
-    }
-
-    /// Returns whether this call created or reacquired the exact installed root.
-    pub const fn publication(&self) -> CompilerExecutionInstalledRootPublicationV1 {
-        self.publication
-    }
-
-    /// Returns the exact manifest-plus-content file count in the installed root.
-    pub const fn file_count(&self) -> usize {
-        14
-    }
-
-    /// Revalidates the complete root-owned tree against its retained sealed sources.
-    ///
-    /// This does not expose the retained root or source descriptors and grants no execution or
-    /// service authority.
-    pub fn revalidate(&self) -> Result<(), DeploymentVerificationErrorV1> {
-        revalidate_installed_deployment(self, (0, 0))
-    }
-
     pub(super) fn retained_root(&self) -> &File {
-        &self.root
+        &self.inner.root
     }
 }
 
 /// Derives the sole V1 final-root name from an admitted manifest SHA-256.
 pub fn compiler_execution_install_root_name_v1(manifest_sha256: [u8; 32]) -> String {
-    format!("{INSTALL_ROOT_PREFIX_V1}{}", lower_hex(&manifest_sha256))
+    install_root_name(Profile::V1, manifest_sha256)
+}
+
+/// Derives the V3-only installed-root name from its externally pinned manifest digest.
+pub fn compiler_execution_install_root_name_v3(manifest_sha256: [u8; 32]) -> String {
+    install_root_name(Profile::V3, manifest_sha256)
+}
+
+fn install_root_name(profile: Profile, manifest_sha256: [u8; 32]) -> String {
+    format!("{}{}", profile.root_prefix(), lower_hex(&manifest_sha256))
 }
 
 /// Recovers installer staging left by a terminated root worker.
@@ -291,13 +328,30 @@ pub fn recover_compiler_execution_install_parent_v1(
     install_parent: &Path,
     expected_manifest_sha256: &str,
 ) -> Result<CompilerExecutionInstallRecoveryV1, DeploymentVerificationErrorV1> {
+    recover_install_parent(Profile::V1, install_parent, expected_manifest_sha256)
+}
+
+/// Recovers only V3 staging, refusing V1 or unknown siblings before any deletion.
+/// Requires the same root-owned private-parent policy and bounded cleanup as V1.
+pub fn recover_compiler_execution_install_parent_v3(
+    install_parent: &Path,
+    expected_manifest_sha256: &str,
+) -> Result<CompilerExecutionInstallRecoveryV1, DeploymentVerificationErrorV1> {
+    recover_install_parent(Profile::V3, install_parent, expected_manifest_sha256)
+}
+
+fn recover_install_parent(
+    profile: Profile,
+    install_parent: &Path,
+    expected_manifest_sha256: &str,
+) -> Result<CompilerExecutionInstallRecoveryV1, DeploymentVerificationErrorV1> {
     if rustix::process::geteuid().as_raw() != 0 {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InsufficientPrivilege,
             "compiler-execution installer recovery requires effective UID 0",
         ));
     }
-    recover_install_parent_for_owner(install_parent, expected_manifest_sha256, (0, 0))
+    recover_install_parent_for_owner(profile, install_parent, expected_manifest_sha256, (0, 0))
 }
 
 #[cfg(test)]
@@ -306,10 +360,11 @@ fn recover_install_parent_for_test_v1(
     expected_manifest_sha256: &str,
     owner: (u32, u32),
 ) -> Result<CompilerExecutionInstallRecoveryV1, DeploymentVerificationErrorV1> {
-    recover_install_parent_for_owner(install_parent, expected_manifest_sha256, owner)
+    recover_install_parent_for_owner(Profile::V1, install_parent, expected_manifest_sha256, owner)
 }
 
 fn recover_install_parent_for_owner(
+    profile: Profile,
     install_parent: &Path,
     expected_manifest_sha256: &str,
     owner: (u32, u32),
@@ -321,7 +376,7 @@ fn recover_install_parent_for_owner(
     )?
     .try_into()
     .expect("an exact 32-byte digest was parsed");
-    let expected_root_name = compiler_execution_install_root_name_v1(manifest_sha256);
+    let expected_root_name = install_root_name(profile, manifest_sha256);
     let parent = open_install_parent(install_parent, owner)?;
     let parent_snapshot = snapshot(
         &fstat(&parent).map_err(|source| io_error("inspect install recovery parent", source))?,
@@ -339,7 +394,7 @@ fn recover_install_parent_for_owner(
                 ));
             }
             final_root_present = true;
-        } else if canonical_staging_recovery_name_v1(child, STAGING_PREFIX_V1) {
+        } else if canonical_staging_recovery_name_v1(child, profile.staging_prefix()) {
             if staging_name.replace(child).is_some() {
                 return Err(super::invalid(
                     DeploymentVerificationErrorKindV1::InvalidInventory,
@@ -491,6 +546,24 @@ pub fn install_compiler_execution_deployment_v1(
     deployment: VerifiedCompilerExecutionDeploymentV1,
     install_parent: &Path,
 ) -> Result<InstalledCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
+    install(deployment.inner, install_parent)
+        .map(|inner| InstalledCompilerExecutionDeploymentV1 { inner })
+}
+
+/// Consumes only V3 sealed custody and atomically publishes its fixed offline-root inventory.
+/// V1 approvals, installation roots and qualification owners cannot be substituted.
+pub fn install_compiler_execution_deployment_v3(
+    deployment: VerifiedCompilerExecutionDeploymentV3,
+    install_parent: &Path,
+) -> Result<InstalledCompilerExecutionDeploymentV3, DeploymentVerificationErrorV1> {
+    install(deployment.inner, install_parent)
+        .map(|inner| InstalledCompilerExecutionDeploymentV3 { inner })
+}
+
+fn install(
+    deployment: VerifiedDeployment,
+    install_parent: &Path,
+) -> Result<InstalledDeployment, DeploymentVerificationErrorV1> {
     if rustix::process::geteuid().as_raw() != 0 {
         return Err(super::invalid(
             DeploymentVerificationErrorKindV1::InsufficientPrivilege,
@@ -506,7 +579,8 @@ pub(super) fn install_compiler_execution_deployment_for_test_v1(
     install_parent: &Path,
     owner: (u32, u32),
 ) -> Result<InstalledCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
-    install_for_owner(deployment, install_parent, owner)
+    install_for_owner(deployment.inner, install_parent, owner)
+        .map(|inner| InstalledCompilerExecutionDeploymentV1 { inner })
 }
 
 #[cfg(test)]
@@ -520,12 +594,12 @@ pub(super) fn install_compiler_execution_deployment_at_fault_for_test_v1(
         point,
         fired: false,
     };
-    let result = install_for_owner_with_hooks(deployment, install_parent, owner, &mut hooks);
+    let result = install_for_owner_with_hooks(deployment.inner, install_parent, owner, &mut hooks);
     assert!(
         hooks.fired,
         "requested installation fault point was not reached"
     );
-    result
+    result.map(|inner| InstalledCompilerExecutionDeploymentV1 { inner })
 }
 
 #[cfg(test)]
@@ -546,16 +620,21 @@ pub(super) fn install_compiler_execution_deployment_with_parent_replacement_for_
         trigger,
         fired: false,
     };
-    let result = install_for_owner_with_hooks(deployment, install_parent, owner, &mut hooks);
+    let result = install_for_owner_with_hooks(deployment.inner, install_parent, owner, &mut hooks);
     assert!(
         hooks.fired,
         "install-parent replacement checkpoint was not reached"
     );
-    result
+    result.map(|inner| InstalledCompilerExecutionDeploymentV1 { inner })
 }
 
 #[cfg(test)]
 pub(super) fn installation_fault_points_for_test_v1() -> Vec<InstallationFaultPointV1> {
+    installation_fault_points(Profile::V1)
+}
+
+#[cfg(test)]
+fn installation_fault_points(profile: Profile) -> Vec<InstallationFaultPointV1> {
     let mut points = vec![
         InstallationFaultPointV1::BeforeStagingCreate,
         InstallationFaultPointV1::StagingCreated,
@@ -565,7 +644,7 @@ pub(super) fn installation_fault_points_for_test_v1() -> Vec<InstallationFaultPo
         points.push(InstallationFaultPointV1::DirectoryCreated(index));
         points.push(InstallationFaultPointV1::DirectoryMetadataSet(index));
     }
-    for index in 0..14 {
+    for index in 0..=profile.files().len() {
         points.push(InstallationFaultPointV1::FileCreated(index));
         points.push(InstallationFaultPointV1::FileWritten(index));
         points.push(InstallationFaultPointV1::FileModeSet(index));
@@ -601,10 +680,10 @@ pub(super) fn installation_fault_is_after_publication_for_test_v1(
 }
 
 fn install_for_owner(
-    deployment: VerifiedCompilerExecutionDeploymentV1,
+    deployment: VerifiedDeployment,
     install_parent: &Path,
     owner: (u32, u32),
-) -> Result<InstalledCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
+) -> Result<InstalledDeployment, DeploymentVerificationErrorV1> {
     install_for_owner_with_hooks(
         deployment,
         install_parent,
@@ -614,17 +693,17 @@ fn install_for_owner(
 }
 
 fn install_for_owner_with_hooks(
-    deployment: VerifiedCompilerExecutionDeploymentV1,
+    deployment: VerifiedDeployment,
     install_parent: &Path,
     owner: (u32, u32),
     hooks: &mut impl InstallationHooksV1,
-) -> Result<InstalledCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
+) -> Result<InstalledDeployment, DeploymentVerificationErrorV1> {
     validate_sealed_file(&deployment.manifest)?;
     validate_sealed_files(&deployment.files)?;
     let parent = open_install_parent(install_parent, owner)?;
     let parent_snapshot =
         snapshot(&fstat(&parent).map_err(|source| io_error("inspect install parent", source))?);
-    let root_name = compiler_execution_install_root_name_v1(deployment.manifest_sha256);
+    let root_name = install_root_name(deployment.profile, deployment.manifest_sha256);
 
     if let Some(root) = open_named_root(&parent, &root_name)? {
         verify_installed_root(&root, owner, &deployment)?;
@@ -637,7 +716,8 @@ fn install_for_owner_with_hooks(
         ));
     }
 
-    let mut staging = StagingRootV1::create(&parent, parent_snapshot, owner, hooks)?;
+    let mut staging =
+        StagingRootV1::create(deployment.profile, &parent, parent_snapshot, owner, hooks)?;
     let prepared = prepare_staging_root(&mut staging, owner, &deployment, hooks);
     if let Err(error) = prepared {
         return Err(staging.cleanup_or(error));
@@ -729,12 +809,12 @@ fn install_for_owner_with_hooks(
 }
 
 fn installed_result(
-    deployment: VerifiedCompilerExecutionDeploymentV1,
+    deployment: VerifiedDeployment,
     root_name: String,
     publication: CompilerExecutionInstalledRootPublicationV1,
     root: File,
-) -> InstalledCompilerExecutionDeploymentV1 {
-    InstalledCompilerExecutionDeploymentV1 {
+) -> InstalledDeployment {
+    InstalledDeployment {
         deployment,
         root_name,
         publication,
@@ -754,6 +834,13 @@ pub(super) fn revalidate_installed_deployment(
     installed: &InstalledCompilerExecutionDeploymentV1,
     owner: (u32, u32),
 ) -> Result<(), DeploymentVerificationErrorV1> {
+    revalidate_installed(&installed.inner, owner)
+}
+
+fn revalidate_installed(
+    installed: &InstalledDeployment,
+    owner: (u32, u32),
+) -> Result<(), DeploymentVerificationErrorV1> {
     validate_sealed_file(&installed.deployment.manifest)?;
     validate_sealed_files(&installed.deployment.files)?;
     verify_installed_root(&installed.root, owner, &installed.deployment)
@@ -771,7 +858,7 @@ pub(super) fn verify_installed_projection(
         INSTALLED_DIRECTORY_MODE_V1,
         "composed qualification root",
     )?;
-    verify_installed_files(root, root_snapshot, &installed.deployment)?;
+    verify_installed_files(root, root_snapshot, &installed.inner.deployment)?;
     if snapshot(
         &fstat(root).map_err(|source| io_error("reinspect composed qualification root", source))?,
     ) != root_snapshot
@@ -891,7 +978,7 @@ fn open_named_root(
 fn prepare_staging_root(
     staging: &mut StagingRootV1,
     owner: (u32, u32),
-    deployment: &VerifiedCompilerExecutionDeploymentV1,
+    deployment: &VerifiedDeployment,
     hooks: &mut impl InstallationHooksV1,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     for (index, &(path, _)) in INSTALL_DIRECTORY_SPECS_V1.iter().enumerate() {
@@ -926,7 +1013,7 @@ fn prepare_staging_root(
 fn verify_installed_root(
     root: &File,
     owner: (u32, u32),
-    deployment: &VerifiedCompilerExecutionDeploymentV1,
+    deployment: &VerifiedDeployment,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     let root_snapshot = validate_directory_mode(
         root,
@@ -936,6 +1023,7 @@ fn verify_installed_root(
     )?;
     verify_directory_children(root, INSTALL_ROOT_CHILDREN_V1, "installed root")?;
     for &(path, children) in INSTALL_DIRECTORY_SPECS_V1 {
+        let children = deployment.profile.directory_children(path, children);
         let directory = open_beneath(root, path, true)?;
         let initial = validate_directory_mode(
             &directory,
@@ -974,10 +1062,10 @@ fn verify_installed_root(
 fn verify_installed_files(
     root: &File,
     root_snapshot: ObjectSnapshotV1,
-    deployment: &VerifiedCompilerExecutionDeploymentV1,
+    deployment: &VerifiedDeployment,
 ) -> Result<(), DeploymentVerificationErrorV1> {
     let manifest = admit_installed_file(root, root_snapshot, &deployment.manifest.entry)?;
-    let parsed = parse_manifest(&manifest.bytes, &deployment.git_commit)?;
+    let parsed = parse_manifest(deployment.profile, &manifest.bytes, &deployment.git_commit)?;
     let expected_entries: Vec<_> = deployment
         .files
         .iter()
@@ -1001,6 +1089,7 @@ fn verify_installed_files(
         }
     }
     validate_build_info(
+        deployment.profile,
         build_info
             .as_deref()
             .expect("V1 inventory begins with BUILD-INFO"),
@@ -1045,6 +1134,7 @@ struct StagingRootV1<'a> {
 
 impl<'a> StagingRootV1<'a> {
     fn create(
+        profile: Profile,
         parent: &'a File,
         parent_snapshot: ObjectSnapshotV1,
         owner: (u32, u32),
@@ -1053,7 +1143,7 @@ impl<'a> StagingRootV1<'a> {
         for _ in 0..16 {
             hooks.checkpoint(InstallationFaultPointV1::BeforeStagingCreate)?;
             let name = random_staging_name(
-                STAGING_PREFIX_V1,
+                profile.staging_prefix(),
                 "generate install-root staging randomness",
             )?;
             match mkdirat(
@@ -1345,6 +1435,10 @@ fn copy_exact_source(
 }
 
 #[cfg(test)]
+#[path = "v3_tests.rs"]
+mod native_tests;
+
+#[cfg(test)]
 mod recovery_tests {
     use std::ffi::OsString;
     use std::fs;
@@ -1382,7 +1476,7 @@ mod recovery_tests {
     }
 
     fn final_root(parent: &Path, manifest: &str) -> PathBuf {
-        let root = parent.join(format!("{INSTALL_ROOT_PREFIX_V1}{manifest}"));
+        let root = parent.join(format!("{}{manifest}", Profile::V1.root_prefix()));
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
         root

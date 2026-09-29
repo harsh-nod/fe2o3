@@ -40,8 +40,13 @@ smoke_output="$({ /usr/bin/env -i "${executable}" \
   3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&- 10<&- 11<&- 12<&- 13<&- 14<&- 15<&- 16<&-; } 2>&1)"
 smoke_status=$?
 set -e
+if [[ $(id -u) -eq 0 ]]; then
+  expected_smoke='native root activation: missing activation variable'
+else
+  expected_smoke='native compiler coordinator requires exact root identity'
+fi
 if [[ ${smoke_status} -ne 1 \
-  || "${smoke_output}" != 'invalid coordinator activation: LISTEN_PID does not name this process' ]]; then
+  || "${smoke_output}" != "${expected_smoke}" ]]; then
   printf 'compiler-execution coordinator did not fail closed without activation metadata\n' >&2
   exit 1
 fi
@@ -50,8 +55,13 @@ set +e
 argument_output="$({ /usr/bin/env -i "${executable}" forbidden; } 2>&1)"
 argument_status=$?
 set -e
+if [[ $(id -u) -eq 0 ]]; then
+  expected_argument='native root activation: expected one bounded nonempty argv0'
+else
+  expected_argument='native compiler coordinator requires exact root identity'
+fi
 if [[ ${argument_status} -ne 1 \
-  || "${argument_output}" != 'invalid coordinator activation: arguments are forbidden' ]]; then
+  || "${argument_output}" != "${expected_argument}" ]]; then
   printf 'compiler-execution coordinator accepted an argument\n' >&2
   exit 1
 fi

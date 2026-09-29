@@ -1,4 +1,4 @@
-//! Fixed native V3 same-host installer. Installed command selection migrates later.
+//! Fixed native V3 same-host provisioner for the paired executable contract.
 use crate::{
     CompilerExecutionProvisioningBundleV3 as Bundle,
     CompilerExecutionProvisioningInputsV3 as Inputs, native_activation as activation,
@@ -53,7 +53,8 @@ const RECORD_PASSES: [(usize, usize); 7] = [
 /// V3 records with no-replace rename. Existing mismatches are never overwritten.
 /// A partial publication is not rolled back: rerunning with the same inputs can
 /// finish it. This configures trust; it does not execute a compiler or prove kernels.
-/// The installed provision command remains V1 until deployment/client migration.
+/// The paired provision command selects this entrypoint; V1 records are not
+/// upgraded, overwritten or accepted as V3 provisioning.
 ///
 /// File, randomness and NSS calls are single attempts with fixed bounds; short
 /// operations, EINTR and oversized NSS entries refuse without retry. Logical

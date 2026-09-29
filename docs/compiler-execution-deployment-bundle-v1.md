@@ -1,5 +1,11 @@
 # Compiler-execution deployment bundle V1
 
+This is the frozen V1 contract. Its reader/installer and qualification APIs remain
+V1-only. The separately reviewable [native V3 prerequisite](compiler-execution-service-v3.md)
+has distinct manifest/owner types and a paired candidate builder; it is not a
+qualified default-service migration. Historical V1 build commands below require
+the matching V1 source revision, not the private paired V3 candidate.
+
 Status: implemented source-bundle admission, atomic offline-root publication,
 fresh installed-root revalidation, sealed disposable-root preparation, and an
 exact fault-cleaned empty staging transaction. Private-namespace mount

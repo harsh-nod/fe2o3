@@ -1,4 +1,4 @@
-//! Fixed V3 orchestration; the installed binary migrates with its provisioning.
+//! Fixed V3 orchestration for the paired native executable/provisioning contract.
 use crate::{
     InheritedCompilerExecutionDeploymentV3 as Deployment,
     RootManagedCompilerExecutionServiceV3 as Managed,
@@ -31,7 +31,9 @@ pub(crate) const FRAME: usize =
 /// attempts. An interrupted wait consumes a turn too; this is not a wall-clock
 /// lease. Reaching the monitoring limit cancels the service and returns a refusal
 /// even if cleanup succeeds. No V1/V2 fallback or runtime family selector exists.
-/// The installed system-manager binary remains V1 until provisioning migrates.
+/// The paired binary selects this entrypoint. Startup still refuses the indirect
+/// V3 supervisor launch until the original-root direct route is composed; no
+/// service readiness or protected compiler enforcement is implied by installation.
 ///
 /// Every return requires termination of the dedicated process. Once cleanup is
 /// admitted, return/unwind before successful original-pool empty shutdown exits

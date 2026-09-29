@@ -73,6 +73,18 @@ if [[ ${installer_status} -ne 2 \
   printf 'static deployment installer argument gate changed\n' >&2
   exit 1
 fi
+
+# Explicit V3 selection uses the same tools, never header detection or fallback.
+for executable in "${manifest}" "${verifier}" "${installer}"; do
+  set +e
+  native_usage="$(/usr/bin/env -i "${executable}" --v3 2>&1)"
+  native_status=$?
+  set -e
+  if [[ ${native_status} -ne 2 || "${native_usage}" != usage:* ]]; then
+    printf 'static V3 deployment tool argument gate changed\n' >&2
+    exit 1
+  fi
+done
 if [[ ${qualification_status} -ne 2 \
   || "${qualification_usage}" != 'usage: fe2o3-compiler-execution-qualification probe'$'\n''       fe2o3-compiler-execution-qualification fault-points'$'\n''       fe2o3-compiler-execution-qualification recover QUALIFICATION_PARENT'$'\n''       fe2o3-compiler-execution-qualification recover-install EXPECTED_MANIFEST_SHA256 INSTALL_PARENT'$'\n''       fe2o3-compiler-execution-qualification run BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT'$'\n''       fe2o3-compiler-execution-qualification fault POINT BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT'$'\n''       fe2o3-compiler-execution-qualification campaign BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT EMPTY_INSTALL_PARENT BASE_IMAGE EXPECTED_BASE_IMAGE_SHA256 QUALIFICATION_PARENT' ]]; then
   printf 'static qualification harness argument gate changed\n' >&2

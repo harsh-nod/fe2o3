@@ -7,9 +7,10 @@ readonly SERVICE="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.servi
 readonly LEGACY_SOCKET="${REPO_ROOT}/deployment/systemd/fe2o3-compiler-execution.socket"
 readonly SYSUSERS="${REPO_ROOT}/deployment/sysusers.d/fe2o3-compiler-execution.conf"
 readonly TMPFILES="${REPO_ROOT}/deployment/tmpfiles.d/fe2o3-compiler-execution.conf"
-readonly ENTRYPOINT="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs"
-readonly INHERITED="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/inherited.rs"
-readonly PROVISIONER="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/provisioning_entrypoint.rs"
+readonly ENTRYPOINT="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/native_entrypoint.rs"
+readonly INHERITED="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/native_inherited_adapter.rs"
+readonly PROVISIONER="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/native_provisioner.rs"
+readonly ACTIVATION_TESTS="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/native_activation_tests.rs"
 readonly COORDINATOR_LIFECYCLE="${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/lifecycle.rs"
 readonly SERVICE_LIFECYCLE="${REPO_ROOT}/crates/fe2o3-compiler-execution-lifecycle/src/lib.rs"
 readonly SUPERVISOR_DEPLOYMENT="${REPO_ROOT}/crates/fe2o3-compiler-execution-supervisor/src/deployment.rs"
@@ -37,17 +38,17 @@ readonly expected_open_files=(
   '/run/fe2o3:runtime-root:read-only'
   '/var/lib/fe2o3/compiler-execution:supervisor-root:read-only'
   '/var/lib/fe2o3/external-anchor:anchor-root:read-only'
-  '/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor:supervisor:read-only'
+  '/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor-v3:supervisor:read-only'
   '/usr/libexec/fe2o3/fe2o3-static-preexec-launcher:launcher:read-only'
-  '/usr/libexec/fe2o3/fe2o3-compiler-execution-issuer:issuer:read-only'
-  '/usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper:anchor-helper:read-only'
-  '/usr/libexec/fe2o3/fe2o3-external-anchor-service:anchor-daemon:read-only'
-  '/etc/fe2o3/compiler-execution/supervisor-deployment-v1:supervisor-deployment:read-only'
-  '/etc/fe2o3/compiler-execution/issuer-policy-v1:issuer-policy:read-only'
-  '/etc/fe2o3/compiler-execution/anchor-deployment-v1:anchor-deployment:read-only'
-  '/etc/fe2o3/compiler-execution/anchor-provisioning-v1:anchor-provisioning:read-only'
-  '/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v1:issuer-key-seed:read-only'
-  '/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v1:anchor-key-seed:read-only'
+  '/usr/libexec/fe2o3/fe2o3-compiler-execution-issuer-conditional:issuer:read-only'
+  '/usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper-v3:anchor-helper:read-only'
+  '/usr/libexec/fe2o3/fe2o3-external-anchor-service-v3:anchor-daemon:read-only'
+  '/etc/fe2o3/compiler-execution/supervisor-deployment-v3:supervisor-deployment:read-only'
+  '/etc/fe2o3/compiler-execution/issuer-policy-v3:issuer-policy:read-only'
+  '/etc/fe2o3/compiler-execution/anchor-deployment-v3:anchor-deployment:read-only'
+  '/etc/fe2o3/compiler-execution/anchor-provisioning-v3:anchor-provisioning:read-only'
+  '/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v3:issuer-key-seed:read-only'
+  '/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v3:anchor-key-seed:read-only'
 )
 [[ "${#open_files[@]}" -eq "${#expected_open_files[@]}" ]] || fail 'OpenFile count is not 14'
 for index in "${!expected_open_files[@]}"; do
@@ -61,44 +62,42 @@ for open_file in "${open_files[@]}"; do
   [[ -z "${activation_names}" ]] || activation_names+=':'
   activation_names+="${without_options##*:}"
 done
-grep -Fq -- "${activation_names}" "${ENTRYPOINT}" || fail 'entrypoint activation names changed'
-grep -Fq -- 'ConstructedRuntimeListenerV1::construct(' "${INHERITED}" ||
+grep -Fq -- "${activation_names}" "${ACTIVATION_TESTS}" || fail 'native activation role test changed'
+grep -Fq -- 'root::listener(runtime_root.into(), credentials.gid(), b)' "${INHERITED}" ||
   fail 'coordinator bound-listener construction is missing'
-grep -Fq -- 'socket_acceptconn(descriptor)' "${INHERITED}" ||
-  fail 'coordinator non-listening admission is missing'
 if sed '/^#\[cfg(test)\]/,$d' "${INHERITED}" | grep -Fq -- 'listen('; then
   fail 'root coordinator must not activate the production listener'
 fi
 grep -Fq -- 'listen(&self.socket.descriptor, LISTENER_BACKLOG_V1)' "${SUPERVISOR_LISTENER}" ||
   fail 'protected supervisor listener activation is missing'
-launch_line="$(grep -n -m1 -F -- 'InheritedCompilerExecutionDeploymentV1::admit()?.launch(' "${ENTRYPOINT}" | cut -d: -f1)"
-ready_line="$(grep -n -m1 -F -- 'readiness.publish()?' "${ENTRYPOINT}" | cut -d: -f1)"
+launch_line="$(grep -n -m1 -F -- 'runtime.start(b)?;' "${ENTRYPOINT}" | cut -d: -f1)"
+ready_line="$(grep -n -m1 -F -- 'runtime.publish(b)?;' "${ENTRYPOINT}" | cut -d: -f1)"
 [[ -n "${launch_line}" && -n "${ready_line}" && "${launch_line}" -lt "${ready_line}" ]] ||
   fail 'systemd readiness must follow supervisor bootstrap readiness'
 for path in \
-  /usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor \
+  /usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor-v3 \
   /usr/libexec/fe2o3/fe2o3-static-preexec-launcher \
-  /usr/libexec/fe2o3/fe2o3-compiler-execution-issuer \
-  /usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper \
-  /usr/libexec/fe2o3/fe2o3-external-anchor-service; do
+  /usr/libexec/fe2o3/fe2o3-compiler-execution-issuer-conditional \
+  /usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper-v3 \
+  /usr/libexec/fe2o3/fe2o3-external-anchor-service-v3; do
   grep -Fq -- "\"${path}\"" "${PROVISIONER}" || fail "provisioner path ${path} changed"
 done
 for name in \
-  supervisor-deployment-v1 \
-  issuer-policy-v1 \
-  anchor-deployment-v1 \
-  anchor-provisioning-v1 \
-  issuer-signing-key-seed-v1 \
-  anchor-signing-key-seed-v1; do
+  supervisor-deployment-v3 \
+  issuer-policy-v3 \
+  anchor-deployment-v3 \
+  anchor-provisioning-v3 \
+  issuer-signing-key-seed-v3 \
+  anchor-signing-key-seed-v3; do
   grep -Fq -- "\"${name}\"" "${PROVISIONER}" || fail "provisioner file ${name} changed"
   grep -Fq -- "/etc/fe2o3/compiler-execution/${name}:" "${SERVICE}" ||
     fail "service file ${name} changed"
 done
-grep -Fq -- '"client-profile-v1"' "${PROVISIONER}" ||
+grep -Fq -- '"client-profile-v3"' "${PROVISIONER}" ||
   fail 'provisioner client profile is missing'
-grep -Fq -- '"/etc/fe2o3/compiler-execution/client-profile-v1"' "${PROTOCOL}" ||
+grep -RFq -- '"/etc/fe2o3/compiler-execution/client-profile-v3"' "$(dirname "${PROTOCOL}")" ||
   fail 'canonical client-profile path is missing'
-if grep -Fq -- '/etc/fe2o3/compiler-execution/client-profile-v1:' "${SERVICE}"; then
+if grep -Fq -- '/etc/fe2o3/compiler-execution/client-profile-v3:' "${SERVICE}"; then
   fail 'public client profile must not add a coordinator activation descriptor'
 fi
 grep -Fq -- 'name = "fe2o3-compiler-execution-provision"' "${COORDINATOR_MANIFEST}" ||
@@ -110,12 +109,12 @@ grep -Fq -- '"/var/lib/fe2o3/compiler-execution-lifecycle-v1"' "${PROTOCOL}" ||
 if grep -Fq -- '/var/lib/fe2o3/compiler-execution-lifecycle-v1:' "${SERVICE}"; then
   fail 'lifecycle lock must derive from supervisor-root instead of adding an activation descriptor'
 fi
-grep -Fq -- 'RetainedProvisioningLifecycleLeaseV1::admit(' "${PROVISIONER}" ||
+grep -Fq -- 'Lease::open(b)?' "${PROVISIONER}" ||
   fail 'provisioner lifecycle lease is missing'
-lifecycle_lease_line="$(grep -n -m1 -F -- 'CompilerExecutionLifecycleLeaseV1::admit_service_from_root(&supervisor_root)' "${INHERITED}" | cut -d: -f1)"
-supervisor_lifecycle_line="$(grep -n -m1 -F -- 'CompilerExecutionServiceLifecycleLeaseV1::open(&supervisor_root)' "${INHERITED}" | cut -d: -f1)"
-anchor_lifecycle_line="$(grep -n -m1 -F -- 'CompilerExecutionServiceLifecycleLeaseV1::open(&anchor_root)' "${INHERITED}" | cut -d: -f1)"
-issuer_seed_line="$(grep -n -m1 -F -- 'let mut seed = read_seed(File::from(issuer_key_seed)' "${INHERITED}" | cut -d: -f1)"
+lifecycle_lease_line="$(grep -n -m1 -F -- 'let (lifecycle, c) = Lease::open(&supervisor_root, b)?;' "${INHERITED}" | cut -d: -f1)"
+supervisor_lifecycle_line="$(grep -n -m1 -F -- 'let (supervisor_lifecycle, c) = Lease::open(&supervisor_root, b)?;' "${INHERITED}" | cut -d: -f1)"
+anchor_lifecycle_line="$(grep -n -m1 -F -- 'let (anchor_lifecycle, c) = Lease::open(&anchor_root, b)?;' "${INHERITED}" | cut -d: -f1)"
+issuer_seed_line="$(grep -n -m1 -F -- 'source::read_seed(&issuer_seed, b)?;' "${INHERITED}" | cut -d: -f1)"
 [[ -n "${lifecycle_lease_line}" && -n "${issuer_seed_line}" && "${lifecycle_lease_line}" -lt "${issuer_seed_line}" ]] ||
   fail 'service lifecycle lease must precede issuer key admission'
 [[ -n "${supervisor_lifecycle_line}" && -n "${anchor_lifecycle_line}" &&
@@ -146,6 +145,10 @@ require_line "${SERVICE}" 'KillMode=mixed'
 require_line "${SERVICE}" 'Restart=on-failure'
 require_line "${SERVICE}" 'RestartSec=1'
 require_line "${SERVICE}" 'RestrictAddressFamilies=AF_UNIX'
+require_line "${SERVICE}" 'CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE'
+grep -Fq -- 'native V3 indirect launch requires the original-root FD12 route' \
+  "${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/native_launch_adapter.rs" ||
+  fail 'missing original-root launch guard was silently removed'
 
 require_line "${SYSUSERS}" 'u fe2o3-compiler - "fe2o3 compiler-execution supervisor" /var/lib/fe2o3/compiler-execution -'
 require_line "${SYSUSERS}" 'u fe2o3-anchor - "fe2o3 external monotonic anchor" /var/lib/fe2o3/external-anchor -'
@@ -155,4 +158,4 @@ require_line "${TMPFILES}" 'd /var/lib/fe2o3/compiler-execution 0700 fe2o3-compi
 require_line "${TMPFILES}" 'd /var/lib/fe2o3/external-anchor 0700 fe2o3-anchor fe2o3-anchor -'
 require_line "${TMPFILES}" 'f /var/lib/fe2o3/compiler-execution-lifecycle-v1 0400 root root -'
 
-printf 'compiler-execution systemd descriptor and filesystem policy is exact\n'
+printf 'native V3 activation source contract is exact; startup remains guarded\n'

@@ -44,8 +44,15 @@ for argument in '' 0 01 +1; do
   fi
   smoke_status=$?
   set -e
+  expected='native compiler coordinator requires exact root identity'
+  if [[ $(id -u) -eq 0 ]]; then
+    case "${argument}" in
+      +1) expected='generation is not decimal' ;;
+      *) expected='expected one canonical nonzero generation' ;;
+    esac
+  fi
   if [[ ${smoke_status} -ne 1 \
-    || "${smoke_output}" != 'expected exactly one canonical nonzero decimal policy generation' ]]; then
+    || "${smoke_output}" != "${expected}" ]]; then
     printf 'compiler-execution provisioner accepted a noncanonical generation\n' >&2
     exit 1
   fi

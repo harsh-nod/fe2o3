@@ -27,11 +27,17 @@ mod host;
 mod install;
 mod mount;
 mod preflight;
+mod profile;
 mod provision;
 mod qualification;
 mod run;
 mod staging;
 mod supervisor;
+
+use profile::Profile;
+pub use profile::{
+    COMPILER_EXECUTION_INSTALL_FILE_COUNT_V3, COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V3,
+};
 
 pub use boot::execute_compiler_execution_systemd_machine_tool_v1;
 pub use cgroup::{
@@ -44,8 +50,10 @@ pub use host::{
 };
 pub use install::{
     CompilerExecutionInstallRecoveryV1, CompilerExecutionInstalledRootPublicationV1,
-    InstalledCompilerExecutionDeploymentV1, compiler_execution_install_root_name_v1,
-    install_compiler_execution_deployment_v1, recover_compiler_execution_install_parent_v1,
+    InstalledCompilerExecutionDeploymentV1, InstalledCompilerExecutionDeploymentV3,
+    compiler_execution_install_root_name_v1, compiler_execution_install_root_name_v3,
+    install_compiler_execution_deployment_v1, install_compiler_execution_deployment_v3,
+    recover_compiler_execution_install_parent_v1, recover_compiler_execution_install_parent_v3,
 };
 pub use mount::{
     MountedCompilerExecutionQualificationV1, PrivateQualificationMountNamespaceV1,
@@ -301,6 +309,23 @@ struct SealedDeploymentFileV1 {
 /// require_as_fd::<VerifiedCompilerExecutionDeploymentV1>();
 /// ```
 pub struct VerifiedCompilerExecutionDeploymentV1 {
+    inner: VerifiedDeployment,
+}
+
+/// Move-only sealed native V3 bundle custody, not service or compiler authority.
+/// V1 verification and qualification cannot consume this owner.
+///
+/// ```compile_fail
+/// use fe2o3_compiler_execution_deployment::{VerifiedCompilerExecutionDeploymentV1 as V1,
+///     VerifiedCompilerExecutionDeploymentV3 as V3};
+/// fn convert(value: V3) -> V1 { value.into() }
+/// ```
+pub struct VerifiedCompilerExecutionDeploymentV3 {
+    inner: VerifiedDeployment,
+}
+
+struct VerifiedDeployment {
+    profile: Profile,
     git_commit: String,
     target: String,
     manifest_sha256: [u8; 32],
@@ -308,47 +333,60 @@ pub struct VerifiedCompilerExecutionDeploymentV1 {
     files: Vec<SealedDeploymentFileV1>,
 }
 
-impl fmt::Debug for VerifiedCompilerExecutionDeploymentV1 {
+impl fmt::Debug for VerifiedDeployment {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("VerifiedCompilerExecutionDeploymentV1")
+            .debug_struct("VerifiedDeployment")
+            .field("profile", &self.profile)
             .field("git_commit", &self.git_commit)
             .field("target", &self.target)
             .field("file_count", &self.files.len())
-            .field("sealed_source_file_count", &self.sealed_source_file_count())
+            .field("sealed_source_file_count", &(self.files.len() + 1))
             .field("authority", &"verified-source-custody-only")
             .finish_non_exhaustive()
     }
 }
 
-impl VerifiedCompilerExecutionDeploymentV1 {
-    /// Returns the exact source commit bound by both the caller and manifest.
-    pub fn git_commit(&self) -> &str {
-        &self.git_commit
-    }
+macro_rules! verified_metadata {
+    ($owner:ident) => {
+        impl fmt::Debug for $owner {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.inner.fmt(f)
+            }
+        }
+        impl $owner {
+            /// Returns the exact source commit bound by both the caller and manifest.
+            pub fn git_commit(&self) -> &str {
+                &self.inner.git_commit
+            }
 
-    /// Returns the exact static target bound by the manifest.
-    pub fn target(&self) -> &str {
-        &self.target
-    }
+            /// Returns the exact static target bound by the manifest.
+            pub fn target(&self) -> &str {
+                &self.inner.target
+            }
 
-    /// Returns the out-of-band-pinned manifest digest.
-    pub const fn manifest_sha256(&self) -> [u8; 32] {
-        self.manifest_sha256
-    }
+            /// Returns the out-of-band-pinned manifest digest.
+            pub const fn manifest_sha256(&self) -> [u8; 32] {
+                self.inner.manifest_sha256
+            }
 
-    /// Returns the exact number of sealed deployment content files.
-    pub fn file_count(&self) -> usize {
-        self.files.len()
-    }
+            /// Returns the exact number of sealed deployment content files.
+            pub fn file_count(&self) -> usize {
+                self.inner.files.len()
+            }
 
-    /// Returns the manifest plus the exact number of sealed deployment content files.
-    pub fn sealed_source_file_count(&self) -> usize {
-        std::iter::once(&self.manifest).chain(&self.files).count()
-    }
+            /// Returns the manifest plus the exact number of sealed deployment content files.
+            pub fn sealed_source_file_count(&self) -> usize {
+                self.inner.files.len() + 1
+            }
+        }
+    };
 }
+verified_metadata!(VerifiedCompilerExecutionDeploymentV1);
+verified_metadata!(VerifiedCompilerExecutionDeploymentV3);
 
-/// Result of writing one canonical install manifest into a clean bundle root.
+/// Mechanical digest/length report from writing a canonical install manifest.
+/// Shared by V1 and V3; this is not verified custody or a family approval.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompilerExecutionManifestGenerationV1 {
     sha256: [u8; 32],
@@ -373,20 +411,38 @@ pub fn generate_compiler_execution_install_manifest_v1(
     git_commit: &str,
     target: &str,
 ) -> Result<CompilerExecutionManifestGenerationV1, DeploymentVerificationErrorV1> {
+    generate_manifest(Profile::V1, bundle_root, git_commit, target)
+}
+
+/// Generates a V3 manifest using the fixed V3 inventory, never a V1 approval.
+pub fn generate_compiler_execution_install_manifest_v3(
+    bundle_root: &Path,
+    git_commit: &str,
+    target: &str,
+) -> Result<CompilerExecutionManifestGenerationV1, DeploymentVerificationErrorV1> {
+    generate_manifest(Profile::V3, bundle_root, git_commit, target)
+}
+
+fn generate_manifest(
+    profile: Profile,
+    bundle_root: &Path,
+    git_commit: &str,
+    target: &str,
+) -> Result<CompilerExecutionManifestGenerationV1, DeploymentVerificationErrorV1> {
     parse_lower_hex_exact(git_commit, GIT_COMMIT_BYTES_V1, "git commit")?;
     if target != COMPILER_EXECUTION_DEPLOYMENT_TARGET_V1 {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidManifest,
-            "deployment target is not the sole V1 target",
+            "deployment target is not the sole static target",
         ));
     }
     let root = open_bundle_root(bundle_root)?;
     let root_snapshot = validate_directory(&root, None, "bundle root")?;
-    verify_inventory(&root, root_snapshot, false)?;
+    verify_inventory(profile, &root, root_snapshot, false)?;
 
-    let mut entries = Vec::with_capacity(FILE_SPECS_V1.len());
-    let mut contents = Vec::with_capacity(FILE_SPECS_V1.len());
-    for spec in FILE_SPECS_V1 {
+    let mut entries = Vec::with_capacity(profile.files().len());
+    let mut contents = Vec::with_capacity(profile.files().len());
+    for &spec in profile.files() {
         let admitted = admit_source_file(&root, root_snapshot, spec, None)?;
         entries.push(ManifestEntryV1 {
             spec,
@@ -395,9 +451,9 @@ pub fn generate_compiler_execution_install_manifest_v1(
         });
         contents.push(admitted.bytes);
     }
-    validate_build_info(&contents[0], git_commit, target)?;
+    validate_build_info(profile, &contents[0], git_commit, target)?;
     validate_sha256sums(&contents[1], &entries)?;
-    let manifest = serialize_manifest(git_commit, target, &entries);
+    let manifest = serialize_manifest(profile, git_commit, target, &entries);
     if manifest.len() > MANIFEST_MAX_BYTES_V1 {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidManifest,
@@ -405,8 +461,8 @@ pub fn generate_compiler_execution_install_manifest_v1(
         ));
     }
     let digest: [u8; 32] = Sha256::digest(&manifest).into();
-    verify_inventory(&root, root_snapshot, false)?;
-    write_manifest(&root, &manifest)?;
+    verify_inventory(profile, &root, root_snapshot, false)?;
+    write_manifest(profile, &root, &manifest)?;
     let published_root_snapshot = validate_directory(
         &root,
         Some((root_snapshot.uid, root_snapshot.gid)),
@@ -417,7 +473,7 @@ pub fn generate_compiler_execution_install_manifest_v1(
             "bundle root custody changed while publishing the install manifest",
         ));
     }
-    verify_inventory(&root, published_root_snapshot, true)?;
+    verify_inventory(profile, &root, published_root_snapshot, true)?;
     Ok(CompilerExecutionManifestGenerationV1 {
         sha256: digest,
         byte_len: manifest.len() as u64,
@@ -430,6 +486,37 @@ pub fn verify_compiler_execution_deployment_v1(
     expected_manifest_sha256: &str,
     expected_git_commit: &str,
 ) -> Result<VerifiedCompilerExecutionDeploymentV1, DeploymentVerificationErrorV1> {
+    verify_deployment(
+        Profile::V1,
+        bundle_root,
+        expected_manifest_sha256,
+        expected_git_commit,
+    )
+    .map(|inner| VerifiedCompilerExecutionDeploymentV1 { inner })
+}
+
+/// Verifies only the V3 inventory/header against external pins, retaining sealed sources.
+/// Old, mixed, extra or substituted V1 inputs refuse without fallback.
+pub fn verify_compiler_execution_deployment_v3(
+    bundle_root: &Path,
+    expected_manifest_sha256: &str,
+    expected_git_commit: &str,
+) -> Result<VerifiedCompilerExecutionDeploymentV3, DeploymentVerificationErrorV1> {
+    verify_deployment(
+        Profile::V3,
+        bundle_root,
+        expected_manifest_sha256,
+        expected_git_commit,
+    )
+    .map(|inner| VerifiedCompilerExecutionDeploymentV3 { inner })
+}
+
+fn verify_deployment(
+    profile: Profile,
+    bundle_root: &Path,
+    expected_manifest_sha256: &str,
+    expected_git_commit: &str,
+) -> Result<VerifiedDeployment, DeploymentVerificationErrorV1> {
     let expected_manifest =
         parse_lower_hex_exact(expected_manifest_sha256, 32, "expected manifest SHA-256")?;
     parse_lower_hex_exact(
@@ -439,9 +526,9 @@ pub fn verify_compiler_execution_deployment_v1(
     )?;
     let root = open_bundle_root(bundle_root)?;
     let root_snapshot = validate_directory(&root, None, "bundle root")?;
-    verify_inventory(&root, root_snapshot, true)?;
+    verify_inventory(profile, &root, root_snapshot, true)?;
 
-    let manifest_spec = MANIFEST_FILE_SPEC_V1;
+    let manifest_spec = profile.manifest();
     let manifest_file = admit_source_file(&root, root_snapshot, manifest_spec, None)?;
     if manifest_file.sha256 != expected_manifest.as_slice() {
         return Err(invalid(
@@ -449,7 +536,7 @@ pub fn verify_compiler_execution_deployment_v1(
             "install manifest does not match the out-of-band SHA-256",
         ));
     }
-    let manifest = parse_manifest(&manifest_file.bytes, expected_git_commit)?;
+    let manifest = parse_manifest(profile, &manifest_file.bytes, expected_git_commit)?;
     let sealed_manifest = seal_source(
         ManifestEntryV1 {
             spec: manifest_spec,
@@ -467,12 +554,13 @@ pub fn verify_compiler_execution_deployment_v1(
         contents.push(admitted.bytes);
         files.push(sealed);
     }
-    validate_build_info(&contents[0], expected_git_commit, &manifest.target)?;
+    validate_build_info(profile, &contents[0], expected_git_commit, &manifest.target)?;
     validate_sha256sums(&contents[1], &manifest.entries)?;
-    verify_inventory(&root, root_snapshot, true)?;
+    verify_inventory(profile, &root, root_snapshot, true)?;
     validate_sealed_file(&sealed_manifest)?;
     validate_sealed_files(&files)?;
-    Ok(VerifiedCompilerExecutionDeploymentV1 {
+    Ok(VerifiedDeployment {
+        profile,
         git_commit: manifest.git_commit,
         target: manifest.target,
         manifest_sha256: expected_manifest
@@ -581,6 +669,7 @@ fn validate_directory_mode(
 }
 
 fn verify_inventory(
+    profile: Profile,
     root: &File,
     root_snapshot: ObjectSnapshotV1,
     manifest_present: bool,
@@ -590,14 +679,11 @@ fn verify_inventory(
     {
         return Err(changed("bundle root changed while verifying inventory"));
     }
-    let root_children = if manifest_present {
-        ROOT_CHILDREN_WITH_MANIFEST_V1
-    } else {
-        ROOT_CHILDREN_WITHOUT_MANIFEST_V1
-    };
+    let root_children = profile.root_children(manifest_present);
     verify_directory_children(root, root_children, "bundle root")?;
     let owner = (root_snapshot.uid, root_snapshot.gid);
     for &(path, expected_children) in DIRECTORY_SPECS_V1 {
+        let expected_children = profile.directory_children(path, expected_children);
         let directory = open_beneath(root, path, true)?;
         let initial = validate_directory(&directory, Some(owner), "bundle subdirectory")?;
         verify_directory_children(&directory, expected_children, "bundle subdirectory")?;
@@ -801,10 +887,14 @@ fn read_bounded(file: &mut File, max_bytes: u64) -> Result<Vec<u8>, DeploymentVe
     Ok(bytes)
 }
 
-fn write_manifest(root: &File, bytes: &[u8]) -> Result<(), DeploymentVerificationErrorV1> {
+fn write_manifest(
+    profile: Profile,
+    root: &File,
+    bytes: &[u8],
+) -> Result<(), DeploymentVerificationErrorV1> {
     let descriptor = openat(
         root,
-        COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V1,
+        profile.manifest().source,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::RUSR | Mode::WUSR,
     )
@@ -822,9 +912,14 @@ fn write_manifest(root: &File, bytes: &[u8]) -> Result<(), DeploymentVerificatio
         .map_err(|source| std_io_error("sync deployment bundle root", source))
 }
 
-fn serialize_manifest(git_commit: &str, target: &str, entries: &[ManifestEntryV1]) -> Vec<u8> {
+fn serialize_manifest(
+    profile: Profile,
+    git_commit: &str,
+    target: &str,
+    entries: &[ManifestEntryV1],
+) -> Vec<u8> {
     let mut manifest = String::new();
-    writeln!(&mut manifest, "{MANIFEST_HEADER_V1}").expect("string writes cannot fail");
+    writeln!(&mut manifest, "{}", profile.header()).expect("string writes cannot fail");
     writeln!(&mut manifest, "git_commit\t{git_commit}").expect("string writes cannot fail");
     writeln!(&mut manifest, "target\t{target}").expect("string writes cannot fail");
     writeln!(&mut manifest, "entry_count\t{}", entries.len()).expect("string writes cannot fail");
@@ -844,6 +939,7 @@ fn serialize_manifest(git_commit: &str, target: &str, entries: &[ManifestEntryV1
 }
 
 fn parse_manifest(
+    profile: Profile,
     bytes: &[u8],
     expected_git_commit: &str,
 ) -> Result<ParsedManifestV1, DeploymentVerificationErrorV1> {
@@ -868,7 +964,7 @@ fn parse_manifest(
         .strip_suffix('\n')
         .expect("final newline checked")
         .split('\n');
-    if lines.next() != Some(MANIFEST_HEADER_V1) {
+    if lines.next() != Some(profile.header()) {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidManifest,
             "install manifest header is invalid",
@@ -890,14 +986,14 @@ fn parse_manifest(
         ));
     }
     let count = parse_single_field(lines.next(), "entry_count")?;
-    if parse_decimal(count, "manifest entry count")? != FILE_SPECS_V1.len() as u64 {
+    if parse_decimal(count, "manifest entry count")? != profile.files().len() as u64 {
         return Err(invalid(
             DeploymentVerificationErrorKindV1::InvalidManifest,
             "install manifest entry count is invalid",
         ));
     }
-    let mut entries = Vec::with_capacity(FILE_SPECS_V1.len());
-    for spec in FILE_SPECS_V1 {
+    let mut entries = Vec::with_capacity(profile.files().len());
+    for &spec in profile.files() {
         let line = lines.next().ok_or_else(|| {
             invalid(
                 DeploymentVerificationErrorKindV1::InvalidManifest,
@@ -1047,6 +1143,7 @@ fn random_staging_name(
 }
 
 fn validate_build_info(
+    profile: Profile,
     bytes: &[u8],
     git_commit: &str,
     target: &str,
@@ -1059,7 +1156,7 @@ fn validate_build_info(
     })?;
     let lines: Vec<&str> = text.strip_suffix('\n').unwrap_or("").split('\n').collect();
     if lines.len() != 4
-        || lines[0] != "schema_version=1"
+        || lines[0] != profile.build_schema()
         || lines[1] != format!("git_commit={git_commit}")
         || !lines[2].starts_with("source_date_epoch=")
         || lines[3] != format!("target={target}")
@@ -1305,12 +1402,16 @@ mod tests {
         assert_eq!(sources, sorted);
     }
 
-    struct Fixture {
-        root: tempfile::TempDir,
+    pub(super) struct Fixture {
+        pub(super) root: tempfile::TempDir,
     }
 
     impl Fixture {
         fn new() -> Self {
+            Self::for_profile(Profile::V1)
+        }
+
+        pub(super) fn for_profile(profile: Profile) -> Self {
             let root = tempfile::tempdir().unwrap();
             for (path, _) in DIRECTORY_SPECS_V1 {
                 fs::create_dir_all(root.path().join(path)).unwrap();
@@ -1324,13 +1425,14 @@ mod tests {
                 )
                 .unwrap();
             }
-            for spec in FILE_SPECS_V1 {
+            for &spec in profile.files() {
                 if spec.source == "SHA256SUMS" {
                     continue;
                 }
                 let bytes = if spec.source == "BUILD-INFO" {
                     format!(
-                        "schema_version=1\ngit_commit={COMMIT}\nsource_date_epoch=1788120406\ntarget={}\n",
+                        "{}\ngit_commit={COMMIT}\nsource_date_epoch=1788120406\ntarget={}\n",
+                        profile.build_schema(),
                         COMPILER_EXECUTION_DEPLOYMENT_TARGET_V1
                     )
                     .into_bytes()
@@ -1344,7 +1446,7 @@ mod tests {
                 )
                 .unwrap();
             }
-            let entries = fixture_entries(root.path());
+            let entries = fixture_entries(profile, root.path());
             let mut sums = String::new();
             for entry in &entries {
                 if entry.spec.source != "SHA256SUMS" {
@@ -1387,10 +1489,11 @@ mod tests {
         }
     }
 
-    fn fixture_entries(root: &Path) -> Vec<ManifestEntryV1> {
-        FILE_SPECS_V1
-            .into_iter()
-            .map(|spec| {
+    fn fixture_entries(profile: Profile, root: &Path) -> Vec<ManifestEntryV1> {
+        profile
+            .files()
+            .iter()
+            .map(|&spec| {
                 if spec.source == "SHA256SUMS" && !root.join(spec.source).exists() {
                     return ManifestEntryV1 {
                         spec,
@@ -1422,19 +1525,19 @@ mod tests {
         assert_eq!(verified.sealed_source_file_count(), 14);
         assert_eq!(verified.manifest_sha256(), generation.sha256());
         assert_eq!(
-            verified.manifest.entry.spec.source,
+            verified.inner.manifest.entry.spec.source,
             COMPILER_EXECUTION_INSTALL_MANIFEST_NAME_V1
         );
 
         let expected_build_info = fs::read(fixture.path("BUILD-INFO")).unwrap();
         drop(fixture);
-        let retained = &mut verified.files[0].file;
+        let retained = &mut verified.inner.files[0].file;
         retained.seek(SeekFrom::Start(0)).unwrap();
         let mut bytes = Vec::new();
         retained.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, expected_build_info);
-        validate_sealed_file(&verified.manifest).unwrap();
-        validate_sealed_files(&verified.files).unwrap();
+        validate_sealed_file(&verified.inner.manifest).unwrap();
+        validate_sealed_files(&verified.inner.files).unwrap();
     }
 
     #[test]

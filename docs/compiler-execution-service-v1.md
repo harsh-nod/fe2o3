@@ -1,11 +1,16 @@
 # Compiler Execution Service V1
 
+This document describes the frozen V1 service, not the privately staged
+[native V3 activation prerequisite](compiler-execution-service-v3.md).
+V1 approval never implies V3 installation or readiness.
+
 ## Status
 
 Native V2/V3 key-owning durable anchors now share V1's persistence engine. See
 the [native state contract](compiler-execution-native-anchor-state.md) for bounded
-state I/O, error/unwind poisoning and accounting. The V1 entrypoints described
-below have not been switched to native owners.
+state I/O, error/unwind poisoning and accounting. The V1 library entrypoints
+described below remain V1-only; the paired candidate executable migration is
+documented separately and remains blocked on direct-root startup.
 
 The shared native V2/V3 dispatcher now retains local occurrence custody across
 requests and checks it around durable publication. See the
