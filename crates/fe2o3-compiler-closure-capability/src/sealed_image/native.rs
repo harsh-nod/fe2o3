@@ -105,6 +105,25 @@ impl SealedCapabilityImage {
         })
     }
 
+    /// The V3 caller has checked root credentials and the exact deployment/policy.
+    /// Change ownership only on this fresh allocation, never on a template alias.
+    pub(crate) fn create_service_key_v3(
+        bytes: &[u8; 32],
+        role: CapabilityRole,
+        deployment: &fe2o3_compiler_execution_protocol::CompilerExecutionSupervisorDeploymentV3,
+    ) -> Result<Self> {
+        // Reopen while root still owns mode 0400, so CHOWN suffices without
+        // DAC_OVERRIDE. fchown also works on the resulting read-only descriptor.
+        let fresh = Self::create_fixed(bytes, role)?.into_read_only_fixed::<32>()?;
+        rustix::fs::fchown(
+            &fresh.image,
+            Some(rustix::process::Uid::from_raw(deployment.service_uid())),
+            Some(rustix::process::Gid::from_raw(deployment.service_gid())),
+        )
+        .map_err(|e| Error::io("assign fresh service key owner", e))?;
+        Ok(fresh)
+    }
+
     pub(crate) fn from_inherited_fixed<const N: usize>(
         child_fd: RawFd,
         role: CapabilityRole,
@@ -174,7 +193,7 @@ impl SealedCapabilityImage {
         Ok(())
     }
 
-    pub(super) fn revalidate_fixed(&self) -> Result<fs::Metadata> {
+    pub(crate) fn revalidate_fixed(&self) -> Result<fs::Metadata> {
         self.revalidate_file_fixed(&self.image)
     }
 
@@ -237,7 +256,7 @@ impl SealedCapabilityImage {
         )
     }
 
-    fn validate_secret_transfer_owner_fixed(
+    pub(crate) fn validate_secret_transfer_owner_fixed(
         &self,
         transfer: &File,
         uid: u32,

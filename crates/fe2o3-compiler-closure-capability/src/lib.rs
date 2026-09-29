@@ -98,7 +98,9 @@ pub use compiler_execution_signing_key::{
     COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionSigningKeyCapabilityV1,
 };
 pub use compiler_execution_signing_key_v2::CompilerExecutionSigningKeyCapabilityV2;
-pub use compiler_execution_signing_key_v3::CompilerExecutionSigningKeyCapabilityV3;
+pub use compiler_execution_signing_key_v3::{
+    CompilerExecutionSigningKeyCapabilityV3, CompilerExecutionSigningKeyServiceTransferV3,
+};
 pub use compiler_execution_supervisor_deployment::{
     COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
     CompilerExecutionSupervisorDeploymentCapabilityV1,

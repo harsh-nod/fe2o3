@@ -190,7 +190,6 @@ impl SealedCapabilityImage {
             .map_err(|error| format!("cannot inherit {}: {error}", self.role.name))
     }
 
-    #[cfg(test)]
     pub(super) fn as_file(&self) -> &File {
         &self.image
     }
