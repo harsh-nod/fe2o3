@@ -38,6 +38,22 @@ impl<const N: usize> Default for ExactPipeFrame<N> {
 }
 
 impl<const N: usize> ExactPipeFrame<N> {
+    /// One validated nonblocking pipe read, including the oversize sentinel.
+    /// Requires 0 < N <= MAX_PIPE_READY_BYTES and stable private read-end flags.
+    /// The caller must prepay Boundary::ReadyPipe.work() and PIPE_ATTEMPT_SCRATCH
+    /// on its original account, and enforce finite attempts, deadlines and liveness.
+    pub fn read_fd_nonblocking(
+        &mut self,
+        fd: BorrowedFd<'_>,
+    ) -> Result<Option<[u8; N]>, PipeFrameError> {
+        self.read_with(|bytes| {
+            if !(1..=MAX_PIPE_READY_BYTES).contains(&N) {
+                return Err(Errno::INVAL);
+            }
+            read_nonblocking(fd, bytes)
+        })
+    }
+
     /// Calls read at most once, with the unfilled suffix or a one-byte EOF probe.
     /// Partial reads, EINTR and EAGAIN remain pending. Only exact EOF yields bytes;
     /// any other terminal outcome permanently prevents a subsequent success.

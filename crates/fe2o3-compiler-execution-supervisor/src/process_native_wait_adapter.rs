@@ -41,7 +41,10 @@ macro_rules! native_wait {
             pub const MAX_TIMEOUT: Duration = Duration::from_secs(120);
             /// Four weighted syscalls cover read/send/wait, liveness, a failure probe and
             /// optional poll; byte/field work covers the largest frame and its sentinel.
-            pub const ATTEMPT_WORK: usize = 4 * 1024 + 8 * WAIT_RECORD_BYTES + 256;
+            /// Additionally prepays the shared readiness pipe's full fstat/F_GETFL/read
+            /// and framing quote, including retries, on the original wait account.
+            pub const ATTEMPT_WORK: usize = 4 * 1024 + 8 * WAIT_RECORD_BYTES + 256
+                + fe2o3_protected_service_spawn::launch_io::Boundary::ReadyPipe.work();
 
             /// Admits bounded inert limits without any I/O or budget creation.
             pub fn new(attempts: usize, timeout: Duration) -> Result<Self> {

@@ -1,12 +1,15 @@
 // One consuming native lifecycle; each module supplies genuine family types.
-use fe2o3_protected_service_spawn::launch_io::{ExactPipeFrame, PipeFrameError};
+use fe2o3_protected_service_spawn::launch_io::{
+    ExactPipeFrame, PIPE_ATTEMPT_SCRATCH, PipeFrameError,
+};
+use std::os::fd::AsFd;
 
 fn read_readiness(
     frame: &mut ExactPipeFrame<READY_BYTES>,
     reader: &OwnedFd,
 ) -> Result<Option<[u8; READY_BYTES]>> {
     frame
-        .read_with(|bytes| rustix::io::read(reader, bytes))
+        .read_fd_nonblocking(reader.as_fd())
         .map_err(|error| match error {
             PipeFrameError::Truncated => Error::State("native readiness is truncated"),
             PipeFrameError::Trailing => Error::State("native readiness has trailing bytes"),
@@ -35,6 +38,7 @@ const LAUNCH_SCRATCH: usize = 8 * size_of::<Session<'static, 'static>>()
     + 16 * size_of::<OwnedFd>()
     + 8192;
 const SESSION_SCRATCH: usize = 4 * size_of::<Session<'static, 'static>>() + 4 * READY_BYTES + 4096;
+const READINESS_SCRATCH: usize = SESSION_SCRATCH + PIPE_ATTEMPT_SCRATCH;
 const OWNER_GROWTH: usize = size_of::<Session<'static, 'static>>();
 
 struct Core<'s> {
@@ -151,7 +155,7 @@ impl<'a, 'work> Launched<'a, 'work> {
             floor,
             ENTRY,
             limits.work(),
-            SESSION_SCRATCH,
+            READINESS_SCRATCH,
             |b| {
                 let deadline = limits.deadline()?;
                 core.supervisor.revalidate(b)?;

@@ -197,7 +197,14 @@ fn assert_wrapped_source<E: StdError + Into<Error> + 'static>(source: E) {
 
 #[test]
 fn wait_limits_accept_exact_endpoints_and_reject_outside_values() {
-    assert_eq!(Wait::ATTEMPT_WORK, 4 * 1024 + 8 * 193 + 256);
+    assert_eq!(
+        Wait::ATTEMPT_WORK,
+        4 * 1024
+            + 8 * 193
+            + 256
+            + fe2o3_protected_service_spawn::launch_io::Boundary::ReadyPipe.work()
+    );
+    assert_eq!(READINESS_SCRATCH, SESSION_SCRATCH + PIPE_ATTEMPT_SCRATCH);
     for (count, timeout) in [
         (1, Duration::from_nanos(1)),
         (Wait::MAX_ATTEMPTS, Wait::MAX_TIMEOUT),
@@ -332,8 +339,75 @@ fn shared_readiness_preserves_native_pending_and_framing_errors() {
             assert!(frame.read_with(|_| Ok(READY_BYTES)).unwrap().is_none());
         }
         let error = read_readiness(&mut frame, &writer).unwrap_err();
-        assert!(matches!(error, Error::Io { operation, errno: Errno::BADF }
+        assert!(matches!(error, Error::Io { operation, errno: Errno::INVAL }
             if operation == if eof { "read native readiness EOF" } else { "read native readiness" }));
+    }
+}
+
+#[test]
+fn native_readiness_rejects_oversize_packet_mode_and_blocking_pipes() {
+    for length in [READY_BYTES + 1, 1024] {
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
+        let flags = rustix::fs::fcntl_getfl(&writer).unwrap();
+        rustix::fs::fcntl_setfl(&writer, flags | rustix::fs::OFlags::DIRECT).unwrap();
+        rustix::io::write(&writer, &vec![7; length]).unwrap();
+        drop(writer);
+        assert!(matches!(
+            read_readiness(&mut ExactPipeFrame::default(), &reader),
+            Err(Error::State("native readiness has trailing bytes"))
+        ));
+    }
+    let (reader, _held_writer) = pipe_with(PipeFlags::CLOEXEC).unwrap();
+    assert!(matches!(
+        read_readiness(&mut ExactPipeFrame::default(), &reader),
+        Err(Error::Io {
+            operation: "read native readiness",
+            errno: Errno::INVAL
+        })
+    ));
+}
+
+#[test]
+fn readiness_wait_prepays_shared_pipe_work_and_scratch_before_io() {
+    let limits = Wait::new(2, Wait::MAX_TIMEOUT).unwrap();
+    for mode in 0..3 {
+        let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
+        rustix::io::write(&writer, &[7; READY_BYTES]).unwrap();
+        drop(writer);
+        let mut work = Work::new(limits.work() - usize::from(mode == 1));
+        let mut budget = Budget::new(&mut work, READINESS_SCRATCH - usize::from(mode == 2));
+        let ledger = budget.work_ledger_identity_v1();
+        let address = &budget as *const Budget<'_> as usize;
+        let mut calls = 0;
+        let result = budget.with_prepaid_scope::<_, Error>(
+            0,
+            ENTRY,
+            limits.work(),
+            READINESS_SCRATCH,
+            |b| {
+                assert_eq!(b as *const Budget<'_> as usize, address);
+                assert!(b.work_ledger_identity_v1() == ledger);
+                let mut frame = ExactPipeFrame::default();
+                attempts(limits, limits.deadline()?, Boundary::Readiness, || {
+                    calls += 1;
+                    read_readiness(&mut frame, &reader)
+                })
+            },
+        );
+        match mode {
+            0 => assert_eq!(result.unwrap(), [7; READY_BYTES]),
+            1 => assert!(matches!(result, Err(Error::Resource(Resource::Work(_))))),
+            _ => assert!(matches!(result, Err(Error::Resource(Resource::Storage(_))))),
+        }
+        assert_eq!(calls, if mode == 0 { 2 } else { 0 });
+        if mode != 0 {
+            let mut unread = [0; READY_BYTES];
+            assert_eq!(rustix::io::read(&reader, &mut unread).unwrap(), READY_BYTES);
+            assert_eq!(unread, [7; READY_BYTES]);
+        }
+        assert_eq!(budget.storage(), 0);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.work(), if mode == 1 { ENTRY } else { limits.work() });
     }
 }
 
