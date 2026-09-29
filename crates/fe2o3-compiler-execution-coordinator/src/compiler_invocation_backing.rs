@@ -175,6 +175,13 @@ impl CompilerInvocationBacking {
         })
     }
 
+    /// Borrows the original runtime for private launch composition, not public
+    /// transport. Keep this complete owner reserved and use its original Budget
+    /// for runtime operations; this borrow does not detach approval or inventory.
+    pub(crate) const fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
     /// Exact retained coordination data, not evidence of cargo authorship or exec.
     pub(crate) const fn descriptor(&self) -> &Descriptor {
         &self.descriptor
