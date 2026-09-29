@@ -829,13 +829,14 @@ fn dropping_an_empty_exhausted_service_retains_the_pool_when_recovery_is_unfunde
 #[test]
 fn shutdown_with_an_undercharged_storage_floor_refuses_to_discard_the_account() {
     static REAPER: DeferredReaperV1 = DeferredReaperV1::new();
-    let limit = Service::ADMISSION_WORK + SHUTDOWN_WORK;
+    let limit = Service::ADMISSION_WORK + MIN_TURN_WORK + SHUTDOWN_WORK;
     let mut service =
         Service::admit_at(&REAPER, Account::new(Work::new(limit), Service::STORAGE)).unwrap();
     let mut request = Account::new(Work::new(Service::RESERVATION_WORK), 0);
     let reserved = request
         .with_budget(|budget| service.reserve_launch(budget))
         .unwrap();
+    service.pump(1).unwrap();
     {
         let mut mode = REAPER.mode.lock().unwrap();
         let ReaperMode::Native(native) = &mut *mode else {

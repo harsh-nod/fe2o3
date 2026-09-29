@@ -1039,6 +1039,12 @@
   "crates/fe2o3-protected-service-spawn/src/native_child_tests.rs": {
     "block": 5
   },
+  "crates/fe2o3-protected-service-spawn/src/native_domain_spawn.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_domain_spawn_tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-protected-service-spawn/src/native_retained_child.rs": {
     "block": 1,
     "function": 1

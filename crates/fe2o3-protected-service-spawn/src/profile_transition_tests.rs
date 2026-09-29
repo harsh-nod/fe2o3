@@ -7,6 +7,34 @@ use std::{
 const MARKER: &str = "FE2O3_PRIVATE_PROFILE_TRANSITION_TEST";
 
 #[test]
+fn fresh_domain_clone_preserves_atomic_pidfd_and_signal_contract() {
+    let domain = File::open("/dev/null").unwrap();
+    let mut output = -1;
+    for fd in [None, Some(domain.as_fd())] {
+        let args = clone_arguments(&mut output, fd);
+        assert_eq!(
+            args.flags,
+            CLONE_PIDFD | CLONE_CLEAR_SIGHAND | if fd.is_some() { CLONE_INTO_CGROUP } else { 0 }
+        );
+        assert_eq!(args.pidfd, (&raw mut output).addr() as u64);
+        assert_eq!(args.cgroup, fd.map_or(0, |fd| fd.as_raw_fd() as u64));
+        assert_eq!(args.exit_signal, SIGCHLD);
+        assert_eq!(
+            [
+                args.child_tid,
+                args.parent_tid,
+                args.stack,
+                args.stack_size,
+                args.tls,
+                args.set_tid,
+                args.set_tid_size
+            ],
+            [0; 7]
+        );
+    }
+}
+
+#[test]
 fn profile_guard_survives_a_transition_that_clears_parent_death() {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([

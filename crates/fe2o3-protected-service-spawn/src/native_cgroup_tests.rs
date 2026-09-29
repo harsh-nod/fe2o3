@@ -172,7 +172,7 @@ fn directory_identity_rejects_replacement_wrong_type_and_removed_inode() {
 
 #[test]
 fn mkdir_collision_and_known_precreation_refusals_never_adopt_existing_state() {
-    for errno in [Errno::EXIST, Errno::ACCES, Errno::PERM, Errno::ROFS] {
+    for errno in [Errno::EXIST, Errno::ACCESS, Errno::PERM, Errno::ROFS] {
         assert_eq!(Phase::after_mkdir(Err(errno)), Phase::NoCreation);
         assert!(Phase::after_mkdir(Err(errno)).may_release());
     }

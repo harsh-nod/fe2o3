@@ -54,6 +54,9 @@ pub use child::RootOwnedProtectedServiceChildV2;
 #[path = "native_retained_child.rs"]
 mod retained_child;
 pub use retained_child::RootOwnedRetainedServiceChildV2;
+#[path = "native_domain_spawn.rs"]
+mod domain_spawn;
+use domain_spawn::Placement;
 
 pub(crate) const ENTRY: usize = 8;
 pub(crate) type Result<T> = std::result::Result<T, ProtectedServiceSpawnErrorV2>;
@@ -347,10 +350,14 @@ impl StagedProtectedServiceExecV2 {
         RootOwnedProtectedServiceChildV2,
         ProtectedServiceSpawnStorageV2,
     )> {
-        let (child, ()) =
-            self.spawn_reserved(self.retained, credentials, cleanup, b, |cleanup, b| {
-                Ok((cleanup.reserve_launch(b)?.into_slot(), ()))
-            })?;
+        let (child, ()) = self.spawn_reserved(
+            self.retained,
+            credentials,
+            Placement::Current,
+            cleanup,
+            b,
+            |cleanup, b| Ok((cleanup.reserve_launch(b)?.into_slot(), ())),
+        )?;
         Ok((
             child,
             ProtectedServiceSpawnStorageV2(RootOwnedProtectedServiceChildV2::STORAGE),
@@ -379,6 +386,29 @@ impl StagedProtectedServiceExecV2 {
         RootOwnedRetainedServiceChildV2<T>,
         ProtectedServiceSpawnStorageV2,
     )> {
+        self.spawn_retaining_placed(
+            credentials,
+            Placement::Current,
+            resources,
+            retained_storage,
+            cleanup,
+            b,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_retaining_placed<T: Send + 'static>(
+        &self,
+        credentials: Credentials,
+        placement: Placement,
+        resources: T,
+        retained_storage: usize,
+        cleanup: &mut Cleanup,
+        b: &mut Budget<'_>,
+    ) -> Result<(
+        RootOwnedRetainedServiceChildV2<T>,
+        ProtectedServiceSpawnStorageV2,
+    )> {
         let floor = self
             .retained
             .checked_add(retained_storage)
@@ -388,7 +418,7 @@ impl StagedProtectedServiceExecV2 {
             .checked_sub(retained_storage)
             .ok_or(Resource::Accounting)?;
         let (child, resources) =
-            self.spawn_reserved(floor, credentials, cleanup, b, |cleanup, b| {
+            self.spawn_reserved(floor, credentials, placement, cleanup, b, |cleanup, b| {
                 let (reservation, view, charge) =
                     cleanup.reserve_retaining(resources, retained_storage, b)?;
                 b.reserve_storage(charge.additional_storage())?;
@@ -400,10 +430,12 @@ impl StagedProtectedServiceExecV2 {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_reserved<R>(
         &self,
         floor: usize,
         credentials: Credentials,
+        placement: Placement,
         cleanup: &mut Cleanup,
         b: &mut Budget<'_>,
         reserve: impl FnOnce(
@@ -433,7 +465,15 @@ impl StagedProtectedServiceExecV2 {
                 let lease =
                     fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1()
                         .map_err(ProtectedServiceSpawnErrorV2::SpawnLease)?;
-                let child = clone_guarded(&self.inner, credentials, ceiling, lease, slot)?;
+                let child = domain_spawn::clone_placed(
+                    &self.inner,
+                    credentials,
+                    ceiling,
+                    lease,
+                    slot,
+                    placement,
+                    b,
+                )?;
                 Ok((child, resources))
             },
         )

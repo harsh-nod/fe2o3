@@ -272,6 +272,8 @@ fn bounded_cleanup_exhaustion_and_failed_recovery_keep_guard_charged() {
     let slot = service.reserve_launch(&mut b).unwrap();
     assert!(matches!(service.shutdown(), Err(Failure::Busy)));
     assert!(matches!(service.pump(CAPACITY), Err(Failure::Resource(_))));
+    // The larger domain allowance still funds one smaller turn after refusal.
+    service.pump(1).unwrap();
     let before = service.report().unwrap();
     assert_eq!(before.storage, Service::STORAGE);
     drop(service);

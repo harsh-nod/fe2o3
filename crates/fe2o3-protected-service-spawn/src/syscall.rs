@@ -14,6 +14,7 @@ use crate::{
 
 const CLONE_PIDFD: u64 = 0x0000_1000;
 const CLONE_CLEAR_SIGHAND: u64 = 0x0000_0001_0000_0000;
+const CLONE_INTO_CGROUP: u64 = 0x0000_0002_0000_0000;
 const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
 const SIGCHLD: u64 = 17;
 const SIGKILL: c_int = 9;
@@ -213,20 +214,21 @@ pub(crate) fn clone_child(
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
 ) -> rustix::io::Result<(rustix::process::Pid, Option<OwnedFd>)> {
+    clone_child_with_cgroup(staged, credentials, cap_last_cap, expected_parent, None)
+}
+
+// Placement alone grants no protected-service or proof-isolation admission.
+// The caller retains this freshly created domain and adopts it with the child
+// before any parent-side check can fail.
+pub(crate) fn clone_child_with_cgroup(
+    staged: &StagedProtectedServiceExecV1,
+    credentials: ProtectedServiceCredentialProfileV1,
+    cap_last_cap: u32,
+    expected_parent: rustix::process::Pid,
+    cgroup: Option<BorrowedFd<'_>>,
+) -> rustix::io::Result<(rustix::process::Pid, Option<OwnedFd>)> {
     let mut pidfd_raw = -1_i32;
-    let arguments = CloneArgsV1 {
-        flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND,
-        pidfd: (&raw mut pidfd_raw).addr() as u64,
-        child_tid: 0,
-        parent_tid: 0,
-        exit_signal: SIGCHLD,
-        stack: 0,
-        stack_size: 0,
-        tls: 0,
-        set_tid: 0,
-        set_tid_size: 0,
-        cgroup: 0,
-    };
+    let arguments = clone_arguments(&mut pidfd_raw, cgroup);
     // SAFETY: clone3 receives the exact Linux ABI record without VM or file-table sharing. The
     // child executes direct syscalls only and cannot return into Rust.
     let result = unsafe {
@@ -260,6 +262,22 @@ pub(crate) fn clone_child(
         Some(unsafe { OwnedFd::from_raw_fd(pidfd_raw) })
     };
     Ok((pid, pidfd))
+}
+
+fn clone_arguments(pidfd: &mut c_int, cgroup: Option<BorrowedFd<'_>>) -> CloneArgsV1 {
+    CloneArgsV1 {
+        flags: CLONE_PIDFD | CLONE_CLEAR_SIGHAND | cgroup.map_or(0, |_| CLONE_INTO_CGROUP),
+        pidfd: (pidfd as *mut c_int).addr() as u64,
+        child_tid: 0,
+        parent_tid: 0,
+        exit_signal: SIGCHLD,
+        stack: 0,
+        stack_size: 0,
+        tls: 0,
+        set_tid: 0,
+        set_tid_size: 0,
+        cgroup: cgroup.map_or(0, |fd| fd.as_raw_fd() as u64),
+    }
 }
 
 pub(crate) struct RootOwnedProtectedServiceChildV1 {

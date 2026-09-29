@@ -31,7 +31,8 @@ publication evidence, or GPU authority.
 `ProtectedIssuerCleanup*V2` names are aliases, not a second implementation.
 Native mode excludes the legacy background worker. Each explicit funded turn
 makes at most one pidfd signal and one nonblocking consuming wait per visited
-slot. Pending and quarantined records retain capacity, descriptors and any
+slot. A fresh-domain record additionally performs one bounded aggregate
+kill/empty/removal step. Pending and quarantined records retain capacity, descriptors and any
 unverified inherited artifact-spawn lease. `ECHILD` never counts as success.
 
 Controller loss preserves the original account and records. Recovery does not
@@ -99,9 +100,24 @@ capacity and an artifact-spawn lease before clone. The atomic pidfd, lease and
 reservation enter one move-only child guard before any fallible parent check.
 Cancellation and Drop take one prepaid cleanup step and defer unresolved custody
 to the shared pool, with no blocking wait, retry loop or fresh ledger.
-Only verified exec or exact consuming terminal disposal releases the spawn lease.
+Only verified exec or complete terminal disposal releases the spawn lease.
 Deferred or quarantined leases can delay artifact-lock descriptor release
 indefinitely; finite cleanup funding does not guarantee eventual reaping.
+
+The optional unsafe `spawn_retaining_in_fresh_domain` extends the same path with
+atomic `CLONE_INTO_CGROUP` placement into a newly created, root-controlled cgroup
+v2 domain. The original reserved slot owns rollback before mkdir. Clone failure
+or unwind can defer a domain-only record; once a child exists, retirement requires
+both its actual consuming terminal wait and aggregate-empty domain removal.
+Neither a killed root child nor a successful `cgroup.kill` write suffices.
+All retained inputs and original service charges survive unresolved cleanup.
+
+This is mechanical custody, not proof isolation. The administrator caller must
+exclude competing privileged mutations and expose no cgroup control or migration
+path to the child. User-namespace isolation, authenticated proof-helper bootstrap,
+and production activation remain separate unfinished requirements. Existing
+service spawns retain their no-domain behavior; nothing silently enables a proof
+child dumpability exception or changes a compiler authority gate.
 
 The native external-anchor coordinator now calls these primitives after deriving
 full charges and validating staged Files, and owns gated readiness/exec/endpoint

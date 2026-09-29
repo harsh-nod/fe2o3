@@ -52,7 +52,7 @@ impl Phase {
             Ok(()) => Self::Uncertain, // Not pinned/validated yet.
             // Collision and access/read-only refusal are not owned creations.
             // All other failures conservatively retain the uncertain operation.
-            Err(Errno::EXIST | Errno::ACCES | Errno::PERM | Errno::ROFS) => Self::NoCreation,
+            Err(Errno::EXIST | Errno::ACCESS | Errno::PERM | Errno::ROFS) => Self::NoCreation,
             Err(_) => Self::Quarantined,
         }
     }

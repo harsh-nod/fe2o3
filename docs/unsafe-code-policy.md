@@ -521,8 +521,21 @@ before clone and adopt the returned PID, pidfd and spawn lease before fallible
 parent work. Post-clone callbacks are finite and allocation-free; credential
 changes re-arm and check parent-death signaling. Exec confirmation releases only
 the spawn lease. Pending or quarantined children retain dependencies; only a
-consuming terminal wait permits retirement. `WNOWAIT` and `ECHILD` are not that
+consuming terminal wait permits direct-child retirement. Fresh-domain custody
+additionally requires observed aggregate emptiness and successful removal of
+the exact retained cgroup. `WNOWAIT` and `ECHILD` are not terminal
 evidence. See [cleanup custody](compiler-execution-cleanup-custody.md).
+
+The optional native fresh-domain spawn extends that same clone path with
+`CLONE_INTO_CGROUP`. It reserves rollback custody before mkdir and transfers the
+actual domain, atomic pidfd, spawn lease and original cleanup slot before any
+fallible parent check. Its unsafe caller must exclude privileged cgroup/mount
+writers and must not export cgroup controls or allow child migration/delegation.
+No caller path or descriptor constructs a domain owner. Root numeric credentials
+and cgroup placement alone establish neither trusted deployment origin nor
+proof-process isolation. The child remains nondumpable; production proof gates
+are unchanged. One additional unsafe mechanical entry point and two ignored
+root-diagnostic call sites are reviewed here, not qualified by their counts.
 
 Fixed-slot, credential and process-transition fixtures run in isolated children.
 Their source descriptors stay above the destination slots; raw adoption happens
