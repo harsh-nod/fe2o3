@@ -8,6 +8,7 @@ use fe2o3_protected_service_profile::{
 };
 
 use crate::native_spawn::compiler_arguments::CompilerArguments;
+use crate::native_spawn::compiler_child_channel::COMPILER_SERVICE_FD;
 use crate::{
     PROTECTED_SERVICE_GATE_RELEASE_V1, PROTECTED_SERVICE_PROFILE_READY_V1,
     PROTECTED_SERVICE_STAGED_DESCRIPTOR_FLOOR_V1, ProtectedServiceDescriptorBindingV1,
@@ -40,6 +41,10 @@ const PR_CAP_AMBIENT_CLEAR_ALL: c_int = 4;
 const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const FAILURE_BASE: u8 = 0xc0;
+
+#[path = "native_compiler_channel_syscall.rs"]
+mod compiler_channel;
+pub(crate) use compiler_channel::SCRATCH as COMPILER_CHANNEL_SCRATCH;
 
 pub(crate) fn has_exact_root_identity() -> bool {
     let mut uids = [u32::MAX; 3];
@@ -120,6 +125,7 @@ pub(crate) struct StagedProtectedServiceExecV1 {
     gate_reader: OwnedFd,
     exec_status_writer: OwnedFd,
     compiler: Option<(File, CompilerArguments)>,
+    compiler_child_channel_transfer: Option<File>,
 }
 
 impl StagedProtectedServiceExecV1 {
@@ -150,6 +156,7 @@ impl StagedProtectedServiceExecV1 {
         exec_status_writer: BorrowedFd<'_>,
         working_directory: BorrowedFd<'_>,
         arguments: CompilerArguments,
+        child_channel_transfer: Option<BorrowedFd<'_>>,
     ) -> io::Result<Self> {
         let count = bindings.len() + standard_io.iter().flatten().count();
         let streams = standard_io
@@ -176,6 +183,10 @@ impl StagedProtectedServiceExecV1 {
             .ok_or_else(|| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
         let cwd = File::from(duplicate_above(working_directory, &mut next)?);
         staged.compiler = Some((cwd, arguments));
+        if let Some(transfer) = child_channel_transfer {
+            staged.compiler_child_channel_transfer =
+                Some(File::from(duplicate_above(transfer, &mut next)?));
+        }
         Ok(staged)
     }
 
@@ -206,6 +217,7 @@ impl StagedProtectedServiceExecV1 {
             gate_reader: duplicate_above(gate_reader, &mut next)?,
             exec_status_writer: duplicate_above(exec_status_writer, &mut next)?,
             compiler: None,
+            compiler_child_channel_transfer: None,
         })
     }
 
@@ -217,16 +229,25 @@ impl StagedProtectedServiceExecV1 {
         self.compiler.as_ref().map(|(cwd, _)| cwd)
     }
 
+    pub(crate) fn compiler_child_channel_transfer(&self) -> Option<&File> {
+        self.compiler_child_channel_transfer.as_ref()
+    }
+
     pub(crate) fn additional_child_work(&self) -> usize {
-        if self.compiler.is_some() {
+        let cwd = if self.compiler.is_some() {
             crate::native_work::COMPILER_CWD_WORK
+        } else {
+            0
+        };
+        cwd + if self.compiler_child_channel_transfer.is_some() {
+            crate::native_work::COMPILER_CHANNEL_WORK
         } else {
             0
         }
     }
 
     pub(crate) fn descriptor_count(&self) -> usize {
-        self.bindings.len()
+        self.bindings.len() + usize::from(self.compiler_child_channel_transfer.is_some())
     }
 
     pub(crate) fn executable(&self) -> &File {
@@ -313,6 +334,17 @@ pub(crate) fn clone_child_with_cgroup(
     mapping_gate: Option<(BorrowedFd<'_>, BorrowedFd<'_>)>,
 ) -> rustix::io::Result<(rustix::process::Pid, Option<OwnedFd>)> {
     if mapping_gate.is_some() && cgroup.is_none() {
+        return Err(rustix::io::Errno::INVAL);
+    }
+    // Defense in depth before clone, including private constructor callers.
+    if staged.compiler_child_channel_transfer.is_some()
+        && (staged.compiler.is_none()
+            || staged.descriptor_count() > crate::MAX_PROTECTED_SERVICE_DESCRIPTOR_BINDINGS_V1
+            || staged
+                .bindings
+                .iter()
+                .any(|b| b.destination == COMPILER_SERVICE_FD))
+    {
         return Err(rustix::io::Errno::INVAL);
     }
     let mut pidfd_raw = -1_i32;
@@ -548,6 +580,17 @@ unsafe fn child_exec(
         }) {
             child_fail(staged.exec_status_writer.as_raw_fd(), stage);
         }
+        // Socket SO_PEERCRED must capture the final child identity, not root.
+        let compiler_client = if let Some(transfer) = &staged.compiler_child_channel_transfer {
+            let client =
+                compiler_channel::create_and_transfer(transfer.as_raw_fd(), expected_parent);
+            if client < 0 {
+                child_fail(staged.exec_status_writer.as_raw_fd(), 11);
+            }
+            client
+        } else {
+            -1
+        };
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
         if libc::syscall(
             libc::SYS_write,
@@ -583,6 +626,13 @@ unsafe fn child_exec(
             {
                 child_fail(staged.exec_status_writer.as_raw_fd(), 8);
             }
+        }
+        if compiler_client >= 0
+            && (libc::syscall(libc::SYS_dup3, compiler_client, COMPILER_SERVICE_FD, 0)
+                != c_long::from(COMPILER_SERVICE_FD)
+                || libc::syscall(libc::SYS_close, compiler_client) != 0)
+        {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 12);
         }
         let name = c"fe2o3-protected-service";
         let arguments = [name.as_ptr().cast_mut(), std::ptr::null_mut()];

@@ -2,7 +2,7 @@
 use super::*;
 use crate::native_work;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 
 const SOURCE: usize = 1 << 20;
 const LIMIT: usize = 1 << 32;
@@ -61,6 +61,202 @@ impl Fixture {
     fn streams(&self) -> [Option<BorrowedFd<'_>>; 3] {
         [Some(self.reader.as_fd()), Some(self.writer.as_fd()), None]
     }
+    fn stage_channel(
+        &self,
+        standard_io: [Option<BorrowedFd<'_>>; 3],
+        bindings: &[Binding<'_>],
+        transfer: BorrowedFd<'_>,
+        b: &mut Budget<'_>,
+    ) -> Result<(Stage, Storage)> {
+        // Inert staging only, never a claim of authenticated root custody.
+        unsafe {
+            Stage::stage_compiler_with_child_channel(
+                &self.file,
+                &self.arguments,
+                &self.environment,
+                self.cwd.as_fd(),
+                standard_io,
+                bindings,
+                self.writer.as_fd(),
+                self.reader.as_fd(),
+                self.writer.as_fd(),
+                transfer,
+                SOURCE,
+                b,
+            )
+        }
+    }
+}
+
+fn transfer_pair(kind: rustix::net::SocketType) -> (OwnedFd, OwnedFd) {
+    rustix::net::socketpair(
+        rustix::net::AddressFamily::UNIX,
+        kind,
+        rustix::net::SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap()
+}
+
+#[test]
+fn channel_staging_pins_exact_high_cloexec_transfer_and_charges_full_quota() {
+    let f = Fixture::new();
+    let (receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    let mut work = Work::new(Stage::COMPILER_CHILD_CHANNEL_STAGING_WORK);
+    let mut b = Budget::new(
+        &mut work,
+        SOURCE + Stage::compiler_staging_scratch_for_sources(SOURCE).unwrap(),
+    );
+    b.reserve_storage(SOURCE).unwrap();
+    let ledger = b.work_ledger_identity_v1();
+    let (stage, charge) = f
+        .stage_channel(f.streams(), &[], transfer.as_fd(), &mut b)
+        .unwrap();
+    assert_eq!(b.work(), Stage::COMPILER_CHILD_CHANNEL_STAGING_WORK);
+    assert_eq!(b.storage(), SOURCE);
+    assert!(ledger == b.work_ledger_identity_v1());
+    assert_eq!(
+        b.peak_storage(),
+        SOURCE + Stage::compiler_staging_scratch_for_sources(SOURCE).unwrap()
+    );
+    assert_eq!(charge.additional_storage(), stage.retained_storage());
+    let actual = stage.compiler_child_channel_transfer().unwrap();
+    assert!(actual.as_raw_fd() >= FLOOR);
+    assert!(
+        rustix::io::fcntl_getfd(actual)
+            .unwrap()
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    );
+    assert_eq!(
+        rustix::fs::fstat(actual).unwrap().st_ino,
+        rustix::fs::fstat(&transfer).unwrap().st_ino
+    );
+    assert!(
+        stage
+            .binding(compiler_child_channel::COMPILER_SERVICE_FD)
+            .is_none()
+    );
+    assert_eq!(
+        stage.spawn_work(63).unwrap(),
+        Stage::spawn_work_for(3, 63).unwrap()
+            + native_work::COMPILER_CWD_WORK
+            + native_work::COMPILER_CHANNEL_WORK
+    );
+    assert_eq!(
+        stage.spawn_retaining_work::<()>(63, 0).unwrap(),
+        Stage::SPAWN_WORK
+            + native_work::child_work(3, 63).unwrap()
+            + native_work::COMPILER_CWD_WORK
+            + native_work::COMPILER_CHANNEL_WORK
+            + crate::ProtectedServiceCleanupServiceV2::retained_launch_work::<()>(0).unwrap()
+    );
+    drop(transfer);
+    rustix::net::send(actual, b"pinned", rustix::net::SendFlags::NOSIGNAL).unwrap();
+    let mut bytes = [0; 6];
+    assert_eq!(rustix::io::read(&receiver, &mut bytes).unwrap(), 6);
+    assert_eq!(&bytes, b"pinned");
+}
+
+#[test]
+fn channel_stage_refuses_underfunding_before_transferring_or_retiring_sources() {
+    let f = Fixture::new();
+    let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    let peak = SOURCE + Stage::compiler_staging_scratch_for_sources(SOURCE).unwrap();
+    let complete = Stage::COMPILER_CHILD_CHANNEL_STAGING_WORK;
+    for (work_limit, storage_limit, reserved, category) in [
+        (ENTRY - 1, peak, SOURCE, 0),
+        (complete - 1, peak, SOURCE, 0),
+        (complete, peak, SOURCE - 1, 1),
+        (complete, peak - 1, SOURCE, 2),
+    ] {
+        let mut work = Work::new(work_limit);
+        let mut b = Budget::new(&mut work, storage_limit);
+        b.reserve_storage(reserved).unwrap();
+        let error = f
+            .stage_channel(f.streams(), &[], transfer.as_fd(), &mut b)
+            .unwrap_err();
+        assert_eq!(b.storage(), reserved);
+        match category {
+            0 => assert!(matches!(error, Error::Resource(Resource::Work(_)))),
+            1 => assert!(matches!(error, Error::Resource(Resource::Accounting))),
+            _ => assert!(matches!(error, Error::Resource(Resource::Storage(_)))),
+        }
+    }
+}
+
+#[test]
+fn channel_slot_collisions_and_total_descriptor_limit_refuse_during_staging() {
+    let f = Fixture::new();
+    let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(SOURCE).unwrap();
+    let collision = [Binding::new(f.file.as_fd(), 195).unwrap()];
+    assert!(matches!(
+        f.stage_channel(f.streams(), &collision, transfer.as_fd(), &mut b),
+        Err(Error::State(
+            "invalid or duplicate native compiler destination"
+        ))
+    ));
+    let (old, _) = f.stage(f.streams(), &collision, &f.cwd, &mut b).unwrap();
+    assert!(old.binding(195).is_some());
+    assert!(old.compiler_child_channel_transfer().is_none());
+    for (count, allowed) in [(29, true), (30, false)] {
+        let bindings: Vec<_> = (3..count + 3)
+            .map(|fd| Binding::new(f.file.as_fd(), fd).unwrap())
+            .collect();
+        assert_eq!(
+            f.stage_channel(f.streams(), &bindings, transfer.as_fd(), &mut b)
+                .is_ok(),
+            allowed
+        );
+    }
+    // With closed stdio and no normal bindings the one generated destination
+    // still satisfies the common child's nonempty bounded table requirement.
+    let (stage, _) = f
+        .stage_channel([None; 3], &[], transfer.as_fd(), &mut b)
+        .unwrap();
+    assert_eq!(
+        stage.spawn_work(63).unwrap(),
+        Stage::spawn_work_for(1, 63).unwrap()
+            + native_work::COMPILER_CWD_WORK
+            + native_work::COMPILER_CHANNEL_WORK
+    );
+    assert_eq!(b.storage(), SOURCE);
+}
+
+#[test]
+fn channel_stage_refuses_non_socket_wrong_type_and_unconnected_transfer() {
+    let f = Fixture::new();
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(SOURCE).unwrap();
+    assert!(
+        f.stage_channel(f.streams(), &[], f.file.as_fd(), &mut b)
+            .is_err()
+    );
+    for kind in [
+        rustix::net::SocketType::STREAM,
+        rustix::net::SocketType::DGRAM,
+    ] {
+        let (_receiver, transfer) = transfer_pair(kind);
+        assert!(matches!(
+            f.stage_channel(f.streams(), &[], transfer.as_fd(), &mut b),
+            Err(Error::State("compiler channel transfer is not seqpacket"))
+        ));
+    }
+    let unconnected = rustix::net::socket_with(
+        rustix::net::AddressFamily::UNIX,
+        rustix::net::SocketType::SEQPACKET,
+        rustix::net::SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    assert!(
+        f.stage_channel(f.streams(), &[], unconnected.as_fd(), &mut b)
+            .is_err()
+    );
+    assert_eq!(b.storage(), SOURCE);
 }
 
 #[test]

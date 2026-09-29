@@ -145,3 +145,85 @@ composition also exists; installed native activation and protected startup remai
 unfinished/unvalidated. Rootless clone and
 cleanup tests do not establish successful protected startup. See the
 [compiler launch checkpoint](../../docs/evidence/conditional-native-compiler-launch-20260926.md).
+
+### Opt-In Native Compiler Child Channel
+
+`native_spawn::StagedProtectedServiceExecV2::stage_compiler_with_child_channel`
+takes the same inputs as `stage_compiler`, with an additional borrowed
+`child_channel_transfer` immediately after `exec_status`. It pins that endpoint
+above FD 400 with CLOEXEC and exposes `compiler_child_channel_transfer()` for
+final contextual validation. Ordinary `stage_compiler` and service callers keep
+their existing behavior, including ordinary binding 195 when no channel is opted
+in. Opt-in staging rejects destination 195 collisions before duplicating or
+cloning. Its generated destination counts toward the total 32-descriptor ceiling,
+including present standard streams; a channel-only table is nonempty.
+
+Supply a fresh, private, unnamed UNIX seqpacket control pair created by the actual
+root parent. Enable SO_PASSCRED on the receiving end before clone. The caller
+must validate the final staged transfer against its original control custody and
+must not install either control endpoint as a compiler binding. Staging checks
+type and connected unnamed addresses; these structural checks do not establish
+root ownership, caller authority or deployment admission. The raw child also
+requires SO_PEERCRED on the control sender to name its expected parent with root
+UID/GID, after the existing complete credential drop, readback and PDEATHSIG rearm.
+
+Only then does the child create the actual CLOEXEC seqpacket pair, so its
+SO_PEERCRED records the child's final PID/UID/GID. It duplicates the client above
+FD 400, closes the original client, and sends exactly one service right and the
+24-byte `FE2CEC2\0` v2 record with child PID, FD195 and parent PID. One direct
+`sendmsg(MSG_DONTWAIT | MSG_NOSIGNAL)` attempt is allowed, with no retry even for
+EINTR. The child closes the service and staged control sender before READY. The
+client stays high and CLOEXEC while gated. After release, the common close_range
+and ordinary descriptor bindings run first; only then does dup3 install the
+client at 195 without CLOEXEC and close the high duplicate, before cwd and exec.
+Socketpair may initially return 195 or a standard stream slot without colliding
+with any high staged source. No parent reservation of numeric FD195 is needed:
+clone does not share the descriptor table, and the raw child creates no threads.
+Failures use the existing status/exit and cleanup owner; setup uses stage byte
+`0xcb`, and final installation uses `0xcc`. A failed operation can follow a
+delivered transfer, so receipt or READY alone must never confer authority.
+
+The root-level `compiler_service_channel` module exports `TRANSFER_BYTES`,
+`COMPILER_SERVICE_FD`, `encode_transfer(child_pid, parent_pid)` and
+`transfer_matches(&wire, child_pid, parent_pid)`. Encoding returns `Option` and
+refuses zero or out-of-range Linux PIDs. These are inert, bounded wire helpers,
+also available as `native_spawn::compiler_child_channel`; decoding a `Transfer`
+does not create process or endpoint authority. The root coordinator separately
+receives with `launch_io::receive_ready_from::<24, true, _>`, binds actual
+SCM_CREDENTIALS and service SO_PEERCRED to admitted credentials and its retained
+original clone pidfd, checks exact child/parent wire claims and liveness, and
+owns gate release and terminal observation. Do not reopen a numeric PID or use
+the public client's same-UID handoff for this distinct-UID root receipt. That
+public client path is unchanged.
+
+Accounting uses the original request ledger, with no new production account:
+
+- `COMPILER_CHILD_CHANNEL_STAGING_WORK` adds five operation allowances and 256
+  scalar work units: three socket shape observations, duplication and eventual
+  or partial close. The ordinary compiler stage quota is unchanged.
+- `compiler_staging_scratch_for_sources` covers either stage. `source_storage`
+  must include all original control/source owners and backing allocations. The
+  returned FULL retained charge includes the optional File in the staged owner;
+  original owners and reservations remain independent.
+- `spawn_work` and `spawn_retaining_work` add ten operation allowances, 256
+  scalar units and `(24 + 24) * 64` wire/ancillary units. These cover peer readback,
+  getpid/getppid, socketpair, high duplication, sendmsg, three pre-gate closes and
+  the final high close. The generated descriptor's ordinary count funds its dup3
+  exactly once. The common child failure suffix remains prepaid.
+- `SPAWN_SCRATCH` explicitly includes four copies of the fixed payload, rights,
+  msghdr, iovec, ucred, FD pair and socklen ABI storage plus 256 control bytes.
+  Receipt, returned right/pidfd storage and contextual admission have separate
+  coordinator charges. Quotas bound logical work/storage, not kernel socket
+  memory, syscall latency, generated stack or child RSS.
+
+Raw-child additions use fixed scalar/ABI records and direct syscalls, without
+allocation, panicking conversions, destructors or retry loops. Error returns go
+immediately to the existing child failure exit; partial descriptor cleanup is
+performed by kernel process teardown. The ignored
+`child_created_channel_survives_gate_and_exec_and_refuses_failed_send_or_gate`
+test requires isolated root, CAP_SYS_PTRACE, clone3/pidfd_getfd and a statically
+built `tests/fixtures/native_compiler_exec.c`, selected with
+`FE2O3_NATIVE_COMPILER_EXEC_FIXTURE`. It checks final credentials, original-pidfd
+custody, high CLOEXEC gating, post-exec FD195 exchange, transfer backpressure and
+wrong gate refusal. These are mechanical diagnostics, not compiler/deployment
+admission evidence.

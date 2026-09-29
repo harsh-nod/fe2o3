@@ -59,6 +59,8 @@ mod domain_spawn;
 use domain_spawn::Placement;
 #[path = "native_compiler_arguments.rs"]
 pub(crate) mod compiler_arguments;
+#[path = "native_compiler_child_channel.rs"]
+pub mod compiler_child_channel;
 #[path = "native_compiler_spawn.rs"]
 mod compiler_spawn;
 #[path = "native_namespace_spawn.rs"]
@@ -181,6 +183,7 @@ impl StagedProtectedServiceExecV2 {
     pub const SPAWN_SCRATCH: usize = 4 * size_of::<Self>()
         + 4 * RootOwnedProtectedServiceChildV2::STORAGE
         + observations::CAPABILITY_CEILING_SCRATCH
+        + syscall::COMPILER_CHANNEL_SCRATCH
         + 8192;
 
     /// Checked conservative full result charge including every duplicated image.

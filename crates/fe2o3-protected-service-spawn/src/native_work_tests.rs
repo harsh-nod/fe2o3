@@ -6,6 +6,31 @@ fn mapping_gate_prepays_read_retries_and_both_closes() {
     assert_eq!(super::MAPPING_GATE_WORK, (64 + 2) * 1088 + 256);
 }
 
+#[test]
+fn compiler_channel_prepays_all_extra_syscalls_and_wire_construction() {
+    let calls = [
+        "SO_PEERCRED",
+        "getpid",
+        "getppid",
+        "socketpair",
+        "F_DUPFD_CLOEXEC",
+        "close original client",
+        "sendmsg",
+        "close service",
+        "close transfer",
+        "close high client",
+    ];
+    assert_eq!(
+        super::COMPILER_CHANNEL_WORK,
+        calls.len() * 1088 + 256 + (24 + 24) * 64
+    );
+    // Installation is charged once through the generated descriptor's count.
+    assert_eq!(
+        child_work(2, 63).unwrap() - child_work(1, 63).unwrap(),
+        1088
+    );
+}
+
 // Independent syscall transcript, without the implementation's aggregated counts or weights.
 fn transcript_work(descriptors: usize, cap_last_cap: u32) -> usize {
     let mut work = 256;

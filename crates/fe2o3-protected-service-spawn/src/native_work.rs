@@ -10,6 +10,13 @@ const CONTROL_WORK: usize = 256;
 // Compiler mode additionally changes cwd after the common stdio close/remap.
 pub(crate) const COMPILER_CWD_WORK: usize = OPERATION_WORK;
 
+// SO_PEERCRED, getpid/getppid, socketpair, high-FD fcntl, three pre-gate
+// closes, sendmsg, and final high-FD close. The final dup3 is already included
+// in descriptor_count/child_work. Wire and ancillary construction are explicit.
+pub(crate) const COMPILER_CHANNEL_WORK: usize = 10 * OPERATION_WORK
+    + CONTROL_WORK
+    + (crate::native_spawn::compiler_child_channel::TRANSFER_BYTES + 24) * 64;
+
 /// Optional pre-profile namespace gate: bounded reads and both child-side closes.
 pub(crate) const MAPPING_GATE_WORK: usize =
     (crate::pre_exec::MAX_CHILD_GATE_ATTEMPTS_V2 + 2) * OPERATION_WORK + CONTROL_WORK;
