@@ -90,6 +90,13 @@ def mutations(body):
         ("forgets-predecessor", "$owner.next_generation = next_generation;", "$owner.next_generation = next_generation; $owner.predecessor_detached_generation = None;"),
     ):
         add(name, old, new, "reserve")
+    # Express the removed guard's Rust truncation with an equivalent bounded
+    # remainder, so this is a logical identity failure, not a cast recommendation.
+    data, focus = cases["truncates-index"]
+    cast = "let slot_index_u16 = slot_index as u16;"
+    need(data.count(cast) == 1, "unique truncated-index cast")
+    cases["truncates-index"] = (data.replace(cast,
+        "let slot_index_u16 = (slot_index % (u16::MAX as usize + 1)) as u16;"), focus)
     need(len(cases) == len(set(cases.values())) == 28, "distinct epoch mutation roster")
     return cases
 

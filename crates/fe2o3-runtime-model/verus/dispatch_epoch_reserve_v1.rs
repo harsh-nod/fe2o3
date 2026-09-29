@@ -115,7 +115,7 @@ impl<C> DispatchGenerationOwnerV1<C> {
 
 // Real shared calls, no constructor premise: cancel frees only the phase and
 // the next reservation consumes the same slot with both counters advanced.
-fn reserve_cancel_reserve<C>(owner: &mut DispatchGenerationOwnerV1<C>, queue: QueueKeyV1,
+fn reserve_cancel_reserve_witness<C>(owner: &mut DispatchGenerationOwnerV1<C>, queue: QueueKeyV1,
     roster: CompletionDispatchRosterV1)
     requires reserve_error(old(owner).state(), queue, roster).is_none(),
         old(owner).next_generation < u64::MAX - 1,
