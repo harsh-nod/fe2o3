@@ -27,6 +27,7 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 
 mod compiler_image;
+mod native_capture;
 mod protected_rustc;
 mod sealed_memfd;
 
@@ -34,6 +35,7 @@ pub use compiler_image::{
     COMPILER_IMAGE_MEASUREMENT_STORAGE_V1, CompilerImageMeasurementErrorV1, CompilerImageRoleV1,
     measure_compiler_image_file_sha256_v1, measure_compiler_image_sha256_v1,
 };
+pub use native_capture::{CapturedStdioDescriptorV1, CapturedStdioV1};
 
 pub use protected_rustc::{
     CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1,
