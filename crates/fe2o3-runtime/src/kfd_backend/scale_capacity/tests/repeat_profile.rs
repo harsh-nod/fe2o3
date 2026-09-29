@@ -95,19 +95,19 @@ fn repeated_output_preparation_requires_its_own_gate_signature_and_exact_inputs(
         launch.kernel = original_kernel;
         denied(&mut backend, &launch);
         launch.kernel = repeat_kernel;
-        for allocation in allocations[..2].iter().copied() {
-            let original = backend.allocations[&allocation].content_sha256;
+        for allocation in &allocations[..2] {
+            let original = backend.allocations[allocation].content_sha256;
             for changed in [None, Some([0; 32])] {
                 backend
                     .allocations
-                    .get_mut(&allocation)
+                    .get_mut(allocation)
                     .unwrap()
                     .content_sha256 = changed;
                 denied(&mut backend, &launch);
             }
             backend
                 .allocations
-                .get_mut(&allocation)
+                .get_mut(allocation)
                 .unwrap()
                 .content_sha256 = original;
         }
