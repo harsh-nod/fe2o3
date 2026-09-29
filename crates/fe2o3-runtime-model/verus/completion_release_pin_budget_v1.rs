@@ -88,6 +88,7 @@ fn validate_reserved_release_pin_budgets<I: Iterator<Item = (u32, u32)>, E>(
         }],
         [proof { assert(*available == capacity(before_iter.remaining(), before, index)); }],
         [proof {
+            assert(capacity(before_iter.remaining(), before, index) > 0);
             assert(remaining@ =~= before.insert(index, (capacity(before_iter.remaining(), before, index) - 1) as u32));
             debit_preserves_decision(before_iter.remaining(), before);
             assert(sufficient(before_iter.remaining(), before) == sufficient(budgets.remaining(), remaining@));
