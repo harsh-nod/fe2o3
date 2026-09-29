@@ -55,6 +55,13 @@ mod launch_manifest_adapter;
 mod launch_manifest_codec;
 mod launch_manifest_v2;
 mod launch_manifest_v3;
+mod proof_executor_bootstrap_v1;
+pub use proof_executor_bootstrap_v1::{
+    PROOF_EXECUTOR_BOOTSTRAP_BYTES_V1, PROOF_EXECUTOR_BOOTSTRAP_STORAGE_V1,
+    PROOF_EXECUTOR_BOOTSTRAP_WORK_V1, ProofExecutorBootstrapErrorV1,
+    ProofExecutorBootstrapFramingErrorV1, ProofExecutorBootstrapKindV1,
+    ProofExecutorBootstrapRecordV1, ProofExecutorBootstrapStorageV1,
+};
 mod receipt_carriage_adapter;
 mod receipt_carriage_v2;
 mod receipt_carriage_v3;

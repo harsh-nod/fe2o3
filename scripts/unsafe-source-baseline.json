@@ -1044,7 +1044,7 @@
     "block": 1
   },
   "crates/fe2o3-protected-service-spawn/src/launch_io_tests.rs": {
-    "block": 3
+    "block": 5
   },
   "crates/fe2o3-protected-service-spawn/src/native_child.rs": {
     "function": 1
@@ -1117,6 +1117,9 @@
     "block": 21,
     "extern_block": 2
   },
+  "crates/fe2o3-verifier/src/bin/proof_executor_helper.rs": {
+    "block": 1
+  },
   "crates/fe2o3-verifier/src/functional_refinement_executor_socket_v1_tests.rs": {
     "block": 3,
     "extern_block": 1
@@ -1154,6 +1157,17 @@
   },
   "crates/fe2o3-verifier/src/portable_reference_v1/codec.rs": {
     "block": 1
+  },
+  "crates/fe2o3-verifier/src/proof_executor_helper_io_v1.rs": {
+    "block": 6,
+    "function": 2
+  },
+  "crates/fe2o3-verifier/src/proof_executor_helper_io_v1_tests.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-verifier/src/proof_executor_helper_v1.rs": {
+    "block": 2,
+    "function": 1
   },
   "crates/fe2o3-verifier/tests/support/recorder.rs": {
     "block": 1,

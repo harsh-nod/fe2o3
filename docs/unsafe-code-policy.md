@@ -41,6 +41,17 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The dedicated proof-helper entry owns raw FD 3 before the first fallible check,
+validates it before opening other descriptors, duplicates it with CLOEXEC and
+closes the original exactly once. Its six mechanical unsafe blocks inspect raw
+flags, borrow that live descriptor, close it, close unrelated descriptor ranges,
+and poll one initialized parent pidfd. The two unsafe mechanical functions and
+the public consuming entry require a sole dedicated secure-start process; these
+are not shared-application APIs. The binary has one call block and the entry has
+two. Four test blocks operate only in disposable subprocesses. Numeric parent
+root and startup acknowledgments do not supply host-root provenance or proof
+authority; the actual creator and outside whole-domain custodian remain required.
+
 The gated namespace collector in `child_namespace_report.rs` uses six unsafe
 blocks and one private syscall function because post-clone observation cannot
 use allocating or TLS-dependent wrappers. Its x86-64 stat buffer layout and

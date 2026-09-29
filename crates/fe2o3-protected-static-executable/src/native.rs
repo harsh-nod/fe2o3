@@ -8,7 +8,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
-use fe2o3_runtime_protocol::{
+use fe2o3_static_executable_format::{
     SEALED_STATIC_APPLICATION_WORKSPACE_BYTES_V1, sealed_static_application_work_bound_v1,
 };
 use std::{error::Error, fmt, fs::File, mem::size_of};

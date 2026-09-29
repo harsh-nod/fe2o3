@@ -141,6 +141,7 @@ fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
 fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
 fe2o3-runtime-model = { path = "crates/fe2o3-runtime-model" }
 fe2o3-runtime-protocol = { path = "crates/fe2o3-runtime-protocol" }
+fe2o3-static-executable-format = { path = "crates/fe2o3-static-executable-format" }
 fe2o3-runtime = { path = "crates/fe2o3-runtime" }
 fe2o3-virtual-runtime = { path = "crates/fe2o3-virtual-runtime" }
 fe2o3-virtual-runtime-cli = { path = "crates/fe2o3-virtual-runtime-cli" }
