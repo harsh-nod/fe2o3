@@ -1,6 +1,6 @@
 # Native Compiler Channel Checkpoint
 
-Date: 2026-09-28. Tested code: `af38925e855cea419b9cf62b605dc057d9d6320e`.
+Date: 2026-09-28 (PDT). Tested code: `bdeeb678a411d29ec59eab9397c9993a20def4a9`.
 
 [Issue #272](https://github.com/harsh-nod/fe2o3/issues/272) remains incomplete.
 These changes validate process mechanics, not a production compiler transaction,
@@ -26,16 +26,20 @@ protected proof execution, GPU execution, or 47/47 tutorial completion.
 
 ## Validation
 
-The final serialized guards used one unchanged 9,261-file source snapshot:
-`e9da5a2f4576d6febc282a5829ed1b32d477cec9749cef9651241ea58ee1ccb5`.
+The final serialized test and compiler-check guards used one unchanged
+9,264-file source snapshot:
+`54fa34347f622915fc1c581b731885f3462283857aa23963f3e78f41cc74804f`.
+This includes the concurrent integer-worklist change from `10789570b`, preserved
+by a normal merge; the V2 worklist is not activated in the default pipeline.
 
-- Coordinator, spawn, client and supervisor: **804 unit/integration tests and
-  256 doctests passed**; 51 environment-dependent tests ignored locally.
+- Coordinator, spawn, client, supervisor and GPU dialect: **894 unit/integration
+  tests and 256 doctests passed**; 51 environment-dependent tests ignored locally.
 - `cargo-fe2o3`, `rustc-codegen-fe2o3` and coordinator: all-target check passed,
   with existing warnings.
 - Unsafe-source policy: 5 passed; its maintenance test remained ignored.
-- Scoped formatting, diff checks, eight hygiene-policy self-tests and the hygiene
-  delta from `6152314066` passed. Nested test processes are not extra suite counts.
+- Scoped formatting, diff checks and eight hygiene-policy self-tests passed.
+  Hygiene deltas passed before merge from `6152314066` and after merge from
+  `10789570b`. Nested test processes are not extra suite counts.
 
 Two isolated-root diagnostics passed on `mi350-2`:
 
@@ -48,9 +52,11 @@ Two isolated-root diagnostics passed on `mi350-2`:
 
 The tests used a read-only, networkless, resource-limited container and a static
 fixture, not an approved compiler. The final coordinator binary SHA256 was
-`1c0fc2aba3334c3dc93efccc3f33f6c1f926727bb7b02269ee4395cbe72b57c8`;
+`d996edb8b1fea3de06099d6f13df2449733c9c3c03054b663d2a728068ad96cc`;
 the native-spawn binary was
 `2e2c654e165ea0c54148a879d3c79c44fd945220fb927f1c7733b7ee99093ac7`.
+The coordinator diagnostic was rerun after the merge; the native-spawn binary
+remained byte-for-byte identical to its successful diagnostic run.
 Every attempt's container, scratch files and private SSH connection were removed.
 Earlier diagnostic fixture failures were preserved and fixed, not counted as passes.
 
