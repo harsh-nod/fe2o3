@@ -23,7 +23,8 @@ use std::{
 
 pub(super) const ENDPOINT_STORAGE: usize = size_of::<(OwnedFd, usize)>();
 pub(super) const TIMEOUT: Duration = Duration::from_secs(120);
-const MAX_ATTEMPTS: usize = 128;
+const MAX_ATTEMPTS: usize = transport::MAX_PHASE_ATTEMPTS;
+const POLL_INTERVAL: Duration = Duration::from_millis(1);
 const ENTRY: usize = 8;
 const CHECK_WORK: usize = ENTRY + 64 * 1088;
 const CHECK_FRAME: usize = 4 * size_of::<RootEndpoint<'static>>()
@@ -157,7 +158,7 @@ impl<'work> RootEndpoint<'work> {
         b.with_prepaid_scope(Self::STORAGE, ENTRY, CHECK_WORK, CHECK_FRAME, |b| {
             self.check(b)?;
             let remaining = remaining(deadline)?;
-            let timeout = event::Timespec::try_from(remaining.min(Duration::from_secs(1)))
+            let timeout = event::Timespec::try_from(remaining.min(POLL_INTERVAL))
                 .map_err(|_| Error::rejected("root gate pause overflow"))?;
             let flags = if writable {
                 event::PollFlags::OUT

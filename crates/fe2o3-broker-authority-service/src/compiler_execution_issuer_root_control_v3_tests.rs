@@ -101,14 +101,20 @@ fn exact_preflight_quote_reaches_real_endpoint_shape_and_creator_checks() {
 #[test]
 fn handshake_has_one_finite_attempt_counter_and_original_deadline() {
     assert_eq!(TIMEOUT, Duration::from_secs(120));
+    assert_eq!(MAX_ATTEMPTS, transport::MAX_PHASE_ATTEMPTS);
+    assert_eq!(POLL_INTERVAL, Duration::from_millis(1));
     let deadline = Instant::now() + TIMEOUT;
     let mut attempts = 0;
-    for expected in 1..=128 {
+    // Waiting for the root's actual image measurement must cross the old cap.
+    for expected in 1..=129 {
         permit_attempt(deadline, &mut attempts).unwrap();
         assert_eq!(attempts, expected);
     }
+    attempts = MAX_ATTEMPTS - 1;
+    permit_attempt(deadline, &mut attempts).unwrap();
+    assert_eq!(attempts, MAX_ATTEMPTS);
     assert!(permit_attempt(deadline, &mut attempts).is_err());
-    assert_eq!(attempts, 128);
+    assert_eq!(attempts, MAX_ATTEMPTS);
     for deadline in [
         Instant::now(),
         Instant::now() + TIMEOUT + Duration::from_secs(1),
