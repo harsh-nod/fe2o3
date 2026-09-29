@@ -2,7 +2,7 @@
 
 ## Milestone Snapshot
 
-As of 2026-09-28 UTC, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
+As of 2026-09-29 UTC, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
 remains open. These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -23,6 +23,23 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [allocation-free event binder and publication prefix](evidence/dev-allocation-free-event-bind-2026-09-28/README.md)
+remove the binder's explicit post-publication scratch allocation while retaining
+O(N) work and exact validation order. Shared executable bodies prove unchanged
+logical state on binder refusal, exact packet-ID rewrites on success and the
+Published prefix retained by the actual caller on later binding refusal.
+The new no-cheating root passes 43 overlapping obligations; six signed campaigns,
+including affected cancellation/release/rollback regressions, pass 142 stages
+and 94 executable negatives at 6225 unchanged source hashes. Release and rollback
+retain their two disclosed reservation contracts. Final KFD passes 1424/0 (320
+construction tests excluded), runtime 1828/0 with 30 hardware ignores, and
+doctests 124/0. Static checks, independent absence of all 159 recorded groups and
+archive restore pass. The initial diagnostic-rejected campaign is retained.
+CPU tests observe zero allocations in the binder only; later lane-event collection
+still allocates. Next are pre-native event-issuance provenance and pre-publication
+reservation of that output. Native authority, outer terminalization, GPU/performance
+and A1/A2 gates remain open; no HIP/HSA speedup is claimed.
 
 The [native source failure settlement](evidence/dev-native-source-failure-2026-09-28/README.md)
 shares the actual inline failure join and both native/resource cancellation
