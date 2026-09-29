@@ -8,6 +8,7 @@ use fe2o3_artifact_transaction::{
     acquire_compiler_module_handoff_currentness_lease_with_quote_v5 as acquire_quoted,
     quote_compiler_module_handoff_currentness_custody_v5 as custody_quote,
     try_acquire_artifact_lock_retirement_barrier_v1 as retirement_barrier,
+    try_recover_compiler_module_handoff_receipt_v5 as try_recover,
 };
 use fe2o3_protected_service_spawn::{
     LateRetainedCustodyV2 as Holder, ProtectedServiceCleanupServiceV2 as Cleanup,
@@ -82,8 +83,8 @@ impl RootPublicationCustodyV3 {
             let receipt = {
                 // Recovery may create temporary OutputLocks on failing paths.
                 // Exclude spawns through their complete rollback/destruction.
-                let _barrier = retirement_barrier()?;
-                recover(&output, &expected.producer, expected.attempt, b)
+                let barrier = retirement_barrier()?;
+                try_recover(&output, &expected.producer, expected.attempt, &barrier, b)
                     .map_err(NativeOccurrenceError::from)?
             };
             let quote = custody_quote(&output, &expected.producer, receipt)

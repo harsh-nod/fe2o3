@@ -76,9 +76,10 @@ The private broker `RootControlReplayWindowV3` orders inert records for one
 connection. The challenge-completed connection retains an empty window for the
 future RPC dispatcher; no publication operation uses it yet. It retains a
 binding and at most one request/reply pair, with the full maximum storage charge
-prepaid even while empty. Every operation checks the original ledger, Budget
-address, process and kernel thread. Its work and scratch quotes include nested
-protocol comparisons; refusal restores entry storage without refunding work or
+prepaid even while empty. Admission, queries, request acceptance, and reply
+preparation check the original ledger, Budget address, process and kernel thread.
+Its work and scratch quotes include nested protocol comparisons; refusal restores
+entry storage without refunding work or
 denial history.
 
 The first request must have sequence 1. An exact duplicate of a pending request

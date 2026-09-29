@@ -13,6 +13,7 @@ use fe2o3_compiler_ffi::{
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::{
     os::fd::AsRawFd,
+    os::unix::fs::PermissionsExt,
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     time::{Duration, Instant},
@@ -31,6 +32,8 @@ fn isolated() -> bool {
         "::actual_pair_retains_locks_on_refusal_and_unwind"
     );
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    let runtime = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(runtime.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     command
         .arg("--exact")
         .arg(
@@ -38,7 +41,10 @@ fn isolated() -> bool {
                 .unwrap(),
         )
         .arg("--nocapture")
-        .env(CHILD, "1");
+        .env(CHILD, "1")
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env_remove("FE2O3_ARTIFACT_PATH_GUARD_DIR")
+        .env_remove("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY");
     let mut child = with_artifact_process_spawn_v1(|| command.spawn()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -83,6 +89,8 @@ fn actual_pair_retains_locks_on_refusal_and_unwind() {
     if isolated() {
         return;
     }
+    // All fixture paths and contenders live in this one isolated process/namespace.
+    fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
     for mode in ["success", "scope-refusal", "unwind", "token-work-refusal"] {
         let directory = tempfile::tempdir().unwrap();
         let mut work = Work::new(usize::MAX);
