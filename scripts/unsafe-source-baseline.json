@@ -179,6 +179,9 @@
   "crates/fe2o3-compiler-closure-capability/src/compiler_execution_policy.rs": {
     "block": 1
   },
+  "crates/fe2o3-compiler-closure-capability/src/compiler_execution_signing_key_service_transfer_v3_tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-compiler-closure-capability/src/native_policy_inheritance_tests.rs": {
     "block": 5
   },
@@ -231,8 +234,12 @@
   "crates/fe2o3-compiler-execution-client/tests/native_inherited/support.rs": {
     "block": 5
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/compiler_channel_trace.rs": {
+    "block": 1,
+    "function": 1
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/compiler_child_channel_tests.rs": {
-    "block": 2
+    "block": 3
   },
   "crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs": {
     "block": 3

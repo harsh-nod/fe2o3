@@ -130,7 +130,7 @@ fn native_child_channel_joins_original_pidfd_before_trace() {
         }
     }
     let mut pool = Drain(Cleanup::admit(Account::new(Work::new(LIMIT), LIMIT)).unwrap());
-    for case in 0..8 {
+    for case in 0..9 {
         run_native(case, &mut pool.0);
     }
 }
@@ -374,6 +374,7 @@ fn run_native(case: usize, pool: &mut Cleanup) {
             ))
             .is_err()
     );
+    let transfer_floor = b.storage();
     let transfer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         trace.with_issuer_inputs(&mut b, |client, peer, pidfd, dependency, same| {
             assert_eq!(client.pid(), child_pid);
@@ -387,7 +388,15 @@ fn run_native(case: usize, pool: &mut Cleanup) {
             if case == 7 {
                 panic!("diagnostic transfer unwind");
             }
-            Ok(dependency)
+            if case == 8 {
+                let charge = dependency.retained_storage();
+                drop(dependency);
+                // Callback success cannot commit a transfer whose enclosing
+                // scope subsequently rejects an under-retired reservation.
+                same.release_storage(charge + 1)?;
+                return Ok(None);
+            }
+            Ok(Some(dependency))
         })
     }));
     let dependency = if case == 7 {
@@ -396,8 +405,15 @@ fn run_native(case: usize, pool: &mut Cleanup) {
     } else {
         let transferred = transfer.unwrap();
         assert_eq!(transferred.is_ok(), case == 0);
-        transferred.ok()
+        if case == 8 {
+            assert!(matches!(
+                transferred,
+                Err(Error::Resource(Resource::Accounting))
+            ));
+        }
+        transferred.ok().flatten()
     };
+    assert_eq!(b.storage(), transfer_floor);
     if let Some(dependency) = &dependency {
         b.reserve_storage(dependency.retained_storage()).unwrap();
     }
@@ -417,6 +433,11 @@ fn run_native(case: usize, pool: &mut Cleanup) {
         );
     } else {
         assert!(trace.resume(&mut b).is_err());
+    }
+    if case == 8 {
+        // Rejection itself must cancel, before an explicit caller cancellation.
+        drain_child(pool, exit_observer.as_fd());
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
     }
     assert_ne!(trace.cancel(), CleanupPoll::Quarantined);
     drain_child(pool, exit_observer.as_fd());

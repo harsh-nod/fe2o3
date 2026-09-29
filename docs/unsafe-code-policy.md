@@ -659,6 +659,22 @@ production unsafe block is needed. Its relay test registers one existing scalar
 send helper in a child-only pre-exec hook. The original same-UID/GID relationship,
 pidfd liveness and protected-runtime refusals remain unchanged.
 
+## Compiler Trace And Key Transfer
+
+The private compiler-channel trace adds one unsafe confirmation function and one
+forwarding block. It preserves the existing original-thread/account trace and
+requires the caller to establish exact native exec-status EOF and closure of all
+inherited artifact-lock aliases, including any in untraced descendants. Its
+diagnostic adds one call block while the non-forking native stage's first exec
+is held. Confirmation releases only the spawn lease, not compiler authority.
+
+The fresh service-owned V3 key transfer adds no production unsafe site. Its
+isolated receiver test adds two scalar libc blocks to drop real/effective/saved
+GID then UID before exercising the unchanged receiver admission. The test requires
+an exact single-test invocation in a disposable process with CHOWN/SETGID/SETUID;
+it is not a shared-process credential API. The root template remains unchanged,
+and a separate read-only sealed image is assigned the deployment's credentials.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

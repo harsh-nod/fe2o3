@@ -175,15 +175,18 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
             &mut Budget<'_>,
         ) -> Result<R>,
     ) -> Result<R> {
-        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+        let mut attempt = InputAttempt {
+            trace: &mut self.trace,
+            phase: &mut self.phase,
+            channel: None,
+        };
+        let result = b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
             // A refused or unwinding callback may already have duplicated inputs.
             // Never replay that transfer, even if a later exec stop is observed.
-            self.phase.begin_transfer(self.trace.poll(b)?.is_exec())?;
-            let attempt = InputAttempt {
-                trace: &mut self.trace,
-                phase: &mut self.phase,
-                channel: self.channel.take(),
-            };
+            attempt
+                .phase
+                .begin_transfer(attempt.trace.poll(b)?.is_exec())?;
+            attempt.channel = self.channel.take();
             let channel = attempt
                 .channel
                 .as_ref()
@@ -191,16 +194,17 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
             channel.revalidate()?;
             let dependency = attempt.trace.retain_dependencies(b)?;
             b.reserve_storage(dependency.retained_storage())?;
-            let result = operation(
+            operation(
                 channel.client,
                 channel.service_peer.as_fd(),
                 channel.client_pidfd.as_fd(),
                 dependency,
                 b,
-            )?;
-            *attempt.phase = Phase::Transferred;
-            Ok(result)
-        })
+            )
+        })?;
+        // Keep cancellation armed through the scope's final accounting checks.
+        *attempt.phase = Phase::Transferred;
+        Ok(result)
     }
 
     /// Resume only after first-exec confirmation. Issuer readiness and approved
@@ -230,7 +234,7 @@ struct InputAttempt<'a, 'work, T: Send + 'static> {
 }
 impl<T: Send + 'static> Drop for InputAttempt<'_, '_, T> {
     fn drop(&mut self) {
-        if *self.phase != Phase::Transferred {
+        if *self.phase == Phase::Transferring {
             *self.phase = Phase::Cancelled;
             let _ = self.trace.cancel();
         }
