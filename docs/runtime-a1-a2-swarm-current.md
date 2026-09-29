@@ -24,6 +24,20 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [dispatch-epoch cancellation refinement and terminal-prefix tests](evidence/dev-dispatch-epoch-cancel-2026-09-28/README.md)
+share all four production identity/roster/cancellation bodies with a no-cheating
+Verus root. Its signed 30-stage campaign passes 16 obligations and all 22 executable
+negatives, with exact refusal and selected-slot-only success for arbitrary owner
+metadata. This proves the retained table's payload projection, not its accounting
+adapter or native authority. Six genuine N=3 CPU cases cover each rollback failure
+stage on both lanes, exact neighbors and cleanup prefixes, burned identities and
+repeated terminal refusal. Final KFD regressions pass 1418/0 (320 construction
+tests excluded), full runtime 1828/0 with 30 hardware ignores, and doctests 124/0.
+Static and formatting checks pass. Both diagnostic-rejected campaigns remain in
+evidence; the classifier is not relaxed. Complete source rollback composition
+and GPU/performance qualification remain open. A1/A2 and accepted lane checkpoints
+are unchanged.
+
 The [complete event-batch release refinement](evidence/dev-event-batch-release-2026-09-28/README.md)
 now shares both reservation stages, ordered validation, aggregate pin checking
 and consuming commit with production. The signed 32-stage campaign passes 28
