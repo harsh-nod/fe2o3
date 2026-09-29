@@ -68,7 +68,15 @@ descriptor checks, profile validation, independent exec EOF, exact readiness plu
 EOF, and liveness checks do not remove the caller's creator-thread, exclusive-wait,
 bounded-Drop and inherited-lock-alias obligations. Its one test-only unsafe block
 stages inert files to check the fixed descriptor map; it never spawns or admits
-them. The shared pipe framer and socket-mode normalization use safe descriptor
+them. The opt-in isolated root startup matrix adds four reviewed call blocks:
+compiler staging, retained clone, held-exec confirmation, and actual V3 issuer
+launch. It constructs genuine prepared inputs, closes all inherited lock aliases,
+keeps the compiler at its first exec stop, and drains the independently funded
+cleanup pool before its creator exits, including during unwinding. These tests
+do not resume a compiler or admit a deployment. The scoped root observation view
+uses safe pidfd/procfs wrappers; its original thread/account and unreaped custody
+checks grant neither compiler admission nor tree supervision.
+The shared pipe framer and socket-mode normalization use safe descriptor
 APIs. This inventory does not establish installed production integration, an
 authorized compiler occurrence, protected proof execution or GPU qualification.
 
@@ -97,6 +105,14 @@ ownership violation. Existing descriptor-substitution and flag-mutation tests
 keep every owner valid while checking continuity refusal. The audit inventory
 also accounts for moved socket/pidfd inspection sites without treating relocation
 as removal of their safety obligations.
+
+The shared x86-64 secure entrypoint restores confinement before inspecting the
+kernel's initial argument table. It requires one nonempty, bounded argv0 and an
+empty initial environment, then writes a private atomic once before libc startup.
+No public setter exists. Rust admission requires that observation and rechecks
+bounded command bytes; it never restores dumpability to read root-owned procfs
+environment data. This extends the existing reviewed assembly boundary without
+adding an unsafe Rust site or granting service identity or proof authority.
 
 The native profile and compiler-execution subject test allocators forward all
 pointer/layout operations unchanged to `System`. Their thread-local counters

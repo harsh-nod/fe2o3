@@ -1,6 +1,6 @@
 //! Typed foreground view over dependencies also owned by the child's fixed slot.
 
-use super::child::{RootTaskTraceEventV2, RootTaskTraceV2};
+use super::child::{RootTaskObservationV2, RootTaskTraceEventV2, RootTaskTraceV2};
 use super::{
     ProtectedServiceSpawnStorageV2 as Storage, Result, RootOwnedProtectedServiceChildV2 as Child,
 };
@@ -130,7 +130,7 @@ pub struct RootRetainedTaskTraceV2<'work, T: Send + 'static> {
     resources: Resources<T>,
 }
 
-impl<T: Send + 'static> RootRetainedTaskTraceV2<'_, T> {
+impl<'work, T: Send + 'static> RootRetainedTaskTraceV2<'work, T> {
     /// Complete original backing and trace charge, including overlap with the pool.
     pub fn retained_storage(&self) -> usize {
         self.trace.retained_storage()
@@ -171,6 +171,22 @@ impl<T: Send + 'static> RootRetainedTaskTraceV2<'_, T> {
     /// Exact root identity, not separate signal or wait authority.
     pub fn pid(&self) -> Pid {
         self.trace.pid()
+    }
+
+    /// Scoped access through the original child, with the full backing floor.
+    /// No compiler admission or consuming wait authority is transferred.
+    pub fn with_task_observation<R, E>(
+        &self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(
+            &RootTaskObservationV2<'_, 'work>,
+            &mut Budget<'_>,
+        ) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<Resource> + From<super::ProtectedServiceSpawnErrorV2>,
+    {
+        self.trace.with_task_observation(b, operation)
     }
 
     /// One consuming root wait; terminal results already notified child cleanup.

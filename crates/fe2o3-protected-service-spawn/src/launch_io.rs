@@ -182,7 +182,8 @@ pub enum Failure {
     InvalidTimeout,
     /// A canonical child failure byte.
     ChildStage(u8),
-    /// The retained child exited before this phase.
+    /// The retained child exited, or its credential-bound bootstrap reached EOF
+    /// before readiness. Bootstrap EOF alone proves neither exit nor reaping.
     ChildExited(&'static str),
     /// Deadline or finite attempts exhausted.
     Timeout(&'static str),
@@ -602,11 +603,24 @@ impl ReadyPacket {
     ) -> Result<([u8; MAX_READY_BYTES], Option<OwnedFd>), Failure> {
         // Dispose all received ownership before rejecting shape or returning a stage.
         if self.rights.invalid
-            || self.rights.credentials != sender
             || self
                 .flags
                 .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
         {
+            return Err(Failure::MalformedReadyTransfer);
+        }
+        // Only credential-bound receives require SO_PASSCRED before I/O. There,
+        // even an empty queued record has credentials; clean EOF has none.
+        if sender.is_some()
+            && self.bytes == 0
+            && self.rights.credentials.is_none()
+            && self.rights.fd.is_none()
+        {
+            return Err(Failure::ChildExited(
+                "bootstrap EOF before service-ready transfer",
+            ));
+        }
+        if self.rights.credentials != sender {
             return Err(Failure::MalformedReadyTransfer);
         }
         if self.bytes == 1 && self.rights.fd.is_none() {

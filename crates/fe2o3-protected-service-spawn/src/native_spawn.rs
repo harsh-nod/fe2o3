@@ -50,7 +50,9 @@ use std::{
 
 #[path = "native_child.rs"]
 mod child;
-pub use child::{RootOwnedProtectedServiceChildV2, RootTaskTraceEventV2, RootTaskTraceV2};
+pub use child::{
+    RootOwnedProtectedServiceChildV2, RootTaskObservationV2, RootTaskTraceEventV2, RootTaskTraceV2,
+};
 #[path = "native_retained_child.rs"]
 mod retained_child;
 pub use retained_child::{RootOwnedRetainedServiceChildV2, RootRetainedTaskTraceV2};

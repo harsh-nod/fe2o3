@@ -11,6 +11,9 @@ use fe2o3_process_identity::{
     COMPILER_IMAGE_MEASUREMENT_STORAGE_V1, CompilerImageMeasurementErrorV1, CompilerImageRoleV1,
     measure_compiler_image_file_sha256_v1,
 };
+use fe2o3_protected_service_spawn::native_spawn::{
+    ProtectedServiceSpawnErrorV2, RootTaskObservationV2,
+};
 use std::mem::size_of;
 
 // Canonical V3 argv/environment encodings contain every observed byte plus
@@ -22,6 +25,7 @@ const CWD_BYTES: usize = fe2o3_rustc_invocation::MAX_PATH_BYTES_V2;
 pub(crate) enum NativeObservationError {
     Resource(Resource),
     Service(ProtectedServiceAdmissionErrorV2),
+    Spawn(ProtectedServiceSpawnErrorV2),
     Capability(CompilerExecutionCapabilityErrorV2),
     Inspection(CompilerExecutionSupervisionErrorV1),
 }
@@ -30,6 +34,7 @@ impl std::fmt::Display for NativeObservationError {
         match self {
             Self::Resource(e) => write!(f, "{e}"),
             Self::Service(e) => write!(f, "{e}"),
+            Self::Spawn(e) => write!(f, "{e}"),
             Self::Capability(e) => write!(f, "{e}"),
             Self::Inspection(e) => write!(f, "{e}"),
         }
@@ -47,8 +52,63 @@ macro_rules! from_error {
 }
 from_error!(Resource, Resource);
 from_error!(ProtectedServiceAdmissionErrorV2, Service);
+from_error!(ProtectedServiceSpawnErrorV2, Spawn);
 from_error!(CompilerExecutionCapabilityErrorV2, Capability);
 from_error!(CompilerExecutionSupervisionErrorV1, Inspection);
+
+// Only the two concrete, actually owned native custody paths can inspect inputs.
+// A source borrows authority for this operation; it never manufactures an owner.
+#[derive(Clone, Copy)]
+pub(crate) enum NativeObservationSource<'a, 'trace, 'work> {
+    Service(&'a Service),
+    Root(&'a RootTaskObservationV2<'trace, 'work>),
+}
+
+impl NativeObservationSource<'_, '_, '_> {
+    pub(crate) fn retained_storage(self) -> usize {
+        match self {
+            Self::Service(service) => service.retained_storage(),
+            Self::Root(root) => root.retained_storage(),
+        }
+    }
+
+    fn client_identity(self, b: &mut Budget<'_>) -> Result<(u32, u64)> {
+        match self {
+            Self::Service(service) => {
+                service.validate_continuity(b)?;
+                Ok(service.client_process_identity())
+            }
+            Self::Root(root) => {
+                root.validate_continuity(b)?;
+                let pid = root.pid().as_raw_nonzero().get() as u32;
+                let ticks = crate::linux::process_start_time_ticks_v2(pid, b)
+                    .map_err(ProtectedServiceAdmissionErrorV2::from)?;
+                root.validate_continuity(b)?;
+                Ok((pid, ticks))
+            }
+        }
+    }
+
+    fn validate_client(self, expected: (u32, u64), b: &mut Budget<'_>) -> Result<()> {
+        if self.client_identity(b)? != expected {
+            return Err(CompilerExecutionSupervisionErrorV1::ProcessIdentityChanged.into());
+        }
+        Ok(())
+    }
+
+    fn remote(self, descriptor: i32, b: &mut Budget<'_>) -> Result<File> {
+        match self {
+            Self::Service(service) => remote(service, descriptor),
+            Self::Root(root) => {
+                let (file, storage) = root.duplicate_descriptor(descriptor, b)?;
+                b.reserve_storage(storage.additional_storage())?;
+                Ok(file)
+            }
+        }
+    }
+}
+
+use NativeObservationSource as Source;
 
 pub(crate) struct NativeObservation {
     client: (u32, u64),
@@ -64,63 +124,60 @@ impl NativeObservation {
     const FRAME: usize = 32 * PROCESS_BYTES + 64 * 1024;
     const WORK: usize = 4096 * PROCESS_BYTES + 128 * 1024;
 
-    pub(crate) fn observe(service: &Service, b: &mut Budget<'_>) -> Result<(Self, usize)> {
-        b.with_prepaid_scope(
-            service.retained_storage(),
-            8,
-            Self::WORK,
-            Self::FRAME,
-            |b| {
-                service.validate_continuity(b)?;
-                let client = service.client_process_identity();
-                let proc_dir = open_process_directory(client.0)?;
-                let invocation = native_invocation(service, b)?;
-                let rustc = measured(open_proc_component(&proc_dir, PROC_EXE, false)?, true, b)?;
-                let backend = measured(remote(service, CODEGEN_BACKEND_FD)?, false, b)?;
-                let artifact = RetainedDirectoryV1::admit(
-                    remote(service, ARTIFACT_DIRECTORY_FD)?,
-                    "artifact directory",
-                    false,
-                )?;
-                let mut observed = Self {
-                    client,
-                    proc_dir,
-                    invocation,
-                    rustc,
-                    backend,
-                    artifact,
-                    identity: [0; 32],
-                };
-                observed.check_inputs(b)?;
-                observed.identity = derive_observation_identity(
-                    client.0,
-                    client.1,
-                    observed.invocation.descriptor(),
-                    &observed.rustc,
-                    &observed.backend,
-                    &observed.artifact,
-                )?;
-                service.validate_continuity(b)?;
-                let storage = observed.retained_storage()?;
-                Ok((observed, storage))
-            },
-        )
+    pub(crate) fn observe_from(
+        source: Source<'_, '_, '_>,
+        b: &mut Budget<'_>,
+    ) -> Result<(Self, usize)> {
+        b.with_prepaid_scope(source.retained_storage(), 8, Self::WORK, Self::FRAME, |b| {
+            let client = source.client_identity(b)?;
+            let proc_dir = open_process_directory(client.0)?;
+            let invocation = native_invocation(source, b)?;
+            let rustc = measured(open_proc_component(&proc_dir, PROC_EXE, false)?, true, b)?;
+            let backend = measured(source.remote(CODEGEN_BACKEND_FD, b)?, false, b)?;
+            let artifact = RetainedDirectoryV1::admit(
+                source.remote(ARTIFACT_DIRECTORY_FD, b)?,
+                "artifact directory",
+                false,
+            )?;
+            let mut observed = Self {
+                client,
+                proc_dir,
+                invocation,
+                rustc,
+                backend,
+                artifact,
+                identity: [0; 32],
+            };
+            observed.check_inputs(b)?;
+            observed.identity = derive_observation_identity(
+                client.0,
+                client.1,
+                observed.invocation.descriptor(),
+                &observed.rustc,
+                &observed.backend,
+                &observed.artifact,
+            )?;
+            source.validate_client(client, b)?;
+            let storage = observed.retained_storage()?;
+            Ok((observed, storage))
+        })
     }
 
-    pub(crate) fn revalidate(&self, service: &Service, b: &mut Budget<'_>) -> Result<()> {
+    pub(crate) fn revalidate_from(
+        &self,
+        source: Source<'_, '_, '_>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
         let floor = self
             .retained_storage()?
-            .checked_add(service.retained_storage())
+            .checked_add(source.retained_storage())
             .ok_or(Resource::Arithmetic)?;
         b.with_prepaid_scope(floor, 8, Self::WORK, Self::FRAME, |b| {
-            service.validate_continuity(b)?;
-            if service.client_process_identity() != self.client {
-                return Err(CompilerExecutionSupervisionErrorV1::ProcessIdentityChanged.into());
-            }
+            source.validate_client(self.client, b)?;
             self.proc_dir.revalidate("client procfs", true)?;
             self.invocation.revalidate_native(b)?;
             self.artifact.revalidate("artifact directory", false)?;
-            let invocation = native_invocation(service, b)?;
+            let invocation = native_invocation(source, b)?;
             if invocation.descriptor() != self.invocation.descriptor() {
                 return Err(CompilerExecutionSupervisionErrorV1::InvocationChanged.into());
             }
@@ -129,9 +186,9 @@ impl NativeObservation {
                 true,
                 b,
             )?;
-            let backend = measured(remote(service, CODEGEN_BACKEND_FD)?, false, b)?;
+            let backend = measured(source.remote(CODEGEN_BACKEND_FD, b)?, false, b)?;
             let artifact = RetainedDirectoryV1::admit(
-                remote(service, ARTIFACT_DIRECTORY_FD)?,
+                source.remote(ARTIFACT_DIRECTORY_FD, b)?,
                 "artifact directory",
                 false,
             )?;
@@ -142,7 +199,7 @@ impl NativeObservation {
                 return Err(CompilerExecutionSupervisionErrorV1::IdentityChanged.into());
             }
             self.check_inputs(b)?;
-            service.validate_continuity(b)?;
+            source.validate_client(self.client, b)?;
             Ok(())
         })
     }
@@ -212,8 +269,11 @@ fn remote(service: &Service, descriptor: i32) -> Result<File> {
     .map(File::from)
     .map_err(|e| inspect_io("observe client descriptor", e))
 }
-fn native_invocation(service: &Service, b: &mut Budget<'_>) -> Result<RustcInvocationCapabilityV1> {
-    let file = remote(service, RUSTC_INVOCATION_CHILD_FD_V1)?;
+fn native_invocation(
+    source: Source<'_, '_, '_>,
+    b: &mut Budget<'_>,
+) -> Result<RustcInvocationCapabilityV1> {
+    let file = source.remote(RUSTC_INVOCATION_CHILD_FD_V1, b)?;
     let (invocation, charge) = RustcInvocationCapabilityV1::from_file_native(file, b)?;
     b.reserve_storage(charge.additional_storage())?;
     Ok(invocation)

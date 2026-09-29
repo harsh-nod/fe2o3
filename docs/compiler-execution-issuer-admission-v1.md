@@ -55,8 +55,12 @@ identity through the retained file description.
 The production image enters through `fe2o3_secure_start_v1`, a freestanding
 x86-64 shim that performs no allocation or runtime call. It restores
 nondumpability after the kernel's `exec` transition, reasserts `no_new_privs`
-and a zero `RLIMIT_CORE`, verifies the two process controls, and then jumps to
-the static runtime entry while preserving its initial stack state. The static
+and a zero `RLIMIT_CORE`, verifies the two process controls, then requires one
+bounded nonempty argv0 and an empty initial environment before entering libc.
+A private atomic records this check; descriptor-only Rust admission requires it
+and rechecks bounded command bytes without reading `/proc/self/environ` or
+restoring dumpability. The shim preserves the initial stack and runtime register
+state when jumping to the static runtime entry. The static
 build gate requires the ELF entry address to equal that symbol. Supervisor-side
 authorization of the same sealed image remains required before key transfer;
 self-measurement after entry cannot authorize a substituted executable. The

@@ -8,6 +8,10 @@ use fe2o3_kernel_ir::{
 use rustix::{io::Errno, process::WaitIdStatus};
 use std::{fmt, marker::PhantomData, rc::Rc, thread::ThreadId};
 
+#[path = "native_root_observation.rs"]
+mod observation;
+pub use observation::RootTaskObservationV2;
+
 // No TRACEEXIT: cancellation must never need an originating-thread ptrace
 // resume after the record has moved to the shared terminal cleanup pool.
 const OPTIONS: usize = (libc::PTRACE_O_TRACEEXEC | libc::PTRACE_O_EXITKILL) as usize;
@@ -100,16 +104,23 @@ enum TraceState {
     Signaled { signal: i32, core_dumped: bool },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TraceRequest {
+    Seize,
+    Continue,
+    Listen,
+}
+
 impl TraceState {
     fn is_terminal(self) -> bool {
         matches!(self, Self::Exited(_) | Self::Signaled { .. })
     }
 
-    fn restart(self) -> Option<(libc::c_uint, usize)> {
+    fn restart(self) -> Option<(TraceRequest, usize)> {
         match self {
-            Self::Exec | Self::TrapStop => Some((libc::PTRACE_CONT, 0)),
-            Self::SignalStop(signal) => Some((libc::PTRACE_CONT, signal as usize)),
-            Self::GroupStop(_) => Some((libc::PTRACE_LISTEN, 0)),
+            Self::Exec | Self::TrapStop => Some((TraceRequest::Continue, 0)),
+            Self::SignalStop(signal) => Some((TraceRequest::Continue, signal as usize)),
+            Self::GroupStop(_) => Some((TraceRequest::Listen, 0)),
             _ => None,
         }
     }
@@ -172,7 +183,7 @@ impl<'work> RootTaskTraceV2<'work> {
                 child.check_pidfd()?;
                 child.record()?.prepare_root_trace()?;
                 let origin = origin();
-                ptrace(libc::PTRACE_SEIZE, child.pid(), OPTIONS)?;
+                ptrace(TraceRequest::Seize, child.pid(), OPTIONS)?;
                 Ok(Self {
                     child,
                     retained,
@@ -335,7 +346,13 @@ fn origin() -> (Pid, Pid, ThreadId) {
     )
 }
 
-fn ptrace(request: libc::c_uint, pid: Pid, data: usize) -> Result<()> {
+fn ptrace(request: TraceRequest, pid: Pid, data: usize) -> Result<()> {
+    // libc's request type differs between glibc and musl; infer its native ABI.
+    let request = match request {
+        TraceRequest::Seize => libc::PTRACE_SEIZE,
+        TraceRequest::Continue => libc::PTRACE_CONT,
+        TraceRequest::Listen => libc::PTRACE_LISTEN,
+    };
     // SAFETY: the closed caller retains the unreaped clone owner; SEIZE installs
     // only OPTIONS, and restarts target only its same-thread observed root stop.
     let result = unsafe {
