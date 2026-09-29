@@ -176,7 +176,7 @@ struct SourceScalarLeavesV18<'relation, 'source> {
     lookup: Vec<SourceScalarLeafLookupV18>,
     wrapping: Vec<SourceWrappingValueV23>,
     floor: usize,
-    private_writes: bool,
+    ordinary_values: bool,
 }
 
 struct SourceScalarNormalizationInputV18<'a, 'relation, 'source> {
@@ -450,7 +450,7 @@ fn source_scalar_expression_endpoint_v18(
                     .and_then(|(expected, actual)| {
                         source_scalar_constant_fold_v18(expected, 0, &mut charge)?;
                         source_scalar_constant_fold_v18(actual, 0, &mut charge)?;
-                        if leaves.private_writes {
+                        if leaves.ordinary_values {
                             source_private_integer_identity_v22(expected, 0, &mut charge)?;
                             source_private_integer_identity_v22(actual, 0, &mut charge)?;
                         }
@@ -1351,6 +1351,7 @@ enum SourceScalarNamespaceV18<'a> {
     Ranked(&'a fe2o3_pliron::ProductionRankedKernelV1),
     SourceOnly,
     PrivateSourceWritesV22,
+    OriginalSourceExpressionsV23,
 }
 
 include!("production_source_private_scalar_leaves_v22.rs");
@@ -1795,11 +1796,14 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
             // All temporary census credit remains in the containing checked
             // scope until its concrete owners have been destroyed.
             drop(reserved);
-            let wrapping = if matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22) {
+            let ordinary_values = matches!(namespace,
+                SourceScalarNamespaceV18::PrivateSourceWritesV22
+                | SourceScalarNamespaceV18::OriginalSourceExpressionsV23);
+            let wrapping = if ordinary_values {
                 source_wrapping_values_v23(relation, root, budget)?
             } else { Vec::new() };
             Ok(Self { relation, root, rows, lookup, wrapping, floor: budget.storage(),
-                private_writes: matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22) })
+                ordinary_values })
         })())
     }
 

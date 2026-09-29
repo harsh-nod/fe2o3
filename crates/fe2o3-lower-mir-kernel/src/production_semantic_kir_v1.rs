@@ -22295,7 +22295,17 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             };
             projection_index += 1;
         }
-        let availability = match &binding {
+        self.check_binding_capability_availability_v29(block, statement, &binding)?;
+        Ok((binding, source_value))
+    }
+
+    fn check_binding_capability_availability_v29(
+        &self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        binding: &SemanticValueBindingV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let availability = match binding {
             SemanticValueBindingV1::IndexWitness {
                 availability: Some(availability),
                 ..
@@ -22346,7 +22356,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 "capability payload is used outside its authenticated enum edge",
             ));
         }
-        Ok((binding, source_value))
+        Ok(())
     }
 
     fn enum_carrier_evidence_v1(&self, local: SemanticLocalIdV1) -> Vec<String> {

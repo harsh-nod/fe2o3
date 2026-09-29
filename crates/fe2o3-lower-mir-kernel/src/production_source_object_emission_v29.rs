@@ -1846,9 +1846,11 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 volatility,
                 operations.len(),
             )?;
-            // Continue through the original local/promoted binding and its
-            // availability check; zero physical bytes cannot reconstruct a token.
-            return Ok(None);
+            // Return the existing logical binding, not a value reconstructed
+            // from zero bytes or a fallback through the legacy slot lookup.
+            return self
+                .source_grid_leader_object_binding_v29(block, statement, place, source)
+                .map(Some);
         }
         let ty = self.source_object_leaf_type_v29(
             block,

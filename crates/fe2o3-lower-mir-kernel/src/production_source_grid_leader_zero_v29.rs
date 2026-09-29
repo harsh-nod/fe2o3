@@ -105,6 +105,81 @@ impl SourceReferenceEmissionV29<'_, '_> {
 }
 
 impl SemanticFunctionLoweringV1<'_, '_> {
+    fn prepay_grid_leader_availability_v29(
+        &self,
+        availability: SemanticCapabilityAvailabilityV1,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if let SemanticCapabilityAvailabilityV1::EnumPayload { local, .. } = availability {
+            let references = self
+                .execution
+                .as_ref()
+                .and_then(|cursor| cursor.references)
+                .ok_or_else(source_grid_leader_zero_error_v29)?;
+            let plan = references.plan;
+            // Pay both original alternatives, including live-in's linear scan.
+            charge_execution_cfg_lookup_v29(self.control_flow_ssa.live_in.len(), budget)?;
+            budget.source_reference_charge_v29(plan, self.function.locals().len())?;
+            charge_execution_cfg_lookup_v29(self.control_flow_ssa.entry_definitions.len(), budget)?;
+            charge_execution_cfg_lookup_v29(
+                self.control_flow_ssa.block_entry_values.len(),
+                budget,
+            )?;
+            charge_execution_cfg_lookup_v29(self.promoted_enum_variant_by_value.len(), budget)?;
+            let enum_type = self
+                .function
+                .locals()
+                .get(local.index() as usize)
+                .and_then(|local| self.types.get(local.ty().index() as usize))
+                .ok_or_else(source_grid_leader_zero_error_v29)?;
+            let SemanticTypeShapeV1::Enum { variants, .. } = enum_type.shape() else {
+                return Err(source_grid_leader_zero_error_v29());
+            };
+            charge_execution_cfg_lookup_v29(variants.len(), budget)?;
+        }
+        Ok(())
+    }
+
+    fn source_grid_leader_object_binding_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        place: &SemanticPlaceV1,
+        source: ScopedObjectEndpointV29,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.with_emission_budget_v1(|this, budget| {
+            source_reference_emission_prepay_v29::<SemanticValueBindingV1>(budget)?;
+            budget.charge_work(12)?;
+            let local = place.local().index() as usize;
+            if !place.projections().is_empty()
+                || this.function.locals().get(local).map(|row| row.ty()) != Some(place.ty())
+                || source.root_type != place.ty()
+                || source.projected_type != place.ty()
+                || source.root_schema != source.projected_schema
+                || source.path.count != 0
+                || source.source_path.count != 0
+                || !matches!(source.object, ScopedObjectIdentityV29::Local { instance, local: actual, .. }
+                    if actual == place.local() && this.execution.as_ref().is_some_and(|cursor| cursor.instance == instance))
+                || !source_grid_leader_zero_type_v29(this.types, this.callables, place.ty(), budget)?
+            {
+                return Err(source_grid_leader_zero_error_v29());
+            }
+            #[cfg(test)]
+            grid_leader_zero_tests::observe_original_zero_binding_v29(this, block, statement, local);
+            let Some(SemanticValueBindingV1::GridLeader { availability }) =
+                this.locals.get(local).and_then(Option::as_ref)
+            else {
+                return Err(source_grid_leader_zero_error_v29());
+            };
+            // Only copy the original live logical binding. Layout, an empty
+            // payload, and the endpoint alone cannot produce availability.
+            let binding = SemanticValueBindingV1::GridLeader { availability: *availability };
+            this.prepay_grid_leader_availability_v29(*availability, budget)?;
+            this.check_binding_capability_availability_v29(block, statement, &binding)?;
+            Ok(binding)
+        })
+    }
+
     fn capture_grid_leader_borrow_v29(
         &mut self,
         site: SourceReferenceSiteV29,
@@ -154,15 +229,17 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         let Some(origin) = origin else {
             return Ok(None);
         };
-        let binding = self
-            .resolve_place_for_source_reference_access_v29(
-                site.block,
-                statement,
-                place,
-                SourceReferenceAccessV29::Borrow(SemanticBorrowKindV1::Shared),
-                operations,
+        let access = SourceReferenceAccessV29::Borrow(SemanticBorrowKindV1::Shared);
+        let binding = if let Some((source, _, _)) =
+            self.source_object_local_endpoint_v29(site.block, statement, place, access)?
+        {
+            self.source_grid_leader_object_binding_v29(site.block, statement, place, source)?
+        } else {
+            self.resolve_place_for_source_reference_access_v29(
+                site.block, statement, place, access, operations,
             )?
-            .0;
+            .0
+        };
         let SemanticValueBindingV1::GridLeader { .. } = binding else {
             return Err(source_grid_leader_zero_error_v29());
         };
@@ -304,36 +381,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         this.option_dominance.allows(*availability, block)
                     }
                     SemanticCapabilityAvailabilityV1::EnumPayload { local, variant } => {
-                        // Pay both original availability alternatives before
-                        // invoking the unchanged predicate, including live-in's
-                        // linear scan of distinct original local identities.
-                        charge_execution_cfg_lookup_v29(
-                            this.control_flow_ssa.live_in.len(),
-                            budget,
-                        )?;
-                        budget.source_reference_charge_v29(plan, this.function.locals().len())?;
-                        charge_execution_cfg_lookup_v29(
-                            this.control_flow_ssa.entry_definitions.len(),
-                            budget,
-                        )?;
-                        charge_execution_cfg_lookup_v29(
-                            this.control_flow_ssa.block_entry_values.len(),
-                            budget,
-                        )?;
-                        charge_execution_cfg_lookup_v29(
-                            this.promoted_enum_variant_by_value.len(),
-                            budget,
-                        )?;
-                        let enum_type = this
-                            .function
-                            .locals()
-                            .get(local.index() as usize)
-                            .and_then(|local| this.types.get(local.ty().index() as usize))
-                            .ok_or_else(source_grid_leader_zero_error_v29)?;
-                        let SemanticTypeShapeV1::Enum { variants, .. } = enum_type.shape() else {
-                            return Err(source_grid_leader_zero_error_v29());
-                        };
-                        charge_execution_cfg_lookup_v29(variants.len(), budget)?;
+                        this.prepay_grid_leader_availability_v29(*availability, budget)?;
                         this.enum_variant_is_available_v1(*local, *variant, block)
                     }
                 },

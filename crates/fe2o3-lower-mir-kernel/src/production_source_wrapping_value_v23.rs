@@ -341,7 +341,7 @@ impl SourceScalarLeavesV18<'_, '_> {
         overflow: ProductionOverflowContractV2,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<ProductionOverflowContractV2> {
-        if overflow != ProductionOverflowContractV2::Checked || !self.private_writes {
+        if overflow != ProductionOverflowContractV2::Checked || !self.ordinary_values {
             return Ok(overflow);
         }
         self.relation.retain_query((|| {

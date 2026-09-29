@@ -42,7 +42,144 @@ fn private_binary_v22(operation: SemanticBinaryOpV1) -> Option<ProductionSemanti
     })
 }
 
+fn store_source_expression_headers_v23() -> Result<usize, ArgumentResourceV1> {
+    // Query arguments, parsed original input, and the returned expression stay
+    // live together. The actual query closure is measured at the call site.
+    argument_sum_v1(&[
+        6 * size_of::<&()>(),
+        size_of::<ScopedMemoryStoreSourceV29>(),
+        size_of::<OriginalPrivateInputV22<'_>>(),
+        size_of::<ProductionSourceScalarInputV18<'_>>(),
+        size_of::<SourceOwnedResultV18<ProductionSourceScalarInputV18<'_>>>(),
+        size_of::<SourceOwnedResultV18<(usize, &SemanticFunctionDeclV1)>>(),
+        size_of::<SourceOwnedResultV18<&ProductionSourceScalarLeavesV18<'_>>>(),
+        size_of::<ProductionSemanticScalarTypeV2>(),
+        size_of::<SourceOwnedResultV18<ProductionSemanticScalarTypeV2>>(),
+        size_of::<SemanticTypeIdV1>(),
+        size_of::<ProductionSemanticExpressionV2>(),
+        size_of::<SourceOwnedResultV18<ProductionSemanticExpressionV2>>(),
+        2 * size_of::<SourceOwnedResultV18<()>>(),
+        4 * size_of::<usize>(),
+    ])
+}
+
 impl OriginalEntryIndexV20<'_, '_> {
+    fn store_source_expression_v23(
+        &self,
+        leaves: &ProductionOptimizedSourceScalarLeavesV18<'_>,
+        request: &ProductionOptimizedSourceScalarStoreV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionSemanticExpressionV2> {
+        self.check(budget)?;
+        let query = |budget: &mut ArgumentBudgetV1<'_>| {
+            let original = leaves.original_leaves(budget)?;
+            let (instance, function) = request.original(budget)?;
+            budget.charge_work(3)?;
+            if !std::ptr::eq(original.leaves.relation, self.source)
+                || !std::ptr::eq(request.leaves, leaves)
+            {
+                return self
+                    .source
+                    .source
+                    .missing("global source expression changed retained context");
+            }
+            let scalar = request.scalar(budget)?;
+            if !matches!(
+                scalar,
+                ProductionSemanticScalarTypeV2::Integer {
+                    bits: 8 | 16 | 32 | 64,
+                    ..
+                }
+            ) {
+                return self
+                    .source
+                    .source
+                    .missing("global source expression requires a fixed integer scalar");
+            }
+            let (ty, input) = match request.original.source {
+                ScopedMemoryStoreSourceV29::Operand { site, role, ty, .. } => {
+                    let operand = scoped_source_operand_v29(function, site, role).ok_or(
+                        ProductionSourceOwnedViewErrorV18::Binding(
+                            "global source expression original operand absent",
+                        ),
+                    )?;
+                    (
+                        ty,
+                        OriginalPrivateInputV22::Operand {
+                            site,
+                            role,
+                            operand,
+                        },
+                    )
+                }
+                ScopedMemoryStoreSourceV29::Assignment {
+                    site: ExecutionSiteV29::Statement { block, statement },
+                    ty,
+                } => {
+                    let Some(SemanticStatementKindV1::Assign(assignment)) = function
+                        .blocks()
+                        .get(block.get() as usize)
+                        .and_then(|row| row.statements().get(statement as usize))
+                        .map(|row| row.kind())
+                    else {
+                        return self
+                            .source
+                            .source
+                            .missing("global source expression original assignment absent");
+                    };
+                    (
+                        ty,
+                        OriginalPrivateInputV22::Rvalue {
+                            block: block.get(),
+                            statement,
+                            value: assignment.value(),
+                        },
+                    )
+                }
+                ScopedMemoryStoreSourceV29::EntryArgument { ty, .. } => {
+                    let ProductionSourceScalarInputV18::EntryArgument { argument } =
+                        request.input_for(function, budget)?
+                    else {
+                        return self
+                            .source
+                            .source
+                            .missing("source Store entry argument changed its original input");
+                    };
+                    (ty, OriginalPrivateInputV22::Argument(argument))
+                }
+                _ => {
+                    return self
+                        .source
+                        .source
+                        .missing("global source expression unsupported original input");
+                }
+            };
+            let mut remaining = fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2;
+            // Every symbol follows an original occurrence or caller edge;
+            // candidate definitions never supply original-source facts.
+            self.private_expression_v22(
+                original,
+                instance,
+                ty,
+                scalar,
+                input,
+                0,
+                &mut remaining,
+                budget,
+            )
+        };
+        let headers = self.source.retain_query(
+            store_source_expression_headers_v23()
+                .and_then(|fixed| argument_sum_v1(&[fixed, std::mem::size_of_val(&query)]))
+                .map_err(Into::into),
+        )?;
+        self.source
+            .retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
+        // The caller's existing expression scratch owns these headers and all
+        // Box backing until after it has dropped the returned tree.
+        self.source.retain_query(query(budget))
+    }
+
     fn source_write_expression_v22(
         &self,
         leaves: &ProductionOptimizedSourceScalarLeavesV18<'_>,
@@ -305,6 +442,22 @@ impl OriginalEntryIndexV20<'_, '_> {
                     statement,
                 };
                 match value.kind() {
+                    SemanticRvalueKindV1::Load(load)
+                        if load.volatility() == SemanticVolatilityV1::NonVolatile =>
+                    {
+                        let expression = leaves
+                            .original_place(instance, function, load.source(), budget)?
+                            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                                "source expression explicit read lacks its captured occurrence",
+                            ))?;
+                        if expression.scalar() != scalar {
+                            return self
+                                .source
+                                .source
+                                .missing("source expression explicit read scalar differs");
+                        }
+                        Ok(expression)
+                    }
                     SemanticRvalueKindV1::Use(operand) => self.private_expression_v22(
                         leaves,
                         instance,

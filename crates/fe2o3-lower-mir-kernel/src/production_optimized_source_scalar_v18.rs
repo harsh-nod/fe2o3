@@ -531,7 +531,7 @@ impl SourceScalarNormalizationV18 for OptimizedSourceScalarNormalizationV18<'_> 
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<ProductionOverflowContractV2> {
         if overflow != ProductionOverflowContractV2::Checked
-            || !self.leaves.original.leaves.private_writes
+            || !self.leaves.original.leaves.ordinary_values
         {
             return Ok(overflow);
         }
@@ -828,7 +828,7 @@ fn optimized_source_scalar_expression_endpoint_v18(
                 .and_then(|(expected, actual)| {
                     source_scalar_constant_fold_v18(expected, 0, &mut charge)?;
                     source_scalar_constant_fold_v18(actual, 0, &mut charge)?;
-                    if leaves.private_writes {
+                    if leaves.ordinary_values {
                         source_private_integer_identity_v22(expected, 0, &mut charge)?;
                         source_private_integer_identity_v22(actual, 0, &mut charge)?;
                     }

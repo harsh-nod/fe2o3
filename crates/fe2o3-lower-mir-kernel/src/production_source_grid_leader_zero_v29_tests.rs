@@ -7,6 +7,43 @@ thread_local! {
     static ZERO_MUTATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ZERO_LOAN_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static ZERO_SOURCE_FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static ZERO_BINDING_FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static ZERO_BINDING_MUTATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(super) fn observe_original_zero_binding_v29(
+    lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
+    block: SemanticBlockIdV1,
+    statement: Option<u32>,
+    local: usize,
+) {
+    let fault = ZERO_BINDING_FAULT.get();
+    if fault == 0 || ZERO_BINDING_MUTATED.get() {
+        return;
+    }
+    let borrowed = statement
+        .and_then(|index| lowering.function.blocks().get(block.index() as usize)?.statements().get(index as usize))
+        .is_some_and(|row| matches!(row.kind(), SemanticStatementKindV1::Assign(assignment)
+            if matches!(assignment.value().kind(), SemanticRvalueKindV1::Borrow { kind: SemanticBorrowKindV1::Shared, .. })));
+    if borrowed != (fault > 3) {
+        return;
+    }
+    assert!(matches!(
+        lowering.locals[local],
+        Some(SemanticValueBindingV1::GridLeader { .. })
+    ));
+    lowering.locals[local] = match (fault - 1) % 3 {
+        0 => None,
+        1 => Some(SemanticValueBindingV1::Unit),
+        2 => Some(SemanticValueBindingV1::GridLeader {
+            availability: SemanticCapabilityAvailabilityV1::EnumPayload {
+                local: SemanticLocalIdV1::from_index(2),
+                variant: u32::MAX,
+            },
+        }),
+        _ => unreachable!(),
+    };
+    ZERO_BINDING_MUTATED.set(true);
 }
 
 fn zero_edge(role: SemanticEdgeRoleV1, block: u32) -> SemanticControlFlowEdgeV1 {
@@ -661,11 +698,40 @@ fn original_grid_leader_capture_outside_some_cannot_issue_a_zero_token() {
     assert!(
         matches!(&result, Err(ProductionSourceOwnedViewErrorV18::Source(
         ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
-    )) if *detail == "grid-leader ZST constant is outside its authenticated Some region"),
+    )) if *detail == "an Option capability Some target is not uniquely controlled by its exact branch"),
         "{result:?}"
     );
     assert!(!completed);
     assert_eq!(ZERO_OBSERVATIONS.get(), 0);
+}
+
+#[test]
+fn original_grid_leader_object_reads_and_borrows_require_live_logical_availability() {
+    struct Restore(u8);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ZERO_BINDING_FAULT.set(self.0);
+        }
+    }
+    let _restore = Restore(ZERO_BINDING_FAULT.get());
+    for fault in 1..=6 {
+        ZERO_BINDING_FAULT.set(fault);
+        ZERO_BINDING_MUTATED.set(false);
+        let (result, completed) = run_zero(false, true, 0);
+        assert!(ZERO_BINDING_MUTATED.get(), "fault {fault}: {result:?}");
+        let expected = if fault % 3 == 0 {
+            "capability payload is used outside its authenticated enum edge"
+        } else {
+            "logical GridLeader effect differs from its original source contract"
+        };
+        assert!(
+            matches!(&result, Err(ProductionSourceOwnedViewErrorV18::Source(
+            ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
+        )) if *detail == expected),
+            "fault {fault}: {result:?}"
+        );
+        assert!(!completed);
+    }
 }
 
 #[test]

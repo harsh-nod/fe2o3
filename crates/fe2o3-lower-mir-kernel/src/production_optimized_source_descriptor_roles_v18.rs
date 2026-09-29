@@ -30,6 +30,7 @@ struct DescriptorAccessSummaryV18 {
 }
 
 include!("production_optimized_source_global_access_v18.rs");
+include!("production_optimized_source_global_expressions_v23.rs");
 
 include!("production_optimized_source_issued_roles_v18.rs");
 
@@ -204,6 +205,9 @@ pub(super) fn descriptor_role_outer_headers_v18<T, E>(
     argument_sum_v1(&[
         callback,
         argument_product_v1(2, alignment)?,
+        // The mode parameter and its borrowed carriers through the outer,
+        // leaf, construction, row-builder and Store-visitor frames coexist.
+        argument_product_v1(8, size_of::<Option<&OriginalEntryIndexV20<'_, '_>>>())?,
         size_of::<DescriptorRoleScopeV18>(),
         size_of::<[usize; 2]>(),
         argument_product_v1(2, size_of::<SourceOwnedResultV18<usize>>())?,
@@ -339,6 +343,24 @@ impl ProductionSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        self.with_descriptor_source_roles_index_v23(optimized, root, recipe, None, budget, consume)
+    }
+
+    fn with_descriptor_source_roles_index_v23<'work, T, E>(
+        &self,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        root: usize,
+        recipe: Option<&fe2o3_pliron::ProductionRankedKernelV1>,
+        index: Option<&OriginalEntryIndexV20<'_, '_>>,
+        budget: &mut ArgumentBudgetV1<'work>,
+        consume: impl for<'scope> FnOnce(
+            &CheckedDescriptorSourceRolesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+    {
         // Exact subject/custody precedes scope entry and its new storage/work.
         optimized.check_exact_original_v18(self, budget)?;
         optimized_source_endpoints_v18(self, optimized, budget)?;
@@ -376,7 +398,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                             self.source.retain_construction(|| {
                                 budget.reserve_storage(descriptor_role_headers_v18::<T, E>()?)?;
                                 let rows = build_descriptor_source_roles_v18(
-                                    self, optimized, root, leaves, budget,
+                                    self, optimized, root, leaves, index, budget,
                                 )?;
                                 let retained = budget
                                     .storage()
@@ -418,6 +440,13 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     optimized,
                     root,
                     recipe,
+                    budget,
+                    consume_leaves,
+                ),
+                None if index.is_some() => self.with_optimized_scalar_leaf_namespace_v18(
+                    optimized,
+                    root,
+                    &SourceScalarNamespaceV18::OriginalSourceExpressionsV23,
                     budget,
                     consume_leaves,
                 ),
@@ -510,6 +539,7 @@ fn build_descriptor_source_roles_v18(
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     root: usize,
     leaves: &ProductionOptimizedSourceScalarLeavesV18<'_>,
+    index: Option<&OriginalEntryIndexV20<'_, '_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<Vec<DescriptorSourceRoleRowV18>> {
     let output = optimized.output_inventory(budget)?;
@@ -667,15 +697,35 @@ fn build_descriptor_source_roles_v18(
         else {
             return Ok(());
         };
-        let index = descriptor_role_index_v18(&rows, request.output, budget)?;
+        let row_index = descriptor_role_index_v18(&rows, request.output, budget)?;
         let Some(row) = rows
-            .get_mut(index)
+            .get_mut(row_index)
             .filter(|row| row.output == request.output && row.write_recipe_pending)
         else {
             return Ok(());
         };
-        let Some(expression) = descriptor_store_expression_v18(leaves, &request, budget)? else {
-            return Ok(());
+        let expression = match descriptor_store_expression_v18(leaves, &request, budget)? {
+            Some(expression) => expression,
+            None => {
+                let Some(index) = index else {
+                    return Ok(());
+                };
+                source_scalar_normalization_scratch_v18(
+                    original.source.cleanup,
+                    budget,
+                    0,
+                    |budget| {
+                        let expression =
+                            index.global_store_expression_v23(leaves, &request, budget)?;
+                        request.original.check_expression(&expression, budget)?;
+                        request.check_expression(&expression, budget)?;
+                        drop(expression);
+                        Ok(())
+                    },
+                )?;
+                row.write_recipe_pending = false;
+                return Ok(());
+            }
         };
         request.original.check_expression(&expression, budget)?;
         request.check_expression(&expression, budget)?;

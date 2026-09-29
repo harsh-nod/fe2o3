@@ -102,6 +102,7 @@ fn descriptor_role_outer_headers_prepay_aligned_callback_before_namespace() {
     type Error = ProductionSourceOwnedViewErrorV18;
     let expected = bytes
         + 2 * alignment
+        + 8 * size_of::<Option<&OriginalEntryIndexV20<'_, '_>>>()
         + size_of::<DescriptorRoleScopeV18>()
         + size_of::<[usize; 2]>()
         + 2 * size_of::<SourceOwnedResultV18<usize>>()
