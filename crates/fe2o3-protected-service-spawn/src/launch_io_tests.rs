@@ -1467,6 +1467,7 @@ fn system_send_is_exact_nonblocking_and_suppresses_sigpipe() {
                 "--exact",
                 "launch_io::tests::system_send_is_exact_nonblocking_and_suppresses_sigpipe",
                 "--test-threads=1",
+                "--nocapture",
             ])
             .env(CHILD, marker.path())
             .stdin(Stdio::null())
@@ -1549,6 +1550,17 @@ fn system_send_is_exact_nonblocking_and_suppresses_sigpipe() {
     assert_eq!(watch.seen, [Boundary::ReadySend, Boundary::Progress]);
     assert_eq!(watch.live_calls, 1);
 
+    drop(receiver);
+    drop(sender);
+    // An unread full queue closes with ECONNRESET. Use a fresh empty peer so
+    // EPIPE genuinely exercises SIGPIPE suppression, not connection reset.
+    let (sender, receiver) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
     drop(receiver);
     // SAFETY: only this dedicated single-test child changes disposition/mask.
     // The initialized set contains only SIGPIPE; SIG_DFL is a valid handler.
