@@ -1,16 +1,95 @@
 //! Root-task mechanics only. Descendant discovery and proof enforcement remain separate.
 
 use super::{Budget, Child, ENTRY, Error, Pid, Poll, Result, RootOwnedProtectedServiceChildV2, io};
+use crate::native_spawn::ProtectedServiceSpawnStorageV2 as Storage;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
 };
 use rustix::{io::Errno, process::WaitIdStatus};
-use std::{fmt, marker::PhantomData, rc::Rc, thread::ThreadId};
+use std::{fmt, marker::PhantomData, mem::size_of, rc::Rc, thread::ThreadId};
 
 #[path = "native_root_observation.rs"]
 mod observation;
 pub use observation::RootTaskObservationV2;
+
+// One word of private payload plus Rc's strong/weak counters. This is logical
+// allocation storage, not allocator metadata or RSS. No child backing is shared.
+struct IdentityAllocation {
+    _private: usize,
+}
+pub(super) const IDENTITY_ALLOCATION_STORAGE: usize =
+    size_of::<IdentityAllocation>() + 2 * size_of::<usize>();
+
+/// Move-only, inert identity of one original trace allocation, not its address,
+/// PID, liveness, wait custody or authority. Only a live scoped root observation
+/// can retain a handle. There is no public constructor or unmetered clone.
+///
+/// A handle may outlive its trace solely to prevent allocation-identity reuse;
+/// it retains no child, descriptor, artifact lease or cleanup slot. Its FULL
+/// handle-plus-allocation charge stays reserved on the original account until
+/// Drop, even when another handle or the trace also pays for that allocation.
+/// Keep that Work borrow and Budget alive at the admitting address throughout
+/// retention. Comparing handles does not check this accounting or live custody.
+///
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// let identity = RootTaskIdentityV2 { allocation: std::rc::Rc::new(()) };
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// let identity = RootTaskIdentityV2::default();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// fn clone<T: Clone>() {} clone::<RootTaskIdentityV2>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// fn copy<T: Copy>() {} copy::<RootTaskIdentityV2>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// fn send<T: Send>() {} send::<RootTaskIdentityV2>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// fn sync<T: Sync>() {} sync::<RootTaskIdentityV2>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// fn fd<T: std::os::fd::AsFd>() {} fd::<RootTaskIdentityV2>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// fn raw<T: std::os::fd::FromRawFd>() {} raw::<RootTaskIdentityV2>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// fn hash<T: std::hash::Hash>() {} hash::<RootTaskIdentityV2>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::native_spawn::RootTaskIdentityV2;
+/// let identity: RootTaskIdentityV2 = 1_usize.into();
+/// ```
+pub struct RootTaskIdentityV2 {
+    allocation: Rc<IdentityAllocation>,
+}
+
+impl RootTaskIdentityV2 {
+    const STORAGE: usize = size_of::<(Self, Storage)>() + IDENTITY_ALLOCATION_STORAGE;
+
+    /// Inert allocation equality only, with no liveness or custody implication.
+    /// Neither reference count is changed and no PID/address is exported.
+    pub fn matches(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.allocation, &other.allocation)
+    }
+
+    /// FULL retained handle, output-charge metadata and shared allocation charge.
+    pub const fn retained_storage(&self) -> usize {
+        Self::STORAGE
+    }
+}
 
 // No TRACEEXIT: cancellation must never need an originating-thread ptrace
 // resume after the record has moved to the shared terminal cleanup pool.
@@ -147,6 +226,7 @@ impl TraceState {
 /// ```
 pub struct RootTaskTraceV2<'work> {
     child: RootOwnedProtectedServiceChildV2,
+    identity: Rc<IdentityAllocation>,
     retained: usize,
     origin: (Pid, Pid, ThreadId),
     ledger: Ledger,
@@ -183,9 +263,12 @@ impl<'work> RootTaskTraceV2<'work> {
                 child.check_pidfd()?;
                 child.record()?.prepare_root_trace()?;
                 let origin = origin();
+                // ROOT_TRACE_GROWTH prepaid this allocation on the original Budget.
+                let identity = Rc::new(IdentityAllocation { _private: 0 });
                 ptrace(TraceRequest::Seize, child.pid(), OPTIONS)?;
                 Ok(Self {
                     child,
+                    identity,
                     retained,
                     origin,
                     ledger: b.work_ledger_identity_v1(),
