@@ -59,12 +59,14 @@ fn owners() -> (u32, u32) {
         rustix::process::getgid().as_raw(),
     )
 }
-fn policy(manifest: &CompilerRuntimeManifestV1) -> CompilerApprovalPolicyV1 {
-    CompilerApprovalPolicyV1::new(
+fn policy(manifest: &CompilerRuntimeManifestV1) -> CompilerApprovalPolicyV2 {
+    CompilerApprovalPolicyV2::new(
         manifest.compiler_closure(),
         [17; 32],
         *manifest.identity(),
         1,
+        9603,
+        9603,
         |_| Ok::<_, Resource>(()),
     )
     .unwrap()
@@ -72,7 +74,7 @@ fn policy(manifest: &CompilerRuntimeManifestV1) -> CompilerApprovalPolicyV1 {
 struct Tree {
     root: PathBuf,
     manifest: CompilerRuntimeManifestV1,
-    policy: CompilerApprovalPolicyV1,
+    policy: CompilerApprovalPolicyV2,
 }
 impl Tree {
     fn new() -> Self {
@@ -285,7 +287,7 @@ fn retained_charge_includes_original_approval_full_capacity_and_all_file_backing
     let t = Tree::new();
     let (result, used) = observe(LIMIT, LIMIT, |b| t.load(b));
     let v = result.unwrap();
-    let extra = size_of::<RetainedCompilerRuntimeV1>() - size_of::<ApprovedCompilerPolicyV1>()
+    let extra = size_of::<RetainedCompilerRuntimeV1>() - size_of::<ApprovedCompilerPolicyV2>()
         + size_of::<RetainedCompilerRuntimeStorageV1>()
         + t.manifest.canonical_bytes().len()
         + 6 * 64;
@@ -429,11 +431,16 @@ fn wrong_ledger_moved_budget_and_short_live_reservation_refuse() {
 fn independently_approved_digest_and_all_six_pins_are_required() {
     let mut t = Tree::new();
     let original = t.policy;
-    t.policy =
-        CompilerApprovalPolicyV1::new(original.compiler_closure(), [17; 32], [99; 32], 1, |_| {
-            Ok::<_, Resource>(())
-        })
-        .unwrap();
+    t.policy = CompilerApprovalPolicyV2::new(
+        original.compiler_closure(),
+        [17; 32],
+        [99; 32],
+        1,
+        9603,
+        9603,
+        |_| Ok::<_, Resource>(()),
+    )
+    .unwrap();
     assert!(matches!(
         failure(observe(LIMIT, LIMIT, |b| t.load(b)).0),
         RetainedCompilerRuntimeErrorV1::Mismatch(_)
@@ -454,11 +461,13 @@ fn independently_approved_digest_and_all_six_pins_are_required() {
             changed[0], changed[1], changed[2], changed[3], changed[4], changed[5],
         )
         .unwrap();
-        t.policy = CompilerApprovalPolicyV1::new(
+        t.policy = CompilerApprovalPolicyV2::new(
             c,
             [17; 32],
             *original.runtime_manifest_identity(),
             1,
+            9603,
+            9603,
             |_| Ok::<_, Resource>(()),
         )
         .unwrap();
@@ -644,11 +653,13 @@ fn retained_writer_and_policy_rotation_refuse_without_mutating_cached_manifest()
     let mut b = Budget::new(&mut w, LIMIT);
     b.reserve_storage(FLOOR).unwrap();
     let v = t.retain(&mut b);
-    let rotated = CompilerApprovalPolicyV1::new(
+    let rotated = CompilerApprovalPolicyV2::new(
         t.policy.compiler_closure(),
         [88; 32],
         *t.policy.runtime_manifest_identity(),
         1,
+        9603,
+        9603,
         |_| Ok::<_, Resource>(()),
     )
     .unwrap();

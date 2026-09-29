@@ -7,14 +7,15 @@
 
 use crate::retained_functional_refinement_runtime_v1::{
     RetainedFunctionalRefinementRuntimeErrorKindV1 as RuntimeKind,
-    RetainedFunctionalRefinementRuntimeErrorV1 as RuntimeError,
-    RetainedGeneratedVerusRuntimeBackendV1 as Runtime, open_retained_generated_verus_runtime_v1,
+    RetainedFunctionalRefinementRuntimeResourceErrorV1 as RuntimeResourceError,
+    RetainedGeneratedVerusRuntimeBackendV1 as Runtime,
+    open_retained_generated_verus_runtime_bounded_v1,
 };
 use fe2o3_build_authority::{
     COMPILER_RUNTIME_MANIFEST_MAX_FILE_BYTES_V1 as IMAGE_MAX, CompilerRuntimeRoleV1 as Role,
 };
 use fe2o3_compiler_closure_capability::{
-    ApprovedCompilerPolicyV1 as Approval, CompilerApprovalErrorV1 as ApprovalError,
+    ApprovedCompilerPolicyV2 as Approval, CompilerApprovalErrorV2 as ApprovalError,
     RetainedCompilerRuntimeErrorV1 as InventoryError, RetainedCompilerRuntimeV1 as Inventory,
 };
 use fe2o3_compiler_execution_protocol::{
@@ -45,8 +46,8 @@ type Result<T> = std::result::Result<T, ProofExecutorHelperErrorV1>;
 
 const RUNTIME_ROOT: &str = "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
 // One dedicated-process ledger, never reset between exchanges. These are
-// logical ceilings, not RSS/latency guarantees. The older runtime lease uses
-// its own finite inventory bounds, not this ledger; do not claim full metering.
+// logical ceilings, not RSS/latency guarantees. Runtime admission and revalidation
+// use this same ledger; proof RPC/execution and cross-process metering remain pending.
 const WORK: usize = 1 << 44;
 const STORAGE: usize = 1 << 35;
 const FRAME: usize = 128 * 1024
@@ -92,9 +93,12 @@ macro_rules! errors {
 errors!(Resource => Resource, ApprovalError => Approval, InventoryError => Inventory,
     ProfileError => Profile, observations::Error => Observation, ImageError => Image,
     RecordError => Record, launch_io::Failure => Transport, rustix::io::Errno => Io);
-impl From<RuntimeError> for Error {
-    fn from(e: RuntimeError) -> Self {
-        Self::Runtime(e.kind())
+impl From<RuntimeResourceError> for Error {
+    fn from(e: RuntimeResourceError) -> Self {
+        match e {
+            RuntimeResourceError::Resource(e) => Self::Resource(e),
+            RuntimeResourceError::Runtime(kind) => Self::Runtime(kind),
+        }
     }
 }
 impl From<launch_io::Error<Error>> for Error {
@@ -139,13 +143,9 @@ impl Context {
         let measurement = Measurement::new(entry.sha256, entry.length, IMAGE_MAX)
             .map_err(|_| Error::Invalid("invalid proof helper measurement"))?;
         drop(helpers);
-        // Observed credentials are confinement configuration, NOT a separately
-        // approved proof-role identity. The root attempt owner must supply that.
-        let credentials = Credentials::new(
-            rustix::process::geteuid().as_raw(),
-            rustix::process::getegid().as_raw(),
-        )
-        .map_err(|_| Error::Invalid("proof helper requires nonroot credentials"))?;
+        let (uid, gid) = inventory.proof_helper_credentials();
+        let credentials = Credentials::new(uid, gid)
+            .map_err(|_| Error::Invalid("invalid approved proof helper credentials"))?;
         let (profile, charge) = Profile::capture(credentials, b)?;
         b.reserve_storage(charge.additional_storage())?;
         require_owned_sigchld_v2(b)?;
@@ -155,7 +155,9 @@ impl Context {
             .map_err(|_| Error::Invalid("invalid proof helper image owner"))?;
         let (image, charge) = Image::admit_running(measurement, owner, "proof executor helper", b)?;
         b.reserve_storage(charge.additional_storage())?;
-        let runtime = open_retained_generated_verus_runtime_v1(Path::new(RUNTIME_ROOT))?;
+        let (runtime, charge) =
+            open_retained_generated_verus_runtime_bounded_v1(Path::new(RUNTIME_ROOT), b)?;
+        b.reserve_storage(charge.additional_storage())?;
         if runtime.identity() != *inventory.manifest().proof_runtime_identity() {
             return Err(Error::Invalid("proof runtime identity mismatch"));
         }
@@ -175,7 +177,7 @@ impl Context {
         require_owned_sigchld_v2(b)?;
         self.inventory.revalidate(b)?;
         self.image.revalidate(b)?;
-        self.runtime.revalidate()?;
+        self.runtime.revalidate_bounded_v1(b)?;
         Ok(())
     }
 }

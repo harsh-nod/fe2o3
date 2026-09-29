@@ -45,7 +45,7 @@ fn chmod(path: &Path, mode: u32) {
 
 struct Tree {
     root: PathBuf,
-    policy: CompilerApprovalPolicyV1,
+    policy: CompilerApprovalPolicyV2,
 }
 impl Tree {
     fn new(helper_length: usize) -> Self {
@@ -85,11 +85,16 @@ impl Tree {
         let manifest =
             CompilerRuntimeManifestV1::new(closure, [18; 32], &entries, |_| Ok::<_, Resource>(()))
                 .unwrap();
-        let policy =
-            CompilerApprovalPolicyV1::new(closure, [17; 32], *manifest.identity(), 1, |_| {
-                Ok::<_, Resource>(())
-            })
-            .unwrap();
+        let policy = CompilerApprovalPolicyV2::new(
+            closure,
+            [17; 32],
+            *manifest.identity(),
+            1,
+            9603,
+            9603,
+            |_| Ok::<_, Resource>(()),
+        )
+        .unwrap();
         let tree = Self { root, policy };
         for (i, entry) in manifest.entries().enumerate() {
             fs::write(tree.code(entry.path), &bytes[i]).unwrap();

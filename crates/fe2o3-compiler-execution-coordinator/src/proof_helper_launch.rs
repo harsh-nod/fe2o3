@@ -199,9 +199,9 @@ impl ManagedProofHelper {
 ///
 /// # Safety
 /// The caller must independently establish host-root deployment provenance, the
-/// helper/peer role-UID binding and a dedicated creator thread that remains alive
-/// until aggregate cleanup. Numeric root and the backing do not establish those
-/// properties; the current profile does not approve a proof-helper role. Retain
+/// actual helper/peer deployment-role binding and a dedicated creator thread that
+/// remains alive until aggregate cleanup. V2 approval supplies helper credentials,
+/// but numeric root and configuration do not establish deployment provenance. Retain
 /// an outside whole-domain custodian, exclusive child wait ownership and the
 /// original pool/controller through unresolved cleanup. Exclude concurrent FD,
 /// credential, signal, namespace/map, cgroup and approved backing mutations.

@@ -1,9 +1,9 @@
-//! Root-staged proof-helper bytes, not proof-role or process admission.
+//! Root-staged proof-helper bytes and approved role configuration, not process admission.
 //!
 //! The approved runtime supplies the sole source measurement and retains its
 //! original immutable inventory. The sealed image is a different kernel object.
-//! Credentials are caller configuration: the current runtime profile contains
-//! supervisor/anchor roles, not an independently approved proof-helper identity.
+//! Credentials come only from the runtime's retained V2 compiler approval.
+//! This does not establish creator provenance or outside cleanup custody.
 
 use fe2o3_build_authority::{
     COMPILER_RUNTIME_MANIFEST_MAX_BYTES_V1 as MANIFEST_BYTES,
@@ -139,12 +139,9 @@ impl ProofHelperBacking {
     /// Consumes a genuinely admitted runtime whose FULL reservation remains live.
     /// Reserve returned growth before retaining Self. On error all consumed local
     /// owners drop, but the original caller-owned reservation is unchanged.
-    /// No process, namespace, proof receipt or approved helper credentials result.
-    pub(crate) fn prepare(
-        runtime: Runtime,
-        credentials: Credentials,
-        budget: &mut Budget<'_>,
-    ) -> Result<(Self, usize)> {
+    /// Helper credentials come from retained approval, never caller configuration.
+    /// No process, namespace or proof receipt results.
+    pub(crate) fn prepare(runtime: Runtime, budget: &mut Budget<'_>) -> Result<(Self, usize)> {
         let input = runtime.required_retained_storage();
         budget.with_prepaid_scope(
             input,
@@ -154,6 +151,7 @@ impl ProofHelperBacking {
             |b| {
                 require_root()?;
                 runtime.revalidate(b)?;
+                let credentials = approved_credentials(&runtime)?;
                 let measurement = select_helper(runtime.manifest().entries())?;
                 let (source, charge) = runtime.try_clone_proof_executor_for_exec(b)?;
                 let source_storage = charge.full_storage();
@@ -277,11 +275,19 @@ impl ProofHelperBacking {
             return Err(ProofHelperBackingError::CoordinatorChanged);
         }
         self.runtime.revalidate(b)?;
+        if self.credentials != approved_credentials(&self.runtime)? {
+            return Err(ProofHelperBackingError::BindingMismatch);
+        }
         let expected = select_helper(self.runtime.manifest().entries())?;
         check_image(&self.image, expected, self.credentials, b)?;
         self.runtime.revalidate(b)?;
         require_root()
     }
+}
+
+fn approved_credentials(runtime: &Runtime) -> Result<Credentials> {
+    let (uid, gid) = runtime.proof_helper_credentials();
+    Credentials::new(uid, gid).map_err(|_| ProofHelperBackingError::BindingMismatch)
 }
 
 fn require_root() -> Result<()> {

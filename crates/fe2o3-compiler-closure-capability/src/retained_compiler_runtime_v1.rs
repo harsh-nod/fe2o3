@@ -1,12 +1,12 @@
 //! Root-approved code inventory custody, not an observed compiler runtime guard.
 use crate::{
-    ApprovedCompilerPolicyV1, CompilerApprovalErrorV1,
+    ApprovedCompilerPolicyV2, CompilerApprovalErrorV2,
     CompilerExecutionCapabilityErrorV2 as CapabilityError, trusted_profile_tree as tree,
 };
 use fe2o3_build_authority::{
     COMPILER_RUNTIME_MANIFEST_MAX_BYTES_V1 as MAX_BYTES,
     COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1 as MAX_ENTRIES,
-    COMPILER_RUNTIME_MANIFEST_STORAGE_V1 as CODEC_STORAGE, CompilerApprovalPolicyV1,
+    COMPILER_RUNTIME_MANIFEST_STORAGE_V1 as CODEC_STORAGE, CompilerApprovalPolicyV2,
     CompilerClosureV2, CompilerRuntimeEntryV1, CompilerRuntimeManifestErrorV1,
     CompilerRuntimeManifestV1,
 };
@@ -74,7 +74,7 @@ pub use transfer::RetainedCompilerRuntimeExecTransferChargeV1;
 /// let _ = RetainedCompilerRuntimeV1::from_path;
 /// ```
 pub struct RetainedCompilerRuntimeV1 {
-    approval: ApprovedCompilerPolicyV1,
+    approval: ApprovedCompilerPolicyV2,
     inventory: Inventory,
 }
 
@@ -104,7 +104,7 @@ pub enum RetainedCompilerRuntimeErrorV1 {
     /// Original resource account refused the operation.
     Resource(Resource),
     /// Existing policy/profile origin revalidation refused.
-    Approval(CompilerApprovalErrorV1),
+    Approval(CompilerApprovalErrorV2),
     /// Existing trusted-tree descriptor checks refused.
     Capability(CapabilityError),
     /// Inert inventory framing or semantics refused.
@@ -117,8 +117,8 @@ impl From<Resource> for RetainedCompilerRuntimeErrorV1 {
         Self::Resource(v)
     }
 }
-impl From<CompilerApprovalErrorV1> for RetainedCompilerRuntimeErrorV1 {
-    fn from(v: CompilerApprovalErrorV1) -> Self {
+impl From<CompilerApprovalErrorV2> for RetainedCompilerRuntimeErrorV1 {
+    fn from(v: CompilerApprovalErrorV2) -> Self {
         Self::Approval(v)
     }
 }
@@ -141,7 +141,7 @@ impl RetainedCompilerRuntimeV1 {
     /// and FS_IMMUTABLE. Root administrators/kernel remain trusted. This does not
     /// exclude process-memory writers or claim that approved files ever execute.
     pub fn from_production_runtime(
-        approval: ApprovedCompilerPolicyV1,
+        approval: ApprovedCompilerPolicyV2,
         budget: &mut Budget<'_>,
     ) -> Result<(Self, RetainedCompilerRuntimeStorageV1)> {
         approval.revalidate(budget)?;
@@ -184,6 +184,15 @@ impl RetainedCompilerRuntimeV1 {
     /// Inert profile bytes do not replace inventory revalidation or execution.
     pub const fn profile(&self) -> &crate::CompilerExecutionClientProfileCapabilityV3 {
         self.approval.profile()
+    }
+    /// Configured proof-helper UID/GID from retained V2 approval. These scalar
+    /// values do not admit a process or replace origin revalidation. Revalidate
+    /// this complete owner before applying them to a process or image.
+    pub fn proof_helper_credentials(&self) -> (u32, u32) {
+        (
+            self.approval.policy().proof_helper_uid(),
+            self.approval.policy().proof_helper_gid(),
+        )
     }
     /// Full retained charge including consumed approval and all code-file backing.
     pub fn required_retained_storage(&self) -> usize {
@@ -245,7 +254,7 @@ struct Inventory {
 }
 impl Inventory {
     fn additional_storage(&self) -> usize {
-        size_of::<RetainedCompilerRuntimeV1>() - size_of::<ApprovedCompilerPolicyV1>()
+        size_of::<RetainedCompilerRuntimeV1>() - size_of::<ApprovedCompilerPolicyV2>()
             + size_of::<RetainedCompilerRuntimeStorageV1>()
             + self.manifest.canonical_bytes().len()
             + self.manifest.total_file_bytes() as usize
@@ -266,7 +275,7 @@ impl Inventory {
     // Private intake mechanics only. Tests call these on a synthetic tree and an
     // inert policy; they never construct RetainedCompilerRuntimeV1 or approval.
     fn load_using(
-        policy: &CompilerApprovalPolicyV1,
+        policy: &CompilerApprovalPolicyV2,
         approval_storage: usize,
         root: impl FnOnce() -> Result<File>,
         uid: u32,
@@ -310,7 +319,7 @@ impl Inventory {
     }
     fn revalidate_using(
         &self,
-        policy: &CompilerApprovalPolicyV1,
+        policy: &CompilerApprovalPolicyV2,
         root: impl FnOnce() -> Result<File>,
         uid: u32,
         gid: u32,
@@ -377,7 +386,7 @@ impl Inventory {
 }
 fn match_policy(
     manifest: &CompilerRuntimeManifestV1,
-    policy: &CompilerApprovalPolicyV1,
+    policy: &CompilerApprovalPolicyV2,
     b: &mut Budget<'_>,
 ) -> Result<()> {
     b.charge_work(512)?;
