@@ -86,14 +86,14 @@ fn scalar_events_never_promote_stops_or_unknown_codes_to_terminal() {
         ),
         Some(Event::Exec)
     );
-    assert_eq!(Event::Exec.restart(), Some((libc::PTRACE_CONT, 0)));
+    assert_eq!(Event::Exec.restart(), Some((TraceRequest::Continue, 0)));
     assert_eq!(
         Event::SignalStop(libc::SIGTERM).restart(),
-        Some((libc::PTRACE_CONT, libc::SIGTERM as usize))
+        Some((TraceRequest::Continue, libc::SIGTERM as usize))
     );
     assert_eq!(
         Event::GroupStop(libc::SIGSTOP).restart(),
-        Some((libc::PTRACE_LISTEN, 0))
+        Some((TraceRequest::Listen, 0))
     );
     assert_eq!(Event::Exited(0).restart(), None);
 }
