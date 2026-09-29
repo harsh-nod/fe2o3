@@ -196,6 +196,10 @@ impl ProofHelperBacking {
     pub(crate) const fn measurement(&self) -> Measurement {
         self.image.measurement()
     }
+    /// Inert identity from the original retained inventory, not a runtime lease.
+    pub(crate) fn runtime_identity(&self) -> [u8; 32] {
+        *self.runtime.manifest().proof_runtime_identity()
+    }
     pub(crate) const fn retained_storage(&self) -> usize {
         self.retained
     }
