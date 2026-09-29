@@ -1,4 +1,7 @@
 // Lock, observation and exact-subject join shared by nominal native families.
+use crate::compiler_execution_supervision::NativeObservationSource as Source;
+use fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2 as RootObservation;
+
 #[derive(Debug)]
 pub(crate) enum NativeOccurrenceError {
     Resource(Resource),
@@ -49,68 +52,85 @@ impl NativeOccurrence {
     const WORK: usize = 4096 * fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3;
 
     pub(crate) fn observe(service: &Service, b: &mut Budget<'_>) -> Result<(Self, usize)> {
-        b.with_prepaid_scope(
-            service.retained_storage(),
-            8,
-            Self::WORK,
-            Self::FRAME,
-            |b| {
-                let (observation, observation_storage) = NativeObservation::observe(service, b)?;
-                b.reserve_storage(observation_storage)?;
-                let expected = Expected::derive(observation.descriptor())?;
-                let output = observation.output_dir();
-                let receipt = recover(&output, &expected.producer, expected.attempt, b)?;
-                let (publication, storage) = acquire(&output, &expected.producer, receipt, b)?;
-                b.reserve_storage(storage.retained_storage())?;
-                let (token, storage) = publication.acquire_current_token(b)?;
-                b.reserve_storage(storage.retained_storage())?;
-                let published = published_invocation(&token);
-                if published != observation.descriptor() {
-                    return Err(NativeOccurrenceError::Mismatch);
-                }
-                let (subject, storage) = Subject::from_publication(receipt, token.handoff(), b)?;
-                b.reserve_storage(storage.retained_storage())?;
-                if subject.attempt() != expected.attempt
-                    || subject.rustc_invocation_sha256() != &expected.invocation_digest
-                    || subject.compiler_closure() != *observation.descriptor().compiler_closure()
-                {
-                    return Err(NativeOccurrenceError::Mismatch);
-                }
-                let mut digest = Sha256::new();
-                digest.update(OCCURRENCE_DOMAIN);
-                digest.update(observation.identity());
-                digest.update(subject.canonical_bytes());
-                let identity = digest.finalize().into();
-                let retained = observation_storage
-                    .checked_add(publication.storage().retained_storage())
-                    .and_then(|n| n.checked_add(token.storage().retained_storage()))
-                    .and_then(|n| n.checked_add(size_of::<(Subject, SubjectStorage)>()))
-                    .and_then(|n| n.checked_add(size_of::<Self>()))
-                    .ok_or(Resource::Arithmetic)?;
-                let occurrence = Self {
-                    observation,
-                    publication,
-                    token,
-                    subject,
-                    identity,
-                    retained,
-                };
-                // All components are covered by the staged frame and their charges.
-                occurrence.revalidate(service, b)?;
-                Ok((occurrence, retained))
-            },
-        )
+        Self::observe_from(Source::Service(service), b)
+    }
+
+    pub(crate) fn observe_root(
+        root: &RootObservation<'_, '_>,
+        b: &mut Budget<'_>,
+    ) -> Result<(Self, usize)> {
+        Self::observe_from(Source::Root(root), b)
+    }
+
+    fn observe_from(source: Source<'_, '_, '_>, b: &mut Budget<'_>) -> Result<(Self, usize)> {
+        b.with_prepaid_scope(source.retained_storage(), 8, Self::WORK, Self::FRAME, |b| {
+            let (observation, observation_storage) = NativeObservation::observe_from(source, b)?;
+            b.reserve_storage(observation_storage)?;
+            let expected = Expected::derive(observation.descriptor())?;
+            let output = observation.output_dir();
+            let receipt = recover(&output, &expected.producer, expected.attempt, b)?;
+            let (publication, storage) = acquire(&output, &expected.producer, receipt, b)?;
+            b.reserve_storage(storage.retained_storage())?;
+            let (token, storage) = publication.acquire_current_token(b)?;
+            b.reserve_storage(storage.retained_storage())?;
+            let published = published_invocation(&token);
+            if published != observation.descriptor() {
+                return Err(NativeOccurrenceError::Mismatch);
+            }
+            let (subject, storage) = Subject::from_publication(receipt, token.handoff(), b)?;
+            b.reserve_storage(storage.retained_storage())?;
+            if subject.attempt() != expected.attempt
+                || subject.rustc_invocation_sha256() != &expected.invocation_digest
+                || subject.compiler_closure() != *observation.descriptor().compiler_closure()
+            {
+                return Err(NativeOccurrenceError::Mismatch);
+            }
+            let mut digest = Sha256::new();
+            digest.update(OCCURRENCE_DOMAIN);
+            digest.update(observation.identity());
+            digest.update(subject.canonical_bytes());
+            let identity = digest.finalize().into();
+            let retained = observation_storage
+                .checked_add(publication.storage().retained_storage())
+                .and_then(|n| n.checked_add(token.storage().retained_storage()))
+                .and_then(|n| n.checked_add(size_of::<(Subject, SubjectStorage)>()))
+                .and_then(|n| n.checked_add(size_of::<Self>()))
+                .ok_or(Resource::Arithmetic)?;
+            let occurrence = Self {
+                observation,
+                publication,
+                token,
+                subject,
+                identity,
+                retained,
+            };
+            // All components are covered by the staged frame and their charges.
+            occurrence.revalidate_from(source, b)?;
+            Ok((occurrence, retained))
+        })
     }
 
     pub(crate) fn revalidate(&self, service: &Service, b: &mut Budget<'_>) -> Result<()> {
+        self.revalidate_from(Source::Service(service), b)
+    }
+
+    pub(crate) fn revalidate_root(
+        &self,
+        root: &RootObservation<'_, '_>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.revalidate_from(Source::Root(root), b)
+    }
+
+    fn revalidate_from(&self, source: Source<'_, '_, '_>, b: &mut Budget<'_>) -> Result<()> {
         let floor = self
             .retained_storage()
-            .checked_add(service.retained_storage())
+            .checked_add(source.retained_storage())
             .ok_or(Resource::Arithmetic)?;
         b.with_prepaid_scope(floor, 8, 16, 128, |b| {
             // validate_current_token is a fixed Arc-identity comparison, not I/O.
             self.publication.validate_current_token(&self.token)?;
-            self.observation.revalidate(service, b)?;
+            self.observation.revalidate_from(source, b)?;
             self.token.revalidate_locked_currentness(b)?;
             Ok(())
         })

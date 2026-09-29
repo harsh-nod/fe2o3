@@ -141,6 +141,33 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         })
     }
 
+    /// Inspection through original trace custody, only after the one-use issuer
+    /// input transfer. The owning attempt must separately gate compiler resume on
+    /// actual readiness/runtime admission; this view grants no compiler admission.
+    pub(crate) fn with_observation<R, E>(
+        &self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(
+            &fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2<'_, 'work>,
+            &mut Budget<'_>,
+        ) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<Resource>
+            + From<Error>
+            + From<fe2o3_protected_service_spawn::native_spawn::ProtectedServiceSpawnErrorV2>,
+    {
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase != Phase::Transferred {
+                return Err(Error::Invalid(
+                    "root observation requires completed issuer input transfer",
+                )
+                .into());
+            }
+            self.trace.with_task_observation(b, operation)
+        })
+    }
+
     /// One original-account consuming wait; this does not release the spawn lease.
     pub(crate) fn poll(&mut self, b: &mut Budget<'_>) -> Result<Event> {
         b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {

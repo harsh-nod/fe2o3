@@ -19,6 +19,9 @@ const COMPLETE: &str = "FE2O3_NATIVE_ROOT_TRACE_COMPLETE";
 #[path = "native_root_trace_confirmation_tests.rs"]
 mod confirmation;
 
+#[path = "native_root_observation_tests.rs"]
+mod observation;
+
 #[test]
 fn real_root_trace_schedules_in_bounded_subprocesses() {
     for mode in [
@@ -195,7 +198,9 @@ fn root_trace_subprocess() {
     let mut service = pool();
     let mut work = Work::new(LIMIT);
     let mut b = Budget::new(&mut work, LIMIT);
-    if mode.starts_with("confirm-") {
+    if mode.starts_with("observe-") {
+        observation::run(&mode, &mut service, &mut b);
+    } else if mode.starts_with("confirm-") {
         confirmation::run(&mode, &mut service, &mut b);
     } else if mode.starts_with("retained") {
         retained(&mode, &mut service, &mut b);

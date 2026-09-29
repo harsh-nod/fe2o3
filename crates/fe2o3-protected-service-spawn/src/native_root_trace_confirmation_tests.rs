@@ -178,6 +178,12 @@ fn moved_budget(service: &mut Service) {
             )),
             Err(Error::Resource(Resource::Accounting))
         ));
+        assert!(matches!(
+            trace.with_task_observation::<(), Error>(candidate, |_, _| panic!(
+                "foreign Budget reached original task observation"
+            )),
+            Err(Error::Resource(Resource::Accounting))
+        ));
         assert_eq!(candidate.storage(), complete);
     }
     std::mem::swap(&mut b, &mut other);

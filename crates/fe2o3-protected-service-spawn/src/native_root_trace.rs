@@ -8,6 +8,10 @@ use fe2o3_kernel_ir::{
 use rustix::{io::Errno, process::WaitIdStatus};
 use std::{fmt, marker::PhantomData, rc::Rc, thread::ThreadId};
 
+#[path = "native_root_observation.rs"]
+mod observation;
+pub use observation::RootTaskObservationV2;
+
 // No TRACEEXIT: cancellation must never need an originating-thread ptrace
 // resume after the record has moved to the shared terminal cleanup pool.
 const OPTIONS: usize = (libc::PTRACE_O_TRACEEXEC | libc::PTRACE_O_EXITKILL) as usize;

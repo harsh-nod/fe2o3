@@ -37,7 +37,7 @@ const CODEGEN_BACKEND_FD: i32 = fe2o3_artifact_transaction::BROKERED_CODEGEN_BAC
 
 #[path = "compiler_execution_supervision_native.rs"]
 mod native;
-pub(crate) use native::{NativeObservation, NativeObservationError};
+pub(crate) use native::{NativeObservation, NativeObservationError, NativeObservationSource};
 
 /// One independently observed, authority-free snapshot of an admitted live rustc process.
 ///

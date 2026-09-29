@@ -98,12 +98,17 @@ pub const CURRENT_PROCESS_START_TIME_IO_STORAGE_V2: usize =
 /// work or clearing denials. No retained input or result allocation is charged.
 /// A compatible procfs mount is trusted; this scalar alone grants no authority.
 pub fn current_process_start_time_ticks_v2(budget: &mut Budget<'_>) -> Result<u64> {
+    process_start_time_ticks_v2(std::process::id(), budget)
+}
+
+// Context only: the caller must retain and bracket the original process custody.
+pub(crate) fn process_start_time_ticks_v2(pid: u32, budget: &mut Budget<'_>) -> Result<u64> {
     budget.with_prepaid_scope(
         0,
         native::ENTRY_WORK,
         CURRENT_PROCESS_START_TIME_WORK_V2,
         CURRENT_PROCESS_START_TIME_IO_STORAGE_V2,
-        |_| Ok(Native::start_time(std::process::id())?),
+        |_| Ok(Native::start_time(pid)?),
     )
 }
 

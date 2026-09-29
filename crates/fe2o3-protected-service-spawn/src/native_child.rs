@@ -22,7 +22,7 @@ use std::{
 
 #[path = "native_root_trace.rs"]
 pub(super) mod trace;
-pub use trace::{RootTaskTraceEventV2, RootTaskTraceV2};
+pub use trace::{RootTaskObservationV2, RootTaskTraceEventV2, RootTaskTraceV2};
 
 struct Custody(Option<(Child, ReapSlotV1<'static>)>);
 impl Drop for Custody {
