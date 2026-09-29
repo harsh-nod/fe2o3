@@ -393,3 +393,165 @@ fn fixed_schedule_fits_checked_native_funding_and_accounts_are_independent() {
                 + CLEANUP_TURNS * Cleanup::shutdown_work()
     );
 }
+
+// Exercise the real entry scheduling and real scope with inert effects only.
+// Native/Activation/Deployment are never constructed by this rootless adapter.
+struct GuardedFake {
+    inner: Fake,
+    creator: CreatorScope,
+}
+
+impl Runtime for GuardedFake {
+    fn start(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        self.inner.start(b)
+    }
+    fn publish(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        self.inner.publish(b)
+    }
+    fn wait(&mut self, b: &mut Budget<'_>) -> Result<Option<i32>> {
+        self.inner.wait(b)
+    }
+    fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        self.inner.continuity(b)
+    }
+    fn cancel(&mut self) {
+        self.inner.cancel();
+    }
+    fn pump(&mut self) -> Result<()> {
+        self.inner.pump()?;
+        self.creator.pump(CAPACITY)?;
+        Ok(())
+    }
+    fn shutdown(&mut self) -> Result<()> {
+        self.inner.shutdown()?;
+        let _original = self.creator.shutdown()?;
+        Ok(())
+    }
+    fn restore(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        self.inner.restore(b)
+    }
+}
+
+impl Drop for GuardedFake {
+    fn drop(&mut self) {
+        // Preserve the actual scheduling prefix before the real scope exits.
+        let events = self.inner.trace.borrow().events.join(",");
+        std::fs::write(std::env::var_os(CREATOR_WITNESS).unwrap(), events).unwrap();
+    }
+}
+
+const CREATOR_MODE: &str = "FE2O3_PRIVATE_ENTRY_CREATOR_TEST";
+const CREATOR_WITNESS: &str = "FE2O3_PRIVATE_ENTRY_CREATOR_WITNESS";
+
+#[test]
+fn dedicated_entry_cannot_return_or_unwind_before_original_pool_shutdown() {
+    use std::{
+        process::{Command, Stdio},
+        time::Instant,
+    };
+    for (mode, code, witness) in [
+        ("empty", 0, "returned"),
+        ("drained_refusal", 0, "returned"),
+        ("restore_refusal", 0, "returned"),
+        (
+            "busy",
+            125,
+            "start,publish,wait,cancel,shutdown,wait,pump,shutdown,wait,pump,shutdown",
+        ),
+        (
+            "cleanup_exhausted",
+            125,
+            "start,publish,wait,cancel,shutdown,wait",
+        ),
+        ("panic", 125, "start,publish"),
+    ] {
+        let completion = tempfile::NamedTempFile::new().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_entrypoint::tests::creator_entry_subprocess",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env(CREATOR_MODE, mode)
+            .env(CREATOR_WITNESS, completion.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("dedicated entry subprocess timed out: {mode}");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{mode}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(completion.path()).unwrap(),
+            witness,
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn creator_entry_subprocess() {
+    let Ok(mode) = std::env::var(CREATOR_MODE) else {
+        return;
+    };
+    let mut fake = Fake::new();
+    match mode.as_str() {
+        "empty" => {}
+        "drained_refusal" => fake.fail = Some("publish"),
+        "restore_refusal" => fake.fail = Some("restore"),
+        "busy" => fake.busy = usize::MAX,
+        "cleanup_exhausted" => {
+            fake.busy = 1;
+            fake.trace.borrow_mut().cleanup = Account::new(Work::new(0), 0);
+        }
+        "panic" => fake.panic = Some("publish"),
+        _ => panic!("unknown creator entry mode"),
+    }
+    let trace = fake.trace.clone();
+    let path = std::env::var_os(CREATOR_WITNESS).unwrap();
+    let mut request = Account::new(Work::new(usize::MAX), FRAME + RETAINED);
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        request.with_budget(|b| {
+            run_scoped(b, 1, 2, || {
+                // This real global controller contains no child or retained resource.
+                // It is confined to this explicitly selected disposable subprocess.
+                let cleanup =
+                    Cleanup::admit(Account::new(Work::new(100_000_000), Cleanup::STORAGE))
+                        .map_err(|e| Failure::from(e.into_parts().0))?;
+                // SAFETY: only this rootless mechanical subprocess may be exited.
+                // No native root, activation, or external-custodian claim is made.
+                let creator = unsafe { CreatorScope::enter(cleanup) };
+                std::fs::write(&path, "entered").unwrap();
+                Ok(GuardedFake {
+                    inner: fake,
+                    creator,
+                })
+            })
+        })
+    }));
+    let outcome = result.expect("catch_unwind must not recover an open creator scope");
+    assert_eq!(outcome.is_ok(), mode == "empty");
+    assert!(trace.borrow().events.contains(&"shutdown"));
+    assert!(trace.borrow().events.contains(&"restore"));
+    assert!(matches!(
+        mode.as_str(),
+        "empty" | "drained_refusal" | "restore_refusal"
+    ));
+    std::fs::write(path, "returned").unwrap();
+}

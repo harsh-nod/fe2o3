@@ -12,12 +12,15 @@ use fe2o3_kernel_ir::{
 use fe2o3_protected_service_spawn::{
     MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY, ProtectedServiceCleanupErrorV2 as CleanupError,
     ProtectedServiceCleanupServiceV2 as Cleanup,
+    creator_scope::DedicatedCreatorScopeV1 as CreatorScope,
 };
 use std::{mem::size_of, time::Duration};
 
 const MONITOR_TURNS: usize = 86_400;
 const CLEANUP_TURNS: usize = 20;
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(120);
+// run_scoped prepays this fixed scope/exit allowance before constructing Native.
+const _: () = assert!(CreatorScope::CONTROL_WORK + 4096 <= root::LOCAL_WORK);
 // Includes control state, error paths and account handles, not generated stack/RSS.
 pub(crate) const FRAME: usize =
     4 * size_of::<Native>() + 4 * size_of::<Failure>() + 2 * size_of::<Account>() + 16384;
@@ -30,9 +33,11 @@ pub(crate) const FRAME: usize =
 /// even if cleanup succeeds. No V1/V2 fallback or runtime family selector exists.
 /// The installed system-manager binary remains V1 until provisioning migrates.
 ///
-/// Every return requires termination of the dedicated process. A refusal or panic
-/// may leave charged cleanup custody and a blocked signal mask. It does not prove
-/// eventual reaping: the service manager must terminate the entire service cgroup.
+/// Every return requires termination of the dedicated process. Once cleanup is
+/// admitted, return/unwind before successful original-pool empty shutdown exits
+/// the dedicated process with status 125. A handled foreground refusal may still
+/// drain completely before returning. This does not prove eventual reaping: the
+/// external service manager must terminate the entire service cgroup.
 /// Signal restoration occurs only after successful empty-pool shutdown; restoring
 /// the previous mask can deliver pending signals before this function returns.
 ///
@@ -45,6 +50,9 @@ pub(crate) const FRAME: usize =
 /// and `environ` is a valid readable null-terminated C environment. No handler may
 /// change the mask or consume termination signals. Do not retry, fork, or continue
 /// application work after this call, including after refusal or caught unwind.
+/// The actual external unit must retain whole-cgroup termination custody after
+/// main-process exit. The checked-in unit uses KillMode=mixed; this function does
+/// not admit its effective configuration, containment, or installed native image.
 ///
 /// ```compile_fail
 /// use fe2o3_compiler_execution_coordinator::run_inherited_compiler_execution_coordinator_v3;
@@ -67,7 +75,10 @@ pub unsafe fn run_inherited_compiler_execution_coordinator_v3() -> Result<()> {
                 managed: None,
                 activation: None,
                 signals: None,
-                cleanup,
+                // SAFETY: this unsafe entry owns the dedicated process, original
+                // pool and external whole-cgroup cleanup contract. Activation
+                // validates the main thread before either native child is cloned.
+                creator: unsafe { CreatorScope::enter(cleanup) },
             })
         })
     })
@@ -152,11 +163,11 @@ fn drain(runtime: &mut impl Runtime, turns: usize, b: &mut Budget<'_>) -> Result
 }
 
 struct Native {
-    // Foreground cancellation runs before controller Drop on every unwind.
+    // Cancel foreground custody before the armed creator scope can fail-stop.
     managed: Option<Managed>,
     activation: Option<Activation>,
     signals: Option<TerminationSignals>,
-    cleanup: Cleanup,
+    creator: CreatorScope,
 }
 
 impl Runtime for Native {
@@ -173,7 +184,11 @@ impl Runtime for Native {
         // SAFETY: activation succeeded and this is the one FD ownership transfer.
         let (deployment, charge) = unsafe { Deployment::admit(b) }?;
         b.reserve_storage(charge.additional_storage())?;
-        let (managed, growth) = deployment.launch(LAUNCH_TIMEOUT, &mut self.cleanup, b)?;
+        // SAFETY: this closed synchronous composition launches anchor then
+        // supervisor on this main thread. It only borrows the original pool;
+        // Native retains the scope through cancellation and empty shutdown.
+        let cleanup = unsafe { self.creator.cleanup_for_launch() };
+        let (managed, growth) = deployment.launch(LAUNCH_TIMEOUT, cleanup, b)?;
         self.managed = Some(managed);
         b.reserve_storage(growth.additional_storage())?;
         Ok(())
@@ -209,12 +224,12 @@ impl Runtime for Native {
     }
 
     fn pump(&mut self) -> Result<()> {
-        self.cleanup.pump(CAPACITY)?;
+        self.creator.pump(CAPACITY)?;
         Ok(())
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        let _original_account = self.cleanup.shutdown()?;
+        let _original_account = self.creator.shutdown()?;
         Ok(())
     }
 
