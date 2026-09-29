@@ -260,8 +260,10 @@ pub(crate) use process_spawn::ArtifactProcessSpawnCoordinatorV1;
 #[cfg(feature = "test-hooks")]
 pub use process_spawn::with_test_artifact_fork_exec_barrier_v1;
 pub use process_spawn::{
+    ArtifactLockRetirementBarrierErrorV1, ArtifactLockRetirementBarrierV1,
     ArtifactProcessSpawnLeaseErrorV1, ArtifactProcessSpawnLeaseV1,
-    try_acquire_artifact_process_spawn_lease_v1, with_artifact_process_spawn_v1,
+    try_acquire_artifact_lock_retirement_barrier_v1, try_acquire_artifact_process_spawn_lease_v1,
+    with_artifact_process_spawn_v1,
 };
 pub use publication_object_inventory_v1::{
     COMPILER_MODULE_HANDOFF_PUBLICATION_OBJECT_FDS_V1,

@@ -2,11 +2,25 @@
 
 use std::fmt;
 use std::process;
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, MutexGuard, TryLockError};
 
 struct ArtifactProcessSpawnStateV1 {
     pid: u32,
     active_spawns: u64,
+    active_releases: u64,
+    retirement: bool,
+}
+
+impl ArtifactProcessSpawnStateV1 {
+    fn reset_after_fork(&mut self) {
+        let pid = process::id();
+        if self.pid != pid {
+            self.pid = pid;
+            self.active_spawns = 0;
+            self.active_releases = 0;
+            self.retirement = false;
+        }
+    }
 }
 
 pub(crate) struct ArtifactProcessSpawnCoordinatorV1 {
@@ -16,23 +30,22 @@ pub(crate) struct ArtifactProcessSpawnCoordinatorV1 {
 
 impl ArtifactProcessSpawnCoordinatorV1 {
     pub(crate) fn global() -> &'static Self {
-        static COORDINATOR: OnceLock<ArtifactProcessSpawnCoordinatorV1> = OnceLock::new();
-        COORDINATOR.get_or_init(|| Self {
+        // A const initializer avoids a hidden OnceLock wait in nonblocking retirement admission.
+        static COORDINATOR: ArtifactProcessSpawnCoordinatorV1 = ArtifactProcessSpawnCoordinatorV1 {
             state: Mutex::new(ArtifactProcessSpawnStateV1 {
-                pid: process::id(),
+                pid: 0,
                 active_spawns: 0,
+                active_releases: 0,
+                retirement: false,
             }),
             idle: Condvar::new(),
-        })
+        };
+        &COORDINATOR
     }
 
-    fn state(&self) -> std::sync::MutexGuard<'_, ArtifactProcessSpawnStateV1> {
+    fn state(&self) -> MutexGuard<'_, ArtifactProcessSpawnStateV1> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let pid = process::id();
-        if state.pid != pid {
-            state.pid = pid;
-            state.active_spawns = 0;
-        }
+        state.reset_after_fork();
         state
     }
 
@@ -40,6 +53,24 @@ impl ArtifactProcessSpawnCoordinatorV1 {
         &'static self,
     ) -> Result<ArtifactProcessSpawnLeaseV1, ArtifactProcessSpawnLeaseErrorV1> {
         let mut state = self.state();
+        loop {
+            if state.retirement {
+                return Err(ArtifactProcessSpawnLeaseErrorV1::RetirementInProgress);
+            }
+            if state.active_releases == 0 {
+                return self.admit_spawn(&mut state);
+            }
+            state = self
+                .idle
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+    }
+
+    fn admit_spawn(
+        &'static self,
+        state: &mut ArtifactProcessSpawnStateV1,
+    ) -> Result<ArtifactProcessSpawnLeaseV1, ArtifactProcessSpawnLeaseErrorV1> {
         state.active_spawns = state
             .active_spawns
             .checked_add(1)
@@ -51,8 +82,36 @@ impl ArtifactProcessSpawnCoordinatorV1 {
     }
 
     pub(crate) fn begin_spawn(&'static self) -> ArtifactProcessSpawnLeaseV1 {
-        self.try_begin_spawn()
+        let mut state = self.state();
+        while state.retirement || state.active_releases != 0 {
+            state = self
+                .idle
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        self.admit_spawn(&mut state)
             .expect("concurrent artifact process spawn count overflowed")
+    }
+
+    fn try_begin_retirement(
+        &'static self,
+    ) -> Result<ArtifactLockRetirementBarrierV1, ArtifactLockRetirementBarrierErrorV1> {
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(ArtifactLockRetirementBarrierErrorV1::Busy);
+            }
+        };
+        state.reset_after_fork();
+        if state.active_spawns != 0 || state.active_releases != 0 || state.retirement {
+            return Err(ArtifactLockRetirementBarrierErrorV1::Busy);
+        }
+        state.retirement = true;
+        Ok(ArtifactLockRetirementBarrierV1 {
+            coordinator: self,
+            origin_pid: state.pid,
+        })
     }
 
     pub(crate) fn release_lock_descriptors(&self, release: impl FnOnce()) {
@@ -63,8 +122,39 @@ impl ArtifactProcessSpawnCoordinatorV1 {
                 .wait(state)
                 .unwrap_or_else(|error| error.into_inner());
         }
-        // Keep the state lock held while descriptors close so a new child cannot inherit them.
+        // Count actual descriptor closing independently of the caller's barrier. Even if that
+        // barrier is dropped on another thread, a new spawn must wait for the close to finish.
+        state.active_releases = state
+            .active_releases
+            .checked_add(1)
+            .expect("concurrent artifact lock release count overflowed");
+        let _release = ArtifactLockDescriptorReleaseV1 {
+            coordinator: self,
+            origin_pid: state.pid,
+        };
+        drop(state);
         release();
+    }
+}
+
+struct ArtifactLockDescriptorReleaseV1<'a> {
+    coordinator: &'a ArtifactProcessSpawnCoordinatorV1,
+    origin_pid: u32,
+}
+
+impl Drop for ArtifactLockDescriptorReleaseV1<'_> {
+    fn drop(&mut self) {
+        if self.origin_pid != process::id() {
+            return;
+        }
+        let mut state = self.coordinator.state();
+        state.active_releases = state
+            .active_releases
+            .checked_sub(1)
+            .expect("artifact lock release count underflowed");
+        if state.active_releases == 0 {
+            self.coordinator.idle.notify_all();
+        }
     }
 }
 
@@ -73,6 +163,8 @@ impl ArtifactProcessSpawnCoordinatorV1 {
 pub enum ArtifactProcessSpawnLeaseErrorV1 {
     /// The shared coordinator cannot count another active lease.
     CountOverflow,
+    /// An explicit artifact retirement barrier excludes new spawns. Retry after retirement.
+    RetirementInProgress,
 }
 
 impl fmt::Display for ArtifactProcessSpawnLeaseErrorV1 {
@@ -81,11 +173,91 @@ impl fmt::Display for ArtifactProcessSpawnLeaseErrorV1 {
             Self::CountOverflow => {
                 formatter.write_str("concurrent artifact process spawn count overflowed")
             }
+            Self::RetirementInProgress => {
+                formatter.write_str("artifact lock retirement in progress")
+            }
         }
     }
 }
 
 impl std::error::Error for ArtifactProcessSpawnLeaseErrorV1 {}
+
+/// Fixed, allocation-free refusal to acquire an artifact lock retirement barrier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtifactLockRetirementBarrierErrorV1 {
+    /// A spawn, descriptor release, another barrier, or mutex contention prevents admission.
+    Busy,
+}
+
+impl fmt::Display for ArtifactLockRetirementBarrierErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("artifact lock retirement coordinator busy")
+    }
+}
+
+impl std::error::Error for ArtifactLockRetirementBarrierErrorV1 {}
+
+/// Move-only exclusion of process creation while actual artifact lock owners are destroyed.
+///
+/// Admission proves only that this process's shared coordinator has no outstanding spawn
+/// leases. It does not prove compiler termination, durable publication, or authority to retire
+/// any owner. The caller must retain the actual owners on Busy/error/unwind until its own
+/// retirement conditions hold. Keep this barrier until their destructors have returned, and
+/// never invoke process creation while holding it. Ordinary lock Drop then has no spawn lease
+/// to wait for. No coordinator mutex is held by this value or across descriptor destruction.
+///
+/// This allocation-free mechanical primitive has no resource ledger. The cleanup custodian
+/// must prepay each attempt, this value's storage, and actual owner destruction on its original
+/// account before acquiring it. Finish fallible accounting/validation before dropping custody;
+/// dropping the barrier neither touches that account nor releases any artifact owner itself.
+///
+/// Moving to another thread preserves exclusion in the originating process. Drop takes only
+/// the coordinator mutex for bookkeeping, never waits for a spawn/descriptor release, and
+/// wakes waiting legacy spawns. This is not a wall-clock scheduling guarantee. A forked copy's
+/// Drop checks its origin before touching the inherited mutex; pre-exec child code must not
+/// re-enter artifact APIs.
+///
+/// ```compile_fail
+/// use fe2o3_artifact_transaction::ArtifactLockRetirementBarrierV1;
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<ArtifactLockRetirementBarrierV1>();
+/// ```
+#[must_use = "retain across destruction of the actual artifact lock owners"]
+pub struct ArtifactLockRetirementBarrierV1 {
+    coordinator: &'static ArtifactProcessSpawnCoordinatorV1,
+    origin_pid: u32,
+}
+
+impl fmt::Debug for ArtifactLockRetirementBarrierV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ArtifactLockRetirementBarrierV1")
+            .field("origin_pid", &self.origin_pid)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ArtifactLockRetirementBarrierV1 {
+    fn drop(&mut self) {
+        if self.origin_pid != process::id() {
+            return;
+        }
+        let mut state = self.coordinator.state();
+        state.retirement = false;
+        self.coordinator.idle.notify_all();
+    }
+}
+
+/// Tries once to exclude new process creation using the actual artifact-lock coordinator.
+///
+/// Unlike checked spawn-lease admission, this uses `try_lock` and never waits. Busy leaves
+/// coordinator obligations unchanged. No owner is accepted, extracted, or destroyed here.
+/// On success, retain the returned barrier across actual lease/token destruction outside all
+/// cleanup-pool mutexes. Ordinary artifact locking/currentness checks are unchanged.
+pub fn try_acquire_artifact_lock_retirement_barrier_v1()
+-> Result<ArtifactLockRetirementBarrierV1, ArtifactLockRetirementBarrierErrorV1> {
+    ArtifactProcessSpawnCoordinatorV1::global().try_begin_retirement()
+}
 
 /// Move-only custody of one obligation in the shared artifact process-spawn coordinator.
 ///
@@ -141,8 +313,9 @@ impl Drop for ArtifactProcessSpawnLeaseV1 {
 
 /// Acquires transferable spawn custody from the same coordinator used by artifact lock release.
 ///
-/// Count overflow returns a fixed error without changing the count. This may wait for the
-/// coordinator mutex; `try` refers to checked admission, not a nonblocking mutex acquisition.
+/// Count overflow or an explicit retirement barrier returns a fixed error without changing
+/// the count. This may wait for the coordinator mutex or ordinary descriptor closing; `try`
+/// refers to checked admission, not a nonblocking mutex acquisition.
 /// The caller must uphold the retention obligation of [`ArtifactProcessSpawnLeaseV1`].
 pub fn try_acquire_artifact_process_spawn_lease_v1()
 -> Result<ArtifactProcessSpawnLeaseV1, ArtifactProcessSpawnLeaseErrorV1> {
@@ -160,7 +333,9 @@ pub fn try_acquire_artifact_process_spawn_lease_v1()
 ///
 /// This wrapper releases its lease on return or unwind. If cleanup can outlive either, use
 /// [`try_acquire_artifact_process_spawn_lease_v1`] and transfer the lease to that custodian.
-/// Like the original wrapper, this panics if the active spawn count overflows.
+/// This waits for any retirement barrier to be dropped before invoking `spawn`, preserving the
+/// wrapper's return/error behavior. Like the original wrapper, count overflow panics. Do not
+/// invoke it on the path responsible for dropping an outstanding retirement barrier.
 pub fn with_artifact_process_spawn_v1<T, E>(spawn: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
     let _spawn = ArtifactProcessSpawnCoordinatorV1::global().begin_spawn();
     spawn()

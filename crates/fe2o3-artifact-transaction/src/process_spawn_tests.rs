@@ -12,6 +12,8 @@ fn isolated_coordinator(active_spawns: u64) -> &'static ArtifactProcessSpawnCoor
         state: Mutex::new(ArtifactProcessSpawnStateV1 {
             pid: process::id(),
             active_spawns,
+            active_releases: 0,
+            retirement: false,
         }),
         idle: Condvar::new(),
     }))
@@ -169,3 +171,6 @@ fn foreign_origin_drop_skips_the_inherited_mutex_and_preserves_counts() {
         assert_eq!(preserved, (state_pid, active_spawns));
     }
 }
+
+#[path = "process_spawn_retirement_tests.rs"]
+mod retirement;
