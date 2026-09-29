@@ -110,10 +110,11 @@ pub(super) fn write_block_argument_v2(
                             SemanticStatementKindV1::Assign(assignment) => Some(assignment),
                             _ => None,
                         });
-                    let operand = assignment.and_then(|assignment| match assignment.value().kind() {
-                        SemanticRvalueKindV1::Use(operand) => Some(operand),
-                        _ => None,
-                    });
+                    let operand =
+                        assignment.and_then(|assignment| match assignment.value().kind() {
+                            SemanticRvalueKindV1::Use(operand) => Some(operand),
+                            _ => None,
+                        });
                     let copy_local = operand.and_then(simple_operand_local).map(|id| id.index());
                     let literal = operand.and_then(|operand| match operand {
                         SemanticOperandV1::Constant(constant) => match constant.value() {
