@@ -24,6 +24,24 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [template preparation and async-owner attempt](evidence/dev-template-prepare-owner-attempt-2026-09-29/README.md)
+source-refines immutable packet preparation, ABI comparison and constructors,
+with exact first refusal or complete templates and no valid-input premise.
+The signed 42-stage campaign passes 30 overlapping obligations and all 34
+executable negatives at 6254 unchanged source hashes. Four genuine Ordinary
+integration groups cover actual refusal classification and corrected no-effect
+retry. KFD passes 1453/0 (320 construction exclusions), runtime 1828/0 (32 hardware
+ignores), doctests 124/0 and all 20 CPU/static/positive-proof stages pass. The exact
+static native-test ELF passes 1765 CPU tests with 32 hardware ignores.
+The new repeated async-owner native campaign is **rejected**: the first reuse
+case returns `Failed(BackendCode(-1))`, the immediate endpoint refuses a 1% busy
+sample, and the replacement case never runs. Complete collection, owned cleanup,
+independent process/path absence and fresh archive replay pass. Source review
+identifies the frozen output-sentinel admission condition as a candidate mismatch,
+not a confirmed historical root cause. Full outer validation/binder composition,
+supported repeated invocation, native authority and all milestone exits remain
+open. No GPU success or performance improvement is claimed by this packet.
+
 The [epoch reservation and heap-backed template qualification](evidence/dev-dispatch-epoch-reserve-2026-09-29/README.md)
 shares actual capacity/preflight/reservation bodies with a no-cheating Verus root,
 proving exact refusal and first-reusable-slot-only commit. It also fixes a real
