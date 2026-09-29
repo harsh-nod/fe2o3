@@ -151,7 +151,13 @@ impl<T: Send + 'static> ManagedIssuer<'_, T> {
         self.account.with(self.retained, b, |b| {
             self.child.with_resources(b, |p, b| -> Result<()> {
                 p.prepared.validate_process(self.child.pid(), b)?;
-                match_ready(&self.ready, self.child.pid(), &p.manifest, &p.prepared, b)
+                match_ready(&self.ready, self.child.pid(), &p.manifest, &p.prepared, b)?;
+                fe2o3_broker_authority_service::validate_retained_issuer_image_v3(
+                    &self.child,
+                    p.prepared.trust.policy().policy(),
+                    b,
+                )?;
+                Ok(())
             })?;
             require_live(&self.child, b)
         })
@@ -262,7 +268,7 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
         FRAME + launch_io::ATTEMPT_SCRATCH + launch_io::PIPE_ATTEMPT_SCRATCH,
         |b| {
             prepared.revalidate(b)?;
-            let continuity = quota::continuity::<T>(prepared.process_quota()?)?;
+            let continuity = prepared.issuer_continuity_quota::<T>()?;
             let credentials = prepared.credentials;
             let (anchor, charge) = prepared.anchor.try_clone_for_supervisor(
                 prepared.trust.deployment(),
@@ -362,12 +368,19 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
             b.reserve_storage(charge.additional_storage())?;
             child.with_resources(b, |p, b| -> Result<()> {
                 p.prepared.validate_process(child.pid(), b)?;
-                match_ready(&ready_record, child.pid(), &p.manifest, &p.prepared, b)
+                match_ready(&ready_record, child.pid(), &p.manifest, &p.prepared, b)?;
+                fe2o3_broker_authority_service::validate_retained_issuer_image_v3(
+                    &child,
+                    p.prepared.trust.policy().policy(),
+                    b,
+                )?;
+                Ok(())
             })?;
             require_live(&child, b)?;
             check_deadline(deadline, "issuer final validation")?;
             // SAFETY: native exec-status EOF, exact private pipe record PLUS EOF,
-            // matches_launch, final prepared process/profile and pidfd liveness passed.
+            // matches_launch, measured running image, final prepared process/profile
+            // and pidfd liveness passed.
             // ALL parent/stage child-end aliases closed before these observations.
             unsafe { child.confirm_exec(b) }?;
             let retained = sum(&[

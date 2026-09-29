@@ -437,16 +437,17 @@ fn issuer_finite_launch_quota_includes_each_nested_operation_and_output_overlap(
         work: 0,
         scratch: 0,
     };
-    let base =
-        quota::launch_quota::<()>(payload, source, zero, zero, zero, zero, zero, zero).unwrap();
-    for index in 0..6 {
-        let mut inputs = [zero; 6];
+    let base = quota::launch_quota::<()>(payload, source, zero, zero, zero, zero, zero, zero, zero)
+        .unwrap();
+    for index in 0..7 {
+        let mut inputs = [zero; 7];
         inputs[index] = Quota {
             work: 13,
             scratch: 17,
         };
         let actual = quota::launch_quota::<()>(
             payload, source, inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5],
+            inputs[6],
         )
         .unwrap();
         assert_eq!(
@@ -464,18 +465,67 @@ fn issuer_finite_launch_quota_includes_each_nested_operation_and_output_overlap(
     );
     assert!(base.scratch() > Stage::spawn_retaining_scratch::<Payload<()>>(payload).unwrap());
     assert!(
-        quota::launch_quota::<()>(usize::MAX, source, zero, zero, zero, zero, zero, zero).is_err()
+        quota::launch_quota::<()>(usize::MAX, source, zero, zero, zero, zero, zero, zero, zero)
+            .is_err()
     );
     assert!(
-        quota::launch_quota::<()>(payload, usize::MAX, zero, zero, zero, zero, zero, zero).is_err()
+        quota::launch_quota::<()>(
+            payload,
+            usize::MAX,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero
+        )
+        .is_err()
     );
     let overflow = Quota {
         work: usize::MAX,
         scratch: 0,
     };
     assert!(
-        quota::launch_quota::<()>(payload, source, overflow, zero, zero, zero, zero, zero).is_err()
+        quota::launch_quota::<()>(
+            payload, source, overflow, zero, zero, zero, zero, zero, zero
+        )
+        .is_err()
     );
+    assert!(
+        quota::launch_quota::<()>(
+            payload, source, zero, zero, zero, zero, zero, zero, overflow
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn issuer_continuity_funds_running_image_and_refuses_quote_overflow() {
+    let zero = Quota {
+        work: 0,
+        scratch: 0,
+    };
+    let image = Quota {
+        work: 13,
+        scratch: 17,
+    };
+    let base = quota::continuity::<()>(zero, zero).unwrap();
+    let measured = quota::continuity::<()>(zero, image).unwrap();
+    assert_eq!(measured.work() - base.work(), image.work());
+    assert_eq!(measured.scratch() - base.scratch(), image.scratch());
+    for overflow in [
+        Quota {
+            work: usize::MAX,
+            scratch: 0,
+        },
+        Quota {
+            work: 0,
+            scratch: usize::MAX,
+        },
+    ] {
+        assert!(quota::continuity::<()>(zero, overflow).is_err());
+    }
 }
 
 #[test]
