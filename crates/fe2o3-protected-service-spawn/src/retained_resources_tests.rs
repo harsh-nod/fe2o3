@@ -11,7 +11,8 @@ use fe2o3_kernel_ir::{
 };
 
 use crate::retained_resources::{
-    RetainedPayload, RetainedResourceAccessErrorV2 as Access, RetainedResourcesV2,
+    RetainedDependencyV2, RetainedPayload, RetainedResourceAccessErrorV2 as Access,
+    RetainedResourcesV2,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -100,6 +101,151 @@ fn retiring_slot_retains_value_until_handle_drops() {
     assert_eq!(Arc::strong_count(&handle.owner), 1);
     assert!(observe(&handle, |value| Arc::ptr_eq(&value.0, &drops)));
     drop(handle);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn dependencies_share_original_backing_until_the_last_independent_drop() {
+    for order in [[0, 1, 2, 3], [1, 0, 3, 2], [2, 3, 0, 1], [2, 0, 1, 3]] {
+        let (handle, payload, drops) = tracked_pair();
+        let mut work = Work::new(2 * RetainedResourcesV2::<DropWitness>::DEPENDENCY_WORK);
+        let mut b = Budget::new(&mut work, 1_000_000);
+        let source = handle.retained_storage();
+        b.reserve_storage(source).unwrap();
+        let first = handle.retain_dependency(&mut b).unwrap();
+        let charge = first.retained_storage();
+        assert_eq!(b.storage(), source, "output must be fully unreserved");
+        assert_eq!(
+            charge,
+            payload.storage() + size_of::<(RetainedDependencyV2<DropWitness>, usize)>()
+        );
+        b.reserve_storage(charge).unwrap();
+        let second = handle.retain_dependency(&mut b).unwrap();
+        assert_eq!(b.storage(), source + charge);
+        b.reserve_storage(second.retained_storage()).unwrap();
+        assert!(Arc::ptr_eq(&handle.owner, &first.owner));
+        assert!(Arc::ptr_eq(&handle.owner, &second.owner));
+        assert_eq!(Arc::strong_count(&handle.owner), 4);
+
+        let (mut handle, mut payload) = (Some(handle), Some(payload));
+        let (mut first, mut second) = (Some(first), Some(second));
+        for (step, owner) in order.into_iter().enumerate() {
+            match owner {
+                0 => {
+                    drop(handle.take());
+                    b.release_storage(source).unwrap();
+                }
+                1 => drop(payload.take()),
+                2 => {
+                    drop(first.take());
+                    b.release_storage(charge).unwrap();
+                }
+                _ => {
+                    // The issuer's cleanup may retire on another thread.
+                    let second = second.take().unwrap();
+                    std::thread::spawn(move || drop(second)).join().unwrap();
+                    b.release_storage(charge).unwrap();
+                }
+            }
+            assert_eq!(drops.load(Ordering::SeqCst), usize::from(step == 3));
+        }
+        assert_eq!(b.storage(), 0);
+    }
+}
+
+#[test]
+fn dependency_funding_is_exact_and_refusal_never_changes_refcounts() {
+    type Handle = RetainedResourcesV2<DropWitness>;
+    let (handle, payload, drops) = tracked_pair();
+    let full = handle.retained_storage();
+    let charge = payload.storage() + size_of::<(RetainedDependencyV2<DropWitness>, usize)>();
+    for case in 0..5 {
+        let quota = if case == 4 {
+            7
+        } else {
+            Handle::DEPENDENCY_WORK - usize::from(case == 2)
+        };
+        let limit = full + charge + Handle::DEPENDENCY_SCRATCH - usize::from(case == 3);
+        let floor = full - usize::from(case == 1);
+        let mut work = Work::new(19 + quota);
+        let mut b = Budget::new(&mut work, limit);
+        b.reserve_storage(floor).unwrap();
+        b.charge_work(19).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let result = handle.retain_dependency(&mut b);
+        assert_eq!(b.storage(), floor);
+        assert!(ledger == b.work_ledger_identity_v1());
+        if case == 0 {
+            let dependency = result.unwrap();
+            assert_eq!(dependency.retained_storage(), charge);
+            assert_eq!(b.work(), 19 + quota);
+            assert_eq!(b.peak_storage(), limit);
+            assert_eq!(Arc::strong_count(&handle.owner), 3);
+            drop(dependency);
+        } else {
+            match (case, result) {
+                (1, Err(Resource::Accounting))
+                | (2 | 4, Err(Resource::Work(_)))
+                | (3, Err(Resource::Storage(_))) => {}
+                _ => panic!("wrong dependency refusal: {case}"),
+            }
+            assert_eq!(b.peak_storage(), floor);
+            if case == 3 {
+                assert_eq!(b.failed_storage(), Some(limit + 1));
+            }
+        }
+        assert_eq!(Arc::strong_count(&handle.owner), 2);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn issuer_cleanup_payload_keeps_transitive_backing_after_source_retirement() {
+    let (handle, compiler_payload, drops) = tracked_pair();
+    let mut work = Work::new(RetainedResourcesV2::<DropWitness>::DEPENDENCY_WORK);
+    let mut b = Budget::new(&mut work, 1_000_000);
+    b.reserve_storage(handle.retained_storage()).unwrap();
+    let dependency = handle.retain_dependency(&mut b).unwrap();
+    let full = dependency.retained_storage();
+    b.reserve_storage(full).unwrap();
+    // Model only the independent issuer slot payload, not any child authority.
+    let issuer_charge =
+        RetainedResourcesV2::<RetainedDependencyV2<DropWitness>>::storage_for(full).unwrap();
+    b.reserve_storage(issuer_charge - full).unwrap();
+    let (issuer, issuer_payload) = RetainedResourcesV2::pair(dependency, full).unwrap();
+    assert!(issuer_payload.storage() >= full);
+    let source = handle.retained_storage();
+    drop((handle, compiler_payload));
+    b.release_storage(source).unwrap();
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(issuer);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    std::thread::spawn(move || drop(issuer_payload))
+        .join()
+        .unwrap();
+    b.release_storage(issuer_charge).unwrap();
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(b.storage(), 0);
+}
+
+#[test]
+fn dependency_does_not_access_or_lock_poisoned_backing() {
+    let (handle, payload, drops) = tracked_pair();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _guard = handle.owner.lock().unwrap();
+            panic!("poison original backing");
+        }))
+        .is_err()
+    );
+    let mut work = Work::new(RetainedResourcesV2::<DropWitness>::DEPENDENCY_WORK);
+    let mut b = Budget::new(&mut work, 1_000_000);
+    b.reserve_storage(handle.retained_storage()).unwrap();
+    let dependency = handle.retain_dependency(&mut b).unwrap();
+    assert!(Arc::ptr_eq(&handle.owner, &dependency.owner));
+    drop((handle, payload));
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(dependency);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
@@ -248,6 +394,11 @@ fn largest_full_request_charge_is_checked_without_wrapping() {
     ));
     assert_eq!(budget.failed_storage(), Some(usize::MAX));
     assert_eq!(budget.storage(), usize::MAX);
+    assert!(matches!(
+        handle.retain_dependency(&mut budget),
+        Err(Resource::Arithmetic)
+    ));
+    assert_eq!(Arc::strong_count(&handle.owner), 2);
 }
 
 #[test]

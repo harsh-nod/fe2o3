@@ -66,6 +66,11 @@ pub struct RetainedResourcesV2<T: Send + 'static> {
 }
 
 impl<T: Send + 'static> RetainedResourcesV2<T> {
+    // Account checks, Arc increment/decrements and final allocation retirement.
+    // T's bounded nonpanicking Drop keeps its independently prepaid obligations.
+    const DEPENDENCY_WORK: usize = ENTRY + 4 * (1024 + 64);
+    const DEPENDENCY_SCRATCH: usize = 4 * size_of::<(RetainedDependencyV2<T>, Resource)>() + 1024;
+
     /// Fixed lock/unlock allowance on the original request ledger; excludes callback work.
     pub const ACCESS_WORK: usize = ENTRY + 2 * 1088;
     /// Fixed guard/result metadata and control frame; excludes callback scratch and output.
@@ -131,6 +136,29 @@ impl<T: Send + 'static> RetainedResourcesV2<T> {
     /// Full request charge: payload storage plus `size_of::<(Self, usize)>()`.
     pub const fn retained_storage(&self) -> usize {
         self.charge
+    }
+
+    /// Only the actual root trace exposes this operation, after checking its
+    /// original account and complete floor. No payload access or cloning of T.
+    pub(crate) fn retain_dependency(
+        &self,
+        b: &mut Budget<'_>,
+    ) -> Result<RetainedDependencyV2<T>, Resource> {
+        let charge = self
+            .charge
+            .checked_sub(size_of::<(Self, usize)>())
+            .ok_or(Resource::Accounting)?
+            .checked_add(size_of::<(RetainedDependencyV2<T>, usize)>())
+            .ok_or(Resource::Arithmetic)?;
+        let scratch = charge
+            .checked_add(Self::DEPENDENCY_SCRATCH)
+            .ok_or(Resource::Arithmetic)?;
+        b.with_prepaid_scope(self.charge, ENTRY, Self::DEPENDENCY_WORK, scratch, |_| {
+            Ok(RetainedDependencyV2 {
+                owner: Arc::clone(&self.owner),
+                charge,
+            })
+        })
     }
 
     /// Inert checked payload quota, including Mutex/Arc overhead and alignment padding.
@@ -210,6 +238,76 @@ impl<T: Send + 'static> fmt::Debug for RetainedResourcesV2<T> {
             .debug_struct("RetainedResourcesV2")
             .field("retained_storage", &self.charge)
             .finish_non_exhaustive()
+    }
+}
+
+/// Move-only, drop-only retention of the SAME original transitive backing.
+///
+/// Constructed only by an actual root trace's `retain_dependencies`. This handle
+/// is Send + 'static even though that trace is thread-bound. It exposes neither
+/// T nor child/descriptor/wait access and creates no new payload or authority.
+/// The last backing owner drops T under its original bounded, prepaid Drop contract.
+///
+/// ```
+/// use fe2o3_protected_service_spawn::RetainedDependencyV2;
+/// fn send_static<T: Send + 'static>() {}
+/// send_static::<RetainedDependencyV2<std::cell::Cell<u8>>>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedDependencyV2;
+/// fn clone<T: Clone>() {} clone::<RetainedDependencyV2<()>>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::{RetainedDependencyV2, RetainedResourcesV2};
+/// fn forge(v: RetainedResourcesV2<()>) -> RetainedDependencyV2<()> { v.into() }
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedResourcesV2;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn bypass(v: &RetainedResourcesV2<()>, b: &mut Budget<'_>) { v.retain_dependency(b); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedDependencyV2;
+/// use fe2o3_protected_service_spawn::native_spawn::ProtectedServiceSpawnErrorV2 as Error;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn access(v: &RetainedDependencyV2<()>, b: &mut Budget<'_>) {
+///     v.with(b, |_, _| Ok::<_, Error>(()));
+/// }
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedDependencyV2;
+/// fn extract(v: RetainedDependencyV2<String>) -> String { v.into_inner() }
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedDependencyV2;
+/// fn downcast(v: RetainedDependencyV2<()>) { v.downcast::<()>(); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedDependencyV2;
+/// fn descriptor<T: std::os::fd::AsFd>() {} descriptor::<RetainedDependencyV2<()>>();
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedDependencyV2;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn wait(v: &mut RetainedDependencyV2<()>, b: &mut Budget<'_>) { v.poll(b); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_protected_service_spawn::RetainedDependencyV2;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn pidfd(v: &RetainedDependencyV2<()>, b: &mut Budget<'_>) { v.try_clone_pidfd(b); }
+/// ```
+pub struct RetainedDependencyV2<T: Send + 'static> {
+    #[allow(dead_code)] // Retained solely for Drop; never locked or exposed.
+    owner: Arc<Mutex<T>>,
+    charge: usize,
+}
+
+impl<T: Send + 'static> RetainedDependencyV2<T> {
+    /// FULL UNRESERVED charge, including all transitive backing and this handle.
+    /// Reserve before retaining or installing in a separately funded cleanup
+    /// payload. The source's entire charge stays live separately until it drops.
+    pub const fn retained_storage(&self) -> usize {
+        self.charge
     }
 }
 
