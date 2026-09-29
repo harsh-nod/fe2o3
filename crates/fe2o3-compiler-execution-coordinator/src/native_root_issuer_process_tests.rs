@@ -32,6 +32,9 @@ mod compiler {
 mod cleanup {
     include!("native_root_issuer_process_cleanup_tests.rs");
 }
+mod continuity {
+    include!("native_root_issuer_process_continuity_tests.rs");
+}
 
 // Logical ceiling only; each launch is narrowed to its checked image-sized quote.
 const WORK: usize = 1 << 60;
@@ -39,10 +42,12 @@ const STORAGE: usize = 1024 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const TURNS: usize = 2048;
 const CASE_ENV: &str = "FE2O3_NATIVE_ROOT_ISSUER_CASE";
-const CASES: [&str; 8] = [
+const CASES: [&str; 10] = [
     "ready-cancel",
     "ready-unwind",
     "ready-image-mismatch",
+    "ready-issuer-exit",
+    "ready-compiler-cancel",
     "same-uid",
     "corrupt-state",
     "zero-timeout",
@@ -143,7 +148,12 @@ fn run(case: &str) {
     let allowance = if case == "short-work" {
         LOCAL_WORK - 1
     } else {
-        quota.work().checked_add(4 * continuity.work()).unwrap()
+        quota
+            .work()
+            .checked_add(4 * continuity.work())
+            .unwrap()
+            .checked_add(continuity::additional_work(case, continuity))
+            .unwrap()
     };
     b.charge_work(
         WORK.checked_sub(b.work() + allowance)
@@ -256,9 +266,32 @@ fn run(case: &str) {
             trace.poll(&mut b).unwrap().is_exec(),
             "startup must leave compiler held"
         );
+        let before_lifetime_work = b.work();
+        match case {
+            "ready-issuer-exit" => continuity::issuer_exit(&issuer, &mut trace, &mut b),
+            "ready-compiler-cancel" => continuity::stop_issuer(&issuer, &trace, &mut b),
+            _ => {}
+        }
+        if matches!(case, "ready-issuer-exit" | "ready-compiler-cancel") {
+            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
         let issuer_storage = issuer.retained_storage();
         assert_ne!(trace.cancel(), CleanupPoll::Quarantined);
+        if case == "ready-compiler-cancel" {
+            continuity::compiler_cancelled(&issuer, &trace, &mut b);
+            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
         cleanup::wait_exit(&mut cleanup.pool, exit.as_fd());
+        if case == "ready-compiler-cancel" {
+            continuity::compiler_cancelled(&issuer, &trace, &mut b);
+            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
+        if matches!(case, "ready-issuer-exit" | "ready-compiler-cancel") {
+            assert_eq!(b.storage(), live);
+            assert!(
+                b.work() - before_lifetime_work <= continuity::additional_work(case, continuity)
+            );
+        }
         drop(trace);
         b.release_storage(trace_storage).unwrap();
         assert_eq!(
