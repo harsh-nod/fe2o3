@@ -97,7 +97,7 @@ pub(super) struct Acquire<'a, 'trace, 'work> {
 // covers constructor rollback. Errors/unwind preserve every installed owner.
 #[allow(unsafe_code)]
 unsafe impl Build<Acquire<'_, '_, '_>> for Owners {
-    const BUILD_WORK: usize = LOCAL_WORK;
+    const BUILD_WORK: usize = OBSERVE_WORK;
     const BUILD_SCRATCH: usize = FRAME;
     type Error = RootPublicationCustodyErrorV3;
     fn build(&mut self, op: Acquire<'_, '_, '_>, b: &mut Budget<'_>) -> Result<()> {

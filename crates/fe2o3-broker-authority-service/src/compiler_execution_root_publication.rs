@@ -12,7 +12,10 @@ use fe2o3_artifact_transaction::{
 use fe2o3_protected_service_spawn::{
     LateRetainedCustodyV2 as Holder, ProtectedServiceCleanupServiceV2 as Cleanup,
     cleanup_bridge::{LateRetainedBuildV2 as Build, LateRetainedPayloadV2 as Payload},
-    native_spawn::{ProtectedServiceSpawnErrorV2 as SpawnError, RootRetainedTaskTraceV2 as Trace},
+    native_spawn::{
+        ProtectedServiceSpawnErrorV2 as SpawnError, RootRetainedTaskTraceV2 as Trace,
+        RootTaskObservationV2 as RootObservation,
+    },
 };
 
 #[path = "compiler_execution_root_publication_payload.rs"]
@@ -21,6 +24,9 @@ use payload::{Acquire, Owners, Validate};
 
 const ENTRY: usize = 8;
 const LOCAL_WORK: usize = ENTRY + 64 * 1088;
+// Expected::derive and join_subject visit/copy the complete admitted descriptor.
+// Their work is additional to nested native-observation and artifact operations.
+const OBSERVE_WORK: usize = LOCAL_WORK + NativeOccurrence::WORK;
 const FRAME: usize = 16 * fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3 + 8192;
 type Result<T> = std::result::Result<T, RootPublicationCustodyErrorV3>;
 
@@ -62,7 +68,7 @@ impl RootPublicationCustodyV3 {
         cleanup: &mut Cleanup,
         b: &mut Budget<'_>,
     ) -> Result<(Self, usize)> {
-        b.with_prepaid_scope(trace.retained_storage(), ENTRY, LOCAL_WORK, FRAME, |b| {
+        b.with_prepaid_scope(trace.retained_storage(), ENTRY, OBSERVE_WORK, FRAME, |b| {
             let (observation, observed_storage) = trace.with_task_observation(b, |root, b| {
                 Ok::<_, RootPublicationCustodyErrorV3>(NativeObservation::observe_from(
                     Source::Root(root),

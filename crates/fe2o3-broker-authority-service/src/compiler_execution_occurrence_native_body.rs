@@ -1,6 +1,5 @@
 // Lock, observation and exact-subject join shared by nominal native families.
 use crate::compiler_execution_supervision::NativeObservationSource as Source;
-use fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2 as RootObservation;
 
 #[derive(Debug)]
 pub(crate) enum NativeOccurrenceError {
@@ -55,13 +54,6 @@ impl NativeOccurrence {
         Self::observe_from(Source::Service(service), b)
     }
 
-    pub(crate) fn observe_root(
-        root: &RootObservation<'_, '_>,
-        b: &mut Budget<'_>,
-    ) -> Result<(Self, usize)> {
-        Self::observe_from(Source::Root(root), b)
-    }
-
     fn observe_from(source: Source<'_, '_, '_>, b: &mut Budget<'_>) -> Result<(Self, usize)> {
         b.with_prepaid_scope(source.retained_storage(), 8, Self::WORK, Self::FRAME, |b| {
             let (observation, observation_storage) = NativeObservation::observe_from(source, b)?;
@@ -96,14 +88,6 @@ impl NativeOccurrence {
 
     pub(crate) fn revalidate(&self, service: &Service, b: &mut Budget<'_>) -> Result<()> {
         self.revalidate_from(Source::Service(service), b)
-    }
-
-    pub(crate) fn revalidate_root(
-        &self,
-        root: &RootObservation<'_, '_>,
-        b: &mut Budget<'_>,
-    ) -> Result<()> {
-        self.revalidate_from(Source::Root(root), b)
     }
 
     fn revalidate_from(&self, source: Source<'_, '_, '_>, b: &mut Budget<'_>) -> Result<()> {
