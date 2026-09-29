@@ -243,13 +243,12 @@ fn require_root() -> Result<()> {
 }
 
 fn validate_endpoint(fd: BorrowedFd<'_>, creator: process::Pid) -> Result<()> {
-    let unnamed: net::SocketAddrAny = net::SocketAddrUnix::new_unnamed().into();
     if io::fcntl_getfd(fd)? != io::FdFlags::CLOEXEC
         || fs::fcntl_getfl(fd)? != (fs::OFlags::RDWR | fs::OFlags::NONBLOCK)
         || net::sockopt::socket_type(fd)? != net::SocketType::SEQPACKET
         || !net::sockopt::socket_passcred(fd)?
-        || net::getsockname(fd)? != unnamed
-        || net::getpeername(fd)? != Some(unnamed)
+        || !socketpair_address(net::getsockname(fd)?)
+        || !net::getpeername(fd)?.is_some_and(socketpair_address)
     {
         return Err(Error::Refused("root control endpoint shape"));
     }
@@ -258,6 +257,27 @@ fn validate_endpoint(fd: BorrowedFd<'_>, creator: process::Pid) -> Result<()> {
         return Err(Error::Refused("root control socket creator"));
     }
     Ok(())
+}
+
+// SO_PASSCRED autobinds an unnamed Linux Unix socket on its first send. The
+// abstract name's shape is not provenance: only the retained pair, exact creator
+// credentials and authenticated launch/gate establish that. No address is used
+// to connect, reopen, or discover an endpoint.
+pub(crate) fn socketpair_address(address: net::SocketAddrAny) -> bool {
+    // Compare before conversion: pinned rustix decodes an unnamed address as an
+    // empty Unix path, which is distinct from the original two-byte address.
+    if address == net::SocketAddrUnix::new_unnamed().into() {
+        return true;
+    }
+    let Ok(address) = net::SocketAddrUnix::try_from(address) else {
+        return false;
+    };
+    address.abstract_name().is_some_and(|name| {
+        name.len() == 5
+            && name
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    })
 }
 
 #[derive(Debug)]
@@ -312,6 +332,10 @@ mod lifecycle_tests;
 #[cfg(test)]
 #[path = "compiler_execution_root_channel_packet_tests.rs"]
 mod packet_tests;
+
+#[cfg(test)]
+#[path = "compiler_execution_root_channel_address_tests.rs"]
+mod address_tests;
 
 #[cfg(test)]
 mod tests {

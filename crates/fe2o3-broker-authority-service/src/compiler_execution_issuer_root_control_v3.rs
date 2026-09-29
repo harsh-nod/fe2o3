@@ -205,13 +205,13 @@ impl<'work> RootEndpoint<'work> {
 }
 
 fn validate_endpoint(fd: BorrowedFd<'_>, root: process::Pid) -> Result<()> {
-    let unnamed: net::SocketAddrAny = net::SocketAddrUnix::new_unnamed().into();
+    use crate::compiler_execution_root_channel::socketpair_address;
     if io::fcntl_getfd(fd)? != io::FdFlags::CLOEXEC
         || fs::fcntl_getfl(fd)? != (fs::OFlags::RDWR | fs::OFlags::NONBLOCK)
         || net::sockopt::socket_type(fd)? != net::SocketType::SEQPACKET
         || !net::sockopt::socket_passcred(fd)?
-        || net::getsockname(fd)? != unnamed
-        || net::getpeername(fd)? != Some(unnamed)
+        || !socketpair_address(net::getsockname(fd)?)
+        || !net::getpeername(fd)?.is_some_and(socketpair_address)
     {
         return Err(Error::rejected("root gate endpoint shape"));
     }
