@@ -399,3 +399,6 @@ mod genuine;
 mod tests;
 #[cfg(test)]
 pub(crate) use genuine::observe_option_enum_scalar_provenance_allocation_before_capabilities_for_test_v1;
+
+#[cfg(test)]
+pub(crate) use genuine::observe_actual_capability_prefix_for_test_v1;

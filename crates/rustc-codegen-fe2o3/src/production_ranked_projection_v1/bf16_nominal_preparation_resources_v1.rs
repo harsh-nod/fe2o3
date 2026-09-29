@@ -248,3 +248,65 @@ preparation_push_policy_item_v1! {
     (preparation_reserve_with_meter_v1(meter, values, 1))
     (meter.preparation_admit_v1()?;)
 }
+
+/// Read-only lexical custody census. Not authority and never a Budget loan.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) struct PreparationCustodySnapshotV1 {
+    pub(super) budget_slot: usize,
+    pub(super) work_ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    pub(super) owned_slot: usize,
+    pub(super) owned: usize,
+    pub(super) storage: usize,
+    pub(super) work: usize,
+    pub(super) peak: usize,
+    pub(super) denied_work: bool,
+    pub(super) denied_storage: bool,
+}
+impl PreparationResourcesV1<'_, '_> {
+    pub(super) fn retained_custody_snapshot_v1(&self) -> Option<PreparationCustodySnapshotV1> {
+        match &self.ledger {
+            Ledger::Legacy => None,
+            Ledger::Original { budget, owned } => {
+                let budget: &Budget<'_> = budget;
+                let owned: &usize = &**owned;
+                Some(PreparationCustodySnapshotV1 {
+                    budget_slot: budget as *const Budget<'_> as usize,
+                    work_ledger: budget.work_ledger_identity_v1(),
+                    owned_slot: owned as *const usize as usize,
+                    owned: *owned,
+                    storage: budget.storage(),
+                    work: budget.work(),
+                    peak: budget.peak_storage(),
+                    denied_work: budget.failed_work().is_some(),
+                    denied_storage: budget.failed_storage().is_some(),
+                })
+            }
+        }
+    }
+}
+
+pub(super) fn retained_custody_snapshot_frame_v1() -> usize {
+    size_of::<(
+        &PreparationResourcesV1<'static, 'static>,
+        &Ledger<'static, 'static>,
+        &&mut Budget<'static>,
+        &&mut usize,
+        &Budget<'static>,
+        &usize,
+        *const Budget<'static>,
+        *const usize,
+        PreparationCustodySnapshotV1,
+        Option<PreparationCustodySnapshotV1>,
+        usize,
+        fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        Option<usize>,
+        Option<usize>,
+        bool,
+        bool,
+    )>()
+}

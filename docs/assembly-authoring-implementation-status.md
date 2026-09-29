@@ -1729,3 +1729,46 @@ See [qualification and limits](retained-induction-analysis-qualification-2026092
 This is not the canonical compiler-ledger connection or a genuine Rust loop
 proof. Whole-root preparation and production admission remain unfinished;
 broad accepted exits remain 6/18.
+
+## Genuine retained capability-prefix checkpoint — 2026-09-29
+
+Actual Rust-source constants, root-entry preparation, earlier retained analyses,
+both capability FIFO passes, replay and read binding now pass a shared-owner
+test-only checkpoint with full independent original DATA comparison. The full
+368-model / 3,360-backend regression (197 ignored), authority/policy checks,
+builds and five genuine source sessions passed, including 36 positive numerical
+CPU runs and controlled callback/query failures.
+See [qualification and limits](genuine-capability-prefix-qualification-20260929.md).
+
+The ordinary route, whole-root BeforeArgumentWriters, nonempty Fixed proof,
+later writers/bounds and production admission remain open. No GPU or physical
+debugger capture is implied. Broad accepted exits remain 6/18.
+
+## Rebased genuine prefix and retained singleton — 2026-09-29
+
+The incoming main changes are preserved. Fresh full qualification passes
+370 model / 3,374 backend tests (197 ignored), 270 serial authority/capability
+tests (four ignored), 20 policy/runtime-manifest controls, builds and five genuine
+source sessions. Complete genuine observations remain equal to the earlier prefix
+checkpoint after the explicit fixture-lockfile reconciliation.
+
+The inert retained singleton component adds 14 passing controls and read-only
+physical-ledger/counter custody snapshots. It is not yet a whole-root caller.
+See [singleton qualification](retained-scalar-singleton-qualification-20260929.md).
+Broad accepted exits remain 6/18; no GPU or physical debugger capture is claimed.
+
+## Retained scalar borrows and portable debugger review — 2026-09-29
+
+The retained scalar-borrow prerequisite passes 16 new controls, 370 model tests
+and 3,390 backend tests (197 ignored), plus 270 authority/capability tests
+(four ignored), 20 policy/runtime-manifest controls and builds.
+[Qualification and limits](retained-scalar-borrow-qualification-20260929.md).
+
+The portable historical debugger profile/planner package preserves all 250
+historical controls, now passing with explicit external fixtures, alongside
+32 passing fixture-free controls. Missing fixture configuration refuses;
+there is no historical host-path fallback or silent skip.
+[Qualification and commands](portable-loaded-debugger-review-qualification-20260929.md).
+
+Neither component activates the genuine whole-root caller or physical debugger
+capture. Broad accepted exits remain M1/V1/V2/U1/U2/U3 (6/18).
