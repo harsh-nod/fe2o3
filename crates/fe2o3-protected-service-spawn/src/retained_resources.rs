@@ -32,6 +32,31 @@ impl fmt::Display for RetainedResourceAccessErrorV2 {
 
 impl Error for RetainedResourceAccessErrorV2 {}
 
+/// Inert bounds for retaining an existing backing dependency, not admission.
+/// Scratch is additional to the source reservation and includes the full output
+/// overlap. Reserve retained_storage separately before keeping the returned owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetainedDependencyQuotaV2 {
+    pub(crate) work: usize,
+    scratch: usize,
+    retained: usize,
+}
+
+impl RetainedDependencyQuotaV2 {
+    /// Fixed work charged on the original source ledger.
+    pub const fn work(self) -> usize {
+        self.work
+    }
+    /// Additional peak above the full prepaid source, including output overlap.
+    pub const fn scratch(self) -> usize {
+        self.scratch
+    }
+    /// Full unreserved output charge, not growth above the borrowed source.
+    pub const fn retained_storage(self) -> usize {
+        self.retained
+    }
+}
+
 /// Move-only handle providing scoped shared access under an owner mutex.
 ///
 /// The typed handle may outlive terminal cleanup; the last owner drops `T`.
@@ -144,20 +169,29 @@ impl<T: Send + 'static> RetainedResourcesV2<T> {
         &self,
         b: &mut Budget<'_>,
     ) -> Result<RetainedDependencyV2<T>, Resource> {
-        let charge = self
+        let quota = self.dependency_quota()?;
+        b.with_prepaid_scope(self.charge, ENTRY, quota.work, quota.scratch, |_| {
+            Ok(RetainedDependencyV2 {
+                owner: Arc::clone(&self.owner),
+                charge: quota.retained,
+            })
+        })
+    }
+
+    pub(crate) fn dependency_quota(&self) -> Result<RetainedDependencyQuotaV2, Resource> {
+        let retained = self
             .charge
             .checked_sub(size_of::<(Self, usize)>())
             .ok_or(Resource::Accounting)?
             .checked_add(size_of::<(RetainedDependencyV2<T>, usize)>())
             .ok_or(Resource::Arithmetic)?;
-        let scratch = charge
+        let scratch = retained
             .checked_add(Self::DEPENDENCY_SCRATCH)
             .ok_or(Resource::Arithmetic)?;
-        b.with_prepaid_scope(self.charge, ENTRY, Self::DEPENDENCY_WORK, scratch, |_| {
-            Ok(RetainedDependencyV2 {
-                owner: Arc::clone(&self.owner),
-                charge,
-            })
+        Ok(RetainedDependencyQuotaV2 {
+            work: Self::DEPENDENCY_WORK,
+            scratch,
+            retained,
         })
     }
 

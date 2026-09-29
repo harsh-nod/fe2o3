@@ -18,7 +18,8 @@ pub mod native_spawn;
 pub use native_spawn::compiler_child_channel as compiler_service_channel;
 mod retained_resources;
 pub use retained_resources::{
-    RetainedDependencyV2, RetainedResourceAccessErrorV2, RetainedResourcesV2,
+    RetainedDependencyQuotaV2, RetainedDependencyV2, RetainedResourceAccessErrorV2,
+    RetainedResourcesV2,
 };
 mod native_cgroup;
 #[allow(unsafe_code)]

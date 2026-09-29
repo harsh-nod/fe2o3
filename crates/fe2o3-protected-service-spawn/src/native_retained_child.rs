@@ -5,7 +5,8 @@ use super::{
     ProtectedServiceSpawnStorageV2 as Storage, Result, RootOwnedProtectedServiceChildV2 as Child,
 };
 use crate::{
-    RetainedDependencyV2, RetainedResourcesV2 as Resources, process_cleanup::CleanupPollV1,
+    RetainedDependencyQuotaV2, RetainedDependencyV2, RetainedResourcesV2 as Resources,
+    process_cleanup::CleanupPollV1,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -133,6 +134,18 @@ impl<T: Send + 'static> RootRetainedTaskTraceV2<'_, T> {
     /// Complete original backing and trace charge, including overlap with the pool.
     pub fn retained_storage(&self) -> usize {
         self.trace.retained_storage()
+    }
+
+    /// Complete fixed work and extra scratch for retain_dependencies, including
+    /// full output overlap. Inspects no descriptor, Budget, payload or authority.
+    /// Persistent cleanup must separately fund a payload containing that output.
+    pub fn dependency_quota(&self) -> Result<RetainedDependencyQuotaV2> {
+        let mut quota = self.resources.dependency_quota()?;
+        quota.work = quota
+            .work
+            .checked_add(super::ENTRY)
+            .ok_or(Resource::Arithmetic)?;
+        Ok(quota)
     }
 
     /// Retains only this trace's original backing for another cleanup payload.

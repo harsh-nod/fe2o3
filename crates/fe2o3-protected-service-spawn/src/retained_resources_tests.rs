@@ -159,13 +159,18 @@ fn dependency_funding_is_exact_and_refusal_never_changes_refcounts() {
     let (handle, payload, drops) = tracked_pair();
     let full = handle.retained_storage();
     let charge = payload.storage() + size_of::<(RetainedDependencyV2<DropWitness>, usize)>();
+    let quoted = handle.dependency_quota().unwrap();
+    assert_eq!(quoted.work(), Handle::DEPENDENCY_WORK);
+    assert_eq!(quoted.scratch(), charge + Handle::DEPENDENCY_SCRATCH);
+    assert_eq!(quoted.retained_storage(), charge);
+    assert_eq!(Arc::strong_count(&handle.owner), 2);
     for case in 0..5 {
         let quota = if case == 4 {
             7
         } else {
-            Handle::DEPENDENCY_WORK - usize::from(case == 2)
+            quoted.work() - usize::from(case == 2)
         };
-        let limit = full + charge + Handle::DEPENDENCY_SCRATCH - usize::from(case == 3);
+        let limit = full + quoted.scratch() - usize::from(case == 3);
         let floor = full - usize::from(case == 1);
         let mut work = Work::new(19 + quota);
         let mut b = Budget::new(&mut work, limit);
@@ -197,6 +202,18 @@ fn dependency_funding_is_exact_and_refusal_never_changes_refcounts() {
         assert_eq!(Arc::strong_count(&handle.owner), 2);
         assert_eq!(drops.load(Ordering::SeqCst), 0);
     }
+}
+
+#[test]
+fn dependency_quote_refuses_invalid_charges_without_acquiring_backing() {
+    let (mut handle, payload, drops) = tracked_pair();
+    handle.charge = 0;
+    assert_eq!(handle.dependency_quota(), Err(Resource::Accounting));
+    handle.charge = usize::MAX;
+    assert_eq!(handle.dependency_quota(), Err(Resource::Arithmetic));
+    assert_eq!(Arc::strong_count(&handle.owner), 2);
+    drop((handle, payload));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[test]

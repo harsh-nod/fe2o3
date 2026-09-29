@@ -375,11 +375,17 @@ fn run_native(case: usize, pool: &mut Cleanup) {
             .is_err()
     );
     let transfer_floor = b.storage();
+    let transfer_work = b.work();
+    let transfer_peak = b.peak_storage();
+    let quota = trace.issuer_inputs_quota().unwrap();
+    let dependency_storage = trace.issuer_dependency_storage().unwrap();
+    assert_eq!((b.storage(), b.work()), (transfer_floor, transfer_work));
     let transfer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         trace.with_issuer_inputs(&mut b, |client, peer, pidfd, dependency, same| {
             assert_eq!(client.pid(), child_pid);
             assert_eq!((client.uid(), client.gid()), (65534, 65534));
             assert!(same.storage() >= full + dependency.retained_storage());
+            assert_eq!(dependency.retained_storage(), dependency_storage);
             require_idle(peer)?;
             require_idle(pidfd)?;
             if case == 6 {
@@ -414,6 +420,8 @@ fn run_native(case: usize, pool: &mut Cleanup) {
         transferred.ok().flatten()
     };
     assert_eq!(b.storage(), transfer_floor);
+    assert_eq!(b.work(), transfer_work + quota.work());
+    assert!(b.peak_storage() <= transfer_peak.max(transfer_floor + quota.scratch()));
     if let Some(dependency) = &dependency {
         b.reserve_storage(dependency.retained_storage()).unwrap();
     }

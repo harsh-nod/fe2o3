@@ -93,6 +93,33 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         self.retained
     }
 
+    /// Mechanical transfer envelope above the prepaid trace, including one
+    /// consuming observation and full dependency overlap. The callback's work,
+    /// scratch, retained outputs and independent cleanup funding are additional.
+    /// This inert query neither opens input access nor checks execution authority.
+    pub(crate) fn issuer_inputs_quota(&self) -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        use fe2o3_protected_service_spawn::native_spawn::RootTaskTraceV2;
+        let dependency = self.trace.dependency_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[
+                LOCAL_WORK,
+                RootTaskTraceV2::OPERATION_WORK,
+                dependency.work(),
+            ])?,
+            scratch: native::sum(&[
+                FRAME,
+                RootTaskTraceV2::OPERATION_SCRATCH,
+                dependency.scratch(),
+                dependency.retained_storage(),
+            ])?,
+        })
+    }
+
+    /// Full drop-only backing charge for the issuer's future cleanup payload.
+    pub(crate) fn issuer_dependency_storage(&self) -> Result<usize> {
+        Ok(self.trace.dependency_quota()?.retained_storage())
+    }
+
     /// Scalar identity for contextual observations, never independent wait custody.
     pub(crate) fn pid(&self) -> rustix::process::Pid {
         self.trace.pid()
