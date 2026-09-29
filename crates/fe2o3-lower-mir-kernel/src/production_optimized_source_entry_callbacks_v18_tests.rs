@@ -1,3 +1,14 @@
+fn owned_optimizer_disposal_header_oracle_v26<T, E>() -> usize {
+    source_owned_finish_header_oracle_v26::<
+        (
+            fe2o3_pliron::CheckedNeutralKernelIrOwnerV18,
+            T,
+            fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
+        ),
+        SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>,
+    >()
+}
+
 fn owned_optimizer_header_oracle_v1744<T, E, F>(_: &F) -> usize {
     use std::mem::{align_of, size_of};
     use std::panic::AssertUnwindSafe;
@@ -61,6 +72,7 @@ fn owned_optimizer_header_oracle_v1744<T, E, F>(_: &F) -> usize {
         + size_of::<AssertUnwindSafe<Result<Output<T>, ProductionSourceOptimizationErrorV18<E>>>>()
         + size_of::<ProductionSourceOptimizationErrorV18<E>>()
         + cleanup
+        + owned_optimizer_disposal_header_oracle_v26::<T, E>()
 }
 
 #[test]
@@ -76,7 +88,8 @@ fn owned_optimizer_generic_result_frames_are_paid_independently_of_capture() {
             LargeResult,
             _,
         >(&consume)
-        .unwrap(),
+        .unwrap()
+            + owned_optimizer_disposal_header_oracle_v26::<LargeResult, LargeResult>(),
         expected,
     );
     let small = owned_optimizer_header_oracle_v1744::<(), (), _>(&consume);
@@ -244,7 +257,10 @@ fn owned_correspondence_large_header_short_and_control_refusal_keep_the_first_er
                 (error.actual(), error.limit()),
                 (MODULE_LIMIT + next, MODULE_LIMIT)
             );
-            assert_eq!(budget.work() - work, if short { 2 } else { 3 });
+            assert_eq!(
+                budget.work() - work,
+                (if short { 2 } else { 3 }) + 32 + 2 + 1 + 4
+            );
             assert_eq!(
                 budget.storage(),
                 floor + if deny && !short { header } else { 0 }
@@ -339,7 +355,11 @@ fn owned_optimizer_header_exact_and_short_refusals_are_caught_and_latched() {
                     (),
                     ProductionSourceOwnedViewErrorV18,
                     _,
-                >(&consume)?,
+                >(&consume)?
+                    + owned_optimizer_disposal_header_oracle_v26::<
+                        (),
+                        ProductionSourceOwnedViewErrorV18,
+                    >(),
                 header
             );
             let filler = MODULE_LIMIT - budget.storage() - header + usize::from(short);
@@ -489,7 +509,7 @@ fn owned_retained_optimizer_header_exact_and_short_refusals_keep_custody() {
                 if short {
                     1
                 } else {
-                    3 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29
+                    3 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29 + 32 + 2 + 1 + 4
                 }
             );
             assert_eq!(
@@ -916,7 +936,7 @@ fn owned_correspondence_late_index_work_refusal_settles_paid_components_only() {
             let control_work = budget.work() - before;
             let control_bytes = receipt.retained_storage();
             drop(control);
-            let prefix = 2 + control_work + 3 + 1;
+            let prefix = 2 + 32 + 2 + 1 + 4 + control_work + 3 + 1;
             budget.charge_work(OPTIMIZED_SOURCE_WORK_LIMIT_V18 - budget.work() - prefix)?;
             let owned = OptimizedAnalysisOwnedCaptureV18 {
                 bytes: [0x27; 2048],

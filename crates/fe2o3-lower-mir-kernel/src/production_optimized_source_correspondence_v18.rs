@@ -31,10 +31,10 @@ pub use attachments::{
 pub use cfg::{ProductionOptimizedSourceCfgEventV18, ProductionOptimizedSourceCfgRootV18};
 pub use control::ProductionOptimizedSourceEffectsV18;
 pub use execution::{
-    ProductionLifecycleCheckedNativePoliciesV18, ProductionOptimizedExecutionKindV18,
-    ProductionOptimizedExecutionRecipesV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
-    ProductionSourceNativeLifecycleDiagnosticV18, ProductionSourceNativeLifecycleErrorV18,
-    ProductionSourcePrivateMemoryRootRequestV18,
+    ProductionLifecycleCheckedNativePoliciesV18, ProductionMixedMemoryCheckedNativePoliciesV26,
+    ProductionOptimizedExecutionKindV18, ProductionOptimizedExecutionRecipesV18,
+    ProductionPrivateMemoryCheckedNativePoliciesV18, ProductionSourceNativeLifecycleDiagnosticV18,
+    ProductionSourceNativeLifecycleErrorV18, ProductionSourcePrivateMemoryRootRequestV18,
 };
 pub use index::ProductionOptimizedSourceGapIntervalV18;
 use index::SourceIndex;
@@ -43,7 +43,10 @@ use index::SourceIndex;
 pub(super) fn owned_headers_for_test_v1744<T, E, F>(
     consume: &F,
 ) -> Result<usize, ArgumentResourceV1> {
-    resources::headers::<T, E, F>(consume)
+    argument_sum_v1(&[
+        resources::headers::<T, E, F>(consume)?,
+        source_owned_finish_headers_v26::<T, E>()?,
+    ])
 }
 pub use memory::{
     ProductionOptimizedSourceAllocationV18, ProductionOptimizedSourceMemoryAccessV18,
@@ -128,7 +131,10 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     Ok(())
                 })())?;
                 self.source.retain_construction(move || {
-                    let headers = resources::headers::<T, E, _>(&consume)?;
+                    let headers = argument_sum_v1(&[
+                        resources::headers::<T, E, _>(&consume)?,
+                        source_owned_finish_preflight_v26::<T, E>(budget)?,
+                    ])?;
                     optimized_source_consumer_resources_v18::reserve_entry(
                         accepted, headers, budget,
                     )?;

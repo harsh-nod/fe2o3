@@ -197,6 +197,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                         tuple_field: _,
                         first_parameter: _,
                         parameter_count: _,
+                        reference_call_transport: _,
                     } = *input;
                     self.emit(
                         self.key(

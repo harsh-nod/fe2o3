@@ -374,17 +374,38 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
         let root = self.original.leaves.root;
         let inventory = self.optimized.output_inventory(budget)?;
         let floor = budget.storage();
-        let headers =
+        let mut consume = Some(consume);
+        let prepared =
             scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
-                let headers = argument_sum_v1(&[
-                    size_of::<ProductionOptimizedSourceScalarStoreDispositionV18<'_>>(),
-                    size_of::<OptimizedSourceScalarNormalizationV18<'_>>(),
-                    size_of::<Option<Gfx942InlineScalarCorrespondenceV30<'_>>>(),
-                    size_of::<usize>(),
-                ])?;
-                relation.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
-                Ok::<_, ProductionSourceOwnedViewErrorV18>(headers)
-            })?;
+                let prepared = (|| {
+                    let headers = argument_sum_v1(&[
+                        std::mem::size_of_val(&consume),
+                        std::mem::align_of_val(&consume),
+                        // Both the inner result and its outer forwarding boundary
+                        // can reject a consumer error, including inline=None.
+                        source_owned_finish_preflight_v26::<usize, E>(budget)?,
+                        source_owned_finish_preflight_v26::<usize, E>(budget)?,
+                        size_of::<ProductionOptimizedSourceScalarStoreDispositionV18<'_>>(),
+                        size_of::<OptimizedSourceScalarNormalizationV18<'_>>(),
+                        size_of::<Option<Gfx942InlineScalarCorrespondenceV30<'_>>>(),
+                        size_of::<usize>(),
+                    ])?;
+                    relation.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
+                    Ok::<_, ProductionSourceOwnedViewErrorV18>(headers)
+                })();
+                if prepared.is_err() {
+                    source_reference_discard_v29(consume.take());
+                }
+                prepared
+            });
+        let headers = match prepared {
+            Ok(headers) => headers,
+            Err(error) => {
+                source_reference_discard_v29(consume);
+                return Err(error.into());
+            }
+        };
+        let mut consume = consume.expect("optimized scalar preparation retained its callback");
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             value_origin_v1::with_optimized_whole_value_origins_v18(
                 relation,

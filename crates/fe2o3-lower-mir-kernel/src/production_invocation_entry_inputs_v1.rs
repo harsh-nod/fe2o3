@@ -8,6 +8,7 @@ struct InvocationInputRowV1 {
     tuple_field: Option<u32>,
     first_parameter: usize,
     parameter_count: usize,
+    reference_call_transport: Option<ReferenceCallTransportV26>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -45,6 +46,7 @@ fn invocation_append_input_v1(
             parameter_count: end
                 .checked_sub(first)
                 .ok_or(ArgumentResourceV1::Arithmetic)?,
+            reference_call_transport: None,
         },
         budget,
     )

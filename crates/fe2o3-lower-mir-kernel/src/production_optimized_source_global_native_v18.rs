@@ -145,12 +145,21 @@ impl PendingGlobalSourceAccessesV18<'_> {
         native
             .check_owner(inventory.owner(), budget)
             .map_err(PendingGlobalNativeErrorV18::Native)?;
-        let storage = self.roles.original.retain_query(
-            global_native_headers_v18(std::mem::size_of_val(&consume)).map_err(Into::into),
-        )?;
-        self.roles
-            .original
-            .retain_query(budget.reserve_storage(storage).map_err(Into::into))?;
+        let prepared = self.roles.original.retain_query((|| {
+            let storage = argument_sum_v1(&[
+                global_native_headers_v18(std::mem::size_of_val(&consume))?,
+                source_owned_finish_preflight_v26::<(), PendingGlobalNativeErrorV18>(budget)?,
+            ])?;
+            budget.reserve_storage(storage)?;
+            Ok(storage)
+        })());
+        let storage = match prepared {
+            Ok(storage) => storage,
+            Err(error) => {
+                source_reference_discard_v29(consume);
+                return Err(error.into());
+            }
+        };
         let ledger = budget.work_ledger_identity_v1();
         let slot = std::ptr::from_ref(&*budget) as usize;
         let retained = budget.storage();

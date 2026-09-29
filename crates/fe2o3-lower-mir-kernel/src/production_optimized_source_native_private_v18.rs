@@ -545,6 +545,12 @@ fn private_native_source_headers_v18<E>(
         h::<Native<'_>>()?,
         h::<std::panic::AssertUnwindSafe<Native<'_>>>()?,
         h::<(
+            &PrivateSourceCompletionV18<'_>,
+            &PrivateNativeRowsV18,
+            &mut PendingCanonicalRankedSourceRolesV18<'_, '_>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()?,
+        h::<(
             &ProductionSourcePrivateMemoryRootRequestV18<'_>,
             &mut std::cell::RefMut<'_, Vec<bool>>,
             &mut [bool],
@@ -776,7 +782,7 @@ fn with_private_native_source_scope_v18<'work, E>(
     pending: &mut PendingCanonicalRankedSourceRolesV18<'_, '_>,
     budget: &mut ArgumentBudgetV1<'work>,
     diagnostic: &DiagnosticCell,
-    mut check_root: impl for<'scope> FnMut(
+    check_root: impl for<'scope> FnMut(
         &ProductionSourcePrivateMemoryRootRequestV18<'scope>,
         &mut ArgumentBudgetV1<'work>,
     ) -> Result<(), E>,
@@ -788,20 +794,113 @@ fn with_private_native_source_scope_v18<'work, E>(
 where
     E: From<ProductionSourceOwnedViewErrorV18>,
 {
+    with_private_source_completion_scope_v26(
+        recipes,
+        physical,
+        input_memory,
+        output_memory,
+        pending,
+        budget,
+        check_root,
+        |completion, rows, pending, budget| {
+            completion.join_pending(recipes, pending, &rows.execution, &rows.recipes, budget)?;
+            let proof = physical.native_physical_v18(budget)?;
+            let observed =
+                pending.with_private_memory_observations_v18(proof, budget, |native, budget| {
+                    let observation = native.observation(budget)?;
+                    let last_invocation = native.last_invocation(budget)?;
+                    diagnostic.set(Some(NativeDiagnostic {
+                        observation,
+                        last_invocation,
+                    }));
+                    let owner = native.owner(budget)?;
+                    if let Err(error) = recipes.check_owner(owner, budget) {
+                        return Ok(Err(error));
+                    }
+                    let obligations = native.obligations(budget)?;
+                    budget.charge_work(
+                        obligations
+                            .len()
+                            .checked_add(1)
+                            .ok_or(ArgumentResourceV1::Arithmetic)?,
+                    )?;
+                    if obligations != rows.obligations.as_slice() {
+                        return Ok(Err(recipes.source_failure(
+                            "private native imported obligation census changed",
+                        )));
+                    }
+                    let view = ProductionPrivateMemoryCheckedNativePoliciesV18 {
+                        recipes,
+                        completion,
+                        native,
+                        obligations,
+                    };
+                    if let Err(error) = view.check(budget) {
+                        return Ok(Err(error));
+                    }
+                    Ok(consume(&view, budget))
+                });
+            if let Err(error) = &observed {
+                diagnostic.set(Some(NativeDiagnostic::from_error(error)));
+            }
+            observed
+                .map_err(|error| PrivateNativeFlowV18::Native(recipes.native_error(error)))?
+                .map_err(PrivateNativeFlowV18::Native)
+        },
+    )
+}
+
+// Source/currentness completion is independent of the chosen native family.
+// The private caller still performs its original strict obligation join. The
+// mixed caller must separately complete every unclaimed global obligation.
+fn with_private_source_completion_scope_v26<'work, E>(
+    recipes: &ProductionOptimizedExecutionRecipesV18<'_>,
+    physical: &CheckedSourcePrivatePhysicalV18<'_>,
+    input_memory: &fe2o3_kernel_analysis::CanonicalKirMemorySsaV18<'_, '_>,
+    output_memory: &fe2o3_kernel_analysis::CanonicalKirMemorySsaV18<'_, '_>,
+    pending: &mut PendingCanonicalRankedSourceRolesV18<'_, '_>,
+    budget: &mut ArgumentBudgetV1<'work>,
+    check_root: impl for<'scope> FnMut(
+        &ProductionSourcePrivateMemoryRootRequestV18<'scope>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), E>,
+    consume: impl for<'scope> FnOnce(
+        &PrivateSourceCompletionV18<'scope>,
+        &PrivateNativeRowsV18,
+        &mut PendingCanonicalRankedSourceRolesV18<'_, '_>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), PrivateNativeFlowV18<E>>,
+) -> Result<(), PrivateNativeFlowV18<E>>
+where
+    E: From<ProductionSourceOwnedViewErrorV18>,
+{
     let optimized = recipes.optimized;
     let original = optimized.original;
     let source = original.source;
-    recipes.check(budget)?;
     let floor = budget.storage();
-    let headers = private_native_source_headers_v18::<E>(
-        std::mem::size_of_val(&check_root),
-        std::mem::align_of_val(&check_root),
-        std::mem::size_of_val(&consume),
-        std::mem::align_of_val(&consume),
-    )?;
-    let rows = scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| {
-        original.retain_query((|| {
+    let scope_slot = std::ptr::from_ref(budget) as usize;
+    let scope_ledger = budget.work_ledger_identity_v1();
+    let mut required = floor;
+    let mut storage = 0usize;
+    let mut check_root = Some(check_root);
+    let mut consume = Some(consume);
+    let mut caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        recipes.check(budget)?;
+        let headers = argument_sum_v1(&[
+            private_native_source_headers_v18::<E>(
+                std::mem::size_of_val(&check_root),
+                std::mem::align_of_val(&check_root),
+                std::mem::size_of_val(&consume),
+                std::mem::align_of_val(&consume),
+            )?,
+            source_reference_cleanup_headers_v29()?,
+            source_owned_finish_preflight_v26::<(), PrivateNativeFlowV18<E>>(budget)?,
+            argument_product_v1(2, std::mem::size_of_val(&check_root))?,
+            argument_product_v1(2, std::mem::size_of_val(&consume))?,
+        ])?;
+        let rows = original.retain_query((|| {
             budget.reserve_storage(headers)?;
+            budget.charge_work(argument_product_v1(2, SOURCE_REFERENCE_ENTRY_WORK_V29)?)?;
             physical.check_native_source_subject_v18(original, optimized, budget)?;
             let roots = original.source.root_count(budget)?;
             let count = optimized.output_inventory(budget)?.operations().len();
@@ -832,16 +931,12 @@ where
                 recipes: recipes.output_recipes(budget)?,
                 roots,
             })
-        })())
-    })?;
-    let storage = budget
-        .storage()
-        .checked_sub(floor)
-        .ok_or(ArgumentResourceV1::Accounting)?;
-    let required = budget.storage();
-    let scope_slot = std::ptr::from_ref(budget) as usize;
-    let scope_ledger = budget.work_ledger_identity_v1();
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        })())?;
+        storage = budget
+            .storage()
+            .checked_sub(floor)
+            .ok_or(ArgumentResourceV1::Accounting)?;
+        required = budget.storage();
         let mut completed_roots = 0usize;
         for root in 0..rows.roots {
             scoped_raw_admission_v29::with_checked_optimized_source_memory_v18(
@@ -863,7 +958,12 @@ where
                         required: budget.storage(),
                     };
                     request.check(budget)?;
-                    check_root(&request, budget).map_err(PrivateNativeFlowV18::Callback)?;
+                    check_root
+                        .as_mut()
+                        .ok_or_else(|| recipes.source_failure("private source callback absent"))?(
+                        &request, budget,
+                    )
+                    .map_err(PrivateNativeFlowV18::Callback)?;
                     request.check(budget)?;
                     if !request.completed.get() {
                         return Err(PrivateNativeFlowV18::Native(NativeError::Source(
@@ -931,49 +1031,27 @@ where
             aliases,
             required,
         };
-        completion.join_pending(recipes, pending, &rows.execution, &rows.recipes, budget)?;
-        let observed =
-            pending.with_private_memory_observations_v18(proof, budget, |native, budget| {
-                let observation = native.observation(budget)?;
-                let last_invocation = native.last_invocation(budget)?;
-                diagnostic.set(Some(NativeDiagnostic {
-                    observation,
-                    last_invocation,
-                }));
-                let owner = native.owner(budget)?;
-                if let Err(error) = recipes.check_owner(owner, budget) {
-                    return Ok(Err(error));
-                }
-                let obligations = native.obligations(budget)?;
-                budget.charge_work(
-                    obligations
-                        .len()
-                        .checked_add(1)
-                        .ok_or(ArgumentResourceV1::Arithmetic)?,
-                )?;
-                if obligations != rows.obligations.as_slice() {
-                    return Ok(Err(recipes.source_failure(
-                        "private native imported obligation census changed",
-                    )));
-                }
-                let view = ProductionPrivateMemoryCheckedNativePoliciesV18 {
-                    recipes,
-                    completion: &completion,
-                    native,
-                    obligations,
-                };
-                if let Err(error) = view.check(budget) {
-                    return Ok(Err(error));
-                }
-                Ok(consume(&view, budget))
-            });
-        if let Err(error) = &observed {
-            diagnostic.set(Some(NativeDiagnostic::from_error(error)));
-        }
-        observed
-            .map_err(|error| PrivateNativeFlowV18::Native(recipes.native_error(error)))?
-            .map_err(PrivateNativeFlowV18::Native)
+        consume
+            .take()
+            .ok_or_else(|| recipes.source_failure("private source consumer absent"))?(
+            &completion,
+            &rows,
+            pending,
+            budget,
+        )
     }));
+    let dropped_root = source_reference_discard_v29(check_root.take());
+    let dropped_consume = source_reference_discard_v29(consume.take());
+    if (dropped_root || dropped_consume) && matches!(caught, Ok(Ok(()))) {
+        caught = Ok(Err(recipes
+            .source_failure("private source callback capture panicked")
+            .into()));
+    }
+    if required == floor {
+        // Preparation failed before any user callback. Its partial allocations
+        // and captures have now been destroyed, while their credit stayed live.
+        storage = budget.storage().checked_sub(floor).unwrap_or(0);
+    }
     let prior = source.guard.first.get();
     // Observe this scope's higher floor on every disposition before dropping
     // rows or refunding their credits. Older recipe/physical floors are lower.
@@ -997,6 +1075,7 @@ where
             Ok(())
         }
     });
-    drop(rows);
     source_owned_finish_callback_v18(caught, prior, postflight, source.cleanup, budget, storage)
 }
+
+include!("production_optimized_source_native_mixed_v26.rs");

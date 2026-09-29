@@ -173,6 +173,14 @@ pub struct PendingCanonicalRankedSourceRolesV18<'s, 'g> {
 }
 
 impl<'g> PendingCanonicalRankedSourceRolesV18<'_, 'g> {
+    /// Monotonic refusal for a composing source scope that lost its higher
+    /// retained floor before a native child was constructed. This operation
+    /// grants no authority and deliberately does not query the damaged budget.
+    pub fn refuse_retained_custody(&self) -> Failure {
+        self.refund_denied.set(true);
+        self.guard.resource(Resource::Accounting)
+    }
+
     fn check(&self, budget: &mut Budget<'_>) -> Result<(), Failure> {
         self.guard.query(budget)?;
         self.graph

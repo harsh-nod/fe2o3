@@ -336,8 +336,16 @@ impl ProductionSourceOwnedViewV18<'_> {
             let accepted = &accepted;
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 self.query(budget)?;
-                let headers =
-                    self.retain_query(P::headers::<T, E, _>(&consume).map_err(Into::into))?;
+                let headers = self.retain_query((|| {
+                    argument_sum_v1(&[
+                        P::headers::<T, E, _>(&consume)?,
+                        source_owned_finish_preflight_v26::<
+                            (P::Output, T, fe2o3_pliron::KirNeutralOwnedOriginStorageV1),
+                            SourceConsumerErrorV18<ProductionSourceOptimizationErrorV18<E>>,
+                        >(budget)?,
+                    ])
+                    .map_err(Into::into)
+                })())?;
                 self.retain_query(
                     optimized_source_consumer_resources_v18::reserve_entry(
                         accepted, headers, budget,

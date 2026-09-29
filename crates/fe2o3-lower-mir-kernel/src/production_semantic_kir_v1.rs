@@ -33668,16 +33668,16 @@ include!("production_source_correspondence_v18.rs");
 #[path = "production_optimized_source_correspondence_v18.rs"]
 mod optimized_source_v18;
 pub use optimized_source_v18::{
-    ProductionLifecycleCheckedNativePoliciesV18, ProductionOptimizedExecutionKindV18,
-    ProductionOptimizedExecutionRecipesV18, ProductionOptimizedSourceAllocationV18,
-    ProductionOptimizedSourceCfgEventV18, ProductionOptimizedSourceCfgRootV18,
-    ProductionOptimizedSourceCorrespondenceV18, ProductionOptimizedSourceEffectsV18,
-    ProductionOptimizedSourceGapIntervalV18, ProductionOptimizedSourceGapV18,
-    ProductionOptimizedSourceMemoryAccessV18, ProductionOptimizedSourceOperationV18,
-    ProductionOptimizedSourcePayloadV18, ProductionOptimizedSourceSpanV18,
-    ProductionOptimizedSourceTerminatorV18, ProductionPrivateMemoryCheckedNativePoliciesV18,
-    ProductionSourceNativeLifecycleDiagnosticV18, ProductionSourceNativeLifecycleErrorV18,
-    ProductionSourcePrivateMemoryRootRequestV18,
+    ProductionLifecycleCheckedNativePoliciesV18, ProductionMixedMemoryCheckedNativePoliciesV26,
+    ProductionOptimizedExecutionKindV18, ProductionOptimizedExecutionRecipesV18,
+    ProductionOptimizedSourceAllocationV18, ProductionOptimizedSourceCfgEventV18,
+    ProductionOptimizedSourceCfgRootV18, ProductionOptimizedSourceCorrespondenceV18,
+    ProductionOptimizedSourceEffectsV18, ProductionOptimizedSourceGapIntervalV18,
+    ProductionOptimizedSourceGapV18, ProductionOptimizedSourceMemoryAccessV18,
+    ProductionOptimizedSourceOperationV18, ProductionOptimizedSourcePayloadV18,
+    ProductionOptimizedSourceSpanV18, ProductionOptimizedSourceTerminatorV18,
+    ProductionPrivateMemoryCheckedNativePoliciesV18, ProductionSourceNativeLifecycleDiagnosticV18,
+    ProductionSourceNativeLifecycleErrorV18, ProductionSourcePrivateMemoryRootRequestV18,
 };
 include!("production_source_ranked_relation_v18.rs");
 include!("production_source_optimizer_entry_v18.rs");

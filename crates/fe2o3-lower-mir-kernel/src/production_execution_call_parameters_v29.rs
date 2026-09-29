@@ -123,12 +123,21 @@ fn execution_call_shape_with_representation_v29(
     let mut values = Vec::new();
     execution_cfg_values_v29(binding, &mut values, &mut 0, budget)?;
     budget.charge_work(values.len())?;
-    if values.len() != expected.len()
-        || values.iter().zip(expected).any(|(value, ty)| {
-            value.ty != ty && !(value.ty == Type::INDEX && ty == Type::Scalar(ScalarType::U64))
-        })
-    {
+    if values.len() != expected.len() {
         return Err(execution_call_error_v29());
+    }
+    for (value, expected) in values.iter().zip(&expected) {
+        if &value.ty == expected
+            || (value.ty == Type::INDEX && *expected == Type::Scalar(ScalarType::U64))
+        {
+            continue;
+        }
+        if representation != ExecutionCfgRepresentationV29::OriginalSource
+            || values.len() != 1
+            || !source_reference_call_widening_v26(types, ty, &value.ty, expected, budget)?
+        {
+            return Err(execution_call_error_v29());
+        }
     }
     Ok(leaves)
 }
@@ -502,6 +511,25 @@ fn build_execution_parameters_with_references_v29<'scope>(
             return Err(execution_call_error_v29());
         }
         locals.push((local, rebuilt));
+        let mut reference_transport = None;
+        if references.is_some() && next.checked_sub(input_first) == Some(1)
+            && let SemanticValueBindingV1::Value { id, ty } = binding
+            && let Some(expected) = plan.parameter_types.get(input_first)
+            && ty != expected
+            && matches!((ty, expected), (Type::Pointer(_), Type::Pointer(_)))
+            && source_reference_call_widening_v26(types, selector.ty, ty, expected, budget)?
+        {
+            budget.charge_work(4)?;
+            if invocation_inputs.is_none() {
+                return Err(execution_call_error_v29());
+            }
+            reference_transport = Some(ReferenceCallTransportV26 {
+                occurrence: origin.occurrence,
+                source_call: std::ptr::from_ref(incoming.source()) as usize,
+                input: *id,
+                output: *prepared.arguments.get(input_first).ok_or_else(execution_call_error_v29)?,
+            });
+        }
         if let Some(inputs) = &mut invocation_inputs {
             invocation_append_input_v1(
                 inputs,
@@ -513,6 +541,7 @@ fn build_execution_parameters_with_references_v29<'scope>(
                 next,
                 budget,
             )?;
+            inputs.last_mut().ok_or_else(execution_call_error_v29)?.reference_call_transport = reference_transport;
         }
     }
     budget.charge_work(values.len())?;

@@ -147,7 +147,10 @@ impl ScopedSourceCleanupBoundaryV29 {
         F: FnOnce(&ScopedSourceCleanupV29, &mut ArgumentBudgetV1<'work>) -> Result<T, E>,
     {
         let preparation = (|| {
-            let header = scoped_source_callback_headers_v29::<T, E, F>()?;
+            let header = argument_sum_v1(&[
+                scoped_source_callback_headers_v29::<T, E, F>()?,
+                source_owned_finish_preflight_v26::<T, E>(budget)?,
+            ])?;
             let total = argument_sum_v1(&[self.header, header])?;
             budget.reserve_storage(header)?;
             self.header = total;
@@ -155,9 +158,12 @@ impl ScopedSourceCleanupBoundaryV29 {
         })();
         // The owned callback is captured by value and dropped inside this catch,
         // including when prepayment refuses before invocation.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            preparation.map_err(E::from)?;
-            run(&self.cleanup, budget)
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match preparation {
+            Ok(()) => run(&self.cleanup, budget),
+            Err(error) => {
+                source_reference_discard_v29(run);
+                Err(E::from(error))
+            }
         }));
         let settlement = self.settle(budget);
         match result {

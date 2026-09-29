@@ -1,3 +1,5 @@
+include!("production_source_reference_call_transport_v26.rs");
+
 struct DefinedCallArgumentSignatureV1<'a, 'scope> {
     projection: DefinedCallProjectionV29<'scope>,
     semantic_types: &'a [SemanticTypeIdV1],
@@ -381,6 +383,20 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 .0
             } else if actual == expected {
                 value
+            } else if matches!((&actual, &expected), (Type::Pointer(_), Type::Pointer(_))) {
+                let origin = execution.as_ref().ok_or_else(execution_call_error_v29)?;
+                self.check_reference_call_argument_v26(
+                    block, call, origin, parameter, projection, binding, value, &actual, &expected,
+                )?;
+                self.emit_id(
+                    operations,
+                    expected.clone(),
+                    OperationKind::Cast {
+                        kind: CastKind::PointerToGeneric,
+                        value,
+                        to: expected,
+                    },
+                )?
             } else if source_descriptor_widening_v29(&actual, &expected) {
                 let origin = execution.as_ref().ok_or_else(execution_call_error_v29)?;
                 self.check_descriptor_call_argument_v29(

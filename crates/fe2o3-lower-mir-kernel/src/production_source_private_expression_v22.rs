@@ -16,6 +16,7 @@ enum OriginalPrivateInputV22<'a> {
 
 fn original_private_expression_headers_v22() -> Result<usize, ArgumentResourceV1> {
     let frame = argument_sum_v1(&[
+        original_shared_capture_headers_v26()?,
         size_of::<OriginalPrivateInputV22<'_>>(),
         3 * size_of::<ProductionSemanticExpressionV2>(),
         size_of::<SourceOwnedResultV18<ProductionSemanticExpressionV2>>(),
@@ -376,10 +377,9 @@ impl OriginalEntryIndexV20<'_, '_> {
                     return Ok(expression);
                 }
                 if !place.projections().is_empty() {
-                    return self
-                        .source
-                        .source
-                        .missing("private source expression uncaptured projection");
+                    return self.captured_shared_reference_expression_v26(
+                        leaves, instance, ty, scalar, site, role, place, next, remaining, budget,
+                    );
                 }
                 let value =
                     self.promoted_use(function_id, site, role, place.local().index(), budget)?;
@@ -535,6 +535,8 @@ impl OriginalEntryIndexV20<'_, '_> {
         }
     }
 }
+
+include!("production_source_private_shared_capture_v26.rs");
 
 // Only the private write profile uses these total fixed-width bit-vector
 // identities. In particular, checked arithmetic and floating values retain

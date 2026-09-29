@@ -30,13 +30,16 @@ pub(super) fn test_descriptor_rows_attempt_boundary_v18(
         &'a ProductionOptimizedSourceCorrespondenceV18<'s>,
         &'a usize,
         &'a ProductionOptimizedSourceScalarLeavesV18<'s>,
+        // The indexed production row builder also borrows its optional index.
+        &'a Option<&'a OriginalEntryIndexV20<'s, 's>>,
     );
     let helper = scoped_source_attempt_header_oracle_v29::<
         (Vec<DescriptorSourceRoleRowV18>, usize),
         ProductionSourceOwnedViewErrorV18,
         Capture<'_, '_>,
     >();
-    let explicit = descriptor_role_headers_v18::<(), ProductionSourceOwnedViewErrorV18>()?;
+    let explicit = descriptor_role_headers_v18::<(), ProductionSourceOwnedViewErrorV18>()?
+        + source_owned_finish_header_oracle_v26::<(), ProductionSourceOwnedViewErrorV18>();
     DESCRIPTOR_ROWS_ATTEMPT_PROBE_V18.set(Some((helper - usize::from(short), 0, 0, 0)));
     let first: SourceOwnedResultV18<()> =
         original.with_descriptor_source_roles_v18(optimized, 0, recipe, budget, |_, _| {

@@ -1013,33 +1013,53 @@ impl ProductionSourceScalarLeavesV18<'_> {
         let relation = leaves.relation;
         leaves.query(budget)?;
         let floor = budget.storage();
-        let (arguments, inline_scalar, function, retained) =
+        let mut consume = Some(consume);
+        let prepared =
             scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
                 let floor = budget.storage();
-                relation.retain_query((|| {
-                    budget.reserve_storage(size_of::<ProductionSourceScalarStoreV18<'_>>())?;
-                    let arguments = SourceRootArgumentsV18::build(relation, leaves.root, budget)?;
-                    let inline_scalar = Gfx942InlineScalarCorrespondenceV30::build_source_v18(
-                        relation,
-                        leaves.root,
-                        budget,
-                    )?;
-                    let physical = relation.source.root(leaves.root, budget)?.1;
-                    let function = relation
-                        .inventory
-                        .functions()
-                        .get(physical)
-                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                            "scalar Store origin root",
-                        ))?
-                        .coordinate;
-                    let retained = budget
-                        .storage()
-                        .checked_sub(floor)
-                        .ok_or(ArgumentResourceV1::Accounting)?;
-                    Ok((arguments, inline_scalar, function, retained))
-                })())
-            })?;
+                relation
+                    .retain_query((|| {
+                        let headers = argument_sum_v1(&[
+                            std::mem::size_of_val(&consume),
+                            std::mem::align_of_val(&consume),
+                            size_of::<ProductionSourceScalarStoreV18<'_>>(),
+                            source_owned_finish_preflight_v26::<usize, E>(budget)?,
+                        ])?;
+                        budget.reserve_storage(headers)?;
+                        let arguments =
+                            SourceRootArgumentsV18::build(relation, leaves.root, budget)?;
+                        let inline_scalar = Gfx942InlineScalarCorrespondenceV30::build_source_v18(
+                            relation,
+                            leaves.root,
+                            budget,
+                        )?;
+                        let physical = relation.source.root(leaves.root, budget)?.1;
+                        let function = relation
+                            .inventory
+                            .functions()
+                            .get(physical)
+                            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                                "scalar Store origin root",
+                            ))?
+                            .coordinate;
+                        let retained = budget
+                            .storage()
+                            .checked_sub(floor)
+                            .ok_or(ArgumentResourceV1::Accounting)?;
+                        Ok((arguments, inline_scalar, function, retained))
+                    })())
+                    .inspect_err(|_| {
+                        source_reference_discard_v29(consume.take());
+                    })
+            });
+        let (arguments, inline_scalar, function, retained) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                source_reference_discard_v29(consume);
+                return Err(error.into());
+            }
+        };
+        let mut consume = consume.expect("scalar store preparation retained its callback");
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             value_origin_v1::with_whole_value_origins_v18(
                 relation,
@@ -1419,9 +1439,10 @@ impl ProductionSourceCorrespondenceV18<'_> {
     {
         self.query(budget)?;
         let floor = budget.storage();
+        let mut consume = Some(consume);
         // Attempt-header refusal happens before the constructor callback can
         // retain it. It is still the first failure of this source query.
-        let (mut leaves, retained) = self.retain_query(scoped_source_attempt_v29(
+        let prepared = self.retain_query(scoped_source_attempt_v29(
             self.source.cleanup,
             budget,
             floor,
@@ -1429,6 +1450,9 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 let floor = budget.storage();
                 self.retain_query((|| {
                     let headers = argument_sum_v1(&[
+                        std::mem::size_of_val(&consume),
+                        std::mem::align_of_val(&consume),
+                        source_owned_finish_preflight_v26::<T, E>(budget)?,
                         size_of::<ProductionSourceScalarLeavesV18<'_>>(),
                         size_of::<SourceScalarNamespaceV18<'_>>(),
                         size_of::<&SourceScalarNamespaceV18<'_>>(),
@@ -1442,10 +1466,21 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         .ok_or(ArgumentResourceV1::Accounting)?;
                     Ok((leaves, retained))
                 })())
+                .inspect_err(|_| {
+                    source_reference_discard_v29(consume.take());
+                })
             },
-        ))?;
+        ));
+        let (mut leaves, retained) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                source_reference_discard_v29(consume);
+                return Err(error.into());
+            }
+        };
         // The constructor's own callback header has now been settled. Only
         // the still-live leaf scope contributes to the returned custody floor.
+        let consume = consume.expect("scalar leaf preparation retained its callback");
         leaves.floor = budget.storage();
         let view = ProductionSourceScalarLeavesV18 { leaves: &leaves };
         let caught =

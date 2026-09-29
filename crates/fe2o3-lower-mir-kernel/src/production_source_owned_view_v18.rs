@@ -341,16 +341,36 @@ impl ProductionPendingScopedSourceOwnerV29 {
     {
         self.check_source_owned_floor_v18(budget)?;
         let floor = budget.storage();
-        let headers = scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
-            let headers = argument_sum_v1(&[
-                size_of::<SourceOwnedQueryGuardV18>(),
-                size_of::<ProductionSourceOwnedViewV18<'_>>(),
-                size_of::<std::thread::Result<Result<T, E>>>(),
-            ])?;
-            budget.reserve_storage(headers)?;
-            self.inner.replay_with_cleanup(cleanup, budget)?;
-            Ok::<_, ProductionSourceOwnedViewErrorV18>(headers)
-        })?;
+        let mut consume = Some(consume);
+        let prepared = scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
+            (|| {
+                let headers = argument_sum_v1(&[
+                    source_owned_finish_preflight_v26::<T, E>(budget)?,
+                    std::mem::size_of_val(&consume),
+                    std::mem::align_of_val(&consume),
+                    size_of::<SourceOwnedQueryGuardV18>(),
+                    size_of::<ProductionSourceOwnedViewV18<'_>>(),
+                    size_of::<std::thread::Result<Result<T, E>>>(),
+                ])?;
+                budget.reserve_storage(headers)?;
+                self.inner.replay_with_cleanup(cleanup, budget)?;
+                Ok::<_, ProductionSourceOwnedViewErrorV18>(headers)
+            })()
+            .inspect_err(|_| {
+                source_reference_discard_v29(consume.take());
+            })
+        });
+        let headers = match prepared {
+            Ok(headers) => headers,
+            Err(error) => {
+                source_reference_discard_v29(consume.take());
+                return Err(error.into());
+            }
+        };
+        let Some(consume) = consume.take() else {
+            cleanup.deny_refund();
+            return Err(ArgumentResourceV1::Accounting.into());
+        };
         let guard = SourceOwnedQueryGuardV18::new(self, budget);
         let view = ProductionSourceOwnedViewV18 {
             owner: self,
@@ -609,7 +629,56 @@ enum SourceOwnedQueryFailureV18 {
     PrivateMemoryPanicked,
 }
 
-// All scope-owned values have dropped before this exact-credit settlement.
+// Each callback prepays one settlement and bounded payload-disposal attempt.
+// This is called after the entry query and before invoking external code.
+fn source_owned_finish_preflight_v26<T, E>(
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, ArgumentResourceV1> {
+    // Snapshot, first-error selection, custody comparisons, exact refund and
+    // protected error conversion and result dispatch, plus the independently
+    // bounded panic-payload retry.
+    budget.charge_work(32 + SOURCE_REFERENCE_ENTRY_WORK_V29)?;
+    source_owned_finish_headers_v26::<T, E>()
+}
+
+fn source_owned_finish_headers_v26<T, E>() -> Result<usize, ArgumentResourceV1> {
+    type Settlement<'a> = (
+        &'a ScopedSourceCleanupV29,
+        usize,
+        fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        usize,
+        usize,
+    );
+    argument_sum_v1(&[
+        source_reference_cleanup_headers_v29()?,
+        // Moving the retained outcome into protected disposal must not borrow
+        // the original callback's return/capture frame reservation.
+        argument_product_v1(3, size_of::<std::thread::Result<Result<T, E>>>())?,
+        size_of::<SourceOwnedResultV18<()>>(),
+        size_of::<Option<ProductionSourceOwnedViewErrorV18>>(),
+        size_of::<Option<SourceOwnedQueryFailureV18>>(),
+        argument_product_v1(2, size_of::<ProductionSourceOwnedViewErrorV18>())?,
+        size_of::<std::panic::AssertUnwindSafe<ProductionSourceOwnedViewErrorV18>>(),
+        size_of::<std::thread::Result<E>>(),
+        argument_product_v1(2, size_of::<Settlement<'_>>())?,
+        size_of::<&mut ArgumentBudgetV1<'_>>(),
+        size_of::<Result<(), ArgumentResourceV1>>(),
+    ])
+}
+
+#[cfg(test)]
+include!("production_source_finish_disposal_v26_tests.rs");
+
+fn source_owned_convert_callback_error_v26<E>(
+    error: ProductionSourceOwnedViewErrorV18,
+) -> std::thread::Result<E>
+where
+    E: From<ProductionSourceOwnedViewErrorV18>,
+{
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || E::from(error)))
+}
+
+// Rejected consumer values are destroyed while their scope credit is still live.
 // Consumer-owned backing, including an escaping error or panic payload, is not
 // scratch and must never be included in a rollback-to-floor calculation.
 fn source_owned_finish_callback_v18<T, E>(
@@ -623,26 +692,72 @@ fn source_owned_finish_callback_v18<T, E>(
 where
     E: From<ProductionSourceOwnedViewErrorV18>,
 {
-    let released = if cleanup.is_denied() {
-        Err(ArgumentResourceV1::Accounting)
-    } else {
-        budget
-            .release_storage(storage)
-            .inspect_err(|_| cleanup.deny_refund())
+    let slot = std::ptr::from_ref(&*budget) as usize;
+    let ledger = budget.work_ledger_identity_v1();
+    let retained = budget.storage();
+    let settle = |budget: &mut ArgumentBudgetV1<'_>| {
+        if slot != std::ptr::from_ref(&*budget) as usize
+            || ledger != budget.work_ledger_identity_v1()
+            || budget.storage() < retained
+        {
+            cleanup.deny_refund();
+        }
+        if cleanup.is_denied() {
+            Err(ArgumentResourceV1::Accounting)
+        } else {
+            budget
+                .release_storage(storage)
+                .inspect_err(|_| cleanup.deny_refund())
+        }
     };
     match caught {
-        Err(payload) => std::panic::resume_unwind(payload),
+        Err(payload) => {
+            let _ = settle(budget);
+            std::panic::resume_unwind(payload)
+        }
         Ok(Err(error)) => match first {
-            Some(first) => Err(first.error().into()),
-            None => Err(error),
-        },
-        Ok(Ok(value)) => match postflight.and(released.map_err(Into::into)) {
-            Ok(()) => Ok(value),
-            Err(error) => {
-                drop(value);
-                Err(error.into())
+            Some(first) => {
+                // A later error may own a hostile destructor. Neither its panic
+                // nor a failed refund can replace the already selected refusal.
+                source_reference_discard_v29(error);
+                let converted = source_owned_convert_callback_error_v26::<E>(first.error());
+                let _ = settle(budget);
+                match converted {
+                    Ok(error) => Err(error),
+                    Err(payload) => std::panic::resume_unwind(payload),
+                }
+            }
+            None => {
+                let _ = settle(budget);
+                Err(error)
             }
         },
+        Ok(Ok(value)) => {
+            let refusal = first
+                .map(SourceOwnedQueryFailureV18::error)
+                .or_else(|| postflight.err());
+            if let Some(error) = refusal {
+                source_reference_discard_v29(value);
+                let converted = source_owned_convert_callback_error_v26::<E>(error);
+                let _ = settle(budget);
+                return match converted {
+                    Ok(error) => Err(error),
+                    Err(payload) => std::panic::resume_unwind(payload),
+                };
+            }
+            match settle(budget) {
+                Ok(()) => Ok(value),
+                Err(error) => {
+                    // release_storage refuses atomically; no accepted credit
+                    // has been refunded on this branch.
+                    source_reference_discard_v29(value);
+                    match source_owned_convert_callback_error_v26::<E>(error.into()) {
+                        Ok(error) => Err(error),
+                        Err(payload) => std::panic::resume_unwind(payload),
+                    }
+                }
+            }
+        }
     }
 }
 impl SourceOwnedQueryFailureV18 {
@@ -889,9 +1004,13 @@ impl ProductionSourceOwnedViewV18<'_> {
             let accepted = &accepted;
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 self.query(budget)?;
-                let headers = self.retain_query(
-                    source_analysis_owned_headers_v18::<T, E, _>(&consume).map_err(Into::into),
-                )?;
+                let headers = self.retain_query((|| {
+                    argument_sum_v1(&[
+                        source_analysis_owned_headers_v18::<T, E, _>(&consume)?,
+                        source_owned_finish_preflight_v26::<T, E>(budget)?,
+                    ])
+                    .map_err(Into::into)
+                })())?;
                 self.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
                 accepted.set(headers);
                 Ok::<_, ProductionSourceOwnedViewErrorV18>((headers, consume))

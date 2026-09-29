@@ -193,21 +193,30 @@ fn pending_first_view_query_drop_observes_linked_denial_before_any_header_refund
                     payload: Some(Box::new(0x1751_0003_u64)),
                 };
                 let called = &invoked;
+                let consume = move |_: &ProductionSourceOwnedViewV18<'_>,
+                                    _: &mut ArgumentBudgetV1<'_>| {
+                    std::hint::black_box(&owned);
+                    called.set(called.get() + 1);
+                    Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+                };
+                fn capture_headers<F>(_: &F) -> usize {
+                    size_of::<Option<F>>() + std::mem::align_of::<Option<F>>()
+                }
+                let owned_headers = capture_headers(&consume);
                 leave_first_source_query_one_short_v1751(budget, entrance_work);
                 let floor = budget.storage();
                 let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     pending
-                        .with_source_consumer_with_cleanup_v18(cleanup, budget, move |_, _| {
-                            std::hint::black_box(&owned);
-                            called.set(called.get() + 1);
-                            Ok::<_, ProductionSourceOwnedViewErrorV18>(())
-                        })
+                        .with_source_consumer_with_cleanup_v18(cleanup, budget, consume)
                         .map_err(|error| error.0)
                 }));
                 assert_eq!(*caught.unwrap_err().downcast::<u64>().unwrap(), 0x1751_0003);
                 assert_eq!((invoked.get(), drops.get()), (0, 1));
                 assert_eq!(budget.work(), MODULE_LIMIT);
-                let headers = size_of::<SourceOwnedQueryGuardV18>()
+                let headers = owned_headers
+                    + source_owned_finish_header_oracle_v26::<(), ProductionSourceOwnedViewErrorV18>(
+                    )
+                    + size_of::<SourceOwnedQueryGuardV18>()
                     + size_of::<ProductionSourceOwnedViewV18<'_>>()
                     + size_of::<std::thread::Result<Result<(), ProductionSourceOwnedViewErrorV18>>>(
                     );

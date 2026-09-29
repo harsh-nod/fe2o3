@@ -82,6 +82,7 @@ fn optimized_correspondence_header_oracle_v18<T, E, F>(_: &F) -> usize {
         + size_of::<AssertUnwindSafe<Result<T, E>>>()
         + 3 * size_of::<usize>()
         + cleanup
+        + source_owned_finish_header_oracle_v26::<T, E>()
 }
 
 fn optimized_source_retained_oracle_v18<F>(
@@ -151,11 +152,11 @@ fn optimized_source_header_exact_and_one_short_storage_refuse_at_distinct_bounda
                 assert_eq!(budget.storage(), floor, "construction scratch refunded only after drop");
                 if short == 1 {
                     assert_eq!(budget.failed_storage(), Some(budget.storage_limit() + 1));
-                    assert_eq!(budget.work() - work, 2, "the control index has not started");
+                    assert_eq!(budget.work() - work, 2 + 32 + 2 + 1 + 4, "the control index has not started");
                 } else {
                     assert_eq!(budget.failed_storage(), Some(budget.storage_limit()
                         + size_of::<fe2o3_kernel_analysis::CheckedCanonicalKirControlIndexV18<'_, '_, '_>>()));
-                    assert_eq!(budget.work() - work, 3, "the exact prepaid header precedes control construction");
+                    assert_eq!(budget.work() - work, 3 + 32 + 2 + 1 + 4, "the exact prepaid header precedes control construction");
                 }
                 attempted.set(true);
                 budget.release_storage(padding)?;

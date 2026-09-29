@@ -43,6 +43,10 @@ pub(super) fn test_source_slice_completion_v25(
 
 fn projection_summary_v25(exclusive: bool) -> SourceSliceArgumentCompletionV25 {
     SourceSliceArgumentCompletionV25 {
+        parameter: SliceDefinition::FunctionArgument {
+            function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(0),
+            argument: 0,
+        },
         ty: SemanticTypeIdV1::from_index(0),
         identity: fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdentityV1::from_sha256([0; 32]),
         scalar: ScalarType::U32,

@@ -84,6 +84,7 @@ fn original_analysis_header_oracle_v1747<T, E, F>(_: &F) -> usize {
         + size_of::<std::thread::Result<Result<T, E>>>()
         + size_of::<Result<T, E>>()
         + size_of::<AssertUnwindSafe<Result<T, E>>>()
+        + source_owned_finish_header_oracle_v26::<T, E>()
 }
 
 #[test]
@@ -91,8 +92,10 @@ fn original_analysis_generic_results_are_paid_independently_of_owned_capture() {
     #[repr(align(256))]
     struct Large([u8; 16384]);
     let consume = || ();
-    let small = source_analysis_owned_headers_v18::<(), (), _>(&consume).unwrap();
-    let large = source_analysis_owned_headers_v18::<Large, Large, _>(&consume).unwrap();
+    let small = source_analysis_owned_headers_v18::<(), (), _>(&consume).unwrap()
+        + source_owned_finish_header_oracle_v26::<(), ()>();
+    let large = source_analysis_owned_headers_v18::<Large, Large, _>(&consume).unwrap()
+        + source_owned_finish_header_oracle_v26::<Large, Large>();
     assert_eq!(
         small,
         original_analysis_header_oracle_v1747::<(), (), _>(&consume)
@@ -132,7 +135,8 @@ fn original_analysis_success_probe_v1747<const N: usize>(
     let header =
         original_analysis_header_oracle_v1747::<(), ProductionSourceOwnedViewErrorV18, _>(&consume);
     assert_eq!(
-        source_analysis_owned_headers_v18::<(), ProductionSourceOwnedViewErrorV18, _>(&consume)?,
+        source_analysis_owned_headers_v18::<(), ProductionSourceOwnedViewErrorV18, _>(&consume)?
+            + source_owned_finish_header_oracle_v26::<(), ProductionSourceOwnedViewErrorV18>(),
         header
     );
     let floor = budget.storage();
@@ -188,7 +192,7 @@ fn original_analysis_header_exact_short_and_paid_work_refusal_settle_only_accept
             budget.reserve_storage(filler)?;
             // One entry query succeeds; the framework's atomic four-unit
             // precharge is then one short, before inventory construction.
-            budget.charge_work(MODULE_LIMIT - budget.work() - 4)?;
+            budget.charge_work(MODULE_LIMIT - budget.work() - 4 - (32 + 2 + 1 + 4))?;
             let floor = budget.storage();
             let work = budget.work();
             let error = source.with_analysis_v18(budget, consume).unwrap_err();
@@ -205,7 +209,7 @@ fn original_analysis_header_exact_short_and_paid_work_refusal_settle_only_accept
                     if limit.actual() == MODULE_LIMIT + 1 && limit.limit() == MODULE_LIMIT));
                 assert_eq!(budget.peak_storage(), MODULE_LIMIT);
             }
-            assert_eq!(budget.work(), work + 1);
+            assert_eq!(budget.work(), work + 1 + 32 + 2 + 1 + 4);
             assert_eq!(
                 budget.storage(),
                 floor + if deny && !short { header } else { 0 }

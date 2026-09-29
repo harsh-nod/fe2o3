@@ -105,6 +105,7 @@ fn original_correspondence_header_oracle_v18<T, E, F>(_: &F) -> usize {
         + size_of::<Result<T, E>>()
         + size_of::<AssertUnwindSafe<Result<T, E>>>()
         + disposal
+        + source_owned_finish_header_oracle_v26::<T, E>()
 }
 
 #[test]
@@ -146,7 +147,8 @@ fn original_correspondence_owned_header_and_rows_exclude_transient_helper_credit
             assert_eq!(
                 source_correspondence_owned_headers_v18::<(), ProductionSourceOwnedViewErrorV18, _>(
                     &consume
-                )?,
+                )? + source_owned_finish_header_oracle_v26::<(), ProductionSourceOwnedViewErrorV18>(
+                ),
                 expected.get()
             );
             source.with_ranked_correspondence_v18(inventory, budget, consume)?;
@@ -199,7 +201,10 @@ fn original_correspondence_owned_header_one_short_disposes_before_refusal_settle
                     (MODULE_LIMIT + 1, MODULE_LIMIT)
                 );
                 assert_eq!(budget.failed_storage(), Some(MODULE_LIMIT + 1));
-                assert_eq!((budget.work(), budget.storage()), (before.0 + 1, before.1));
+                assert_eq!(
+                    (budget.work(), budget.storage()),
+                    (before.0 + 1 + 32 + 2 + 1 + 4, before.1)
+                );
                 assert_eq!((invoked.get(), drops.get()), (0, 1));
                 assert_eq!(source.cleanup.is_denied(), deny_drop);
                 refusal.set(Some(error));
@@ -241,7 +246,8 @@ fn original_correspondence_credit_reservation_is_atomic_exact_short_and_overflow
             source_correspondence_owned_headers_v18::<(), ProductionSourceOwnedViewErrorV18, _>(
                 &consume
             )
-            .unwrap(),
+            .unwrap()
+                + source_owned_finish_header_oracle_v26::<(), ProductionSourceOwnedViewErrorV18>(),
             header
         );
         let mut work = CanonicalKernelIrWorkBudgetV1::new(100);
@@ -300,8 +306,9 @@ fn original_correspondence_paid_header_and_rows_are_refunded_only_after_owned_di
                     .map_err(source_attachment_error_v18)?;
                     let census_work = budget.work() - census_start;
                     assert!(row_count > 0);
-                    let prefix = 1 + if rows_paid { census_work } else { 0 };
-                    // Entry query costs one; the first or second mapper census
+                    let prefix = 1 + 32 + 2 + 1 + 4 + if rows_paid { census_work } else { 0 };
+                    // Entry query and disposal prepayment precede the mapper;
+                    // the first or second mapper census
                     // begins with an atomic two-unit charge.
                     budget.charge_work(MODULE_LIMIT - budget.work() - prefix - 1)?;
                     let owned = OriginalCorrespondenceCaptureV18 {

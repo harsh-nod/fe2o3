@@ -250,6 +250,27 @@ fn check_scoped_defined_call_phases_with_references_v29(
                     let source_call = call.source();
                     let first = span.first_operation_ordinal as usize;
                     let end = argument_sum_v1(&[first, span.operation_count as usize])?;
+                    let (arguments_first, call_operation) = match row.kind {
+                        SemanticKirCallReturnKindV1::Call { arguments_first, call_operation, .. }
+                        | SemanticKirCallReturnKindV1::NoNormalReturnCall { arguments_first, call_operation, .. } => (arguments_first, call_operation),
+                        SemanticKirCallReturnKindV1::Return { .. } => return Err(mismatch()),
+                    };
+                    if let Some(entry) = &target.invocation_entry {
+                        check_reference_call_replay_v26(
+                            instances.owner().source_semantic().types(),
+                            source.declaration(),
+                            callee.declaration(),
+                            occurrence,
+                            source_call,
+                            &target.function,
+                            &entry.inputs,
+                            block,
+                            arguments_first as usize,
+                            call_operation as usize,
+                            &values,
+                            budget,
+                        )?;
+                    }
                     if let SemanticKirCallReturnKindV1::NoNormalReturnCall {
                         arguments_first,
                         call_operation,

@@ -165,6 +165,16 @@ fn source_worklist_entry_one_short_preserves_original_refusal_on_retry() {
                 &consume
             )
             .unwrap()
+                + source_owned_finish_header_oracle_v26::<
+                    (
+                        fe2o3_pliron::CheckedNeutralKernelIrOwnerIntegerWorklistV18,
+                        (),
+                        fe2o3_pliron::KirNeutralOwnedOriginStorageV1
+                    ),
+                    SourceConsumerErrorV18<
+                        ProductionSourceOptimizationErrorV18<ProductionSourceOwnedViewErrorV18>,
+                    >,
+                >()
         );
         let padding = MODULE_LIMIT - budget.storage() - headers + 1;
         budget.reserve_storage(padding).unwrap();

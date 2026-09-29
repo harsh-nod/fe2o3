@@ -1017,7 +1017,11 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 std::mem::size_of::<SemanticSourceReferenceBindingV29>(),
             )?;
             let mut values = source_reference_owned_vec_v29(references.plan, 0, budget)?;
-            execution_cfg_values_v29(&referent, &mut values, &mut 0, budget)?;
+            // The captured live zero-sized capability has no scalar payload.
+            // Its original loan receipt, not an ordinary SSA value, carries it.
+            if grid_leader.is_none() {
+                execution_cfg_values_v29(&referent, &mut values, &mut 0, budget)?;
+            }
             let binding = SemanticSourceReferenceBindingV29 {
                 owner: references.plan as *const SourceReferencePlanV29<'_, '_> as usize,
                 source: references.plan.source,

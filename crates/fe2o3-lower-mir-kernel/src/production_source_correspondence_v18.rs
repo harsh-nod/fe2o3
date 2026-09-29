@@ -316,7 +316,10 @@ impl ProductionSourceOwnedViewV18<'_> {
                     return self.missing("foreign canonical inventory");
                 }
                 let rows = self.retain_construction(|| {
-                    let headers = source_correspondence_owned_headers_v18::<T, E, _>(&consume)?;
+                    let headers = argument_sum_v1(&[
+                        source_correspondence_owned_headers_v18::<T, E, _>(&consume)?,
+                        source_owned_finish_preflight_v26::<T, E>(budget)?,
+                    ])?;
                     reserve_source_correspondence_credit_v18(budget, accepted, headers)?;
                     source_attachments_owned_v18(self, inventory, budget, accepted)
                 })?;

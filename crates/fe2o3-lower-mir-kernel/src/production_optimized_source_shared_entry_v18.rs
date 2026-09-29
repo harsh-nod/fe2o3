@@ -75,6 +75,20 @@ fn shared_entry_consume_v18<'work>(
     budget: &mut ArgumentBudgetV1<'work>,
     consume: impl FnOnce(&mut ArgumentBudgetV1<'work>) -> SourceOwnedResultV18<()>,
 ) -> SourceOwnedResultV18<()> {
+    original.check(budget)?;
+    let prepared = original.retain_query((|| {
+        let storage =
+            source_owned_finish_preflight_v26::<(), ProductionSourceOwnedViewErrorV18>(budget)?;
+        budget.reserve_storage(storage)?;
+        Ok(storage)
+    })());
+    let storage = match prepared {
+        Ok(storage) => storage,
+        Err(error) => {
+            source_reference_discard_v29(consume);
+            return Err(error);
+        }
+    };
     let required = budget.storage();
     let slot = std::ptr::from_ref(&*budget) as usize;
     let ledger = budget.work_ledger_identity_v1();
@@ -97,7 +111,7 @@ fn shared_entry_consume_v18<'work>(
         postflight,
         original.source.cleanup,
         budget,
-        0,
+        storage,
     )
 }
 
@@ -334,12 +348,27 @@ impl PendingGlobalSourceAccessesV18<'_> {
         original.retain_query(self.roles.observe_custody(budget))?;
         let capture = std::mem::size_of_val(&consume);
         let alignment = std::mem::align_of_val(&consume);
-        let storage = original.retain_query(
-            shared_entry_headers_v18()
-                .and_then(|fixed| argument_sum_v1(&[fixed, capture, alignment]))
-                .map_err(Into::into),
-        )?;
-        original.retain_query(budget.reserve_storage(storage).map_err(Into::into))?;
+        let prepared = original.retain_query((|| {
+            let storage = shared_entry_headers_v18().and_then(|fixed| {
+                argument_sum_v1(&[
+                    fixed,
+                    capture,
+                    alignment,
+                    source_owned_finish_preflight_v26::<(), ProductionSourceOwnedViewErrorV18>(
+                        budget,
+                    )?,
+                ])
+            })?;
+            budget.reserve_storage(storage)?;
+            Ok(storage)
+        })());
+        let storage = match prepared {
+            Ok(storage) => storage,
+            Err(error) => {
+                source_reference_discard_v29(consume);
+                return Err(error);
+            }
+        };
         let required = budget.storage();
         let slot = std::ptr::from_ref(&*budget) as usize;
         let ledger = budget.work_ledger_identity_v1();

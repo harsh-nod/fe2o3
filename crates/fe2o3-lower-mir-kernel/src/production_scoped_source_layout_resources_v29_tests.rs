@@ -128,6 +128,7 @@ fn scoped_layout_cleanup_callback_and_attempt_frames_are_independent() {
 fn scoped_layout_callback_first_header_denial_never_enters_consumer() {
     fn size<F>(_: &F) -> usize {
         scoped_source_callback_headers_v29::<(), ScopedModuleErrorV29, F>().unwrap()
+            + source_owned_finish_header_oracle_v26::<(), ScopedModuleErrorV29>()
     }
     for short in [false, true] {
         let entered = std::cell::Cell::new(false);
@@ -139,7 +140,7 @@ fn scoped_layout_callback_first_header_denial_never_enters_consumer() {
         let boundary = size_of::<ScopedSourceCleanupBoundaryV29>()
             + size_of::<std::thread::Result<Result<(), ScopedModuleErrorV29>>>();
         let limit = MODULE_FLOOR + boundary + callback - usize::from(short);
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(32 + 2 + 1 + 4);
         let mut budget = ArgumentBudgetV1::new(&mut work, limit);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let result = with_scoped_source_cleanup_v29(&mut budget, MODULE_FLOOR, run);
@@ -152,7 +153,10 @@ fn scoped_layout_callback_first_header_denial_never_enters_consumer() {
             result.unwrap();
         }
         assert_eq!(entered.get(), !short);
-        assert_eq!((budget.work(), budget.storage()), (0, MODULE_FLOOR));
+        assert_eq!(
+            (budget.work(), budget.storage()),
+            (32 + 2 + 1 + 4, MODULE_FLOOR)
+        );
     }
 }
 

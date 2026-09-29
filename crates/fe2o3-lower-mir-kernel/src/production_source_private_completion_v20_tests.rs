@@ -16,6 +16,9 @@ mod source_writes_v22;
 #[path = "production_source_private_spill_v25_tests.rs"]
 mod source_spills_v25;
 
+#[path = "production_source_private_raw_dereference_v26_tests.rs"]
+mod source_raw_dereference_v26;
+
 fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSsaOwnerV1 {
     let base = module_fixture_owner(ModuleFixture::Ordinary);
     let semantic = base.source_semantic();

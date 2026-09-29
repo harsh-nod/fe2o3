@@ -1,3 +1,8 @@
+mod reference_call_replay_v26 {
+    use super::*;
+    include!("production_source_reference_call_replay_v26_tests.rs");
+}
+
 #[test]
 fn original_global_expression_namespace_keeps_private_reads_and_legacy_values_separate() {
     let completed = std::cell::Cell::new(false);

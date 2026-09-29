@@ -1,5 +1,6 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceSliceArgumentCompletionV25 {
+    parameter: SliceDefinition,
     ty: SemanticTypeIdV1,
     identity: fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdentityV1,
     scalar: ScalarType,
@@ -17,8 +18,9 @@ impl SourceSliceArgumentCompletionV25 {
         projection: Option<fe2o3_kernel_ir::Axis>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<()> {
-        budget.charge_work(20)?;
+        budget.charge_work(21)?;
         if self.ty != entry.abi.ty()
+            || self.parameter != entry.optimized_parameter()
             || self.identity != entry.abi.identity()
             || self.scalar != entry.abi.scalar()
             || self.exclusive != entry.abi.is_exclusive_contract()
@@ -120,6 +122,7 @@ fn slice_completion_add_v25(
             "slice runtime argument ordinal differs",
         ))?;
     let row = slot.get_or_insert(SourceSliceArgumentCompletionV25 {
+        parameter: entry.optimized_parameter(),
         ty: entry.abi.ty(),
         identity: entry.abi.identity(),
         scalar: entry.abi.scalar(),
@@ -131,6 +134,8 @@ fn slice_completion_add_v25(
     });
     row.add(entry, projection, budget)
 }
+
+include!("production_optimized_source_global_completion_v26.rs");
 
 impl PendingSharedEntryRegionsV18<'_, '_> {
     fn with_complete_slice_domains_v25<'work, F>(
@@ -314,12 +319,6 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
             if read_effects != (observed[0], observed[1], 0)
                 || store_effects != (observed[1], observed[0], 0)
             {
-                #[cfg(test)]
-                eprintln!(
-                    "slice census function={:?} source={observed:?} reads={read_effects:?} stores={store_effects:?} operations={:?}",
-                    function.coordinate,
-                    function.function.body.as_ref().map(|body| &body.blocks)
-                );
                 return original
                     .source
                     .missing("slice global effect census is incomplete");

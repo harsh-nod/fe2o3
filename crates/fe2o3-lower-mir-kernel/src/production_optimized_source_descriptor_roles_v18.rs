@@ -365,22 +365,38 @@ impl ProductionSourceCorrespondenceV18<'_> {
         optimized.check_exact_original_v18(self, budget)?;
         optimized_source_endpoints_v18(self, optimized, budget)?;
         let outer_floor = budget.storage();
+        let mut consume = Some(consume);
         // Retain failures of the attempt envelope as well as its constructor.
-        let outer_retained = self.retain_query(scoped_source_attempt_v29(
+        let prepared = self.retain_query(scoped_source_attempt_v29(
             self.source.cleanup,
             budget,
             outer_floor,
             |budget| {
-                self.source.retain_construction(|| {
-                    let headers = descriptor_role_outer_headers_v18::<T, E>(
-                        std::mem::size_of_val(&consume),
-                        std::mem::align_of_val(&consume),
-                    )?;
-                    budget.reserve_storage(headers)?;
-                    Ok(headers)
-                })
+                self.source
+                    .retain_construction(|| {
+                        let headers = argument_sum_v1(&[
+                            descriptor_role_outer_headers_v18::<T, E>(
+                                std::mem::size_of_val(&consume),
+                                std::mem::align_of_val(&consume),
+                            )?,
+                            source_owned_finish_preflight_v26::<T, E>(budget)?,
+                        ])?;
+                        budget.reserve_storage(headers)?;
+                        Ok(headers)
+                    })
+                    .inspect_err(|_| {
+                        source_reference_discard_v29(consume.take());
+                    })
             },
-        ))?;
+        ));
+        let outer_retained = match prepared {
+            Ok(retained) => retained,
+            Err(error) => {
+                source_reference_discard_v29(consume);
+                return Err(error.into());
+            }
+        };
+        let consume = consume.expect("descriptor role preparation retained its callback");
         let outer_scope = DescriptorRoleScopeV18::new(budget);
         let outer_caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let consume_leaves =
@@ -396,7 +412,11 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         |budget| {
                             let floor = budget.storage();
                             self.source.retain_construction(|| {
-                                budget.reserve_storage(descriptor_role_headers_v18::<T, E>()?)?;
+                                let headers = argument_sum_v1(&[
+                                    descriptor_role_headers_v18::<T, E>()?,
+                                    source_owned_finish_preflight_v26::<T, E>(budget)?,
+                                ])?;
+                                budget.reserve_storage(headers)?;
                                 let rows = build_descriptor_source_roles_v18(
                                     self, optimized, root, leaves, index, budget,
                                 )?;

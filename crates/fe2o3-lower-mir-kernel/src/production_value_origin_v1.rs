@@ -245,28 +245,48 @@ where
     };
     relation.query(budget)?;
     let floor = budget.storage();
-    let (origins, storage) =
+    let mut consume = Some(consume);
+    let prepared =
         super::scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
-            let floor = budget.storage();
-            let headers = super::argument_sum_v1(&[
-                std::mem::size_of::<WholeValueOriginsV18<'_>>(),
-                std::mem::size_of::<std::thread::Result<std::result::Result<R, E>>>(),
-            ])?;
-            budget.reserve_storage(headers)?;
-            let origins = relation.retain_query(
-                prepare_inner(inventory, expected_owner, function, budget).map_err(query_error),
-            )?;
-            let retained =
-                super::argument_product_v1(origins.origins.len(), std::mem::size_of::<Origin>())?;
-            let storage = super::argument_sum_v1(&[headers, retained])?;
-            let scratch = budget
-                .storage()
-                .checked_sub(floor)
-                .and_then(|live| live.checked_sub(storage))
-                .ok_or(Resource::Accounting)?;
-            budget.release_storage(scratch)?;
-            Ok::<_, ViewError>((origins, storage))
-        })?;
+            (|| {
+                let floor = budget.storage();
+                let headers = super::argument_sum_v1(&[
+                    super::source_owned_finish_preflight_v26::<R, E>(budget)?,
+                    std::mem::size_of_val(&consume),
+                    std::mem::align_of_val(&consume),
+                    std::mem::size_of::<WholeValueOriginsV18<'_>>(),
+                    std::mem::size_of::<std::thread::Result<std::result::Result<R, E>>>(),
+                ])?;
+                budget.reserve_storage(headers)?;
+                let origins = relation.retain_query(
+                    prepare_inner(inventory, expected_owner, function, budget).map_err(query_error),
+                )?;
+                let retained =
+                    super::argument_product_v1(origins.origins.len(), std::mem::size_of::<Origin>())?;
+                let storage = super::argument_sum_v1(&[headers, retained])?;
+                let scratch = budget
+                    .storage()
+                    .checked_sub(floor)
+                    .and_then(|live| live.checked_sub(storage))
+                    .ok_or(Resource::Accounting)?;
+                budget.release_storage(scratch)?;
+                Ok::<_, ViewError>((origins, storage))
+            })()
+            .inspect_err(|_| {
+                super::source_reference_discard_v29(consume.take());
+            })
+        });
+    let (origins, storage) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            super::source_reference_discard_v29(consume.take());
+            return Err(error.into());
+        }
+    };
+    let Some(consume) = consume.take() else {
+        relation.source.cleanup.deny_refund();
+        return Err(ViewError::Resource(Resource::Accounting).into());
+    };
     let slot = std::ptr::from_ref(budget) as usize;
     let ledger = budget.work_ledger_identity_v1();
     let live_floor = budget.storage();

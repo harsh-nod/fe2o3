@@ -340,6 +340,7 @@ fn invocation_input_map_has_independent_exact_and_one_short_scratch_limits() {
             tuple_field: None,
             first_parameter: 0,
             parameter_count: 0,
+            reference_call_transport: None,
         },
         InvocationInputRowV1 {
             local: 2,
@@ -348,6 +349,7 @@ fn invocation_input_map_has_independent_exact_and_one_short_scratch_limits() {
             tuple_field: None,
             first_parameter: 0,
             parameter_count: 1,
+            reference_call_transport: None,
         },
     ];
     // One allocation visit (3), initialization plus final local scan (2*4),

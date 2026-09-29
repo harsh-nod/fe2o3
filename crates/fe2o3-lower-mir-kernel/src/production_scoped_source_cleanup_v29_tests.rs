@@ -407,7 +407,7 @@ fn source_cleanup_header_is_charged_once_and_obeys_independent_exact_limits() {
         (complete, 5, 3, None),
         (complete, 4, 3, None),
     ] {
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_allowance);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_allowance + 32 + 2 + 1 + 4);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_FLOOR + allowance);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let state = State {
@@ -437,7 +437,14 @@ fn source_cleanup_header_is_charged_once_and_obeys_independent_exact_limits() {
                     && error.limit() == MODULE_FLOOR + allowance
             ));
             assert_eq!(budget.failed_storage(), Some(MODULE_FLOOR + denied));
-            assert_eq!(budget.work(), 0);
+            assert_eq!(
+                budget.work(),
+                if allowance < header {
+                    0
+                } else {
+                    32 + 2 + 1 + 4
+                }
+            );
         } else if work_allowance < 5 {
             assert!(matches!(
                 result,
@@ -450,7 +457,7 @@ fn source_cleanup_header_is_charged_once_and_obeys_independent_exact_limits() {
         } else {
             result.unwrap();
             assert_eq!(budget.peak_storage(), MODULE_FLOOR + complete);
-            assert_eq!(budget.work(), 5);
+            assert_eq!(budget.work(), 5 + 32 + 2 + 1 + 4);
         }
     }
 }
@@ -474,6 +481,7 @@ fn cleanup_callback_header_oracle_v1766<T, E, F>() -> usize {
         + size_of::<Result<usize, ArgumentResourceV1>>()
         + size_of::<Box<dyn std::any::Any + Send>>()
         + 2 * size_of::<usize>()
+        + source_owned_finish_header_oracle_v26::<T, E>()
 }
 
 fn cleanup_attempt_header_oracle_v1766<T, E, F>() -> usize {
@@ -504,6 +512,39 @@ fn cleanup_attempt_header_oracle_v1766<T, E, F>() -> usize {
         + size_of::<bool>()
         + size_of::<Result<usize, ArgumentResourceV1>>()
         + size_of::<Result<(), ArgumentResourceV1>>()
+}
+
+#[test]
+fn source_cleanup_new_settlement_preflight_preserves_refusal_through_uncalled_capture_drop() {
+    struct Capture<'a>(&'a std::cell::Cell<bool>);
+    impl Capture<'_> {
+        fn invoked(&self) {
+            panic!("preflight refusal invoked its callback");
+        }
+    }
+    impl Drop for Capture<'_> {
+        fn drop(&mut self) {
+            self.0.set(true);
+            panic!("uncalled cleanup callback destructor");
+        }
+    }
+    let dropped = std::cell::Cell::new(false);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(32 + 2 + 1 + 4 - 1);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let boundary =
+        ScopedSourceCleanupBoundaryV29::new::<(), ArgumentResourceV1>(MODULE_FLOOR, &mut budget)
+            .unwrap();
+    let capture = Capture(&dropped);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        boundary.run(&mut budget, move |_, _| {
+            capture.invoked();
+            Ok::<_, ArgumentResourceV1>(())
+        })
+    }));
+    assert!(dropped.get());
+    assert!(matches!(caught, Ok(Err(ArgumentResourceV1::Work(_)))));
+    assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
 #[test]

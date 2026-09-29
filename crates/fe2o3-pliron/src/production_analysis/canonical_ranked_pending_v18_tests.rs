@@ -9,6 +9,50 @@ use fe2o3_kernel_ir::{
 
 const AMPLE: usize = 1 << 40;
 
+#[test]
+fn pending_source_descendant_refusal_suppresses_refunds_before_native_child_exists() {
+    for prior_mutation in [false, true] {
+        with_checked(&lifecycle(false), |checked, budget| {
+            let floor = budget.storage();
+            let lost = Cell::new(0usize);
+            let result = with_pending_canonical_ranked_source_roles_v18(
+                checked,
+                LAYOUTS,
+                budget,
+                |pending, budget| {
+                    let parent = budget.storage();
+                    budget.reserve_storage(16)?;
+                    budget.release_storage(1)?;
+                    assert!(budget.storage() > parent);
+                    lost.set(budget.storage());
+                    if prior_mutation {
+                        assert!(matches!(pending.guard.mutation(), Failure::Mutation));
+                    }
+                    let refusal = pending.refuse_retained_custody();
+                    if prior_mutation {
+                        assert!(matches!(refusal, Failure::Mutation));
+                    } else {
+                        assert!(matches!(refusal, Failure::Resource(Resource::Accounting)));
+                    }
+                    assert!(pending.owner(budget).is_err());
+                    Ok(())
+                },
+            );
+            if prior_mutation {
+                assert!(matches!(result, Err(Failure::Mutation)));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(Failure::Resource(Resource::Accounting))
+                ));
+            }
+            assert_eq!(budget.storage(), lost.get());
+            // Test-owned denied credits are drained only after every view dies.
+            budget.release_storage(budget.storage() - floor).unwrap();
+        });
+    }
+}
+
 fn lifecycle(load: bool) -> Module {
     let mut module = Module::new("pending-lifecycle");
     let mut block = BasicBlock::new(BlockId(0));

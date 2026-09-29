@@ -1,5 +1,9 @@
 use super::*;
 
+mod reference_transport_v26 {
+    include!("production_source_reference_call_transport_v26_tests.rs");
+}
+
 fn projections() -> [HelperCallArgumentV1; 2] {
     [0, 1].map(|component| HelperCallArgumentV1 {
         source_argument: 0,

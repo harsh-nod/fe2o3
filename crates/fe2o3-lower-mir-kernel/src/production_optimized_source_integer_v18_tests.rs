@@ -177,6 +177,7 @@ fn integer_entry_header_oracle_v18<F>(_: &F) -> usize {
         + size_of::<std::panic::AssertUnwindSafe<Result<Output, Error>>>()
         + size_of::<Error>()
         + source_reference_cleanup_headers_v29().unwrap()
+        + source_owned_finish_header_oracle_v26::<Output, SourceConsumerErrorV18<Error>>()
 }
 
 #[test]
@@ -425,6 +426,16 @@ fn source_integer_continuation_header_refusal_is_sticky_after_padding_release() 
                 &consume
             )
             .unwrap()
+                + source_owned_finish_header_oracle_v26::<
+                    (
+                        fe2o3_pliron::CheckedNeutralKernelIrOwnerIntegerContinuationV18,
+                        (),
+                        fe2o3_pliron::KirNeutralOwnedOriginStorageV1
+                    ),
+                    SourceConsumerErrorV18<
+                        ProductionSourceOptimizationErrorV18<ProductionSourceOwnedViewErrorV18>,
+                    >,
+                >()
         );
         let padding = MODULE_LIMIT - budget.storage() - headers + 1;
         budget.reserve_storage(padding).unwrap();

@@ -379,7 +379,8 @@ pub(super) fn test_pending_global_native_frame_retry_v18(
                         entered.set(true);
                         Ok(())
                     };
-                    let required = global_native_headers_v18(std::mem::size_of_val(&callback)).unwrap();
+                    let required = global_native_headers_v18(std::mem::size_of_val(&callback)).unwrap()
+                        + source_owned_finish_header_oracle_v26::<(), PendingGlobalNativeErrorV18>();
                     let padding = budget.storage_limit() - budget.storage() - required + 1;
                     budget.reserve_storage(padding).unwrap();
                     let first = source.with_native_access_v18(native, operation, budget, callback);

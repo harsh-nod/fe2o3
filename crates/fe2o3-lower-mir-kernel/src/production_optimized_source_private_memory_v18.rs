@@ -264,13 +264,16 @@ where
 {
     optimized_source_endpoints_v18(original, optimized, budget)?;
     let floor = budget.storage();
+    let mut consume = Some(consume);
     let capture = std::mem::size_of_val(&consume);
     let alignment = std::mem::align_of_val(&consume);
-    let (physical, allocations, retained) =
-        scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
-            let floor = budget.storage();
-            original.retain_query((|| {
+    let prepared = scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
+        let floor = budget.storage();
+        original
+            .retain_query((|| {
+                let disposal = source_owned_finish_preflight_v26::<T, E>(budget)?;
                 budget.reserve_storage(argument_sum_v1(&[
+                    disposal,
                     capture,
                     alignment,
                     size_of::<CheckedSourcePrivatePhysicalV18<'_>>(),
@@ -343,7 +346,18 @@ where
                     .ok_or(ArgumentResourceV1::Accounting)?;
                 Ok((physical, allocations, retained))
             })())
-        })?;
+            .inspect_err(|_| {
+                source_reference_discard_v29(consume.take());
+            })
+    });
+    let (physical, allocations, retained) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            source_reference_discard_v29(consume);
+            return Err(error.into());
+        }
+    };
+    let consume = consume.expect("private preparation retained its callback");
     let view = CheckedSourcePrivatePhysicalV18 {
         original,
         optimized,
@@ -718,6 +732,135 @@ fn source_private_safe_allocation_v18(
     Ok(())
 }
 
+fn source_private_raw_allocation_v26(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    currentness: &CheckedOptimizedSourceMemoryV18<'_>,
+    allocation: &SourcePrivateAllocationV18<'_>,
+    object: &OptimizedSourceObjectV18<'_>,
+    access: &PendingSourceMemoryAccessV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<()> {
+    // Fixed role/place/type/schema comparisons and the bounded original-place
+    // selector are prepaid separately from the formation-alternative walk.
+    budget.charge_work(128)?;
+    let (endpoint, writing) = match object.original.source.role {
+        ScopedObjectRoleV29::ReadValue { source, .. } => (source, false),
+        ScopedObjectRoleV29::WriteValue { destination, .. } => (destination, true),
+        _ => {
+            return original
+                .source
+                .missing("source private raw access changed its role");
+        }
+    };
+    let ScopedAllocationIdentityV29::OriginalObject {
+        local,
+        generation: 0,
+    } = allocation.original.origin.identity
+    else {
+        return original
+            .source
+            .missing("source private raw allocation is not an original invocation object");
+    };
+    let ScopedSlotRepresentationV29::Object { schema, .. } = allocation.original.representation
+    else {
+        return original
+            .source
+            .missing("source private raw allocation schema absent");
+    };
+    let ScopedObjectIdentityV29::Reference {
+        instance,
+        site,
+        role,
+        dereference_prefix,
+    } = endpoint.object
+    else {
+        return original
+            .source
+            .missing("source private indirect access has no original reference endpoint");
+    };
+    let semantic = original.source.source_semantic(budget)?;
+    let (function, _) =
+        original
+            .source
+            .instance(allocation.root, access.instance.index(), budget)?;
+    let function = semantic.functions().get(function.index() as usize).ok_or(
+        ProductionSourceOwnedViewErrorV18::Binding("source private raw access original function"),
+    )?;
+    let place = scoped_object_original_place_v29(function, site, role).ok_or(
+        ProductionSourceOwnedViewErrorV18::Binding("source private raw access original place"),
+    )?;
+    let pointer = function
+        .locals()
+        .get(place.local().index() as usize)
+        .and_then(|local| semantic.types().get(local.ty().index() as usize))
+        .map(SemanticTypeDeclV1::shape);
+    if access.instance.index() != object.original.instance
+        || access.anchor != object.original.row
+        || instance != access.instance
+        || object.original.anchor.source != Some(ScopedMemoryFrameV29::operand(site, Some(role)))
+        || dereference_prefix != 1
+        || !matches!(place.projections(), [projection]
+            if projection.kind() == SemanticProjectionKindV1::Dereference
+                && projection.result_type() == place.ty())
+        || !matches!(pointer, Some(SemanticTypeShapeV1::Pointer(pointer))
+            if pointer.kind() == SemanticPointerKindV1::Raw
+                && pointer.metadata() == SemanticPointerMetadataV1::None
+                && pointer.pointee() == place.ty()
+                && (!writing || pointer.mutability() == SemanticMutabilityV1::Mutable))
+        || endpoint.source
+            != (ScopedObjectSourceV29::Place {
+                site,
+                role,
+                local: place.local(),
+                prefix: 1,
+            })
+        || endpoint.root_type != allocation.original.origin.semantic_type
+        || endpoint.projected_type != endpoint.root_type
+        || place.ty() != endpoint.root_type
+        || endpoint.root_schema != schema
+        || endpoint.projected_schema != schema
+        || endpoint.path.count != 0
+        || endpoint.source_path.count != 1
+        || access.safe_object.is_some()
+    {
+        return original.source.missing(
+            "source private raw access differs from its original whole-object dereference",
+        );
+    }
+    let alternatives = currentness
+        .original
+        .pending
+        .alternatives
+        .get(access.alternatives.clone())
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "source private raw activation range",
+        ))?;
+    budget.charge_work(1)?;
+    if alternatives.is_empty() {
+        return original
+            .source
+            .missing("source private raw activation is absent");
+    }
+    // These alternatives were issued by exact original raw-origin replay, not
+    // inferred from equal physical addresses. The caller independently checks
+    // the complete original/output currentness equations for this occurrence.
+    for alternative in alternatives {
+        budget.charge_work(6)?;
+        if alternative.instance != allocation.original.instance
+            || alternative.local.index() != local
+            || alternative.slot != allocation.slot
+            || alternative.activation != SourceMemoryActivationV29::Invocation
+            || alternative.formation.is_none()
+        {
+            return original.source.missing(
+                "source private raw access differs from its original referent and formation",
+            );
+        }
+    }
+    budget.charge_work(1)?;
+    Ok(())
+}
+
 fn source_private_entry_destination_v18(
     allocation: &SourcePrivateAllocationV18<'_>,
     object: &OptimizedSourceObjectV18<'_>,
@@ -910,12 +1053,20 @@ fn source_private_access_row_v18(
         after,
         budget,
     )?;
-    budget.charge_work(7)?;
+    budget.charge_work(12)?;
     if !core.physical.operation(ordinal)
         || allocation.root != root
         || allocation.slot != access.physical.slot
         || address.length() != 1
         || address.offset() != 0
+        || output
+            .operations()
+            .get(address.allocation())
+            .is_none_or(|operation| {
+                operation.coordinate != allocation.output
+                    || !matches!(operation.operation.results.as_slice(), [result]
+                    if result.id == allocation.pointer)
+            })
     {
         return original
             .source
@@ -923,9 +1074,33 @@ fn source_private_access_row_v18(
     }
     if let Some(safe) = access.safe_object {
         // `after` was independently resolved through the physical definition
-        // table above. Only this authenticated safe origin permits a distinct
+        // table above. This authenticated safe origin permits a distinct
         // pointer/access instance; equal allocation numbers alone do not.
         source_private_safe_allocation_v18(currentness, allocation, object, access, safe, budget)?;
+    } else if matches!(
+        object.original.source.role,
+        ScopedObjectRoleV29::ReadValue {
+            source: ScopedObjectEndpointV29 {
+                object: ScopedObjectIdentityV29::Reference { .. },
+                ..
+            },
+            ..
+        } | ScopedObjectRoleV29::WriteValue {
+            destination: ScopedObjectEndpointV29 {
+                object: ScopedObjectIdentityV29::Reference { .. },
+                ..
+            },
+            ..
+        }
+    ) {
+        source_private_raw_allocation_v26(
+            original,
+            currentness,
+            allocation,
+            object,
+            access,
+            budget,
+        )?;
     } else if allocation.original.instance.index() != object.original.instance
         || allocation.pointer != after
     {
@@ -1240,6 +1415,31 @@ fn source_private_root_headers_v18() -> Result<usize, ArgumentResourceV1> {
         source_private_header_v18::<&PendingSourceMemoryAccessV29>()?,
         source_private_header_v18::<&PendingSourceMemoryAccessV29>()?,
         source_private_header_v18::<SourceSafeObjectOriginV29>()?,
+        source_private_header_v18::<(
+            &ProductionSourceCorrespondenceV18<'_>,
+            &CheckedOptimizedSourceMemoryV18<'_>,
+            &SourcePrivateAllocationV18<'_>,
+            &OptimizedSourceObjectV18<'_>,
+            &PendingSourceMemoryAccessV29,
+            &mut ArgumentBudgetV1<'_>,
+        )>()?,
+        source_private_header_v18::<(ScopedObjectEndpointV29, bool)>()?,
+        source_private_header_v18::<&AdmittedInertSemanticMirV1>()?,
+        source_private_header_v18::<SemanticFunctionIdV1>()?,
+        source_private_header_v18::<(SemanticFunctionIdV1, Option<(usize, SemanticBlockIdV1)>)>()?,
+        source_private_header_v18::<&SemanticFunctionDeclV1>()?,
+        source_private_header_v18::<Option<&SemanticFunctionDeclV1>>()?,
+        source_private_header_v18::<&SemanticPlaceV1>()?,
+        source_private_header_v18::<Option<&SemanticPlaceV1>>()?,
+        source_private_header_v18::<Option<&SemanticTypeShapeV1>>()?,
+        source_private_header_v18::<Option<&SemanticTypeDeclV1>>()?,
+        source_private_header_v18::<Option<&fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>>(
+        )?,
+        source_private_header_v18::<&fe2o3_mir_model::semantic_mir_v1::SemanticPointerTypeV1>()?,
+        source_private_header_v18::<&SemanticProjectionV1>()?,
+        source_private_header_v18::<ScopedMemoryFrameV29>()?,
+        source_private_header_v18::<SemanticLocalIdV1>()?,
+        source_private_header_v18::<std::slice::Iter<'_, PendingSourceMemoryAlternativeV29>>()?,
         source_private_header_v18::<Option<SourceSafeObjectOriginV29>>()?,
         source_private_header_v18::<SourceReferenceAccessV29>()?,
         source_private_header_v18::<SourceMemoryActivationV29>()?,
@@ -1410,6 +1610,23 @@ impl CheckedSourcePrivateMemoryV18<'_> {
         other_allocation: bool,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<()> {
+        self.test_reference_pointer_substitution_v26(true, other_allocation, budget)
+    }
+
+    pub(super) fn test_raw_pointer_substitution_v26(
+        &self,
+        other_allocation: bool,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
+        self.test_reference_pointer_substitution_v26(false, other_allocation, budget)
+    }
+
+    fn test_reference_pointer_substitution_v26(
+        &self,
+        safe: bool,
+        other_allocation: bool,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
         self.check(budget)?;
         // These are actual-view query substitutions, not fabricated canonical
         // owners. The full unchanged composition must precede each refusal.
@@ -1422,16 +1639,28 @@ impl CheckedSourcePrivateMemoryV18<'_> {
                 std::slice::Iter<'_, Option<SourcePrivateAllocationV18<'_>>>,
             >()?,
             source_private_header_v18::<Option<&Option<SourcePrivateAllocationV18<'_>>>>()?,
-            source_private_header_v18::<(bool, &Self, &mut ArgumentBudgetV1<'_>)>()?,
+            source_private_header_v18::<(bool, bool, &Self, &mut ArgumentBudgetV1<'_>)>()?,
+            source_private_header_v18::<&[PendingSourceMemoryAlternativeV29]>()?,
+            source_private_header_v18::<std::slice::Iter<'_, PendingSourceMemoryAlternativeV29>>()?,
         ])?)?;
         for row in self.currentness.accesses {
             budget.charge_work(5)?;
             let original = &self.currentness.original.pending.accesses[row.original];
-            let Some(safe) = original.safe_object else {
+            if original.safe_object.is_some() != safe {
                 continue;
-            };
-            if safe.key.access != SourceReferenceAccessV29::Read {
-                continue;
+            }
+            if let Some(safe) = original.safe_object {
+                if safe.key.access != SourceReferenceAccessV29::Read {
+                    continue;
+                }
+            } else {
+                let alternatives =
+                    &self.currentness.original.pending.alternatives[original.alternatives.clone()];
+                budget.charge_work(argument_sum_v1(&[alternatives.len(), 1])?)?;
+                if alternatives.is_empty() || alternatives.iter().any(|row| row.formation.is_none())
+                {
+                    continue;
+                }
             }
             let Some((output, access, pointer)) = row.output else {
                 panic!("retained safe read");
@@ -1477,7 +1706,7 @@ impl CheckedSourcePrivateMemoryV18<'_> {
                 )
                 .map(|_| ());
         }
-        panic!("safe reference read required before hostile query")
+        panic!("original reference read required before hostile query")
     }
 
     pub(super) fn test_safe_counts_v18(
@@ -1599,68 +1828,86 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
         currentness.check_scope_v18(self.original, self.optimized, root, budget)?;
         entries.check_for(self.original, self.optimized, root, budget)?;
         let floor = budget.storage();
+        let mut consume = Some(consume);
         let capture = std::mem::size_of_val(&consume);
         let alignment = std::mem::align_of_val(&consume);
+        let mut extend = Some(extend);
         let extend_bytes = std::mem::size_of_val(&extend);
         let extend_alignment = if extend_bytes == 0 {
             0
         } else {
             std::mem::align_of_val(&extend)
         };
-        let (first, rows, retained) =
+        let prepared =
             scoped_source_attempt_v29(self.original.source.cleanup, budget, floor, |budget| {
                 let floor = budget.storage();
-                self.original.retain_query((|| {
-                    budget.reserve_storage(argument_sum_v1(&[
-                        capture,
-                        alignment,
-                        extend_bytes,
-                        extend_alignment,
-                        size_of::<CheckedSourcePrivateMemoryV18<'_>>(),
-                        source_private_root_headers_v18()?,
-                        source_private_operation_headers_v18()?,
-                        source_private_root_capture_headers_v18()?,
-                        source_private_header_v18::<(
-                            usize,
-                            Vec<Option<SourcePrivateOperationV18>>,
-                            usize,
-                        )>()?,
-                        size_of::<
-                            std::thread::Result<
-                                SourceOwnedResultV18<(
-                                    usize,
-                                    Vec<Option<SourcePrivateOperationV18>>,
-                                    usize,
-                                )>,
-                            >,
-                        >(),
-                        size_of::<Result<T, E>>(),
-                        size_of::<std::thread::Result<Result<T, E>>>(),
-                        source_private_header_v18::<Option<SourceOwnedQueryFailureV18>>()?,
-                        source_private_header_v18::<usize>()?,
-                        source_private_header_v18::<()>()?,
-                        source_private_header_v18::<()>()?,
-                        physical_discard_headers_v29::<T, E>()?,
-                        source_reference_cleanup_headers_v29()?,
-                    ])?)?;
-                    #[cfg(test)]
-                    budget.reserve_storage(source_private_header_v18::<[usize; 3]>()?)?;
-                    budget.charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)?;
-                    let (first, rows) = source_private_root_rows_with_v25(
-                        self,
-                        currentness,
-                        entries,
-                        root,
-                        budget,
-                        extend,
-                    )?;
-                    let retained = budget
-                        .storage()
-                        .checked_sub(floor)
-                        .ok_or(ArgumentResourceV1::Accounting)?;
-                    Ok((first, rows, retained))
-                })())
-            })?;
+                self.original
+                    .retain_query((|| {
+                        let disposal = source_owned_finish_preflight_v26::<T, E>(budget)?;
+                        budget.reserve_storage(argument_sum_v1(&[
+                            disposal,
+                            capture,
+                            alignment,
+                            extend_bytes,
+                            extend_alignment,
+                            size_of::<CheckedSourcePrivateMemoryV18<'_>>(),
+                            source_private_root_headers_v18()?,
+                            source_private_operation_headers_v18()?,
+                            source_private_root_capture_headers_v18()?,
+                            source_private_header_v18::<(
+                                usize,
+                                Vec<Option<SourcePrivateOperationV18>>,
+                                usize,
+                            )>()?,
+                            size_of::<
+                                std::thread::Result<
+                                    SourceOwnedResultV18<(
+                                        usize,
+                                        Vec<Option<SourcePrivateOperationV18>>,
+                                        usize,
+                                    )>,
+                                >,
+                            >(),
+                            size_of::<Result<T, E>>(),
+                            size_of::<std::thread::Result<Result<T, E>>>(),
+                            source_private_header_v18::<Option<SourceOwnedQueryFailureV18>>()?,
+                            source_private_header_v18::<usize>()?,
+                            source_private_header_v18::<()>()?,
+                            source_private_header_v18::<()>()?,
+                            physical_discard_headers_v29::<T, E>()?,
+                            source_reference_cleanup_headers_v29()?,
+                        ])?)?;
+                        #[cfg(test)]
+                        budget.reserve_storage(source_private_header_v18::<[usize; 3]>()?)?;
+                        budget.charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)?;
+                        let (first, rows) = source_private_root_rows_with_v25(
+                            self,
+                            currentness,
+                            entries,
+                            root,
+                            budget,
+                            extend.take().ok_or(ArgumentResourceV1::Accounting)?,
+                        )?;
+                        let retained = budget
+                            .storage()
+                            .checked_sub(floor)
+                            .ok_or(ArgumentResourceV1::Accounting)?;
+                        Ok((first, rows, retained))
+                    })())
+                    .inspect_err(|_| {
+                        source_reference_discard_v29(extend.take());
+                        source_reference_discard_v29(consume.take());
+                    })
+            });
+        let (first, rows, retained) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                source_reference_discard_v29(extend);
+                source_reference_discard_v29(consume);
+                return Err(error.into());
+            }
+        };
+        let consume = consume.expect("private root preparation retained its callback");
         let view = CheckedSourcePrivateMemoryV18 {
             physical: self,
             currentness,

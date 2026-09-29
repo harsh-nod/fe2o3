@@ -657,29 +657,45 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
         self.check(budget)?;
         let source = self.optimized.original.source;
         let floor = budget.storage();
-        let rows = source.retain_query(scoped_source_attempt_v29(
+        let mut consume = Some(consume);
+        let prepared = source.retain_query(scoped_source_attempt_v29(
             source.cleanup,
             budget,
             floor,
             |budget| {
-                source.retain_construction(|| {
-                    budget.reserve_storage(argument_sum_v1(&[
-                        size_of::<Vec<OutputRecipe>>(),
-                        size_of::<ProductionLifecycleCheckedNativePoliciesV18<'_, '_>>(),
-                        2 * size_of::<SourceOwnedResultV18<Vec<OutputRecipe>>>(),
-                        size_of::<std::thread::Result<NativeResult>>(),
-                        2 * size_of::<NativeResult>(),
-                        std::mem::size_of_val(&consume),
-                        2 * std::mem::align_of_val(&consume),
-                    ])?)?;
-                    self.output_recipes(budget)
-                })
+                source
+                    .retain_construction(|| {
+                        let disposal =
+                            source_owned_finish_preflight_v26::<(), NativeError>(budget)?;
+                        budget.reserve_storage(argument_sum_v1(&[
+                            disposal,
+                            size_of::<Vec<OutputRecipe>>(),
+                            size_of::<ProductionLifecycleCheckedNativePoliciesV18<'_, '_>>(),
+                            2 * size_of::<SourceOwnedResultV18<Vec<OutputRecipe>>>(),
+                            size_of::<std::thread::Result<NativeResult>>(),
+                            2 * size_of::<NativeResult>(),
+                            std::mem::size_of_val(&consume),
+                            2 * std::mem::align_of_val(&consume),
+                        ])?)?;
+                        self.output_recipes(budget)
+                    })
+                    .inspect_err(|_| {
+                        source_reference_discard_v29(consume.take());
+                    })
             },
-        ))?;
+        ));
+        let rows = match prepared {
+            Ok(rows) => rows,
+            Err(error) => {
+                source_reference_discard_v29(consume);
+                return Err(error.into());
+            }
+        };
         let storage = budget
             .storage()
             .checked_sub(floor)
             .ok_or_else(|| self.pending_error(ArgumentResourceV1::Accounting.into()))?;
+        let consume = consume.expect("native lifecycle preparation retained its callback");
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let owner = pending
                 .owner(budget)

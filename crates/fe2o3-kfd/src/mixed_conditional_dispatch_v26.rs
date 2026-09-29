@@ -309,6 +309,12 @@ impl MixedConditionalDispatchPremisesV26 {
     pub fn unused_slices(&self) -> &[MixedConditionalUnusedSliceV26] {
         &self.unused_slices
     }
+    pub fn slices(&self) -> &[Slice] {
+        &self.slices
+    }
+    pub fn accesses(&self) -> &[MixedConditionalAccessV26] {
+        &self.accesses
+    }
 
     pub(crate) fn check_request(
         &self,

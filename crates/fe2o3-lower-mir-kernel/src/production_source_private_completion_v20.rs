@@ -1,3 +1,5 @@
+include!("production_source_mixed_completion_v26.rs");
+
 /// A source expression, actual ranked view, or private native check refused.
 #[derive(Debug)]
 pub enum ProductionPrivateSourceCheckErrorV20 {

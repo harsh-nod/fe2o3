@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_private_shared_capture_v26_tests.rs"]
+mod shared_capture_v26;
+
 fn mixed_owner(neutral: bool) -> ProductionSemanticSsaOwnerV1 {
     let base = private_entry_owner_v20(if neutral {
         PrivateEntryFixtureV20::Neutral
