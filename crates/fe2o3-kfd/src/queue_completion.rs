@@ -30,6 +30,7 @@ include!("queue_completion/bound_cancel_body.rs");
 include!("queue_completion/rollback_adapters_body.rs");
 include!("queue_completion/event_bind_body.rs");
 include!("queue_completion/event_issue_body.rs");
+include!("queue_completion/batch_bind_body.rs");
 
 macro_rules! completion_rust_expr {
     ($body:expr) => {
@@ -1519,95 +1520,19 @@ impl CompletionSignalArenaOwnerV1 {
         &mut self,
         templates: CompletionPacketTemplatesV1<N>,
     ) -> Result<BoundCompletionBatchV1<N>, Gfx942CompletionErrorV1> {
-        self.require_ready()?;
-        validate_packet_count::<N>()?;
-        let next_batch_id = self
-            .next_batch_id
-            .checked_add(1)
-            .ok_or(Gfx942CompletionErrorV1::BatchIdentityExhausted)?;
-        let available: Vec<usize> = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(index, record)| {
-                (record.phase == CompletionSlotPhaseV1::Available).then_some(index)
-            })
-            .take(N)
-            .collect();
-        if available.len() != N {
-            return Err(Gfx942CompletionErrorV1::InsufficientSignals);
-        }
+        completion_bind_batch_body!(completion_rust_expr, self, templates, N)
+    }
 
-        let mut prepared = Vec::<AqlPreparedKernelDispatchV1>::with_capacity(N);
-        for (template, slot_index) in templates.values.iter().zip(&available) {
-            self.validate_dispatch_binding(template.generations)?;
-            let offset = u64::try_from(*slot_index)
-                .ok()
-                .and_then(|index| index.checked_mul(AMD_SIGNAL_BYTES_V1 as u64))
-                .ok_or(Gfx942CompletionErrorV1::InvalidArena(
-                    "completion slot offset",
-                ))?;
-            let raw =
-                self.gpu_base
-                    .checked_add(offset)
-                    .ok_or(Gfx942CompletionErrorV1::InvalidArena(
-                        "completion slot address",
-                    ))?;
-            let signal = ObservedGpuAddressV1::new(raw)
-                .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("completion address"))?;
-            prepared.push(
-                AqlKernelDispatchPacketV1::new_unpublished_with_ordering(
-                    template.geometry,
-                    template.private_segment_size,
-                    template.group_segment_size,
-                    template.kernel_object,
-                    template.kernarg_address,
-                    template.kernarg_alignment,
-                    signal,
-                    template.ordering,
-                )
-                .map_err(Gfx942CompletionErrorV1::PacketBinding)?,
-            );
-        }
-        let packets: Box<[AqlPreparedKernelDispatchV1; N]> = prepared
-            .into_boxed_slice()
-            .try_into()
-            .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("packet array conversion"))?;
-        let packets = AqlPreparedKernelDispatchBatchV2::try_from_boxed_packets(packets)
-            .map_err(Gfx942CompletionErrorV1::BatchConstruction)?;
-        let slots: Box<[CompletionSlotLeaseV1; N]> = available
-            .iter()
-            .map(|index| CompletionSlotLeaseV1 {
-                index: *index as u32,
-                generation: self.slots[*index].generation,
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice()
-            .try_into()
-            .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("slot array conversion"))?;
-        for slot in slots.iter() {
-            self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Bound {
-                batch_id: self.next_batch_id,
-            };
-        }
-        let dispatches: Box<[CompletionDispatchGenerationBindingV1; N]> = templates
-            .values
-            .iter()
-            .map(|template| template.generations)
-            .collect::<Vec<_>>()
-            .into_boxed_slice()
-            .try_into()
-            .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("dispatch array conversion"))?;
-        let retention = CompletionBatchRetentionV1 {
-            batch_id: self.next_batch_id,
-            queue: self.queue,
-            signal_mapping: self.signal_mapping,
-            slots,
-            dispatches,
-            last_packet_id: None,
-        };
-        self.next_batch_id = next_batch_id;
-        Ok(BoundCompletionBatchV1 { packets, retention })
+    fn select_available_slots(&self, count: usize) -> Vec<CompletionSlotLeaseV1> {
+        completion_select_slots_body!(completion_rust_expr, self, count)
+    }
+
+    fn commit_bound_batch<const N: usize>(
+        &mut self,
+        bound: BoundCompletionBatchV1<N>,
+        next_batch_id: u64,
+    ) -> BoundCompletionBatchV1<N> {
+        completion_commit_batch_body!(completion_rust_expr, self, bound, next_batch_id, N)
     }
 
     pub(super) fn validate_bound<const N: usize>(
@@ -2076,16 +2001,7 @@ impl CompletionSignalArenaOwnerV1 {
         &self,
         binding: CompletionDispatchGenerationBindingV1,
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        if binding.queue != self.queue {
-            return Err(Gfx942CompletionErrorV1::WrongQueueGeneration);
-        }
-        if binding.dispatch_generation == 0
-            || binding.code.allocation.vm != self.queue.vm
-            || binding.kernarg.allocation.vm != self.queue.vm
-        {
-            return Err(Gfx942CompletionErrorV1::WrongVmGeneration);
-        }
-        Ok(())
+        completion_dispatch_binding_body!(completion_rust_expr, self, binding)
     }
 
     fn require_unpinned<const N: usize>(

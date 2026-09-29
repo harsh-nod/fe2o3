@@ -6,6 +6,7 @@ mod release_tests {
     include!("batch_event_release_tests.rs");
     include!("event_bind_tests.rs");
     include!("event_issue_tests.rs");
+    include!("batch_bind_tests.rs");
 
     #[derive(Debug, Eq, PartialEq)]
     struct Snapshot {

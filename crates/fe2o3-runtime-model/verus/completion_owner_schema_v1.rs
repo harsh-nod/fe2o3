@@ -34,12 +34,26 @@ struct CompletionSlotRecordV1 {
     generation: u64, phase: CompletionSlotPhaseV1, event_pins: u32, native_reader_pins: u32,
 }
 #[derive(Debug)]
+enum AqlAddressObservationError { Zero, InvalidRequiredAlignment, Misaligned }
+#[derive(Debug)]
+enum AqlDispatchPacketError {
+    KernelObject(AqlAddressObservationError), Kernarg(AqlAddressObservationError),
+    CompletionSignal(AqlAddressObservationError),
+}
+#[derive(Debug)]
+enum AqlPreparedKernelDispatchBatchErrorV1 {
+    ZeroPacketCount, PacketCountExceedsReviewedMaximum { requested: usize, maximum: u32 },
+}
+#[derive(Debug)]
 enum Gfx942CompletionErrorV1 {
     ZeroPacketCount, PacketCountExceedsMaximum { requested: usize, maximum: usize },
     StaleBatchGeneration, SignalPinned { slot: u32, event_pins: u32, native_reader_pins: u32 },
     Poisoned, StaleEventOccurrence, DuplicateDependency, DependencyLedgerAllocation, EventAlreadyBound,
     InvalidSessionOccurrence, InvalidAcceptanceEpoch, EventCapacityExhausted, EventIdentityExhausted,
     SignalPinCountExhausted,
+    BatchIdentityExhausted, InsufficientSignals, WrongQueueGeneration, WrongVmGeneration,
+    InvalidArena(&'static str), PacketBinding(AqlDispatchPacketError),
+    BatchConstruction(AqlPreparedKernelDispatchBatchErrorV1),
 }
 struct CompletionSignalArenaOwnerV1<D> {
     queue: QueueKeyV1, signal_mapping: MemoryMappingKeyV1, gpu_base: u64, next_batch_id: u64,

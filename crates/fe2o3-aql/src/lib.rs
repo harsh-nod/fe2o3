@@ -19,6 +19,14 @@ use core::{
     sync::atomic::{AtomicI64, Ordering},
 };
 
+include!("preparation_body.rs");
+
+macro_rules! aql_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+
 /// Stable name of the reviewed packet/signal contract.
 pub const AQL_DISPATCH_ABI_SCHEMA_ID_V1: &str =
     "rocr-7.2.4-amdhsa-gfx942-aql-dispatch-busy-signal-v1";
@@ -192,27 +200,18 @@ pub struct ObservedGpuAddressV1(u64);
 
 impl ObservedGpuAddressV1 {
     pub const fn new(raw: u64) -> Result<Self, AqlAddressObservationError> {
-        if raw == 0 {
-            return Err(AqlAddressObservationError::Zero);
-        }
-        Ok(Self(raw))
+        aql_address_body!(aql_rust_expr, raw)
     }
 
     pub const fn raw(self) -> u64 {
-        self.0
+        aql_field_body!(aql_rust_expr, self, 0)
     }
 
     pub const fn require_alignment(
         self,
         alignment: u64,
     ) -> Result<Self, AqlAddressObservationError> {
-        if alignment == 0 || alignment > 4096 || !alignment.is_power_of_two() {
-            return Err(AqlAddressObservationError::InvalidRequiredAlignment);
-        }
-        if self.0 & (alignment - 1) != 0 {
-            return Err(AqlAddressObservationError::Misaligned);
-        }
-        Ok(self)
+        aql_alignment_body!(aql_rust_expr, self, alignment)
     }
 }
 
@@ -633,15 +632,15 @@ impl AqlDispatchGeometryV1 {
     }
 
     pub const fn grid(self) -> [u32; 3] {
-        self.grid
+        aql_field_body!(aql_rust_expr, self, grid)
     }
 
     pub const fn workgroup(self) -> [u16; 3] {
-        self.workgroup
+        aql_field_body!(aql_rust_expr, self, workgroup)
     }
 
     pub const fn dimensions(self) -> u16 {
-        self.dimensions
+        aql_field_body!(aql_rust_expr, self, dimensions)
     }
 
     /// Derives the COV6 block-count, group-size, remainder, and rank values.
@@ -817,36 +816,17 @@ impl AqlKernelDispatchPacketV1 {
         completion_signal: ObservedGpuAddressV1,
         ordering: AqlDispatchOrderingV1,
     ) -> Result<AqlPreparedKernelDispatchV1, AqlDispatchPacketError> {
-        let kernel_object = kernel_object
-            .require_alignment(64)
-            .map_err(AqlDispatchPacketError::KernelObject)?;
-        let kernarg_address = kernarg_address
-            .require_alignment(kernarg_alignment)
-            .map_err(AqlDispatchPacketError::Kernarg)?;
-        let completion_signal = completion_signal
-            .require_alignment(AMD_SIGNAL_ALIGNMENT_V1 as u64)
-            .map_err(AqlDispatchPacketError::CompletionSignal)?;
-        let workgroup = geometry.workgroup();
-        let grid = geometry.grid();
-
-        let packet = Self {
-            full_header: (u32::from(geometry.dimensions()) << 16)
-                | u32::from(AQL_INVALID_PACKET_HEADER_V1),
-            workgroup_size_x: workgroup[0],
-            workgroup_size_y: workgroup[1],
-            workgroup_size_z: workgroup[2],
-            reserved0: 0,
-            grid_size_x: grid[0],
-            grid_size_y: grid[1],
-            grid_size_z: grid[2],
+        aql_dispatch_preparation_body!(
+            aql_rust_expr,
+            geometry,
             private_segment_size,
             group_segment_size,
-            kernel_object: kernel_object.raw(),
-            kernarg_address: kernarg_address.raw(),
-            reserved2: 0,
-            completion_signal: completion_signal.raw(),
-        };
-        Ok(AqlPreparedKernelDispatchV1 { packet, ordering })
+            kernel_object,
+            kernarg_address,
+            kernarg_alignment,
+            completion_signal,
+            ordering
+        )
     }
 
     pub const fn is_unpublished(&self) -> bool {
@@ -996,18 +976,7 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
     pub fn try_from_boxed_packets(
         packets: Box<[AqlPreparedKernelDispatchV1; N]>,
     ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
-        if N == 0 {
-            return Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount);
-        }
-        if N > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
-            return Err(
-                AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
-                    requested: N,
-                    maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2,
-                },
-            );
-        }
-        Ok(Self { packets })
+        aql_boxed_batch_body!(aql_rust_expr, packets, N)
     }
 
     pub const fn packet_count(&self) -> u32 {
@@ -1203,6 +1172,24 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_alignment_check_preserves_power_of_two_policy() {
+        for alignment in (0..=8193).chain([u64::MAX, 1_u64 << 63]) {
+            for raw in [1, 63, 64, 4095, 4096, 4097, u64::MAX] {
+                let address = ObservedGpuAddressV1::new(raw).unwrap();
+                let expected = if alignment == 0 || alignment > 4096 || !alignment.is_power_of_two()
+                {
+                    Err(AqlAddressObservationError::InvalidRequiredAlignment)
+                } else if raw % alignment != 0 {
+                    Err(AqlAddressObservationError::Misaligned)
+                } else {
+                    Ok(address)
+                };
+                assert_eq!(address.require_alignment(alignment), expected);
+            }
+        }
+    }
 
     #[test]
     fn cov6_shape_separates_complete_blocks_from_partial_remainders() {
