@@ -226,3 +226,5 @@ The subsequent [envelope/intake evidence](evidence/root-control-envelope-2026092
 records the framing, root-channel owner and complete-table preflight checkpoint.
 The [running-image evidence](evidence/root-issuer-image-20260929.md) records the
 direct-launch image check, lifecycle test coverage and remaining privileged gates.
+The [packet/replay evidence](evidence/root-control-replay-20260929.md) records the
+private packet operations, inert replay window and still-unexecuted socket cases.
