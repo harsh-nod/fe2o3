@@ -279,13 +279,13 @@ impl<'work> RootControlSessionV3<'work> {
     }
 
     fn check_account(&self, b: &Budget<'_>) -> Result<()> {
-        if self.ledger != b.work_ledger_identity_v1()
-            || self.budget_address != b as *const Budget<'_> as usize
-            || self.process != process::getpid()
-            || self.thread != rustix::thread::gettid()
-        {
-            return Err(Resource::Accounting.into());
-        }
+        check_account_binding(
+            self.ledger,
+            self.budget_address,
+            self.process,
+            self.thread,
+            b,
+        )?;
         require_root()
     }
 }
@@ -303,6 +303,18 @@ impl<'work> RootControlSessionV3<'work> {
 /// use fe2o3_broker_authority_service::RootConnectionV3 as C;
 /// fn send<T: Send>() {} send::<C<'static>>();
 /// ```
+/// Connection-only authentication is private to the broker, not a public
+/// substitute for the live-original validation API.
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::{RootConnectionV3 as C, RootControlSessionV3 as S};
+/// use fe2o3_compiler_execution_protocol::{CompilerExecutionIssuerPolicyV3 as P,
+///     CompilerExecutionServiceLaunchManifestV3 as M};
+/// use fe2o3_protected_service_spawn::native_spawn::RootOwnedRetainedServiceChildV2 as I;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+/// fn unchecked(c: &C<'_>, s: &S<'_>, i: &I<()>, p: &P, m: &M, b: &mut B<'_>) {
+///     c.validate_established_issuer_authentication(s, i, p, m, b);
+/// }
+/// ```
 pub struct RootConnectionV3<'work> {
     channel: Channel<'work>,
     replay: Replay<'work>,
@@ -319,6 +331,8 @@ impl RootConnectionV3<'_> {
         self.retained
     }
 
+    /// Validate the live original compiler AND the established issuer connection.
+    /// Existing callers still require the original scoped compiler observation.
     pub fn validate<T: Send + 'static>(
         &self,
         root: &RootControlSessionV3<'_>,
@@ -340,15 +354,93 @@ impl RootConnectionV3<'_> {
         ])?;
         b.with_prepaid_scope(floor, ENTRY, LOCAL_WORK, FRAME, |b| {
             root.validate_original(original, b)?;
-            if self.epoch != root.epoch || !self.request.matches_launch(policy, manifest, b)? {
-                return Err(Error::Refused("root connection association changed"));
-            }
-            self.channel.validate_root_endpoint(b)?;
-            validate_peer(root, issuer, self.issuer, &self.pidfd, self.credentials, b)?;
-            validate_retained_issuer_image_v3(issuer, policy, b)?;
-            Ok(())
+            self.validate_retained_issuer_and_channel(root, issuer, policy, manifest, b)
         })
     }
+
+    /// Authenticate only this already challenge-completed issuer connection.
+    /// The exact RootSession epoch, original account/address/process/thread,
+    /// exact root credentials, retained root namespaces, live measured issuer,
+    /// policy/manifest and original channel are all still checked. The session
+    /// retains its original trace identity; no new identity or epoch is admitted.
+    ///
+    /// No compiler observation is required: the original compiler may have exited.
+    /// This establishes neither live compiler custody nor permission to retire,
+    /// currentness, durable publication, a tombstone or replay acceptance. The
+    /// caller must separately validate the particular operation and its exact
+    /// retained state; ordinary live operations must continue to use `validate`.
+    /// Keep connection, root and issuer/policy/manifest inputs prepaid. The
+    /// existing `validation_quota` remains a conservative work/scratch bound;
+    /// successful work is lower by LOCAL_WORK + Original::IDENTITY_WORK.
+    pub(crate) fn validate_established_issuer_authentication<T: Send + 'static>(
+        &self,
+        root: &RootControlSessionV3<'_>,
+        issuer: &Child<T>,
+        policy: &Policy,
+        manifest: &Manifest,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        let inputs = issuer.retained_storage().max(sum(&[
+            policy.retained_storage(),
+            manifest.retained_storage(),
+        ])?);
+        let floor = sum(&[self.retained, root.retained, inputs])?;
+        b.with_prepaid_scope(floor, ENTRY, LOCAL_WORK, FRAME, |b| {
+            root.check_account(b)?;
+            root.namespaces.revalidate_self(b)?;
+            self.validate_retained_issuer_and_channel(root, issuer, policy, manifest, b)
+        })
+    }
+
+    // Both entry points already prepaid this local work/frame. Keep the shared
+    // issuer checks in the original order without introducing an extra scope.
+    fn validate_retained_issuer_and_channel<T: Send + 'static>(
+        &self,
+        root: &RootControlSessionV3<'_>,
+        issuer: &Child<T>,
+        policy: &Policy,
+        manifest: &Manifest,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        check_launch_association(self.epoch, root.epoch, &self.request, policy, manifest, b)?;
+        self.channel.validate_root_endpoint(b)?;
+        validate_peer(root, issuer, self.issuer, &self.pidfd, self.credentials, b)?;
+        validate_retained_issuer_image_v3(issuer, policy, b)?;
+        Ok(())
+    }
+}
+
+// These private comparisons are inert, not authentication on their own. Their
+// caller must have prepaid LOCAL_WORK/FRAME and must perform the actual checks.
+fn check_account_binding(
+    ledger: Ledger,
+    address: usize,
+    process: process::Pid,
+    thread: process::Pid,
+    b: &Budget<'_>,
+) -> Result<()> {
+    if ledger != b.work_ledger_identity_v1()
+        || address != b as *const Budget<'_> as usize
+        || process != process::getpid()
+        || thread != rustix::thread::gettid()
+    {
+        return Err(Resource::Accounting.into());
+    }
+    Ok(())
+}
+
+fn check_launch_association(
+    connection_epoch: [u8; 32],
+    root_epoch: [u8; 32],
+    request: &Record,
+    policy: &Policy,
+    manifest: &Manifest,
+    b: &mut Budget<'_>,
+) -> Result<()> {
+    if connection_epoch != root_epoch || !request.matches_launch(policy, manifest, b)? {
+        return Err(Error::Refused("root connection association changed"));
+    }
+    Ok(())
 }
 
 fn validate_peer<T: Send + 'static>(
@@ -495,3 +587,7 @@ impl std::error::Error for Error {
 #[path = "compiler_execution_root_connection_quota.rs"]
 mod quota;
 pub use quota::RootConnectionQuotaV3;
+
+#[cfg(test)]
+#[path = "compiler_execution_root_connection_tests.rs"]
+mod tests;
