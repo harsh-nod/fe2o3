@@ -37,6 +37,12 @@
   "crates/cargo-fe2o3/src/compiler_execution_boundary_native_tests.rs": {
     "block": 1
   },
+  "crates/cargo-fe2o3/src/inert_rustc_stdio_capture.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/src/inert_rustc_stdio_capture_tests.rs": {
+    "block": 17
+  },
   "crates/cargo-fe2o3/src/main.rs": {
     "block": 6
   },
@@ -191,6 +197,9 @@
   },
   "crates/fe2o3-compiler-execution-client/src/child_channel.rs": {
     "block": 20
+  },
+  "crates/fe2o3-compiler-execution-client/src/child_channel_transfer_tests.rs": {
+    "block": 1
   },
   "crates/fe2o3-compiler-execution-client/src/inherited_admission.rs": {
     "block": 10,
@@ -999,14 +1008,16 @@
     "block": 3
   },
   "crates/fe2o3-process-identity/src/native_capture.rs": {
-    "block": 3,
-    "function": 1
+    "block": 3
   },
   "crates/fe2o3-process-identity/src/sealed_memfd.rs": {
     "block": 2
   },
+  "crates/fe2o3-process-identity/tests/child_fchdir.rs": {
+    "block": 6
+  },
   "crates/fe2o3-process-identity/tests/native_capture.rs": {
-    "block": 16
+    "block": 12
   },
   "crates/fe2o3-process-identity/tests/receiver_exec.rs": {
     "block": 2

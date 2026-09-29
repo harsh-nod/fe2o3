@@ -618,13 +618,16 @@ alone does not release the lease: confirmation additionally requires the caller
 to authenticate native exec and closure of every inherited artifact-lock alias.
 It does not establish process-tree isolation or compiler authority.
 
-`fe2o3-process-identity/native_capture.rs` adds one unsafe capture function and
-three blocks for scalar standard-slot probes, CLOEXEC duplication above FD2,
-and adoption of newly owned descriptors. The caller excludes concurrent slot
-and shared-flag changes. Cwd access borrows the existing pin without reopening
+`fe2o3-process-identity/native_capture.rs` uses three blocks for scalar
+standard-slot probes, CLOEXEC duplication above FD2, and adoption of newly owned
+descriptors. Capture is safe, inert and non-atomic: concurrent slot replacement
+can mix observations, while shared flags, offsets and contents remain mutable.
+It neither creates a borrowed lifetime for a raw standard slot nor grants
+invocation provenance. The authenticated native stage's obligations are separate.
+Cwd access borrows the existing pin without reopening
 its pathname. Inode/flag comparison is not evidence of OFD provenance.
 
-Reviewed test-only additions are 16 capture blocks, two compiler staging blocks,
+Reviewed test-only additions are 12 capture blocks, two compiler staging blocks,
 two native-exec blocks, and nine trace-confirmation blocks. Isolated subprocess
 tests cover absent/CLOEXEC streams, offsets, partial capture failure, actual
 trace waits, short funding and retained cleanup. The explicit root diagnostic
@@ -632,6 +635,29 @@ uses a static C fixture through the production clone path, with no compiler,
 proof or GPU authority. The C fixture checks inputs and descriptors and exits;
 its libc boundary remains part of the diagnostic, outside the Rust inventory.
 No unrelated inventory allowances change.
+
+## Wrapper Input Custody
+
+The cwd hook now owns its CLOEXEC duplicate through Command's lifetime, including
+reuse and failure, instead of capturing a borrowed raw descriptor. The existing
+unsafe block still performs only pre-exec fstat/fchdir; registration can refuse
+before changing Command. Six test-only blocks cover descriptor probes and an
+isolated soft-limit guard.
+
+The binding wrapper captures actual runtime-sanitized entry stdio before opening
+files, and retains it with protected parent invocation custody. Two installation
+blocks perform raw standard-slot probes and register a closure owning high-FD
+duplicates. Only bounded descriptor operations run before exec. Absent or
+original-CLOEXEC slots close; other streams preserve shared offsets/status flags.
+The wrapper keeps current parent slots open so pinning and Command's error pipe
+cannot occupy a slot the final hook replaces. Capture and sampled revalidation
+do not prove immutable aliases, pre-runtime inheritance or compiler authority.
+
+The child-channel transfer now requires kernel message credentials matching both
+the declared child PID and the service socket's creation credentials. No new
+production unsafe block is needed. Its relay test registers one existing scalar
+send helper in a child-only pre-exec hook. The original same-UID/GID relationship,
+pidfd liveness and protected-runtime refusals remain unchanged.
 
 ## Initial Reduction
 

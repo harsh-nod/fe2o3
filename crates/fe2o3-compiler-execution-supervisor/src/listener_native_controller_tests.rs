@@ -333,8 +333,7 @@ fn selected_pump_must_be_fundable_before_acceptance() {
 
 #[test]
 fn busy_shutdown_and_closed_controller_never_imply_terminal_cleanup() {
-    let mut work =
-        Work::new(Cleanup::RESERVATION_WORK + 2 * (ENTRY + Service::DISPATCH_TURN_WORK));
+    let mut work = Work::new(Cleanup::RESERVATION_WORK + 2 * (ENTRY + Service::DISPATCH_TURN_WORK));
     let mut b = Budget::new(&mut work, FLOOR + Service::DISPATCH_SCRATCH);
     b.reserve_storage(FLOOR).unwrap();
     // Admission prepays the first shutdown; one pump and two retries remain.

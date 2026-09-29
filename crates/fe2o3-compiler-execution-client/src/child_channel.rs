@@ -141,6 +141,11 @@ impl PendingCompilerExecutionChildChannelV1 {
         if receiver.as_raw_fd() == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
             mem::swap(&mut receiver, &mut sender);
         }
+        // The inherited control socket's SO_PEERCRED names its creator, not the
+        // post-fork sender. Require kernel credentials on the transfer itself.
+        rustix::net::sockopt::set_socket_passcred(&receiver, true).map_err(|error| {
+            CompilerExecutionChildChannelErrorV1::Descriptor(io::Error::from(error))
+        })?;
         let reserved_child_fd = if sender.as_raw_fd() == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
             let control = rustix::io::fcntl_dupfd_cloexec(&sender, 0).map_err(|error| {
                 CompilerExecutionChildChannelErrorV1::Descriptor(io::Error::from(error))
@@ -502,9 +507,14 @@ fn wait_for_transfer(
 fn receive_service_peer(
     receiver: &OwnedFd,
 ) -> Result<(OwnedFd, u32, u32), CompilerExecutionChildChannelErrorV1> {
+    if !rustix::net::sockopt::socket_passcred(receiver)
+        .map_err(|error| CompilerExecutionChildChannelErrorV1::Descriptor(io::Error::from(error)))?
+    {
+        return Err(CompilerExecutionChildChannelErrorV1::TransferCredentialsMismatch);
+    }
     let mut payload = [0_u8; TRANSFER_BYTES];
     let mut vectors = [IoSliceMut::new(&mut payload)];
-    let mut control = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+    let mut control = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2), ScmCredentials(1))];
     let mut ancillary = RecvAncillaryBuffer::new(&mut control);
     let received = recvmsg(
         receiver,
@@ -518,6 +528,7 @@ fn receive_service_peer(
             .flags
             .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC);
     let mut descriptor = None;
+    let mut credentials = None;
     let mut malformed_ancillary = false;
     for message in ancillary.drain() {
         match message {
@@ -529,6 +540,9 @@ fn receive_service_peer(
                         descriptor = Some(received);
                     }
                 }
+            }
+            RecvAncillaryMessage::ScmCredentials(value) if credentials.is_none() => {
+                credentials = Some(value);
             }
             _ => malformed_ancillary = true,
         }
@@ -552,8 +566,26 @@ fn receive_service_peer(
     if parent_pid == 0 || parent_pid == child_pid {
         return Err(CompilerExecutionChildChannelErrorV1::MalformedTransfer);
     }
-
+    validate_seqpacket_peer(&descriptor).map_err(service_peer_error)?;
+    require_close_on_exec(&descriptor)?;
+    require_transfer_credentials(credentials, child_pid, peer_identity(&descriptor)?)?;
     Ok((descriptor, child_pid, parent_pid))
+}
+
+fn require_transfer_credentials(
+    sender: Option<rustix::net::UCred>,
+    child_pid: u32,
+    peer: CompilerExecutionClientProcessIdentityV1,
+) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+    let sender = sender.ok_or(CompilerExecutionChildChannelErrorV1::TransferCredentialsMismatch)?;
+    if sender.pid.as_raw_nonzero().get() as u32 != child_pid
+        || sender.pid.as_raw_nonzero().get() as u32 != peer.pid()
+        || sender.uid.as_raw() != peer.uid()
+        || sender.gid.as_raw() != peer.gid()
+    {
+        return Err(CompilerExecutionChildChannelErrorV1::TransferCredentialsMismatch);
+    }
+    Ok(())
 }
 
 fn peer_identity(
@@ -652,6 +684,7 @@ pub enum CompilerExecutionChildChannelErrorV1 {
     ServicePeerClosed,
     PeerCredentials(io::Error),
     PeerCredentialsMismatch,
+    TransferCredentialsMismatch,
     MissingCloseOnExec,
 }
 
@@ -704,12 +737,19 @@ impl fmt::Display for CompilerExecutionChildChannelErrorV1 {
             Self::PeerCredentialsMismatch => {
                 formatter.write_str("rustc service peer credentials name another process")
             }
+            Self::TransferCredentialsMismatch => {
+                formatter.write_str("rustc channel sender credentials differ from its service peer")
+            }
             Self::MissingCloseOnExec => {
                 formatter.write_str("retained rustc channel descriptor lacks close-on-exec")
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "child_channel_transfer_tests.rs"]
+mod transfer_tests;
 
 impl Error for CompilerExecutionChildChannelErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
