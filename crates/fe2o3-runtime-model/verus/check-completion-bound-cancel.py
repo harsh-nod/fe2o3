@@ -3,6 +3,7 @@
 
 import hashlib
 from pathlib import Path
+import re
 import runpy
 import sys
 import types
@@ -13,6 +14,20 @@ BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
 BODY = Path("crates/fe2o3-kfd/src/queue_completion/bound_cancel_body.rs")
 PROOF = V / "completion_bound_cancel_v1.rs"
+SCHEMA = V / "completion_owner_schema_v1.rs"
+EXECUTION = V / "completion_bound_cancel_execution_v1.rs"
+ADAPTERS = BODY.with_name("rollback_adapters_body.rs")
+FILES = [BODY, PROOF, SCHEMA, EXECUTION, ADAPTERS]
+ALLOWED_INPUTS = {
+    PROOF: [
+        ('include!("completion_owner_schema_v1.rs");', SCHEMA),
+        ('include!("completion_bound_cancel_execution_v1.rs");', EXECUTION),
+    ],
+    EXECUTION: [
+        ('include!("../../fe2o3-kfd/src/queue_completion/bound_cancel_body.rs");', BODY),
+        ('include!("../../fe2o3-kfd/src/queue_completion/rollback_adapters_body.rs");', ADAPTERS),
+    ],
+}
 FUNCTIONS = ("validate_packet_count", "validate_bound", "validate_retention",
              "require_unpinned", "cancel_bound_retaining")
 BITVECTOR_ENUMERATION_NOTE = (
@@ -24,6 +39,24 @@ BITVECTOR_ENUMERATION_NOTE = (
 def need(value, message):
     if not value:
         raise ValueError(message)
+
+
+def audit(inputs):
+    need(set(inputs) == set(FILES), "exact cancellation proof closure")
+    reached, pending = set(), [PROOF]
+    while pending:
+        path = pending.pop()
+        if path in reached:
+            continue
+        reached.add(path)
+        source = inputs[path]
+        for statement, target in ALLOWED_INPUTS.get(path, []):
+            need(target in FILES and source.count(statement) == 1, "exact source edge: " + statement)
+            source = source.replace(statement, "")
+            pending.append(target)
+        need(not re.search(r"\b(?:mod|path|include|include_str|include_bytes|env|option_env)\b", source),
+             "no extra source input: " + str(path))
+    need(reached == set(FILES), "every cancellation closure file reachable")
 
 
 def mutations(body):
@@ -82,14 +115,15 @@ def selection_notes(leaf, focus=None):
 def campaign():
     raw = (ROOT / BASE).read_bytes()
     need(hashlib.sha256(raw).hexdigest() == BASE_SHA, "authenticated publication controller")
+    audit({path: (ROOT / path).read_bytes().decode("utf-8") for path in FILES})
     module = types.ModuleType("bound_cancel_campaign")
     module.__file__ = str(ROOT / BASE)
     sys.modules[module.__name__] = module
     exec(compile(raw, module.__file__, "exec"), module.__dict__)
-    module.FILES = [BODY, PROOF]
+    module.FILES = FILES
     module.BODY = BODY
     module.PROOF = PROOF
-    module.EXPECTED = dict(module.EXPECTED, verified=25)
+    module.EXPECTED = dict(module.EXPECTED, verified=26)
     module.mutations = mutations
     module.selection_notes = selection_notes
     inherited = module.inherited

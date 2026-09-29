@@ -9,6 +9,35 @@ runner = runpy.run_path(str(Path(__file__).with_name("check-completion-bound-can
 campaign = runner["campaign"]()
 need = runner["need"]
 root = runner["ROOT"]
+inputs = {path: (root / path).read_bytes().decode("utf-8") for path in runner["FILES"]}
+runner["audit"](inputs)
+for path in runner["FILES"]:
+    for suffix in ('\nmod foreign;', '\ninclude!("/foreign.rs");',
+                   '\ninclude_str!("/foreign.rs");', '\ninclude_bytes!("/foreign.rs");',
+                   '\nenv!("FOREIGN");', '\noption_env!("FOREIGN");'):
+        try:
+            runner["audit"]({**inputs, path: inputs[path] + suffix})
+        except ValueError:
+            pass
+        else:
+            raise ValueError("extra cancellation input accepted")
+for path, statements in runner["ALLOWED_INPUTS"].items():
+    for statement, _ in statements:
+        for replacement in ("", statement + "\n" + statement, statement.replace(".rs", "-foreign.rs")):
+            try:
+                runner["audit"]({**inputs, path: inputs[path].replace(statement, replacement)})
+            except ValueError:
+                pass
+            else:
+                raise ValueError("changed cancellation source edge accepted")
+for changed in ({path: text for path, text in inputs.items() if path != runner["SCHEMA"]},
+                {**inputs, Path("/foreign.rs"): ""}):
+    try:
+        runner["audit"](changed)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("inexact cancellation closure accepted")
 body = (root / runner["BODY"]).read_text()
 cases = runner["mutations"](body)
 need(len(cases) == len(set(cases.values())) == 23, "distinct cancellation mutation roster")
@@ -26,14 +55,22 @@ for changed in (body + body, body.replace("record.generation != $slot.generation
         raise ValueError("stale or ambiguous mutation site accepted")
 
 parent = (root / "crates/fe2o3-kfd/src/queue_completion.rs").read_text()
-proof = (root / runner["PROOF"]).read_text()
+proof = (root / runner["EXECUTION"]).read_text()
 need(parent.count('include!("queue_completion/bound_cancel_body.rs");') == 1, "production include")
 need(proof.count('include!("../../fe2o3-kfd/src/queue_completion/bound_cancel_body.rs");') == 1,
      "proof uses production body")
 for name in ("packet_count", "validate_bound", "validate_retention", "require_unpinned", "cancel_bound_retaining"):
     call = "completion_" + name + "_body!("
     need(parent.count(call) == proof.count(call) == 1, "shared macro wiring: " + name)
-need(campaign.FILES == [runner["BODY"], runner["PROOF"]], "two-file relocation closure")
+need(campaign.FILES == runner["FILES"] and len(campaign.FILES) == 5, "five-file relocation closure")
+thin = (root / runner["PROOF"]).read_text()
+need(thin.count('include!("completion_owner_schema_v1.rs");') == 1, "common schema included")
+need(thin.count('include!("completion_bound_cancel_execution_v1.rs");') == 1, "execution leaf included")
+need(proof.count('include!("../../fe2o3-kfd/src/queue_completion/rollback_adapters_body.rs");') == 1,
+     "consuming adapter included")
+need(parent.count("completion_cancel_bound_body!(completion_rust_expr, self, retention)") == 1,
+     "production consuming adapter")
+need(proof.count("completion_cancel_bound_body!(@annotated") == 1, "proved consuming adapter")
 
 classifier = campaign.inherited()
 leaf = classifier.inherited()
@@ -75,4 +112,4 @@ need(not check([bit_note]), "enumeration alone is not a negative control")
 need(check([bit_note, error]), "exact enumeration permits a separate authenticated logical error")
 need(not check([dict(bit_note, message=bit_note["message"] + " Resource limit (rlimit) exceeded"), error]),
      "resource-bearing enumeration rejected")
-print("PASS: completion bound cancellation calibration (4 groups)")
+print("PASS: completion bound cancellation calibration (5 groups)")

@@ -27,6 +27,7 @@ use crate::wait::MonotonicWaitV1;
 
 include!("queue_completion/event_release_body.rs");
 include!("queue_completion/bound_cancel_body.rs");
+include!("queue_completion/rollback_adapters_body.rs");
 
 macro_rules! completion_rust_expr {
     ($body:expr) => {
@@ -1614,8 +1615,7 @@ impl CompletionSignalArenaOwnerV1 {
         &mut self,
         retention: CompletionBatchRetentionV1<N>,
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        self.cancel_bound_retaining(retention)
-            .map_err(|(error, _retention)| error)
+        completion_cancel_bound_body!(completion_rust_expr, self, retention)
     }
 
     /// Owner-preserving cancellation used when a prepublication event pin may
@@ -2469,7 +2469,7 @@ impl CompletionSignalArenaOwnerV1 {
         &mut self,
         events: Vec<Gfx942ComputeEventOccurrenceV1>,
     ) -> Result<usize, (Gfx942CompletionErrorV1, Vec<Gfx942ComputeEventOccurrenceV1>)> {
-        self.release_compute_event_batch(events)
+        completion_release_dependency_event_batch_body!(completion_rust_expr, self, events)
     }
 
     #[allow(clippy::result_large_err)]

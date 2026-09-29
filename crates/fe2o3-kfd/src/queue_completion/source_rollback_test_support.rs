@@ -18,6 +18,7 @@ impl SourceRollbackSnapshot {
         batch: u64,
         release: bool,
         cancel: bool,
+        event_pins: u32,
     ) {
         let target: Vec<_> = self
             .events
@@ -39,9 +40,10 @@ impl SourceRollbackSnapshot {
             assert!(row.packet_id.is_none());
             let slot = &mut self.custody.slots[row.slot.index as usize];
             assert_eq!(slot.generation, row.slot.generation);
-            assert_eq!(slot.event_pins, 1);
+            assert_eq!(slot.event_pins, event_pins);
             assert_eq!(slot.native_reader_pins, 0);
             if release {
+                assert_eq!(event_pins, 1);
                 self.events.remove(&id).unwrap();
                 slot.event_pins = 0;
             }
@@ -55,6 +57,19 @@ impl SourceRollbackSnapshot {
 }
 
 impl CompletionSignalArenaOwnerV1 {
+    pub(in crate::queue) fn clear_bound_event_pins_for_test(&mut self, batch: u64) {
+        let mut count = 0;
+        for slot in self.slots.iter_mut() {
+            if slot.phase == (CompletionSlotPhaseV1::Bound { batch_id: batch }) {
+                assert_eq!(slot.event_pins, 1);
+                assert_eq!(slot.native_reader_pins, 0);
+                slot.event_pins = 0;
+                count += 1;
+            }
+        }
+        assert_eq!(count, 3);
+    }
+
     pub(in crate::queue) fn source_rollback_snapshot_for_test(&self) -> SourceRollbackSnapshot {
         SourceRollbackSnapshot {
             custody: self.custody_snapshot_for_test(),

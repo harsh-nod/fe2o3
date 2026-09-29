@@ -8,7 +8,7 @@ import runpy
 runner = runpy.run_path(str(Path(__file__).with_name("check-completion-event-batch-release.py")))
 need = runner["need"]
 root = runner["ROOT"]
-inputs = {path: (root / path).read_text() for path in runner["FILES"]}
+inputs = {path: (root / path).read_bytes().decode("utf-8") for path in runner["FILES"]}
 runner["audit"](inputs)
 campaign = runner["campaign"]()
 body = inputs[runner["BODY"]]
@@ -27,11 +27,12 @@ for changed in (body + body, body.replace("$available.checked_sub(1)", "$availab
 
 for path, text in (
     (runner["CONTRACTS"], inputs[runner["CONTRACTS"]] + "\n// drift\n"),
-    *((runner["PROOF"], inputs[runner["PROOF"]] + suffix) for suffix in
+    (runner["CONTRACTS"], inputs[runner["CONTRACTS"]].replace("\n", "\r\n")),
+    *((path, inputs[path] + suffix) for path in runner["FILES"] if path != runner["CONTRACTS"] for suffix in
       ("\nassume(false);", "\nadmit();", "\n#[verifier::external_body]", "\n#[verifier::assume_termination]", "\nextern crate foreign;", "\nmod foreign;",
        '\ninclude !("/absolute/foreign.rs");', '\ninclude_str!("/absolute/foreign.rs");',
        '\ninclude_bytes!("/absolute/foreign.rs");', '\nenv!("FOREIGN");', '\noption_env!("FOREIGN");')),
-    (runner["PROOF"], inputs[runner["PROOF"]].replace('queue_completion/event_release_body.rs', 'queue_completion/foreign.rs')),
+    (runner["EXECUTION"], inputs[runner["EXECUTION"]].replace('queue_completion/event_release_body.rs', 'queue_completion/foreign.rs')),
     (runner["SINGLE"], inputs[runner["SINGLE"]] + '\ninclude!("foreign.rs");'),
 ):
     try:
@@ -41,13 +42,30 @@ for path, text in (
     else:
         raise ValueError("unapproved trust/closure change accepted")
 
+for path, edges in runner["ALLOWED_INPUTS"].items():
+    for statement, _ in edges:
+        for replacement in ("", statement + "\n" + statement, statement.replace(".rs", "-foreign.rs")):
+            try:
+                runner["audit"]({**inputs, path: inputs[path].replace(statement, replacement)})
+            except ValueError:
+                pass
+            else:
+                raise ValueError("missing/duplicate/redirected edge accepted")
+orphan = Path("orphan.rs")
+try:
+    runner["audit"]({**inputs, orphan: ""}, [*runner["FILES"], orphan])
+except ValueError:
+    pass
+else:
+    raise ValueError("unreachable source accepted")
+
 parent = (root / "crates/fe2o3-kfd/src/queue_completion/dependency_event.rs").read_text()
 need(parent.count('include!("batch_event_release_body.rs");') == 1, "production include")
 need(parent.count("completion_release_event_batch_body!(completion_rust_expr, self, events)") == 1,
      "complete production method wiring")
-need(inputs[runner["PROOF"]].count("completion_release_event_batch_body!(@annotated") == 1,
+need(inputs[runner["EXECUTION"]].count("completion_release_event_batch_body!(@annotated") == 1,
      "complete proof method wiring")
-need(campaign.FILES == runner["FILES"], "four-file relocation closure")
+need(campaign.FILES == runner["FILES"] and len(campaign.FILES) == 6, "six-file relocation closure")
 
 classifier = campaign.inherited()
 leaf = classifier.inherited()
@@ -83,4 +101,4 @@ success = {"verus": verifier, "verification-results": campaign.EXPECTED}
 need(classifier.proof_positive(0, json.dumps(success), "", verifier, campaign.EXPECTED, {path}), "positive accepted")
 need(not classifier.proof_positive(1, json.dumps(success), "", verifier, campaign.EXPECTED, {path}), "failed positive rejected")
 need(not classifier.proof_positive(0, json.dumps(success), json.dumps(bounds), verifier, campaign.EXPECTED, {path}), "bounds failure never accepted as positive")
-print("PASS: completion event batch release calibration (5 groups)")
+print("PASS: completion event batch release calibration (6 groups)")

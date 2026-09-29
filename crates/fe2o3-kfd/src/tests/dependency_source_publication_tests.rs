@@ -490,10 +490,11 @@ enum Fault {
 #[test]
 fn source_terminal_rollback_preserves_exact_prefix_neighbors_and_burned_identities() {
     for auxiliary in [false, true] {
-        for fault in [
-            Fault::EventRelease,
-            Fault::CompletionCancel,
-            Fault::DispatchCancel,
+        for (fault, unpinned_refusal) in [
+            (Fault::EventRelease, false),
+            (Fault::EventRelease, true),
+            (Fault::CompletionCancel, false),
+            (Fault::DispatchCancel, false),
         ] {
             assert!(!take_dispatch_terminal_process_gate_record_v1());
             let (mut session, lane) = fixture(auxiliary);
@@ -528,6 +529,9 @@ fn source_terminal_rollback_preserves_exact_prefix_neighbors_and_burned_identiti
                     submit(selected, &mut recipe, |session, packets| {
                         assert_eq!(packets.packet_count(), 3);
                         match fault {
+                            Fault::EventRelease if unpinned_refusal => session
+                                .completion_owner
+                                .clear_bound_event_pins_for_test(before.0),
                             Fault::EventRelease => session.completion_owner.poison_owner(),
                             Fault::CompletionCancel => session
                                 .completion_owner
@@ -563,7 +567,12 @@ fn source_terminal_rollback_preserves_exact_prefix_neighbors_and_burned_identiti
             let release = !matches!(fault, Fault::EventRelease);
             let cancel = matches!(fault, Fault::DispatchCancel);
             let mut expected = expected.unwrap();
-            expected.expect_terminal_prefix(before.0, release, cancel);
+            expected.expect_terminal_prefix(
+                before.0,
+                release,
+                cancel,
+                u32::from(!unpinned_refusal),
+            );
             assert_eq!(
                 owner(&session, ordinal).source_rollback_snapshot_for_test(),
                 expected

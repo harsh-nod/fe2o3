@@ -2,6 +2,14 @@
 
 use super::*;
 
+include!("../queue_completion/source_rollback_body.rs");
+
+macro_rules! dependency_source_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
+
 // Keep source publication and rollback identical for native recipes and CPU
 // receipt tests. Only the native adapter can access retained device authority.
 pub(super) trait DependencySourceRecipeV1<const N: usize> {
@@ -4552,15 +4560,13 @@ impl ComputeAqlQueueSessionV1 {
                 Ok((batch, events))
             }
             Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(error)) => {
-                if self
-                    .completion_owner
-                    .release_dependency_event_batch_v1(events)
-                    .is_err()
-                    || self.completion_owner.cancel_bound(retention).is_err()
-                {
-                    return Err(FixedDispatchSubmissionFailureV1::Terminal(
-                        Gfx942CompletionErrorV1::StaleEventOccurrence.into(),
-                    ));
+                if let Err(error) = completion_source_rollback_body!(
+                    dependency_source_rust_expr,
+                    self.completion_owner,
+                    events,
+                    retention
+                ) {
+                    return Err(FixedDispatchSubmissionFailureV1::Terminal(error.into()));
                 }
                 Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(
                     map_submission(error),

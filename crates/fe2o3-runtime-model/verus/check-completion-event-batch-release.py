@@ -17,7 +17,20 @@ SINGLE = BODY.with_name("event_release_body.rs")
 PROOF = V / "completion_event_batch_release_v1.rs"
 CONTRACTS = V / "completion_hash_reserve_contracts_v1.rs"
 CONTRACTS_SHA = "a3c6d3bd3f022470323da7bf44e4148097e9691fb055634a85f161cf12199a49"
-FILES = [BODY, SINGLE, PROOF, CONTRACTS]
+SCHEMA = V / "completion_owner_schema_v1.rs"
+EXECUTION = V / "completion_event_batch_release_execution_v1.rs"
+FILES = [BODY, SINGLE, PROOF, CONTRACTS, SCHEMA, EXECUTION]
+ALLOWED_INPUTS = {
+    PROOF: [
+        ('#[path = "completion_hash_reserve_contracts_v1.rs"]\nmod reserve_contracts;', CONTRACTS),
+        ('include!("completion_owner_schema_v1.rs");', SCHEMA),
+        ('include!("completion_event_batch_release_execution_v1.rs");', EXECUTION),
+    ],
+    EXECUTION: [
+        ('include!("../../fe2o3-kfd/src/queue_completion/event_release_body.rs");', SINGLE),
+        ('include!("../../fe2o3-kfd/src/queue_completion/batch_event_release_body.rs");', BODY),
+    ],
+}
 FUNCTION = "*release_compute_event_batch"
 BOUNDS_ERROR = "precondition not met: index in bounds for this access"
 
@@ -27,28 +40,30 @@ def need(value, message):
         raise ValueError(message)
 
 
-def audit(inputs):
+def audit(inputs, files=FILES, edges=ALLOWED_INPUTS, root=PROOF):
     # A fail-closed source guardrail, not equivalent to Verus --no-cheating.
-    need(set(inputs) == set(FILES), "exact batch proof closure")
+    need(set(inputs) == set(files), "exact proof closure")
     need(hashlib.sha256(inputs[CONTRACTS].encode()).hexdigest() == CONTRACTS_SHA,
          "exact two trusted standard-library declarations")
     forbidden = r"\b(?:assume\w*|admit\w*|axiom|external\w*|verifier|unsafe|extern)\b"
-    for path in FILES:
+    for path in files:
         if path != CONTRACTS:
             need(not re.search(forbidden, inputs[path]), "additional trust construct: " + str(path))
-    proof = inputs[PROOF]
-    for statement in (
-        'include!("../../fe2o3-kfd/src/queue_completion/event_release_body.rs");',
-        'include!("../../fe2o3-kfd/src/queue_completion/batch_event_release_body.rs");',
-        '#[path = "completion_hash_reserve_contracts_v1.rs"]\nmod reserve_contracts;',
-    ):
-        need(proof.count(statement) == 1, "exact proof input: " + statement)
-        proof = proof.replace(statement, "")
     source_inputs = r"\b(?:mod|path|include|include_str|include_bytes|env|option_env)\b"
-    need(not re.search(source_inputs, proof), "no extra proof source input")
-    for path in (BODY, SINGLE, CONTRACTS):
-        need(not re.search(source_inputs, inputs[path]),
-             "no transitive source input: " + str(path))
+    need(set(edges) <= set(files) and root in files, "closed include graph")
+    reached, pending = set(), [root]
+    while pending:
+        path = pending.pop()
+        if path in reached:
+            continue
+        reached.add(path)
+        source = inputs[path]
+        for statement, target in edges.get(path, []):
+            need(target in files and source.count(statement) == 1, "exact source edge: " + statement)
+            source = source.replace(statement, "")
+            pending.append(target)
+        need(not re.search(source_inputs, source), "no extra source input: " + str(path))
+    need(reached == set(files), "every closure file reachable")
 
 
 def mutations(body):
@@ -97,7 +112,7 @@ def selection_notes(leaf, focus=None):
 def campaign():
     raw = (ROOT / BASE).read_bytes()
     need(hashlib.sha256(raw).hexdigest() == BASE_SHA, "authenticated publication controller")
-    audit({path: (ROOT / path).read_text() for path in FILES})
+    audit({path: (ROOT / path).read_bytes().decode("utf-8") for path in FILES})
     # This campaign deliberately uses a different trust profile. Verus rejects
     # the two std contracts under --no-cheating, including imported contracts.
     source = raw.decode()
@@ -110,7 +125,7 @@ def campaign():
     module.FILES = FILES
     module.BODY = BODY
     module.PROOF = PROOF
-    module.EXPECTED = dict(module.EXPECTED, verified=28)
+    module.EXPECTED = dict(module.EXPECTED, verified=29)
     module.mutations = mutations
     module.selection_notes = selection_notes
     return module
