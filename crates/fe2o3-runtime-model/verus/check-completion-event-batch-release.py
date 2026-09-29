@@ -19,6 +19,7 @@ CONTRACTS = V / "completion_hash_reserve_contracts_v1.rs"
 CONTRACTS_SHA = "a3c6d3bd3f022470323da7bf44e4148097e9691fb055634a85f161cf12199a49"
 FILES = [BODY, SINGLE, PROOF, CONTRACTS]
 FUNCTION = "*release_compute_event_batch"
+BOUNDS_ERROR = "precondition not met: index in bounds for this access"
 
 
 def need(value, message):
@@ -87,7 +88,7 @@ def mutations(body):
 
 def selection_notes(leaf, focus=None):
     need(focus in (None, FUNCTION), "exact batch-release selector")
-    return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS, SELECTION_NOTES={
+    return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS | {BOUNDS_ERROR}, SELECTION_NOTES={
         "verifying root module (selected functions)",
         "verifying root module, function completion_event_batch_release_v1::CompletionSignalArenaOwnerV1::release_compute_event_batch (selected functions)",
     })

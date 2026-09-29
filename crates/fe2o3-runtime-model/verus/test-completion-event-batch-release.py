@@ -71,7 +71,16 @@ for message in ("Resource limit (rlimit) exceeded", "type annotations needed", "
     need(not check([error, dict(error, message=message)]), "nonlogical/mixed failure rejected")
 need(not check([dict(error, spans=[{"is_primary": True, "file_name": "/foreign.rs"}])]),
      "foreign logical diagnostic rejected")
+bounds = dict(error, message=runner["BOUNDS_ERROR"])
+need(check([bounds]), "exact authenticated bounds precondition accepted")
+need(not check([dict(bounds, message=bounds["message"] + " unknown")]), "unknown bounds diagnostic rejected")
+need(not check([dict(bounds, level="warning")]), "bounds warning is not logical failure evidence")
+need(not check([dict(bounds, spans=[{"is_primary": True, "file_name": "/foreign.rs"}])]), "foreign bounds diagnostic rejected")
+need(not check([bounds, dict(error, message="Resource limit (rlimit) exceeded")]), "bounds/resource mixture rejected")
+need(not check([bounds, dict(error, message="type annotations needed")]), "bounds/frontend mixture rejected")
+need(not check([dict(bounds, children=[dict(error, message="internal error")])]), "nested internal error rejected")
 success = {"verus": verifier, "verification-results": campaign.EXPECTED}
 need(classifier.proof_positive(0, json.dumps(success), "", verifier, campaign.EXPECTED, {path}), "positive accepted")
 need(not classifier.proof_positive(1, json.dumps(success), "", verifier, campaign.EXPECTED, {path}), "failed positive rejected")
+need(not classifier.proof_positive(0, json.dumps(success), json.dumps(bounds), verifier, campaign.EXPECTED, {path}), "bounds failure never accepted as positive")
 print("PASS: completion event batch release calibration (5 groups)")
