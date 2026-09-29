@@ -1,10 +1,14 @@
 //! Root-staged proof-helper bytes and approved role configuration, not process admission.
 //!
-//! The approved runtime supplies the sole source measurement and retains its
-//! original immutable inventory. The sealed image is a different kernel object.
+//! The compiler backing keeps the single approved runtime and exact invocation
+//! alive. That inventory supplies the sole source measurement; the sealed image
+//! is a different kernel object.
 //! Credentials come only from the runtime's retained V2 compiler approval.
 //! This does not establish creator provenance or outside cleanup custody.
 
+use crate::compiler_invocation_backing::{
+    CompilerInvocationBacking as Compiler, CompilerInvocationBackingError as CompilerError,
+};
 use fe2o3_build_authority::{
     COMPILER_RUNTIME_MANIFEST_MAX_BYTES_V1 as MANIFEST_BYTES,
     COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1 as MAX_ENTRIES,
@@ -36,6 +40,7 @@ type Result<T> = std::result::Result<T, ProofHelperBackingError>;
 #[derive(Debug)]
 pub(crate) enum ProofHelperBackingError {
     Resource(Resource),
+    Compiler(CompilerError),
     Runtime(RuntimeError),
     Image(ImageError),
     RootRequired,
@@ -57,6 +62,11 @@ impl From<RuntimeError> for ProofHelperBackingError {
         Self::Runtime(error)
     }
 }
+impl From<CompilerError> for ProofHelperBackingError {
+    fn from(error: CompilerError) -> Self {
+        Self::Compiler(error)
+    }
+}
 impl From<ImageError> for ProofHelperBackingError {
     fn from(error: ImageError) -> Self {
         Self::Image(error)
@@ -66,6 +76,7 @@ impl fmt::Display for ProofHelperBackingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Resource(e) => e.fmt(f),
+            Self::Compiler(e) => e.fmt(f),
             Self::Runtime(e) => e.fmt(f),
             Self::Image(e) => e.fmt(f),
             Self::RootRequired => f.write_str("proof helper staging requires exact root IDs"),
@@ -80,6 +91,7 @@ impl std::error::Error for ProofHelperBackingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Resource(e) => Some(e),
+            Self::Compiler(e) => Some(e),
             Self::Runtime(e) => Some(e),
             Self::Image(e) => Some(e),
             Self::Io { source, .. } => Some(source),
@@ -111,11 +123,11 @@ impl Account {
     }
 }
 
-/// Move-only complete inventory plus independently sealed executable custody.
+/// Move-only compiler backing plus independently sealed executable custody.
 /// No provider, raw owner import, role selection or deployment assertion exists.
 pub(crate) struct ProofHelperBacking {
     image: Image,
-    runtime: Runtime,
+    compiler: Compiler,
     credentials: Credentials,
     prepared_by: rustix::process::Pid,
     account: Account,
@@ -123,7 +135,7 @@ pub(crate) struct ProofHelperBacking {
 }
 
 impl ProofHelperBacking {
-    const ENVELOPE: usize = size_of::<(Self, usize)>() - size_of::<Runtime>() - size_of::<Image>();
+    const ENVELOPE: usize = size_of::<(Self, usize)>() - size_of::<Compiler>() - size_of::<Image>();
     /// Local scalar/credential/FD work, at most two bounded manifest selections,
     /// and descriptor retirement on a consuming refusal.
     /// Runtime and Image operations additionally charge their existing envelopes
@@ -136,13 +148,14 @@ impl ProofHelperBacking {
         + 4 * size_of::<rustix::fs::Stat>()
         + 8192;
 
-    /// Consumes a genuinely admitted runtime whose FULL reservation remains live.
+    /// Consumes a compiler backing whose FULL reservation remains live, including
+    /// the single admitted inventory, exact invocation and both exec sources.
     /// Reserve returned growth before retaining Self. On error all consumed local
     /// owners drop, but the original caller-owned reservation is unchanged.
     /// Helper credentials come from retained approval, never caller configuration.
     /// No process, namespace or proof receipt results.
-    pub(crate) fn prepare(runtime: Runtime, budget: &mut Budget<'_>) -> Result<(Self, usize)> {
-        let input = runtime.required_retained_storage();
+    pub(crate) fn prepare(compiler: Compiler, budget: &mut Budget<'_>) -> Result<(Self, usize)> {
+        let input = compiler.retained_storage();
         budget.with_prepaid_scope(
             input,
             ENTRY_WORK,
@@ -150,8 +163,9 @@ impl ProofHelperBacking {
             Self::FRAME_STORAGE,
             |b| {
                 require_root()?;
-                runtime.revalidate(b)?;
-                let credentials = approved_credentials(&runtime)?;
+                compiler.revalidate(b)?;
+                let runtime = compiler.runtime();
+                let credentials = approved_credentials(runtime)?;
                 let measurement = select_helper(runtime.manifest().entries())?;
                 let (source, charge) = runtime.try_clone_proof_executor_for_exec(b)?;
                 let source_storage = charge.full_storage();
@@ -175,7 +189,7 @@ impl ProofHelperBacking {
                 let (retained, growth) = retained_storage_for(input, image.retained_storage())?;
                 let owner = Self {
                     image,
-                    runtime,
+                    compiler,
                     credentials,
                     prepared_by: rustix::process::getpid(),
                     account: Account::capture(b),
@@ -191,12 +205,17 @@ impl ProofHelperBacking {
     pub(crate) const fn credentials(&self) -> Credentials {
         self.credentials
     }
+    /// Borrow the same compiler owner retained through helper cleanup. This
+    /// neither detaches its inventory nor creates independent launch authority.
+    pub(crate) const fn compiler(&self) -> &Compiler {
+        &self.compiler
+    }
     pub(crate) const fn measurement(&self) -> Measurement {
         self.image.measurement()
     }
     /// Inert identity from the original retained inventory, not a runtime lease.
     pub(crate) fn runtime_identity(&self) -> [u8; 32] {
-        *self.runtime.manifest().proof_runtime_identity()
+        *self.compiler.runtime().manifest().proof_runtime_identity()
     }
     pub(crate) const fn retained_storage(&self) -> usize {
         self.retained
@@ -274,13 +293,14 @@ impl ProofHelperBacking {
         if rustix::process::getpid() != self.prepared_by {
             return Err(ProofHelperBackingError::CoordinatorChanged);
         }
-        self.runtime.revalidate(b)?;
-        if self.credentials != approved_credentials(&self.runtime)? {
+        self.compiler.revalidate(b)?;
+        let runtime = self.compiler.runtime();
+        if self.credentials != approved_credentials(runtime)? {
             return Err(ProofHelperBackingError::BindingMismatch);
         }
-        let expected = select_helper(self.runtime.manifest().entries())?;
+        let expected = select_helper(runtime.manifest().entries())?;
         check_image(&self.image, expected, self.credentials, b)?;
-        self.runtime.revalidate(b)?;
+        self.compiler.revalidate(b)?;
         require_root()
     }
 }
@@ -322,12 +342,12 @@ fn select_helper<'a>(entries: impl Iterator<Item = Entry<'a>>) -> Result<Measure
     ))
 }
 
-fn retained_storage_for(runtime: usize, image: usize) -> Result<(usize, usize)> {
+fn retained_storage_for(compiler: usize, image: usize) -> Result<(usize, usize)> {
     let growth = image
         .checked_add(ProofHelperBacking::ENVELOPE)
         .ok_or(Resource::Arithmetic)?;
     Ok((
-        runtime.checked_add(growth).ok_or(Resource::Arithmetic)?,
+        compiler.checked_add(growth).ok_or(Resource::Arithmetic)?,
         growth,
     ))
 }

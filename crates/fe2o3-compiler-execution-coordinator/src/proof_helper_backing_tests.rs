@@ -13,6 +13,13 @@ use std::{
 const LIMIT: usize = 1 << 34;
 const EXTRA: usize = 27;
 
+#[test]
+fn helper_preparation_consumes_the_compiler_owner_and_only_borrows_it_back() {
+    let _: fn(Compiler, &mut Budget<'_>) -> Result<(ProofHelperBacking, usize)> =
+        ProofHelperBacking::prepare;
+    let _: fn(&ProofHelperBacking) -> &Compiler = ProofHelperBacking::compiler;
+}
+
 fn helper() -> Entry<'static> {
     Entry {
         role: Role::ProofExecutorHelper,
