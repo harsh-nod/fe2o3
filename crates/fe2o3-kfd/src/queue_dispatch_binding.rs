@@ -11,6 +11,7 @@ include!("queue_dispatch_binding/epoch_cancel_body.rs");
 include!("queue_dispatch_binding/epoch_reserve_body.rs");
 include!("queue_dispatch_binding/cancel_binding_body.rs");
 include!("queue_dispatch_binding/template_prepare_body.rs");
+include!("queue_dispatch_binding/template_preflight_body.rs");
 
 macro_rules! dispatch_rust_expr {
     ($body:expr) => {
@@ -873,10 +874,7 @@ impl DispatchDataAuthorityV1 {
     }
 
     const fn vm(&self) -> fe2o3_runtime_model::VmKeyV1 {
-        match self {
-            Self::Device(authority) => authority.facts().vm(),
-            Self::HostVisible(authority) => authority.facts().mapping().allocation.vm,
-        }
+        dispatch_template_data_vm_body!(dispatch_rust_expr, self)
     }
 
     fn checked_gpu_subrange(&self, offset: u64, byte_len: u64, alignment: u64) -> Option<u64> {
@@ -2533,6 +2531,13 @@ impl DispatchResourceOwnerV1 {
                 })
     }
 
+    fn preflight_templates<const N: usize>(
+        &self,
+        queue: QueueKeyV1,
+    ) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        dispatch_template_preflight_body!(dispatch_rust_expr, self, N, queue)
+    }
+
     pub(super) fn bind_templates<const N: usize>(
         &mut self,
         queue: QueueKeyV1,
@@ -2543,31 +2548,7 @@ impl DispatchResourceOwnerV1 {
         ),
         Gfx942DispatchBindingErrorV1,
     > {
-        self.generation.ensure_not_poisoned()?;
-        validate_packet_count::<N>()?;
-        if self.packets.len() != N
-            || self.code_identity.len() != self.code.len()
-            || self.data.len() != self.data_premises.len()
-            || self
-                .code_identity
-                .iter()
-                .any(|identity| identity.mapping.allocation.vm != queue.vm)
-            || self.kernarg.facts().mapping().allocation.vm != queue.vm
-            || self.data.iter().any(|authority| authority.vm() != queue.vm)
-        {
-            return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
-        }
-        if let Some(packet_index) = self
-            .packets
-            .iter()
-            .position(|packet| packet.ordering != AqlDispatchOrderingV1::WaitForPrior)
-        {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                packet: packet_index,
-                detail: "multi-inflight recipe requires wait-for-prior ordering",
-            });
-        }
-        let (_, generation, _) = self.generation.preflight_reservation(queue)?;
+        let generation = self.preflight_templates::<N>(queue)?;
         let templates =
             prepare_dispatch_templates_v1(&self.packets, &self.code_identity, queue, generation)?;
         // Keep the roster heap-backed through submission, including large-N
@@ -5013,16 +4994,7 @@ fn ranges_overlap_u64(left: u64, left_len: u64, right: u64, right_len: u64) -> b
 }
 
 fn validate_packet_count<const N: usize>() -> Result<(), Gfx942DispatchBindingErrorV1> {
-    if N == 0 {
-        return Err(Gfx942DispatchBindingErrorV1::ZeroPacketCount);
-    }
-    if N > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
-        return Err(Gfx942DispatchBindingErrorV1::PacketCountExceedsMaximum {
-            requested: N,
-            maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize,
-        });
-    }
-    Ok(())
+    dispatch_template_packet_count_body!(dispatch_rust_expr, N)
 }
 
 pub(super) fn validate_fixed_batch_ring<const N: usize>(

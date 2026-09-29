@@ -54,6 +54,8 @@ enum FixedDispatchCapacityProfileV1 { Default64, Qualification1024 }
 enum Gfx942DispatchBindingErrorV1 {
     Poisoned, StaleDispatchGeneration, WrongQueueGeneration, GenerationExhausted,
     DispatchEpochCapacity { maximum: usize }, ResourcePhase,
+    ZeroPacketCount, PacketCountExceedsMaximum { requested: usize, maximum: usize },
+    InvalidKernarg { packet: usize, detail: &'static str },
 }
 struct DispatchGenerationOwnerV1<C> {
     next_generation: u64, recipe_occurrence: u64, recipe_queue: Option<QueueKeyV1>,

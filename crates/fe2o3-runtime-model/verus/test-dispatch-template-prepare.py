@@ -66,7 +66,7 @@ def active_includes(source, expected):
 
 
 BINDING_INCLUDES = [f'include!("queue_dispatch_binding/{name}_body.rs");'
-                    for name in ("epoch_cancel", "epoch_reserve", "cancel_binding", "template_prepare")]
+                    for name in ("epoch_cancel", "epoch_reserve", "cancel_binding", "template_prepare", "template_preflight")]
 COMPLETION_INCLUDES = [f'include!("queue_completion/{name}_body.rs");'
                       for name in ("event_release", "bound_cancel", "rollback_adapters", "event_bind", "event_issue", "batch_bind")]
 COMPLETION_INCLUDES.append('include!("queue_dispatch_binding/template_prepare_body.rs");')
@@ -91,26 +91,7 @@ pub(super) fn bind_templates<const N: usize>(
     (Box<[CompletionPacketTemplateV1; N]>, DispatchEpochIdentityV1,),
     Gfx942DispatchBindingErrorV1,
 > {
-    self.generation.ensure_not_poisoned()?;
-    validate_packet_count::<N>()?;
-    if self.packets.len() != N
-        || self.code_identity.len() != self.code.len()
-        || self.data.len() != self.data_premises.len()
-        || self.code_identity.iter().any(|identity| identity.mapping.allocation.vm != queue.vm)
-        || self.kernarg.facts().mapping().allocation.vm != queue.vm
-        || self.data.iter().any(|authority| authority.vm() != queue.vm)
-    {
-        return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
-    }
-    if let Some(packet_index) = self.packets.iter()
-        .position(|packet| packet.ordering != AqlDispatchOrderingV1::WaitForPrior)
-    {
-        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
-            packet: packet_index,
-            detail: "multi-inflight recipe requires wait-for-prior ordering",
-        });
-    }
-    let (_, generation, _) = self.generation.preflight_reservation(queue)?;
+    let generation = self.preflight_templates::<N>(queue)?;
     let templates = prepare_dispatch_templates_v1(&self.packets, &self.code_identity, queue, generation)?;
     let templates: Box<[CompletionPacketTemplateV1; N]> = templates
         .into_boxed_slice().try_into()
@@ -246,8 +227,8 @@ impl DispatchResourceOwnerV1 {
 need(compact(code_only(moved_call)).count(BINDING_WRAPPERS[-1]) == 1, "decoy preserves global active call")
 rejects(lambda: wiring(moved_call, completion))
 for old, new in (
-    ("self.generation.ensure_not_poisoned()?;", ""),
-    ("self.generation.preflight_reservation(queue)?", "self.generation.preflight_reservation(other_queue)?"),
+    ("self.preflight_templates::<N>(queue)?", "0"),
+    ("self.preflight_templates::<N>(queue)?", "self.preflight_templates::<N>(other_queue)?"),
     ("self.generation.reserve(queue, expected_roster)?", "self.generation.reserve(queue, other_roster)?"),
 ):
     rejects(lambda: binder_join(binding.replace(old, new)))
