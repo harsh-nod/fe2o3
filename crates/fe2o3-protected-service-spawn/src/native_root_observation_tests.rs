@@ -16,6 +16,12 @@ fn original_trace_observation_preserves_custody_and_accounting() {
 }
 
 #[test]
+fn same_trace_observation_builds_late_custody_without_exclusive_trace_borrow() {
+    subprocess("observe-late-builder");
+    subprocess("observe-late-builder-refused");
+}
+
+#[test]
 #[ignore = "requires isolated native pidfd_getfd permission"]
 fn original_root_descriptor_observation() {
     assert_eq!(std::env::var("FE2O3_RUN_NATIVE_TESTS").as_deref(), Ok("1"));
@@ -42,6 +48,10 @@ fn original_root_descriptor_observation_second_continuity_refusal_closes_fd() {
 }
 
 pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
+    if mode.starts_with("observe-late-builder") {
+        late_builder(service, b, mode.ends_with("-refused"));
+        return;
+    }
     let slot = service.reserve_launch(b).unwrap().into_slot();
     let (child, gate, witness) = spawn(slot);
     let retained = Owner::STORAGE + Owner::ROOT_TRACE_GROWTH;
@@ -246,6 +256,88 @@ pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
     drop(trace);
     drain(service);
     require_reaped(&witness);
+}
+
+struct ObservationPayload {
+    _lease: Backing,
+    token: Option<Backing>,
+    drops: Arc<AtomicUsize>,
+}
+
+// SAFETY: inert bounded counters, no native lock or authority; preparation is
+// independent and all partial states are complete drop-only owners.
+unsafe impl crate::cleanup_bridge::LateRetainedPayloadV2 for ObservationPayload {
+    const RETIRE_WORK: usize = 128;
+    const RETIRE_SCRATCH: usize = 128;
+    type Prepared = ();
+    fn try_prepare_retirement(&self) -> Option<()> {
+        Some(())
+    }
+    fn retire(self, _: ()) {
+        drop(self);
+    }
+}
+
+// SAFETY: only adds one inert owner after actual same-trace continuity checking;
+// the borrowed view is neither stored nor exported, even on late refusal.
+unsafe impl crate::cleanup_bridge::LateRetainedBuildV2<&View<'_, '_>> for ObservationPayload {
+    const BUILD_WORK: usize = 64;
+    const BUILD_SCRATCH: usize = 128;
+    type Error = Error;
+    fn build(&mut self, view: &View<'_, '_>, b: &mut Budget<'_>) -> Result<()> {
+        if self.token.is_some() {
+            return Err(Error::State("duplicate fixture token"));
+        }
+        view.validate_continuity(b)?;
+        self.token = Some(Backing(self.drops.clone()));
+        Ok(())
+    }
+}
+
+fn late_builder(service: &mut Service, b: &mut Budget<'_>, refuse: bool) {
+    let slot = service.reserve_launch(b).unwrap().into_slot();
+    let (child, _gate, witness) = spawn(slot);
+    b.reserve_storage(Owner::STORAGE + Owner::ROOT_TRACE_GROWTH)
+        .unwrap();
+    let mut trace = child.into_root_trace(b).unwrap();
+    let drops = Arc::new(AtomicUsize::new(0));
+    // SAFETY: covers this fixture's entire inline and shared atomic storage.
+    let (holder, charge) =
+        unsafe { trace.reserve_late_custody::<ObservationPayload>(service, 1024, b) }.unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    trace
+        .prepare_late_attachment(&holder, b)
+        .unwrap()
+        .commit(ObservationPayload {
+            _lease: Backing(drops.clone()),
+            token: None,
+            drops: drops.clone(),
+        });
+    let floor = b.storage();
+    // This is a real scoped view from the SAME trace, never a fabricated view.
+    let result = trace.with_task_observation::<_, Error>(b, |view, b| {
+        // SAFETY: the prepaid fixture builder only validates and adds an inert owner.
+        unsafe { trace.build_late_custody(&holder, view, b) }?;
+        if refuse {
+            b.release_storage(1)?;
+        }
+        Ok(())
+    });
+    if refuse {
+        assert!(matches!(result, Err(Error::Resource(Resource::Accounting))));
+    } else {
+        result.unwrap();
+    }
+    assert_eq!(b.storage(), floor);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert!(trace.child.record().unwrap().retains_spawn_lease());
+    assert_ne!(trace.cancel(), Poll::Quarantined);
+    drop(trace);
+    drop(holder);
+    b.release_storage(charge.additional_storage()).unwrap();
+    drain(service);
+    require_reaped(&witness);
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
 
 fn terminal_without_reaping(witness: &OwnedFd) -> Option<Event> {

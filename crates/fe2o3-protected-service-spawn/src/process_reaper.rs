@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::MAX_PROTECTED_SERVICE_PROCESSES_V2 as CAPACITY;
 use crate::native_cgroup::NativeCgroupDomainV1;
 use crate::process_cleanup::{ChildCleanupV1, CleanupPollV1, CleanupRecordV1};
+use crate::retained_late::LatePayload;
 use crate::retained_resources::RetainedPayload;
 
 #[path = "process_reaper_native.rs"]
@@ -31,6 +32,8 @@ const RESERVED: u8 = 1;
 const DEFERRED: u8 = 2;
 const QUARANTINED: u8 = 3;
 const RETIRING: u8 = 4;
+// Child/domain terminal: only nonblocking late-payload retirement remains.
+const TERMINAL_PENDING: u8 = 5;
 
 /// Fixed refusal categories for the trusted legacy cleanup protocol.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +48,7 @@ struct ReapCellV1 {
     state: AtomicU8,
     child: Mutex<Option<CleanupRecordV1>>,
     retained: Mutex<Option<RetainedPayload>>,
+    late: Mutex<Option<LatePayload>>,
     retained_storage: AtomicUsize,
 }
 
@@ -54,6 +58,7 @@ impl ReapCellV1 {
             state: AtomicU8::new(EMPTY),
             child: Mutex::new(None),
             retained: Mutex::new(None),
+            late: Mutex::new(None),
             retained_storage: AtomicUsize::new(0),
         }
     }
@@ -129,6 +134,10 @@ impl DeferredReaperV1 {
     }
 
     fn pump_cell(&self, cell: &ReapCellV1) {
+        if cell.state.load(Ordering::Acquire) == TERMINAL_PENDING {
+            self.retire_cell(cell, None);
+            return;
+        }
         if cell.state.load(Ordering::Acquire) != DEFERRED {
             return;
         }
@@ -160,6 +169,24 @@ pub struct ReapSlotV1<'a> {
 }
 
 impl ReapSlotV1<'_> {
+    pub(crate) fn check_late<T: crate::cleanup_bridge::LateRetainedPayloadV2>(
+        &self,
+        owner: &crate::LateRetainedCustodyV2<T>,
+    ) -> Result<(), ProtectedServiceCleanupErrorV2> {
+        let late = self
+            .cell
+            .late
+            .try_lock()
+            .map_err(|_| ProtectedServiceCleanupErrorV2::Busy)?;
+        if !self.armed
+            || self.cell.state.load(Ordering::Acquire) != RESERVED
+            || !late.as_ref().is_some_and(|payload| owner.matches(payload))
+        {
+            return Err(ProtectedServiceCleanupErrorV2::State);
+        }
+        Ok(())
+    }
+
     pub(crate) fn complete(mut self) {
         self.armed = false;
         self.reaper.retire_cell(self.cell, None);

@@ -2,6 +2,7 @@
 
 use super::super::{
     CleanupRecordV1, DeferredReaperV1, EMPTY, QUARANTINED, RETIRING, ReapCellV1, ReaperMode,
+    TERMINAL_PENDING,
 };
 use super::{Budget, Failure, Resource, Service, Storage};
 use crate::RetainedResourcesV2 as Retained;
@@ -103,6 +104,23 @@ impl DeferredReaperV1 {
             complete: false,
         };
         drop(child);
+        let late = cell
+            .late
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(crate::retained_late::LatePayload::pending_copy);
+        if let Some(late) = late {
+            // The original child/domain is already terminal. Failed funding or
+            // readiness keeps the same payload and charge, without another wait.
+            if self.fund_late_retirement(late.work).is_err() || !late.try_retire() {
+                retirement.complete = true;
+                cell.state.store(TERMINAL_PENDING, Ordering::Release);
+                return;
+            }
+        }
+        let late = cell.late.lock().unwrap_or_else(|e| e.into_inner()).take();
+        drop(late);
         let payload = cell
             .retained
             .lock()

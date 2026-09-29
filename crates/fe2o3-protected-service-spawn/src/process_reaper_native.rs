@@ -622,3 +622,6 @@ mod guard_tests;
 
 #[path = "process_reaper_retained.rs"]
 mod retained;
+
+#[path = "process_reaper_late.rs"]
+mod late;

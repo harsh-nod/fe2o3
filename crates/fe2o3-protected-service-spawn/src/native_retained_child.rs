@@ -131,6 +131,66 @@ pub struct RootRetainedTaskTraceV2<'work, T: Send + 'static> {
 }
 
 impl<'work, T: Send + 'static> RootRetainedTaskTraceV2<'work, T> {
+    /// Monotonically extend only the installed late payload; return no owner/view.
+    ///
+    /// # Safety
+    /// Follow RootTaskTraceV2::build_late_custody's prepaid-input and trusted
+    /// builder contract. Original immutable launch dependencies remain separate.
+    pub unsafe fn build_late_custody<P, Operation>(
+        &self,
+        holder: &crate::LateRetainedCustodyV2<P>,
+        operation: Operation,
+        b: &mut Budget<'_>,
+    ) -> std::result::Result<(), <P as crate::cleanup_bridge::LateRetainedBuildV2<Operation>>::Error>
+    where
+        P: crate::cleanup_bridge::LateRetainedBuildV2<Operation>,
+    {
+        // SAFETY: the caller supplies the same bounded monotone builder contract.
+        unsafe { self.trace.build_late_custody(holder, operation, b) }
+    }
+
+    /// Prepay a separate one-shot late holder in this trace's original slot.
+    /// Returns FULL additional foreground storage; original backing is unchanged.
+    ///
+    /// # Safety
+    /// Follow RootTaskTraceV2::reserve_late_custody's complete storage and
+    /// install-before-fallible-work contract for the future payload.
+    pub unsafe fn reserve_late_custody<P: crate::cleanup_bridge::LateRetainedPayloadV2>(
+        &mut self,
+        cleanup: &mut crate::ProtectedServiceCleanupServiceV2,
+        storage: usize,
+        b: &mut Budget<'_>,
+    ) -> Result<(crate::LateRetainedCustodyV2<P>, Storage)> {
+        // SAFETY: the caller supplies the same storage/retirement obligations.
+        unsafe { self.trace.reserve_late_custody(cleanup, storage, b) }
+    }
+
+    /// Exclusively bind the already-funded holder before acquiring its payload.
+    pub fn prepare_late_attachment<'slot, P: crate::cleanup_bridge::LateRetainedPayloadV2>(
+        &'slot self,
+        holder: &'slot crate::LateRetainedCustodyV2<P>,
+        b: &mut Budget<'_>,
+    ) -> Result<crate::PreparedLateAttachmentV2<'slot, P>> {
+        self.trace.prepare_late_attachment(holder, b)
+    }
+
+    /// Prepare one release; token Drop preserves custody in the exact slot.
+    ///
+    /// # Safety
+    /// Independently authorize this exact occurrence's release as required by
+    /// RootTaskTraceV2::prepare_late_retirement. Mechanical readiness is insufficient.
+    pub unsafe fn prepare_late_retirement<
+        'slot,
+        P: crate::cleanup_bridge::LateRetainedPayloadV2,
+    >(
+        &'slot self,
+        holder: &'slot crate::LateRetainedCustodyV2<P>,
+        b: &mut Budget<'_>,
+    ) -> Result<Option<crate::PreparedLateRetirementV2<'slot, P>>> {
+        // SAFETY: the caller supplies the same exact-occurrence release contract.
+        unsafe { self.trace.prepare_late_retirement(holder, b) }
+    }
+
     /// Complete original backing and trace charge, including overlap with the pool.
     pub fn retained_storage(&self) -> usize {
         self.trace.retained_storage()

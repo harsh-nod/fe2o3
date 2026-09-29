@@ -13,6 +13,9 @@ use std::{fmt, marker::PhantomData, mem::size_of, rc::Rc, thread::ThreadId};
 mod observation;
 pub use observation::RootTaskObservationV2;
 
+#[path = "native_root_late.rs"]
+mod late;
+
 // One word of private payload plus Rc's strong/weak counters. This is logical
 // allocation storage, not allocator metadata or RSS. No child backing is shared.
 struct IdentityAllocation {
