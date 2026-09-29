@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [transactional bound-batch preparation](evidence/dev-bound-batch-preparation-2026-09-28/README.md)
+completes every heap-owned roster and conversion before owner mutation, reuses
+selected leases directly, and shares the actual AQL constructors and complete
+selection/preparation/commit with Verus. Without a valid-prepared premise, it
+proves exact first-error refusal and exact packet/retention association with
+selected-phase-only commit. The root passes 55 overlapping obligations under two
+explicit std conversion contracts. Two signed campaigns pass 56 stages and all
+40 executable negatives at 6242 unchanged source hashes. AQL passes 47/0, KFD
+1439/0 (320 construction exclusions), runtime 1828/0 (30 hardware ignores), and
+doctests 124/0. Static checks, five affected positive proof roots, archive restore
+and independent absence of all 98 recorded groups pass. Zero allocations are
+observed at the actual shared commit boundary for N=1,3,64,8192, not a latency
+or HIP/HSA speedup. Next is actual resource-derived `bind_templates`, dispatch
+epoch preflight/reservation and Ordinary refusal classification. Native mapping
+authentication, publication authority and all milestone exit gates remain open.
+
 The [event issuer and pre-native output reservation](evidence/dev-event-issuance-preallocation-2026-09-28/README.md)
 remove the issuer's occurrence scratch Vec and move lane-output reservation ahead
 of acceptance issuance and recipe binding. Shared constructor, issuer, forwarder
@@ -35,9 +51,10 @@ and 149 executable negatives at 6234 unchanged source hashes. KFD passes 1431/0
 doctests 124/0. Static checks, archive restore and independent byte/process audits
 pass; all 308 recorded groups are absent. Scoped CPU tests observe two fresh-batch issuer
 allocations and zero post-native-success source-continuation allocations, not
-a latency or HIP/HSA speedup. Next is transactional bound-batch preparation and
-its packet/retention provenance; native authority, outer terminalization and
-all remaining milestone gates stay open.
+a latency or HIP/HSA speedup. The bound-batch packet above now closes the host
+preparation transaction and packet/retention association; resource-derived
+template provenance, native authority, outer terminalization and all remaining
+milestone gates stay open.
 
 The [allocation-free event binder and publication prefix](evidence/dev-allocation-free-event-bind-2026-09-28/README.md)
 remove the binder's explicit post-publication scratch allocation while retaining
