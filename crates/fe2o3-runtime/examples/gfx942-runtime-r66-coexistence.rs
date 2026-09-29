@@ -1,4 +1,4 @@
-//! Native retained-custody qualification, not a device-overlap measurement.
+//! One process-isolated native retained-custody cell, not device overlap.
 #[cfg(not(feature = "hardware-qualification"))]
 fn main() {
     eprintln!("hardware-qualification feature required");
@@ -19,6 +19,43 @@ mod enabled {
     const PAD: usize = 128;
     const SMALL: usize = 1024 * 1024 + 257;
     const LARGE: usize = 0x003f_ffe0 + 257;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct CaseProfile {
+        ordinal: usize,
+        bytes: usize,
+        packets: usize,
+        h2d: bool,
+        compute_first: bool,
+    }
+
+    fn arguments(args: &[String]) -> ResultV1<(u64, CaseProfile)> {
+        if args.len() != 4 || args[2] != "--case" {
+            return Err("expected GPU unique ID --case 0..7; one case per process".into());
+        }
+        let unique_id = if let Some(hex) = args[1].strip_prefix("0x") {
+            u64::from_str_radix(hex, 16)?
+        } else {
+            args[1].parse()?
+        };
+        if unique_id == 0 {
+            return Err("zero GPU unique ID".into());
+        }
+        let ordinal = match args[3].as_bytes() {
+            [digit @ b'0'..=b'7'] => usize::from(*digit - b'0'),
+            _ => return Err("expected one canonical case ordinal 0..7".into()),
+        };
+        Ok((
+            unique_id,
+            CaseProfile {
+                ordinal,
+                bytes: if ordinal < 4 { SMALL } else { LARGE },
+                packets: if ordinal < 4 { 1 } else { 2 },
+                h2d: ordinal % 4 < 2,
+                compute_first: ordinal.is_multiple_of(2),
+            },
+        ))
+    }
 
     fn error(value: impl Debug) -> Box<dyn Error> {
         format!("{value:?}").into()
@@ -412,46 +449,96 @@ mod enabled {
     }
     pub fn run() -> ResultV1<()> {
         let args = std::env::args().collect::<Vec<_>>();
-        if args.len() != 2 {
-            return Err("expected one GPU unique ID".into());
-        }
-        let unique_id = if let Some(hex) = args[1].strip_prefix("0x") {
-            u64::from_str_radix(hex, 16)?
-        } else {
-            args[1].parse()?
-        };
-        if unique_id == 0 {
-            return Err("zero GPU unique ID".into());
-        }
-        let cases = std::thread::Builder::new()
+        let (unique_id, profile) = arguments(&args)?;
+        // ACQUIRE_VM retains process-lifetime admission even after queue teardown.
+        // The external runner, not a thread loop, creates the next case owner.
+        let observed = std::thread::Builder::new()
             .name("r66-owner".into())
-            .spawn(move || -> Result<Vec<Value>, String> {
-                let mut cases = Vec::new();
-                for (bytes, packets) in [(SMALL, 1), (LARGE, 2)] {
-                    for h2d in [true, false] {
-                        for compute_first in [true, false] {
-                            let ordinal = cases.len();
-                            cases.push(
-                                case(unique_id, ordinal, bytes, packets, h2d, compute_first)
-                                    .map_err(|error| format!(
-                                        "R66 cell={ordinal} bytes={bytes} packets={packets} direction={} order={}: {error}",
-                                        if h2d { "h2d" } else { "d2h" },
-                                        if compute_first { "compute-first" } else { "copy-first" },
-                                    ))?,
-                            );
-                        }
-                    }
-                }
-                Ok(cases)
+            .spawn(move || -> Result<Value, String> {
+                let CaseProfile {
+                    ordinal,
+                    bytes,
+                    packets,
+                    h2d,
+                    compute_first,
+                } = profile;
+                case(unique_id, ordinal, bytes, packets, h2d, compute_first)
+                    .map_err(|error| format!(
+                        "R66 cell={ordinal} bytes={bytes} packets={packets} direction={} order={}: {error}",
+                        if h2d { "h2d" } else { "d2h" },
+                        if compute_first { "compute-first" } else { "copy-first" },
+                    ))
             })?
             .join()
             .map_err(|_| "R66 owner panicked")?
             .map_err(|error| -> Box<dyn Error> { error.into() })?;
         println!(
             "{}",
-            json!({"schema": "fe2o3.runtime.r66-retained-coexistence.v1", "cases": cases, "owner_threads": 1, "cleanup": "complete", "physical_overlap": "unmeasured"})
+            json!({"schema": "fe2o3.runtime.r66-retained-coexistence-cell.v1",
+                "unique_id": unique_id, "case": observed, "owner_threads": 1,
+                "process_scope": "one-cell-per-process", "cleanup": "complete",
+                "physical_overlap": "unmeasured"})
         );
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn argv(values: &[&str]) -> Vec<String> {
+            values.iter().map(|value| (*value).to_owned()).collect()
+        }
+
+        #[test]
+        fn selectors_preserve_the_exact_eight_cell_roster() {
+            let mut ordinal = 0;
+            for (bytes, packets) in [(SMALL, 1), (LARGE, 2)] {
+                for h2d in [true, false] {
+                    for compute_first in [true, false] {
+                        let (unique_id, profile) = arguments(&argv(&[
+                            "r66",
+                            "0xab83d2ffef0d3cdf",
+                            "--case",
+                            &ordinal.to_string(),
+                        ]))
+                        .unwrap();
+                        assert_eq!(unique_id, 0xab83d2ffef0d3cdf);
+                        assert_eq!(
+                            profile,
+                            CaseProfile {
+                                ordinal,
+                                bytes,
+                                packets,
+                                h2d,
+                                compute_first,
+                            }
+                        );
+                        ordinal += 1;
+                    }
+                }
+            }
+            assert_eq!(ordinal, 8);
+        }
+
+        #[test]
+        fn invalid_arguments_reject_before_any_native_owner_exists() {
+            for values in [
+                vec!["r66"],
+                vec!["r66", "1"],
+                vec!["r66", "0", "--case", "0"],
+                vec!["r66", "invalid", "--case", "0"],
+                vec!["r66", "1", "--case", "8"],
+                vec!["r66", "1", "--case", "00"],
+                vec!["r66", "1", "--case", "-1"],
+                vec!["r66", "1", "--case", "+1"],
+                vec!["r66", "1", "--case", "true"],
+                vec!["r66", "1", "--all", "0"],
+                vec!["r66", "1", "--case", "0", "extra"],
+            ] {
+                assert!(arguments(&argv(&values)).is_err(), "accepted {values:?}");
+            }
+        }
     }
 }
 

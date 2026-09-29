@@ -10,9 +10,10 @@ use crate::qualification_gfx942_vecadd_v1::{
 };
 use crate::{
     RuntimeAllocationIdV1, RuntimeAsyncEngineCallErrorV1, RuntimeAsyncEngineConfigV1,
-    RuntimeAsyncLaunchRequestV1, RuntimeAsyncOwnedDispositionV1, RuntimeAsyncOwnedEngineV1,
-    RuntimeAsyncProgressConfigV1, RuntimeCompletionStatusV1, RuntimeContextV1, RuntimeModuleIdV1,
-    RuntimeStreamIdV1, TypedRuntimeKernelV1,
+    RuntimeAsyncLaunchRequestV1, RuntimeAsyncOperationResultV1, RuntimeAsyncOwnedDispositionV1,
+    RuntimeAsyncOwnedEngineV1, RuntimeAsyncProgressConfigV1, RuntimeAsyncProgressHandleV1,
+    RuntimeCompletionStatusV1, RuntimeContextV1, RuntimeModuleIdV1, RuntimeStreamIdV1,
+    TypedRuntimeKernelV1,
 };
 use std::future::Future;
 use std::sync::mpsc::{SyncSender, sync_channel};
@@ -134,6 +135,76 @@ fn sampled_receipts(backend: &KfdRuntimeBackendV1) -> Vec<serde_json::Value> {
     rows
 }
 
+fn fail_owned_observation(
+    engine: RuntimeAsyncOwnedEngineV1<KfdRuntimeBackendV1>,
+    handle: &RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>,
+    wave: usize,
+    ordinal: usize,
+    mut result: RuntimeAsyncOperationResultV1<Arguments, KfdRuntimeBackendErrorV1>,
+) -> ! {
+    let submission = result.submission.take();
+    let snapshot = handle.observer().enqueue_with_context(move |context| {
+        let submission = submission.as_ref()
+            .and_then(|submission| context.backend_submission_for_test_v1(submission).ok());
+        let backend = context.backend();
+        let first_failure = take_unpublished_compute_failure_for_test_v1().map(|failure| {
+            serde_json::json!({
+                "submission": failure.submission, "stream": failure.stream,
+                "stage": failure.stage, "kind": format!("{:?}", failure.kind),
+                "quiescent": failure.quiescent, "detail": failure.detail(),
+                "detail_truncated": failure.detail_truncated,
+            })
+        });
+        serde_json::json!({
+            "submission": submission,
+            "submission_published": submission.and_then(|id| backend.submissions.get(&id))
+                .map(|record| record.profile_dispatch_published),
+            "context_terminal": context.is_terminal(), "backend_terminal": backend.terminal,
+            "pending_compute": backend.pending_compute.len(),
+            "completed_successfully": backend.submissions.values()
+                .filter(|record| record.status == BackendPollV1::Succeeded).count(),
+            "completed_failed": backend.submissions.values()
+                .filter(|record| matches!(record.status, BackendPollV1::Failed { .. })).count(),
+            "active_lanes": usize::from(backend.active.is_some()) + backend.auxiliary_compute_lanes.iter()
+                .filter(|lane| lane.active.is_some()).count(),
+            "retained_pipeline": backend.compute_pipeline.len() + backend.auxiliary_compute_lanes.iter()
+                .map(|lane| lane.pipeline.len()).sum::<usize>(),
+            "native_dirty_extents": backend.native_dirty_extents,
+            "allocations_without_content_hash": backend.allocations.ordinary_iter()
+                .filter(|(_, allocation)| allocation.content_sha256.is_none()).count(),
+            "first_unpublished_failure": first_failure,
+        })
+    });
+    let state = match snapshot {
+        Ok(snapshot) => match await_bounded(snapshot) {
+            Ok(state) => state,
+            Err(error) => serde_json::json!({"snapshot_error": format!("{error:?}")}),
+        },
+        Err(error) => serde_json::json!({"snapshot_enqueue_error": format!("{error:?}")}),
+    };
+    eprintln!("scale_owner_failure_json={}", serde_json::json!({
+        "wave": wave, "ordinal": ordinal, "state": state,
+        "observation": format!("{:?}", result.observation),
+        "rejected_observations": result.rejected_observations,
+        "last_rejected_observation": format!("{:?}", result.last_rejected_observation),
+    }));
+    // Stop and join through the owning engine. Failure never authorizes manual
+    // native teardown, and a retained disposition is not cleanup success.
+    let shutdown = match engine.shutdown() {
+        Ok(shutdown) => serde_json::json!({
+            "disposition": format!("{:?}", shutdown.disposition),
+            "worker_panicked": shutdown.worker_panicked,
+            "native_failure": format!("{:?}", shutdown.native_failure),
+            "cleanup_complete": shutdown.cleanup.as_ref().map(|report| report.is_complete()),
+            "cleanup_failure_count": shutdown.cleanup.as_ref().map(|report| report.failures().len()),
+            "retained": shutdown.cleanup.as_ref().map(|report| format!("{:?}", report.retained())),
+        }),
+        Err(error) => serde_json::json!({"join_error": format!("{error:?}")}),
+    };
+    eprintln!("scale_owner_failure_shutdown_json={shutdown}");
+    panic!("scaled owner observation failed at wave {wave}, ordinal {ordinal}");
+}
+
 #[test]
 #[ignore = "requires an idle selected MI300X, isolated process and external process-group deadline"]
 fn native_scaled_owned_two_waves_2048_operations_reuse_and_cleanup() {
@@ -172,6 +243,7 @@ fn run_owned_waves(replace: bool) {
                     KfdRuntimeProfilerConfigV1::new(scope, PROFILE_CAPACITY).unwrap(),
                 )
                 .map_err(|error| format!("profiler: {error:?}"))?;
+            reset_unpublished_compute_failure_for_test_v1();
             Ok(RuntimeContextV1::open(backend)?)
         },
         config,
@@ -308,10 +380,9 @@ fn run_owned_waves(replace: bool) {
         for (ordinal, operation) in operations.into_iter().enumerate() {
             let result = await_bounded(operation).unwrap();
             checks.push(result.rejected_observations == 0);
-            assert_eq!(
-                result.observation.unwrap(),
-                RuntimeCompletionStatusV1::Succeeded
-            );
+            if !matches!(result.observation, Ok(RuntimeCompletionStatusV1::Succeeded)) {
+                fail_owned_observation(engine, &handle, wave, ordinal, result);
+            }
             let submission = result.submission.unwrap();
             checks.push(submission.stream() == prepared.streams[ordinal % LANES]);
             returned.push(submission);

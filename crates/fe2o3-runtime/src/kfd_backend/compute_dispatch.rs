@@ -1,5 +1,133 @@
 use super::*;
 
+#[cfg(test)]
+pub(super) struct UnpublishedComputeFailureForTestV1 {
+    pub(super) submission: u64,
+    pub(super) stream: u64,
+    pub(super) stage: &'static str,
+    pub(super) kind: KfdRuntimeBackendErrorKindV1,
+    pub(super) quiescent: bool,
+    pub(super) detail_truncated: bool,
+    detail: [u8; 512],
+    detail_len: usize,
+}
+
+#[cfg(test)]
+impl UnpublishedComputeFailureForTestV1 {
+    pub(super) fn detail(&self) -> &str {
+        std::str::from_utf8(&self.detail[..self.detail_len]).unwrap()
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    // Explicit opt-in, first failure only, no allocation or native authority.
+    static UNPUBLISHED_COMPUTE_FAILURE_FOR_TEST_V1:
+        std::cell::RefCell<(bool, Option<UnpublishedComputeFailureForTestV1>)> =
+        const { std::cell::RefCell::new((false, None)) };
+}
+
+#[cfg(test)]
+pub(super) fn reset_unpublished_compute_failure_for_test_v1() {
+    UNPUBLISHED_COMPUTE_FAILURE_FOR_TEST_V1.with(|cell| *cell.borrow_mut() = (true, None));
+}
+
+#[cfg(test)]
+pub(super) fn take_unpublished_compute_failure_for_test_v1()
+-> Option<UnpublishedComputeFailureForTestV1> {
+    UNPUBLISHED_COMPUTE_FAILURE_FOR_TEST_V1.with(|cell| {
+        let mut state = cell.borrow_mut();
+        state.0 = false;
+        state.1.take()
+    })
+}
+
+#[cfg(test)]
+fn record_unpublished_compute_failure_for_test_v1(
+    submission: u64,
+    stream: u64,
+    stage: &'static str,
+    failure: &RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+) {
+    UNPUBLISHED_COMPUTE_FAILURE_FOR_TEST_V1.with(|cell| {
+        let mut state = cell.borrow_mut();
+        if !state.0 || state.1.is_some() {
+            return;
+        }
+        let (error, quiescent) = match failure {
+            RuntimeBackendFailureV1::Rejected(error) => (error, false),
+            RuntimeBackendFailureV1::Quiescent(error) => (error, true),
+            RuntimeBackendFailureV1::Terminal(_) => return,
+        };
+        let mut detail = [0; 512];
+        let mut detail_len = error.detail().len().min(detail.len());
+        while !error.detail().is_char_boundary(detail_len) {
+            detail_len -= 1;
+        }
+        detail[..detail_len].copy_from_slice(&error.detail().as_bytes()[..detail_len]);
+        state.1 = Some(UnpublishedComputeFailureForTestV1 {
+            submission,
+            stream,
+            stage,
+            kind: error.kind(),
+            quiescent,
+            detail_truncated: detail_len != error.detail().len(),
+            detail,
+            detail_len,
+        });
+    });
+}
+
+#[cfg(test)]
+#[test]
+fn unpublished_failure_capture_is_opt_in_first_only_bounded_and_utf8_safe() {
+    let rejected = RuntimeBackendFailureV1::Rejected(KfdRuntimeBackendErrorV1::new(
+        KfdRuntimeBackendErrorKindV1::Unsupported,
+        "must not replace the first failure",
+    ));
+    assert!(take_unpublished_compute_failure_for_test_v1().is_none());
+    record_unpublished_compute_failure_for_test_v1(1, 2, "disabled", &rejected);
+    assert!(take_unpublished_compute_failure_for_test_v1().is_none());
+
+    reset_unpublished_compute_failure_for_test_v1();
+    let terminal = RuntimeBackendFailureV1::Terminal(KfdRuntimeBackendErrorV1::new(
+        KfdRuntimeBackendErrorKindV1::Terminal,
+        "terminal failures must not masquerade as unpublished settlement",
+    ));
+    record_unpublished_compute_failure_for_test_v1(3, 4, "terminal", &terminal);
+    UNPUBLISHED_COMPUTE_FAILURE_FOR_TEST_V1.with(|cell| {
+        assert!(cell.borrow().1.is_none());
+    });
+    let prefix = "a".repeat(511);
+    let quiescent = RuntimeBackendFailureV1::Quiescent(KfdRuntimeBackendErrorV1::new(
+        KfdRuntimeBackendErrorKindV1::Native,
+        format!("{prefix}\u{00e9}tail"),
+    ));
+    record_unpublished_compute_failure_for_test_v1(5, 6, "staging", &quiescent);
+    record_unpublished_compute_failure_for_test_v1(7, 8, "later", &rejected);
+    let captured = take_unpublished_compute_failure_for_test_v1().unwrap();
+    assert_eq!((captured.submission, captured.stream), (5, 6));
+    assert_eq!(captured.stage, "staging");
+    assert_eq!(captured.kind, KfdRuntimeBackendErrorKindV1::Native);
+    assert!(captured.quiescent && captured.detail_truncated);
+    assert_eq!(captured.detail(), prefix);
+    assert!(captured.detail().len() <= 512);
+    record_unpublished_compute_failure_for_test_v1(9, 10, "disabled-after-take", &rejected);
+    assert!(take_unpublished_compute_failure_for_test_v1().is_none());
+
+    reset_unpublished_compute_failure_for_test_v1();
+    let exact_detail = "\u{00e9}".repeat(256);
+    let exact = RuntimeBackendFailureV1::Rejected(KfdRuntimeBackendErrorV1::new(
+        KfdRuntimeBackendErrorKindV1::Capacity,
+        &exact_detail,
+    ));
+    record_unpublished_compute_failure_for_test_v1(11, 12, "exact-bound", &exact);
+    let captured = take_unpublished_compute_failure_for_test_v1().unwrap();
+    assert_eq!(captured.detail().len(), 512);
+    assert_eq!(captured.detail(), exact_detail);
+    assert!(!captured.quiescent && !captured.detail_truncated);
+}
+
 impl KfdRuntimeBackendV1 {
     pub(super) fn compute_stream_head_publication_blocker_v1(
         &self,
@@ -1318,7 +1446,12 @@ impl KfdRuntimeBackendV1 {
         };
         if let Err(failure) = staging {
             return match failure {
-                RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_) => {
+                _failure @ (RuntimeBackendFailureV1::Rejected(_)
+                | RuntimeBackendFailureV1::Quiescent(_)) => {
+                    #[cfg(test)]
+                    record_unpublished_compute_failure_for_test_v1(
+                        pending.id, pending.launch.stream, "staging", &_failure,
+                    );
                     self.settle_failed_unpublished_compute_v1(pending, -1)
                 }
                 failure @ RuntimeBackendFailureV1::Terminal(_) => {
@@ -1397,7 +1530,12 @@ impl KfdRuntimeBackendV1 {
                     )),
                 }
             }
-            Err(RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_)) => {
+            Err(_failure @ (RuntimeBackendFailureV1::Rejected(_)
+            | RuntimeBackendFailureV1::Quiescent(_))) => {
+                #[cfg(test)]
+                record_unpublished_compute_failure_for_test_v1(
+                    pending.id, pending.launch.stream, "preparation-or-publication", &_failure,
+                );
                 self.release_compute_lane_lease_v1(pending.launch.stream, lane);
                 self.settle_failed_unpublished_compute_v1(pending, -1)
             }

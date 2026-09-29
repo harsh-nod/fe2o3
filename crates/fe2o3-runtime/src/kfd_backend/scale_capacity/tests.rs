@@ -81,6 +81,114 @@ fn rejected<T>(
 }
 
 #[test]
+fn scaled_exact_vecadd_output_metadata_denial_settles_and_refunds_without_native_work() {
+    use crate::qualification_gfx942_vecadd_v1::{
+        GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1,
+        GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1,
+        GFX942_VECADD_QUALIFICATION_SIGNATURE_V1, admit_gfx942_vecadd_qualification_v1,
+        gfx942_vecadd_qualification_bindings_v1,
+        gfx942_vecadd_qualification_explicit_kernarg_v1,
+    };
+
+    for truthful_completed_output in [false, true] {
+        let account = account(64 * 1024 * 1024, 32);
+        let mut backend = backend(account.clone());
+        let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
+        let buffers = admitted.host_buffers().unwrap();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let module = backend.load_module_v1(7, admitted.hsaco()).unwrap();
+        let kernel = backend
+            .resolve_kernel_v1(module, admitted.kernel_name(), GFX942_VECADD_QUALIFICATION_SIGNATURE_V1)
+            .unwrap();
+        let allocations = [buffers.left(), buffers.right(), buffers.output()].map(|bytes| {
+            let allocation = backend.allocate_v1(
+                7,
+                RuntimeMemoryKindV1::HostVisible,
+                GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+                GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1,
+            ).unwrap();
+            backend.write_allocation_v1(allocation, 0, bytes).unwrap();
+            allocation
+        });
+        let launch = OwnedComputeLaunchV1 {
+            stream,
+            kernel,
+            explicit_kernarg: gfx942_vecadd_qualification_explicit_kernarg_v1().into(),
+            bindings: gfx942_vecadd_qualification_bindings_v1(allocations).unwrap().into(),
+            geometry: admitted.geometry(),
+            semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+        };
+        for reuse_bound_recipe in [false, true] {
+            backend.prepare_launch(launch.borrowed(), false, reuse_bound_recipe).unwrap();
+        }
+        if truthful_completed_output {
+            backend.write_allocation_v1(allocations[2], 0, buffers.expected_output()).unwrap();
+        } else {
+            // Model only the host metadata invalidation from logical writeback.
+            // No native completion, queue, DATA lease or receipt is fabricated.
+            backend.allocations.get_mut(&allocations[2]).unwrap().content_sha256 = None;
+        }
+        let expected_detail = "direct KFD launch authority denied the exact invocation";
+        for reuse_bound_recipe in [false, true] {
+            assert!(matches!(
+                backend.prepare_launch(launch.borrowed(), false, reuse_bound_recipe),
+                Err(RuntimeBackendFailureV1::Rejected(error))
+                    if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+                        && error.detail() == expected_detail
+            ));
+        }
+        // Match the existing CPU three-binding fixture's region admission;
+        // storage remains Synthetic and no native backing is claimed.
+        for allocation in allocations {
+            let record = backend.allocations.get_mut(&allocation).unwrap();
+            assert!(matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Synthetic));
+            record.sdma_backed = true;
+            record.sdma_initialized = true;
+        }
+        let before = account.usage();
+        reset_unpublished_compute_failure_for_test_v1();
+        // This CPU-only switch permits host admission. The exact gate must
+        // reject before publication can obtain any native resource.
+        backend.native_available = true;
+        let first = backend.submit_v1(launch.borrowed()).unwrap();
+        let second = backend.submit_v1(launch.borrowed()).unwrap();
+        for submission in [first, second] {
+            assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Failed { code: -1 });
+            assert!(!backend.submissions[&submission].profile_dispatch_published);
+        }
+        let diagnostic = take_unpublished_compute_failure_for_test_v1().unwrap();
+        assert_eq!((diagnostic.submission, diagnostic.stream), (first, stream));
+        assert_eq!(diagnostic.stage, "preparation-or-publication");
+        assert_eq!(diagnostic.kind, KfdRuntimeBackendErrorKindV1::Unsupported);
+        assert_eq!(diagnostic.detail(), expected_detail);
+        assert!(!diagnostic.quiescent && !diagnostic.detail_truncated);
+        assert!(take_unpublished_compute_failure_for_test_v1().is_none());
+        assert!(backend.pending_compute.is_empty() && backend.pending_compute_streams.is_empty());
+        assert!(backend.allocation_custody.is_empty() && backend.compute_module_retain_counts.is_empty());
+        assert!(backend.compute_dependency_retain_counts.is_empty() && backend.stream_compute_lanes.is_empty());
+        assert_eq!(backend.compute_completion_reservations, 0);
+        assert_eq!(account.usage(), before);
+        assert!(!backend.terminal && backend.active.is_none() && backend.compute_pipeline.is_empty());
+        assert!(backend.queue.is_none() && backend.admitted_device.is_none() && backend.terminal_memory.is_none());
+        assert!(backend.native_compute_lanes.iter().all(Option::is_none));
+        for submission in [second, first] {
+            backend.release_submission_v1(submission).unwrap();
+        }
+        assert!(backend.submissions.is_empty() && backend.stream_submission_tails.is_empty());
+        backend.native_available = false;
+        for allocation in allocations {
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+        backend.unload_module_v1(module).unwrap();
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+        drop(backend);
+        assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+        assert_eq!(account.usage().retained_records, 0);
+    }
+}
+
+#[test]
 fn scaled_startup_refunds_first_table_on_second_table_byte_or_record_failure() {
     for (bytes, records) in [(pipeline_bytes() * 2 - 1, 2), (pipeline_bytes() * 2, 1)] {
         let account = account(bytes, records);

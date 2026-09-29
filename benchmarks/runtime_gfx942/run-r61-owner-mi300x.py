@@ -84,6 +84,7 @@ class OwnerRunner(base.Runner):
     schema = "fe2o3.r61-owner-copy-qualification.v1"
     claim_scope = "one-device-one-stream-h2d-d2h-abandoned-observer-custody-and-cleanup"
     cargo_features = ()
+    qualification_runs = 2
 
     def cargo_feature_arguments(self):
         if self.cargo_features not in ((), ("fe2o3-runtime/hardware-qualification",)):
@@ -92,6 +93,11 @@ class OwnerRunner(base.Runner):
 
     def validate_qualifier_output(self, output):
         validate_output(output, self.expected_pass)
+
+    def qualification_metadata(self):
+        if type(self.qualification_runs) is not int or self.qualification_runs <= 0:
+            raise base.RunError("qualification run count must be a positive integer")
+        return {"qualification_runs": self.qualification_runs}
 
     def snapshot(self):
         super().snapshot()
@@ -203,7 +209,7 @@ class OwnerRunner(base.Runner):
         self.run(["/usr/bin/taskset", "--cpu-list", self.topology["measurement_cpu_list"],
                   "/usr/bin/numactl", f"--physcpubind={self.topology['measurement_cpu_list']}",
                   f"--membind={self.topology['numa_node']}", "/usr/bin/true"], label="placement-probe")
-        for ordinal in range(2):
+        for ordinal in range(self.qualification_runs):
             output = self.phase(f"owner-{ordinal}", "kfd", [base.UNIQUE_ID])
             self.validate_qualifier_output(output.read_text())
         self.verify_source()
@@ -215,6 +221,7 @@ class OwnerRunner(base.Runner):
                 or base.sha256_file(retained_binary) != self.binary_hashes["kfd"]
                 or base.sha256_file(self.binaries["kfd"]) != self.binary_hashes["kfd"]):
             raise base.RunError("retained owner binary differs from the qualified build")
+        qualification = self.qualification_metadata()
         destination = self.args.output_dir / f"{self.label}-owner-{secrets.token_hex(16)}"
         base.write_json(self.evidence / "commands.json", self.commands)
         base.write_json(self.evidence / "provenance.json", {
@@ -224,7 +231,7 @@ class OwnerRunner(base.Runner):
             "source_archive_sha256": base.sha256_file(self.evidence / "source.tar"),
             "snapshot_input_sha256": self.snapshot_input_hashes,
             "tool_identity": self.tool_hashes, "binary_sha256": self.binary_hashes,
-            "topology": self.topology, "qualification_runs": 2,
+            "topology": self.topology, **qualification,
             "census_retry_policy": "abort-set", "performance_claim": False,
         })
         base.write_json(self.evidence / "sha256.json", base.tree_hashes(self.evidence))

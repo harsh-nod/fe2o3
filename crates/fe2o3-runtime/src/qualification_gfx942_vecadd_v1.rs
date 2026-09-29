@@ -650,6 +650,45 @@ mod tests {
     }
 
     #[test]
+    fn qualification_gate_rejects_unknown_or_truthful_completed_output_hash() {
+        let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
+        let buffers = admitted.host_buffers().unwrap();
+        let bindings = gfx942_vecadd_qualification_bindings_v1([10, 20, 30]).unwrap();
+        let dispatch_abi = authority_abi_v1();
+        let kernarg = gfx942_vecadd_qualification_explicit_kernarg_v1();
+        let accepts = |allocations: &[KfdRuntimeAuthorityAllocationV1<'_>]| {
+            admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                module_image: HSACO_BYTES_V1,
+                module_sha256: GFX942_VECADD_QUALIFICATION_HSACO_SHA256_V1,
+                kernel_name: GFX942_VECADD_QUALIFICATION_KERNEL_V1,
+                signature: GFX942_VECADD_QUALIFICATION_SIGNATURE_V1,
+                explicit_kernarg: &kernarg,
+                complete_kernarg_template: &kernarg,
+                bindings: &bindings,
+                dispatch_abi: &dispatch_abi,
+                allocations,
+                geometry: GFX942_VECADD_QUALIFICATION_GEOMETRY_V1,
+                semantic_launch: crate::KfdRuntimeSemanticLaunchV1::Ordinary,
+            })
+        };
+        let mut allocations = [
+            authority_allocation_v1(10, buffers.left()),
+            authority_allocation_v1(20, buffers.right()),
+            authority_allocation_v1(30, buffers.output()),
+        ];
+        assert!(accepts(&allocations));
+        // Logical writeback invalidates this hash before any host readback.
+        allocations[2].content_sha256 = None;
+        assert!(!accepts(&allocations));
+        allocations[2] = authority_allocation_v1(30, buffers.expected_output());
+        assert!(!accepts(&allocations));
+        // Only restoring the actual sentinel bytes and their truthful hash
+        // restores V1 admission; completed output is a different invocation.
+        allocations[2] = authority_allocation_v1(30, buffers.output());
+        assert!(accepts(&allocations));
+    }
+
+    #[test]
     fn qualification_gate_rejects_each_policy_dimension_independently() {
         let mut invocation = TestInvocationV1::new();
         assert!(invocation.authorize_v1(HSACO_BYTES_V1));

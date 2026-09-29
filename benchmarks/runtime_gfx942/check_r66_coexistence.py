@@ -8,6 +8,8 @@ import pathlib
 import re
 
 SCHEMA = "fe2o3.runtime.r66-retained-coexistence.v1"
+CELL_SCHEMA = "fe2o3.runtime.r66-retained-coexistence-cell.v1"
+UNIQUE_ID = 0xab83d2ffef0d3cdf
 MAX_OUTPUT_BYTES = 32768
 PAD = 128
 PROFILES = tuple((size, packets, direction, order)
@@ -87,7 +89,7 @@ def expected_credits(ordinal):
             "eighth_request": "capacity-rejected-unchanged", "retirement": "retained", "after_cleanup": "zero"}
 
 
-def validate_output(output):
+def parse_output(output):
     require(type(output) is str and len(output) <= MAX_OUTPUT_BYTES and output.endswith("\n")
             and output.count("\n") == 1, "expected one bounded JSON record with final newline")
     try:
@@ -95,6 +97,48 @@ def validate_output(output):
         document = json.loads(output, object_pairs_hook=unique_object, parse_constant=invalid_constant)
     except (ValueError, TypeError, RecursionError) as error:
         raise ValidationError(f"invalid R66 evidence: {error}") from error
+    return document
+
+
+def validate_case(case, ordinal, identities):
+    profile = PROFILES[ordinal]
+    exact_keys(case, CASE_KEYS)
+    require(all(type(case[key]) is int for key in ("ordinal", "bytes", "packets"))
+            and case["ordinal"] == ordinal
+            and (case["bytes"], case["packets"], case["direction"], case["order"]) == profile
+            and case["canaries"] == "complete", "case profile mismatch")
+    credits = case["logical_credits"]
+    exact_keys(credits, set(expected_credits(ordinal)))
+    require(all(type(credits[key]) is int for key in ("capacity_bytes", "capacity_records", "full_bytes", "full_records"))
+            and credits == expected_credits(ordinal), "requested-allocation credit accounting mismatch")
+    for key in ("first", "both", "after_copy", "after_compute"):
+        observation(case[key])
+    first, both, after_copy, after_compute = (case[key] for key in
+                                             ("first", "both", "after_copy", "after_compute"))
+    require(both["compute"] is not None and both["copy"] is not None
+            and both["copy_packets"] == case["packets"], "missing co-retained native publication")
+    first_kind = "compute" if case["order"] == "compute-first" else "copy"
+    other_kind = "copy" if first_kind == "compute" else "compute"
+    require(first[first_kind] == both[first_kind]
+            and first[first_kind + "_membership"] == both[first_kind + "_membership"]
+            and first[other_kind] is None
+            and first["copy_packets"] == (case["packets"] if first_kind == "copy" else 0),
+            "publication order changed retained identity")
+    require(after_copy["compute"] == both["compute"]
+            and after_copy["compute_membership"] == both["compute_membership"]
+            and after_copy["copy"] is None, "copy retirement did not preserve exact compute custody")
+    require(after_compute["compute"] is None and after_compute["copy"] is None,
+            "native work retained after retirement")
+    for key in ("compute", "copy", "compute_membership", "copy_membership"):
+        require(both[key] not in identities, "native/runtime occurrence was reused")
+        identities.add(both[key])
+    for key, expected in expected_hashes(ordinal).items():
+        require(case[key] == expected, f"independent full-buffer or R26 output mismatch: {key}")
+
+
+def validate_output(output):
+    """Historical single-process matrix, with its original cross-cell checks."""
+    document = parse_output(output)
     exact_keys(document, {"schema", "cases", "owner_threads", "cleanup", "physical_overlap"})
     require(document["schema"] == SCHEMA and document["cleanup"] == "complete"
             and document["physical_overlap"] == "unmeasured"
@@ -103,39 +147,23 @@ def validate_output(output):
     cases = document["cases"]
     require(type(cases) is list and len(cases) == len(PROFILES), "incomplete profile matrix")
     identities = set()
-    for ordinal, (case, profile) in enumerate(zip(cases, PROFILES)):
-        exact_keys(case, CASE_KEYS)
-        require(all(type(case[key]) is int for key in ("ordinal", "bytes", "packets"))
-                and case["ordinal"] == ordinal
-                and (case["bytes"], case["packets"], case["direction"], case["order"]) == profile
-                and case["canaries"] == "complete", "case profile mismatch")
-        credits = case["logical_credits"]
-        exact_keys(credits, set(expected_credits(ordinal)))
-        require(all(type(credits[key]) is int for key in ("capacity_bytes", "capacity_records", "full_bytes", "full_records"))
-                and credits == expected_credits(ordinal), "requested-allocation credit accounting mismatch")
-        for key in ("first", "both", "after_copy", "after_compute"):
-            observation(case[key])
-        first, both, after_copy, after_compute = (case[key] for key in
-                                                 ("first", "both", "after_copy", "after_compute"))
-        require(both["compute"] is not None and both["copy"] is not None
-                and both["copy_packets"] == case["packets"], "missing co-retained native publication")
-        first_kind = "compute" if case["order"] == "compute-first" else "copy"
-        other_kind = "copy" if first_kind == "compute" else "compute"
-        require(first[first_kind] == both[first_kind]
-                and first[first_kind + "_membership"] == both[first_kind + "_membership"]
-                and first[other_kind] is None
-                and first["copy_packets"] == (case["packets"] if first_kind == "copy" else 0),
-                "publication order changed retained identity")
-        require(after_copy["compute"] == both["compute"]
-                and after_copy["compute_membership"] == both["compute_membership"]
-                and after_copy["copy"] is None, "copy retirement did not preserve exact compute custody")
-        require(after_compute["compute"] is None and after_compute["copy"] is None,
-                "native work retained after retirement")
-        for key in ("compute", "copy", "compute_membership", "copy_membership"):
-            require(both[key] not in identities, "native/runtime occurrence was reused")
-            identities.add(both[key])
-        for key, expected in expected_hashes(ordinal).items():
-            require(case[key] == expected, f"independent full-buffer or R26 output mismatch: {key}")
+    for ordinal, case in enumerate(cases):
+        validate_case(case, ordinal, identities)
+    return document
+
+
+def validate_cell_output(output, ordinal):
+    require(type(ordinal) is int and 0 <= ordinal < len(PROFILES), "exact external case selector")
+    document = parse_output(output)
+    exact_keys(document, {"schema", "unique_id", "case", "owner_threads", "process_scope", "cleanup", "physical_overlap"})
+    require(document["schema"] == CELL_SCHEMA and document["cleanup"] == "complete"
+            and document["physical_overlap"] == "unmeasured"
+            and type(document["unique_id"]) is int and document["unique_id"] == UNIQUE_ID
+            and type(document["owner_threads"]) is int and document["owner_threads"] == 1
+            and document["process_scope"] == "one-cell-per-process", "unsupported isolated cell claim")
+    # The controller binds this output to one separately recorded process. Raw
+    # generation/receipt digests are not globally unique across process starts.
+    validate_case(document["case"], ordinal, set())
     return document
 
 
@@ -152,12 +180,17 @@ def read_output(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=pathlib.Path)
+    parser.add_argument("--case", type=int, choices=range(len(PROFILES)))
     args = parser.parse_args()
     try:
-        validate_output(read_output(args.output))
+        if args.case is None:
+            validate_output(read_output(args.output))
+        else:
+            validate_cell_output(read_output(args.output), args.case)
     except (OSError, ValidationError) as error:
         parser.exit(1, f"R66 rejected: {error}\n")
-    print("PASS R66 retained custody: 8 cells; physical overlap unmeasured")
+    print("PASS R66 retained custody: " + ("8 cells" if args.case is None else "1 isolated cell")
+          + "; physical overlap unmeasured")
 
 
 if __name__ == "__main__":
