@@ -74,7 +74,7 @@ macro_rules! native_entrypoint {
 
         // Prepay the common process-hardening and fixed FD take/close mechanics. Each
         // native capability, image, transport and durable operation charges separately.
-        const IO_WORK: usize = 8 + 64 * 1024;
+        const IO_WORK: usize = 8 + 64 * 1024 + INHERITED_CHECK_WORK;
         const FRAME: usize = 16 * 1024
             + Admission::PROCESS_STORAGE
             + Service::FD_PAIR_STORAGE
@@ -82,12 +82,14 @@ macro_rules! native_entrypoint {
             + Anchor::PAIR_STORAGE
             + Key::FILE_STORAGE
             + Inputs::INPUT_STORAGE
-            + Admission::READINESS_WRITER_STORAGE;
+            + Admission::READINESS_WRITER_STORAGE
+            + ROOT_CONTROL_STORAGE;
 
-        /// Runs one native protected issuer from the launcher's fixed slots 3..=11.
+        /// Runs one native protected issuer from its nominal inherited descriptor table.
+        /// V2 requires FD3..11; V3 additionally requires the root endpoint at FD12.
         ///
         /// Reads no argv/environment and never dispatches or retries through V1. The
-        /// existing descriptor ABI and process-hardening mechanics are shared, not
+        /// process-hardening and descriptor mechanics are shared, not
         /// admitted policy/key/service owners. The separately installed native binary
         /// must be pinned by the native supervisor's program/policy capabilities.
         ///
@@ -103,7 +105,9 @@ macro_rules! native_entrypoint {
         }
 
         fn run(b: &mut Budget<'_>) -> Result<()> {
+            // harden uses only setrlimit/getrlimit and prctl, never allocating FDs.
             let process = Process::harden().map_err(Error::Process)?;
+            require_inherited_table()?;
             b.reserve_storage(Admission::PROCESS_STORAGE + Inputs::INPUT_STORAGE)?;
             let (inputs, charge) = Inputs::from_inherited(b)?;
             b.reserve_storage(charge.additional_storage())?;
@@ -120,7 +124,8 @@ macro_rules! native_entrypoint {
                     + Client::FD_STORAGE
                     + Anchor::PAIR_STORAGE
                     + Key::FILE_STORAGE
-                    + Admission::READINESS_WRITER_STORAGE,
+                    + Admission::READINESS_WRITER_STORAGE
+                    + ROOT_CONTROL_STORAGE,
             )?;
             let root = take_inherited(ROOT)?;
             let peer = take_inherited(PEER)?;
@@ -131,6 +136,7 @@ macro_rules! native_entrypoint {
             let writer = take_inherited(READY)?;
             let anchor = take_inherited(ANCHOR)?;
             let anchor_pid = take_inherited(ANCHOR_PID)?;
+            let root_control = take_root_control()?;
 
             let expected = inputs.manifest().client();
             let expected = Expected::new(expected.pid(), expected.uid(), expected.gid())
@@ -152,7 +158,7 @@ macro_rules! native_entrypoint {
             let (admission, charge) = Admission::admit(process, service, policy, key, anchor, b)?;
             b.reserve_storage(charge.additional_storage())?;
             inputs.revalidate(b)?;
-            admission.serve_native_with_readiness(inputs.manifest(), writer, b)?;
+            serve(admission, &inputs, writer, root_control, b)?;
             inputs.revalidate(b)?;
             Ok(())
         }
@@ -161,6 +167,12 @@ macro_rules! native_entrypoint {
         mod tests {
             use super::*;
             use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+            fn entrypoint(b: &mut Budget<'_>) -> Result<()> {
+                $entrypoint(b)
+            }
+
+            include!("native_inherited_tests.rs");
 
             #[test]
             fn native_entrypoint_denies_work_before_hardening_or_inherited_io() {

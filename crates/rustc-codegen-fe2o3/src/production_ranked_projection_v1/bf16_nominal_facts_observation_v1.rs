@@ -195,3 +195,104 @@ mod tests;
 pub(crate) use tests::{
     inspect_foreign_nominal_facts_refusal_for_test_v1, inspect_nominal_routing_genuine_for_test_v1,
 };
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::production_ranked_projection_v1) fn with_checked_nominal_facts_observation_v1<
+    'g,
+    'i,
+    'w,
+    R: Copy + 'static,
+    F,
+>(
+    owner: &'g ProductionPreRankedKirOwnerV1,
+    inventory: &'i CanonicalKirInventoryV1<'g>,
+    root: SemanticFunctionIdV1,
+    caller: SemanticFunctionIdV1,
+    block: SemanticBlockIdV1,
+    call: &SemanticDirectCallV1,
+    budget: &mut Budget<'w>,
+    owned: &mut usize,
+    inspect: F,
+) -> Result<R>
+where
+    F: for<'q, 'r, 'b> FnOnce(
+        &fe2o3_lower_mir_kernel::CheckedBf16NominalCallV1<'q>,
+        &mut CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w>,
+        &mut usize,
+    ) -> Result<R>,
+{
+    // Additive sibling, not a second query or a replacement facts constructor.
+    // These credits belong to the caller's already-physical pending owner.
+    if budget.failed_work().is_some() || budget.failed_storage().is_some() {
+        return Err(Resource::Accounting.into());
+    }
+    let bytes = checked_facts_frame::<R, F>()?;
+    budget.charge_work(32)?;
+    let next = owned.checked_add(bytes).ok_or(Resource::Arithmetic)?;
+    budget.reserve_storage(bytes)?;
+    *owned = next;
+    owner.with_checked_bf16_nominal_call_v1(
+        inventory,
+        root,
+        caller,
+        block,
+        call,
+        budget,
+        |checked, budget| {
+            with_sparse_facts(owner, inventory, root, caller, budget, |facts| {
+                inspect(checked, facts, owned)
+            })
+        },
+    )
+}
+#[cfg(test)]
+fn checked_facts_frame<R, F>() -> Result<usize> {
+    let rows = [
+        size_of::<(
+            &ProductionPreRankedKirOwnerV1,
+            &CanonicalKirInventoryV1<'static>,
+            SemanticFunctionIdV1,
+            SemanticFunctionIdV1,
+            SemanticBlockIdV1,
+            &SemanticDirectCallV1,
+            &mut Budget<'static>,
+            &mut usize,
+            F,
+        )>(),
+        size_of::<(
+            &ProductionPreRankedKirOwnerV1,
+            &CanonicalKirInventoryV1<'static>,
+            SemanticFunctionIdV1,
+            SemanticFunctionIdV1,
+            &mut usize,
+            F,
+        )>(),
+        size_of::<(
+            &fe2o3_lower_mir_kernel::CheckedBf16NominalCallV1<'static>,
+            &mut CanonicalSourceAssertionFactsV1<'static, 'static, 'static, 'static, 'static>,
+            &mut usize,
+            F,
+        )>(),
+        size_of::<(
+            usize,
+            usize,
+            Option<usize>,
+            Result<usize>,
+            Resource,
+            QueryError,
+        )>(),
+        size_of::<(R, Result<R>, Result<R>, F)>(),
+        size_of::<(
+            [usize; 6],
+            std::array::IntoIter<usize, 6>,
+            usize,
+            usize,
+            Option<usize>,
+        )>(),
+    ];
+    rows.into_iter().try_fold(0usize, |sum, row| {
+        sum.checked_add(row)
+            .ok_or(QueryError::Resource(Resource::Arithmetic))
+    })
+}

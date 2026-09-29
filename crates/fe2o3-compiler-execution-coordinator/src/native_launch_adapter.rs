@@ -20,6 +20,9 @@ macro_rules! launch {
         use std::{fmt, mem::size_of, os::fd::AsFd, time::{Duration, Instant}};
 
         type Child = RetainedChild<$Prepared>;
+        // Nominal macro family, never a decoded wire version or caller option.
+        const REQUIRES_ORIGINAL_ROOT_CONTROL: bool = $version.as_bytes()[0] == b'3';
+        const LAUNCH_ENTRY: usize = 8;
         const DESTINATIONS: [i32; 11] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 220];
         const _: () = {
             use fe2o3_compiler_execution_supervisor::*;
@@ -40,6 +43,16 @@ macro_rules! launch {
         const BINDINGS_STORAGE: usize = size_of::<[Binding<'static>; 11]>();
         const FRAME: usize = 4 * size_of::<($Managed, Storage)>() + 4 * size_of::<Stage>()
             + 8 * size_of::<Error>() + 4 * size_of::<rustix::fs::Stat>() + 16384;
+
+        fn launch_entry(input: usize, b: &mut Budget<'_>) -> Result<()> {
+            b.with_prepaid_scope(input, LAUNCH_ENTRY, LAUNCH_ENTRY, 0, |_| {
+                if REQUIRES_ORIGINAL_ROOT_CONTROL {
+                    return Err(Error::Invalid(
+                        "native V3 indirect launch requires the original-root FD12 route"));
+                }
+                Ok(())
+            })
+        }
 
         fn decode_ready(bytes: &[u8], pid: rustix::process::Pid, deployment: &Deployment,
             b: &mut Budget<'_>) -> Result<(Ready, usize)> {
@@ -246,6 +259,9 @@ macro_rules! launch {
             /// pending/quarantined supervisor cleanup retains preparation and the anchor.
             /// Reserve returned growth before retaining the managed result. Inherited
             /// root startup/provisioning provenance remain separate deployment obligations.
+            /// V3 refuses before staging or clone until the original-root FD12 route
+            /// is supported. Supervisor FD12 remains the lifecycle lease, not a
+            /// substitute root-control endpoint. V2 retains its existing route.
             ///
             /// ```
             #[doc = concat!("use fe2o3_compiler_execution_coordinator::{", stringify!($Prepared), " as Prepared, ", stringify!($Managed), " as Managed, CompilerExecutionLaunchErrorV2 as Error, CompilerExecutionLaunchStorageV2 as Storage};")]
@@ -259,7 +275,8 @@ macro_rules! launch {
             pub fn launch(self, timeout: Duration, cleanup: &mut Cleanup, b: &mut Budget<'_>)
                 -> Result<($Managed, Storage)> {
                 let input = self.retained;
-                b.with_prepaid_scope(input, 8, LOCAL_WORK, FRAME + launch_io::ATTEMPT_SCRATCH, |b| {
+                launch_entry(input, b)?;
+                b.with_prepaid_scope(input, 0, LOCAL_WORK - LAUNCH_ENTRY, FRAME + launch_io::ATTEMPT_SCRATCH, |b| {
                     let deadline = launch_io::bounded_deadline(timeout)?;
                     self.validate_cleanup_guard(cleanup, b)?;
                     let continuity = self.managed_quota()?;

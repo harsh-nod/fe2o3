@@ -38,7 +38,6 @@ use super::{
     CurrentStaticIssuerMeasurementsV1 as Measurements, FileSnapshotV1 as Snapshot,
     IssuerAdmissionErrorKindV1 as Kind, ProtectedIssuerProcessV1 as Process,
     RetainedStaticIssuerExecutableV1 as Executable, native_checks::IssuerInspectionError,
-    require_close_on_exec, validate_executable_snapshot,
 };
 use crate::{
     ProtectedExternalAnchorServiceAdmissionV2 as Anchor,
@@ -54,14 +53,14 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKernelIrWorkBudgetV1 as Work, CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
 };
+use fe2o3_runtime_protocol::{CompilerExecutionAttestationErrorV1, SealedStaticApplicationErrorV1};
+#[cfg(test)]
 use fe2o3_runtime_protocol::{
-    CompilerExecutionAttestationErrorV1, CompilerExecutionIssuerMeasurementV1,
-    SEALED_STATIC_APPLICATION_WORKSPACE_BYTES_V1, SealedStaticApplicationErrorV1,
-    sealed_static_application_identity_v1, sealed_static_application_work_bound_v1,
-    sealed_static_issuer_runtime_measurement_v1,
+    CompilerExecutionIssuerMeasurementV1, sealed_static_issuer_runtime_measurement_v1,
 };
-use sha2::{Digest, Sha256};
-use std::{fmt, fs::File, marker::PhantomData, mem::size_of};
+#[cfg(test)]
+use std::fs::File;
+use std::{fmt, marker::PhantomData, mem::size_of};
 
 #[path = "compiler_execution_issuer_native_service_v3.rs"]
 pub(super) mod service;

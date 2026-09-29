@@ -874,3 +874,13 @@ pub(crate) use bf16_nominal_recipe_resources_v1::observe_actual_root_retired_fix
 
 #[cfg(test)]
 pub(crate) use bf16_nominal_recipe_resources_v1::observe_actual_root_fixed_prefix_comparison_for_test_v1;
+
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(super) use bf16_nominal_facts_observation_v1::with_checked_nominal_facts_observation_v1;
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(super) use bf16_nominal_recipe_resources_v1::{
+    ActualSelectedInputsV1, select_actual_capability_prefix_inputs_v1,
+    with_nominal_source_preparation_v1,
+};

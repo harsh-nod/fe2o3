@@ -3,12 +3,17 @@ const FIXED_WORK: usize = 64 * 1024;
 const FRAME: usize = 32 * (REQUEST_BYTES + RESPONSE_BYTES + Ledger::STORAGE) + 65536;
 const IO_ATTEMPTS: usize = 256;
 
+#[path = "compiler_execution_issuer_native_session.rs"]
+mod session;
+use session::{PublicationGuard, Session};
+
 impl<'work> Admission<'work> {
     /// Consumes native custody and the original work ledger into the canonical
     /// bounded native transport. Only cancellation returns successfully.
     /// Prepared challenges and signed receipts are sent only after durable commit
     /// and fresh retained-custody checks. Issue accepts only the independently
-    /// observed, still-locked publication occurrence named by the prepared record.
+    /// observed, still-locked publication occurrence retained since Prepare.
+    /// A pending journal recovered without that live owner cannot resume issuance.
     ///
     /// Publication requires a durable independently signed anchor transition and
     /// exact Worker reacquisition before issuer advancement or an ACK. Currentness
@@ -60,6 +65,23 @@ impl<'work> Admission<'work> {
     }
 
     fn serve_native(self, ready: Option<(&Manifest, OwnedFd)>, b: &mut Budget<'_>) -> Result<()> {
+        self.serve_native_after_readiness(
+            ready,
+            b,
+            COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1,
+            |_, _, _| Ok(()),
+        )
+    }
+
+    // Only concrete internal consumers supply this gate. It runs after the
+    // readiness writer has closed and before the first client receive/dispatch.
+    fn serve_native_after_readiness(
+        self,
+        ready: Option<(&Manifest, OwnedFd)>,
+        b: &mut Budget<'_>,
+        timeout: std::time::Duration,
+        gate: impl FnOnce(&Self, Instant, &mut Budget<'_>) -> Result<()>,
+    ) -> Result<()> {
         // Reject a foreign ledger before any directory or transport I/O.
         self.validate_continuity(b)?;
         let floor = self
@@ -86,9 +108,10 @@ impl<'work> Admission<'work> {
             let mut anchor = NativeAnchor::new(&self.anchor, &self.policy, b)?;
             b.reserve_storage(anchor.retained_storage())?;
             let deadline = Instant::now()
-                .checked_add(COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1)
+                .checked_add(timeout)
                 .ok_or_else(|| Error::rejected("native service deadline overflow"))?;
             let mut attempts = 0;
+            let mut session = Session::default();
             if let Some((manifest, writer)) = ready {
                 readiness::publish(manifest, &self.policy, writer, b, |b| {
                     self.validate_continuity(b)?;
@@ -99,45 +122,62 @@ impl<'work> Admission<'work> {
                     Ok(())
                 })?;
             }
+            gate(&self, deadline, b)?;
             for _ in 0..MAX_COMPILER_EXECUTION_SERVICE_PACKETS_V1 {
-                let cancelled = b.with_prepaid_scope(
-                    self.retained_storage() + Ledger::STORAGE + anchor.retained_storage(),
-                    8,
-                    FIXED_WORK,
-                    FRAME,
-                    |b| {
-                        self.validate_continuity(b)?;
-                        ledger.validate(b)?;
-                        let bytes = receive_packet_metered::<REQUEST_BYTES, Error>(
-                            self.service.service_peer(),
-                            self.service.client_pidfd(),
-                            deadline,
-                            &mut || permit_io(b, &mut attempts),
-                        )?;
-                        self.validate_continuity(b)?;
-                        let packet = retain(Packet::decode(bytes.as_slice(), b)?, b)?;
-                        let response = dispatch(
-                            &self,
-                            &mut ledger,
-                            &mut anchor,
-                            &packet,
-                            deadline,
-                            &mut attempts,
-                            b,
-                        )?;
-                        self.validate_continuity(b)?;
-                        ledger.validate(b)?;
-                        send_packet_metered(
-                            self.service.service_peer(),
-                            self.service.client_pidfd(),
-                            response.canonical_bytes(),
-                            deadline,
-                            &mut || permit_io(b, &mut attempts),
-                        )?;
-                        self.validate_continuity(b)?;
-                        Ok::<_, Error>(packet.kind() == Kind::Cancel)
-                    },
-                )?;
+                let retained = session.retained_storage();
+                let floor = self
+                    .retained_storage()
+                    .checked_add(Ledger::STORAGE)
+                    .and_then(|n| n.checked_add(anchor.retained_storage()))
+                    .and_then(|n| n.checked_add(retained))
+                    .ok_or(Resource::Arithmetic)?;
+                let cancelled = b.with_prepaid_scope(floor, 8, FIXED_WORK, FRAME, |b| {
+                    self.validate_continuity(b)?;
+                    ledger.validate(b)?;
+                    let bytes = receive_packet_metered::<REQUEST_BYTES, Error>(
+                        self.service.service_peer(),
+                        self.service.client_pidfd(),
+                        deadline,
+                        &mut || permit_io(b, &mut attempts),
+                    )?;
+                    self.validate_continuity(b)?;
+                    let packet = retain(Packet::decode(bytes.as_slice(), b)?, b)?;
+                    let response = dispatch(
+                        &self,
+                        &mut ledger,
+                        &mut anchor,
+                        &mut session,
+                        &packet,
+                        deadline,
+                        &mut attempts,
+                        b,
+                    )?;
+                    self.validate_continuity(b)?;
+                    ledger.validate(b)?;
+                    if packet.kind() != Kind::Cancel {
+                        session.validate(&self, &ledger.record, b)?;
+                    }
+                    send_packet_metered(
+                        self.service.service_peer(),
+                        self.service.client_pidfd(),
+                        response.canonical_bytes(),
+                        deadline,
+                        &mut || permit_io(b, &mut attempts),
+                    )?;
+                    self.validate_continuity(b)?;
+                    if packet.kind() != Kind::Cancel {
+                        session.validate(&self, &ledger.record, b)?;
+                    }
+                    Ok::<_, Error>(packet.kind() == Kind::Cancel)
+                })?;
+                // The packet scope restores its entry charge even when ownership
+                // changes. Keep the live occurrence fully prepaid between packets.
+                let next = session.retained_storage();
+                if next >= retained {
+                    b.reserve_storage(next - retained)?;
+                } else {
+                    b.release_storage(retained - next)?;
+                }
                 if cancelled {
                     return Ok(());
                 }
@@ -151,6 +191,7 @@ fn dispatch(
     a: &Admission<'_>,
     ledger: &mut Ledger,
     anchor: &mut NativeAnchor<'_>,
+    session: &mut Session,
     packet: &Packet,
     deadline: Instant,
     attempts: &mut usize,
@@ -159,19 +200,20 @@ fn dispatch(
     if packet.policy_identity() != a.policy.identity() {
         return Err(Error::rejected("native service policy mismatch"));
     }
+    if packet.kind() != Kind::Cancel {
+        session.validate(a, &ledger.record, b)?;
+    }
     match packet.kind() {
         Kind::Prepare => {
             require_position(ledger, packet)?;
-            if !matches!(ledger.record.body, Body::Ready) {
-                return Err(Error::rejected("prepare requires a ready native journal"));
-            }
-            let (occurrence, charge) = NativeOccurrence::observe(&a.service, b)?;
-            b.reserve_storage(charge)?;
+            session.prepare(a, &ledger.record, b)?;
+            let occurrence = session.occurrence()?;
             let nonce = fresh_nonce(b)?;
             occurrence.revalidate(&a.service, b)?;
+            a.validate_continuity(b)?;
             let next = ledger
                 .record
-                .prepare(&a.policy, &a.signing_key, &occurrence, nonce, b)?;
+                .prepare(&a.policy, &a.signing_key, occurrence, nonce, b)?;
             b.reserve_storage(Record::STORAGE)?;
             occurrence.revalidate(&a.service, b)?;
             a.validate_continuity(b)?;
@@ -181,12 +223,12 @@ fn dispatch(
         Kind::Issue => {
             require_position(ledger, packet)?;
             let request = retain(packet.decode_request(b)?, b)?;
-            let (occurrence, charge) = NativeOccurrence::observe(&a.service, b)?;
-            b.reserve_storage(charge)?;
+            let occurrence = session.occurrence()?;
             occurrence.revalidate(&a.service, b)?;
+            a.validate_continuity(b)?;
             if let Body::Issued { request: held, .. } = &ledger.record.body {
-                // Lost-response replay observes the original occurrence again; it
-                // neither signs twice nor substitutes an equivalent new process.
+                // Lost-response replay retains the original lock and token; it
+                // neither signs twice nor acquires an equivalent new occurrence.
                 if held.canonical_bytes() != request.canonical_bytes()
                     || occurrence.identity() != &ledger.record.occurrence
                     || occurrence.subject().canonical_bytes() != request.subject().canonical_bytes()
@@ -199,7 +241,7 @@ fn dispatch(
                 let next =
                     ledger
                         .record
-                        .issue(&a.policy, &a.signing_key, &occurrence, request, b)?;
+                        .issue(&a.policy, &a.signing_key, occurrence, request, b)?;
                 b.reserve_storage(Record::STORAGE)?;
                 occurrence.revalidate(&a.service, b)?;
                 a.validate_continuity(b)?;
@@ -210,11 +252,13 @@ fn dispatch(
         Kind::Publish => {
             let request = retain(packet.decode_request(b)?, b)?;
             let publication = retain(packet.decode_publication(b)?, b)?;
+            let guard = session.publication_guard(a, &ledger.record)?;
             let (ack, advanced) = ledger.publish(
                 &a.policy,
                 &a.signing_key,
                 &request,
                 &publication,
+                &guard,
                 &mut |c, b| {
                     a.validate_continuity(b)?;
                     let receipt = anchor.exchange(c, deadline, attempts, b)?;
@@ -225,6 +269,7 @@ fn dispatch(
             )?;
             b.reserve_storage(ack.retained_storage())?;
             a.validate_continuity(b)?;
+            session.retire(a, ledger, &publication, &ack, b)?;
             return retain(
                 Response::new(
                     packet.identity(),

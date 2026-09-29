@@ -41,6 +41,18 @@ const SESSION_SCRATCH: usize = 4 * size_of::<Session<'static, 'static>>() + 4 * 
 const READINESS_SCRATCH: usize = SESSION_SCRATCH + PIPE_ATTEMPT_SCRATCH;
 const OWNER_GROWTH: usize = size_of::<Session<'static, 'static>>();
 
+fn launch_entry(b: &mut Budget<'_>) -> Result<()> {
+    b.charge_work(ENTRY)?;
+    // Bound by the nominal module, not input claims. Both public launch and
+    // run_session reach this gate before extraction, cleanup reservation or clone.
+    if REQUIRES_ORIGINAL_ROOT_CONTROL {
+        return Err(Error::State(
+            "native V3 indirect launch requires the original-root FD12 route",
+        ));
+    }
+    Ok(())
+}
+
 struct Core<'s> {
     supervisor: &'s Supervisor,
     process: IssuerChild,
@@ -379,6 +391,8 @@ impl Supervisor {
     /// Parent protocol attempts and the complete direct-child syscall allowance
     /// are debited before clone. Mutex, scheduler and kernel wait latency are not
     /// bounded by these logical quotas. No legacy admitted owner is constructed.
+    /// V3 refuses before payload extraction or clone until the original-root
+    /// FD12 route is supported. No supervisor lifecycle descriptor is repurposed.
     pub fn launch<'a, 'work>(
         &'a self,
         prepared: Prepared,
@@ -415,7 +429,7 @@ impl Supervisor {
         limits: Wait,
         funded_floor: usize,
     ) -> Result<Launched<'a, 'work>> {
-        guard.funding.budget.charge_work(ENTRY)?;
+        launch_entry(guard.funding.budget)?;
         guard.funding.grow(OWNER_GROWTH)?;
         let retained = guard.funding.retained;
         let prepared = guard.owner.take().expect("prepared native input");

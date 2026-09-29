@@ -1,9 +1,9 @@
 //! Scoped descriptor inspection through the original, unreaped root custody.
 
-use super::{Budget, ENTRY, Error, Result, RootTaskTraceV2, TraceState, io};
+use super::{Budget, ENTRY, Error, Result, RootTaskIdentityV2, RootTaskTraceV2, TraceState, io};
 use crate::native_spawn::ProtectedServiceSpawnStorageV2 as Storage;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
-use std::{fs::File, mem::size_of};
+use std::{fs::File, mem::size_of, rc::Rc};
 
 /// Borrowed access to one original traced task, not compiler or proof admission.
 /// No PID/pidfd constructor, descriptor trait, clone, consuming wait or signal
@@ -39,6 +39,10 @@ impl RootTaskObservationV2<'_, '_> {
     /// Descriptor output overlap plus one sequential continuity frame.
     pub const DESCRIPTOR_SCRATCH: usize =
         size_of::<(File, Storage)>() + 256 + Self::CONTINUITY_SCRATCH;
+    /// Full identity extraction work, including original live-trace validation.
+    pub const IDENTITY_WORK: usize = ENTRY + Self::CONTINUITY_WORK;
+    /// Full output handle/allocation overlap plus the live validation frame.
+    pub const IDENTITY_SCRATCH: usize = RootTaskIdentityV2::STORAGE + Self::CONTINUITY_SCRATCH;
     /// Enclosing view work; the callback must separately fund all of its work.
     pub const VIEW_WORK: usize = 8 + 2 * Self::CONTINUITY_WORK;
     /// Enclosing view and continuity scratch, excluding callback requirements.
@@ -56,6 +60,30 @@ impl RootTaskObservationV2<'_, '_> {
     /// Original account/thread and non-consuming liveness check. No retry.
     pub fn validate_continuity(&self, b: &mut Budget<'_>) -> Result<()> {
         self.trace.validate_observation(b)
+    }
+
+    /// Retains this original trace's inert, move-stable allocation identity.
+    /// Full work/storage funding and original account/thread/live-child checks
+    /// precede the refcount increment. There is no PID reopen or authority grant.
+    /// The output charge is FULL and UNRESERVED; reserve it on this same Budget
+    /// before retaining the handle, including after an enclosing scope returns.
+    /// Keep the original Work borrow and Budget at its admitting address alive
+    /// until the handle drops. The handle borrows neither this view nor the trace,
+    /// so subsequent polling, trace movement and terminal cleanup remain possible.
+    pub fn retain_identity(&self, b: &mut Budget<'_>) -> Result<(RootTaskIdentityV2, Storage)> {
+        b.with_prepaid_scope(
+            self.retained_storage(),
+            ENTRY,
+            ENTRY,
+            RootTaskIdentityV2::STORAGE,
+            |b| {
+                self.validate_continuity(b)?;
+                let identity = RootTaskIdentityV2 {
+                    allocation: Rc::clone(&self.trace.identity),
+                };
+                Ok((identity, Storage(RootTaskIdentityV2::STORAGE)))
+            },
+        )
     }
 
     /// One pidfd_getfd through the original clone descriptor. No /proc fallback,
@@ -122,12 +150,12 @@ impl<'work> RootTaskTraceV2<'work> {
     ///     t.with_task_observation(b, |view, _| Ok::<_, ProtectedServiceSpawnErrorV2>(view)).unwrap()
     /// }
     /// ```
-    pub fn with_task_observation<R, E>(
+    pub fn with_task_observation<'budget, R, E>(
         &self,
-        b: &mut Budget<'_>,
+        b: &mut Budget<'budget>,
         operation: impl FnOnce(
             &RootTaskObservationV2<'_, 'work>,
-            &mut Budget<'_>,
+            &mut Budget<'budget>,
         ) -> std::result::Result<R, E>,
     ) -> std::result::Result<R, E>
     where
@@ -147,3 +175,7 @@ impl<'work> RootTaskTraceV2<'work> {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "native_root_identity_tests.rs"]
+mod identity_tests;

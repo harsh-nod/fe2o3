@@ -39,11 +39,17 @@ pub use native_v3::{
 };
 #[path = "compiler_execution_issuer_native_checks.rs"]
 mod native_checks;
+#[path = "compiler_execution_issuer_native_image.rs"]
+mod native_image;
 pub use native::{
     ProtectedCompilerExecutionIssuerAdmissionErrorV2, ProtectedCompilerExecutionIssuerAdmissionV2,
     ProtectedCompilerExecutionIssuerServiceErrorV2, ProtectedCompilerExecutionIssuerStorageV2,
 };
 use native_checks::IssuerInspectionError;
+pub use native_image::{
+    RootIssuerImageErrorV3, RootIssuerImageQuotaV3, retained_issuer_image_quota_v3,
+    validate_retained_issuer_image_v3,
+};
 
 use crate::{
     ProtectedCompilerExecutionExternalAnchorV1, ProtectedServiceAdmissionErrorV1,

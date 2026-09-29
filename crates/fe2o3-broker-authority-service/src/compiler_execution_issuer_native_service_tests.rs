@@ -19,7 +19,7 @@ use std::{
     },
 };
 
-fn custody(b: &mut Budget<'_>) -> (Policy, Key) {
+pub(super) fn custody(b: &mut Budget<'_>) -> (Policy, Key) {
     let measurement =
         fe2o3_runtime_protocol::CompilerExecutionIssuerMeasurementV1::new([3; 32], 4096).unwrap();
     let public = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
@@ -40,7 +40,7 @@ fn custody(b: &mut Budget<'_>) -> (Policy, Key) {
     assert_eq!(seed, [0; 32]);
     (p, key)
 }
-fn directory() -> (tempfile::TempDir, File) {
+pub(super) fn directory() -> (tempfile::TempDir, File) {
     let directory = tempfile::tempdir().unwrap();
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let file = File::open(directory.path()).unwrap();
@@ -59,7 +59,7 @@ pub(super) fn recover_family_fixture(
         b.reserve_storage(Ledger::STORAGE)?;
         if published {
             let (request, publication) = worker_tests::issued(&mut ledger, &p, &key, 1, b);
-            let (_, advanced) = ledger.publish(
+            let (_, advanced) = ledger.publish_fixture(
                 &p,
                 &key,
                 &request,

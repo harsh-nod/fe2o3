@@ -13,6 +13,8 @@ impl Supervisor {
     /// still be pumped after refusal. This method neither provisions a listener nor
     /// installs privileges, activates compiler publication, or grants GPU authority.
     /// All existing profile, policy, pidfd and exact-readiness checks remain in force.
+    /// V3 currently returns the explicit launch refusal before clone; this path
+    /// cannot bypass the original-root FD12 requirement through `launch_funded`.
     pub fn run_session<'a, 'work>(
         &'a self,
         control: OwnedFd,

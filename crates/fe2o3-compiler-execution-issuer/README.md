@@ -101,14 +101,26 @@ authority. Permission refusals remain terminal; there is no fake admission.
 
 ## Conditional Native Issuer
 
-`run_inherited_compiler_execution_issuer_v3` uses the same fixed descriptor ABI,
-process hardening, cumulative resource account, packet loop and durable recovery
-state machine with actual V3 policy, signing-key, packet and journal owners.
+`run_inherited_compiler_execution_issuer_v3` requires FD3..12, with the original
+root's private control endpoint at FD12. It preflights the complete non-CLOEXEC
+table before allocating or duplicating descriptors. All V3 inherited duplicates,
+including the sealed policy and manifest imports, start at FD13. V1/V2 retain
+their FD3..11 contract and floor-12 consuming intake.
+
+V3 shares process hardening, cumulative resource accounting, the packet loop and
+durable recovery with actual V3 policy, signing-key, packet and journal owners.
 `CompilerExecutionIssuerLaunchInputsV3` retains and revalidates both sealed input
 objects; the identity-only manifest must match the independently decoded V3 policy.
+Its pair-only API borrows FD6/8 and does not require the remaining service slots.
 There is no wire sniffing, policy conversion, or fallback to the V1/V2 entrypoints.
 The separate `fe2o3-compiler-execution-issuer-conditional` binary calls this entrypoint;
 it does not change the default executable or trusted deployment.
+
+The V3 entrypoint consumes FD12 into `serve_native_with_root_readiness`: endpoint
+admission precedes readiness, and the root handshake gates the client packet loop.
+The endpoint remains owned for the serving lifetime. Launch integration must stage
+this same ABI on every V3 route, or refuse unsupported routes before child creation;
+the indirect supervisor's own FD12 lifecycle lock is not the issuer root endpoint.
 
 Prepare and Issue use an independently observed compiler process and retain its
 exact V5 publication lease and consumption token. The published invocation must

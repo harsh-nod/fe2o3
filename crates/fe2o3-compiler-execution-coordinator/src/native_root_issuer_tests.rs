@@ -371,7 +371,7 @@ fn issuer_peer_preparation_rejects_unexpected_status_without_clearing_it() {
 #[allow(unsafe_code)]
 fn issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close() {
     let channels = Channels::new().unwrap();
-    let files: [File; 9] = std::array::from_fn(|_| tempfile::tempfile().unwrap());
+    let files: [File; 10] = std::array::from_fn(|_| tempfile::tempfile().unwrap());
     let sources = [
         files[0].as_fd(),
         files[1].as_fd(),
@@ -382,14 +382,15 @@ fn issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close() {
         channels.ready_writer.as_fd(),
         files[6].as_fd(),
         files[7].as_fd(),
+        files[8].as_fd(),
     ];
     let bindings = staging::bindings(sources).unwrap();
     assert_eq!(
         bindings.map(|binding| binding.destination()),
         staging::DESTINATIONS
     );
-    assert_eq!(staging::DESTINATIONS, [3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    let sources_charge = 13 * FILE_STORAGE + staging::BINDINGS_STORAGE;
+    assert_eq!(staging::DESTINATIONS, [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    let sources_charge = 14 * FILE_STORAGE + staging::BINDINGS_STORAGE;
     let mut work = Work::new(Stage::STAGING_WORK);
     let mut b = Budget::new(&mut work, LIMIT);
     b.reserve_storage(sources_charge).unwrap();
@@ -397,7 +398,7 @@ fn issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close() {
     // prepaid and kept live. This stage is NEVER spawned or treated as admitted.
     let (stage, c) = unsafe {
         Stage::stage(
-            &files[8],
+            &files[9],
             &bindings,
             channels.profile_writer.as_fd(),
             channels.gate_reader.as_fd(),
@@ -415,9 +416,9 @@ fn issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close() {
     for (source, destination) in sources.into_iter().zip(staging::DESTINATIONS) {
         staging::validate_duplicate(source, stage.binding(destination).unwrap().as_fd()).unwrap();
     }
-    assert!(stage.binding(12).is_none());
+    assert!(stage.binding(13).is_none());
     assert!(stage.binding(220).is_none());
-    staging::validate_duplicate(files[8].as_fd(), stage.executable().as_fd()).unwrap();
+    staging::validate_duplicate(files[9].as_fd(), stage.executable().as_fd()).unwrap();
     // The only remaining writer is Stage's alias after the parent channel closes.
     let readers = channels.close_child_ends();
     assert_eq!(
@@ -437,16 +438,17 @@ fn issuer_finite_launch_quota_includes_each_nested_operation_and_output_overlap(
         work: 0,
         scratch: 0,
     };
-    let base =
-        quota::launch_quota::<()>(payload, source, zero, zero, zero, zero, zero, zero).unwrap();
-    for index in 0..6 {
-        let mut inputs = [zero; 6];
+    let base = quota::launch_quota::<()>(payload, source, zero, zero, zero, zero, zero, zero, zero)
+        .unwrap();
+    for index in 0..7 {
+        let mut inputs = [zero; 7];
         inputs[index] = Quota {
             work: 13,
             scratch: 17,
         };
         let actual = quota::launch_quota::<()>(
             payload, source, inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5],
+            inputs[6],
         )
         .unwrap();
         assert_eq!(
@@ -464,18 +466,120 @@ fn issuer_finite_launch_quota_includes_each_nested_operation_and_output_overlap(
     );
     assert!(base.scratch() > Stage::spawn_retaining_scratch::<Payload<()>>(payload).unwrap());
     assert!(
-        quota::launch_quota::<()>(usize::MAX, source, zero, zero, zero, zero, zero, zero).is_err()
+        quota::launch_quota::<()>(usize::MAX, source, zero, zero, zero, zero, zero, zero, zero)
+            .is_err()
     );
     assert!(
-        quota::launch_quota::<()>(payload, usize::MAX, zero, zero, zero, zero, zero, zero).is_err()
+        quota::launch_quota::<()>(
+            payload,
+            usize::MAX,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero
+        )
+        .is_err()
     );
     let overflow = Quota {
         work: usize::MAX,
         scratch: 0,
     };
     assert!(
-        quota::launch_quota::<()>(payload, source, overflow, zero, zero, zero, zero, zero).is_err()
+        quota::launch_quota::<()>(
+            payload, source, overflow, zero, zero, zero, zero, zero, zero
+        )
+        .is_err()
     );
+    assert!(
+        quota::launch_quota::<()>(
+            payload, source, zero, zero, zero, zero, zero, zero, overflow
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn root_startup_quote_funds_original_view_channel_and_handshake_without_resetting() {
+    let zero = Quota {
+        work: 0,
+        scratch: 0,
+    };
+    let base = quota::root_startup_quota::<()>(zero, zero).unwrap();
+    assert_eq!(
+        base.work(),
+        4 * RootChannel::WORK
+            + CompilerTrace::<()>::OBSERVATION_WORK
+            + Resources::<Payload<()>>::ACCESS_WORK
+            + RootSession::CREATE_WORK
+    );
+    assert_eq!(
+        base.scratch(),
+        RootChannel::STORAGE
+            + RootChannel::SCRATCH
+            + ReadyIssuer::<()>::ENVELOPE
+            + CompilerTrace::<()>::OBSERVATION_SCRATCH
+            + Resources::<Payload<()>>::ACCESS_SCRATCH
+            + 2 * RootSession::CREATE_SCRATCH
+    );
+    let add = Quota {
+        work: 13,
+        scratch: 17,
+    };
+    for (launch, gate) in [(add, zero), (zero, add)] {
+        let q = quota::root_startup_quota::<()>(launch, gate).unwrap();
+        assert_eq!(
+            (q.work() - base.work(), q.scratch() - base.scratch()),
+            (13, 17)
+        );
+    }
+    for overflow in [
+        Quota {
+            work: usize::MAX,
+            scratch: 0,
+        },
+        Quota {
+            work: 0,
+            scratch: usize::MAX,
+        },
+    ] {
+        for (launch, gate) in [(overflow, zero), (zero, overflow)] {
+            assert!(matches!(
+                quota::root_startup_quota::<()>(launch, gate),
+                Err(Error::Resource(Resource::Arithmetic))
+            ));
+        }
+    }
+}
+
+#[test]
+fn issuer_continuity_funds_running_image_and_refuses_quote_overflow() {
+    let zero = Quota {
+        work: 0,
+        scratch: 0,
+    };
+    let image = Quota {
+        work: 13,
+        scratch: 17,
+    };
+    let base = quota::continuity::<()>(zero, zero).unwrap();
+    let measured = quota::continuity::<()>(zero, image).unwrap();
+    assert_eq!(measured.work() - base.work(), image.work());
+    assert_eq!(measured.scratch() - base.scratch(), image.scratch());
+    for overflow in [
+        Quota {
+            work: usize::MAX,
+            scratch: 0,
+        },
+        Quota {
+            work: 0,
+            scratch: usize::MAX,
+        },
+    ] {
+        assert!(quota::continuity::<()>(zero, overflow).is_err());
+    }
 }
 
 #[test]

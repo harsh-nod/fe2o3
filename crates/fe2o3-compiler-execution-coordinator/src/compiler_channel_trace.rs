@@ -41,6 +41,10 @@ impl Phase {
 }
 
 impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
+    pub(crate) const OBSERVATION_WORK: usize =
+        LOCAL_WORK + fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2::VIEW_WORK;
+    pub(crate) const OBSERVATION_SCRATCH: usize =
+        FRAME + fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2::VIEW_SCRATCH;
     const ENVELOPE: usize = size_of::<(Self, usize)>()
         - size_of::<Trace<'work, T>>()
         - size_of::<CompilerChildChannel>();
@@ -144,12 +148,12 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
     /// Inspection through original trace custody, only after the one-use issuer
     /// input transfer. The owning attempt must separately gate compiler resume on
     /// actual readiness/runtime admission; this view grants no compiler admission.
-    pub(crate) fn with_observation<R, E>(
+    pub(crate) fn with_observation<'budget, R, E>(
         &self,
-        b: &mut Budget<'_>,
+        b: &mut Budget<'budget>,
         operation: impl FnOnce(
             &fe2o3_protected_service_spawn::native_spawn::RootTaskObservationV2<'_, 'work>,
-            &mut Budget<'_>,
+            &mut Budget<'budget>,
         ) -> std::result::Result<R, E>,
     ) -> std::result::Result<R, E>
     where
@@ -220,13 +224,13 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
     /// compiler connection after issuer exit. No root-trace/wait authority escapes.
     pub(crate) fn with_issuer_inputs<R>(
         &mut self,
-        b: &mut Budget<'_>,
+        b: &mut Budget<'work>,
         operation: impl FnOnce(
             Identity,
             BorrowedFd<'_>,
             BorrowedFd<'_>,
             Dependency<T>,
-            &mut Budget<'_>,
+            &mut Budget<'work>,
         ) -> Result<R>,
     ) -> Result<R> {
         let mut attempt = InputAttempt {

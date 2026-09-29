@@ -20,7 +20,78 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
-use std::{error::Error, fmt, mem::size_of, os::fd::RawFd};
+use std::{
+    error::Error,
+    fmt,
+    fs::File,
+    mem::size_of,
+    os::fd::{FromRawFd, RawFd},
+};
+
+// Two scalar inspections, two duplications and their failure-path closes. The
+// enclosing frame prepays the transient Files; capability/codec work nests on b.
+const READ_WORK: usize = 8 + 6 * (1024 + 64);
+
+fn preflight_inputs(policy: RawFd, launch: RawFd) -> Result<()> {
+    for fd in [policy, launch] {
+        if fd < 3 {
+            return Err(CapabilityError::Rejected("inherited descriptor overlaps stdio").into());
+        }
+        // SAFETY: F_GETFD checks the raw slot without borrowing or adopting it.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 {
+            return Err(input_io_error("inspect inherited descriptor").into());
+        }
+        if flags & libc::FD_CLOEXEC != 0 {
+            return Err(CapabilityError::Rejected("inherited descriptor is close-on-exec").into());
+        }
+    }
+    Ok(())
+}
+
+fn input_io_error(operation: &'static str) -> CapabilityError {
+    CapabilityError::Io {
+        operation,
+        errno: std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or(libc::EIO),
+    }
+}
+
+fn duplicate_input(fd: RawFd) -> Result<File> {
+    // SAFETY: both sources were preflighted before any duplication. Success
+    // yields a new owner above the entire V3 inherited table, including FD12.
+    let duplicate = unsafe {
+        libc::fcntl(
+            fd,
+            libc::F_DUPFD_CLOEXEC,
+            crate::PRIVATE_DESCRIPTOR_FLOOR_V3,
+        )
+    };
+    if duplicate < 0 {
+        return Err(input_io_error("retain inherited descriptor").into());
+    }
+    // SAFETY: this successful duplication transfers its unique ownership to File.
+    Ok(unsafe { File::from_raw_fd(duplicate) })
+}
+
+fn read_policy(fd: RawFd, b: &mut Budget<'_>) -> Result<(PolicyCapability, usize)> {
+    let (value, charge) = PolicyCapability::from_file(duplicate_input(fd)?, b)?;
+    // from_file returns growth over the consumed File. The inherited source is
+    // still borrowed, so this reader returns the full new owner's charge.
+    let full = PolicyCapability::FILE_STORAGE
+        .checked_add(charge.additional_storage())
+        .ok_or(Resource::Arithmetic)?;
+    Ok((value, full))
+}
+
+fn read_launch(fd: RawFd, b: &mut Budget<'_>) -> Result<(LaunchCapability, usize)> {
+    let (value, charge) = LaunchCapability::from_file(duplicate_input(fd)?, b)?;
+    let full = LaunchCapability::FILE_STORAGE
+        .checked_add(charge.additional_storage())
+        .ok_or(Resource::Arithmetic)?;
+    Ok((value, full))
+}
 
 /// Both owners use actual SubjectV3 policy and manifest types. The shared launch
 /// wire does not establish a family: the policy is independently decoded as V3
@@ -28,6 +99,9 @@ use std::{error::Error, fmt, mem::size_of, os::fd::RawFd};
 ///
 /// Inert, move-only native inputs freshly admitted from fixed launch slots 6/8.
 /// The two independently decoded images must name the same native policy.
+/// Private duplicates start at FD13, leaving the V3 root-control slot FD12 intact.
+/// This pair reader does not preflight the other service slots; the V3 entrypoint
+/// checks the full FD3..12 table before calling it or allocating any descriptors.
 /// No legacy-policy fallback or conversion of an admitted legacy owner exists.
 /// Agreement does not independently pin policy provenance: a consistently
 /// replaced pair also agrees. Trusted installation and program admission must
@@ -138,5 +212,6 @@ mod tests {
         CompilerExecutionServiceLaunchManifestV2 as OtherManifest,
     };
     const CHILD_TEST: &str = "launch_inputs_v3::tests::inherited_slot_child";
+    const EXPECTED_PRIVATE_FLOOR: RawFd = 13;
     include!("launch_inputs_tests.rs");
 }

@@ -90,8 +90,7 @@ Native and legacy modes are mutually exclusive. Consuming native launch transfer
 the prepaid reservation into the shared child owner. See the
 [cleanup custody contract](../../docs/compiler-execution-cleanup-custody.md).
 
-`ProtectedIssuerSupervisorV2::launch` and `ProtectedIssuerSupervisorV3::launch`
-consume their respective prepared custody into separate
+`ProtectedIssuerSupervisorV2::launch` consumes its prepared custody into separate
 launched, ready, serving and exited states over the existing clone3/pidfd engine.
 It requires the protected process profile, gates exec on native revalidation,
 and prepays finite child and parent attempts. Exact native readiness and EOF
@@ -103,8 +102,15 @@ readiness type. Shared wire framing is not authorization: readiness must match
 the exact child PID, launch manifest, and policy of the same family.
 See the [consuming-launch contract](../../docs/compiler-execution-consuming-launch-v2.md).
 
-`ProtectedIssuerSupervisorV2::run_session` and `ProtectedIssuerSupervisorV3::run_session`
-now compose handoff, preparation, consuming launch, readiness, publication and
+V3 indirect launch now refuses before payload extraction, cleanup-slot allocation
+or clone, including the funded path reached through `run_session`. Its mandatory
+issuer FD12 root-control channel is supplied only by the coordinator's private
+direct-root launch primitive. The supervisor's own FD12 remains its lifecycle
+lock. Restoring the indirect route requires actual original-root custody and
+channel transfer; there is no fallback or substitute descriptor. See the
+[root-control contract](../../docs/compiler-execution-root-control.md).
+
+`ProtectedIssuerSupervisorV2::run_session` composes handoff, preparation, consuming launch, readiness, publication and
 terminal wait without replacing the original request ledger. Each retained
 growth is reserved while its owner is guarded; refusal closes owners before
 retiring their adopted charges. Native session limits preserve distinct finite
@@ -114,9 +120,9 @@ the independently funded cleanup pool. This is a session API, not listener or
 deployment activation; its complete protected execution is not yet validated.
 
 ```rust
-use fe2o3_compiler_execution_supervisor::{ProtectedIssuerSupervisorV3 as Supervisor,
-    ProtectedIssuerCleanupServiceV2 as Cleanup, ProtectedIssuerSessionLimitsV3 as Limits,
-    ProtectedIssuerSessionErrorV3 as Error, ExitedProtectedIssuerV3 as Exited};
+use fe2o3_compiler_execution_supervisor::{ProtectedIssuerSupervisorV2 as Supervisor,
+    ProtectedIssuerCleanupServiceV2 as Cleanup, ProtectedIssuerSessionLimitsV2 as Limits,
+    ProtectedIssuerSessionErrorV2 as Error, ExitedProtectedIssuerV2 as Exited};
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
 fn session<'a, 'w>(s: &'a Supervisor, control: std::os::fd::OwnedFd,
     cleanup: &mut Cleanup, limits: Limits, budget: &'a mut Budget<'w>)
@@ -132,11 +138,13 @@ remain open. Four isolated distinct-UID **V2** synthetic consuming cases passed 
 MI350: ready/publication/natural exit, missing EOF, trailing bytes, and
 Drop-before-readiness cleanup through the actual static launcher.
 V3 consuming custody has local deterministic lifecycle and exact-readiness-join
-tests, plus an opt-in distinct-UID consuming fixture using the actual V3 public
+tests, plus a historical opt-in distinct-UID consuming fixture using the V3 public
 APIs and a separately built synthetic static issuer. The fixture covers
 publication/exit, missing EOF, trailing data and drop-before-readiness cleanup;
 negative cases require the public readiness peer to close without publication.
-No isolated V3 child-launch or protected-runtime execution is credited yet.
+No isolated V3 child-launch or protected-runtime execution is credited yet. Those
+positive indirect V3 fixtures cannot pass the current preclone refusal and are
+not current acceptance evidence; their source is retained for route migration.
 Separate opt-in V2/V3 fixtures now call the public `run_session` entry point for
 success, missing EOF and trailing data. They do not inject production stage hooks:
 the submitter verifies actual publication and asks the original client to stop.

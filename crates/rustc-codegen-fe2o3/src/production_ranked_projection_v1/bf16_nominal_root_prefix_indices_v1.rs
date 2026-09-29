@@ -254,7 +254,7 @@ fn actual_use_frame<R, F>() -> Result<usize> {
     Ok(frame)
 }
 
-struct ActualSelectedInputsV1<'a> {
+pub(in crate::production_ranked_projection_v1) struct ActualSelectedInputsV1<'a> {
     input: &'a ProductionRankedRootInputV1,
     source_root: ProductionSourceLaunchRootV1,
     references: &'a [AuthenticatedReferenceEffectBindingV1],
@@ -915,3 +915,144 @@ pub(crate) use guarded_genuine_v1::observe_actual_root_guarded_accesses_for_test
 
 #[cfg(test)]
 pub(crate) use argument_initialization::observe_actual_root_fixed_prefix_comparison_for_test_v1;
+
+#[cfg(test)]
+impl ActualSelectedInputsV1<'_> {
+    pub(in crate::production_ranked_projection_v1) fn source_root(
+        &self,
+    ) -> ProductionSourceLaunchRootV1 {
+        self.source_root
+    }
+    pub(in crate::production_ranked_projection_v1) fn input(&self) -> &ProductionRankedRootInputV1 {
+        self.input
+    }
+    pub(in crate::production_ranked_projection_v1) fn references(
+        &self,
+    ) -> &[AuthenticatedReferenceEffectBindingV1] {
+        self.references
+    }
+}
+#[cfg(test)]
+pub(in crate::production_ranked_projection_v1) fn select_actual_capability_prefix_inputs_v1<'a>(
+    owner: &ProductionPreRankedKirOwnerV1,
+    checked: &CheckedBf16NominalCallV1<'_>,
+    function: &SemanticFunctionDeclV1,
+    actual: &'a crate::production_pipeline::ActualRetainedRankedInputsV1<'_>,
+    resources: &mut PreparationResourcesV1<'_, '_>,
+) -> Result<ActualSelectedInputsV1<'a>> {
+    if !resources.is_metered() || resources.has_denial() {
+        return Err(resource(Resource::Accounting));
+    }
+    resources.work(64)?;
+    resources.reserve_storage(capability_prefix_selection_frame()?)?;
+    if !actual.belongs_to(owner) || !std::ptr::eq(owner, checked.emission().owner()) {
+        return Err(Error::Incomplete(
+            "capability prefix actual inputs belong to another checked owner",
+        ));
+    }
+    // Exact existing complete selection algorithm; no raw-root replacement,
+    // cloned binding, default empty table or old Rich/graph factory.
+    actual_selected_inputs_v1(
+        owner,
+        checked,
+        function,
+        actual.inputs(),
+        actual.bindings(),
+        resources,
+    )
+}
+#[cfg(test)]
+fn capability_prefix_selection_frame() -> Result<usize> {
+    // Keep the unchanged source-selection call's original assembly-policy
+    // envelope; new wrapper/view/transfer vertices are separately additive.
+    let rows = [
+        8192,
+        size_of::<ActualSelectedInputsV1<'static>>(),
+        size_of::<(
+            &ProductionPreRankedKirOwnerV1,
+            &CheckedBf16NominalCallV1<'static>,
+            &SemanticFunctionDeclV1,
+            &crate::production_pipeline::ActualRetainedRankedInputsV1<'static>,
+            &mut PreparationResourcesV1<'static, 'static>,
+        )>(),
+        size_of::<(
+            &[ProductionRankedRootInputV1],
+            &AuthenticatedReferenceEffectBindingsV1,
+            &mut PreparationResourcesV1<'static, 'static>,
+            Result<ActualSelectedInputsV1<'static>>,
+        )>(),
+        size_of::<(
+            &ActualSelectedInputsV1<'static>,
+            ProductionSourceLaunchRootV1,
+            &ProductionRankedRootInputV1,
+            &[AuthenticatedReferenceEffectBindingV1],
+        )>(),
+        size_of::<(
+            [bool; 2],
+            Option<usize>,
+            Option<(usize, ProductionSourceLaunchRootV1)>,
+            usize,
+            ProductionSourceLaunchRootV1,
+            usize,
+            usize,
+            usize,
+            usize,
+            Option<usize>,
+        )>(),
+        size_of::<(
+            &AdmittedInertSemanticMirV1,
+            &ProductionSourceLaunchRosterV1,
+            &SemanticFunctionDeclV1,
+            Option<&SemanticFunctionDeclV1>,
+            [u8; 32],
+        )>(),
+        size_of::<(
+            std::iter::Enumerate<std::slice::Iter<'static, ProductionRankedRootInputV1>>,
+            std::slice::Iter<'static, ProductionRankedRootInputV1>,
+            &ProductionRankedRootInputV1,
+            &ProductionRankedRootInputV1,
+            &str,
+            &str,
+            usize,
+            usize,
+            Option<usize>,
+            Result<bool>,
+        )>(),
+        size_of::<(
+            std::iter::Enumerate<
+                std::iter::Zip<
+                    std::slice::Iter<'static, ProductionRankedRootInputV1>,
+                    std::slice::Iter<'static, ProductionSourceLaunchRootV1>,
+                >,
+            >,
+            &ProductionRankedRootInputV1,
+            &ProductionSourceLaunchRootV1,
+        )>(),
+        size_of::<(
+            std::iter::Enumerate<std::slice::Iter<'static, AuthenticatedReferenceEffectBindingV1>>,
+            &AuthenticatedReferenceEffectBindingV1,
+            std::iter::Enumerate<std::slice::Iter<'static, ProductionRankedRootInputV1>>,
+            &ProductionRankedRootInputV1,
+            &[AuthenticatedReferenceEffectBindingV1],
+        )>(),
+        size_of::<(
+            Error,
+            Resource,
+            Result<usize>,
+            Result<()>,
+            Option<usize>,
+            bool,
+        )>(),
+        size_of::<(
+            [usize; 12],
+            std::array::IntoIter<usize, 12>,
+            usize,
+            usize,
+            Option<usize>,
+        )>(),
+    ];
+    rows.into_iter().try_fold(0usize, |sum, row| {
+        sum.checked_add(row)
+            .ok_or_else(|| resource(Resource::Arithmetic))
+    })
+}

@@ -249,12 +249,28 @@ impl Ledger {
         key: &Key,
         request: &Request,
         publication: &Publication,
+        guard: &PublicationGuard<'_>,
+        exchange: &mut impl FnMut(&AnchorChallenge, &mut Budget<'_>) -> Result<AnchorReceipt>,
+        b: &mut Budget<'_>,
+    ) -> Result<(Ack, bool)> {
+        self.publish_checked_with_hooks(p, key, request, publication, exchange,
+            &mut |b| guard.validate(b), &mut NoHooks, b)
+    }
+
+    #[cfg(test)]
+    pub(super) fn publish_fixture(
+        &mut self,
+        p: &Policy,
+        key: &Key,
+        request: &Request,
+        publication: &Publication,
         exchange: &mut impl FnMut(&AnchorChallenge, &mut Budget<'_>) -> Result<AnchorReceipt>,
         b: &mut Budget<'_>,
     ) -> Result<(Ack, bool)> {
         self.publish_with_hooks(p, key, request, publication, exchange, &mut NoHooks, b)
     }
 
+    #[cfg(test)]
     pub(super) fn publish_with_hooks(
         &mut self,
         p: &Policy,
@@ -265,12 +281,31 @@ impl Ledger {
         hooks: &mut impl Hooks,
         b: &mut Budget<'_>,
     ) -> Result<(Ack, bool)> {
+        self.publish_checked_with_hooks(p, key, request, publication, exchange,
+            &mut |_| Ok(()), hooks, b)
+    }
+
+    // The production caller supplies only the closed PublicationGuard above.
+    // Test fault injection exercises these same boundaries without pretending to
+    // construct an admitted service or a native compiler occurrence.
+    fn publish_checked_with_hooks(
+        &mut self,
+        p: &Policy,
+        key: &Key,
+        request: &Request,
+        publication: &Publication,
+        exchange: &mut impl FnMut(&AnchorChallenge, &mut Budget<'_>) -> Result<AnchorReceipt>,
+        check: &mut impl FnMut(&mut Budget<'_>) -> Result<()>,
+        hooks: &mut impl Hooks,
+        b: &mut Budget<'_>,
+    ) -> Result<(Ack, bool)> {
         let floor = Self::STORAGE
             + p.retained_storage()
             + key.retained_storage()
             + request.retained_storage()
             + publication.retained_storage();
         b.with_prepaid_scope(floor, 8, 1024 * Self::STORAGE, 32 * Self::STORAGE, |b| {
+            check(b)?;
             self.validate(b)?;
             let policy = retain(Policy::decode(p.canonical_bytes(), b)?, b)?;
             let q = retain(Request::decode(request.canonical_bytes(), b)?, b)?;
@@ -284,6 +319,7 @@ impl Ledger {
                 if !w.matches(&t) {
                     return Err(Error::rejected("native publication replay substitution"));
                 }
+                check(b)?;
                 return Ok((w.ack(b)?, false));
             }
             if !issued_matches(&self.record, &t, b)? {
@@ -316,7 +352,9 @@ impl Ledger {
                     .begin_advance(CallerNonceV1::from_bytes(fresh_nonce(b)?), &anchor_key)?;
                 b.reserve_storage(size_of::<AnchorChallenge>())?;
                 let next = retain(AnchorJournal::prepared(&t, pending.challenge(), b)?, b)?;
+                check(b)?;
                 self.commit_anchor(next, hooks, b)?;
+                check(b)?;
             }
             let anchor = self
                 .anchor
@@ -326,11 +364,15 @@ impl Ledger {
                 // The exact challenge is durably reacquired before it leaves
                 // the service. A replay never draws a replacement nonce.
                 self.validate(b)?;
+                check(b)?;
                 let receipt = exchange(anchor.challenge(), b)?;
                 b.reserve_storage(size_of::<AnchorReceipt>())?;
+                check(b)?;
                 self.validate(b)?;
                 let next = retain(anchor.record_anchor_receipt(&receipt, b)?, b)?;
+                check(b)?;
                 self.commit_anchor(next, hooks, b)?;
+                check(b)?;
             }
             let anchor = self
                 .anchor
@@ -348,6 +390,7 @@ impl Ledger {
                 let next = WorkerRecord::new(anchor.transaction(), receipt, b)?;
                 b.reserve_storage(WorkerRecord::STORAGE)?;
                 if self.worker.as_ref().is_none_or(|w| w.bytes != next.bytes) {
+                    check(b)?;
                     self.poisoned = true;
                     ledger::commit_named(
                         &self.store,
@@ -360,6 +403,7 @@ impl Ledger {
                     self.worker = Some(next);
                     validate_join(&self.record, self.worker.as_ref(), self.anchor.as_ref(), b)?;
                     self.poisoned = false;
+                    check(b)?;
                 }
                 self.validate(b)?;
                 let w = self
@@ -371,7 +415,9 @@ impl Ledger {
                     .as_ref()
                     .ok_or_else(|| Error::rejected("native committed anchor missing"))?;
                 let next = retain(anchor.mark_published(w.identity, b)?, b)?;
+                check(b)?;
                 self.commit_anchor(next, hooks, b)?;
+                check(b)?;
             }
             self.validate(b)?;
             let w = self
@@ -379,12 +425,31 @@ impl Ledger {
                 .as_ref()
                 .ok_or_else(|| Error::rejected("native published Worker missing"))?;
             let ack = w.ack(b)?;
+            check(b)?;
             let next = self.record.advance(&ack, p, key, b)?;
             b.reserve_storage(Record::STORAGE)?;
+            check(b)?;
             self.commit_with_hooks(next, hooks, b)?;
+            check(b)?;
             self.validate(b)?;
+            check(b)?;
             Ok((ack, true))
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn publish_with_continuity_checks_fixture(
+        &mut self,
+        p: &Policy,
+        key: &Key,
+        request: &Request,
+        publication: &Publication,
+        exchange: &mut impl FnMut(&AnchorChallenge, &mut Budget<'_>) -> Result<AnchorReceipt>,
+        check: &mut impl FnMut(&mut Budget<'_>) -> Result<()>,
+        hooks: &mut impl Hooks,
+        b: &mut Budget<'_>,
+    ) -> Result<(Ack, bool)> {
+        self.publish_checked_with_hooks(p, key, request, publication, exchange, check, hooks, b)
     }
 
     fn commit_anchor(
@@ -428,6 +493,41 @@ impl Ledger {
                     return Ok(None);
                 }
                 Ok(Some(w.carriage(b)?))
+            },
+        )
+    }
+
+    /// Private durable-completion gate for occurrence retirement, not a carriage
+    /// decoder or remote assertion. A previous completed Worker may coexist with
+    /// the next pending issuer record: that is recoverable but cannot retire it.
+    /// Returns the FULL UNRESERVED carriage charge, like recover_carriage.
+    pub(super) fn retirement_carriage(
+        &self,
+        publication: &Publication,
+        ack: &Ack,
+        b: &mut Budget<'_>,
+    ) -> Result<Carriage> {
+        b.with_prepaid_scope(
+            Self::STORAGE + publication.retained_storage() + ack.retained_storage(),
+            8,
+            1024 * Self::STORAGE,
+            16 * Self::STORAGE,
+            |b| {
+                self.validate(b)?;
+                if !matches!(self.record.body, Body::Ready) {
+                    return Err(Error::rejected("native retirement requires a ready issuer"));
+                }
+                let worker = self.completed_worker(b)?.ok_or_else(|| {
+                    Error::rejected("native retirement precedes completed durable publication")
+                })?;
+                let carriage = worker.carriage(b)?;
+                if carriage.publication().canonical_bytes() != publication.canonical_bytes()
+                    || carriage.acknowledgment().canonical_bytes() != ack.canonical_bytes()
+                {
+                    return Err(Error::rejected("native retirement changed durable carriage"));
+                }
+                self.validate(b)?;
+                Ok(carriage)
             },
         )
     }

@@ -55,6 +55,57 @@ fn funded_owner<'a, 'work, 'probe>(
     }
 }
 
+#[test]
+fn indirect_launch_entry_is_nominal_and_preserves_funded_refusal_history() {
+    use std::any::TypeId;
+    assert_eq!(
+        REQUIRES_ORIGINAL_ROOT_CONTROL,
+        TypeId::of::<Supervisor>() == TypeId::of::<crate::ProtectedIssuerSupervisorV3>()
+    );
+    for short_work in [false, true] {
+        let drops = Cell::new(0);
+        let reached_payload = Cell::new(false);
+        let mut work = Work::new(5 + ENTRY - usize::from(short_work));
+        let mut budget = Budget::new(&mut work, FLOOR);
+        budget.reserve_storage(FLOOR).unwrap();
+        assert!(budget.reserve_storage(1).is_err());
+        budget.charge_work(5).unwrap();
+        assert!(budget.charge_work(ENTRY + 1).is_err());
+        let account = budget.work_ledger_identity_v1();
+        let result = (|| -> Result<()> {
+            // The real launch_funded uses the same entry before grow/take or
+            // cleanup.reserve_launch; this probe supplies no admitted owner.
+            let guard = funded_owner(&mut budget, &drops);
+            launch_entry(guard.funding.budget)?;
+            reached_payload.set(true);
+            Ok(())
+        })();
+        if short_work {
+            assert!(matches!(result, Err(Error::Resource(Resource::Work(_)))));
+        } else if REQUIRES_ORIGINAL_ROOT_CONTROL {
+            assert!(matches!(
+                result,
+                Err(Error::State(
+                    "native V3 indirect launch requires the original-root FD12 route"
+                ))
+            ));
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(
+            reached_payload.get(),
+            !short_work && !REQUIRES_ORIGINAL_ROOT_CONTROL
+        );
+        assert_eq!(drops.get(), 1);
+        assert_eq!(budget.storage(), UNRELATED);
+        assert_eq!(budget.peak_storage(), FLOOR);
+        assert_eq!(budget.work(), 5 + if short_work { 0 } else { ENTRY });
+        assert_eq!(budget.failed_work(), Some(5 + ENTRY + 1));
+        assert_eq!(budget.failed_storage(), Some(FLOOR + 1));
+        assert!(budget.work_ledger_identity_v1() == account);
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 enum RetirementEvent {
     Owner {

@@ -51,6 +51,7 @@ pub use wait::{ProtectedIssuerBoundaryV3, ProtectedIssuerWaitV3};
 use wait::{attempts, before_deadline, live};
 type Result<T> = std::result::Result<T, Error>;
 const ENTRY: usize = 8;
+const REQUIRES_ORIGINAL_ROOT_CONTROL: bool = true;
 
 /// Move-only native launched child, not ready service or compiler authority.
 ///

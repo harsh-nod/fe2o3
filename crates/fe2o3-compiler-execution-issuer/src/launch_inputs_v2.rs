@@ -22,6 +22,22 @@ use fe2o3_kernel_ir::{
 };
 use std::{error::Error, fmt, mem::size_of, os::fd::RawFd};
 
+const READ_WORK: usize = 8;
+
+fn preflight_inputs(_: RawFd, _: RawFd) -> Result<()> {
+    Ok(())
+}
+
+fn read_policy(fd: RawFd, b: &mut Budget<'_>) -> Result<(PolicyCapability, usize)> {
+    let (value, charge) = PolicyCapability::from_inherited_at(fd, b)?;
+    Ok((value, charge.additional_storage()))
+}
+
+fn read_launch(fd: RawFd, b: &mut Budget<'_>) -> Result<(LaunchCapability, usize)> {
+    let (value, charge) = LaunchCapability::from_inherited_at(fd, b)?;
+    Ok((value, charge.additional_storage()))
+}
+
 /// Inert, move-only native inputs freshly admitted from fixed launch slots 6/8.
 /// The two independently decoded images must name the same native policy.
 /// No legacy-policy fallback or conversion of an admitted legacy owner exists.
@@ -74,5 +90,6 @@ mod tests {
         CompilerExecutionServiceLaunchManifestV3 as OtherManifest,
     };
     const CHILD_TEST: &str = "launch_inputs_v2::tests::inherited_slot_child";
+    const EXPECTED_PRIVATE_FLOOR: RawFd = 12;
     include!("launch_inputs_tests.rs");
 }

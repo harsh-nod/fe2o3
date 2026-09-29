@@ -14,6 +14,9 @@
 // Use read-only fixture/root mounts, no network/GPU, bounded memory/CPU/PIDs,
 // and an outer 600-second timeout. Startup mechanics only, no production credit.
 use super::super::*;
+use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionIssuerMeasurementV1 as Measurement, CompilerExecutionIssuerPolicyV3 as Policy,
+};
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::{fs as disk, os::unix::fs::MetadataExt, process::Command};
 
@@ -36,9 +39,10 @@ const STORAGE: usize = 1024 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const TURNS: usize = 2048;
 const CASE_ENV: &str = "FE2O3_NATIVE_ROOT_ISSUER_CASE";
-const CASES: [&str; 7] = [
+const CASES: [&str; 8] = [
     "ready-cancel",
     "ready-unwind",
+    "ready-image-mismatch",
     "same-uid",
     "corrupt-state",
     "zero-timeout",
@@ -131,8 +135,9 @@ fn run(case: &str) {
         .issuer_cleanup_quota(&trace, 2 * TURNS + 2)
         .unwrap();
     cleanup.check_capacity(cleanup_quota);
-    let continuity =
-        quota::continuity::<compiler::Backing>(prepared.process_quota().unwrap()).unwrap();
+    let continuity = prepared
+        .issuer_continuity_quota::<compiler::Backing>()
+        .unwrap();
     // Limit this invocation on its ORIGINAL account. Scalars reserve capacity;
     // no large backing allocation or replacement ledger is used for ballast.
     let allowance = if case == "short-work" {
@@ -180,7 +185,8 @@ fn run(case: &str) {
     assert!(b.peak_storage() <= before_peak.max(floor + quota.scratch()));
     b.release_storage(padding).unwrap();
     if case.starts_with("ready-") {
-        let (issuer, growth) = launched.expect("actual V3 issuer startup through Ready120 + EOF");
+        let (issuer, growth) =
+            launched.expect("actual V3 issuer startup through Ready120 + EOF and root challenge");
         b.reserve_storage(growth.additional_storage()).unwrap();
         assert_eq!(
             issuer.retained_storage(),
@@ -195,27 +201,57 @@ fn run(case: &str) {
         f.assert_state("ready");
         let live = b.storage();
         let used = b.work();
-        issuer.validate_ready(&mut b).unwrap();
+        issuer.validate_ready(&trace, &mut b).unwrap();
         assert_eq!(b.storage(), live);
         assert!(b.work() - used <= issuer.continuity_quota().work());
+        if case == "ready-image-mismatch" {
+            issuer
+                .child
+                .with_resources(&mut b, |p, b| -> Result<()> {
+                    use fe2o3_broker_authority_service::IssuerAdmissionErrorKindV1 as Kind;
+                    let policy = p.prepared.trust.policy().policy();
+                    let mut digest = policy.executable().sha256();
+                    digest[0] ^= 1;
+                    let (wrong, charge) = Policy::new(
+                        policy.generation(),
+                        Measurement::new(digest, policy.executable().byte_len()).unwrap(),
+                        policy.runtime(),
+                        *policy.verifying_key(),
+                        *policy.external_anchor_verifying_key(),
+                        b,
+                    )
+                    .unwrap();
+                    b.reserve_storage(charge.additional_storage())?;
+                    let error = fe2o3_broker_authority_service::validate_retained_issuer_image_v3(
+                        &issuer.child,
+                        &wrong,
+                        b,
+                    )
+                    .unwrap_err();
+                    assert_eq!(error.kind(), Some(Kind::ExecutablePolicyMismatch));
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(b.storage(), live);
+        }
         foreign.reserve_storage(live).unwrap();
         assert!(matches!(
-            issuer.validate_ready(&mut foreign),
+            issuer.validate_ready(&trace, &mut foreign),
             Err(Error::Resource(Resource::Accounting))
         ));
         // Same ledger at another address and a foreign ledger at the original
         // address must both refuse while the actual child remains live.
         std::mem::swap(&mut b, &mut foreign);
         assert!(matches!(
-            issuer.validate_ready(&mut b),
+            issuer.validate_ready(&trace, &mut b),
             Err(Error::Resource(Resource::Accounting))
         ));
         assert!(matches!(
-            issuer.validate_ready(&mut foreign),
+            issuer.validate_ready(&trace, &mut foreign),
             Err(Error::Resource(Resource::Accounting))
         ));
         std::mem::swap(&mut b, &mut foreign);
-        issuer.validate_ready(&mut b).unwrap();
+        issuer.validate_ready(&trace, &mut b).unwrap();
         assert!(
             trace.poll(&mut b).unwrap().is_exec(),
             "startup must leave compiler held"

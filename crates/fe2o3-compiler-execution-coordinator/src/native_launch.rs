@@ -1,5 +1,9 @@
 //! Native supervisor launch mechanics; authority stays in the closed family adapters.
 use crate::native::CompilerExecutionPreparationErrorV2 as Preparation;
+use fe2o3_broker_authority_service::{
+    RootConnectionErrorV3 as RootConnection, RootIssuerImageErrorV3 as IssuerImage,
+    RootLaunchChannelErrorV3 as RootChannel,
+};
 use fe2o3_compiler_closure_capability::CompilerExecutionCapabilityErrorV2 as Capability;
 use fe2o3_compiler_execution_lifecycle::LifecycleLeaseErrorV2 as Lifecycle;
 use fe2o3_compiler_execution_protocol::{
@@ -48,6 +52,12 @@ pub enum CompilerExecutionLaunchErrorV2 {
     Anchor(Anchor),
     /// Measured executable transfer refused.
     Executable(Image),
+    /// The actual retained issuer's running image differs from its pinned policy.
+    IssuerImage(IssuerImage),
+    /// Original root channel construction or staging refused.
+    RootChannel(RootChannel),
+    /// Original-root and measured issuer challenge refused.
+    RootConnection(RootConnection),
     /// Atomic spawn or child operation refused.
     Spawn(Spawn),
     /// Persistent cleanup funding refused.
@@ -109,7 +119,8 @@ errors!(Resource => Resource, Preparation => Preparation, Capability => Capabili
     Lifecycle => Lifecycle, Inputs => ServiceInputs, Anchor => Anchor, Image => Executable,
     Spawn => Spawn, Cleanup => Cleanup, Retained => Retained, Profile => Profile,
     observations::Error => Observation, ReadyV2 => ReadyV2, ReadyV3 => ReadyV3,
-    ManifestV3 => ManifestV3, ServiceReadyV3 => ServiceReadyV3);
+    ManifestV3 => ManifestV3, ServiceReadyV3 => ServiceReadyV3, IssuerImage => IssuerImage,
+    RootChannel => RootChannel, RootConnection => RootConnection);
 
 impl From<launch_io::Failure> for Failure {
     fn from(error: launch_io::Failure) -> Self {

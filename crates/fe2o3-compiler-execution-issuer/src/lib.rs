@@ -72,8 +72,38 @@ pub const COMPILER_EXECUTION_ISSUER_READY_FD_V1: RawFd = 9;
 pub const COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1: RawFd = 10;
 /// Pidfd retaining the exact live external-anchor service process identity.
 pub const COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1: RawFd = 11;
+/// V3-only issuer endpoint of the original root's private control channel.
+pub const COMPILER_EXECUTION_ISSUER_ROOT_CONTROL_FD_V3: RawFd = 12;
 
 const PRIVATE_DESCRIPTOR_FLOOR: RawFd = 12;
+const PRIVATE_DESCRIPTOR_FLOOR_V3: RawFd = 13;
+
+const NATIVE_INHERITED_DESCRIPTORS: [RawFd; 9] = [
+    COMPILER_EXECUTION_ISSUER_ROOT_FD_V1,
+    COMPILER_EXECUTION_ISSUER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_POLICY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1,
+    COMPILER_EXECUTION_ISSUER_READY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
+];
+// One non-retrying F_GETFD (1024) and fixed table/flag checks (64) per slot.
+const NATIVE_INHERITED_CHECK_WORK: usize = NATIVE_INHERITED_DESCRIPTORS.len() * (1024 + 64);
+const NATIVE_INHERITED_DESCRIPTORS_V3: [RawFd; 10] = [
+    COMPILER_EXECUTION_ISSUER_ROOT_FD_V1,
+    COMPILER_EXECUTION_ISSUER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_POLICY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1,
+    COMPILER_EXECUTION_ISSUER_READY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_ROOT_CONTROL_FD_V3,
+];
+const NATIVE_INHERITED_CHECK_WORK_V3: usize = NATIVE_INHERITED_DESCRIPTORS_V3.len() * (1024 + 64);
 
 const _: () = assert!(COMPILER_EXECUTION_ISSUER_ROOT_FD_V1 > libc::STDERR_FILENO);
 const _: () = assert!(COMPILER_EXECUTION_ISSUER_ROOT_FD_V1 < COMPILER_EXECUTION_ISSUER_PEER_FD_V1);
@@ -99,6 +129,12 @@ const _: () = assert!(
 const _: () =
     assert!(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1 < PRIVATE_DESCRIPTOR_FLOOR);
 const _: () = assert!(PRIVATE_DESCRIPTOR_FLOOR < 128);
+const _: () = assert!(
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1
+        < COMPILER_EXECUTION_ISSUER_ROOT_CONTROL_FD_V3
+);
+const _: () = assert!(COMPILER_EXECUTION_ISSUER_ROOT_CONTROL_FD_V3 < PRIVATE_DESCRIPTOR_FLOOR_V3);
+const _: () = assert!(PRIVATE_DESCRIPTOR_FLOOR_V3 < 128);
 
 /// Runs one exact protected compiler-execution service occurrence from inherited descriptors.
 ///
@@ -261,10 +297,16 @@ fn publish_readiness(
 }
 
 fn take_inherited(descriptor: RawFd) -> Result<OwnedFd, CompilerExecutionIssuerEntrypointErrorV1> {
+    take_inherited_at_floor(descriptor, PRIVATE_DESCRIPTOR_FLOOR)
+}
+
+fn take_inherited_at_floor(
+    descriptor: RawFd,
+    floor: RawFd,
+) -> Result<OwnedFd, CompilerExecutionIssuerEntrypointErrorV1> {
     require_inherited(descriptor)?;
     // SAFETY: F_DUPFD_CLOEXEC atomically returns one newly owned descriptor or reports failure.
-    let retained =
-        unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, PRIVATE_DESCRIPTOR_FLOOR) };
+    let retained = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, floor) };
     if retained < 0 {
         return Err(CompilerExecutionIssuerEntrypointErrorV1::Descriptor(
             io::Error::last_os_error(),
@@ -286,6 +328,22 @@ fn require_inherited(descriptor: RawFd) -> Result<(), CompilerExecutionIssuerEnt
     }
     if flags & libc::FD_CLOEXEC != 0 {
         return Err(CompilerExecutionIssuerEntrypointErrorV1::UnexpectedCloseOnExec(descriptor));
+    }
+    Ok(())
+}
+
+// Native entrypoints prepay their nominal table quote on the original budget.
+// Check the complete table before any duplication can reuse a missing input slot.
+// This only borrows the fixed slots; object admission and consuming takes follow.
+fn require_native_inherited() -> Result<(), CompilerExecutionIssuerEntrypointErrorV1> {
+    require_inherited_table(&NATIVE_INHERITED_DESCRIPTORS)
+}
+
+fn require_inherited_table(
+    descriptors: &[RawFd],
+) -> Result<(), CompilerExecutionIssuerEntrypointErrorV1> {
+    for &descriptor in descriptors {
+        require_inherited(descriptor)?;
     }
     Ok(())
 }

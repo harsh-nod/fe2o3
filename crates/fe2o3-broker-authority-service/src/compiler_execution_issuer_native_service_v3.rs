@@ -28,6 +28,9 @@ use std::{os::fd::OwnedFd, time::Instant};
 #[path = "compiler_execution_issuer_native_readiness.rs"]
 mod readiness;
 
+#[path = "compiler_execution_issuer_root_control_v3.rs"]
+mod root_control;
+
 #[path = "compiler_execution_issuer_native_error.rs"]
 mod error;
 #[path = "compiler_execution_issuer_native_ledger.rs"]
@@ -83,6 +86,55 @@ const ACK_MAGIC: &[u8; 8] = b"F2O3CEA3";
 const ACK_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT-PUBLICATION-ACK/V3\0";
 
 include!("compiler_execution_issuer_native_service_body.rs");
+
+impl Admission<'_> {
+    /// Prepaid input charge for the consumed root-control endpoint, in addition
+    /// to the admission, manifest and READINESS_WRITER_STORAGE reservations.
+    pub const ROOT_CONTROL_ENDPOINT_STORAGE: usize = root_control::ENDPOINT_STORAGE;
+
+    /// Serves only after exact readiness publication and an authenticated gate
+    /// exchange with this issuer's actual root parent. Consumes and retains the
+    /// endpoint through the entire service, including after the gate reply.
+    /// The handshake and dispatch share one deadline of at most 120 seconds.
+    ///
+    /// Uses the concrete V3 admission and its actual policy/manifest binding;
+    /// supplied records cannot replace admission or authorize compiler work.
+    /// All inputs remain prepaid on the original budget. Entry storage and
+    /// cumulative work/denial history are preserved on refusal and unwind.
+    /// The V3 inherited entrypoint supplies its mandatory FD12 endpoint. The
+    /// direct root launcher stages that ABI; unsupported indirect launches refuse.
+    /// Root-owned publication observation and retirement are separate integrations.
+    pub fn serve_native_with_root_readiness(
+        self,
+        manifest: &Manifest,
+        writer: OwnedFd,
+        root_endpoint: OwnedFd,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        let floor = self
+            .retained_storage()
+            .checked_add(manifest.retained_storage())
+            .and_then(|n| n.checked_add(Self::READINESS_WRITER_STORAGE))
+            .and_then(|n| n.checked_add(Self::ROOT_CONTROL_ENDPOINT_STORAGE))
+            .ok_or(Resource::Arithmetic)?;
+        b.with_prepaid_scope(floor, 8, FIXED_WORK, FRAME, |b| {
+            self.validate_continuity(b)?;
+            readiness::check_binding(&self, manifest, b)?;
+            let (root, charge) = root_control::RootEndpoint::new(root_endpoint, b)?;
+            b.reserve_storage(charge)?;
+            let result = self.serve_native_after_readiness(
+                Some((manifest, writer)),
+                b,
+                root_control::TIMEOUT,
+                |a, deadline, b| root.handshake(a, manifest, deadline, b),
+            );
+            // The gate callback only borrows the owner. Keep its endpoint alive
+            // until the consuming service has finished, even after handshake.
+            drop(root);
+            result
+        })
+    }
+}
 
 #[cfg(test)]
 fn verify_test_current(

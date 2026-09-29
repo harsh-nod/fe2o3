@@ -135,10 +135,11 @@ impl<T: Send + 'static> RetainedResourcesV2<T> {
     ///     owner.with(b, |value, _| { value.clear(); Ok(()) })
     /// }
     /// ```
-    pub fn with<R, E>(
+    // Preserve the account's Work lifetime, not the callback's payload borrow.
+    pub fn with<'budget, R, E>(
         &self,
-        b: &mut Budget<'_>,
-        operation: impl FnOnce(&T, &mut Budget<'_>) -> Result<R, E>,
+        b: &mut Budget<'budget>,
+        operation: impl FnOnce(&T, &mut Budget<'budget>) -> Result<R, E>,
     ) -> Result<R, E>
     where
         E: From<Resource> + From<RetainedResourceAccessErrorV2>,

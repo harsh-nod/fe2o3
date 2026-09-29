@@ -22,7 +22,7 @@ use std::{
 
 #[path = "native_root_trace.rs"]
 pub(super) mod trace;
-pub use trace::{RootTaskObservationV2, RootTaskTraceEventV2, RootTaskTraceV2};
+pub use trace::{RootTaskIdentityV2, RootTaskObservationV2, RootTaskTraceEventV2, RootTaskTraceV2};
 
 struct Custody(Option<(Child, ReapSlotV1<'static>)>);
 impl Drop for Custody {
@@ -69,8 +69,10 @@ impl RootOwnedProtectedServiceChildV2 {
     /// Fixed logical control/error/descriptor staging, not generated stack or RSS.
     pub const OPERATION_SCRATCH: usize = 4 * Self::STORAGE + 1024;
     /// Conservative GROWTH to reserve before consuming this owner into a trace.
-    /// It includes the complete trace frame in addition to the original owner.
-    pub const ROOT_TRACE_GROWTH: usize = size_of::<RootTaskTraceV2<'static>>();
+    /// Includes the complete trace frame and its private Rc identity allocation
+    /// in addition to the original owner. Escaped identity handles pay separately.
+    pub const ROOT_TRACE_GROWTH: usize =
+        size_of::<RootTaskTraceV2<'static>>() + trace::IDENTITY_ALLOCATION_STORAGE;
 
     /// Consumes this child into a thread-bound, root-task-only trace controller.
     /// Reserve ROOT_TRACE_GROWTH on the original ledger before this call. Errors

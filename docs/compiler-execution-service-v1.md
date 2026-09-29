@@ -7,6 +7,11 @@ the [native state contract](compiler-execution-native-anchor-state.md) for bound
 state I/O, error/unwind poisoning and accounting. The V1 entrypoints described
 below have not been switched to native owners.
 
+The shared native V2/V3 dispatcher now retains local occurrence custody across
+requests and checks it around durable publication. See the
+[native session contract](compiler-execution-native-session.md) for the exact
+lock-release ordering and the still-unconnected privileged root observer.
+
 The canonical authority-free packet codec and the consumed Linux service loop
 are implemented. The loop operates only on an already admitted
 `ProtectedCompilerExecutionIssuerV1`; it does not create a second compiler or

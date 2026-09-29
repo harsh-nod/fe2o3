@@ -39,10 +39,11 @@ impl Prepared {
     /// Prepared PLUS the full original CompilerTrace. Includes trace poll/input
     /// transfer, full overlapping dependency, fresh key/manifest, source images,
     /// frozen Stage, retained child growth, all finite transport/liveness attempts,
-    /// two prepared process checks, exact readiness and exec confirmation.
+    /// two prepared process checks, the actual running issuer image, exact
+    /// readiness, exec confirmation and the post-readiness root challenge.
     ///
     /// Query is inert and grants no launch authority. It funds this composition,
-    /// not compiler resume/observation/issuance or production attempt setup. Keep
+    /// not compiler resume, publication observation/issuance or production attempt setup. Keep
     /// both input reservations; reserve launch's returned growth before retention.
     /// Persistent cleanup uses issuer_cleanup_quota on its existing ledger.
     pub(crate) fn issuer_launch_quota<T: Send + 'static>(
@@ -90,7 +91,7 @@ impl Prepared {
                 AnchorTransfer::INTO_DESCRIPTORS_SCRATCH,
             ])?,
         };
-        launch_quota::<T>(
+        let launch = launch_quota::<T>(
             payload,
             source,
             trace.issuer_inputs_quota()?,
@@ -108,7 +109,45 @@ impl Prepared {
             },
             staging,
             self.process_quota()?,
+            self.issuer_image_quota()?,
+        )?;
+        let gate =
+            RootConnection::handshake_quota(self.trust.policy().policy().executable().byte_len())?;
+        root_startup_quota::<T>(
+            launch,
+            Quota {
+                work: gate.work(),
+                scratch: gate.scratch(),
+            },
         )
+    }
+
+    fn issuer_image_quota(&self) -> Result<Quota> {
+        let quota = fe2o3_broker_authority_service::retained_issuer_image_quota_v3(
+            self.trust.policy().policy().executable().byte_len(),
+        )?;
+        Ok(Quota {
+            work: quota.work(),
+            scratch: quota.scratch(),
+        })
+    }
+
+    pub(crate) fn issuer_continuity_quota<T: Send + 'static>(&self) -> Result<Quota> {
+        let base = continuity::<T>(self.process_quota()?, self.issuer_image_quota()?)?;
+        let root =
+            RootConnection::validation_quota(self.trust.policy().policy().executable().byte_len())?;
+        Ok(Quota {
+            work: sum(&[
+                base.work(),
+                CompilerTrace::<T>::OBSERVATION_WORK,
+                root.work(),
+            ])?,
+            scratch: sum(&[
+                base.scratch(),
+                CompilerTrace::<T>::OBSERVATION_SCRATCH,
+                root.scratch(),
+            ])?,
+        })
     }
 
     /// Additional finite cleanup funding, with the original pool and all existing
@@ -126,6 +165,30 @@ impl Prepared {
             cleanup_turns,
         )
     }
+}
+
+pub(super) fn root_startup_quota<T: Send + 'static>(launch: Quota, gate: Quota) -> Result<Quota> {
+    Ok(Quota {
+        work: sum(&[
+            launch.work(),
+            4 * RootChannel::WORK,
+            CompilerTrace::<T>::OBSERVATION_WORK,
+            Resources::<Payload<T>>::ACCESS_WORK,
+            RootSession::CREATE_WORK,
+            gate.work(),
+        ])?,
+        scratch: sum(&[
+            launch.scratch(),
+            RootChannel::STORAGE,
+            RootChannel::SCRATCH,
+            ReadyIssuer::<T>::ENVELOPE,
+            CompilerTrace::<T>::OBSERVATION_SCRATCH,
+            Resources::<Payload<T>>::ACCESS_SCRATCH,
+            // Retained session overlaps the subsequent connection handshake.
+            2 * RootSession::CREATE_SCRATCH,
+            gate.scratch(),
+        ])?,
+    })
 }
 
 pub(super) fn cleanup_quota<T: Send + 'static>(
@@ -161,6 +224,7 @@ pub(super) fn launch_quota<T: Send + 'static>(
     anchor: Quota,
     staging: Quota,
     process: Quota,
+    running_image: Quota,
 ) -> Result<Quota> {
     let polling = sum(&[
         launch_io::MAX_WORK,
@@ -191,6 +255,7 @@ pub(super) fn launch_quota<T: Send + 'static>(
             Cleanup::retained_launch_work::<Payload<T>>(payload)?,
             repeated(2, Resources::<Payload<T>>::ACCESS_WORK)?,
             repeated(2, process.work())?,
+            running_image.work(),
             repeated(2, READY_WORK)?,
             polling,
             2 * PlainChild::OPERATION_WORK,
@@ -214,6 +279,7 @@ pub(super) fn launch_quota<T: Send + 'static>(
             child_growth,
             Resources::<Payload<T>>::ACCESS_SCRATCH,
             process.scratch(),
+            running_image.scratch(),
             READY_BYTES,
             READY_SCRATCH,
             READY_OWNER,
@@ -225,12 +291,13 @@ pub(super) fn launch_quota<T: Send + 'static>(
     })
 }
 
-pub(super) fn continuity<T: Send + 'static>(process: Quota) -> Result<Quota> {
+pub(super) fn continuity<T: Send + 'static>(process: Quota, running_image: Quota) -> Result<Quota> {
     Ok(Quota {
         work: sum(&[
             LOCAL_WORK,
             Resources::<Payload<T>>::ACCESS_WORK,
             process.work(),
+            running_image.work(),
             READY_WORK,
             PlainChild::OPERATION_WORK,
         ])?,
@@ -238,6 +305,7 @@ pub(super) fn continuity<T: Send + 'static>(process: Quota) -> Result<Quota> {
             FRAME,
             Resources::<Payload<T>>::ACCESS_SCRATCH,
             process.scratch(),
+            running_image.scratch(),
             READY_SCRATCH,
             PlainChild::OPERATION_SCRATCH,
         ])?,

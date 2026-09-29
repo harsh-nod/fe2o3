@@ -139,6 +139,21 @@ mod compiler_execution_journal_recovery;
 #[cfg(target_os = "linux")]
 mod compiler_execution_occurrence;
 #[cfg(target_os = "linux")]
+mod compiler_execution_root_channel;
+#[cfg(target_os = "linux")]
+mod compiler_execution_root_connection;
+#[cfg(target_os = "linux")]
+pub use compiler_execution_root_connection::{
+    RootConnectionErrorV3, RootConnectionQuotaV3, RootConnectionStorageV3, RootConnectionV3,
+    RootControlSessionV3,
+};
+#[cfg(target_os = "linux")]
+mod compiler_execution_root_exchange;
+#[cfg(target_os = "linux")]
+pub use compiler_execution_root_channel::{
+    RootLaunchChannelErrorV3, RootLaunchChannelStorageV3, RootLaunchChannelV3,
+};
+#[cfg(target_os = "linux")]
 mod compiler_execution_service;
 #[cfg(target_os = "linux")]
 mod compiler_execution_supervision;
@@ -166,8 +181,10 @@ pub use compiler_execution_issuer::{
     ProtectedCompilerExecutionIssuerAdmissionV2, ProtectedCompilerExecutionIssuerAdmissionV3,
     ProtectedCompilerExecutionIssuerServiceErrorV2, ProtectedCompilerExecutionIssuerServiceErrorV3,
     ProtectedCompilerExecutionIssuerStorageV2, ProtectedCompilerExecutionIssuerStorageV3,
-    ProtectedIssuerProcessV1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
-    current_static_issuer_measurements_v1, sealed_static_issuer_runtime_measurement_v1,
+    ProtectedIssuerProcessV1, RootIssuerImageErrorV3, RootIssuerImageQuotaV3,
+    SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1, current_static_issuer_measurements_v1,
+    retained_issuer_image_quota_v3, sealed_static_issuer_runtime_measurement_v1,
+    validate_retained_issuer_image_v3,
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_issuer_durable::{
