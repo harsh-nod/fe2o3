@@ -38,6 +38,8 @@ enum Gfx942CompletionErrorV1 {
     ZeroPacketCount, PacketCountExceedsMaximum { requested: usize, maximum: usize },
     StaleBatchGeneration, SignalPinned { slot: u32, event_pins: u32, native_reader_pins: u32 },
     Poisoned, StaleEventOccurrence, DuplicateDependency, DependencyLedgerAllocation, EventAlreadyBound,
+    InvalidSessionOccurrence, InvalidAcceptanceEpoch, EventCapacityExhausted, EventIdentityExhausted,
+    SignalPinCountExhausted,
 }
 struct CompletionSignalArenaOwnerV1<D> {
     queue: QueueKeyV1, signal_mapping: MemoryMappingKeyV1, gpu_base: u64, next_batch_id: u64,

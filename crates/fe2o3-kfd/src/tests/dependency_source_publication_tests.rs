@@ -8,6 +8,8 @@ use crate::queue::dispatch_binding::CpuDispatchOwnerSnapshotV1;
 use crate::queue::dispatch_binding::TestOnlyMultiInflightDispatchOwnerV1 as DispatchOwner;
 use fe2o3_aql::{AqlCompletionObservationV1, AqlRingReservationError};
 
+include!("dependency_source_output_tests.rs");
+
 struct Recipe {
     owner: DispatchOwner,
     fail_publish: bool,

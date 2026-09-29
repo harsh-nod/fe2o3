@@ -5,6 +5,7 @@ use super::*;
 include!("../queue_completion/source_rollback_body.rs");
 include!("../queue_completion/source_publish_body.rs");
 include!("dependency_source_failure_body.rs");
+include!("dependency_source_output_body.rs");
 
 #[cfg(test)]
 pub(super) use {dependency_source_failure_body, dependency_source_recipe_cancel_call};
@@ -4455,6 +4456,7 @@ impl ComputeAqlQueueSessionV1 {
                 ),
             ));
         }
+        let mut output = dependency_source_output_reserve_body!(dependency_source_rust_expr, N)?;
         let acceptance = match self.dependency_owner.reserve_acceptance_epoch() {
             Ok(acceptance) => acceptance,
             Err(error @ ComputeDependencyTargetUseErrorV1::AcceptanceEpochExhausted) => {
@@ -4496,10 +4498,12 @@ impl ComputeAqlQueueSessionV1 {
         };
         Ok(Gfx942ComputeDependencySourceBatchV1 {
             batch: wrap_published(completion, identity),
-            events: events
-                .into_iter()
-                .map(|event| Gfx942ComputeDependencyEventV1 { lane, event })
-                .collect(),
+            events: dependency_source_output_pack_body!(
+                dependency_source_rust_expr,
+                output,
+                events,
+                lane
+            ),
         })
     }
 

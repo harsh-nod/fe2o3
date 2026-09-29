@@ -2522,6 +2522,15 @@ pub(crate) mod tests {
         directory_entries::allocation_counter::counted(operation)
     }
 
+    pub(crate) use directory_entries::allocation_counter::AllocationCounter;
+
+    pub(crate) fn fail_allocation_for_test<R>(
+        ordinal: usize,
+        operation: impl FnOnce() -> R,
+    ) -> (R, bool) {
+        directory_entries::allocation_counter::fail_one(ordinal, operation)
+    }
+
     use super::*;
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};

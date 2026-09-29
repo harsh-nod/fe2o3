@@ -8,6 +8,7 @@ include!("completion_bound_cancel_execution_v1.rs");
 include!("../../fe2o3-kfd/src/queue_completion/event_release_body.rs");
 include!("completion_event_core_v1.rs");
 include!("../../fe2o3-kfd/src/queue_completion/event_bind_body.rs");
+include!("completion_event_occurrence_v1.rs");
 include!("../../fe2o3-kfd/src/queue_completion/source_publish_body.rs");
 
 verus! {
@@ -19,21 +20,11 @@ enum FixedDispatchSubmissionFailureV1 {
     Terminal(ComputeAqlQueueSessionErrorV1),
 }
 
-spec fn table<R>(s: State<R>) -> OwnerState<()> {
-    OwnerState { queue: s.queue, signal_mapping: s.signal_mapping, gpu_base: s.gpu_base,
-        next_batch_id: s.next_batch_id, slots: s.slots, dependency_ledger: (), phase: s.phase }
-}
 spec fn published<D, const N: usize>(s: OwnerState<D>, r: CompletionBatchRetentionV1<N>) -> bool {
     r.last_packet_id.is_some() && valid(s, r, CompletionSlotPhaseV1::Published { batch_id: r.batch_id })
 }
 spec fn published_error<const N: usize>(r: CompletionBatchRetentionV1<N>) -> Gfx942CompletionErrorV1 {
     if r.last_packet_id.is_none() { Gfx942CompletionErrorV1::StaleBatchGeneration } else { retention_error(N) }
-}
-spec fn occurrence<const N: usize>(session: u64, epoch: u64, r: CompletionBatchRetentionV1<N>,
-    i: int, packet: Option<u64>) -> ExactCompletionOccurrenceV1 {
-    ExactCompletionOccurrenceV1 { session_occurrence: session, source_acceptance_epoch: epoch,
-        batch_id: r.batch_id, queue: r.queue, signal_mapping: r.signal_mapping,
-        slot: r.slots@[i], dispatch_generation: r.dispatches@[i].dispatch_generation, packet_id: packet }
 }
 spec fn packet<const N: usize>(r: CompletionBatchRetentionV1<N>, i: int) -> Option<u64> {
     if 0 <= i < N && N <= u64::MAX && i <= u64::MAX && r.last_packet_id.is_some()
@@ -124,14 +115,6 @@ proof fn untouched_key<const N: usize>(map: Map<u64, ExactCompletionOccurrenceV1
 {
     if n > 0 { untouched_key(map, rows, r, n - 1, key); }
 }
-
-fn exact_occurrence<const N: usize>(session_occurrence: u64, source_acceptance_epoch: u64,
-    retention: &CompletionBatchRetentionV1<N>, batch_index: usize, packet_id: Option<u64>)
-    -> (out: Result<ExactCompletionOccurrenceV1, Gfx942CompletionErrorV1>)
-    ensures out == if batch_index < N {
-        Ok(occurrence(session_occurrence, source_acceptance_epoch, *retention, batch_index as int, packet_id))
-    } else { Err(Gfx942CompletionErrorV1::StaleBatchGeneration) },
-{ completion_exact_occurrence_body!(verus_exec_expr, session_occurrence, source_acceptance_epoch, retention, batch_index, packet_id) }
 
 fn packet_id_at<const N: usize>(retention: &CompletionBatchRetentionV1<N>, batch_index: usize)
     -> (out: Result<u64, Gfx942CompletionErrorV1>)

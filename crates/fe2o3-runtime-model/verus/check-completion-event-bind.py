@@ -15,18 +15,20 @@ PROOF = V / "completion_event_bind_v1.rs"
 SCHEMA = V / "completion_owner_schema_v1.rs"
 BOUND = V / "completion_bound_cancel_execution_v1.rs"
 CORE = V / "completion_event_core_v1.rs"
+OCCURRENCE = V / "completion_event_occurrence_v1.rs"
 BODY = Path("crates/fe2o3-kfd/src/queue_completion/event_bind_body.rs")
 PUBLISH = BODY.with_name("source_publish_body.rs")
 BOUND_BODY = BODY.with_name("bound_cancel_body.rs")
 ADAPTERS = BODY.with_name("rollback_adapters_body.rs")
 SINGLE = BODY.with_name("event_release_body.rs")
-FILES = [PROOF, SCHEMA, BOUND, CORE, BODY, PUBLISH, BOUND_BODY, ADAPTERS, SINGLE]
+FILES = [PROOF, SCHEMA, BOUND, CORE, OCCURRENCE, BODY, PUBLISH, BOUND_BODY, ADAPTERS, SINGLE]
 EDGES = {
     PROOF: [('include!("completion_owner_schema_v1.rs");', SCHEMA),
             ('include!("completion_bound_cancel_execution_v1.rs");', BOUND),
             ('include!("../../fe2o3-kfd/src/queue_completion/event_release_body.rs");', SINGLE),
             ('include!("completion_event_core_v1.rs");', CORE),
             ('include!("../../fe2o3-kfd/src/queue_completion/event_bind_body.rs");', BODY),
+            ('include!("completion_event_occurrence_v1.rs");', OCCURRENCE),
             ('include!("../../fe2o3-kfd/src/queue_completion/source_publish_body.rs");', PUBLISH)],
     BOUND: [('include!("../../fe2o3-kfd/src/queue_completion/bound_cancel_body.rs");', BOUND_BODY),
             ('include!("../../fe2o3-kfd/src/queue_completion/rollback_adapters_body.rs");', ADAPTERS)],
@@ -42,7 +44,7 @@ def need(value, message):
 
 
 def audit(inputs):
-    need(set(inputs) == set(FILES), "exact nine-file closure")
+    need(set(inputs) == set(FILES), "exact ten-file closure")
     reached, pending = set(), [PROOF]
     while pending:
         path = pending.pop()

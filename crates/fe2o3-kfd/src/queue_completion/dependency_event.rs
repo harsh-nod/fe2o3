@@ -89,12 +89,7 @@ pub(super) struct CompletionDependencyLedgerV1 {
 
 impl CompletionDependencyLedgerV1 {
     pub(super) fn new() -> Self {
-        Self {
-            next_event_id: 1,
-            next_reader_lease_id: 1,
-            events: HashMap::new(),
-            readers: HashMap::new(),
-        }
+        completion_dependency_ledger_new_body!(completion_rust_expr)
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -217,64 +212,14 @@ impl CompletionSignalArenaOwnerV1 {
         source_acceptance_epoch: u64,
         retention: &CompletionBatchRetentionV1<N>,
     ) -> Result<Vec<Gfx942ComputeEventOccurrenceV1>, Gfx942CompletionErrorV1> {
-        self.require_ready()?;
-        self.validate_bound(retention)?;
-        validate_logical_identity(session_occurrence, source_acceptance_epoch)?;
-        let next_len = self
-            .dependency_ledger
-            .events
-            .len()
-            .checked_add(N)
-            .ok_or(Gfx942CompletionErrorV1::EventCapacityExhausted)?;
-        if next_len > GFX942_MAX_COMPUTE_EVENT_OCCURRENCES_V1 {
-            return Err(Gfx942CompletionErrorV1::EventCapacityExhausted);
-        }
-        let count =
-            u64::try_from(N).map_err(|_| Gfx942CompletionErrorV1::EventIdentityExhausted)?;
-        let next_event_id = self
-            .dependency_ledger
-            .next_event_id
-            .checked_add(count)
-            .ok_or(Gfx942CompletionErrorV1::EventIdentityExhausted)?;
-        let mut exact = Vec::new();
-        exact
-            .try_reserve_exact(N)
-            .map_err(|_| Gfx942CompletionErrorV1::DependencyLedgerAllocation)?;
-        for batch_index in 0..N {
-            let occurrence = exact_occurrence(
-                session_occurrence,
-                source_acceptance_epoch,
-                retention,
-                batch_index,
-                None,
-            )?;
-            self.slots[occurrence.slot.index as usize]
-                .event_pins
-                .checked_add(1)
-                .ok_or(Gfx942CompletionErrorV1::SignalPinCountExhausted)?;
-            exact.push(occurrence);
-        }
-        self.dependency_ledger
-            .events
-            .try_reserve(N)
-            .map_err(|_| Gfx942CompletionErrorV1::DependencyLedgerAllocation)?;
-        let mut events = Vec::new();
-        events
-            .try_reserve_exact(N)
-            .map_err(|_| Gfx942CompletionErrorV1::DependencyLedgerAllocation)?;
-
-        for (offset, occurrence) in exact.into_iter().enumerate() {
-            let event_id = self.dependency_ledger.next_event_id + offset as u64;
-            let replaced = self.dependency_ledger.events.insert(event_id, occurrence);
-            debug_assert!(replaced.is_none());
-            self.slots[occurrence.slot.index as usize].event_pins += 1;
-            events.push(Gfx942ComputeEventOccurrenceV1 {
-                event_id,
-                exact: occurrence,
-            });
-        }
-        self.dependency_ledger.next_event_id = next_event_id;
-        Ok(events)
+        completion_record_event_batch_body!(
+            completion_rust_expr,
+            self,
+            session_occurrence,
+            source_acceptance_epoch,
+            retention,
+            N
+        )
     }
 
     /// Records an event before its source batch is published.
@@ -289,40 +234,14 @@ impl CompletionSignalArenaOwnerV1 {
         retention: &CompletionBatchRetentionV1<N>,
         batch_index: usize,
     ) -> Result<Gfx942ComputeEventOccurrenceV1, Gfx942CompletionErrorV1> {
-        self.require_ready()?;
-        self.validate_bound(retention)?;
-        validate_logical_identity(session_occurrence, source_acceptance_epoch)?;
-        if self.dependency_ledger.events.len() >= GFX942_MAX_COMPUTE_EVENT_OCCURRENCES_V1 {
-            return Err(Gfx942CompletionErrorV1::EventCapacityExhausted);
-        }
-        let exact = exact_occurrence(
+        completion_record_single_event_body!(
+            completion_rust_expr,
+            self,
             session_occurrence,
             source_acceptance_epoch,
             retention,
-            batch_index,
-            None,
-        )?;
-        let next_event_id = self
-            .dependency_ledger
-            .next_event_id
-            .checked_add(1)
-            .ok_or(Gfx942CompletionErrorV1::EventIdentityExhausted)?;
-        let record = &self.slots[exact.slot.index as usize];
-        let next_event_pins = record
-            .event_pins
-            .checked_add(1)
-            .ok_or(Gfx942CompletionErrorV1::SignalPinCountExhausted)?;
-        self.dependency_ledger
-            .events
-            .try_reserve(1)
-            .map_err(|_| Gfx942CompletionErrorV1::DependencyLedgerAllocation)?;
-
-        let event_id = self.dependency_ledger.next_event_id;
-        let replaced = self.dependency_ledger.events.insert(event_id, exact);
-        debug_assert!(replaced.is_none());
-        self.dependency_ledger.next_event_id = next_event_id;
-        self.slots[exact.slot.index as usize].event_pins = next_event_pins;
-        Ok(Gfx942ComputeEventOccurrenceV1 { event_id, exact })
+            batch_index
+        )
     }
 
     /// Binds one unbound event to its exact source packet exactly once.
@@ -955,13 +874,7 @@ fn validate_logical_identity(
     session_occurrence: u64,
     acceptance_epoch: u64,
 ) -> Result<(), Gfx942CompletionErrorV1> {
-    if session_occurrence == 0 {
-        return Err(Gfx942CompletionErrorV1::InvalidSessionOccurrence);
-    }
-    if acceptance_epoch == 0 {
-        return Err(Gfx942CompletionErrorV1::InvalidAcceptanceEpoch);
-    }
-    Ok(())
+    completion_logical_identity_body!(completion_rust_expr, session_occurrence, acceptance_epoch)
 }
 
 fn exact_occurrence<const N: usize>(

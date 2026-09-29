@@ -29,6 +29,7 @@ include!("queue_completion/event_release_body.rs");
 include!("queue_completion/bound_cancel_body.rs");
 include!("queue_completion/rollback_adapters_body.rs");
 include!("queue_completion/event_bind_body.rs");
+include!("queue_completion/event_issue_body.rs");
 
 macro_rules! completion_rust_expr {
     ($body:expr) => {
@@ -1198,10 +1199,12 @@ impl CompletionSignalArenaOwnerV1 {
         source_acceptance_epoch: u64,
         bound: &BoundCompletionBatchV1<N>,
     ) -> Result<Vec<Gfx942ComputeEventOccurrenceV1>, Gfx942CompletionErrorV1> {
-        self.record_dependency_event_batch_v1(
+        completion_record_bound_dependency_batch_body!(
+            completion_rust_expr,
+            self,
             session_occurrence,
             source_acceptance_epoch,
-            &bound.retention,
+            bound
         )
     }
 
@@ -1225,10 +1228,12 @@ impl CompletionSignalArenaOwnerV1 {
         source_acceptance_epoch: u64,
         retention: &CompletionBatchRetentionV1<N>,
     ) -> Result<Vec<Gfx942ComputeEventOccurrenceV1>, Gfx942CompletionErrorV1> {
-        self.record_unbound_compute_event_batch(
+        completion_record_dependency_batch_body!(
+            completion_rust_expr,
+            self,
             session_occurrence,
             source_acceptance_epoch,
-            retention,
+            retention
         )
     }
 
