@@ -450,10 +450,13 @@ fn parent_custody_keeps_the_original_capture() {
     .upgrade(CompilerClosureV2::new([1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]).unwrap())
     .unwrap();
     let capability = RustcInvocationCapabilityV1::create(capture.descriptor().clone()).unwrap();
+    let directory = fe2o3_process_identity::PinnedWorkingDirectoryV3::open(Path::new("/")).unwrap();
+    directory.configure_child_fchdir(&mut command).unwrap();
     let custody = ParentRustcInvocationCustody::retain(
         Some(InertPreparedRustcInvocationCapture::V3(Box::new(capture))),
         Some(capability),
         Some(stdio),
+        directory,
     )
     .unwrap()
     .unwrap();
@@ -463,9 +466,30 @@ fn parent_custody_keeps_the_original_capture() {
     assert_eq!(stdio.stderr().unwrap().descriptor_flags(), FdFlags::empty());
     assert!(!custody.grants_compiler_authority());
     custody.revalidate().unwrap();
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+    let mut work = Work::new(30_000_000);
+    let mut budget = Budget::new(&mut work, 4_000_000);
+    let floor = custody.native_retained_storage().unwrap();
+    budget.reserve_storage(floor).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    custody.revalidate_native(&mut budget).unwrap();
     let flags = rustix::fs::fcntl_getfl(&sources[2]).unwrap();
     rustix::fs::fcntl_setfl(&sources[2], flags ^ OFlags::NONBLOCK).unwrap();
     assert!(custody.revalidate().is_err());
+    assert!(matches!(
+        custody.revalidate_native(&mut budget),
+        Err(
+            fe2o3_compiler_closure_capability::CompilerExecutionCapabilityErrorV2::Io {
+                operation: "parent stdio",
+                errno: libc::ESTALE,
+            }
+        )
+    ));
+    assert_eq!(budget.storage(), floor);
+    assert!(budget.work_ledger_identity_v1() == ledger);
     drop(custody);
     // SAFETY: scalar probe checks that parent custody released its owned copy.
     assert_eq!(unsafe { libc::fcntl(retained, libc::F_GETFD) }, -1);

@@ -16,7 +16,7 @@ use fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1;
 use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_hsaco_finalize::ProtectedFirstBuildWorkerV3Error;
-use fe2o3_process_identity::CapturedStdioV1;
+use fe2o3_process_identity::{CapturedStdioV1, PinnedWorkingDirectoryV3};
 use fe2o3_rustc_invocation::RustcInvocationDescriptorV3;
 
 use crate::compiler_execution_boundary::{
@@ -41,13 +41,19 @@ pub(crate) struct ParentRustcInvocationCustody {
     // Present only when an entry adapter supplied an actual early capture. None
     // is missing capture, never three absent slots or root-process substitution.
     stdio: Option<CapturedStdioV1>,
+    // The owner used to configure the child, not a reopen of descriptor cwd text.
+    working_directory: PinnedWorkingDirectoryV3,
 }
 
 impl ParentRustcInvocationCustody {
+    /// Moves the same directory owner used for child setup into V3 custody.
+    /// Capture and retention do not authenticate a pathname/object join. Other
+    /// invocation kinds drop these inputs; the Command hook owns its duplicate.
     pub(crate) fn retain(
         capture: Option<InertPreparedRustcInvocationCapture>,
         capability: Option<RustcInvocationCapabilityV1>,
         stdio: Option<CapturedStdioV1>,
+        working_directory: PinnedWorkingDirectoryV3,
     ) -> Result<Option<Self>, ParentRustcInvocationCustodyError> {
         match (capture, capability) {
             (Some(InertPreparedRustcInvocationCapture::V3(invocation)), Some(capability)) => {
@@ -55,6 +61,7 @@ impl ParentRustcInvocationCustody {
                     invocation,
                     capability,
                     stdio,
+                    working_directory,
                 };
                 custody.revalidate()?;
                 Ok(Some(custody))
@@ -72,6 +79,9 @@ impl ParentRustcInvocationCustody {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), ParentRustcInvocationCustodyError> {
+        self.working_directory
+            .native_source()
+            .map_err(ParentRustcInvocationCustodyError::WorkingDirectory)?;
         if let Some(stdio) = &self.stdio {
             stdio
                 .revalidate()
@@ -115,6 +125,7 @@ pub(crate) enum ParentRustcInvocationCustodyError {
     DescriptorMismatch,
     Capability(String),
     Stdio(std::io::Error),
+    WorkingDirectory(std::io::Error),
 }
 
 impl fmt::Display for ParentRustcInvocationCustodyError {
@@ -133,6 +144,7 @@ impl fmt::Display for ParentRustcInvocationCustodyError {
             ),
             Self::Capability(error) => write!(formatter, "retained rustc invocation capability is invalid: {error}"),
             Self::Stdio(error) => write!(formatter, "retained wrapper stdio is invalid: {error}"),
+            Self::WorkingDirectory(error) => write!(formatter, "retained wrapper working directory is invalid: {error}"),
         }
     }
 }
