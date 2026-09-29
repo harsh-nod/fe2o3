@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [native source failure settlement](evidence/dev-native-source-failure-2026-09-28/README.md)
+shares the actual inline failure join and both native/resource cancellation
+forwarders with a no-cheating Verus root. Two signed campaigns pass 32 stages,
+16 executable negatives and 21 overlapping obligations, with 6218 unchanged
+source hashes. The native-recipe normal-return theorem requires a present
+dispatch owner only for Retryable input; absent non-retry owners remain valid.
+Three new CPU groups cover genuine prepared resources on both lanes, neighboring
+epochs, move-only error preservation, absent-owner panic and cancellation refusal
+normalization. Final KFD passes 1421/0 (320 construction tests excluded), runtime
+1828/0 with 30 hardware ignores, and doctests 124/0. Static checks, independent
+absence of all 48 recorded groups and archive restore pass. The warning-bearing
+stopped campaign remains rejected; the strict classifier is unchanged. The old
+22 epoch mutants are not rerun. Next is allocation-free post-publication event
+binding and success-prefix composition; native authority/provenance, outer
+terminalization, GPU/performance and A1/A2 gates remain open.
+
 The [completion source rollback composition](evidence/dev-completion-source-rollback-2026-09-28/README.md)
 shares the actual inline short-circuit cleanup, production calls and consuming/
 forwarding adapters over one owner. It proves skipped cancellation on release
