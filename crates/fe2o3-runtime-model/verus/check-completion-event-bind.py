@@ -9,8 +9,8 @@ import types
 
 ROOT = Path(__file__).resolve().parents[3]
 V = Path("crates/fe2o3-runtime-model/verus")
-BASE = V / "check-compute-pipeline-publication.py"
-BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
+BASE = V / "check-completion-bound-cancel.py"
+BASE_SHA = "fcd9507c3cccffb1b2c331bbc74fddcd83198d7e5ce73337b06041377f2f74f6"
 PROOF = V / "completion_event_bind_v1.rs"
 SCHEMA = V / "completion_owner_schema_v1.rs"
 BOUND = V / "completion_bound_cancel_execution_v1.rs"
@@ -145,11 +145,12 @@ def selection_notes(leaf, focus=None):
 def campaign(source=False):
     audit({path: (ROOT / path).read_bytes().decode("utf-8") for path in FILES})
     raw = (ROOT / BASE).read_bytes()
-    need(hashlib.sha256(raw).hexdigest() == BASE_SHA, "authenticated publication controller")
-    module = types.ModuleType("event_bind_campaign")
-    module.__file__ = str(ROOT / BASE)
-    sys.modules[module.__name__] = module
-    exec(compile(raw, module.__file__, "exec"), module.__dict__)
+    need(hashlib.sha256(raw).hexdigest() == BASE_SHA, "authenticated retention controller")
+    base = types.ModuleType("event_bind_retention_controller")
+    base.__file__ = str(ROOT / BASE)
+    sys.modules[base.__name__] = base
+    exec(compile(raw, base.__file__, "exec"), base.__dict__)
+    module = base.campaign()
     module.FILES, module.PROOF, module.BODY = FILES, PROOF, PUBLISH if source else BODY
     module.EXPECTED = dict(module.EXPECTED, verified=43)
     module.mutations = source_mutations if source else mutations

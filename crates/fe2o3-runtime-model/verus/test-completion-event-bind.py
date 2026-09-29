@@ -145,4 +145,15 @@ for source_mode, count in ((False, 28), (True, 6)):
         verifier, campaign.EXPECTED, {path})
     need(check_positive(0, ""), "exact positive")
     need(not check_positive(1, "") and not check_positive(0, json.dumps(error)), "invalid positive rejected")
+    for message in classifier.ENUMERATION_NOTES:
+        note = dict(error, level="note", message=message)
+        need(check_positive(0, json.dumps(note)), "exact inherited enumeration")
+        need(not check([note]) and check([note, error]), "enumeration alone is not a logical negative")
+        for hostile in (
+            dict(note, message=message + " unknown"), dict(note, level="warning"),
+            dict(note, level="error"), dict(note, children=[error]),
+            dict(note, spans=[{"is_primary": True, "file_name": "/foreign.rs"}]),
+        ):
+            need(not check_positive(0, json.dumps(hostile)), "hostile positive enumeration rejected")
+        need(not check([dict(note, message=message + " Resource limit (rlimit) exceeded"), error]), "mixed enumeration rejected")
 print("PASS: completion event binding calibration (6 groups)")
