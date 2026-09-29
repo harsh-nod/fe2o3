@@ -1,5 +1,7 @@
 //! Ordinary fixtures exercise the service's actual durable consumer, not public
 //! protected-process admission, independent administration, or GPU authority.
+#[path = "compiler_execution_publication_continuity_tests.rs"]
+mod continuity_tests;
 use super::super::worker::{ANCHOR, WORKER};
 use super::*;
 use ed25519_dalek::{Signer, SigningKey};
@@ -102,13 +104,13 @@ fn native_worker_publication_replay_second_sequence_and_currentness() {
         let (q, u) = issued(&mut ledger, &p, &key, seed, &mut b);
         let floor = b.storage();
         let (ack, advanced) = ledger
-            .publish(&p, &key, &q, &u, &mut proposed, &mut b)
+            .publish_fixture(&p, &key, &q, &u, &mut proposed, &mut b)
             .unwrap();
         assert!(advanced);
         assert_eq!(b.storage(), floor);
         b.reserve_storage(ack.retained_storage()).unwrap();
         let (same, advanced) = ledger
-            .publish(
+            .publish_fixture(
                 &p,
                 &key,
                 &q,
@@ -210,12 +212,12 @@ fn native_worker_every_publication_commit_boundary_recovers_exactly_once() {
                 drop(ledger);
                 let mut ledger = Ledger::recover(root.as_fd(), &p, &key, &mut b).unwrap();
                 let (ack, _) = ledger
-                    .publish(&p, &key, &q, &u, &mut exchange, &mut b)
+                    .publish_fixture(&p, &key, &q, &u, &mut exchange, &mut b)
                     .unwrap();
                 assert_eq!(ledger.record.sequence, 2);
                 b.reserve_storage(ack.retained_storage()).unwrap();
                 let (replay, advanced) = ledger
-                    .publish(
+                    .publish_fixture(
                         &p,
                         &key,
                         &q,
@@ -245,7 +247,7 @@ fn native_worker_anchor_send_receive_loss_reuses_exact_persisted_challenge() {
         let mut saved = None;
         assert!(
             ledger
-                .publish(
+                .publish_fixture(
                     &p,
                     &key,
                     &q,
@@ -269,7 +271,7 @@ fn native_worker_anchor_send_receive_loss_reuses_exact_persisted_challenge() {
         let mut ledger = Ledger::recover(root.as_fd(), &p, &key, &mut b).unwrap();
         let (c, receipt) = saved.unwrap();
         ledger
-            .publish(
+            .publish_fixture(
                 &p,
                 &key,
                 &q,
@@ -352,7 +354,7 @@ fn native_worker_incomplete_publication_cannot_recover_or_attest_ack_carriage() 
         );
         assert_eq!(snapshot(dir.path()), before);
         ledger
-            .publish(
+            .publish_fixture(
                 &p,
                 &key,
                 &q,
@@ -387,7 +389,7 @@ fn native_worker_prior_position_abort_is_durable_and_terminal() {
     let (q, u) = issued(&mut ledger, &p, &key, 1, &mut b);
     assert!(
         ledger
-            .publish(
+            .publish_fixture(
                 &p,
                 &key,
                 &q,
@@ -402,7 +404,7 @@ fn native_worker_prior_position_abort_is_durable_and_terminal() {
     let mut ledger = Ledger::recover(root.as_fd(), &p, &key, &mut b).unwrap();
     assert!(
         ledger
-            .publish(
+            .publish_fixture(
                 &p,
                 &key,
                 &q,
@@ -426,7 +428,7 @@ fn native_worker_fresh_currentness_rejects_stale_receipt_and_post_exchange_repla
     b.reserve_storage(Ledger::STORAGE).unwrap();
     let (q, u) = issued(&mut ledger, &p, &key, 1, &mut b);
     ledger
-        .publish(&p, &key, &q, &u, &mut proposed, &mut b)
+        .publish_fixture(&p, &key, &q, &u, &mut proposed, &mut b)
         .unwrap();
     let carriage = ledger
         .recover_carriage(q.subject(), &mut b)
@@ -480,7 +482,7 @@ fn native_worker_fresh_currentness_rejects_stale_receipt_and_post_exchange_repla
     std::fs::write(path, bytes).unwrap();
     let (next_q, next_u) = issued(&mut ledger, &p, &key, 2, &mut b);
     ledger
-        .publish(&p, &key, &next_q, &next_u, &mut proposed, &mut b)
+        .publish_fixture(&p, &key, &next_q, &next_u, &mut proposed, &mut b)
         .unwrap();
     assert!(
         ledger
@@ -494,7 +496,7 @@ fn native_worker_fresh_currentness_rejects_stale_receipt_and_post_exchange_repla
     );
     assert!(
         ledger
-            .publish(
+            .publish_fixture(
                 &p,
                 &key,
                 &q,
@@ -517,12 +519,12 @@ fn native_worker_cross_journal_substitution_refuses_before_any_recovery_mutation
     b.reserve_storage(Ledger::STORAGE).unwrap();
     let (q, u) = issued(&mut ledger, &p, &key, 1, &mut b);
     ledger
-        .publish(&p, &key, &q, &u, &mut proposed, &mut b)
+        .publish_fixture(&p, &key, &q, &u, &mut proposed, &mut b)
         .unwrap();
     let old = snapshot(dir.path());
     let (q, u) = issued(&mut ledger, &p, &key, 2, &mut b);
     ledger
-        .publish(&p, &key, &q, &u, &mut proposed, &mut b)
+        .publish_fixture(&p, &key, &q, &u, &mut proposed, &mut b)
         .unwrap();
     drop(ledger);
     for name in [
@@ -566,7 +568,7 @@ fn native_worker_all_three_journal_recovery_crashes_preserve_publication() {
             b.reserve_storage(Ledger::STORAGE).unwrap();
             let (q, u) = issued(&mut ledger, &p, &key, 1, &mut b);
             let (ack, _) = ledger
-                .publish(&p, &key, &q, &u, &mut proposed, &mut b)
+                .publish_fixture(&p, &key, &q, &u, &mut proposed, &mut b)
                 .unwrap();
             drop(ledger);
             assert!(
@@ -575,7 +577,7 @@ fn native_worker_all_three_journal_recovery_crashes_preserve_publication() {
             assert!(fault.fired, "{journal}/{fault:?}");
             let mut ledger = Ledger::recover(root.as_fd(), &p, &key, &mut b).unwrap();
             let (replay, advanced) = ledger
-                .publish(
+                .publish_fixture(
                     &p,
                     &key,
                     &q,
@@ -606,7 +608,7 @@ fn native_worker_exhausted_original_meter_cannot_start_anchor_exchange() {
     let floor = b.storage();
     assert!(
         ledger
-            .publish(
+            .publish_fixture(
                 &p,
                 &key,
                 &q,
