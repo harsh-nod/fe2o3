@@ -1782,3 +1782,34 @@ Its final sibling imports preserve all original algorithms and test bodies.
 The operational filesystem entry remains unactivated; complete successor
 input/policy/currentness qualification and physical capture remain open.
 Broad accepted exits remain 6/18.
+
+## Retained Shared-liveness component — 2026-09-29
+
+The private retained lexical-liveness constructor now keeps locals, indegrees
+and ready capacity attached through refusal and caller unwind, binds the original
+source/Budget/work ledger/credit counter, and preserves original traversal/work
+order. Its 15 controls passed within 1,689 pliron tests, alongside 370 model,
+3,390 backend, 270 authority and 20 policy/runtime-manifest tests and backend/
+extractor builds. Separately gated ignored tests were not silently counted as run.
+
+See [qualification and boundaries](retained-shared-liveness-qualification-20260929.md).
+This is not complete retained Shared analysis or ordinary whole-root activation:
+alias/transient ownership, statement-driven construction, source/SSA/query joins
+and the backend bridge remain. Broad accepted exits stay 6/18.
+
+## Retained Shared alias-state primitives — 2026-09-29
+
+The private alias-state owner/session preserves current, unvisited and removed
+payloads through refusal and prevents continued primitive work after an error.
+Its 16 new controls passed within 1,705 pliron tests, alongside the complete
+model/backend, authority, policy, broker/coordinator/spawn and build regression.
+See [qualification and limits](retained-shared-alias-state-qualification-20260929.md).
+Real statement-driven alias production, source/SSA joins, the backend bridge and
+ordinary whole-root activation remain open.
+
+The portable debugger input graph/resource planner also passed 44 fixture-free
+controls and 13 separately supplied historical integration controls. Its
+[usage and limits](../tools/debugger/loaded-operational-graph/README.md) distinguish
+structural plans from actual IO, admission and physical capture. The operational
+adapter and bounded evidence writer remain separate work.
+Broad accepted exits remain M1/V1/V2/U1/U2/U3 (6/18).
