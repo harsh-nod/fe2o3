@@ -103,9 +103,16 @@ for adapters, count in ((False, 10), (True, 3)):
             need(not check([dict(note, message=message + " unknown"), error]), "unknown selector rejected")
         for message in ("recommendation not met", "Resource limit (rlimit) exceeded", "type annotations needed", "internal error"):
             need(not check([error, dict(error, message=message)]), "mixed failure rejected")
+        closure_error = dict(error, message=runner["CLOSURE_POSTCONDITION_ERROR"])
+        need(check([closure_error]) == (focus == "*cancel_bound"), "closure failure limited to exact adapter selector")
+        need(not check([dict(closure_error, message=closure_error["message"] + " unknown")]), "unknown closure failure rejected")
+        need(not check([dict(closure_error, spans=[{"is_primary": True, "file_name": "/foreign.rs"}])]), "foreign closure failure rejected")
+        need(not check([dict(closure_error, children=[error])]), "nested closure diagnostic rejected")
+        for message in ("recommendation not met", "Resource limit (rlimit) exceeded", "type annotations needed", "internal error"):
+            need(not check([closure_error, dict(error, message=message)]), "mixed closure failure rejected")
         need(not check([dict(error, spans=[{"is_primary": True, "file_name": "vstd/std_specs/vec.rs"}])]), "foreign primary rejected")
     positive = {"verus": verifier, "verification-results": campaign.EXPECTED}
     need(classifier.proof_positive(0, json.dumps(positive), "", verifier, campaign.EXPECTED, {path}), "positive accepted")
     need(not classifier.proof_positive(1, json.dumps(positive), "", verifier, campaign.EXPECTED, {path}), "failed positive rejected")
     need(not classifier.proof_positive(0, json.dumps(positive), json.dumps(error), verifier, campaign.EXPECTED, {path}), "logical error never positive")
-print("PASS: completion source rollback calibration (6 groups)")
+print("PASS: completion source rollback calibration (7 groups)")

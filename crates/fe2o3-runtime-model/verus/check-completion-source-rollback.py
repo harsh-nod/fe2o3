@@ -16,6 +16,7 @@ BODY = Path("crates/fe2o3-kfd/src/queue_completion/source_rollback_body.rs")
 ADAPTERS = BODY.with_name("rollback_adapters_body.rs")
 BOUND_BODY = BODY.with_name("bound_cancel_body.rs")
 BOUND_EXECUTION = V / "completion_bound_cancel_execution_v1.rs"
+CLOSURE_POSTCONDITION_ERROR = "unable to prove post-condition of closure"
 BITVECTOR_ENUMERATION_NOTE = (
     "bitvector assertion not satisfied: not all errors may have been reported; "
     "rerun with a higher value for --multiple-errors to find other potential errors in this function"
@@ -105,7 +106,10 @@ def selection_notes(leaf, focus=None):
     functions = ("rollback_source", "cancel_bound", "release_dependency_event_batch_v1")
     need(focus is None or focus in {"*" + name for name in functions}, "exact rollback selector")
     selected = functions if focus is None else (focus[1:],)
-    return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS, SELECTION_NOTES={
+    errors = leaf.LOGICAL_ERRORS
+    if focus == "*cancel_bound":
+        errors = errors | {CLOSURE_POSTCONDITION_ERROR}
+    return types.SimpleNamespace(LOGICAL_ERRORS=errors, SELECTION_NOTES={
         "verifying root module (selected functions)",
         *{"verifying root module, function completion_source_rollback_v1::CompletionSignalArenaOwnerV1::"
           + name + " (selected functions)" for name in selected},
