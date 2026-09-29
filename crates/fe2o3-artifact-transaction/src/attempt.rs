@@ -11,10 +11,10 @@ use crate::{
 };
 
 const ATTEMPT_MAGIC: &[u8] = b"FE2O3-ATTEMPTS-V1\0";
-const MAX_ATTEMPT_RECORDS: usize = 1024;
+pub(crate) const MAX_ATTEMPT_RECORDS: usize = 1024;
 pub(crate) const MAX_ATTEMPT_BYTES: usize = 1024 * 1024;
-const MAX_STABLE_SOURCE_BYTES: usize = 4096;
-const MAX_CRATE_NAME_BYTES: usize = 128;
+pub(crate) const MAX_STABLE_SOURCE_BYTES: usize = 4096;
+pub(crate) const MAX_CRATE_NAME_BYTES: usize = 128;
 const ATTEMPT_HEADER_BYTES: usize = ATTEMPT_MAGIC.len() + 8 + 4;
 const ATTEMPT_RECORD_FIXED_BYTES: usize = 2 + 2 + 32 + 8 + 16 + 1 + 1;
 const BACKEND_RECEIPT_NONE: u8 = 0;

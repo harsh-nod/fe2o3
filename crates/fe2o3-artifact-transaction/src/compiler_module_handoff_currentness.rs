@@ -2,7 +2,26 @@
 use super::*;
 
 type Result<T> = std::result::Result<T, HandoffEngineError>;
-const STREAM_BYTES: usize = 16 * 1024;
+pub(super) const STREAM_BYTES: usize = 16 * 1024;
+
+pub(super) const fn record_work<S: HandoffSchema>() -> usize {
+    5 * S::RECORD_BYTES + 1
+}
+
+pub(super) const fn record_scratch<S: HandoffSchema>() -> usize {
+    S::RECORD_BYTES + std::mem::size_of::<Sha256>() + std::mem::size_of::<HandoffRecord<S>>()
+}
+
+pub(super) fn stream_work(
+    length: usize,
+) -> std::result::Result<usize, fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1> {
+    length
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(STREAM_BYTES + 257))
+        .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
+}
+
+pub(super) const STREAM_STORAGE: usize = STREAM_BYTES + std::mem::size_of::<Sha256>();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Binding {
@@ -132,6 +151,32 @@ pub(super) struct CurrentLocation {
     pub(super) slot_identity: [u8; 32],
 }
 
+pub(super) fn location_storage(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    parent: &PinnedDirectory,
+    slot: &PinnedDirectory,
+) -> std::result::Result<usize, fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1> {
+    [
+        producer.stable_source.capacity(),
+        producer.crate_name.capacity(),
+        output.display_path.capacity(),
+        output
+            .path_guard
+            .as_ref()
+            .map_or(0, |g| g.display_path.capacity()),
+        parent.name.capacity(),
+        parent.path.capacity(),
+        slot.name.capacity(),
+        slot.path.capacity(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |sum, n| {
+        sum.checked_add(n)
+            .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)
+    })
+}
+
 pub(super) fn shape<S: Schema>(slot: &PinnedDirectory) -> Result<()> {
     let entries = slot_entries(slot)?;
     if entries.iter().any(|entry| entry == CONSUMED_ENTRY) {
@@ -236,6 +281,18 @@ pub(super) fn read_file(
     maximum: usize,
     resources: &mut Resources<'_, '_>,
 ) -> Result<Vec<u8>> {
+    read_file_with_capacity(slot, entry, pinned, length, maximum, false, resources)
+}
+
+fn read_file_with_capacity(
+    slot: &PinnedDirectory,
+    entry: &str,
+    pinned: &PinnedFile,
+    length: usize,
+    maximum: usize,
+    exact_capacity: bool,
+    resources: &mut Resources<'_, '_>,
+) -> Result<Vec<u8>> {
     if length == 0 || length > maximum {
         return Err(CompilerModuleHandoffErrorV1::InvalidHandoffSize {
             actual: length,
@@ -249,7 +306,11 @@ pub(super) fn read_file(
             .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
     )?;
     validate_file(slot, entry, pinned)?;
-    let mut bytes = resources.buffer(length)?;
+    let mut bytes = if exact_capacity {
+        resources.exact_buffer(length)?
+    } else {
+        resources.buffer(length)?
+    };
     bytes.resize(length, 0);
     read_file_into(slot, entry, pinned, &mut bytes)?;
     Ok(bytes)
@@ -481,14 +542,8 @@ pub(super) fn prepay_payload_stream<S: Schema>(
     resources: &mut Resources<'_, '_>,
 ) -> Result<()> {
     resources.require::<S>()?;
-    resources.reserve(STREAM_BYTES + std::mem::size_of::<Sha256>())?;
-    resources.work(
-        record
-            .length
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(STREAM_BYTES + 257))
-            .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
-    )
+    resources.reserve(STREAM_STORAGE)?;
+    resources.work(stream_work(record.length)?)
 }
 
 /// Caller prepays one bounded stream and retains its scratch reservation.
@@ -629,7 +684,16 @@ pub(super) fn recover<S: Schema>(
     slot: S::Slot,
     resources: &mut Resources<'_, '_>,
 ) -> Result<S::Receipt> {
-    recover_with_lock::<S>(output_dir, producer, attempt, slot, false, resources)
+    recover_with_lock::<S>(
+        output_dir,
+        producer,
+        attempt,
+        slot,
+        false,
+        S::MAX_HANDOFF_BYTES,
+        None,
+        resources,
+    )
 }
 
 pub(super) fn try_recover<S: Schema>(
@@ -637,9 +701,20 @@ pub(super) fn try_recover<S: Schema>(
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
     slot: S::Slot,
+    maximum_handoff_bytes: usize,
+    maximum_location_storage: Option<usize>,
     resources: &mut Resources<'_, '_>,
 ) -> Result<S::Receipt> {
-    recover_with_lock::<S>(output_dir, producer, attempt, slot, true, resources)
+    recover_with_lock::<S>(
+        output_dir,
+        producer,
+        attempt,
+        slot,
+        true,
+        maximum_handoff_bytes,
+        maximum_location_storage,
+        resources,
+    )
 }
 
 fn recover_with_lock<S: Schema>(
@@ -648,12 +723,38 @@ fn recover_with_lock<S: Schema>(
     attempt: BuildAttempt,
     slot: S::Slot,
     nonblocking: bool,
+    maximum_handoff_bytes: usize,
+    maximum_location_storage: Option<usize>,
     resources: &mut Resources<'_, '_>,
 ) -> Result<S::Receipt> {
     resources.scoped(|resources| {
         resources.require::<S>()?;
+        if maximum_handoff_bytes == 0 || maximum_handoff_bytes > S::MAX_HANDOFF_BYTES {
+            return Err(CompilerModuleHandoffErrorV1::InvalidHandoffSize {
+                actual: maximum_handoff_bytes,
+                maximum: S::MAX_HANDOFF_BYTES,
+            }
+            .into());
+        }
         resources.reserve(std::mem::size_of::<Sha256>())?;
         let output = PinnedOutput::open_existing(output_dir)?;
+        if let Some(maximum) = maximum_location_storage
+            && output
+                .display_path
+                .capacity()
+                .checked_add(
+                    output
+                        .path_guard
+                        .as_ref()
+                        .map_or(0, |g| g.display_path.capacity()),
+                )
+                .ok_or(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?
+                > maximum
+        {
+            return Err(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into(),
+            );
+        }
         let _lock = if nonblocking {
             output.try_lock()?.ok_or(HandoffEngineError::Busy)?
         } else {
@@ -676,6 +777,13 @@ fn recover_with_lock<S: Schema>(
             format!("{}{}", S::SLOT_PREFIX, hex(&slot_identity)),
         )?
         .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
+        if let Some(maximum) = maximum_location_storage
+            && location_storage(&output, producer, &parent, &directory)? > maximum
+        {
+            return Err(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into(),
+            );
+        }
         recover_slot::<S>(&directory, resources)?;
         shape::<S>(&directory)?;
         let ready = pin(&directory, READY_ENTRY, S::RECORD_BYTES)?;
@@ -698,6 +806,15 @@ fn recover_with_lock<S: Schema>(
             )
             .into());
         }
+        // The inert caller ceiling limits resources, not authority. Check the
+        // exact durable record before opening/allocating/reading payload bytes.
+        if record.length > maximum_handoff_bytes {
+            return Err(CompilerModuleHandoffErrorV1::InvalidHandoffSize {
+                actual: record.length,
+                maximum: maximum_handoff_bytes,
+            }
+            .into());
+        }
         let payload = pin(&directory, PAYLOAD_ENTRY, record.length)?;
         if record.file != payload.identity {
             return Err(invalid_slot(
@@ -707,12 +824,13 @@ fn recover_with_lock<S: Schema>(
             .into());
         }
         validate_decode_working_set::<S>(record.length, S::MAX_DECODE_WORKING_SET_BYTES)?;
-        let bytes = read_file(
+        let bytes = read_file_with_capacity(
             &directory,
             PAYLOAD_ENTRY,
             &payload,
             record.length,
             S::MAX_HANDOFF_BYTES,
+            maximum_location_storage.is_some(),
             resources,
         )?;
         resources.work(

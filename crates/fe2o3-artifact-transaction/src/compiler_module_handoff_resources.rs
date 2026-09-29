@@ -131,6 +131,16 @@ impl<'budget, 'work> Resources<'budget, 'work> {
         )?;
         Ok(bytes)
     }
+
+    /// Quoted constructors cannot transfer allocator-chosen excess capacity.
+    pub(super) fn exact_buffer(&mut self, length: usize) -> Result<Vec<u8>, HandoffEngineError> {
+        self.reserve(length)?;
+        let bytes = try_allocate_payload_buffer(length)?;
+        if bytes.capacity() != length {
+            return Err(Resource::Accounting.into());
+        }
+        Ok(bytes)
+    }
 }
 
 impl From<Resource> for HandoffEngineError {

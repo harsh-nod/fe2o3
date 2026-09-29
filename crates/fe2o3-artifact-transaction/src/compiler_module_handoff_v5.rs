@@ -21,10 +21,14 @@ use schema::{Schema, payload_storage};
 #[path = "compiler_module_handoff_v5_custody.rs"]
 mod custody;
 pub use custody::{
-    CompilerModuleHandoffCurrentnessCustodyQuoteV5,
+    CompilerModuleHandoffCurrentnessCustodyQuoteV5, CompilerModuleHandoffCustodyQuotaV5,
+    CompilerModuleHandoffOperationQuotaV5,
     acquire_compiler_module_handoff_currentness_lease_with_quote_v5,
+    compiler_module_handoff_custody_quota_for_limit_v5,
+    compiler_module_handoff_try_recovery_quota_v5,
     quote_compiler_module_handoff_currentness_custody_v5,
     try_recover_compiler_module_handoff_receipt_v5,
+    try_recover_compiler_module_handoff_receipt_with_limit_v5,
 };
 #[path = "compiler_module_handoff_v5_admission.rs"]
 mod admission;
@@ -284,6 +288,7 @@ impl<T> CompilerModuleHandoffConsumptionTokenV5<T> {
     }
     pub fn revalidate_locked_currentness(&self, budget: &mut Budget<'_>) -> Result<()> {
         entry(budget, self.storage.0, |resources| {
+            custody::prepay_currentness(&self.binding, resources)?;
             currentness::metadata(&self.binding, resources)?;
             Ok(())
         })

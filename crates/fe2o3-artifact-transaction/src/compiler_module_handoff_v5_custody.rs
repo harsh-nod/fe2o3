@@ -5,6 +5,15 @@ use fe2o3_compiler_ffi::INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_S
 
 const PATH_GUARD_CAPACITY: usize = 16 * 1024;
 
+#[path = "compiler_module_handoff_v5_quota.rs"]
+mod quota;
+pub(super) use quota::prepay_currentness;
+pub use quota::{
+    CompilerModuleHandoffCustodyQuotaV5, CompilerModuleHandoffOperationQuotaV5,
+    compiler_module_handoff_custody_quota_for_limit_v5,
+    compiler_module_handoff_try_recovery_quota_v5,
+};
+
 /// Recovers an inert V5 receipt without waiting for a cooperating writer's lock.
 /// Uses the same recovery, decoding, and accounting as ordinary V5 recovery.
 /// A contended output/path lock returns `Busy` before recovery mutates any slot.
@@ -27,6 +36,40 @@ pub fn try_recover_compiler_module_handoff_receipt_v5(
             producer,
             attempt,
             CompilerModuleHandoffSlotV5::Production,
+            MAX_COMPILER_MODULE_HANDOFF_BYTES_V5,
+            None,
+            resources,
+        )?)
+    })
+}
+
+/// Nonblocking recovery with an inert payload-size ceiling, on the same engine.
+/// The durable record must fit before payload opening, allocation or reading.
+/// The ceiling grants no authority and does not replace any currentness check.
+/// Fund `compiler_module_handoff_try_recovery_quota_v5` on the original ledger;
+/// no owner escapes and all temporary locks drop under the borrowed barrier.
+pub fn try_recover_compiler_module_handoff_receipt_with_limit_v5(
+    output: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    maximum_handoff_bytes: usize,
+    barrier: &Barrier,
+    budget: &mut Budget<'_>,
+) -> Result<CompilerModuleHandoffReceiptV5> {
+    quota::validate_length(maximum_handoff_bytes)?;
+    let dynamic = dynamic_bound(output, producer)?;
+    entry(budget, 0, |resources| {
+        if !barrier.guards_artifact_locks() {
+            return Err(Resource::Accounting.into());
+        }
+        quota::filesystem(dynamic, quota::Operation::Recovery)?.prepay(resources)?;
+        Ok(currentness::try_recover::<Schema>(
+            output,
+            producer,
+            attempt,
+            CompilerModuleHandoffSlotV5::Production,
+            maximum_handoff_bytes,
+            Some(dynamic),
             resources,
         )?)
     })
@@ -88,6 +131,37 @@ pub fn quote_compiler_module_handoff_currentness_custody_v5(
         return Err(Error::HandoffIdentityMismatch);
     }
     let output_length = output.as_os_str().len();
+    let source_capacity = producer.stable_source.capacity();
+    let crate_capacity = producer.crate_name.capacity();
+    let dynamic = dynamic_bound(output, producer)?;
+    let lease = CompilerModuleHandoffStorageV5(quota::lease_storage(dynamic)?);
+    let token = CompilerModuleHandoffStorageV5(quota::token_storage(dynamic, receipt.length)?);
+    let retained = lease.0.checked_add(token.0).ok_or(Resource::Arithmetic)?;
+    Ok(CompilerModuleHandoffCurrentnessCustodyQuoteV5 {
+        receipt,
+        output_length,
+        source_capacity,
+        crate_capacity,
+        dynamic,
+        lease,
+        token,
+        retained,
+    })
+}
+
+fn dynamic_bound(output: &Path, producer: &ProducerIdentity) -> Result<usize> {
+    dynamic_bound_for_lengths(
+        output.as_os_str().len(),
+        producer.stable_source.capacity(),
+        producer.crate_name.capacity(),
+    )
+}
+
+fn dynamic_bound_for_lengths(
+    output_length: usize,
+    source_capacity: usize,
+    crate_capacity: usize,
+) -> Result<usize> {
     let parent_name = Schema::PARENT_PREFIX
         .len()
         .checked_add(64)
@@ -104,8 +178,6 @@ pub fn quote_compiler_module_handoff_currentness_custody_v5(
         .checked_add(1)
         .and_then(|n| n.checked_add(slot_name))
         .ok_or(Resource::Arithmetic)?;
-    let source_capacity = producer.stable_source.capacity();
-    let crate_capacity = producer.crate_name.capacity();
     let mut dynamic = source_capacity
         .checked_add(crate_capacity)
         .and_then(|n| n.checked_add(PATH_GUARD_CAPACITY))
@@ -124,30 +196,7 @@ pub fn quote_compiler_module_handoff_currentness_custody_v5(
             .and_then(|n| dynamic.checked_add(n))
             .ok_or(Resource::Arithmetic)?;
     }
-    let lease = CompilerModuleHandoffStorageV5(
-        CURRENT_STORAGE
-            .checked_add(size_of::<CompilerModuleHandoffCurrentnessLeaseV5>())
-            .and_then(|n| n.checked_add(dynamic))
-            .ok_or(Resource::Arithmetic)?,
-    );
-    let token = CompilerModuleHandoffStorageV5(
-        token_headers::<Handoff>()
-            .checked_add(dynamic)
-            .and_then(|n| n.checked_add(receipt.length))
-            .and_then(|n| n.checked_add(METADATA))
-            .ok_or(Resource::Arithmetic)?,
-    );
-    let retained = lease.0.checked_add(token.0).ok_or(Resource::Arithmetic)?;
-    Ok(CompilerModuleHandoffCurrentnessCustodyQuoteV5 {
-        receipt,
-        output_length,
-        source_capacity,
-        crate_capacity,
-        dynamic,
-        lease,
-        token,
-        retained,
-    })
+    Ok(dynamic)
 }
 
 /// Acquires a real V5 lease within the quote's complete retained bound.
@@ -178,6 +227,7 @@ pub fn acquire_compiler_module_handoff_currentness_lease_with_quote_v5(
         {
             return Err(Resource::Accounting.into());
         }
+        quota::filesystem(quote.dynamic, quota::Operation::Lease)?.prepay(resources)?;
         resources.reserve(quote.lease.0)?;
         resources.work(quote.dynamic.checked_mul(4).ok_or(Resource::Arithmetic)?)?;
         let binding = mint_quoted(output, producer, quote, resources)?;
@@ -204,20 +254,7 @@ fn dynamic_storage(
     if guard > PATH_GUARD_CAPACITY {
         return Err(Resource::Accounting);
     }
-    [
-        producer.stable_source.capacity(),
-        producer.crate_name.capacity(),
-        output.display_path.capacity(),
-        guard,
-        parent.name.capacity(),
-        parent.path.capacity(),
-        slot.name.capacity(),
-        slot.path.capacity(),
-    ]
-    .into_iter()
-    .try_fold(0usize, |sum, n| {
-        sum.checked_add(n).ok_or(Resource::Arithmetic)
-    })
+    currentness::location_storage(output, producer, parent, slot)
 }
 
 fn mint_quoted(
@@ -292,6 +329,7 @@ impl CompilerModuleHandoffCurrentnessLeaseV5 {
             {
                 return Err(Resource::Accounting.into());
             }
+            quota::filesystem(quote.dynamic, quota::Operation::Token)?.prepay(resources)?;
             let headers = quote
                 .token
                 .0
@@ -299,10 +337,7 @@ impl CompilerModuleHandoffCurrentnessLeaseV5 {
                 .and_then(|n| n.checked_sub(METADATA))
                 .ok_or(Resource::Accounting)?;
             resources.reserve(headers)?;
-            let mut bytes = resources.buffer(quote.receipt.length)?;
-            if bytes.capacity() != quote.receipt.length {
-                return Err(Resource::Accounting.into());
-            }
+            let mut bytes = resources.exact_buffer(quote.receipt.length)?;
             resources.work(quote.receipt.length)?;
             bytes.resize(quote.receipt.length, 0);
             let lock = self
