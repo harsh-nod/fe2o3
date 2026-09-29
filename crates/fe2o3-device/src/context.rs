@@ -1,8 +1,9 @@
 //! Source contract for compiler-issued kernel identity.
 //!
-//! This provider is staged for the unified capability importer. Production
-//! currently rejects these nominal types. The reserved issuer always traps
-//! outside authenticated lowering and adds no physical kernel argument.
+//! The unified importer retains this nominal role in semantic MIR V29. Normal
+//! production still requires checked canonical capability materialization.
+//! The reserved issuer traps outside authenticated compiler replacement and
+//! adds no physical kernel argument.
 
 #![forbid(unsafe_code)]
 
@@ -48,8 +49,8 @@ pub struct KernelCapabilityBrand<'kernel, Kernel, Target, Launch> {
 
 /// Opaque logical root for one kernel's execution capabilities.
 ///
-/// This source-provider type is not yet admitted by the production importer.
-/// Its reserved issuance terminal always traps without authenticated lowering;
+/// Import preserves this role without granting executable capability authority.
+/// Its reserved issuance terminal traps without authenticated compiler replacement;
 /// it has no public constructor or caller-supplied payload.
 /// It is invariant in its lifetime and brands, and is neither copyable nor
 /// transferable between host threads. Its zero size is not issuance evidence.
@@ -74,7 +75,7 @@ impl<'kernel, Kernel, Target: KernelTarget, Launch: KernelLaunch>
     /// Reserved source terminal for an authenticated physical kernel root.
     ///
     /// Calling this function directly cannot create a context. The collector
-    /// must authenticate its occurrence and result before any future lowering.
+    /// authenticates its occurrence and result before semantic construction.
     #[doc(hidden)]
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_kernel_context_issue_v1"]

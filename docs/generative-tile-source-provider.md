@@ -3,12 +3,13 @@
 ## Status
 
 This is a staged source contract for #275 and #272, not executable tile support.
-Production rejects the four nominal authority types before ordinary structural
-type lowering and rejects the staged callable terminals. Logical context entry
-generation and collector authentication are separate prerequisites; they do not
-admit executable context or tile operations. No semantic-MIR version, intrinsic
-tag, schedule or runtime authority is introduced. Existing SIMT APIs retain their
-behavior.
+The unified importer preserves the four nominal authority roles and authenticates
+the five callable terminals in explicit semantic MIR V29. The ordinary production
+materializer still rejects execution capabilities before aggregate/ZST erasure.
+The separate source-owned pending constructor produces canonical KIR V18, but
+its reconstruction replay does not establish source refinement or authorize an
+executable continuation. Logical context entry authentication alone grants no
+schedule, artifact or runtime authority. Existing SIMT APIs retain their behavior.
 
 The provider extracts the context/workgroup nucleus reviewed in historical
 capability snapshot `a9559337915285ceed881bb2bef59437c5112eda`. That snapshot's
@@ -20,7 +21,7 @@ unbranded `WorkgroupCollectives` receiver is replaced, not treated as equivalent
 `KernelContext<'kernel, Kernel, Target, Launch>` is opaque, zero-sized and
 invariant in each identity. Target and launch markers are sealed. There is no
 public context constructor. The reserved safe, out-of-line root issuance terminal
-always traps unless a future authenticated lowering replaces it.
+traps outside authenticated compiler replacement.
 
 `KernelContext::with_workgroup` accepts a higher-ranked `FnOnce` callback owning
 `WorkgroupCapability<'workgroup, KernelCapabilityBrand<...>, InitialEpoch>`.
@@ -88,16 +89,16 @@ being inferred from matching zero-sized types.
 
 Only this generated wrapper protocol is inspected; user kernel bodies continue
 through the existing general importer. Bound declarations and authenticated
-producer evidence remain distinct. Even a valid entry still stops at the
-unimplemented `KernelContextIssue` terminal in semantic preflight without a
-simulation bundle or kernel artifact. Nominal caller-supplied capabilities
-remain rejected at the separate capability-owner boundary.
+producer evidence remain distinct. Valid issuance is represented by the
+authenticated `ContextIssue` operation in MIR V29. Normal production still stops
+at checked canonical materialization without a simulation bundle or kernel
+artifact. Nominal caller-supplied capabilities do not gain issuance authority.
 
 The trusted device registry binds each reserved diagnostic item to the exact
-reviewed source closure and compiler definition path. Nominal authority refusal
-runs before struct-to-aggregate conversion, including retained aliases, nested
-fields, reference pointees and zero-length array elements. Otherwise an unused
-zero-sized context argument could bypass callable-terminal rejection.
+reviewed source closure and compiler definition path. Nominal roles survive type
+construction, including retained aliases, nested fields, reference pointees and
+zero-length array elements. Their presence selects exact V29 admission, so an
+unused zero-sized context cannot bypass the materializer's capability gate.
 
 Ordinary structs and zero-sized values remain supported. A phantom type argument
 alone carries no authority value and does not expand the retained executable
@@ -131,11 +132,17 @@ The [unified SIMT/tile integration ADR](unified-simt-tile-integration.md) record
 the proposed shared graph, schedule, scratch and acceptance boundaries. It is
 not an approved schema allocation or evidence that the staged operations execute.
 
-The unified capability owner must connect the authenticated frontend producer
-to the canonical semantic schema, preserving registration, nominal kernel,
-logical helper, target/launch brands and physical-root-only issuance. Frontend
-authentication alone is not semantic capability transport. No unsafe issuer
-or unused unsafe sealing trait is required for this entry protocol.
+The unified capability owner must connect source-owned pending materialization
+to the existing ranked, formal-memory and target consumers with checked value,
+control, assertion and memory correspondence. Preserve registration, nominal
+kernel, logical helper, target/launch brands, physical-root-only issuance and
+the complete V18 storage-layout table. The isolated lifecycle eraser accepts
+V15 and returns V12; it is not an adapter for that pending V18 owner. No unsafe
+issuer or unused unsafe sealing trait is required for this entry protocol.
+
+The [context vecadd source handoff](issue272-context-vecadd-source-handoff-v1.md)
+records the genuine shared-body fixture, authored refusal/observation tests and
+the existing #271 producer dependency. It claims no executed qualification.
 
 Workgroup issuance must carry checked producer/root/call occurrence identity,
 not only a matching type or launch geometry. That identity and epoch must survive

@@ -6,6 +6,9 @@ use fe2o3_lower_mir_kernel::ProductionPendingScopedSourceOwnerV29 as Pending;
 
 const PENDING_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::pending_context_source_child";
 
+#[path = "production_context_vecadd_source_v29_tests.rs"]
+mod vecadd_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct PendingObservation {
     source: [u8; 32],
