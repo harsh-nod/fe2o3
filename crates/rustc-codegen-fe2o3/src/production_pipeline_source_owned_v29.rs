@@ -48,6 +48,7 @@ pub(crate) enum Error {
     IntegerHandoff(ProductionUnqualifiedIntegerHandoffErrorV18),
     ScalarCfgHandoff(ProductionScalarCfgHandoffErrorV18),
     BoundScalarHandoff(ProductionBoundScalarHandoffErrorV19),
+    BoundPrivateWorklistHandoff(fe2o3_lower_mir_kernel::ProductionBoundPrivateHandoffErrorV21),
     TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
     FormalReports(Box<formal_context_v19::ReportOptimizationErrorV19>),
     FormalPaths(Box<formal_context_v19::PathOptimizationErrorV20>),
@@ -69,6 +70,7 @@ impl std::error::Error for Error {
             Self::IntegerHandoff(error) => Some(error),
             Self::ScalarCfgHandoff(error) => Some(error),
             Self::BoundScalarHandoff(error) => Some(error),
+            Self::BoundPrivateWorklistHandoff(error) => Some(error),
             Self::TargetLlvm(error) => Some(error),
             Self::FormalReports(error) => Some(error.as_ref()),
             Self::FormalPaths(error) => Some(error.as_ref()),
@@ -340,6 +342,9 @@ source_handoff_policy_v29!(@impl BoundScalar, BoundHandoff,
         size_of::<ProductionBoundScalarHandoffErrorV19>(),
     ]
 );
+
+#[path = "production_pipeline_source_bound_worklist_v21.rs"]
+mod bound_worklist_v21;
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// The fixed source profile is selected before any semantic admission.

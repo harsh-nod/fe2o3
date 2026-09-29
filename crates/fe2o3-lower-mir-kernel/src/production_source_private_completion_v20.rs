@@ -147,6 +147,24 @@ fn private_source_completion_v20(
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionPrivateSourceCheckErrorV20> {
+    with_private_source_completion_v21(original, optimized, budget, &mut |_, _| Ok(()))
+}
+
+// The caller retains and pays the concrete callback. Only a borrowed callback
+// carrier crosses this scope, and every original root/function check remains
+// mandatory before it can observe the live private-native completion.
+fn with_private_source_completion_v21<'work, F>(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    budget: &mut ArgumentBudgetV1<'work>,
+    consume: &mut F,
+) -> Result<(), ProductionPrivateSourceCheckErrorV20>
+where
+    F: for<'scope, 'owner> FnMut(
+        &ProductionPrivateMemoryCheckedNativePoliciesV18<'scope, 'owner>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), ProductionSourceNativeLifecycleErrorV18>,
+{
     use ProductionPrivateSourceCheckErrorV20 as Error;
     use fe2o3_kernel_analysis::{
         CanonicalKirPrivateMemoryLimitsV1, CanonicalRankedMetadataV18, CanonicalRankedViewErrorV1,
@@ -213,7 +231,7 @@ fn private_source_completion_v20(
                                         .into());
                                 }
                             }
-                            Ok(())
+                            consume(native, budget)
                         },
                     ),
                 )

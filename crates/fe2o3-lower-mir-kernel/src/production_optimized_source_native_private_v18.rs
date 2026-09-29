@@ -1,6 +1,8 @@
 // Complete original private-memory and lifecycle joins on an actual native scope.
 use scoped_raw_admission_v29::{CheckedOptimizedSourceMemoryV18, CheckedSourcePrivatePhysicalV18};
 
+include!("production_source_private_formal_coverage_v21.rs");
+
 enum PrivateNativeFlowV18<E> {
     Callback(E),
     Native(NativeError),

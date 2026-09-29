@@ -229,3 +229,8 @@ fn source_worklist_callback_error_is_not_relabelled_as_admission() {
     assert!(completed.get());
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
+
+mod bound_private_tests_v21 {
+    use super::*;
+    include!("production_source_bound_worklist_handoff_v21_tests.rs");
+}

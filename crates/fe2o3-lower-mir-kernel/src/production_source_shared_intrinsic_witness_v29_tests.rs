@@ -290,7 +290,7 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
     // Reuse those dense slots rather than retaining unreachable declarations.
     if write {
         types[BOOL.index() as usize] = declaration(
-            11,
+            7,
             SemanticTypeLayoutV1::new_with_backend_repr(
                 Some(1),
                 1,
@@ -306,7 +306,7 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
     }
     let other_witness = if write { OPTIONAL } else { OTHER_WITNESS };
     let other = declaration(
-        12,
+        if write { 9 } else { 12 },
         types[WITNESS.index() as usize].layout().clone(),
         types[WITNESS.index() as usize].shape().clone(),
     );
@@ -594,6 +594,20 @@ fn with_witness_builder(
                 .unwrap();
             let index = builder.plain(INDEX, budget).unwrap();
             let mut arguments = vec![carrier, witness, index];
+            // function() restores the outer diagnostic scope. Re-enter this
+            // actual call's effect site before testing the private intrinsic API.
+            assert!(builder.effect_site.is_none());
+            builder.effect_site = Some(SourceReferenceSiteV29 {
+                instance: instances.root(),
+                block: SemanticBlockIdV1::from_index(0),
+                statement: None,
+            });
+            builder.effect_ordinal = 0;
+            let accepted = builder
+                .intrinsic(callable, &arguments, call, budget)
+                .unwrap();
+            assert_eq!(builder.plan.nodes[accepted].ty, OPTIONAL);
+            builder.effect_ordinal = 0;
             consume(&mut builder, callable, call, &mut arguments, budget);
             completed = true;
             drop(arguments);

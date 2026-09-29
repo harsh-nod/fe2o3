@@ -260,6 +260,8 @@ macro_rules! source_output_handoff_queries_v18 {
     };
 }
 
+include!("production_source_bound_worklist_handoff_v21.rs");
+
 source_output_handoff_queries_v18!(
     ProductionClosedScalarOutputHandoffV18,
     CheckedNeutralKernelIrOwnerV18

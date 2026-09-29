@@ -5,6 +5,8 @@ enum PrivateEntryFixtureV20 {
     Arithmetic,
     Phi,
     Captured,
+    Neutral,
+    NonNeutral,
 }
 
 fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSsaOwnerV1 {
@@ -19,7 +21,7 @@ fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSs
         )))
     };
     let captured = || {
-        vec![
+        let mut statements = vec![
             assign(
                 place(2, pointer),
                 SemanticRvalueKindV1::AddressOf {
@@ -31,8 +33,26 @@ fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSs
                 place(3, U32),
                 SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1, U32))),
             ),
-            assign(place(0, UNIT), unit()),
-        ]
+        ];
+        if matches!(
+            case,
+            PrivateEntryFixtureV20::Neutral | PrivateEntryFixtureV20::NonNeutral
+        ) {
+            statements.push(assign(
+                place(1, U32),
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: SemanticOperandV1::Copy(place(3, U32)),
+                    right: literal(if matches!(case, PrivateEntryFixtureV20::Neutral) {
+                        0
+                    } else {
+                        1
+                    }),
+                },
+            ));
+        }
+        statements.push(assign(place(0, UNIT), unit()));
+        statements
     };
     let captured_locals = |tag| {
         vec![
@@ -69,7 +89,9 @@ fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSs
     let rhs = match case {
         PrivateEntryFixtureV20::Forward
         | PrivateEntryFixtureV20::Phi
-        | PrivateEntryFixtureV20::Captured => {
+        | PrivateEntryFixtureV20::Captured
+        | PrivateEntryFixtureV20::Neutral
+        | PrivateEntryFixtureV20::NonNeutral => {
             SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1, U32)))
         }
         PrivateEntryFixtureV20::Constant => SemanticRvalueKindV1::Use(literal(19)),
@@ -138,7 +160,9 @@ fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSs
     let root = function(
         60,
         SemanticFunctionRoleV1::KernelRoot,
-        abi(61, true, &[U32]),
+        abi(61, true, &[U32])
+            .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
+            .unwrap(),
         forwarding_locals(70),
         root_blocks,
     )
@@ -146,7 +170,9 @@ fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSs
     let companion = function(
         90,
         SemanticFunctionRoleV1::KernelRoot,
-        abi(91, true, &[U32]),
+        abi(91, true, &[U32])
+            .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
+            .unwrap(),
         captured_locals(100),
         vec![block(110, captured(), SemanticTerminatorKindV1::Return)],
     )
@@ -236,6 +262,40 @@ fn private_entry_phi_owner_v20() -> ProductionSemanticSsaOwnerV1 {
 
 fn private_entry_captured_owner_v20() -> ProductionSemanticSsaOwnerV1 {
     private_entry_owner_v20(PrivateEntryFixtureV20::Captured)
+}
+
+fn private_entry_neutral_owner_v20() -> ProductionSemanticSsaOwnerV1 {
+    private_entry_owner_v20(PrivateEntryFixtureV20::Neutral)
+}
+
+fn private_entry_non_neutral_owner_v20() -> ProductionSemanticSsaOwnerV1 {
+    private_entry_owner_v20(PrivateEntryFixtureV20::NonNeutral)
+}
+
+fn private_entry_typed_memory_census_v20(
+    owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+) -> [usize; 3] {
+    let mut counts = [0; 3];
+    for operation in owner
+        .module()
+        .functions
+        .iter()
+        .filter_map(|function| function.body.as_ref())
+        .flat_map(|body| &body.blocks)
+        .flat_map(|block| &block.operations)
+    {
+        match operation.kind {
+            OperationKind::Alloca { .. } => counts[0] += 1,
+            OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::ReadValue { .. }) => {
+                counts[1] += 1
+            }
+            OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::WriteValue { .. }) => {
+                counts[2] += 1
+            }
+            _ => {}
+        }
+    }
+    counts
 }
 
 #[test]
@@ -369,8 +429,8 @@ fn private_source_completion_refuses_genuine_phi_without_selecting_a_predecessor
 #[test]
 fn private_source_completion_retains_real_changed_and_noop_integer_owners() {
     for (factory, changed) in [
-        (integer_add_source_v18 as fn() -> _, true),
-        (integer_non_neutral_source_v18, false),
+        (private_entry_neutral_owner_v20 as fn() -> _, true),
+        (private_entry_non_neutral_owner_v20, false),
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
@@ -380,11 +440,21 @@ fn private_source_completion_retains_real_changed_and_noop_integer_owners() {
         let completed = std::cell::Cell::new(false);
         prepared
             .with_source_consumer_v18(&mut budget, |source, budget| {
+                assert!(
+                    private_entry_typed_memory_census_v20(source.canonical(budget)?)
+                        .into_iter()
+                        .all(|count| count > 0)
+                );
                 let handoff = source.private_completed_integer_output_v20(
                     ProductionKernelArgumentAbiInputV18 { roots: &roots },
                     budget,
                 )?;
                 let output = handoff.output(budget)?;
+                assert!(
+                    private_entry_typed_memory_census_v20(output.owner())
+                        .into_iter()
+                        .all(|count| count > 0)
+                );
                 assert_eq!(output.report().passes()[0].changed(), changed);
                 assert_eq!(
                     output.owner().canonical_bytes() != output.input_audit_bytes(),
@@ -612,70 +682,87 @@ fn private_entry_index_cut_v20(cut: Option<(bool, usize)>) -> (usize, usize, boo
     let prepared =
         private_memory_prepared_v18(private_entry_forward_owner_v20, &mut budget).unwrap();
     let completed = std::cell::Cell::new(None);
+    let settled = std::cell::Cell::new(false);
     let result =
         with_production_optimizer_result_v18(prepared, &mut budget, |original, _, budget| {
-            // Test-owned padding establishes an exact remaining budget after the
-            // genuine source/optimizer entry. It is not a production cap override.
-            if let Some((is_work, remaining)) = cut {
-                if is_work {
-                    budget
-                        .charge_work(OPTIMIZED_SOURCE_WORK_LIMIT_V18 - budget.work() - remaining)?;
-                } else {
-                    budget.reserve_storage(MODULE_LIMIT - budget.storage() - remaining)?;
-                }
-            }
-            let before = (budget.work(), budget.storage());
-            match OriginalEntryIndexV20::build(original, budget) {
-                Ok(index) => {
-                    let units = budget.work() - before.0;
-                    let bytes = budget.storage() - before.1;
-                    let expected_bytes =
-                        index.definitions.capacity() * size_of::<OriginalEntryDefinitionRowV20>();
-                    assert_eq!(bytes, expected_bytes);
-                    assert!(!index.definitions.is_empty());
-                    drop(index);
-                    completed.set(Some((units, bytes, true)));
-                    // Stop before any later query can consume a unit belonging to
-                    // this constructor's exact-work boundary.
-                    Err(ProductionSourceOwnedViewErrorV18::Binding(
-                        "selected index boundary stop",
-                    ))
-                }
-                Err(error) => {
-                    let Some((is_work, _)) = cut else {
-                        panic!("unbounded original index refused: {error:?}")
-                    };
-                    match (is_work, &error) {
-                        (
-                            true,
-                            ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(
-                                refusal,
-                            )),
-                        ) => assert!(refusal.actual() > refusal.limit()),
-                        (
-                            false,
-                            ProductionSourceOwnedViewErrorV18::Resource(
-                                ArgumentResourceV1::Storage(refusal),
-                            ),
-                        ) => assert!(refusal.actual() > refusal.limit()),
-                        _ => panic!("wrong exact index boundary: {error:?}"),
+            let floor = budget.storage();
+            let result = source_scalar_normalization_scratch_v18(
+                original.source.cleanup,
+                budget,
+                0,
+                |budget| {
+                    // Test-owned padding establishes an exact remaining budget after the
+                    // genuine source/optimizer entry. It is not a production cap override.
+                    if let Some((is_work, remaining)) = cut {
+                        if is_work {
+                            budget.charge_work(
+                                OPTIMIZED_SOURCE_WORK_LIMIT_V18 - budget.work() - remaining,
+                            )?;
+                        } else {
+                            budget.reserve_storage(MODULE_LIMIT - budget.storage() - remaining)?;
+                        }
                     }
-                    let after = (budget.work(), budget.storage());
-                    assert_eq!(
-                        OriginalEntryIndexV20::build(original, budget)
-                            .err()
-                            .unwrap()
-                            .to_string(),
-                        error.to_string()
-                    );
-                    assert_eq!((budget.work(), budget.storage()), after);
-                    completed.set(Some((0, 0, false)));
-                    Err(error)
-                }
-            }
+                    let before = (budget.work(), budget.storage());
+                    match OriginalEntryIndexV20::build(original, budget) {
+                        Ok(index) => {
+                            let units = budget.work() - before.0;
+                            let bytes = budget.storage() - before.1;
+                            let expected_bytes = index.definitions.capacity()
+                                * size_of::<OriginalEntryDefinitionRowV20>();
+                            assert_eq!(bytes, expected_bytes);
+                            assert!(!index.definitions.is_empty());
+                            drop(index);
+                            completed.set(Some((units, bytes, true)));
+                            // Stop before any later query can consume a unit belonging to
+                            // this constructor's exact-work boundary.
+                            Err(ProductionSourceOwnedViewErrorV18::Binding(
+                                "selected index boundary stop",
+                            ))
+                        }
+                        Err(error) => {
+                            let Some((is_work, _)) = cut else {
+                                panic!("unbounded original index refused: {error:?}")
+                            };
+                            match (is_work, &error) {
+                                (
+                                    true,
+                                    ProductionSourceOwnedViewErrorV18::Resource(
+                                        ArgumentResourceV1::Work(refusal),
+                                    ),
+                                ) => assert!(refusal.actual() > refusal.limit()),
+                                (
+                                    false,
+                                    ProductionSourceOwnedViewErrorV18::Resource(
+                                        ArgumentResourceV1::Storage(refusal),
+                                    ),
+                                ) => assert!(refusal.actual() > refusal.limit()),
+                                _ => panic!("wrong exact index boundary: {error:?}"),
+                            }
+                            let after = (budget.work(), budget.storage());
+                            assert_eq!(
+                                OriginalEntryIndexV20::build(original, budget)
+                                    .err()
+                                    .unwrap()
+                                    .to_string(),
+                                error.to_string()
+                            );
+                            assert_eq!((budget.work(), budget.storage()), after);
+                            completed.set(Some((0, 0, false)));
+                            Err(error)
+                        }
+                    }
+                },
+            );
+            assert_eq!(budget.storage(), floor);
+            settled.set(true);
+            result
         });
     assert!(result.is_err());
     assert_eq!(budget.storage(), MODULE_FLOOR + headers);
+    assert!(
+        settled.get(),
+        "lexical index and padding credit must settle after all backing drops"
+    );
     completed
         .get()
         .expect("index assertions must complete outside caught callbacks")
@@ -690,3 +777,5 @@ fn private_source_entry_index_exact_and_one_short_work_and_storage_are_cumulativ
         assert!(!private_entry_index_cut_v20(Some((is_work, limit - 1))).2);
     }
 }
+#[path = "production_source_bound_private_handoff_v21_tests.rs"]
+mod bound_private_tests;
