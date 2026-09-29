@@ -117,7 +117,7 @@ fn drain(service: &mut Service) {
     loop {
         service.pump(64).unwrap();
         match service.shutdown() {
-            Ok(()) => return,
+            Ok(_) => return,
             Err(crate::ProtectedServiceCleanupErrorV2::Busy) => {}
             Err(error) => panic!("cleanup refused: {error}"),
         }
@@ -368,7 +368,7 @@ fn retained(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
         Err(Error::Resource(Resource::Accounting))
     ));
     assert!(matches!(
-        trace.with_resources::<_, Error>(b, |_, _| panic!("unfunded backing callback")),
+        trace.with_resources::<(), Error>(b, |_, _| panic!("unfunded backing callback")),
         Err(Error::Resource(Resource::Accounting))
     ));
     b.reserve_storage(1).unwrap();

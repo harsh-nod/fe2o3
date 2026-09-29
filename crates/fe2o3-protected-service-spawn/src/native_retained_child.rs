@@ -148,6 +148,21 @@ impl<T: Send + 'static> RootRetainedTaskTraceV2<'_, T> {
         self.trace.resume(b)
     }
 
+    /// Releases only the spawn lease at the owned, still-held exec observation.
+    /// The complete backing charge and original Budget address remain required.
+    /// Uses RootTaskTraceV2::CONFIRM_EXEC_WORK and CONFIRM_EXEC_SCRATCH.
+    ///
+    /// # Safety
+    /// Authenticate this exact child's successful native exec and closure of all
+    /// inherited artifact-lock aliases, including any in untraced descendants.
+    /// Retain exclusive consuming-wait ownership. Root exec observation alone
+    /// does not establish these conditions or admit the executable or its tree.
+    pub unsafe fn confirm_exec(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        // SAFETY: the caller supplies the same exec/alias-closure contract; the
+        // trace checks its full retained charge, account, thread and held stop.
+        unsafe { self.trace.confirm_exec(b) }
+    }
+
     /// Read-only access to the entire backing on the original ledger.
     pub fn with_resources<R, E>(
         &self,
@@ -158,7 +173,7 @@ impl<T: Send + 'static> RootRetainedTaskTraceV2<'_, T> {
         E: From<Resource> + From<crate::RetainedResourceAccessErrorV2>,
     {
         b.with_prepaid_scope(self.retained_storage(), 0, 0, 0, |b| {
-            self.trace.check_ledger(b)?;
+            self.trace.check_budget(b)?;
             self.resources.with(b, operation)
         })
     }

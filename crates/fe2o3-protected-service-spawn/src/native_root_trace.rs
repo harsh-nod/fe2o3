@@ -124,7 +124,9 @@ impl TraceState {
 /// mapping, interpreter, descendant or proof admission is established. In
 /// particular, exec observation does not release the inherited artifact lease.
 /// The originating Work borrow stays live for this owner's lifetime; a different
-/// Work ledger refuses even when it declares an identical storage/work quota.
+/// Work ledger or Budget address refuses even with identical storage/work quota.
+/// Keep the original Budget live at its admitting address until this owner drops.
+/// Address equality is an in-borrow accounting check, not persistent identity.
 ///
 /// ```compile_fail
 /// use fe2o3_protected_service_spawn::native_spawn::RootOwnedProtectedServiceChildV2 as Child;
@@ -137,6 +139,7 @@ pub struct RootTaskTraceV2<'work> {
     retained: usize,
     origin: (Pid, Pid, ThreadId),
     ledger: Ledger,
+    budget_address: usize,
     held: TraceState,
     local: PhantomData<(&'work Budget<'work>, Rc<()>)>,
 }
@@ -148,6 +151,12 @@ impl<'work> RootTaskTraceV2<'work> {
     pub const OPERATION_SCRATCH: usize = RootOwnedProtectedServiceChildV2::OPERATION_SCRATCH
         + 4 * std::mem::size_of::<Self>()
         + 4 * std::mem::size_of::<WaitIdStatus>();
+    /// Full confirmation work, including the nested native-child lease release.
+    pub const CONFIRM_EXEC_WORK: usize =
+        Self::OPERATION_WORK + RootOwnedProtectedServiceChildV2::OPERATION_WORK;
+    /// Full overlapping confirmation scratch, above the retained trace charge.
+    pub const CONFIRM_EXEC_SCRATCH: usize =
+        Self::OPERATION_SCRATCH + RootOwnedProtectedServiceChildV2::OPERATION_SCRATCH;
 
     pub(in crate::native_spawn) fn begin(
         child: RootOwnedProtectedServiceChildV2,
@@ -169,6 +178,7 @@ impl<'work> RootTaskTraceV2<'work> {
                     retained,
                     origin,
                     ledger: b.work_ledger_identity_v1(),
+                    budget_address: b as *const Budget<'_> as usize,
                     held: TraceState::Pending,
                     local: PhantomData,
                 })
@@ -194,11 +204,13 @@ impl<'work> RootTaskTraceV2<'work> {
         }
     }
 
-    pub(in crate::native_spawn) fn check_ledger(
+    pub(in crate::native_spawn) fn check_budget(
         &self,
         b: &Budget<'_>,
     ) -> std::result::Result<(), Resource> {
-        if self.ledger != b.work_ledger_identity_v1() {
+        if self.ledger != b.work_ledger_identity_v1()
+            || self.budget_address != b as *const Budget<'_> as usize
+        {
             Err(Resource::Accounting)
         } else {
             Ok(())
@@ -225,7 +237,7 @@ impl<'work> RootTaskTraceV2<'work> {
             Self::OPERATION_WORK,
             Self::OPERATION_SCRATCH,
             |b| {
-                self.check_ledger(b)?;
+                self.check_budget(b)?;
                 self.check_thread()?;
                 self.child.record()?;
                 if self.held == TraceState::Refused {
@@ -253,7 +265,7 @@ impl<'work> RootTaskTraceV2<'work> {
             Self::OPERATION_WORK,
             Self::OPERATION_SCRATCH,
             |b| {
-                self.check_ledger(b)?;
+                self.check_budget(b)?;
                 self.check_thread()?;
                 self.child.record()?.prepare_root_trace()?;
                 let (request, data) = self
@@ -263,6 +275,37 @@ impl<'work> RootTaskTraceV2<'work> {
                 ptrace(request, self.pid(), data)?;
                 self.held = TraceState::Pending;
                 Ok(())
+            },
+        )
+    }
+
+    /// Releases only the spawn lease while this controller still holds an exec
+    /// stop observed by its own consuming wait. Resuming, retiring, deferring or
+    /// losing custody refuses confirmation. The stop, slot and backing remain.
+    /// CONFIRM_EXEC_WORK/SCRATCH cover both this check and the child operation.
+    ///
+    /// # Safety
+    /// Authenticate the exact child's successful exec under the native launch
+    /// protocol and establish closure of ALL inherited artifact-lock aliases,
+    /// including any held by untraced descendants. A root exec event alone does
+    /// not authenticate the executable or exclude those aliases. Preserve
+    /// exclusive consuming-wait ownership. Refusal leaves the lease retained.
+    pub unsafe fn confirm_exec(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        b.with_prepaid_scope(
+            self.retained,
+            ENTRY,
+            Self::OPERATION_WORK,
+            Self::OPERATION_SCRATCH,
+            |b| {
+                self.check_budget(b)?;
+                self.check_thread()?;
+                if self.held != TraceState::Exec {
+                    return Err(Error::State("root trace has no held exec observation"));
+                }
+                self.child.record()?.prepare_root_trace()?;
+                // SAFETY: the caller authenticates exec/alias closure; the owned
+                // observed exec stop, original account and custody are checked above.
+                unsafe { self.child.confirm_exec(b) }
             },
         )
     }
