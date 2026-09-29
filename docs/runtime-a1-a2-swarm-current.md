@@ -24,6 +24,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [completion source rollback composition](evidence/dev-completion-source-rollback-2026-09-28/README.md)
+shares the actual inline short-circuit cleanup, production calls and consuming/
+forwarding adapters over one owner. It proves skipped cancellation on release
+refusal, retained release effects on later cancellation refusal, and exact
+selected-slot cleanup on success, without a healthy-owner/provenance premise.
+Four final signed campaigns pass 92 stages and 60 executable negatives; the
+composed root proves 51 obligations with the two explicit reservation contracts.
+Standalone cancellation retains `--no-cheating`. Eight N=3 terminal-prefix CPU
+cases include a refusal for which erroneous eager cancellation would succeed.
+Final KFD passes 1418/0 (320 construction tests excluded), runtime 1828/0 with
+30 hardware ignores, and doctests 124/0. Static/format checks and independent
+absence of all 197 recorded process groups pass. Two stopped proof campaigns
+and the doctest summary-harness refusal are retained. Outer dispatch settlement,
+native no-effect frames, terminalization/unwind and GPU/performance qualification
+remain open. A1/A2 and accepted lane checkpoints are unchanged.
+
 The [dispatch-epoch cancellation refinement and terminal-prefix tests](evidence/dev-dispatch-epoch-cancel-2026-09-28/README.md)
 share all four production identity/roster/cancellation bodies with a no-cheating
 Verus root. Its signed 30-stage campaign passes 16 obligations and all 22 executable
