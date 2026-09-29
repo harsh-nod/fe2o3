@@ -354,6 +354,29 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
         input: OpCoordinate,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<Option<ProductionOptimizedSourceMemoryAccessV18<'_>>> {
+        self.scalar_memory_access_profile_v25(root, input, None, budget)
+    }
+
+    // The private spill consumer already owns an exact original sidecar row.
+    // Reuse every payload/transition check without rescanning the root census.
+    pub(in super::super) fn scalar_memory_access_at_v25(
+        &self,
+        root: usize,
+        input: OpCoordinate,
+        instance: usize,
+        row: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<ProductionOptimizedSourceMemoryAccessV18<'_>>> {
+        self.scalar_memory_access_profile_v25(root, input, Some((instance, row)), budget)
+    }
+
+    fn scalar_memory_access_profile_v25(
+        &self,
+        root: usize,
+        input: OpCoordinate,
+        source: Option<(usize, usize)>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<ProductionOptimizedSourceMemoryAccessV18<'_>>> {
         self.retain((|| {
             self.query(budget)?;
             budget.charge_work(1)?;
@@ -376,10 +399,68 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
                 }
                 _ => return Ok(None),
             };
-            let Some(original) = self
-                .original
-                .retained_memory_access(root, input, pointer, budget)?
-            else {
+            let original = match source {
+                None => self
+                    .original
+                    .retained_memory_access(root, input, pointer, budget)?,
+                Some((instance, row)) => {
+                    budget.charge_work(8)?;
+                    let anchors = self
+                        .original
+                        .source
+                        .sidecar(root, instance, budget)?
+                        .scoped_memory_anchors
+                        .as_ref()
+                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                            "private spill access lacks original anchor census",
+                        ))?;
+                    let function = self.original.source.instance(root, instance, budget)?.0;
+                    if anchors.subject.instance.index() != instance
+                        || anchors.subject.function != function
+                        || anchors.subject.ledger != self.original.ledger
+                    {
+                        return resources::binding("private spill anchor subject differs");
+                    }
+                    let anchor =
+                        anchors
+                            .rows
+                            .get(row)
+                            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                                "private spill access anchor is absent",
+                            ))?;
+                    if !matches!(anchor.kind, ScopedMemoryAnchorKindV29::Access { .. }) {
+                        return resources::binding("private spill access is not a scalar anchor");
+                    }
+                    let [mapped] = self.original.attachment_range(
+                        TileAttachmentKeyV29 {
+                            root,
+                            family: TileAttachmentFamilyV29::MemoryAnchor,
+                            instance,
+                            row,
+                            field: TileAttachmentFieldV29::MemoryPointer,
+                            component: 0,
+                            part: 0,
+                        },
+                        budget,
+                    )?
+                    else {
+                        return resources::binding("private spill pointer attachment census");
+                    };
+                    if self
+                        .original
+                        .attachment_value(root, mapped.location, budget)?
+                        != pointer
+                    {
+                        return resources::binding("private spill original pointer differs");
+                    }
+                    Some(SourcePhysicalAccessV18 {
+                        instance,
+                        row,
+                        anchor,
+                    })
+                }
+            };
+            let Some(original) = original else {
                 return Ok(None);
             };
             let payload = self

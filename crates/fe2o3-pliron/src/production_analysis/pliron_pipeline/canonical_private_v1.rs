@@ -16,6 +16,7 @@ struct PrivateStageCoverageV1 {
     identity: crate::PlironStructuralIdentityLabelV1,
     operations: usize,
     private_counts: [usize; 5],
+    global_counts: [usize; 2],
 }
 
 pub(crate) struct PrivateCoverageV1 {
@@ -46,6 +47,40 @@ impl CanonicalPrivatePipelineReportV1 {
     }
 }
 
+/// Conditional global domains remain explicit premises. This report is not a
+/// private-only proof, artifact authority, or discharge of runtime contracts.
+pub struct CanonicalMixedPipelineReportV26 {
+    pub(super) report: ProductionPlironPreloweringReportV2,
+    pub(super) coverage: PrivateCoverageV1,
+}
+impl CanonicalMixedPipelineReportV26 {
+    pub fn reports(&self) -> &ProductionPlironPreloweringReportV2 {
+        &self.report
+    }
+    pub fn paired_stage_count(&self) -> usize {
+        self.coverage.len()
+    }
+    pub fn global_access_counts(&self, position: usize) -> Option<[usize; 2]> {
+        self.coverage
+            .stages
+            .get(position)
+            .map(|stage| stage.global_counts)
+    }
+    pub fn private_access_counts(&self, position: usize) -> Option<[usize; 5]> {
+        self.coverage
+            .stages
+            .get(position)
+            .map(|stage| stage.private_counts)
+    }
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+pub(crate) struct CanonicalMixedPipelineOutcomeV26 {
+    pub(crate) report: CanonicalMixedPipelineReportV26,
+    pub(crate) resource_upper_bound: ProductionAnalysisResourceUpperBoundV1,
+}
+
 pub(crate) struct CanonicalPrivatePipelineOutcomeV1 {
     pub(crate) report: CanonicalPrivatePipelineReportV1,
     pub(crate) resource_upper_bound: ProductionAnalysisResourceUpperBoundV1,
@@ -53,6 +88,7 @@ pub(crate) struct CanonicalPrivatePipelineOutcomeV1 {
 
 pub(super) struct SessionV1<'a, A: NativePrivateInputV1 = NativeCanonicalPrivateAdmissionV1<'a>> {
     input: &'a A,
+    mixed: bool,
     ordinary: ProductionAnalysisReportValidationSessionV1<'a>,
     manager: usize,
     identity: crate::PlironStructuralIdentityLabelV1,
@@ -73,12 +109,67 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
         analyses: &mut PlironAnalysisManagerV1,
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<Self, PipelineErrorV1> {
+        Self::begin_profile_v26(
+            input,
+            endpoint,
+            atomic_target,
+            preservation,
+            census,
+            limits,
+            analyses,
+            observer,
+            false,
+        )
+    }
+
+    pub(super) fn begin_mixed_v26(
+        input: &'a A,
+        endpoint: (&'a Context, &'a FuncOp),
+        atomic_target: Option<&PlironAtomicTargetContextV1>,
+        preservation: crate::PlironPassValidationHandleV1,
+        census: ProductionAnalysisInputCensusV1,
+        limits: ProductionAnalysisResourceLimitsV1,
+        analyses: &mut PlironAnalysisManagerV1,
+        observer: PipelineObservationV1<'_, '_, '_>,
+    ) -> Result<Self, PipelineErrorV1> {
+        Self::begin_profile_v26(
+            input,
+            endpoint,
+            atomic_target,
+            preservation,
+            census,
+            limits,
+            analyses,
+            observer,
+            true,
+        )
+    }
+
+    fn begin_profile_v26(
+        input: &'a A,
+        endpoint: (&'a Context, &'a FuncOp),
+        atomic_target: Option<&PlironAtomicTargetContextV1>,
+        preservation: crate::PlironPassValidationHandleV1,
+        census: ProductionAnalysisInputCensusV1,
+        limits: ProductionAnalysisResourceLimitsV1,
+        analyses: &mut PlironAnalysisManagerV1,
+        observer: PipelineObservationV1<'_, '_, '_>,
+        mixed: bool,
+    ) -> Result<Self, PipelineErrorV1> {
         let phase = ProductionAnalysisResourcePhaseV1::ReportValidation;
         let header =
             resources::setup().map_err(|e| observed_pipeline_resource_error_v1(observer, e))?;
         invocation_receipt_v1::require_observed_v1(limits, phase, Ok(header), observer)
             .map_err(|e| observed_pipeline_resource_error_v1(observer, e))?;
-        if !input.authenticate(endpoint.0, endpoint.1)
+        if input.supports_conditional_globals_v26() != mixed
+            || input.conditional_global_counts_v26().is_some() != mixed
+            || !input.authenticate(endpoint.0, endpoint.1)
+            || input
+                .context()
+                .ir_mutation_attempt_epoch()
+                .ok()
+                .map(|epoch| epoch.value())
+                != Some(input.epoch())
             || input.epoch() != preservation.input_mutation_epoch()
             || input.operation_count() != census.operations
         {
@@ -105,6 +196,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
         let setup = header.checked_then_retain(ordinary.setup_resource_upper_bound_v1(), phase)?;
         Ok(Self {
             input,
+            mixed,
             ordinary,
             manager: analyses as *const _ as usize,
             identity,
@@ -113,6 +205,23 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             stages: [None; 9],
             setup,
         })
+    }
+
+    fn current(&self) -> bool {
+        self.current_at((self.input.context(), self.input.function()))
+    }
+
+    fn current_at(&self, endpoint: (&Context, &FuncOp)) -> bool {
+        self.input.supports_conditional_globals_v26() == self.mixed
+            && self.input.conditional_global_counts_v26().is_some() == self.mixed
+            && self.input.authenticate(endpoint.0, endpoint.1)
+            && self
+                .input
+                .context()
+                .ir_mutation_attempt_epoch()
+                .ok()
+                .map(|epoch| epoch.value())
+                == Some(self.input.epoch())
     }
 
     pub(super) fn setup(&self) -> ProductionAnalysisResourceUpperBoundV1 {
@@ -131,9 +240,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
         if self.next >= 9
             || self.pending.is_some()
             || self.manager != analyses as *const _ as usize
-            || !self
-                .input
-                .authenticate(self.input.context(), self.input.function())
+            || !self.current()
         {
             return Err(PipelineErrorV1::CanonicalPrivateInput);
         }
@@ -166,6 +273,8 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             return Err(PipelineErrorV1::CanonicalPrivateInput);
         }
         let mut counts = [0usize; 5];
+        let mut globals = [0usize; 2];
+        let mut visited = 0usize;
         for block in self
             .input
             .function()
@@ -178,7 +287,30 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
                     .input
                     .operation(self.input.context(), operation)
                     .ok_or(PipelineErrorV1::CanonicalPrivateInput)?;
+                visited = visited
+                    .checked_add(1)
+                    .ok_or(PipelineErrorV1::CanonicalPrivateInput)?;
                 let slot = match kind {
+                    PrivateOperationKindV1::ConditionalGlobalIndexV26 => {
+                        if !self.mixed {
+                            return Err(PipelineErrorV1::CanonicalPrivateInput);
+                        }
+                        None
+                    }
+                    PrivateOperationKindV1::ConditionalGlobalReadV26
+                    | PrivateOperationKindV1::ConditionalGlobalWriteV26 => {
+                        if !self.mixed {
+                            return Err(PipelineErrorV1::CanonicalPrivateInput);
+                        }
+                        let slot = usize::from(matches!(
+                            kind,
+                            PrivateOperationKindV1::ConditionalGlobalWriteV26
+                        ));
+                        globals[slot] = globals[slot]
+                            .checked_add(1)
+                            .ok_or(PipelineErrorV1::CanonicalPrivateInput)?;
+                        None
+                    }
                     PrivateOperationKindV1::Scalar => None,
                     PrivateOperationKindV1::Allocate => Some(0),
                     PrivateOperationKindV1::Address => Some(1),
@@ -195,9 +327,22 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
                     | PrivateOperationKindV1::UnreachableV18 => None,
                 };
                 if let Some(slot) = slot {
-                    counts[slot] += 1;
+                    counts[slot] = counts[slot]
+                        .checked_add(1)
+                        .ok_or(PipelineErrorV1::CanonicalPrivateInput)?;
                 }
             }
+        }
+        if visited != self.input.operation_count()
+            || globals != self.input.conditional_global_counts_v26().unwrap_or([0; 2])
+            || !self.current()
+            || self
+                .stages
+                .iter()
+                .flatten()
+                .any(|stage| stage.private_counts != counts || stage.global_counts != globals)
+        {
+            return Err(PipelineErrorV1::CanonicalPrivateInput);
         }
         // Every position consumes the same sealed whole-language/callee proof,
         // not absence of findings in the ordinary reader. Bounds also consumes
@@ -209,9 +354,12 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             identity: self.identity,
             operations: self.input.operation_count(),
             private_counts: counts,
+            global_counts: globals,
         });
         #[cfg(test)]
         tests::inject(self.next, &mut self.pending);
+        #[cfg(test)]
+        tests::inject_epoch(self.next, self.input.context(), self.input.function());
         let coverage = self.pending.ok_or(PipelineErrorV1::CanonicalPrivateInput)?;
         if coverage.position != self.next
             || coverage.pass != pass
@@ -219,6 +367,8 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             || coverage.identity != self.identity
             || coverage.operations != self.input.operation_count()
             || coverage.private_counts != counts
+            || coverage.global_counts != globals
+            || !self.current()
         {
             return Err(PipelineErrorV1::CanonicalPrivateInput);
         }
@@ -243,7 +393,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             .take()
             .ok_or(PipelineErrorV1::CanonicalPrivateInput)?;
         if self.manager != analyses as *const _ as usize
-            || !self.input.authenticate(endpoint.0, endpoint.1)
+            || !self.current_at(endpoint)
             || coverage.position != self.next
             || checkpoint.position() != self.next
             || checkpoint.pass() != coverage.pass
@@ -305,19 +455,26 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             || self.pending.is_some()
             || self.stages.iter().any(Option::is_none)
             || self.manager != analyses as *const _ as usize
-            || !self
-                .input
-                .authenticate(self.input.context(), self.input.function())
+            || !self.current()
         {
             return Err(PipelineErrorV1::CanonicalPrivateInput);
         }
         for (position, coverage) in self.stages.iter().enumerate() {
-            let coverage = coverage.ok_or(PipelineErrorV1::CanonicalPrivateInput)?;
+            let coverage = coverage
+                .as_ref()
+                .ok_or(PipelineErrorV1::CanonicalPrivateInput)?;
             if coverage.position != position
                 || coverage.pass != PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2[position]
                 || coverage.epoch != self.input.epoch()
                 || coverage.identity != self.identity
                 || coverage.operations != self.input.operation_count()
+                || coverage.global_counts
+                    != self.input.conditional_global_counts_v26().unwrap_or([0; 2])
+                || (!self.mixed && coverage.global_counts != [0; 2])
+                || self.stages[0].as_ref().is_none_or(|first| {
+                    first.private_counts != coverage.private_counts
+                        || first.global_counts != coverage.global_counts
+                })
             {
                 return Err(PipelineErrorV1::CanonicalPrivateInput);
             }
@@ -371,6 +528,35 @@ pub(crate) fn run_v18(
         PipelineOutcomeV1::CanonicalPrivate(outcome) => Ok(outcome),
         _ => Err(PipelineErrorV1::CanonicalPrivateInput),
     }
+}
+
+pub(crate) fn run_mixed_v26(
+    input: &crate::kir_bridge_v1::NativeCanonicalMixedAdmissionV26<'_>,
+    limits: ProductionAnalysisResourceLimitsV1,
+    receipt: Option<&mut invocation_receipt_v1::InvocationReceiptV1>,
+) -> Result<CanonicalMixedPipelineOutcomeV26, PipelineErrorV1> {
+    match run_shared_production_checks_v1(
+        input.context(),
+        input.function(),
+        None,
+        None,
+        limits,
+        (PipelineFamilyV1::CanonicalMixedV26(input), receipt),
+        #[cfg(test)]
+        None,
+    )? {
+        PipelineOutcomeV1::CanonicalMixedV26(outcome) => Ok(outcome),
+        _ => Err(PipelineErrorV1::CanonicalPrivateInput),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_with_mixed_coverage_fault_v26<T>(
+    position: usize,
+    kind: u8,
+    run: impl FnOnce() -> T,
+) -> (T, bool) {
+    tests::with_coverage_fault(position, kind, run)
 }
 
 #[cfg(test)]

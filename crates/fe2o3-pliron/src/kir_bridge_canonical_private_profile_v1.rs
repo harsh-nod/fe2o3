@@ -197,7 +197,11 @@ impl<'a> NativeCanonicalPrivateProjectionV1<'a> {
                             }
                             Kind::TrapEnd => false,
                             Kind::Scalar => keys(context, pointer).is_none(),
-                            Kind::LifecycleV18 | Kind::UnreachableV18 => false,
+                            Kind::LifecycleV18
+                            | Kind::UnreachableV18
+                            | Kind::ConditionalGlobalIndexV26
+                            | Kind::ConditionalGlobalReadV26
+                            | Kind::ConditionalGlobalWriteV26 => false,
                         };
                         if !matches {
                             return Err(refuse(Need::NativeJoin, None));

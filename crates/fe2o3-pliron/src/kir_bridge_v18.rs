@@ -146,6 +146,7 @@ pub(crate) use optimization::{
 mod private_policy;
 #[path = "kir_bridge_canonical_ranked_v18.rs"]
 mod ranked_policy;
+pub(crate) use private_policy::NativeCanonicalMixedAdmissionV26;
 pub(crate) use private_policy::NativeCanonicalPrivateAdmissionV18;
 
 #[path = "kir_bridge_global_pending_v18.rs"]

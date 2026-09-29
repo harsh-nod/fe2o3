@@ -420,7 +420,9 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
         )
     }
 
-    fn policy_resource(error: &CanonicalRankedPolicyFailureV1) -> Option<ArgumentResourceV1> {
+    pub(in super::super::super) fn policy_resource(
+        error: &CanonicalRankedPolicyFailureV1,
+    ) -> Option<ArgumentResourceV1> {
         use CanonicalRankedPolicyFailureV1 as Failure;
         match error {
             Failure::Resource(error)

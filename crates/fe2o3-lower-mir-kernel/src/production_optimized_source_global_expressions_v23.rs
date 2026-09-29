@@ -436,7 +436,7 @@ pub(super) fn test_global_source_expression_counterfeit_v23(
                 Err(error)
             })
         })
-    }))
+    })).map(|_| ())
 }
 
 #[cfg(test)]

@@ -4,12 +4,14 @@ use crate::production_analysis::canonical_ranked_checks_v1::private::tests::{
 };
 
 std::thread_local! {
+    static EPOCH_FAULT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static FAULT: std::cell::Cell<Option<(usize, u8)>> = const { std::cell::Cell::new(None) };
 }
 struct Reset;
 impl Drop for Reset {
     fn drop(&mut self) {
         FAULT.with(|fault| fault.set(None));
+        EPOCH_FAULT.with(|fault| fault.set(None));
     }
 }
 
@@ -18,7 +20,7 @@ pub(crate) fn with_coverage_fault<T>(
     kind: u8,
     run: impl FnOnce() -> T,
 ) -> (T, bool) {
-    assert!(position < 9 && kind < 5);
+    assert!(position < 9 && kind < 8);
     assert!(FAULT.with(|fault| fault.get()).is_none());
     let _reset = Reset;
     FAULT.with(|fault| fault.set(Some((position, kind))));
@@ -44,7 +46,24 @@ pub(super) fn inject(position: usize, pending: &mut Option<PrivateStageCoverageV
         1 => row.pass = PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2[(position + 1) % 9],
         2 => row.epoch = row.epoch.wrapping_add(1),
         3 => row.operations += 1,
-        _ => row.private_counts[4] += 1,
+        4 => row.private_counts[4] += 1,
+        5 => row.global_counts[0] += 1,
+        6 => row.global_counts[1] += 1,
+        7 => {
+            row.private_counts[3] = row.private_counts[3]
+                .checked_sub(1)
+                .expect("fixture has private Store");
+            row.global_counts[1] += 1;
+        }
+        _ => unreachable!("closed coverage fault"),
+    }
+}
+
+pub(super) fn inject_epoch(position: usize, context: &Context, function: &FuncOp) {
+    use pliron::op::Op;
+    if EPOCH_FAULT.with(|fault| fault.get()) == Some(position) {
+        EPOCH_FAULT.with(|fault| fault.set(None));
+        let _unchanged = function.get_operation().deref_mut(context);
     }
 }
 
@@ -86,7 +105,7 @@ fn literal_private_increment_formulas_and_each_exact_one_under_limit() {
             setup.retained_storage_upper_bound(),
             setup.peak_storage_upper_bound()
         ),
-        (128, 128, 128)
+        (149, 149, 149)
     );
     let record = resources::record().unwrap();
     assert_eq!(
@@ -95,7 +114,7 @@ fn literal_private_increment_formulas_and_each_exact_one_under_limit() {
             record.retained_storage_upper_bound(),
             record.peak_storage_upper_bound()
         ),
-        (32, 0, 4)
+        (48, 0, 4)
     );
     let finish = resources::finish().unwrap();
     assert_eq!(
@@ -104,7 +123,7 @@ fn literal_private_increment_formulas_and_each_exact_one_under_limit() {
             finish.retained_storage_upper_bound(),
             finish.peak_storage_upper_bound()
         ),
-        (116, 0, 4)
+        (424, 0, 4)
     );
     for bound in [setup, record, finish] {
         let work = bound.work_upper_bound();
@@ -130,31 +149,31 @@ fn literal_private_increment_formulas_and_each_exact_one_under_limit() {
             projection.with_function(ordinal, budget, |input| {
                 assert_eq!(input.operation_count(), rows);
                 let stage = resources::stage(input, phase).unwrap();
-                let expected = 32 * (rows + 1) * (rows + 1) + 32;
+                let expected = 32 * (rows + 1) * (rows + 1) + 128;
                 assert_eq!(
                     (
                         stage.work_upper_bound(),
                         stage.retained_storage_upper_bound(),
                         stage.peak_storage_upper_bound()
                     ),
-                    (expected, 0, 6)
+                    (expected, 0, 9)
                 );
                 assert_eq!(
                     input.identity_lookup_work(),
                     Some(512 * (rows + 1) * (rows + 1))
                 );
                 assert!(
-                    ProductionAnalysisResourceLimitsV1::new(expected, 6)
+                    ProductionAnalysisResourceLimitsV1::new(expected, 9)
                         .require(phase, stage)
                         .is_ok()
                 );
                 assert!(
-                    ProductionAnalysisResourceLimitsV1::new(expected - 1, 6)
+                    ProductionAnalysisResourceLimitsV1::new(expected - 1, 9)
                         .require(phase, stage)
                         .is_err()
                 );
                 assert!(
-                    ProductionAnalysisResourceLimitsV1::new(expected, 5)
+                    ProductionAnalysisResourceLimitsV1::new(expected, 8)
                         .require(phase, stage)
                         .is_err()
                 );
@@ -189,6 +208,86 @@ fn ordinary_native_entry_is_still_closed_while_private_entry_keeps_real_reports(
                 assert_eq!(private.report.reports().pass_order().len(), 9);
             })?;
         }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn private_rows_cannot_be_relabelled_as_conditional_globals_at_any_stage_v26() {
+    for position in 0..9 {
+        for kind in 5..8 {
+            with_projection(&fixture(), |projection, budget| {
+                projection.with_function(1, budget, |input| {
+                    let (result, reached) = with_coverage_fault(position, kind, || {
+                        run(
+                            input,
+                            ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+                            None,
+                        )
+                    });
+                    assert!(reached);
+                    assert!(matches!(
+                        result,
+                        Err(PipelineErrorV1::CanonicalPrivateInput)
+                    ));
+                })?;
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn unchanged_native_structure_after_mutable_borrow_rejects_every_stage_v26() {
+    for position in 0..9 {
+        let _reset = Reset;
+        let mut checked = false;
+        let result = with_projection(&fixture(), |projection, budget| {
+            projection.with_function(1, budget, |input| {
+                let expected = input.epoch();
+                EPOCH_FAULT.with(|fault| fault.set(Some(position)));
+                let error = run(
+                    input,
+                    ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+                    None,
+                )
+                .err()
+                .expect("same bytes cannot restore an old epoch");
+                assert!(EPOCH_FAULT.with(|fault| fault.get()).is_none());
+                assert!(input.context().ir_mutation_attempt_epoch().unwrap().value() > expected);
+                assert!(matches!(error, PipelineErrorV1::CanonicalPrivateInput));
+                checked = true;
+            })?;
+            projection.check_epoch()?;
+            Ok(())
+        });
+        assert!(checked, "real stage must run before outer custody rejects");
+        assert!(
+            result.is_err(),
+            "the outer owner also rejects the stale graph"
+        );
+    }
+}
+
+#[test]
+fn historical_private_reports_have_zero_global_counts_in_all_nine_stages_v26() {
+    with_projection(&fixture(), |projection, budget| {
+        projection.with_function(1, budget, |input| {
+            assert!(!input.supports_conditional_globals_v26());
+            assert_eq!(input.conditional_global_counts_v26(), None);
+            let outcome = run(
+                input,
+                ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+                None,
+            )
+            .unwrap();
+            for stage in outcome.report.coverage.stages {
+                assert_eq!(stage.global_counts, [0, 0]);
+                assert_eq!(stage.private_counts, [1, 0, 1, 1, 0]);
+            }
+        })?;
         Ok(())
     })
     .unwrap();

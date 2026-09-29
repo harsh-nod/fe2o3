@@ -43,6 +43,9 @@ enum RankedOperationKind {
     PrivateRead,
     PrivateWrite,
     PrivateCall,
+    ConditionalGlobalIndexV26,
+    ConditionalGlobalReadV26,
+    ConditionalGlobalWriteV26,
     TerminalCall,
     TerminalEnd,
     RankedView,
@@ -450,6 +453,18 @@ fn canonical_private_operation_kind_v1(
 ) -> Option<RankedOperationKind> {
     use crate::production_analysis::canonical_ranked_checks_v1::private::PrivateOperationKindV1 as Kind;
     Some(match input.operation(context, operation)? {
+        Kind::ConditionalGlobalIndexV26 if input.supports_conditional_globals_v26() => {
+            RankedOperationKind::ConditionalGlobalIndexV26
+        }
+        Kind::ConditionalGlobalReadV26 if input.supports_conditional_globals_v26() => {
+            RankedOperationKind::ConditionalGlobalReadV26
+        }
+        Kind::ConditionalGlobalWriteV26 if input.supports_conditional_globals_v26() => {
+            RankedOperationKind::ConditionalGlobalWriteV26
+        }
+        Kind::ConditionalGlobalIndexV26
+        | Kind::ConditionalGlobalReadV26
+        | Kind::ConditionalGlobalWriteV26 => return None,
         Kind::Allocate => RankedOperationKind::PrivateAllocate,
         Kind::Address => RankedOperationKind::PrivateAddress,
         Kind::Read => RankedOperationKind::PrivateRead,

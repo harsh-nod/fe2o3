@@ -977,16 +977,23 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             }
             Ok(())
         })?;
-        let grid_leader =
+        let captured_grid_leader =
             self.capture_grid_leader_borrow_v29(site, statement, place, loan, operations)?;
-        let referent = if matches!(
+        let (grid_leader, referent) = if let Some((proof, binding)) = captured_grid_leader {
+            // The original typed-object path already checked the live logical
+            // capability. Its zero-value representation has no scalar address.
+            (Some(proof), binding)
+        } else if matches!(
             references.plan.cells.strategies.get(loan),
             Some(SourceReferenceCellStrategyV29::Object(_))
         ) {
-            self.source_reference_object_address_v29(site, statement, place, loan, operations)?
-                .ok_or_else(scoped_object_error_v29)?
+            (
+                None,
+                self.source_reference_object_address_v29(site, statement, place, loan, operations)?
+                    .ok_or_else(scoped_object_error_v29)?,
+            )
         } else {
-            match self
+            let binding = match self
                 .source_reference_scalar_address_v29(site, statement, place, loan, operations)?
             {
                 Some(address) => address,
@@ -1000,7 +1007,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     )?
                     .0
                 }
-            }
+            };
+            (None, binding)
         };
         self.with_emission_budget_v1(|_, budget| {
             references.check(budget)?;

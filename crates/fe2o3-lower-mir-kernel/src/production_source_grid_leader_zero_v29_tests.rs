@@ -11,7 +11,7 @@ thread_local! {
     static ZERO_BINDING_MUTATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-pub(super) fn observe_original_zero_binding_v29(
+fn observe_original_zero_binding_v29(
     lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
     block: SemanticBlockIdV1,
     statement: Option<u32>,
@@ -707,13 +707,19 @@ fn original_grid_leader_capture_outside_some_cannot_issue_a_zero_token() {
 
 #[test]
 fn original_grid_leader_object_reads_and_borrows_require_live_logical_availability() {
-    struct Restore(u8);
+    struct Restore(u8, Option<SourceGridLeaderBindingObserverV29>, bool);
     impl Drop for Restore {
         fn drop(&mut self) {
             ZERO_BINDING_FAULT.set(self.0);
+            SOURCE_GRID_LEADER_BINDING_OBSERVER_V29.set(self.1);
+            ZERO_BINDING_MUTATED.set(self.2);
         }
     }
-    let _restore = Restore(ZERO_BINDING_FAULT.get());
+    let _restore = Restore(
+        ZERO_BINDING_FAULT.get(),
+        SOURCE_GRID_LEADER_BINDING_OBSERVER_V29.replace(Some(observe_original_zero_binding_v29)),
+        ZERO_BINDING_MUTATED.get(),
+    );
     for fault in 1..=6 {
         ZERO_BINDING_FAULT.set(fault);
         ZERO_BINDING_MUTATED.set(false);

@@ -98,10 +98,10 @@ pub fn source_helper_parameter_shape_with_policy_v18(
     policy: ParameterLeafPolicyV1,
 ) -> Result<(bool, HelperParameterComponentsV1), ProductionSourceArgumentErrorV1> {
     let argument = mapped.abi();
-    // This carries an admitted raw pointer value, not a pointee region or a
-    // borrow. Legacy helpers and pointer-free aggregate admission stay closed.
+    // This transports an admitted thin pointer representation, not a pointee
+    // region or a loan proof. References retain their exact source ownership.
+    // Legacy helpers and pointer-free aggregate admission stay closed.
     if policy != ParameterLeafPolicyV1::PointerFree
-        && mapped.source_ownership() == SemanticSourceArgumentOwnershipV1::RawPointer
         && mapped.tuple_field().is_none()
         && mapped.local_field().is_none()
         && argument.value().adjusted().is_none()
@@ -109,7 +109,26 @@ pub fn source_helper_parameter_shape_with_policy_v18(
         && matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
         && let Some(declaration) = types.get(argument.ty().index() as usize)
         && let SemanticTypeShapeV1::Pointer(pointer) = declaration.shape()
-        && pointer.kind() == SemanticPointerKindV1::Raw
+        && matches!(
+            (
+                pointer.kind(),
+                pointer.mutability(),
+                mapped.source_ownership()
+            ),
+            (
+                SemanticPointerKindV1::Raw,
+                _,
+                SemanticSourceArgumentOwnershipV1::RawPointer
+            ) | (
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Immutable,
+                SemanticSourceArgumentOwnershipV1::SharedBorrow
+            ) | (
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Mutable,
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow
+            )
+        )
         && pointer.metadata() == SemanticPointerMetadataV1::None
         && pointer.pointer_width_bits() == 64
         && declaration.layout().size_bytes() == Some(8)

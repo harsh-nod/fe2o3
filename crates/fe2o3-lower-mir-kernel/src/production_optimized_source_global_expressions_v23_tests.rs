@@ -79,7 +79,7 @@ fn global_expression_helper_operation_owner_v23(
     let original = &source.functions()[0];
     let unit = SemanticTypeIdV1::from_index(0);
     let scalar = SemanticTypeIdV1::from_index(1);
-    let reference = SemanticTypeIdV1::from_index(7);
+    let reference = original.locals()[7].ty();
     assert!(matches!(source.types()[reference.index() as usize].shape(),
         SemanticTypeShapeV1::Pointer(pointer) if pointer.kind() == SemanticPointerKindV1::Reference
             && pointer.mutability() == SemanticMutabilityV1::Mutable

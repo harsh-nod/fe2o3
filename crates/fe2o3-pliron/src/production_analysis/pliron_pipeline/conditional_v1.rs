@@ -16,6 +16,7 @@ enum PipelineFamilyV1<'a> {
     Ordinary,
     LifecycleV18(&'a crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'a>),
     Conditional(&'a ConditionalPipelineSubjectV1<'a>),
+    CanonicalMixedV26(&'a crate::kir_bridge_v1::NativeCanonicalMixedAdmissionV26<'a>),
     CanonicalPrivateV18(&'a crate::kir_bridge_v1::NativeCanonicalPrivateAdmissionV18<'a>),
     CanonicalPrivate(&'a crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'a>),
 }
@@ -28,6 +29,12 @@ enum ValidationFamilyV1<'a> {
     Ordinary(ProductionAnalysisReportValidationSessionV1<'a>),
     Conditional(conditional_validation::SessionV1<'a>),
     CanonicalPrivate(canonical_private_v1::SessionV1<'a>),
+    CanonicalMixedV26(
+        canonical_private_v1::SessionV1<
+            'a,
+            crate::kir_bridge_v1::NativeCanonicalMixedAdmissionV26<'a>,
+        >,
+    ),
     CanonicalPrivateV18(
         canonical_private_v1::SessionV1<
             'a,
@@ -165,6 +172,7 @@ enum PipelineOutcomeV1 {
     Ordinary(ProductionPlironPreloweringOutcomeV1),
     Conditional(ConditionalPipelineOutcomeV1),
     CanonicalPrivate(canonical_private_v1::CanonicalPrivatePipelineOutcomeV1),
+    CanonicalMixedV26(canonical_private_v1::CanonicalMixedPipelineOutcomeV26),
 }
 
 #[allow(
@@ -175,6 +183,7 @@ enum PipelineReportsV1 {
     Ordinary(ProductionPlironPreloweringReportV2),
     Conditional(ConditionalPipelineReportV1),
     CanonicalPrivate(canonical_private_v1::CanonicalPrivatePipelineReportV1),
+    CanonicalMixedV26(canonical_private_v1::CanonicalMixedPipelineReportV26),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -327,7 +336,8 @@ impl PipelineFamilyV1<'_> {
             Self::Ordinary
             | Self::LifecycleV18(_)
             | Self::CanonicalPrivate(_)
-            | Self::CanonicalPrivateV18(_) => Ok((None, None)),
+            | Self::CanonicalPrivateV18(_)
+            | Self::CanonicalMixedV26(_) => Ok((None, None)),
             Self::Conditional(input) => conditional_ownership::prepare_rows_with_observation_v1(
                 input.context(),
                 input.function(),
@@ -373,7 +383,8 @@ impl PipelineFamilyV1<'_> {
                 Self::Ordinary
                 | Self::LifecycleV18(_)
                 | Self::CanonicalPrivate(_)
-                | Self::CanonicalPrivateV18(_) => dependencies.0,
+                | Self::CanonicalPrivateV18(_)
+                | Self::CanonicalMixedV26(_) => dependencies.0,
                 Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::default(),
             },
             dependencies.1,
@@ -405,7 +416,8 @@ impl PipelineFamilyV1<'_> {
             Self::Ordinary
             | Self::LifecycleV18(_)
             | Self::CanonicalPrivate(_)
-            | Self::CanonicalPrivateV18(_) => bound,
+            | Self::CanonicalPrivateV18(_)
+            | Self::CanonicalMixedV26(_) => bound,
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::checked_phase(
                 phase,
                 bound.work_upper_bound(),
@@ -451,7 +463,8 @@ impl PipelineFamilyV1<'_> {
             Self::Ordinary
             | Self::LifecycleV18(_)
             | Self::CanonicalPrivate(_)
-            | Self::CanonicalPrivateV18(_) => {
+            | Self::CanonicalPrivateV18(_)
+            | Self::CanonicalMixedV26(_) => {
                 compose_effect_refinement_resource_upper_bound_v1(census, effect_local, ownership)
             }
             Self::Conditional(_) => effect_local
@@ -588,9 +601,9 @@ pub(crate) fn run_conditional_production_checks_with_observation_v1(
         None,
     )? {
         PipelineOutcomeV1::Conditional(outcome) => Ok(outcome),
-        PipelineOutcomeV1::Ordinary(_) | PipelineOutcomeV1::CanonicalPrivate(_) => {
-            Err(PipelineErrorV1::ConditionalInput)
-        }
+        PipelineOutcomeV1::Ordinary(_)
+        | PipelineOutcomeV1::CanonicalPrivate(_)
+        | PipelineOutcomeV1::CanonicalMixedV26(_) => Err(PipelineErrorV1::ConditionalInput),
     }
 }
 
@@ -751,6 +764,20 @@ impl<'a> ValidationFamilyV1<'a> {
                 let transfer = observer.map(|_| session.setup());
                 Ok((Self::CanonicalPrivateV18(session), transfer))
             }
+            PipelineFamilyV1::CanonicalMixedV26(input) => {
+                let session = canonical_private_v1::SessionV1::begin_mixed_v26(
+                    input,
+                    endpoint,
+                    atomic_target,
+                    preservation,
+                    census,
+                    limits,
+                    analyses,
+                    observer,
+                )?;
+                let transfer = observer.map(|_| session.setup());
+                Ok((Self::CanonicalMixedV26(session), transfer))
+            }
             PipelineFamilyV1::Ordinary | PipelineFamilyV1::LifecycleV18(_) => {
                 let session = begin_observed_report_validation_v1(
                     context,
@@ -788,6 +815,7 @@ impl<'a> ValidationFamilyV1<'a> {
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::default(),
             Self::CanonicalPrivate(session) => session.setup(),
             Self::CanonicalPrivateV18(session) => session.setup(),
+            Self::CanonicalMixedV26(session) => session.setup(),
         }
     }
 
@@ -852,6 +880,14 @@ impl<'a> ValidationFamilyV1<'a> {
                 observer,
             ),
             Self::CanonicalPrivateV18(session) => session.record(
+                (context, function),
+                checkpoint,
+                report,
+                stage,
+                analyses,
+                observer,
+            ),
+            Self::CanonicalMixedV26(session) => session.record(
                 (context, function),
                 checkpoint,
                 report,

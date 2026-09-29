@@ -6,6 +6,10 @@ use crate::production_analysis::canonical_ranked_checks_v1::{
 use fe2o3_kernel_analysis::{CanonicalKirInventoryV18, CheckedCanonicalKirPrivateMemoryV18};
 use pliron::builtin::op_interfaces::OneRegionInterface;
 
+#[path = "kir_bridge_mixed_memory_v26.rs"]
+mod mixed;
+pub(crate) use mixed::NativeCanonicalMixedAdmissionV26;
+
 // Only the graph visitor below constructs this token after a complete
 // coordinate/schema census. No V12 graph, owner or certificate is constructed.
 pub(crate) struct NativeCanonicalPrivateAdmissionV18<'a> {
@@ -221,6 +225,19 @@ impl NativeCanonicalPrivateAdmissionV18<'_> {
         profile: storage_v18::ProfileV18<'_>,
         budget: &mut Budget<'_>,
     ) -> Result<(), Failure> {
+        self.validate_complete_with(profile, budget, |_, _, _| Ok(false))
+    }
+
+    fn validate_complete_with(
+        &self,
+        profile: storage_v18::ProfileV18<'_>,
+        budget: &mut Budget<'_>,
+        mut extra: impl FnMut(
+            Ptr<Operation>,
+            usize,
+            storage_v18::ProfileV18<'_>,
+        ) -> Result<bool, Failure>,
+    ) -> Result<(), Failure> {
         let context = self.identity.context();
         let function = self.identity.function();
         if !self.authenticate(context, function) {
@@ -264,7 +281,7 @@ impl NativeCanonicalPrivateAdmissionV18<'_> {
                     // Fixed decoder/operand copies are transient and cannot
                     // outlive this complete carrier check.
                     self.checked_memory_carrier(pointer, index, profile)?;
-                } else {
+                } else if !extra(pointer, index, profile)? {
                     self.identity
                         .operation(context, pointer)
                         .ok_or(Failure::NativeSchema)?;

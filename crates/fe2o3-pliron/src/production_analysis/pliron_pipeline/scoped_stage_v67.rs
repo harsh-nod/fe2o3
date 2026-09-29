@@ -191,6 +191,9 @@ where
                 ValidationFamilyV1::CanonicalPrivate(session) => {
                     session.prepare(phase, analyses, observer)?
                 }
+                ValidationFamilyV1::CanonicalMixedV26(session) => {
+                    session.prepare(phase, analyses, observer)?
+                }
                 ValidationFamilyV1::CanonicalPrivateV18(session) => {
                     session.prepare(phase, analyses, observer)?
                 }

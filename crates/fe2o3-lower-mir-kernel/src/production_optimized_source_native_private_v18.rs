@@ -161,6 +161,52 @@ impl ProductionSourcePrivateMemoryRootRequestV18<'_> {
             Ok(())
         })())
     }
+
+    pub(in super::super::super) fn check_private_spill_writes_v25(
+        &self,
+        entries: &ProductionCheckedSourceEntryWritesV18<'_>,
+        index: &OriginalEntryIndexV20<'_, '_>,
+        leaves: &ProductionOptimizedSourceScalarLeavesV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
+        self.original.retain_query((|| {
+            self.check(budget)?;
+            budget.charge_work(1)?;
+            if self.completed.get() {
+                return self
+                    .original
+                    .source
+                    .missing("private native root completed twice");
+            }
+            entries.check_for(self.original, self.optimized, self.root, budget)?;
+            let mut coverage = self.coverage.try_borrow_mut().map_err(|_| {
+                ProductionSourceOwnedViewErrorV18::Binding(
+                    "private native recursive root completion",
+                )
+            })?;
+            self.physical.with_root_memory_spills_v25(
+                self.root,
+                self.currentness,
+                entries,
+                index,
+                leaves,
+                budget,
+                |memory, budget| {
+                    memory.mark_native_source_operations_v18(
+                        self.original,
+                        self.optimized,
+                        self.root,
+                        &mut coverage,
+                        budget,
+                    )
+                },
+            )?;
+            drop(coverage);
+            self.check(budget)?;
+            self.completed.set(true);
+            Ok(())
+        })())
+    }
 }
 
 struct PrivateSourceCompletionV18<'a> {
@@ -624,6 +670,33 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        self.with_private_memory_native_profile_v25::<false, E>(
+            checked, layouts, limits, budget, check_root, consume,
+        )
+    }
+
+    pub(in super::super::super) fn with_private_memory_native_profile_v25<
+        'work,
+        const SPILLS: bool,
+        E,
+    >(
+        &self,
+        checked: &mut fe2o3_kernel_analysis::CheckedCanonicalRankedViewV18<'_, '_, '_, '_>,
+        layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
+        limits: fe2o3_kernel_analysis::CanonicalKirPrivateMemoryLimitsV1,
+        budget: &mut ArgumentBudgetV1<'work>,
+        check_root: impl for<'scope> FnMut(
+            &ProductionSourcePrivateMemoryRootRequestV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), E>,
+        consume: impl for<'scope, 'owner> FnOnce(
+            &ProductionPrivateMemoryCheckedNativePoliciesV18<'scope, 'owner>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> NativeResult,
+    ) -> Result<Result<(), E>, NativeError>
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+    {
         self.query(budget)?;
         let inventory = checked
             .inventory(budget)
@@ -644,7 +717,11 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
             |pending, budget| {
                 Ok(
                     self.with_execution_recipes_prepaid_v18(budget, |recipes, budget| {
-                        scoped_raw_admission_v29::with_source_private_physical_v18(
+                        scoped_raw_admission_v29::with_source_private_physical_profile_v25::<
+                            SPILLS,
+                            _,
+                            _,
+                        >(
                             self.original,
                             self,
                             limits,

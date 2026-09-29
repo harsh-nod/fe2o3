@@ -13,6 +13,7 @@ include!("production_optimized_source_global_access_v18_tests.rs");
 include!("production_optimized_source_global_native_fixtures_v18_tests.rs");
 include!("production_optimized_source_global_read_conditions_v18_tests.rs");
 include!("production_optimized_source_shared_entry_v18_tests.rs");
+include!("production_optimized_source_slice_entry_v25_tests.rs");
 include!("production_optimized_source_issued_role_fixture_v18_tests.rs");
 include!("production_optimized_source_global_expressions_v23_tests.rs");
 

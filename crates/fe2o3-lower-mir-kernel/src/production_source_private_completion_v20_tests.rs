@@ -7,10 +7,14 @@ enum PrivateEntryFixtureV20 {
     Captured,
     Neutral,
     NonNeutral,
+    NonNeutralDeadAddress,
 }
 
 #[path = "production_source_private_writes_v22_tests.rs"]
 mod source_writes_v22;
+
+#[path = "production_source_private_spill_v25_tests.rs"]
+mod source_spills_v25;
 
 fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSsaOwnerV1 {
     let base = module_fixture_owner(ModuleFixture::Ordinary);
@@ -24,6 +28,23 @@ fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSs
         )))
     };
     let captured = || {
+        // The integer-only fixtures keep the formed address live so unrelated
+        // pointer DCE cannot turn the non-neutral case into a changed output.
+        let read = if matches!(
+            case,
+            PrivateEntryFixtureV20::Neutral | PrivateEntryFixtureV20::NonNeutral
+        ) {
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(2),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap(),
+                ],
+                U32,
+            )
+            .unwrap()
+        } else {
+            place(1, U32)
+        };
         let mut statements = vec![
             assign(
                 place(2, pointer),
@@ -34,12 +55,14 @@ fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSs
             ),
             assign(
                 place(3, U32),
-                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1, U32))),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(read)),
             ),
         ];
         if matches!(
             case,
-            PrivateEntryFixtureV20::Neutral | PrivateEntryFixtureV20::NonNeutral
+            PrivateEntryFixtureV20::Neutral
+                | PrivateEntryFixtureV20::NonNeutral
+                | PrivateEntryFixtureV20::NonNeutralDeadAddress
         ) {
             statements.push(assign(
                 place(1, U32),
@@ -94,7 +117,8 @@ fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSs
         | PrivateEntryFixtureV20::Phi
         | PrivateEntryFixtureV20::Captured
         | PrivateEntryFixtureV20::Neutral
-        | PrivateEntryFixtureV20::NonNeutral => {
+        | PrivateEntryFixtureV20::NonNeutral
+        | PrivateEntryFixtureV20::NonNeutralDeadAddress => {
             SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1, U32)))
         }
         PrivateEntryFixtureV20::Constant => SemanticRvalueKindV1::Use(literal(19)),
@@ -275,6 +299,10 @@ fn private_entry_non_neutral_owner_v20() -> ProductionSemanticSsaOwnerV1 {
     private_entry_owner_v20(PrivateEntryFixtureV20::NonNeutral)
 }
 
+fn private_entry_dead_address_owner_v20() -> ProductionSemanticSsaOwnerV1 {
+    private_entry_owner_v20(PrivateEntryFixtureV20::NonNeutralDeadAddress)
+}
+
 fn private_entry_root_owner_v20() -> ProductionSemanticSsaOwnerV1 {
     let base = typed_root_entry_rhs_owner_v18();
     let source = base.source_semantic();
@@ -355,18 +383,18 @@ fn private_entry_integer_diagnostic_v20(
         };
         for block in &body.blocks {
             for (oi, operation) in block.operations.iter().enumerate() {
-                let OperationKind::Binary { op, lhs, rhs } = operation.kind else {
-                    continue;
-                };
                 if remaining == 0 {
-                    eprintln!("private integer {label} candidate limit");
+                    eprintln!("private integer {label} operation limit");
                     return;
                 }
                 remaining -= 1;
                 eprintln!(
-                    "private integer {label} function={fi} block={:?} operation={oi} kind={op:?} results={:?}",
-                    block.id, operation.results
+                    "private integer {label} function={fi} block={:?} operation={oi} kind={:?} results={:?}",
+                    block.id, operation.kind, operation.results
                 );
+                let OperationKind::Binary { lhs, rhs, .. } = operation.kind else {
+                    continue;
+                };
                 for (side, value) in [("lhs", lhs), ("rhs", rhs)] {
                     let producer =
                         body.blocks
@@ -538,11 +566,21 @@ fn private_source_completion_retains_real_changed_and_noop_integer_owners() {
                         .into_iter()
                         .all(|count| count > 0)
                 );
-                if output.report().passes()[0].changed() != changed {
+                if output.report().passes()[0].changed() != changed
+                    || (output.owner().canonical_bytes() != output.input_audit_bytes()) != changed
+                {
                     eprintln!(
-                        "private integer expected changed={changed} report={:?}",
-                        output.report()
+                        "private integer expected changed={changed} input_bytes={} output_bytes={}",
+                        output.input_audit_bytes().len(),
+                        output.owner().canonical_bytes().len()
                     );
+                    for (ordinal, pass) in output.report().passes().iter().enumerate() {
+                        eprintln!(
+                            "private integer pass={ordinal} kind={:?} changed={}",
+                            pass.pass(),
+                            pass.changed()
+                        );
+                    }
                     private_entry_integer_diagnostic_v20("input", source.canonical(budget)?);
                     private_entry_integer_diagnostic_v20("output", output.owner());
                 }
@@ -561,6 +599,64 @@ fn private_source_completion_retains_real_changed_and_noop_integer_owners() {
         assert!(completed.get());
         assert_eq!(budget.storage(), MODULE_FLOOR);
     }
+}
+
+#[test]
+fn private_source_completion_distinguishes_dead_address_dce_from_integer_rewrites() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let (prepared, fixture) =
+        integer_handoff_prepared_v18(private_entry_dead_address_owner_v20, &mut budget);
+    let roots = fixture.roots();
+    let completed = std::cell::Cell::new(false);
+    let restrict_count = |owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18| {
+        owner
+            .module()
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(
+                    operation.kind,
+                    OperationKind::Cast {
+                        kind: fe2o3_kernel_ir::CastKind::RestrictPointerAccess,
+                        ..
+                    }
+                )
+            })
+            .count()
+    };
+    prepared
+        .with_source_consumer_v18(&mut budget, |source, budget| {
+            let input = source.canonical(budget)?;
+            assert_eq!(restrict_count(input), 2);
+            assert_eq!(private_entry_typed_memory_census_v20(input), [2, 2, 4]);
+            let handoff = source.private_completed_integer_output_v20(
+                ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                budget,
+            )?;
+            let output = handoff.output(budget)?;
+            assert_eq!(output.report().passes().len(), 2);
+            assert!(!output.report().passes()[0].changed());
+            assert!(output.report().passes()[1].changed());
+            assert_ne!(output.owner().canonical_bytes(), output.input_audit_bytes());
+            assert_eq!(restrict_count(output.owner()), 0);
+            assert_eq!(
+                private_entry_typed_memory_census_v20(output.owner()),
+                [2, 2, 4]
+            );
+            assert_eq!(output.map().output_identity(), output.owner().identity());
+            assert!(!output.grants_authority());
+            handoff.discard(budget)?;
+            completed.set(true);
+            Ok::<_, ProductionPrivateSourceHandoffErrorV20>(())
+        })
+        .unwrap();
+    assert!(completed.get());
+    assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
 #[test]

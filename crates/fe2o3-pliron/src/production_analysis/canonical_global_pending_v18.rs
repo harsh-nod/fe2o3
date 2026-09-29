@@ -26,6 +26,27 @@ pub struct PendingCanonicalGlobalAccessesV18<'s, 'g> {
     refund_denied: &'s Cell<bool>,
 }
 
+impl<'s, 'g> PendingCanonicalGlobalAccessesV18<'s, 'g> {
+    // The mixed scope has completed both whole-owner replay and the exact
+    // native global census. This factory is inaccessible outside that scope's
+    // parent module, and does not discharge any global memory requirement.
+    pub(super) fn after_mixed_census_v26(
+        owner: &'g VerifiedCanonicalKernelIrModuleV18,
+        graph: &'s crate::KirPlironGraphV18<'g>,
+        epoch: u64,
+        guard: &'s Guard,
+        refund_denied: &'s Cell<bool>,
+    ) -> Self {
+        Self {
+            owner,
+            graph,
+            epoch,
+            guard,
+            refund_denied,
+        }
+    }
+}
+
 impl PendingCanonicalGlobalAccessesV18<'_, '_> {
     /// A composing source owner can report a lost, still-live higher floor.
     /// This can only refuse the scope and suppress its refunds, never admit it.

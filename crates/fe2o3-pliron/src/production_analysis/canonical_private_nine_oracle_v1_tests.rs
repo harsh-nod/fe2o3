@@ -383,13 +383,13 @@ fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stage
             o.complete,
             [
                 Triple {
-                    w: 126720717,
-                    r: 39462,
+                    w: 126722054,
+                    r: 39483,
                     p: 19940272
                 },
                 Triple {
-                    w: 212920668,
-                    r: 57320,
+                    w: 212922005,
+                    r: 57341,
                     p: 19956297
                 },
             ][ordinal]
@@ -398,7 +398,7 @@ fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stage
         assert_eq!(o.gates.len(), [186, 216][ordinal]);
         assert_eq!(o.gates.iter().filter(|gate| gate.work_cut).count(), 85);
         assert_eq!(o.identity.structural[0].w, 512 * (o.shape.o + 1).pow(2) + 1);
-        assert_eq!(o.shape.coverage().w, 32 * (o.shape.o + 1).pow(2) + 32);
+        assert_eq!(o.shape.coverage().w, 32 * (o.shape.o + 1).pow(2) + 128);
         assert_eq!(o.progress, Triple::new(2112, 1056, 1072));
         assert_eq!(
             numbers::progress_graph(o.shape),
@@ -446,9 +446,9 @@ fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stage
     assert_eq!(
         numbers::module(),
         Triple {
-            w: 339641385,
-            r: 96782,
-            p: 19995759
+            w: 339644059,
+            r: 96824,
+            p: 19995780
         }
     );
 }

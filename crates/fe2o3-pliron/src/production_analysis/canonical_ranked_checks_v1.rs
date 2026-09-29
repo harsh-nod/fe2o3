@@ -84,6 +84,8 @@ pub enum CanonicalRankedPolicyFailureV1 {
     View(CanonicalRankedViewErrorV1),
     Bridge(crate::KirBridgeErrorV12),
     StorageBridge(crate::KirBridgeErrorV18),
+    /// Conditional global analysis refused; preserve its original typed cause.
+    ConditionalGlobalsV26(fe2o3_kernel_ir::CanonicalGuardedGlobalReadErrorV1),
     /// Actual output operation has no checked source-role recipe in this scope.
     SourceRequirementV18 {
         coordinate: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
@@ -160,6 +162,7 @@ impl std::error::Error for Failure {
             Self::View(error) => Some(error),
             Self::Bridge(error) => Some(error),
             Self::StorageBridge(error) => Some(error),
+            Self::ConditionalGlobalsV26(error) => Some(error),
             Self::Analysis { cause, .. } => Some(cause),
             Self::UnsupportedGraph { .. }
             | Self::SourceRequirementV18 { .. }
@@ -426,9 +429,9 @@ mod storage;
 pub use storage::{
     CanonicalRankedSourceObligationV18, CanonicalRankedSourceRequirementV18,
     CheckedCanonicalRankedPoliciesV18, PendingCanonicalGlobalAccessesV18,
-    PendingCanonicalPrivateMemoryPoliciesV18, PendingCanonicalRankedPoliciesV18,
-    PendingCanonicalRankedSourceRolesV18, with_canonical_ranked_policy_checks_v18,
-    with_pending_canonical_ranked_source_roles_v18,
+    PendingCanonicalMixedMemoryPoliciesV26, PendingCanonicalPrivateMemoryPoliciesV18,
+    PendingCanonicalRankedPoliciesV18, PendingCanonicalRankedSourceRolesV18,
+    with_canonical_ranked_policy_checks_v18, with_pending_canonical_ranked_source_roles_v18,
 };
 
 #[path = "canonical_private_admission_v1.rs"]

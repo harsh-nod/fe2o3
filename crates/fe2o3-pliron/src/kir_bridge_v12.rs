@@ -954,4 +954,5 @@ include!("kir_bridge_commutative_owner_v1.rs");
 #[path = "kir_bridge_canonical_trace_v1.rs"]
 pub(crate) mod canonical_trace_v1;
 
+pub(crate) use bridge_v18::NativeCanonicalMixedAdmissionV26;
 pub(crate) use bridge_v18::NativeCanonicalPrivateAdmissionV18;

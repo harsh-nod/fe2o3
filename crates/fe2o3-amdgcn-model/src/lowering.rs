@@ -50,6 +50,10 @@ pub use ordered_program_v17::lower_canonical_v17_compiler_module_to_gfx942_xnack
 mod ordered_program_composition_v1;
 pub use ordered_program_composition_v1::*;
 
+#[path = "lowering/physical_launch_v2.rs"]
+mod physical_launch_v2;
+pub use physical_launch_v2::*;
+
 include!("lowering_native_v12.rs");
 
 use crate::{
@@ -1117,6 +1121,27 @@ fn lower_compiler_module_with_ordered_context(
     require_kernel: bool,
     ordered_owner: Option<OrderedModuleOwner<'_>>,
 ) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_physical_context_v2(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        ordered_owner,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_compiler_module_with_physical_context_v2(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
+    physical: Option<&CompilerPhysicalLaunchV2<'_>>,
+) -> Result<String, LoweringErrors> {
     if require_kernel && module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -1201,6 +1226,9 @@ fn lower_compiler_module_with_ordered_context(
     }
 
     let launch_policy_map = validate_launch_policies(module, &kernels, launch_policies)?;
+    if let Some(physical) = physical {
+        physical.check(module, target)?;
+    }
 
     let mut entries = BTreeMap::<FunctionId, &Kernel>::new();
     let mut emitted_symbols = BTreeMap::<String, String>::new();
@@ -1413,7 +1441,13 @@ fn lower_compiler_module_with_ordered_context(
             Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
             _ => None,
         };
-        preflight_function(&mut lowerer)?;
+        preflight_function_with_physical_context_v2(
+            &mut lowerer,
+            physical
+                .map(|physical| physical.entry(kernel))
+                .transpose()?
+                .flatten(),
+        )?;
         kernel_lowerers.push(lowerer);
     }
 
@@ -1988,8 +2022,15 @@ fn component_names(helpers: &[&Function], component: &[usize]) -> String {
 }
 
 fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+    preflight_function_with_physical_context_v2(lowerer, None)
+}
+
+fn preflight_function_with_physical_context_v2(
+    lowerer: &mut FunctionLowerer<'_>,
+    physical: Option<&fe2o3_kernel_analysis::UniformityPhysicalLaunchV2<'_>>,
+) -> Result<(), LoweringErrors> {
     validate_reducible_cfg(lowerer)?;
-    validate_convergent_cfg(lowerer)?;
+    validate_convergent_cfg(lowerer, physical)?;
     lowerer.validate_parameters()?;
     let body = lowerer.body("function body is missing during preflight")?;
     for block in &body.blocks {
@@ -2018,7 +2059,19 @@ fn validate_reducible_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringE
     ))
 }
 
-fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+fn validate_convergent_cfg(
+    lowerer: &FunctionLowerer<'_>,
+    physical: Option<&fe2o3_kernel_analysis::UniformityPhysicalLaunchV2<'_>>,
+) -> Result<(), LoweringErrors> {
+    if let Some(physical) = physical
+        && (!std::ptr::eq(physical.module(), lowerer.module)
+            || !std::ptr::eq(physical.function(), lowerer.function)
+            || !lowerer
+                .kernel
+                .is_some_and(|kernel| std::ptr::eq(kernel, physical.kernel())))
+    {
+        return Err(physical_launch_v2::invalid(lowerer.module));
+    }
     let body = lowerer.body("function body is missing during convergent CFG validation")?;
     let convergent_operations = body
         .blocks
@@ -2044,7 +2097,10 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         return Ok(());
     }
 
-    let report = fe2o3_kernel_analysis::analyze_kernel_entry(lowerer.module, lowerer.function);
+    let report = match physical {
+        Some(physical) => physical.analyze(),
+        None => fe2o3_kernel_analysis::analyze_kernel_entry(lowerer.module, lowerer.function),
+    };
     if let Some(diagnostic) = report.diagnostics().iter().find(|diagnostic| {
         matches!(
             diagnostic,

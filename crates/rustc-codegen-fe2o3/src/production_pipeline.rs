@@ -548,6 +548,9 @@ struct AuthenticatedProductionBindings {
 #[path = "production_pipeline/formal_envelope_preflight_v2.rs"]
 mod formal_envelope_preflight_v2;
 
+#[path = "production_pipeline/physical_target_context_v2.rs"]
+mod physical_target_context_v2;
+
 pub(super) struct AdmittedSemanticMirStage {
     semantic_mir: fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     bindings: AuthenticatedProductionBindings,
@@ -1158,6 +1161,7 @@ impl FormalMemoryAdmittedProductionCompilation {
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         }
+        let mut physical_geometry = Vec::with_capacity(semantic.roots().len());
         for (((typed_root, semantic_root), kernel), formal) in bindings
             .typed_descriptor_roots
             .iter()
@@ -1193,7 +1197,7 @@ impl FormalMemoryAdmittedProductionCompilation {
                     crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
                 ),
             )?;
-            crate::production_geometry_v1::derive_production_geometry_v1(
+            let geometry = crate::production_geometry_v1::derive_production_geometry_v1(
                 admitted.semantic_kir().module(),
                 typed_root.entry_symbol(),
                 semantic_function,
@@ -1201,9 +1205,16 @@ impl FormalMemoryAdmittedProductionCompilation {
                 target_profile.device_target(),
             )
             .map_err(ProductionPipelineError::Geometry)?;
+            physical_geometry.push(geometry);
         }
         let optimized = RetainedProductionTargetV30::try_lower(&admitted, target_profile)?;
         let target_module = optimized.module();
+        let physical_context = physical_target_context_v2::bind(
+            admitted.semantic_kir().module(),
+            target_module,
+            target_profile,
+            &physical_geometry,
+        )?;
         let workgroups = exact_target_workgroup_roster_v1(target_module)?;
         let target_kir_identity = match admitted
             .semantic_kir()
@@ -1232,20 +1243,12 @@ impl FormalMemoryAdmittedProductionCompilation {
                 dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v11(&owner)
             }
         };
-        let lowering = match target_profile {
-            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
-                dialect_amdgcn::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    target_module,
-                    target_kir_identity,
-                )
-            }
-            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
-                dialect_amdgcn::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    target_module,
-                    target_kir_identity,
-                )
-            }
-        };
+        let lowering =
+            dialect_amdgcn::lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(
+                target_module,
+                target_kir_identity,
+                &physical_context,
+            );
         let dialect_llvm_ir = lowering.map_err(ProductionPipelineError::TargetLowering)?;
         let llvm_ir = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&dialect_llvm_ir)
             .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
@@ -4367,7 +4370,7 @@ mod tests {
             .find("RetainedProductionTargetV30::try_lower(")
             .unwrap();
         let lower = transaction
-            .find("lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(")
+            .find("lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(")
             .unwrap();
         assert!(retain < lower);
         assert!(!retained.contains("optimize_kernel_ir_module_v"));

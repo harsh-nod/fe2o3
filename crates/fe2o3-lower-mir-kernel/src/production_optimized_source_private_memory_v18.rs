@@ -1,5 +1,6 @@
 // A lexical source/currentness/physical composition, not native Memory policy.
 // The source entry-value binder is an independent mandatory dependency.
+include!("production_source_private_spill_v25.rs");
 #[derive(Clone, Copy)]
 struct SourcePrivateAllocationV18<'a> {
     root: usize,
@@ -243,6 +244,24 @@ pub(super) fn with_source_private_physical_v18<'work, T, E>(
 where
     E: From<ProductionSourceOwnedViewErrorV18>,
 {
+    with_source_private_physical_profile_v25::<false, T, E>(
+        original, optimized, limits, budget, consume,
+    )
+}
+
+pub(super) fn with_source_private_physical_profile_v25<'work, const SPILLS: bool, T, E>(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    limits: fe2o3_kernel_analysis::CanonicalKirPrivateMemoryLimitsV1,
+    budget: &mut ArgumentBudgetV1<'work>,
+    consume: impl for<'scope> FnOnce(
+        &CheckedSourcePrivatePhysicalV18<'scope>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<ProductionSourceOwnedViewErrorV18>,
+{
     optimized_source_endpoints_v18(original, optimized, budget)?;
     let floor = budget.storage();
     let capture = std::mem::size_of_val(&consume);
@@ -289,6 +308,11 @@ where
                         >,
                     >(),
                     source_private_allocation_headers_v18()?,
+                    if SPILLS {
+                        source_private_spill_shape_headers_v25()?
+                    } else {
+                        0
+                    },
                     source_private_operation_headers_v18()?,
                     source_private_physical_capture_headers_v18()?,
                     size_of::<Result<T, E>>(),
@@ -310,8 +334,9 @@ where
                 // The analysis transfers unreserved backing. No query or caller
                 // callback occurs before its receipt is reserved in this ledger.
                 budget.reserve_storage(receipt.retained_storage())?;
-                let allocations =
-                    source_private_allocations_v18(original, optimized, &physical, budget)?;
+                let allocations = source_private_allocations_profile_v25::<SPILLS>(
+                    original, optimized, &physical, budget,
+                )?;
                 let retained = budget
                     .storage()
                     .checked_sub(floor)
@@ -387,6 +412,15 @@ fn source_private_allocations_v18<'a>(
     physical: &fe2o3_kernel_analysis::CheckedCanonicalKirPrivateMemoryV18<'a, 'a>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<Vec<Option<SourcePrivateAllocationV18<'a>>>> {
+    source_private_allocations_profile_v25::<false>(original, optimized, physical, budget)
+}
+
+fn source_private_allocations_profile_v25<'a, const SPILLS: bool>(
+    original: &'a ProductionSourceCorrespondenceV18<'a>,
+    optimized: &'a ProductionOptimizedSourceCorrespondenceV18<'a>,
+    physical: &fe2o3_kernel_analysis::CheckedCanonicalKirPrivateMemoryV18<'a, 'a>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<Vec<Option<SourcePrivateAllocationV18<'a>>>> {
     optimized_source_endpoints_v18(original, optimized, budget)?;
     let output = optimized.output_inventory(budget)?;
     budget.charge_work(1)?;
@@ -403,25 +437,40 @@ fn source_private_allocations_v18<'a>(
         let owner = original.source.root_row(root)?;
         for (slot, backing) in owner.source_slots.slots.iter().enumerate() {
             budget.charge_work(6)?;
-            let ScopedSlotRepresentationV29::Object {
-                schema,
-                bytes,
-                alignment,
-            } = backing.representation
-            else {
-                return original
-                    .source
-                    .missing("source private entry family requires typed scalar object slots");
+            let (bytes, alignment) = match backing.representation {
+                ScopedSlotRepresentationV29::Object {
+                    schema,
+                    bytes,
+                    alignment,
+                } => {
+                    if !matches!((backing.origin.identity, backing.origin.source),
+                        (ScopedAllocationIdentityV29::OriginalObject { .. },
+                            ScopedAllocationSourceV29::OriginalObject { schema: source_schema, .. }) if source_schema == schema)
+                    {
+                        return original
+                            .source
+                            .missing("source private allocation lost original object identity");
+                    }
+                    (
+                        usize::try_from(bytes).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                        alignment,
+                    )
+                }
+                ScopedSlotRepresentationV29::ScalarArray(_) if SPILLS => {
+                    let shape =
+                        source_private_spill_shape_v25(original, root, slot, backing, budget)?;
+                    (
+                        usize::try_from(shape.element.size)
+                            .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                        shape.element.alignment,
+                    )
+                }
+                _ => {
+                    return original
+                        .source
+                        .missing("source private entry family requires typed scalar object slots");
+                }
             };
-            let bytes = usize::try_from(bytes).map_err(|_| ArgumentResourceV1::Arithmetic)?;
-            if !matches!((backing.origin.identity, backing.origin.source),
-                (ScopedAllocationIdentityV29::OriginalObject { .. },
-                    ScopedAllocationSourceV29::OriginalObject { schema: source_schema, .. }) if source_schema == schema)
-            {
-                return original
-                    .source
-                    .missing("source private allocation lost original object identity");
-            }
             let input = source_slot_input_v18(original, root, slot, budget)?;
             let allocation = optimized.allocation_for_slot_v18(root, slot, input, budget)?;
             let actual = allocation
@@ -517,15 +566,41 @@ fn source_private_current_slot_v18<'a>(
     after: ValueId,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<&'a PendingSourceMemoryAccessV29> {
-    if !currentness.retained_value_footprint_v18(
+    source_private_current_occurrence_v25(
+        currentness,
         original,
         optimized,
         root,
         object.original.instance,
         object.input,
+        object.output,
+        before,
+        after,
+        budget,
+    )
+}
+
+fn source_private_current_occurrence_v25<'a>(
+    currentness: &'a CheckedOptimizedSourceMemoryV18<'_>,
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    root: usize,
+    instance: usize,
+    input: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    output: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    before: ValueId,
+    after: ValueId,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<&'a PendingSourceMemoryAccessV29> {
+    if !currentness.retained_value_footprint_v18(
+        original,
+        optimized,
+        root,
+        instance,
+        input,
         0,
         before,
-        Some((object.output, 0, after)),
+        Some((output, 0, after)),
         budget,
     )? {
         return original
@@ -535,9 +610,9 @@ fn source_private_current_slot_v18<'a>(
     // Reuse the existing sorted complete currentness index, never scan slots
     // or all original accesses for each actual operation.
     let key = [
-        object.input.block.function.0 as usize,
-        object.input.block.block as usize,
-        object.input.operation as usize,
+        input.block.function.0 as usize,
+        input.block.block as usize,
+        input.operation as usize,
         0,
     ];
     let ordinal = private_array_partition_v1(
@@ -952,6 +1027,21 @@ fn source_private_root_rows_v18(
     root: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<(usize, Vec<Option<SourcePrivateOperationV18>>)> {
+    source_private_root_rows_with_v25(core, currentness, entries, root, budget, |_, _, _| Ok(()))
+}
+
+fn source_private_root_rows_with_v25<'work>(
+    core: &CheckedSourcePrivatePhysicalV18<'_>,
+    currentness: &CheckedOptimizedSourceMemoryV18<'_>,
+    entries: &ProductionCheckedSourceEntryWritesV18<'_>,
+    root: usize,
+    budget: &mut ArgumentBudgetV1<'work>,
+    extend: impl FnOnce(
+        usize,
+        &mut [Option<SourcePrivateOperationV18>],
+        &mut ArgumentBudgetV1<'work>,
+    ) -> SourceOwnedResultV18<()>,
+) -> SourceOwnedResultV18<(usize, Vec<Option<SourcePrivateOperationV18>>)> {
     core.check(budget)?;
     currentness.check_scope_v18(core.original, core.optimized, root, budget)?;
     entries.check_for(core.original, core.optimized, root, budget)?;
@@ -1034,6 +1124,7 @@ fn source_private_root_rows_v18(
             Ok(())
         },
     )?;
+    extend(first, &mut rows, budget)?;
     for (relative, (operation, row)) in actual.iter().zip(&rows).enumerate() {
         budget.charge_work(3)?;
         let ordinal = first
@@ -1475,12 +1566,47 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        self.with_root_memory_extend_v25(
+            root,
+            currentness,
+            entries,
+            budget,
+            |_, _, _| Ok(()),
+            consume,
+        )
+    }
+
+    fn with_root_memory_extend_v25<'work, T, E>(
+        &self,
+        root: usize,
+        currentness: &CheckedOptimizedSourceMemoryV18<'_>,
+        entries: &ProductionCheckedSourceEntryWritesV18<'_>,
+        budget: &mut ArgumentBudgetV1<'work>,
+        extend: impl FnOnce(
+            usize,
+            &mut [Option<SourcePrivateOperationV18>],
+            &mut ArgumentBudgetV1<'work>,
+        ) -> SourceOwnedResultV18<()>,
+        consume: impl for<'scope> FnOnce(
+            &CheckedSourcePrivateMemoryV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+    {
         self.check(budget)?;
         currentness.check_scope_v18(self.original, self.optimized, root, budget)?;
         entries.check_for(self.original, self.optimized, root, budget)?;
         let floor = budget.storage();
         let capture = std::mem::size_of_val(&consume);
         let alignment = std::mem::align_of_val(&consume);
+        let extend_bytes = std::mem::size_of_val(&extend);
+        let extend_alignment = if extend_bytes == 0 {
+            0
+        } else {
+            std::mem::align_of_val(&extend)
+        };
         let (first, rows, retained) =
             scoped_source_attempt_v29(self.original.source.cleanup, budget, floor, |budget| {
                 let floor = budget.storage();
@@ -1488,6 +1614,8 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
                     budget.reserve_storage(argument_sum_v1(&[
                         capture,
                         alignment,
+                        extend_bytes,
+                        extend_alignment,
                         size_of::<CheckedSourcePrivateMemoryV18<'_>>(),
                         source_private_root_headers_v18()?,
                         source_private_operation_headers_v18()?,
@@ -1518,8 +1646,14 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
                     #[cfg(test)]
                     budget.reserve_storage(source_private_header_v18::<[usize; 3]>()?)?;
                     budget.charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)?;
-                    let (first, rows) =
-                        source_private_root_rows_v18(self, currentness, entries, root, budget)?;
+                    let (first, rows) = source_private_root_rows_with_v25(
+                        self,
+                        currentness,
+                        entries,
+                        root,
+                        budget,
+                        extend,
+                    )?;
                     let retained = budget
                         .storage()
                         .checked_sub(floor)

@@ -333,7 +333,7 @@ impl Facts<'_> {
     }
 }
 
-fn comparison_truth(
+pub(super) fn comparison_truth(
     predicate: ComparePredicate,
     lhs: UnsignedRange,
     rhs: UnsignedRange,

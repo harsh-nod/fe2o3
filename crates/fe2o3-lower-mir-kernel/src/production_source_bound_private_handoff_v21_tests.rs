@@ -203,11 +203,17 @@ fn bound_private_handoff_retains_actual_changed_and_noop_fixed_integer_outputs()
                         .into_iter()
                         .all(|count| count > 0)
                 );
-                if output.report().passes()[0].changed() != changed {
+                if output.report().passes()[0].changed() != changed
+                    || (output.owner().canonical_bytes() != output.input_audit_bytes()) != changed
+                {
                     eprintln!(
-                        "bound private integer expected changed={changed} report={:?}",
-                        output.report()
+                        "bound private integer expected changed={changed} input_bytes={} output_bytes={}",
+                        output.input_audit_bytes().len(),
+                        output.owner().canonical_bytes().len()
                     );
+                    for (ordinal, pass) in output.report().passes().iter().enumerate() {
+                        eprintln!("bound private integer pass={ordinal} kind={:?} changed={}", pass.pass(), pass.changed());
+                    }
                     private_entry_integer_diagnostic_v20("input", source.canonical(budget)?);
                     private_entry_integer_diagnostic_v20("output", output.owner());
                 }
@@ -430,8 +436,10 @@ fn bound_private_live_reason_cursor_rejects_duplicate_skipped_missing_and_wrong_
                      budget: &mut ArgumentBudgetV1<'_>| {
                         let functions = native.function_count(budget)?;
                         assert!(functions > 0);
-                        assert!(native.report(functions, budget)?.is_none());
-                        assert!(native.history(functions, budget)?.is_none());
+                        for function in 0..functions {
+                            assert!(native.report(function, budget)?.is_some());
+                            assert!(native.history(function, budget)?.is_some());
+                        }
                         let result = original.with_optimized_formal_reports_v19(optimized, &launches, fe2o3_kernel_ir::FormalIndexWidth::Bits64, fe2o3_kernel_ir::ControlFlowLimits::DEFAULT, budget, |before, after, budget| {
                     let count = before.analysis().incomplete_reasons().len();
                     assert_eq!(count, 3, "two typed accesses plus their conservative private-pointer reason: {:?}", before.analysis().incomplete_reasons());
@@ -484,6 +492,71 @@ fn bound_private_live_reason_cursor_rejects_duplicate_skipped_missing_and_wrong_
         assert!(result.is_err());
         assert!(completed.get().is_some_and(|count| count > 1));
         assert!(settled.get());
+        assert_eq!(budget.storage(), MODULE_FLOOR + headers);
+    }
+}
+
+#[test]
+fn bound_private_live_report_queries_retain_out_of_range_refusal_outside_cursor_scope() {
+    for history in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        let headers = private_source_completion_headers_v20().unwrap()
+            + size_of::<Result<(), ProductionPrivateSourceCheckErrorV20>>()
+            + 2 * size_of::<ProductionSourceNativeLifecycleErrorV18>()
+            + size_of::<[usize; 16]>();
+        budget.reserve_storage(MODULE_FLOOR + headers).unwrap();
+        let prepared =
+            private_memory_prepared_v18(typed_root_entry_rhs_owner_v18, &mut budget).unwrap();
+        let completed = std::cell::Cell::new(false);
+        let settled = std::cell::Cell::new(false);
+        let result = with_production_optimizer_result_v18(
+            prepared,
+            &mut budget,
+            |original, optimized, budget| {
+                let private = with_private_source_completion_v21(
+                    original,
+                    optimized,
+                    budget,
+                    &mut |native, budget| {
+                        let functions = native.function_count(budget)?;
+                        assert!(functions > 0);
+                        let failure = if history {
+                            native.history(functions, budget).unwrap_err()
+                        } else {
+                            native.report(functions, budget).unwrap_err()
+                        };
+                        assert!(
+                            matches!(failure, ProductionSourceNativeLifecycleErrorV18::Pending(fe2o3_pliron::CanonicalRankedPolicyFailureV1::InvalidQuery { function }) if function == functions)
+                        );
+                        assert!(
+                            matches!(native.function_count(budget), Err(ProductionSourceNativeLifecycleErrorV18::Pending(fe2o3_pliron::CanonicalRankedPolicyFailureV1::InvalidQuery { function })) if function == functions)
+                        );
+                        completed.set(true);
+                        // Swallowing the query error cannot publish a successful scope.
+                        Ok(())
+                    },
+                );
+                let Err(ProductionPrivateSourceCheckErrorV20::Native(
+                    ProductionSourceNativeLifecycleErrorV18::Native(error),
+                )) = private
+                else {
+                    panic!("actual native query refusal was not retained: {private:?}");
+                };
+                assert!(matches!(
+                    error.failure(),
+                    fe2o3_pliron::CanonicalRankedPolicyFailureV1::InvalidQuery { function: 1 }
+                ));
+                assert!(error.last_invocation().is_some());
+                assert!(error.observation().work_upper_bound() > 0);
+                settled.set(true);
+                Err::<(), _>(ProductionSourceOwnedViewErrorV18::Binding(
+                    "selected private report query control complete",
+                ))
+            },
+        );
+        assert!(result.is_err());
+        assert!(completed.get() && settled.get());
         assert_eq!(budget.storage(), MODULE_FLOOR + headers);
     }
 }

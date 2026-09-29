@@ -836,10 +836,10 @@ pub use canonical_ranked_checks_v1::{
     CanonicalRankedPolicyHistoryV1, CanonicalRankedPolicyResourceObservationV1,
     CanonicalRankedSourceObligationV18, CanonicalRankedSourceRequirementV18,
     CheckedCanonicalRankedPoliciesV1, CheckedCanonicalRankedPoliciesV18,
-    PendingCanonicalGlobalAccessesV18, PendingCanonicalPrivateMemoryPoliciesV18,
-    PendingCanonicalRankedPoliciesV18, PendingCanonicalRankedSourceRolesV18,
-    with_canonical_ranked_policy_checks_v1, with_canonical_ranked_policy_checks_v18,
-    with_pending_canonical_ranked_source_roles_v18,
+    PendingCanonicalGlobalAccessesV18, PendingCanonicalMixedMemoryPoliciesV26,
+    PendingCanonicalPrivateMemoryPoliciesV18, PendingCanonicalRankedPoliciesV18,
+    PendingCanonicalRankedSourceRolesV18, with_canonical_ranked_policy_checks_v1,
+    with_canonical_ranked_policy_checks_v18, with_pending_canonical_ranked_source_roles_v18,
 };
 
 mod native_invocation_trace_v1;

@@ -1004,6 +1004,7 @@ mod kernel_argument_abi_v18 {
     }
 
     include!("production_kernel_shared_entry_abi_v18.rs");
+    include!("production_kernel_slice_entry_abi_v25.rs");
 
     #[cfg(test)]
     pub(super) mod tests {

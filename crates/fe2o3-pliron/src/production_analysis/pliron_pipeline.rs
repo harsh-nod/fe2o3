@@ -13,7 +13,7 @@
 
 #[path = "pliron_pipeline/canonical_private_v1.rs"]
 pub(crate) mod canonical_private_v1;
-pub use canonical_private_v1::CanonicalPrivatePipelineReportV1;
+pub use canonical_private_v1::{CanonicalMixedPipelineReportV26, CanonicalPrivatePipelineReportV1};
 
 use std::{error::Error, fmt};
 

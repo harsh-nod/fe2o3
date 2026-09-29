@@ -24,7 +24,8 @@ fn run_memory_bounds_stage_v1(
             PipelineFamilyV1::Ordinary
             | PipelineFamilyV1::LifecycleV18(_)
             | PipelineFamilyV1::CanonicalPrivate(_)
-            | PipelineFamilyV1::CanonicalPrivateV18(_) => {
+            | PipelineFamilyV1::CanonicalPrivateV18(_)
+            | PipelineFamilyV1::CanonicalMixedV26(_) => {
                 preflight_ranked_bounds_resource_upper_bound_v1(census, limits)
             }
             PipelineFamilyV1::Conditional(input) => conditional_bounds::preflight_v1(
@@ -64,7 +65,8 @@ fn run_memory_bounds_stage_v1(
         PipelineFamilyV1::Ordinary
         | PipelineFamilyV1::LifecycleV18(_)
         | PipelineFamilyV1::CanonicalPrivate(_)
-        | PipelineFamilyV1::CanonicalPrivateV18(_) => {
+        | PipelineFamilyV1::CanonicalPrivateV18(_)
+        | PipelineFamilyV1::CanonicalMixedV26(_) => {
             let (report, bound) = run_preflight_production_stage_v1(
                 endpoint,
                 analyses,
@@ -78,6 +80,10 @@ fn run_memory_bounds_stage_v1(
                     input, analyses, observer,
                 ),
             PipelineFamilyV1::CanonicalPrivateV18(input) =>
+                crate::production_analysis::pliron_ranked_bounds::require_canonical_private_bounds_v1(
+                    input, analyses, observer,
+                ),
+            PipelineFamilyV1::CanonicalMixedV26(input) =>
                 crate::production_analysis::pliron_ranked_bounds::require_canonical_private_bounds_v1(
                     input, analyses, observer,
                 ),

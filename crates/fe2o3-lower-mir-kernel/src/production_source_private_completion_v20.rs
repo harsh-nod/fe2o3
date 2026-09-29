@@ -117,6 +117,26 @@ fn private_source_completion_headers_v20() -> Result<usize, ArgumentResourceV1> 
             &ProductionOptimizedSourceScalarLeavesV18<'_>,
             &OriginalEntryIndexV20<'_, '_>,
         )>()?,
+        // The fixed mixed-spill completion retains these method arguments and
+        // its query closure while the shared native/root frames are live.
+        h::<(
+            &ProductionSourcePrivateMemoryRootRequestV18<'_>,
+            &ProductionCheckedSourceEntryWritesV18<'_>,
+            &OriginalEntryIndexV20<'_, '_>,
+            &ProductionOptimizedSourceScalarLeavesV18<'_>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()?,
+        h::<(
+            &ProductionSourcePrivateMemoryRootRequestV18<'_>,
+            &ProductionCheckedSourceEntryWritesV18<'_>,
+            &OriginalEntryIndexV20<'_, '_>,
+            &ProductionOptimizedSourceScalarLeavesV18<'_>,
+            &mut &mut ArgumentBudgetV1<'_>,
+        )>()?,
+        h::<(
+            &OriginalEntryIndexV20<'_, '_>,
+            &ProductionOptimizedSourceScalarLeavesV18<'_>,
+        )>()?,
         h::<[usize; 16]>()?,
         h::<[u32; 8]>()?,
         original_private_expression_headers_v22()?,
@@ -166,7 +186,9 @@ fn complete_private_source_root_v20(
                             .map_err(Into::into),
                     )
                 },
-                |entries, budget| request.check_entry_writes(entries, budget),
+                |entries, budget| {
+                    request.check_private_spill_writes_v25(entries, index, leaves, budget)
+                },
             )
         },
     )
@@ -234,7 +256,7 @@ where
             budget,
             |checked, budget| {
                 Ok::<_, CanonicalRankedViewErrorV1>(
-                    optimized.with_private_memory_native_policies_v18(
+                    optimized.with_private_memory_native_profile_v25::<true, _>(
                         checked,
                         layouts,
                         limits,

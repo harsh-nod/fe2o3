@@ -394,6 +394,7 @@ use crate::kir_bridge_v1::{
 enum IdentityAdmissionV1<'a> {
     Private(&'a NativeCanonicalPrivateAdmissionV1<'a>),
     PrivateV18(&'a NativeCanonicalPrivateAdmissionV18<'a>),
+    MixedV26(&'a crate::kir_bridge_v1::NativeCanonicalMixedAdmissionV26<'a>),
     Lifecycle(&'a NativeLifecycleIdentityAdmissionV18<'a>),
 }
 
@@ -402,6 +403,7 @@ impl IdentityAdmissionV1<'_> {
         match self {
             Self::Private(input) => input.authenticate(context, function),
             Self::PrivateV18(input) => input.authenticate(context, function),
+            Self::MixedV26(input) => input.authenticate(context, function),
             Self::Lifecycle(input) => input.authenticate(context, function),
         }
     }
@@ -409,6 +411,7 @@ impl IdentityAdmissionV1<'_> {
         match self {
             Self::Private(input) => input.operation(context, pointer).map(|_| ()),
             Self::PrivateV18(input) => input.operation(context, pointer).map(|_| ()),
+            Self::MixedV26(input) => input.operation(context, pointer).map(|_| ()),
             Self::Lifecycle(input) => input.operation(context, pointer),
         }
     }
@@ -423,6 +426,7 @@ impl IdentityAdmissionV1<'_> {
         match self {
             Self::Private(input) => input.attribute(context, pointer, key, dialect, name),
             Self::PrivateV18(input) => input.attribute(context, pointer, key, dialect, name),
+            Self::MixedV26(input) => input.attribute(context, pointer, key, dialect, name),
             Self::Lifecycle(input) => input.attribute(context, pointer, key, dialect, name),
         }
     }
@@ -430,6 +434,7 @@ impl IdentityAdmissionV1<'_> {
         match self {
             Self::Private(input) => input.identity_lookup_work(),
             Self::PrivateV18(input) => input.identity_lookup_work(),
+            Self::MixedV26(input) => input.identity_lookup_work(),
             Self::Lifecycle(input) => input.identity_lookup_work(),
         }
     }
@@ -466,6 +471,16 @@ impl<'a> LivePlironStructuralIdentityProviderV1<'a> {
             context: input.context(),
             function: input.function(),
             private: Some(IdentityAdmissionV1::PrivateV18(input)),
+        }
+    }
+
+    pub(crate) fn canonical_mixed_v26(
+        input: &'a crate::kir_bridge_v1::NativeCanonicalMixedAdmissionV26<'a>,
+    ) -> Self {
+        Self {
+            context: input.context(),
+            function: input.function(),
+            private: Some(IdentityAdmissionV1::MixedV26(input)),
         }
     }
 

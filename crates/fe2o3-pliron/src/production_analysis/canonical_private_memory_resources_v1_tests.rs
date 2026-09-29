@@ -220,7 +220,9 @@ fn physical_entry_retains_exact_existing_independent_nine_stage_numbers() {
     // Independent caller/helper graph preparation adds74033/88673 work;
     // replacing their cyclic-capable continuation changes work by71662/85438
     // and retained credit by15 each. The second-function peak adds the first15.
-    assert_eq!((full.w, full.r, full.p), (339641385, 96782, 19995759));
+    // Mixed coverage adds 1337 work and 21 retained units per function;
+    // the helper's dominating peak holds the caller's additional 21 units.
+    assert_eq!((full.w, full.r, full.p), (339644059, 96824, 19995780));
     with_checked(&fixture(), |checked, budget| {
         let entry = budget.storage();
         with_memory_checks(

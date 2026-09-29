@@ -809,6 +809,9 @@ fn call_error(error: CallError) -> Failure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PrivateOperationKindV1 {
+    ConditionalGlobalIndexV26,
+    ConditionalGlobalReadV26,
+    ConditionalGlobalWriteV26,
     Scalar,
     Allocate,
     Address,

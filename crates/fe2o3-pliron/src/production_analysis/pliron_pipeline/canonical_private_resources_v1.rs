@@ -4,33 +4,38 @@ type Bound = ProductionAnalysisResourceUpperBoundV1;
 type Limit = ProductionAnalysisResourceLimitV1;
 type Phase = ProductionAnalysisResourcePhaseV1;
 
-// Nine inline Option slots: 9 * (eleven coverage fields + one tag).
-// Identity labels have two fields. Pending: eleven fields + tag.
-// Input/manager/identity/next and setup bound: eight fields. Total: 128.
+// Nine inline Option slots and one pending slot retain two global counters
+// independently of the five private counters: 128 + 10 * 2 + profile = 149.
+// Global rows are not reclassified as private effects in any stage.
 // The ordinary validation session is accounted by its existing separate bound.
 pub(super) fn setup() -> Result<Bound, Limit> {
-    Bound::checked_phase(Phase::ReportValidation, 128, 128, 0)
+    Bound::checked_phase(Phase::ReportValidation, 149, 149, 0)
 }
 
 pub(super) fn stage(input: &impl NativePrivateInputV1, phase: Phase) -> Result<Bound, Limit> {
     let work = input
         .stage_lookup_work()
-        .and_then(|work| work.checked_add(32))
+        .and_then(|work| work.checked_add(128))
         .ok_or(Limit {
             phase,
             resource: "private stage coverage work",
         })?;
-    // The prepared slot and final slot were prepaid in setup; six counters are
-    // scratch, not a second report or an allocation-proportional cell table.
-    Bound::checked_phase(phase, work, 0, 6)
+    // The fixed work also covers both epoch checks and comparison with at most
+    // nine preceding seven-counter rows. Nine census counters are scratch;
+    // pending/final coverage slots were prepaid in setup.
+    Bound::checked_phase(phase, work, 0, 9)
 }
 
 pub(super) fn record() -> Result<Bound, Limit> {
-    Bound::checked_phase(Phase::ReportValidation, 32, 0, 4)
+    Bound::checked_phase(Phase::ReportValidation, 48, 0, 4)
 }
 
 pub(super) fn finish() -> Result<Bound, Limit> {
-    Bound::checked_phase(Phase::ReportValidation, 9 * 12 + 8, 0, 4)
+    // Check all profile/count joins and copy each complete coverage row into
+    // the final report. This also covers the separate missing-slot census.
+    // Per row: 13 transferred fields + 7 baseline counters + 4 global counters
+    // + 6 identity/control fields + loop/tags. Validation borrows both rows.
+    Bound::checked_phase(Phase::ReportValidation, 9 * 40 + 64, 0, 4)
 }
 
 pub(super) fn admit(

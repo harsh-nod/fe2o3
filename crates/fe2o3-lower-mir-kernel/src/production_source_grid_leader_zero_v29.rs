@@ -1,5 +1,14 @@
 // A source effect with no physical components. This records a checked source
 // disposition, not an address/content origin or a newly issued capability.
+#[cfg(test)]
+type SourceGridLeaderBindingObserverV29 =
+    fn(&mut SemanticFunctionLoweringV1<'_, '_>, SemanticBlockIdV1, Option<u32>, usize);
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_GRID_LEADER_BINDING_OBSERVER_V29: std::cell::Cell<Option<SourceGridLeaderBindingObserverV29>> = const { std::cell::Cell::new(None) };
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ScopedZeroObjectV29 {
     endpoint: ScopedObjectEndpointV29,
@@ -165,7 +174,9 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 return Err(source_grid_leader_zero_error_v29());
             }
             #[cfg(test)]
-            grid_leader_zero_tests::observe_original_zero_binding_v29(this, block, statement, local);
+            if let Some(observe) = SOURCE_GRID_LEADER_BINDING_OBSERVER_V29.get() {
+                observe(this, block, statement, local);
+            }
             let Some(SemanticValueBindingV1::GridLeader { availability }) =
                 this.locals.get(local).and_then(Option::as_ref)
             else {
@@ -187,7 +198,10 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         place: &SemanticPlaceV1,
         loan: usize,
         operations: &mut Vec<Operation>,
-    ) -> Result<Option<SourceGridLeaderBorrowV29>, ProductionSemanticKirErrorV1> {
+    ) -> Result<
+        Option<(SourceGridLeaderBorrowV29, SemanticValueBindingV1)>,
+        ProductionSemanticKirErrorV1,
+    > {
         let origin = self.with_emission_budget_v1(|this, budget| {
             let references = this
                 .execution
@@ -196,7 +210,9 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 .ok_or_else(source_grid_leader_zero_error_v29)?;
             references.check(budget)?;
             let plan = references.plan;
-            source_reference_owned_prepay_v29::<Option<SourceGridLeaderBorrowV29>>(plan, budget)?;
+            source_reference_owned_prepay_v29::<
+                Option<(SourceGridLeaderBorrowV29, SemanticValueBindingV1)>,
+            >(plan, budget)?;
             source_reference_owned_prepay_v29::<Option<usize>>(plan, budget)?;
             budget.source_reference_charge_v29(plan, 5)?;
             let record = plan
@@ -246,11 +262,14 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         // The place resolver checked availability in the original source function.
         // The receipt records that predicate, not an Option index to reinterpret
         // in a different helper. Only this original live loan may consume it.
-        Ok(Some(SourceGridLeaderBorrowV29 {
-            site,
-            ty: place.ty(),
-            origin,
-        }))
+        Ok(Some((
+            SourceGridLeaderBorrowV29 {
+                site,
+                ty: place.ty(),
+                origin,
+            },
+            binding,
+        )))
     }
 
     fn lower_grid_leader_argument_v29(

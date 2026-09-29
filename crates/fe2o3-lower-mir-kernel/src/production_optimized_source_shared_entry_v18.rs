@@ -533,3 +533,5 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
 
 #[cfg(test)]
 include!("production_optimized_source_shared_entry_commands_v18_tests.rs");
+
+include!("production_optimized_source_slice_entry_v25.rs");

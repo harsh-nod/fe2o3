@@ -1,5 +1,7 @@
 use super::super::super::tests::LAYOUTS;
 use super::*;
+#[path = "canonical_ranked_mixed_pending_v26_tests.rs"]
+mod mixed_memory_v26;
 #[path = "canonical_ranked_private_spill_v25_tests.rs"]
 mod scalar_spills_v25;
 use fe2o3_kernel_analysis::{

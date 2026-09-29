@@ -371,6 +371,10 @@ fn pending_refund_headers_v18() -> Result<usize, Failure> {
 mod private_memory;
 pub use private_memory::PendingCanonicalPrivateMemoryPoliciesV18;
 
+#[path = "canonical_ranked_mixed_pending_v26.rs"]
+mod mixed_memory;
+pub use mixed_memory::PendingCanonicalMixedMemoryPoliciesV26;
+
 #[path = "canonical_global_pending_v18.rs"]
 mod global_memory;
 pub use global_memory::PendingCanonicalGlobalAccessesV18;

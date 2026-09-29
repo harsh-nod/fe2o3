@@ -110,7 +110,10 @@ pub use ssa::{
     SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,
     place_pruned_ssa_parameters,
 };
-pub use uniformity::{analyze_function, analyze_kernel_entry};
+pub use uniformity::{
+    UniformityPhysicalLaunchErrorV2, UniformityPhysicalLaunchV2, analyze_function,
+    analyze_kernel_entry,
+};
 
 use fe2o3_kernel_ir::{BlockId, FunctionId, SynchronizationScope, ValueId};
 use std::collections::BTreeMap;

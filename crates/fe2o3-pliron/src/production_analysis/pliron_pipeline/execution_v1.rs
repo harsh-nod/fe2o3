@@ -54,6 +54,9 @@ fn run_shared_production_checks_inner_v1<'a>(
                 PipelineFamilyV1::CanonicalPrivate(input) => {
                     LivePlironStructuralIdentityProviderV1::canonical_private(input)
                 }
+                PipelineFamilyV1::CanonicalMixedV26(input) => {
+                    LivePlironStructuralIdentityProviderV1::canonical_mixed_v26(input)
+                }
                 PipelineFamilyV1::CanonicalPrivateV18(input) => {
                     LivePlironStructuralIdentityProviderV1::canonical_private_v18(input)
                 }
@@ -421,7 +424,8 @@ fn run_shared_production_checks_inner_v1<'a>(
         PipelineFamilyV1::Ordinary
         | PipelineFamilyV1::LifecycleV18(_)
         | PipelineFamilyV1::CanonicalPrivate(_)
-        | PipelineFamilyV1::CanonicalPrivateV18(_) => {
+        | PipelineFamilyV1::CanonicalPrivateV18(_)
+        | PipelineFamilyV1::CanonicalMixedV26(_) => {
             let (report, bound) = run_preflight_and_record_production_stage_v1(
                 (context, function),
                 &mut analyses,
@@ -732,7 +736,8 @@ fn run_shared_production_checks_inner_v1<'a>(
         PipelineFamilyV1::Ordinary
         | PipelineFamilyV1::LifecycleV18(_)
         | PipelineFamilyV1::CanonicalPrivate(_)
-        | PipelineFamilyV1::CanonicalPrivateV18(_) => {
+        | PipelineFamilyV1::CanonicalPrivateV18(_)
+        | PipelineFamilyV1::CanonicalMixedV26(_) => {
             let (report, _) = run_preflight_and_record_production_stage_v1(
                 (context, function),
                 &mut analyses,
@@ -987,6 +992,41 @@ fn run_shared_production_checks_inner_v1<'a>(
                 },
             )
         }
+        ValidationFamilyV1::CanonicalMixedV26(validation) => {
+            let (report_validation, coverage) = with_invocation_phase_v1(
+                receipt.as_deref_mut(),
+                ProductionAnalysisResourcePhaseV1::ReportValidation,
+                0,
+                |observer| {
+                    let (validation, coverage, bound) =
+                        validation.finish(&preservation, &mut analyses, observer)?;
+                    Ok(((validation, coverage), observer.map(|_| bound)))
+                },
+            )?;
+            let (Some(bounds), Some(ownership), Some(semantics)) = (bounds, ownership, semantics)
+            else {
+                return Err(PipelineErrorV1::CanonicalPrivateInput);
+            };
+            PipelineReportsV1::CanonicalMixedV26(
+                canonical_private_v1::CanonicalMixedPipelineReportV26 {
+                    report: ProductionPlironPreloweringReportV2 {
+                        target_contract,
+                        tensor_layout,
+                        bounds,
+                        atomics,
+                        race,
+                        ownership,
+                        barriers,
+                        pipeline_protocol,
+                        workgroup,
+                        semantics,
+                        preservation,
+                        report_validation,
+                    },
+                    coverage,
+                },
+            )
+        }
         ValidationFamilyV1::Conditional(validation) => {
             if bounds.is_some() || ownership.is_some() || semantics.is_some() {
                 return Err(PipelineErrorV1::ConditionalInput);
@@ -1041,6 +1081,12 @@ fn run_shared_production_checks_inner_v1<'a>(
         }
         PipelineReportsV1::CanonicalPrivate(report) => PipelineOutcomeV1::CanonicalPrivate(
             canonical_private_v1::CanonicalPrivatePipelineOutcomeV1 {
+                report,
+                resource_upper_bound,
+            },
+        ),
+        PipelineReportsV1::CanonicalMixedV26(report) => PipelineOutcomeV1::CanonicalMixedV26(
+            canonical_private_v1::CanonicalMixedPipelineOutcomeV26 {
                 report,
                 resource_upper_bound,
             },

@@ -5,6 +5,21 @@ use crate::production_analysis::pliron_pipeline::{
     PipelineErrorV1, canonical_private_v1::CanonicalPrivatePipelineOutcomeV1,
 };
 
+// Closed to these two genuine engine outcomes; no caller can supply a bound.
+trait NativeOutcomeV26 {
+    fn resource_bound(&self) -> Bound;
+}
+impl NativeOutcomeV26 for CanonicalPrivatePipelineOutcomeV1 {
+    fn resource_bound(&self) -> Bound {
+        self.resource_upper_bound
+    }
+}
+impl NativeOutcomeV26 for crate::canonical_private_v1::CanonicalMixedPipelineOutcomeV26 {
+    fn resource_bound(&self) -> Bound {
+        self.resource_upper_bound
+    }
+}
+
 fn snapshot(
     bound: Bound,
     receipt: InvocationObservationV1,
@@ -60,6 +75,25 @@ impl PrivateAnalysisV1 {
         &mut self,
         input: &impl NativePrivateInputV1,
     ) -> Result<CanonicalPrivatePipelineOutcomeV1, Failure> {
+        self.invoke_inner_v26(input.ordinal(), |limits, receipt| {
+            input.run_fixed(limits, Some(receipt))
+        })
+    }
+
+    pub(in crate::production_analysis::canonical_ranked_checks_v1) fn invoke_mixed_v26(
+        &mut self,
+        input: &crate::kir_bridge_v1::NativeCanonicalMixedAdmissionV26<'_>,
+    ) -> Result<crate::canonical_private_v1::CanonicalMixedPipelineOutcomeV26, Failure> {
+        self.invoke_inner_v26(input.ordinal(), |limits, receipt| {
+            crate::canonical_private_v1::run_mixed_v26(input, limits, Some(receipt))
+        })
+    }
+
+    fn invoke_inner_v26<T: NativeOutcomeV26>(
+        &mut self,
+        ordinal: usize,
+        run: impl FnOnce(Limits, &mut InvocationReceiptV1) -> Result<T, PipelineErrorV1>,
+    ) -> Result<T, Failure> {
         let floor = self.contract.cumulative();
         let limits = self
             .contract
@@ -67,12 +101,10 @@ impl PrivateAnalysisV1 {
             .map_err(|error| self.denied(error))?;
         let mut receipt =
             InvocationReceiptV1::new(floor, self.limits).map_err(|error| self.denied(error))?;
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            input.run_fixed(limits, Some(&mut receipt))
-        }));
+        let result = catch_unwind(AssertUnwindSafe(|| run(limits, &mut receipt)));
         let observed = receipt.snapshot();
         self.last = Some(CanonicalRankedPolicyHistoryV1 {
-            function: input.ordinal(),
+            function: ordinal,
             floor: snapshot(floor, InvocationObservationV1::default()),
             invocation: snapshot(observed.current, observed),
         });
@@ -87,7 +119,7 @@ impl PrivateAnalysisV1 {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(PipelineErrorV1::Ordinary(cause))) => {
                 return Err(Failure::Analysis {
-                    function: input.ordinal(),
+                    function: ordinal,
                     cause,
                 });
             }
@@ -100,7 +132,7 @@ impl PrivateAnalysisV1 {
         let bound = receipt
             .complete()
             .map_err(|_| Failure::InvocationAccounting)?;
-        if outcome.resource_upper_bound != bound {
+        if outcome.resource_bound() != bound {
             return Err(Failure::InvocationAccounting);
         }
         Ok(outcome)
