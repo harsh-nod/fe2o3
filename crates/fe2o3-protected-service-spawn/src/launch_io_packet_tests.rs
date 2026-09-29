@@ -138,7 +138,9 @@ fn packet_send_is_exact_and_rejects_invalid_sizes_on_default_sockets() {
             assert_eq!(packet.payload, payload);
             assert_eq!(packet.rights.credentials, None);
             assert!(!packet.rights.invalid && packet.rights.fd.is_none());
-            assert!(packet.flags.is_empty());
+            // Linux may echo the MSG_CMSG_CLOEXEC requested by our receiver.
+            let requested = ReturnFlags::from_bits_retain(libc::MSG_CMSG_CLOEXEC as _);
+            assert!((packet.flags & !requested).is_empty(), "{:?}", packet.flags);
         }
         for result in [
             send_packet(sender.as_fd(), &[]),
@@ -195,12 +197,16 @@ fn packet_send_preserves_confirmed_backpressure_without_blocking() {
 
 #[test]
 fn packet_validation_requires_exact_shape_without_stage_or_eof_interpretation() {
+    let requested = ReturnFlags::from_bits_retain(libc::MSG_CMSG_CLOEXEC as _);
     for bytes in [0, 1, 15, 16, 17] {
         for flags in [
             ReturnFlags::empty(),
+            requested,
             ReturnFlags::TRUNC,
             ReturnFlags::CTRUNC,
             ReturnFlags::TRUNC | ReturnFlags::CTRUNC,
+            requested | ReturnFlags::TRUNC,
+            requested | ReturnFlags::CTRUNC,
         ] {
             for credentials in [None, Some(this_sender())] {
                 let mut packet = packet::<16>();
@@ -208,7 +214,10 @@ fn packet_validation_requires_exact_shape_without_stage_or_eof_interpretation() 
                 packet.flags = flags;
                 packet.rights.credentials = credentials;
                 let result = packet.authenticate(this_sender());
-                if bytes == 16 && flags.is_empty() && credentials.is_some() {
+                if bytes == 16
+                    && !flags.intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+                    && credentials.is_some()
+                {
                     assert_eq!(result, Ok([0xa5; 16]));
                 } else {
                     assert_eq!(result, Err(Failure::MalformedReadyTransfer));
