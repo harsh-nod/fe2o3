@@ -3,12 +3,13 @@
 // (the binary named -native is V2); ANCHOR_HELPER_V3 and ANCHOR_DAEMON_V3 are
 // fe2o3-external-anchor-provisioning-helper-v3 and fe2o3-external-anchor-service-v3.
 // All use the FE2O3_NATIVE_ROOT_ prefix. FE2O3_NATIVE_COMPILER_EXEC_FIXTURE is
-// the existing static exec-stop fixture, also pinned as the unused supervisor;
-// the distinct anchor helper is pinned as the unused launcher. Issuer runtime
+// the existing static exec-stop fixture. The admitted daemon image is pinned
+// as the unused supervisor; the distinct helper is the unused launcher. Neither
+// supervisor nor launcher executes in this startup-only test. Issuer runtime
 // uses the canonical sealed-static measurement. No compiler instruction resumes.
 // Require explicit FE2O3_RUN_NATIVE_ROOT_ISSUER=1, FE2O3_NATIVE_ROOT_SCRATCH=/tmp,
 // FE2O3_NATIVE_ROOT_RUNTIME=/run/fe2o3, private writable mounts at both paths,
-// procfs, clone3/ptrace and CHOWN/SETUID/SETGID/SETPCAP/SYS_PTRACE/KILL, plus
+// procfs, clone3/ptrace and CHOWN/FOWNER/SETUID/SETGID/SETPCAP/SYS_PTRACE/KILL, plus
 // DAC_READ_SEARCH (or DAC_OVERRIDE) for real root-bound lifecycle revalidation.
 // Use read-only fixture/root mounts, no network/GPU, bounded memory/CPU/PIDs,
 // and an outer 600-second timeout. Startup mechanics only, no production credit.
@@ -29,7 +30,8 @@ mod cleanup {
     include!("native_root_issuer_process_cleanup_tests.rs");
 }
 
-const WORK: usize = 1_000_000_000_000;
+// Logical ceiling only; each launch is narrowed to its checked image-sized quote.
+const WORK: usize = 1 << 60;
 const STORAGE: usize = 1024 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const TURNS: usize = 2048;

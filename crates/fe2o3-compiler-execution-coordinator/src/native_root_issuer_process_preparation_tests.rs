@@ -38,7 +38,6 @@ pub(super) fn prepare(
             .expect("actual lifecycle requires CAP_DAC_READ_SEARCH or CAP_DAC_OVERRIDE in the isolated container"));
     }
     let issuer_image = fixtures::measurement(&f.issuer);
-    let compiler_image = fixtures::measurement(&f.compiler);
     let helper_image = fixtures::measurement(&f.helper);
     let daemon_image = fixtures::measurement(&f.daemon);
     let public = |seed| {
@@ -64,7 +63,7 @@ pub(super) fn prepare(
             fixtures::ISSUER,
             fixtures::ISSUER,
             Service::new(fixtures::ANCHOR, fixtures::ANCHOR).unwrap(),
-            compiler_image,
+            daemon_image,
             helper_image,
             policy.policy(),
             b
@@ -141,13 +140,13 @@ pub(super) fn prepare(
         )
     );
     b.reserve_storage(
-        Image::file_storage_for_length(compiler_image.byte_len()).unwrap()
+        Image::file_storage_for_length(daemon_image.byte_len()).unwrap()
             + Image::file_storage_for_length(helper_image.byte_len()).unwrap()
             + Image::file_storage_for_length(issuer_image.byte_len()).unwrap(),
     )
     .unwrap();
     let sources = crate::CompilerExecutionSupervisorProgramSourcesV1::new(
-        File::open(&f.compiler).unwrap(),
+        File::open(&f.daemon).unwrap(),
         File::open(&f.helper).unwrap(),
         File::open(&f.issuer).unwrap(),
     );
