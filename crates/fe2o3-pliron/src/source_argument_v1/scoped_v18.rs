@@ -465,7 +465,11 @@ fn check_argument_trace_v18<'w, R>(
                     || matches!(
                         semantic.types()[mapped.abi().ty().index() as usize].shape(),
                         SemanticTypeShapeV1::Pointer(pointer)
-                            if pointer.kind() == SemanticPointerKindV1::Raw
+                            // The exact helper shape above already validated
+                            // ownership, unadjusted ABI, width and access mode.
+                            // A thin reference is one leaf, not an aggregate.
+                            if matches!(pointer.kind(),
+                                SemanticPointerKindV1::Raw | SemanticPointerKindV1::Reference)
                                 && pointer.metadata() == SemanticPointerMetadataV1::None
                     )
             }

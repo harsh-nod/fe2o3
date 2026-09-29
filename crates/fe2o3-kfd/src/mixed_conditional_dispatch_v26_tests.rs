@@ -329,3 +329,122 @@ fn mixed_width_empty_extent_and_offset_overflow_boundaries_are_exact() {
         Err(Error::Arithmetic)
     );
 }
+
+fn with_unused(
+    slices: &[Slice],
+    accesses: &[MixedConditionalAccessV26],
+    unused: &[MixedConditionalUnusedSliceV26],
+) -> Result<MixedConditionalDispatchPremisesV26> {
+    MixedConditionalDispatchPremisesV26::new_with_unused_slices_v26(
+        [1; 32],
+        [2; 32],
+        [3; 32],
+        &bytes(slices),
+        geometry(),
+        3,
+        [64, 1, 1],
+        64,
+        slices,
+        accesses,
+        unused,
+    )
+}
+
+#[test]
+fn mixed_explicit_unused_slice_keeps_actual_mapping_without_inventing_accesses() {
+    let slices = slices();
+    let accesses = accesses();
+    let unused = [MixedConditionalUnusedSliceV26 {
+        slice: 2,
+        source_argument_identity: [90; 32],
+    }];
+    assert!(payload(&slices, &accesses[..3]).is_err());
+    let value = with_unused(&slices, &accesses[..3], &unused).unwrap();
+    assert_eq!(value.unused_slices(), unused);
+    let request = request(&slices)
+        .with_mixed_conditional_premises_v26(value)
+        .unwrap();
+    let value = request.mixed_conditional_premises_v26().unwrap();
+    assert!(
+        value
+            .check_live(&[
+                facts(0x1000, 12, 1),
+                facts(0x2000, 12, 2),
+                facts(0x3000, 12, 3)
+            ])
+            .is_ok()
+    );
+    assert_eq!(
+        value.check_live(&[
+            facts(0x1000, 12, 1),
+            facts(0x2000, 12, 2),
+            facts(0x3000, 11, 3)
+        ]),
+        Err(Error::LogicalSpan)
+    );
+    assert_eq!(
+        value.check_live(&[
+            facts(0x1000, 12, 1),
+            facts(0x2000, 12, 2),
+            facts(0x1000, 12, 3)
+        ]),
+        Err(Error::Alias)
+    );
+}
+
+#[test]
+fn mixed_unused_roster_rejects_accessed_duplicate_omitted_and_substituted_rows() {
+    let slices = slices();
+    let rows = accesses();
+    let unused = MixedConditionalUnusedSliceV26 {
+        slice: 2,
+        source_argument_identity: [90; 32],
+    };
+    assert!(with_unused(&slices, &rows, &[unused]).is_err());
+    assert!(with_unused(&slices, &rows[..3], &[]).is_err());
+    assert!(with_unused(&slices, &rows[..3], &[unused, unused]).is_err());
+    assert!(
+        with_unused(
+            &slices,
+            &rows[..3],
+            &[MixedConditionalUnusedSliceV26 { slice: 0, ..unused }]
+        )
+        .is_err()
+    );
+    assert!(
+        with_unused(
+            &slices,
+            &rows[..3],
+            &[MixedConditionalUnusedSliceV26 { slice: 3, ..unused }]
+        )
+        .is_err()
+    );
+    let first = with_unused(&slices, &rows[..3], &[unused]).unwrap();
+    let mut changed = unused;
+    changed.source_argument_identity[0] ^= 1;
+    assert_ne!(
+        first.identity(),
+        with_unused(&slices, &rows[..3], &[changed])
+            .unwrap()
+            .identity()
+    );
+    let plain = payload(&slices, &rows).unwrap();
+    assert_eq!(
+        plain.identity(),
+        with_unused(&slices, &rows, &[]).unwrap().identity()
+    );
+    let all_unused: Vec<_> = (0..3)
+        .map(|slice| MixedConditionalUnusedSliceV26 {
+            slice,
+            source_argument_identity: [90 + slice as u8; 32],
+        })
+        .collect();
+    assert!(payload(&slices, &[]).is_err());
+    let value = with_unused(&slices, &[], &all_unused).unwrap();
+    assert!(
+        request(&slices)
+            .with_mixed_conditional_premises_v26(value)
+            .is_ok()
+    );
+    assert!(with_unused(&slices, &[], &all_unused[..2]).is_err());
+}

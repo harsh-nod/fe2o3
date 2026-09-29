@@ -458,7 +458,7 @@ fn original_raw_helper_requires_explicit_raw_pointer_ownership() {
 #[test]
 fn original_raw_helper_correspondence_is_atomic_and_rejects_substitution() {
     let source = raw_source(0, false, SemanticSourceArgumentOwnershipV1::RawPointer);
-    check_pointer_correspondence(&source, false);
+    check_pointer_correspondence(&source, 0, false);
 }
 
 #[test]
@@ -470,18 +470,33 @@ fn original_reference_helper_correspondence_is_atomic_and_rejects_substitution()
             SemanticSourceArgumentOwnershipV1::SharedBorrow
         };
         let source = pointer_source(0, mutable, ownership, true);
-        check_pointer_correspondence(&source, mutable);
+        check_pointer_correspondence(&source, 0, mutable);
     }
 }
 
-fn check_pointer_correspondence(source: &AdmittedInertSemanticMirV1, mutable: bool) {
+#[test]
+fn original_reference_helper_atomic_walk_preserves_non_generic_source_spaces() {
+    for space in [1, 4] {
+        for mutable in [false, true] {
+            let ownership = if mutable {
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow
+            } else {
+                SemanticSourceArgumentOwnershipV1::SharedBorrow
+            };
+            let source = pointer_source(space, mutable, ownership, true);
+            check_pointer_correspondence(&source, space, mutable);
+        }
+    }
+}
+
+fn check_pointer_correspondence(source: &AdmittedInertSemanticMirV1, space: u32, mutable: bool) {
     for mutation in 0..4 {
-        let mut ty = expected_pointer(0, mutable);
+        let mut ty = expected_pointer(space, mutable);
         if mutation == 1 {
-            ty = expected_pointer(1, mutable);
+            ty = expected_pointer(if space == 1 { 0 } else { 1 }, mutable);
         }
         if mutation == 2 {
-            ty = expected_pointer(0, !mutable);
+            ty = expected_pointer(space, !mutable);
         }
         let target = Function::internal_helper(
             "raw_source_helper",

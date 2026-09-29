@@ -548,7 +548,7 @@ fn validate(rows: &impl Rows) -> Format<()> {
         || s.exact_grid[usize::from(s.source_rank)..]
             .iter()
             .any(|n| *n != 1)
-        || (rows.argument_count() == 0) != (rows.occurrence_count() == 0)
+        || (rows.argument_count() == 0 && rows.occurrence_count() != 0)
     {
         return Err("mixed launch or ABI header");
     }
@@ -561,7 +561,7 @@ fn validate(rows: &impl Rows) -> Format<()> {
             || u32::from(a.generated_field) >= s.generated_field_count
             || a.reads
                 .checked_add(a.writes)
-                .filter(|n| *n != 0 && *n <= MAX_MIXED_OCCURRENCES_V26 as u32)
+                .filter(|n| *n <= MAX_MIXED_OCCURRENCES_V26 as u32)
                 .is_none()
             || (a.writes != 0 && !a.source_exclusive)
             || !a.pointer_offset.is_multiple_of(8)
@@ -751,6 +751,25 @@ impl<'a> MixedContractV26<'a> {
     ) -> ResultV26<MixedOccurrenceV26, E> {
         pay(64 + 16 * MixedOccurrenceV26::BYTES).map_err(MixedContractErrorV26::Resource)?;
         Rows::occurrence(self, i).map_err(MixedContractErrorV26::Invalid)
+    }
+    /// Commits an exact source/ABI argument row, including a zero-access row.
+    /// This is data identity only; it cannot assert that an actual graph is unused.
+    pub fn argument_identity<E>(
+        &self,
+        i: usize,
+        pay: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> ResultV26<[u8; 32], E> {
+        pay(256 + 16 * MixedArgumentV26::BYTES).map_err(MixedContractErrorV26::Resource)?;
+        if i >= self.arguments {
+            return Err(MixedContractErrorV26::Invalid("mixed argument ordinal"));
+        }
+        let at = PREFIX + MixedContractSubjectsV26::BYTES + i * MixedArgumentV26::BYTES;
+        let mut hash = Sha256::new();
+        hash.update(b"FE2O3/CONDITIONAL-MIXED-ARGUMENT/V26\0");
+        hash.update(self.identity);
+        hash.update((i as u64).to_le_bytes());
+        hash.update(&self.bytes[at..at + MixedArgumentV26::BYTES]);
+        Ok(hash.finalize().into())
     }
     /// Binds the complete exact row and contract, never just a parameter/count.
     pub fn occurrence_identity<E>(

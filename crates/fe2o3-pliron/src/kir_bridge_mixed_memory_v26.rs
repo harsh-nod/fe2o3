@@ -23,6 +23,57 @@ impl NativeCanonicalMixedAdmissionV26<'_> {
         self.kinds.get(index).copied().flatten()
     }
 
+    fn is_trap_end(&self, coordinate: KirBridgeCoordinateV1) -> bool {
+        let KirBridgeCoordinateV1::Terminator { function, block } = coordinate else {
+            return false;
+        };
+        if function as usize != self.ordinal() {
+            return false;
+        }
+        let Some(function) = self.private.inventory().functions().get(function as usize) else {
+            return false;
+        };
+        let Some(index) = function.blocks.start.checked_add(block as usize) else {
+            return false;
+        };
+        let Some(row) = self.private.inventory().blocks().get(index) else {
+            return false;
+        };
+        index < function.blocks.end
+            && row.coordinate.block == block
+            && matches!(row.terminator, Terminator::Unreachable)
+            && row.operations.end.checked_sub(1).is_some_and(|last| {
+                last >= row.operations.start && self.extra_kind(last) == Some(Kind::TrapCall)
+            })
+    }
+
+    fn check_trap(&self, pointer: Ptr<Operation>, index: usize) -> Result<(), Failure> {
+        let context = self.context();
+        let expected = self.private.inventory().operations()[index].operation;
+        let OperationKind::Call { callee, arguments } = &expected.kind else {
+            return Err(Failure::ExactGraph);
+        };
+        let native = Operation::get_op::<CallOp>(pointer, context).ok_or(Failure::NativeSchema)?;
+        let raw = pointer.deref(context);
+        if !arguments.is_empty()
+            || !expected.results.is_empty()
+            || raw.num_regions() != 0
+            || raw.get_num_successors() != 0
+            || raw.get_num_operands() != 0
+            || raw.get_num_results() != 0
+            || raw.attributes.0.len() != 2
+            || native
+                .get_attr_gpu_call_callee(context)
+                .is_none_or(|actual| actual.as_str() != callee.as_str())
+            || native.signature(context).is_none()
+        {
+            return Err(Failure::ExactGraph);
+        }
+        // The mandatory same-epoch snapshot verifies CallOp's immutable
+        // signature against these zero arities, without an unpaid getter clone.
+        Ok(())
+    }
+
     fn check_index(&self, pointer: Ptr<Operation>, index: usize) -> Result<(), Failure> {
         let context = self.context();
         let expected = self.private.inventory().operations()[index].operation;
@@ -76,6 +127,7 @@ impl NativeCanonicalMixedAdmissionV26<'_> {
             .validate_complete_with(profile, budget, |pointer, index, _| {
                 match self.extra_kind(index) {
                     Some(Kind::ConditionalGlobalIndexV26) => self.check_index(pointer, index)?,
+                    Some(Kind::TrapCall) => self.check_trap(pointer, index)?,
                     Some(Kind::ConditionalGlobalReadV26 | Kind::ConditionalGlobalWriteV26) => {
                         // The whole-module pending carrier census validated these
                         // exact operands, results and fixed attributes at this epoch.
@@ -129,6 +181,13 @@ impl NativePrivateInputV1 for NativeCanonicalMixedAdmissionV26<'_> {
         {
             return Some(kind);
         }
+        if self.is_trap_end(coordinate) {
+            return self
+                .private
+                .identity
+                .unreachable(context, pointer)
+                .then_some(Kind::TrapEnd);
+        }
         self.private.operation(context, pointer)
     }
     fn attribute(
@@ -163,6 +222,11 @@ impl NativePrivateInputV1 for NativeCanonicalMixedAdmissionV26<'_> {
                     && key == "gpu_preserved_operation_kind"
                     && name == "preserved_operation_kind"
             }
+            Some(Kind::TrapCall) => false,
+            Some(Kind::TrapEnd) => self
+                .private
+                .identity
+                .attribute(context, pointer, key, dialect, name),
             Some(_) => self.private.attribute(context, pointer, key, dialect, name),
             None => false,
         }
@@ -260,6 +324,16 @@ fn mixed_rows_v26(
                 }
                 _ => return Err(Failure::ExactGraph),
             }
+        } else if matches!(row.operation.kind, OperationKind::Call { .. })
+            && row
+                .operation
+                .has_registered_trap_contract_with_budget_v26(budget)?
+        {
+            if physical.operation(index) {
+                return Err(Failure::ExactGraph);
+            }
+            check_trap_pair_v26(inventory, index, budget)?;
+            Some(Kind::TrapCall)
         } else if matches!(&row.operation.kind, OperationKind::Intrinsic(intrinsic)
             if matches!(intrinsic.kind, IntrinsicKind::InvocationIndex { kind: IndexKind::Global, .. }))
         {
@@ -276,6 +350,74 @@ fn mixed_rows_v26(
         return Err(Failure::ExactGraph);
     }
     Ok(kinds)
+}
+
+fn check_trap_pair_v26(
+    inventory: &CanonicalKirInventoryV18<'_>,
+    index: usize,
+    budget: &mut Budget<'_>,
+) -> Result<(), Failure> {
+    budget.charge_work(64)?;
+    let row = &inventory.operations()[index];
+    let coordinate = row.coordinate;
+    let function = inventory
+        .functions()
+        .get(coordinate.block.function.0 as usize)
+        .ok_or(Failure::ExactGraph)?;
+    let block_index = function
+        .blocks
+        .start
+        .checked_add(coordinate.block.block as usize)
+        .filter(|n| *n < function.blocks.end)
+        .ok_or(Failure::ExactGraph)?;
+    let block = inventory
+        .blocks()
+        .get(block_index)
+        .ok_or(Failure::ExactGraph)?;
+    let calls = inventory
+        .calls()
+        .get(function.calls.clone())
+        .ok_or(Failure::ExactGraph)?;
+    // Inventory construction preserves coordinate order; search only this
+    // function's call range rather than scanning the module for every pair.
+    let levels = (usize::BITS - calls.len().leading_zeros()) as usize;
+    budget.charge_work(
+        levels
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(8))
+            .ok_or(ResourceError::Arithmetic)?,
+    )?;
+    let call_index = calls
+        .binary_search_by_key(&coordinate, |call| call.coordinate)
+        .map_err(|_| Failure::ExactGraph)?;
+    let call = &calls[call_index];
+    let target = call
+        .target
+        .and_then(|target| inventory.functions().get(target.0 as usize))
+        .ok_or(Failure::ExactGraph)?;
+    // Prepay both this declaration name comparison and the later exact native
+    // carrier name comparison. Unequal native string lengths return immediately.
+    budget.charge_work(
+        call.callee
+            .len()
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(2))
+            .ok_or(ResourceError::Arithmetic)?,
+    )?;
+    if block.coordinate != coordinate.block
+        || block.operations.end.checked_sub(1) != Some(index)
+        || !matches!(block.terminator, Terminator::Unreachable)
+        || target.function.body.is_some()
+        || target.function.id.as_str() != call.callee
+        || !target.function.signature.parameters.is_empty()
+        || !target.function.signature.results.is_empty()
+    {
+        return Err(Failure::ExactGraph);
+    }
+    // The inventory retains the exact verified V18 owner. Its reserved-call
+    // verifier authenticated the declaration, capability and terminal position.
+    // This additional pair census grants neither source truth nor launch rights.
+    Ok(())
 }
 
 fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure> {
@@ -348,6 +490,32 @@ fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure>
         (&'a NativeCanonicalMixedAdmissionV26<'a>,),
         Vec<Option<Kind>>,
     );
+    type Trap<'a> = (
+        &'a CanonicalKirInventoryV18<'a>,
+        &'a fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'a>,
+        &'a fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'a>,
+        &'a fe2o3_kernel_analysis::CanonicalKirBlockRefV1<'a>,
+        &'a fe2o3_kernel_analysis::CanonicalKirCallRefV1<'a>,
+        &'a [fe2o3_kernel_analysis::CanonicalKirCallRefV1<'a>],
+        std::ops::Range<usize>,
+        Result<usize, usize>,
+        &'a NativeCanonicalMixedAdmissionV26<'a>,
+        &'a Context,
+        &'a KirOperation,
+        &'a fe2o3_kernel_ir::FunctionId,
+        &'a [ValueId],
+        Ref<'a, Operation>,
+        Option<Ref<'a, pliron::builtin::attributes::StringAttr>>,
+        Option<Ref<'a, pliron::builtin::attributes::TypeAttr>>,
+        CallOp,
+        Option<CallOp>,
+        Option<TypeHandle>,
+        Option<Ptr<Operation>>,
+        KirBridgeCoordinateV1,
+        fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+        [usize; 16],
+        [bool; 4],
+    );
     let mut bytes = native_private_headers_v18(capture, alignment)?
         .checked_add(KirPlironGraphV18::pending_global_scan_headers_v18()?)
         .ok_or(ResourceError::Arithmetic)?;
@@ -356,6 +524,7 @@ fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure>
         h::<Index<'_>>()?,
         h::<Snapshot<'_>>()?,
         h::<Conditions<'_>>()?,
+        h::<Trap<'_>>()?,
         h::<NativeCanonicalMixedAdmissionV26<'_>>()?,
         h::<Result<Vec<Option<Kind>>, Failure>>()?,
     ] {

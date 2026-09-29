@@ -91,6 +91,7 @@ mod mixed_conditional_dispatch_v26;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use mixed_conditional_dispatch_v26::{
     MixedConditionalAccessV26, MixedConditionalDispatchPremisesV26, MixedConditionalIndexDomainV26,
+    MixedConditionalUnusedSliceV26,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

@@ -153,6 +153,18 @@ fn fixture() -> Module {
     module
 }
 
+fn trap_fixture() -> Module {
+    use fe2o3_kernel_ir::AmdGpuDiagnosticOperation as Diagnostic;
+    let mut module = fixture();
+    let function = &mut module.functions[0];
+    function.required_capabilities = Diagnostic::Trap.required_capabilities();
+    let exit = &mut function.body.as_mut().unwrap().blocks[2];
+    exit.operations.push(Diagnostic::Trap.operation(None));
+    exit.terminator = Some(Terminator::Unreachable);
+    module.functions.push(Diagnostic::Trap.declaration());
+    module
+}
+
 fn fault(graph: &mut KirPlironGraphV18<'_>, fault: usize) {
     let op = |block, operation| {
         *graph
@@ -203,6 +215,54 @@ fn fault(graph: &mut KirPlironGraphV18<'_>, fault: usize) {
             let pointer = op(1, 2);
             graph.coordinates.remove(&pointer);
         }
+        10 | 15 => {
+            let call = Operation::get_op::<CallOp>(op(2, 0), context).unwrap();
+            let original = call
+                .get_attr_gpu_call_callee(context)
+                .unwrap()
+                .as_str()
+                .to_owned();
+            call.set_attr_gpu_call_callee(
+                context,
+                pliron::builtin::attributes::StringAttr::new("changed".into()),
+            );
+            if fault == 15 {
+                call.set_attr_gpu_call_callee(
+                    context,
+                    pliron::builtin::attributes::StringAttr::new(original),
+                );
+            }
+        }
+        11 => {
+            let call = Operation::get_op::<CallOp>(op(2, 0), context).unwrap();
+            let wrong = FunctionType::get(context, vec![IndexType::get(context).into()], vec![]);
+            call.set_attr_gpu_call_signature(
+                context,
+                pliron::builtin::attributes::TypeAttr::new(wrong.into()),
+            );
+        }
+        12 => {
+            let terminal = *graph
+                .coordinates
+                .iter()
+                .find(|(_, coordinate)| {
+                    **coordinate
+                        == KirBridgeCoordinateV1::Terminator {
+                            function: 0,
+                            block: 2,
+                        }
+                })
+                .unwrap()
+                .0;
+            graph
+                .origins
+                .preserved_terminators
+                .insert(terminal, Terminator::Return { values: vec![] });
+        }
+        14 => {
+            let pointer = op(2, 0);
+            graph.coordinates.remove(&pointer);
+        }
         _ => {}
     }
 }
@@ -236,11 +296,21 @@ fn run_case(
     work_limit: usize,
     storage_limit: usize,
     which: usize,
-    mut consume: impl FnMut(&NativeCanonicalMixedAdmissionV26<'_>) -> Result<(), Failure>,
+    consume: impl FnMut(&NativeCanonicalMixedAdmissionV26<'_>) -> Result<(), Failure>,
 ) -> (Result<(), Failure>, usize, usize, usize) {
     let module = fixture();
-    let (owner, credit) = owner(&module);
-    let (foreign, foreign_credit) = self::owner(&module);
+    run_module_case(&module, work_limit, storage_limit, which, consume)
+}
+
+fn run_module_case(
+    module: &Module,
+    work_limit: usize,
+    storage_limit: usize,
+    which: usize,
+    mut consume: impl FnMut(&NativeCanonicalMixedAdmissionV26<'_>) -> Result<(), Failure>,
+) -> (Result<(), Failure>, usize, usize, usize) {
+    let (owner, credit) = owner(module);
+    let (foreign, foreign_credit) = self::owner(module);
     let mut work = Work::new(work_limit);
     let mut budget = Budget::new(&mut work, storage_limit);
     let mut calls = 0;
@@ -267,7 +337,7 @@ fn run_case(
         budget.reserve_storage(graph_credit.retained_storage())?;
         let original_epoch = graph.ranked_policy_epoch_v18()?;
         fault(&mut graph, which);
-        let epoch = if which == 5 {
+        let epoch = if matches!(which, 5 | 15) {
             original_epoch
         } else {
             graph.ranked_policy_epoch_v18()?
@@ -287,10 +357,13 @@ fn run_case(
                         with_canonical_conditional_slice_domains_v26(
                             reads,
                             stores,
-                            &[ExplicitLaunchExtent::Exact {
-                                rank: 3,
-                                extents: [64, 1, 1],
-                            }],
+                            &vec![
+                                ExplicitLaunchExtent::Exact {
+                                    rank: 3,
+                                    extents: [64, 1, 1],
+                                };
+                                module.functions.len()
+                            ],
                             FormalIndexWidth::Bits64,
                             budget,
                             |globals, budget| {
@@ -328,10 +401,108 @@ fn run_case(
             },
         )
         .map_err(formal_error)?;
-        assert!(matches!(domain_result, Some(())));
+        if domain_result.is_none() {
+            return Err(Failure::NativeSchema);
+        }
         native.expect("complete family reached native gate")
     })();
     (result, budget.work(), budget.peak_storage(), calls)
+}
+
+#[test]
+fn mixed_native_v26_registered_trap_pair_runs_nine_stages_without_relabeling_memory() {
+    let (result, _, _, calls) = run_module_case(&trap_fixture(), AMPLE, AMPLE, 0, |input| {
+        let mut pair = [0; 2];
+        for pointer in input.private.coordinates.keys() {
+            match input.operation(input.context(), *pointer).unwrap() {
+                Kind::TrapCall => pair[0] += 1,
+                Kind::TrapEnd => pair[1] += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(pair, [1, 1]);
+        let outcome = crate::canonical_private_v1::run_mixed_v26(
+            input,
+            crate::ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+            None,
+        )
+        .unwrap();
+        assert!(outcome.report.reports().is_clean());
+        assert!(!outcome.report.grants_artifact_or_launch_authority());
+        for stage in 0..9 {
+            assert_eq!(outcome.report.global_access_counts(stage), Some([1, 1]));
+            assert_eq!(
+                outcome.report.private_access_counts(stage),
+                Some([1, 0, 1, 1, 1])
+            );
+        }
+        assert!(!input.globals.runtime_requirements_are_discharged());
+        assert!(!input.globals.grants_artifact_or_launch_authority());
+        assert!(
+            input
+                .run_fixed(
+                    crate::ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+                    None
+                )
+                .is_err()
+        );
+        Ok(())
+    });
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(calls, 1);
+}
+
+#[test]
+fn mixed_native_v26_trap_pair_rejects_same_count_mutations_and_old_epoch_restore() {
+    for which in [10, 11, 12, 14, 15] {
+        let (result, _, _, calls) = run_module_case(&trap_fixture(), AMPLE, AMPLE, which, |_| {
+            panic!("changed trap admitted")
+        });
+        assert!(result.is_err(), "fault {which}");
+        assert_eq!(calls, 0, "fault {which}");
+    }
+}
+
+#[test]
+fn mixed_native_v26_trap_pair_exact_and_one_short_limits_remain_transactional() {
+    let module = trap_fixture();
+    let (result, work, peak, calls) = run_module_case(&module, AMPLE, AMPLE, 0, |_| Ok(()));
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(calls, 1);
+    assert!(
+        run_module_case(&module, work, peak, 0, |_| Ok(()))
+            .0
+            .is_ok()
+    );
+    assert!(
+        run_module_case(&module, work - 1, peak, 0, |_| Ok(()))
+            .0
+            .is_err()
+    );
+    assert!(
+        run_module_case(&module, work, peak - 1, 0, |_| Ok(()))
+            .0
+            .is_err()
+    );
+}
+
+#[test]
+fn mixed_native_v26_nonterminal_diagnostics_do_not_become_trap_pairs() {
+    use fe2o3_kernel_ir::AmdGpuDiagnosticOperation as Diagnostic;
+    for diagnostic in [Diagnostic::DebugTrap, Diagnostic::Clock32] {
+        let mut module = fixture();
+        let function = &mut module.functions[0];
+        function.required_capabilities = diagnostic.required_capabilities();
+        function.body.as_mut().unwrap().blocks[2]
+            .operations
+            .push(diagnostic.operation(diagnostic.result_type().map(|_| ValueId(99))));
+        module.functions.push(diagnostic.declaration());
+        let (result, _, _, calls) = run_module_case(&module, AMPLE, AMPLE, 0, |_| {
+            panic!("nonterminal diagnostic admitted")
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 0);
+    }
 }
 
 #[test]

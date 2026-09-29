@@ -40,6 +40,14 @@ pub struct MixedConditionalAccessV26 {
     pub invocation_axis: Option<u8>,
 }
 
+/// An explicit zero-access source/ABI row, never a synthetic memory occurrence.
+/// A consuming compiler/Worker must authenticate this complete row's origin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MixedConditionalUnusedSliceV26 {
+    pub slice: u16,
+    pub source_argument_identity: [u8; 32],
+}
+
 /// Complete bounded transport. Construction authenticates no source theorem,
 /// descriptor, current publication, executable, Rust borrow, or access right.
 #[derive(Debug)]
@@ -54,6 +62,7 @@ pub struct MixedConditionalDispatchPremisesV26 {
     index_width: u8,
     slices: Vec<Slice>,
     accesses: Vec<MixedConditionalAccessV26>,
+    unused_slices: Vec<MixedConditionalUnusedSliceV26>,
 }
 
 impl MixedConditionalDispatchPremisesV26 {
@@ -70,9 +79,45 @@ impl MixedConditionalDispatchPremisesV26 {
         slices: &[Slice],
         accesses: &[MixedConditionalAccessV26],
     ) -> Result<Self> {
+        if slices.is_empty() != accesses.is_empty() {
+            return Err(Error::ResourceLimit);
+        }
+        Self::new_with_unused_slices_v26(
+            contract_identity,
+            packing_identity,
+            kernel_id,
+            explicit_kernarg,
+            geometry,
+            source_rank,
+            exact_grid,
+            index_width,
+            slices,
+            accesses,
+            &[],
+        )
+    }
+
+    /// Preserves all mapping/fixup rows while separately declaring exact unused
+    /// arguments. The historical constructor still requires every slice to have
+    /// an access. An accessed argument cannot be mislabeled unused here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_unused_slices_v26(
+        contract_identity: [u8; 32],
+        packing_identity: [u8; 32],
+        kernel_id: [u8; 32],
+        explicit_kernarg: &[u8],
+        geometry: AqlDispatchGeometryV1,
+        source_rank: u8,
+        exact_grid: [u64; 3],
+        index_width: u8,
+        slices: &[Slice],
+        accesses: &[MixedConditionalAccessV26],
+        unused_slices: &[MixedConditionalUnusedSliceV26],
+    ) -> Result<Self> {
         if slices.len() > MAX_SLICES
             || accesses.len() > MAX_ACCESSES
-            || slices.is_empty() != accesses.is_empty()
+            || unused_slices.len() > MAX_SLICES
+            || (slices.is_empty() && (!accesses.is_empty() || !unused_slices.is_empty()))
             || explicit_kernarg.len() > MAX_KERNARG
         {
             return Err(Error::ResourceLimit);
@@ -121,7 +166,19 @@ impl MixedConditionalDispatchPremisesV26 {
                     return Err(Error::Binding);
                 }
             }
-            if !accesses.iter().any(|access| usize::from(access.slice) == i) {
+            let used = accesses.iter().any(|access| usize::from(access.slice) == i);
+            let unused = unused_slices.iter().any(|row| usize::from(row.slice) == i);
+            if used == unused {
+                return Err(Error::Binding);
+            }
+        }
+        for (i, row) in unused_slices.iter().enumerate() {
+            if usize::from(row.slice) >= slices.len()
+                || unused_slices[..i].iter().any(|prior| {
+                    prior.slice == row.slice
+                        || prior.source_argument_identity == row.source_argument_identity
+                })
+            {
                 return Err(Error::Binding);
             }
         }
@@ -218,6 +275,16 @@ impl MixedConditionalDispatchPremisesV26 {
             hash_domain(&mut hash, access.address_domain);
             hash.update([access.invocation_axis.map_or(0, |axis| axis + 1)]);
         }
+        // Keep the previous V26 identity unchanged when there are no unused
+        // arguments; an explicit extra roster has its own unambiguous suffix.
+        if !unused_slices.is_empty() {
+            hash.update(b"FE2O3/KFD/CONDITIONAL-MIXED-UNUSED-SLICES/V26\0");
+            put_usize(&mut hash, unused_slices.len());
+            for row in unused_slices {
+                hash.update(row.slice.to_le_bytes());
+                hash.update(row.source_argument_identity);
+            }
+        }
         Ok(Self {
             identity: hash.finalize().into(),
             contract_identity,
@@ -229,6 +296,7 @@ impl MixedConditionalDispatchPremisesV26 {
             index_width,
             slices: bounded_copy(slices)?,
             accesses: bounded_copy(accesses)?,
+            unused_slices: bounded_copy(unused_slices)?,
         })
     }
 
@@ -237,6 +305,9 @@ impl MixedConditionalDispatchPremisesV26 {
     }
     pub const fn contract_identity(&self) -> &[u8; 32] {
         &self.contract_identity
+    }
+    pub fn unused_slices(&self) -> &[MixedConditionalUnusedSliceV26] {
+        &self.unused_slices
     }
 
     pub(crate) fn check_request(

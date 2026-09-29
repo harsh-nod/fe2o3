@@ -602,3 +602,47 @@ fn mixed_descriptor_subject_normalizes_only_final_digest_and_charges_before_hash
         Err(MixedContractErrorV26::Resource("work"))
     );
 }
+
+#[test]
+fn mixed_contract_explicit_zero_access_arguments_keep_full_source_abi_identity() {
+    let args = [argument(0, 0, 1), argument(2, 0, 0)];
+    let rows = [occurrence(0, 1, true)];
+    let bytes = encoded(subjects(), &args, &rows);
+    let view = decode_mixed_contract_v26(&bytes, &mut pay).unwrap();
+    assert_eq!((view.argument_count(), view.occurrence_count()), (2, 1));
+    let unused = view.argument(1, &mut pay).unwrap();
+    assert_eq!([unused.reads, unused.writes], [0, 0]);
+    let identity = view.argument_identity(1, &mut pay).unwrap();
+    assert_ne!(identity, view.argument_identity(0, &mut pay).unwrap());
+    assert!(view.argument_identity(2, &mut pay).is_err());
+    let mut changed = args;
+    changed[1].semantic_type_identity[0] ^= 1;
+    let bytes = encoded(subjects(), &changed, &rows);
+    assert_ne!(
+        decode_mixed_contract_v26(&bytes, &mut pay)
+            .unwrap()
+            .argument_identity(1, &mut pay)
+            .unwrap(),
+        identity
+    );
+    changed = args;
+    changed[0].writes = 0;
+    assert!(
+        encoded_mixed_contract_v26_len(
+            &MixedContractInputV26 {
+                subjects: subjects(),
+                arguments: &changed,
+                occurrences: &rows
+            },
+            &mut pay
+        )
+        .is_err()
+    );
+    let bytes = encoded(subjects(), &[argument(0, 0, 0), argument(2, 0, 0)], &[]);
+    assert_eq!(
+        decode_mixed_contract_v26(&bytes, &mut pay)
+            .unwrap()
+            .argument_count(),
+        2
+    );
+}
