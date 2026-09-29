@@ -1,9 +1,11 @@
 //! Root-created channel provenance, not issuer or compiler admission.
+use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_ROOT_CONTROL_BYTES_V3 as PACKET_BYTES;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKernelIrWorkBudgetV1 as Work, CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
 };
+use fe2o3_protected_service_spawn::launch_io as transport;
 use rustix::{fs, io, net, process};
 use std::{
     fmt,
@@ -70,6 +72,18 @@ impl RootLaunchChannelStorageV3 {
 /// use fe2o3_broker_authority_service::RootLaunchChannelV3 as C;
 /// fn adopt(fd: std::os::fd::OwnedFd) { let _ = C::from_fd(fd); }
 /// ```
+/// The broker's packet operations are not available as a public authority path.
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::RootLaunchChannelV3 as C;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+/// fn send(c: &C<'_>, bytes: &[u8; 4096], b: &mut B<'_>) { c.send_packet(bytes, b); }
+/// ```
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::RootLaunchChannelV3 as C;
+/// use fe2o3_protected_service_spawn::launch_io::MessageSender;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as B;
+/// fn receive(c: &C<'_>, sender: MessageSender, b: &mut B<'_>) { c.receive_packet(sender, b); }
+/// ```
 pub struct RootLaunchChannelV3<'work> {
     root: OwnedFd,
     issuer: Option<OwnedFd>,
@@ -84,6 +98,9 @@ impl<'work> RootLaunchChannelV3<'work> {
     pub const WORK: usize = WORK;
     pub const SCRATCH: usize = FRAME;
     pub const STORAGE: usize = size_of::<(Self, RootLaunchChannelStorageV3)>() + 2 * FD_STORAGE;
+    pub(crate) const PACKET_WORK: usize = WORK + transport::packet_receive_work(PACKET_BYTES);
+    pub(crate) const PACKET_SCRATCH: usize =
+        FRAME + transport::packet_receive_scratch(PACKET_BYTES);
 
     pub fn create(b: &mut Budget<'work>) -> Result<(Self, RootLaunchChannelStorageV3)> {
         b.with_prepaid_scope(0, ENTRY, WORK, FRAME, |b| {
@@ -140,6 +157,57 @@ impl<'work> RootLaunchChannelV3<'work> {
         })
     }
 
+    /// One bounded attempt on the retained root endpoint. Sender values are
+    /// inert comparisons: the session must derive them from its actual admitted
+    /// issuer, validate liveness, and complete a fresh post-readiness challenge.
+    /// A packet alone grants no admission, transition or retirement authority.
+    /// Returned bytes are unreserved; retain their full charge before storing.
+    pub(crate) fn receive_packet(
+        &self,
+        sender: transport::MessageSender,
+        b: &mut Budget<'_>,
+    ) -> Result<Option<[u8; PACKET_BYTES]>> {
+        b.with_prepaid_scope(
+            Self::STORAGE,
+            ENTRY,
+            Self::PACKET_WORK,
+            Self::PACKET_SCRATCH,
+            |b| {
+                self.check_packet_endpoint(b)?;
+                transport::receive_authenticated_packet(self.root.as_fd(), sender)
+                    .map_err(packet_error)
+            },
+        )
+    }
+
+    /// Sends inert bytes without transferring the endpoint or changing replay
+    /// state. None/error does not discard a pending reply; Some is not an ACK.
+    /// Both the owner and complete borrowed payload must already be prepaid.
+    pub(crate) fn send_packet(
+        &self,
+        bytes: &[u8; PACKET_BYTES],
+        b: &mut Budget<'_>,
+    ) -> Result<Option<()>> {
+        b.with_prepaid_scope(
+            Self::STORAGE + PACKET_BYTES,
+            ENTRY,
+            Self::PACKET_WORK,
+            Self::PACKET_SCRATCH,
+            |b| {
+                self.check_packet_endpoint(b)?;
+                transport::send_packet(self.root.as_fd(), bytes).map_err(packet_error)
+            },
+        )
+    }
+
+    fn check_packet_endpoint(&self, b: &Budget<'_>) -> Result<()> {
+        self.check_account(b)?;
+        if self.issuer.is_some() {
+            return Err(Error::Refused("parent issuer endpoint still open"));
+        }
+        validate_endpoint(self.root.as_fd(), self.process)
+    }
+
     pub const fn retained_storage(&self) -> usize {
         Self::STORAGE
     }
@@ -153,6 +221,13 @@ impl<'work> RootLaunchChannelV3<'work> {
             return Err(Resource::Accounting.into());
         }
         require_root()
+    }
+}
+
+fn packet_error(error: transport::Failure) -> Error {
+    match error {
+        transport::Failure::Io { source, .. } => Error::Io(source),
+        _ => Error::Refused("root control packet framing or credentials"),
     }
 }
 
