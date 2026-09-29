@@ -283,6 +283,16 @@
   "crates/fe2o3-compiler-execution-coordinator/src/native_provisioner_activation.rs": {
     "block": 4
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_root_issuer.rs": {
+    "block": 3,
+    "function": 2
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_root_issuer_staging.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_root_issuer_tests.rs": {
+    "block": 1
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/native_tests.rs": {
     "block": 1
   },

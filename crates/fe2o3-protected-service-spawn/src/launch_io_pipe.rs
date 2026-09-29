@@ -19,8 +19,9 @@ pub enum PipeFrameError {
     Finished,
 }
 
-/// Fixed inert bytes plus exact-EOF state. This performs no I/O of its own and
-/// supplies no deadline, metering, pipe-shape, liveness or admission policy.
+/// Fixed inert bytes plus exact-EOF state. The callback form performs no I/O of
+/// its own; the FD form also validates pipe shape and nonblocking status. Neither
+/// form supplies deadline, metering, liveness or admission policy.
 pub struct ExactPipeFrame<const N: usize> {
     bytes: [u8; N],
     used: usize,
