@@ -150,6 +150,12 @@ fn main() -> ExitCode {
     }
     if raw_args
         .first()
+        .is_some_and(|argument| argument == authority_release::INTERNAL_CHILD_ARG_V4)
+    {
+        return authority_release::run_child_v4(&raw_args[1..]);
+    }
+    if raw_args
+        .first()
         .is_some_and(|argument| argument == application_supervisor::INTERNAL_SUPERVISOR_ARG)
     {
         return run_application_supervisor(&raw_args[1..]);
@@ -1251,8 +1257,7 @@ fn cargo_with_backend_result(
     let protected_compiler_closure =
         protected_release.map(authority_release::ProtectedReleaseAdmission::compiler_closure);
     let compiler_execution_profile = protected_release
-        .map(authority_release::ProtectedReleaseAdmission::compiler_execution_profile)
-        .cloned()
+        .map(authority_release::ProtectedReleaseAdmission::compiler_execution_profile_identity)
         .ok_or_else(|| {
             "production compilation requires the protected compiler-execution client profile"
                 .to_owned()
@@ -1407,7 +1412,7 @@ struct BackendRunContext {
     build_config_identity: Option<build_config::BuildConfigIdentity>,
     compiler_closure_sha256: [u8; 32],
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
-    compiler_execution_profile: fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1,
+    compiler_execution_profile: authority_release::CompilerExecutionProfileIdentity,
     target_dir: project::PinnedDirectory,
     generation: generation::PreparedGeneration,
     managed_rustc_args: OsString,
@@ -1428,7 +1433,7 @@ struct BackendRunPreparation {
     protected_binding_wrapper: Option<pinned_executable::PinnedExecutable>,
     cargo_binding_trampoline: Option<pinned_executable::PinnedExecutable>,
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
-    compiler_execution_profile: fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1,
+    compiler_execution_profile: authority_release::CompilerExecutionProfileIdentity,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
 }
 
@@ -1533,10 +1538,7 @@ impl BackendRunContext {
             cargo_configuration.extend_from_slice(authorized_closure.snapshot());
         }
         append_production_target_semantic_configuration(&mut cargo_configuration, target_profile);
-        append_compiler_execution_profile_semantic_configuration(
-            &mut cargo_configuration,
-            &compiler_execution_profile,
-        );
+        compiler_execution_profile.append_semantic_configuration(&mut cargo_configuration);
         let backend_reference = pinned_backend
             .fixed_child_descriptor_path(BACKEND_CHILD_FD)
             .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
@@ -1587,12 +1589,13 @@ fn append_production_target_semantic_configuration(
     configuration.push(0);
 }
 
+#[cfg(test)]
 fn append_compiler_execution_profile_semantic_configuration(
     configuration: &mut Vec<u8>,
     profile: &fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1,
 ) {
-    configuration.extend_from_slice(b"fe2o3-compiler-execution-client-profile-v1\0");
-    configuration.extend_from_slice(profile.identity().as_bytes());
+    authority_release::CompilerExecutionProfileIdentity::V1(*profile.identity().as_bytes())
+        .append_semantic_configuration(configuration);
 }
 
 fn run_cargo_with_backend(
@@ -1676,40 +1679,65 @@ fn run_cargo_with_backend_inner(
         let protected_release = protected_release.ok_or_else(|| {
             "protected compiler closure has no retained authority release".to_owned()
         })?;
-        if protected_release.compiler_execution_profile() != &context.compiler_execution_profile {
+        if protected_release.compiler_execution_profile_identity()
+            != context.compiler_execution_profile
+        {
             return Err(
                 "retained compiler-execution client profile changed after generation preparation"
                     .to_owned(),
             );
         }
-        let binding = capability_broker::CapabilityBindingV3::new_protected(
-            capability_profile,
-            config_identity,
-            compiler_closure,
-            retained_object_binding_sha256,
-        )?;
-        match source_isa_observer_policy.as_ref() {
-            Some(policy) => {
-                capability_broker::CapabilityBroker::start_protected_with_source_isa_observer(
-                    context.build_session,
-                    binding,
-                    compiler_closure,
-                    protected_release.compiler_execution_profile_capability(),
-                    &context.pinned_backend,
-                    artifact_dir,
-                    &context.pinned_cargo,
-                    policy,
-                )?
-            }
-            None => capability_broker::CapabilityBroker::start_protected(
+        if let Some(profile) = protected_release.compiler_execution_profile_v3() {
+            let binding = capability_broker::CapabilityBindingV3::new_protected_v4(
+                capability_profile,
+                config_identity,
+                compiler_closure,
+                retained_object_binding_sha256,
+                *profile.profile().identity().as_bytes(),
+            )?;
+            capability_broker::CapabilityBroker::start_protected_v4(
                 context.build_session,
                 binding,
                 compiler_closure,
-                protected_release.compiler_execution_profile_capability(),
+                profile,
                 &context.pinned_backend,
                 artifact_dir,
                 &context.pinned_cargo,
-            )?,
+                source_isa_observer_policy.as_ref(),
+            )?
+        } else {
+            let profile = protected_release
+                .compiler_execution_profile_capability()
+                .ok_or("protected release has no retained compiler-execution profile")?;
+            let binding = capability_broker::CapabilityBindingV3::new_protected(
+                capability_profile,
+                config_identity,
+                compiler_closure,
+                retained_object_binding_sha256,
+            )?;
+            match source_isa_observer_policy.as_ref() {
+                Some(policy) => {
+                    capability_broker::CapabilityBroker::start_protected_with_source_isa_observer(
+                        context.build_session,
+                        binding,
+                        compiler_closure,
+                        profile,
+                        &context.pinned_backend,
+                        artifact_dir,
+                        &context.pinned_cargo,
+                        policy,
+                    )?
+                }
+                None => capability_broker::CapabilityBroker::start_protected(
+                    context.build_session,
+                    binding,
+                    compiler_closure,
+                    profile,
+                    &context.pinned_backend,
+                    artifact_dir,
+                    &context.pinned_cargo,
+                )?,
+            }
         }
     } else {
         if source_isa_observer_enabled {

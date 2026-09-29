@@ -24,6 +24,10 @@
 //! still possess a kernel-observed one-use invocation permit. This is not a sandbox against hostile
 //! same-user code that can ptrace or inject into another process; untrusted build dependencies
 //! require a separate process sandbox.
+//!
+//! The private V4 transport binds a fresh V3 client-profile identity and keeps
+//! the same four protected descriptor roles. V3/V1 and V4/V3 readers select an
+//! exact family before authentication, with no retry, upgrade or fallback.
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
@@ -54,6 +58,9 @@ mod platform {
     };
     use sha2::{Digest, Sha256};
 
+    use crate::authority_release::profile::{
+        ClientProfileAccountV3, FundedClientProfileV3, FundedProfileFileV3,
+    };
     use crate::build_config::{
         ProductionSourceIsaObservationKindV1, ProductionSourceIsaObserverPolicyV1,
     };
@@ -78,6 +85,10 @@ mod platform {
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
     const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V3\0";
     const ROUTE_PREFIX: &str = "fe2o3-capability-route-v3";
+    const REQUEST_MAGIC_V4: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V4\0";
+    const ROUTE_PREFIX_V4: &str = "fe2o3-capability-route-v4";
+    const REQUEST_AUTH_DOMAIN_V4: &[u8] = b"FE2O3/CAPABILITY-BROKER/REQUEST-AUTH/V4\0";
+    const RESPONSE_AUTH_DOMAIN_V4: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V4\0";
     const ENDPOINT_BYTES: usize = 32;
     const ENDPOINT_HEX_BYTES: usize = ENDPOINT_BYTES * 2;
     const SECRET_BYTES: usize = 32;
@@ -141,7 +152,64 @@ mod platform {
     #[derive(Clone, Copy)]
     struct BrokerCompilerCapabilities<'profile> {
         closure: Option<fe2o3_build_authority::CompilerClosureV2>,
-        execution_profile: Option<&'profile CompilerExecutionClientProfileCapabilityV1>,
+        execution_profile: Option<BrokerProfileRef<'profile>>,
+    }
+
+    #[derive(Clone, Copy)]
+    enum BrokerProfileRef<'a> {
+        V1(&'a CompilerExecutionClientProfileCapabilityV1),
+        V3(&'a FundedClientProfileV3),
+    }
+
+    enum RetainedBrokerProfile {
+        V1(CompilerExecutionClientProfileCapabilityV1),
+        V3(FundedClientProfileV3),
+    }
+
+    enum BrokerProfileTransfer {
+        V1(File),
+        V3(FundedProfileFileV3),
+    }
+
+    impl BrokerProfileTransfer {
+        fn file(&self) -> &File {
+            match self {
+                Self::V1(file) => file,
+                Self::V3(file) => file.file(),
+            }
+        }
+    }
+
+    impl RetainedBrokerProfile {
+        fn try_clone_for_transfer(&self) -> Result<BrokerProfileTransfer, String> {
+            match self {
+                Self::V1(profile) => profile
+                    .try_clone_for_transfer()
+                    .map(BrokerProfileTransfer::V1),
+                Self::V3(profile) => profile
+                    .try_clone_for_transfer()
+                    .map(BrokerProfileTransfer::V3),
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum CompilerExecutionProfileFamily {
+        LegacyV1,
+        NativeV3,
+    }
+
+    /// Untrusted dispatch hint only. Each selected reader authenticates its exact
+    /// family, request, profile identity and descriptor roster independently.
+    pub(crate) fn broker_route_family_from_environment()
+    -> Result<CompilerExecutionProfileFamily, String> {
+        let route = std::env::var(CAPABILITY_BROKER_ENV)
+            .map_err(|_| format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}"))?;
+        match route.split(':').next() {
+            Some(ROUTE_PREFIX) => Ok(CompilerExecutionProfileFamily::LegacyV1),
+            Some(ROUTE_PREFIX_V4) => Ok(CompilerExecutionProfileFamily::NativeV3),
+            _ => Err("capability broker route has an unknown transport family".to_owned()),
+        }
     }
 
     #[derive(Clone)]
@@ -419,7 +487,7 @@ mod platform {
         ) -> Self {
             Self {
                 closure: Some(closure),
-                execution_profile: Some(execution_profile),
+                execution_profile: Some(BrokerProfileRef::V1(execution_profile)),
             }
         }
     }
@@ -470,6 +538,8 @@ mod platform {
         compiler_closure_sha256: [u8; COMPILER_CLOSURE_ID_BYTES],
         rustc_executable_sha256: [u8; RUSTC_EXECUTABLE_ID_BYTES],
         retained_object_binding_sha256: [u8; RETAINED_OBJECT_BINDING_BYTES],
+        // None preserves the frozen V3 bytes; Some is exclusively V4/V3-profile.
+        native_profile_identity: Option<[u8; 32]>,
     }
 
     impl CapabilityBindingV3 {
@@ -493,6 +563,7 @@ mod platform {
                 compiler_closure_sha256,
                 rustc_executable_sha256,
                 retained_object_binding_sha256,
+                native_profile_identity: None,
             })
         }
 
@@ -513,6 +584,31 @@ mod platform {
             Ok(binding)
         }
 
+        pub(crate) fn new_protected_v4(
+            profile: CapabilityProfileV1,
+            config_identity: Option<[u8; CONFIG_ID_BYTES]>,
+            compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            retained_object_binding_sha256: [u8; RETAINED_OBJECT_BINDING_BYTES],
+            native_profile_identity: [u8; 32],
+        ) -> Result<Self, String> {
+            if native_profile_identity == [0; 32]
+                || config_identity.is_none_or(|identity| identity == [0; 32])
+            {
+                return Err(
+                    "native profile binding requires exact nonzero profile and config identities"
+                        .to_owned(),
+                );
+            }
+            let mut binding = Self::new_protected(
+                profile,
+                config_identity,
+                compiler_closure,
+                retained_object_binding_sha256,
+            )?;
+            binding.native_profile_identity = Some(native_profile_identity);
+            Ok(binding)
+        }
+
         /// Reads an untrusted routing claim only. `receive` must authenticate it
         /// before its configuration identity can authorize manifest preparation.
         pub(crate) fn from_environment_for_client(
@@ -526,6 +622,28 @@ mod platform {
                 return Err("capability broker route has the wrong profile".into());
             }
             Ok(route.binding)
+        }
+
+        pub(crate) fn from_environment_for_client_v4(
+            profile: CapabilityProfileV1,
+        ) -> Result<Self, String> {
+            let encoded_route = std::env::var(CAPABILITY_BROKER_ENV).map_err(|_| {
+                format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}")
+            })?;
+            let route = BrokerRouteV3::parse_v4(&encoded_route)?;
+            if route.binding.profile != profile {
+                return Err("capability broker route has the wrong profile".into());
+            }
+            Ok(route.binding)
+        }
+
+        const fn request_bytes(self) -> usize {
+            REQUEST_BYTES
+                + if self.native_profile_identity.is_some() {
+                    33
+                } else {
+                    0
+                }
         }
 
         /// A routing claim until `receive` authenticates this exact binding.
@@ -727,8 +845,13 @@ mod platform {
 
     impl BrokerRouteV3 {
         fn encode(&self) -> String {
-            format!(
-                "{ROUTE_PREFIX}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{:x}:{:x}:{:x}:{}",
+            let prefix = if self.binding.native_profile_identity.is_some() {
+                ROUTE_PREFIX_V4
+            } else {
+                ROUTE_PREFIX
+            };
+            let mut route = format!(
+                "{prefix}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{:x}:{:x}:{:x}:{}",
                 self.endpoint,
                 hex(&self.secret),
                 self.binding.profile.route_name(),
@@ -751,13 +874,33 @@ mod platform {
                 self.peer.inode,
                 self.peer.mode,
                 hex(&self.peer.executable_sha256),
-            )
+            );
+            if let Some(identity) = self.binding.native_profile_identity {
+                route.push_str(":profile-v3:");
+                route.push_str(&hex(&identity));
+            }
+            route
         }
 
         fn parse(value: &str) -> Result<Self, String> {
+            Self::parse_for(value, false)
+        }
+
+        fn parse_v4(value: &str) -> Result<Self, String> {
+            Self::parse_for(value, true)
+        }
+
+        fn parse_for(value: &str, native: bool) -> Result<Self, String> {
             let fields = value.split(':').collect::<Vec<_>>();
-            if fields.len() != 16 || fields[0] != ROUTE_PREFIX {
-                return Err("capability broker route is not canonical V3".into());
+            let (count, prefix) = if native {
+                (18, ROUTE_PREFIX_V4)
+            } else {
+                (16, ROUTE_PREFIX)
+            };
+            if fields.len() != count || fields[0] != prefix {
+                return Err(
+                    "capability broker route is not the exact selected transport family".into(),
+                );
             }
             let endpoint = fields[1].to_owned();
             endpoint_address(&endpoint)?;
@@ -786,6 +929,22 @@ mod platform {
                 retained_object_binding_sha256,
             )?;
             binding.protected_compiler_closure_v2 = protected_compiler_closure_v2;
+            if native {
+                if !protected_compiler_closure_v2
+                    || fields[16] != "profile-v3"
+                    || config_identity.is_none_or(|identity| identity == [0; 32])
+                {
+                    return Err(
+                        "native broker route has mixed family or missing protected configuration"
+                            .into(),
+                    );
+                }
+                let identity = decode_fixed_hex(fields[17], "native profile identity")?;
+                if identity == [0; 32] {
+                    return Err("native broker route has zero profile identity".into());
+                }
+                binding.native_profile_identity = Some(identity);
+            }
             let peer = BrokerPeerIdentityV2 {
                 uid: u32::try_from(parse_canonical_decimal(fields[9], "peer uid", true)?)
                     .map_err(|_| "capability broker peer uid exceeds u32".to_owned())?,
@@ -1065,6 +1224,34 @@ mod platform {
             )
         }
 
+        /// Starts only from the fresh capability retained by a V4 release. The
+        /// shared engine checks the exact profile identity before thread transfer.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn start_protected_v4(
+            session: BuildSession,
+            binding: CapabilityBindingV3,
+            compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            compiler_execution_profile: &FundedClientProfileV3,
+            backend: &PinnedCodegenBackend,
+            artifact: &PinnedDirectory,
+            pinned_cargo_image: &PinnedExecutable,
+            observer_policy: Option<&ProductionSourceIsaObserverPolicyV1>,
+        ) -> Result<Self, String> {
+            Self::start_with_compiler_capabilities(
+                session,
+                binding,
+                BrokerCompilerCapabilities {
+                    closure: Some(compiler_closure),
+                    execution_profile: Some(BrokerProfileRef::V3(compiler_execution_profile)),
+                },
+                backend,
+                artifact,
+                pinned_cargo_image,
+                observer_policy,
+                PRODUCTION_BROKER_LIMITS,
+            )
+        }
+
         fn start_with_limits(
             session: BuildSession,
             binding: CapabilityBindingV3,
@@ -1112,6 +1299,16 @@ mod platform {
                         .to_owned(),
                 );
             }
+            match (binding.native_profile_identity, compiler.execution_profile) {
+                (None, None | Some(BrokerProfileRef::V1(_))) => {}
+                (Some(identity), Some(BrokerProfileRef::V3(profile)))
+                    if identity == *profile.profile().identity().as_bytes() => {}
+                _ => {
+                    return Err(
+                        "capability binding and retained profile family/identity differ".to_owned(),
+                    );
+                }
+            }
             let source_isa_observer = observer_policy
                 .map(|policy| BrokerSourceIsaObserverV1::from_policy(policy, session))
                 .transpose()?;
@@ -1142,11 +1339,17 @@ mod platform {
                 .transpose()?;
             let compiler_execution_profile = compiler
                 .execution_profile
-                .map(|profile| {
-                    profile.revalidate()?;
-                    CompilerExecutionClientProfileCapabilityV1::from_file(
-                        profile.try_clone_for_transfer()?,
-                    )
+                .map(|profile| match profile {
+                    BrokerProfileRef::V1(profile) => {
+                        profile.revalidate()?;
+                        CompilerExecutionClientProfileCapabilityV1::from_file(
+                            profile.try_clone_for_transfer()?,
+                        )
+                        .map(RetainedBrokerProfile::V1)
+                    }
+                    BrokerProfileRef::V3(profile) => {
+                        profile.try_clone_retained().map(RetainedBrokerProfile::V3)
+                    }
                 })
                 .transpose()?;
             let endpoint = random_endpoint().map_err(|error| {
@@ -1261,28 +1464,59 @@ mod platform {
         pub(crate) artifact: PinnedDirectory,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) compiler_execution_profile: Option<CompilerExecutionClientProfileCapabilityV1>,
+        compiler_execution_profile_v3: Option<FundedClientProfileV3>,
+        authenticated_binding: Option<CapabilityBindingV3>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
+    }
+
+    impl BrokeredCapabilities {
+        /// Populated only after the exact response and all descriptors authenticate.
+        pub(crate) fn authenticated_client_profile_v3_identity(&self) -> Option<[u8; 32]> {
+            self.authenticated_binding
+                .and_then(|binding| binding.native_profile_identity)
+        }
+
+        pub(crate) fn take_compiler_execution_profile_v3(
+            &mut self,
+        ) -> Result<FundedClientProfileV3, String> {
+            if self.authenticated_client_profile_v3_identity().is_none()
+                || self.compiler_execution_profile.is_some()
+            {
+                return Err(
+                    "broker response is not the authenticated native profile family".to_owned(),
+                );
+            }
+            self.compiler_execution_profile_v3
+                .take()
+                .ok_or_else(|| "authenticated native profile has already been consumed".to_owned())
+        }
     }
 
     pub(crate) struct BrokeredInvocationAuthorityV1 {
         stream: UnixStream,
+        profile_account: Option<ClientProfileAccountV3>,
     }
 
     pub(crate) struct SourceIsaObservationSinkV1 {
         stream: UnixStream,
+        _profile_account: Option<ClientProfileAccountV3>,
         config_identity: [u8; 32],
         unit_identity: [u8; 32],
         attempt: BuildAttempt,
     }
 
     impl BrokeredInvocationAuthorityV1 {
-        fn from_authenticated_stream(stream: UnixStream) -> Result<Self, String> {
+        fn from_authenticated_stream_with_account(
+            stream: UnixStream,
+            profile_account: Option<ClientProfileAccountV3>,
+        ) -> Result<Self, String> {
             let normalized = rustix::io::fcntl_dupfd_cloexec(&stream, RECEIVED_DESCRIPTOR_FLOOR)
                 .map_err(|error| {
                     format!("failed to retain authenticated invocation capability: {error}")
                 })?;
             Ok(Self {
                 stream: UnixStream::from(normalized),
+                profile_account,
             })
         }
 
@@ -1320,6 +1554,7 @@ mod platform {
             }
             Ok(SourceIsaObservationSinkV1 {
                 stream,
+                _profile_account: self.profile_account,
                 config_identity,
                 unit_identity,
                 attempt,
@@ -1404,10 +1639,27 @@ mod platform {
         session: BuildSession,
         binding: CapabilityBindingV3,
     ) -> Result<BrokeredCapabilities, String> {
+        if binding.native_profile_identity.is_some() {
+            return Err("legacy broker reader rejects a native profile binding".to_owned());
+        }
         let encoded_route = std::env::var(CAPABILITY_BROKER_ENV)
             .map_err(|_| format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}"))?;
         let route = BrokerRouteV3::parse(&encoded_route)?;
         receive_from(&route, session, binding)
+    }
+
+    pub(crate) fn receive_v4(
+        session: BuildSession,
+        binding: CapabilityBindingV3,
+        account: ClientProfileAccountV3,
+    ) -> Result<BrokeredCapabilities, String> {
+        if binding.native_profile_identity.is_none() {
+            return Err("native broker reader rejects a legacy profile binding".to_owned());
+        }
+        let encoded_route = std::env::var(CAPABILITY_BROKER_ENV)
+            .map_err(|_| format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}"))?;
+        let route = BrokerRouteV3::parse_v4(&encoded_route)?;
+        receive_from_with_account(&route, session, binding, Some(account))
     }
 
     fn receive_from(
@@ -1415,11 +1667,34 @@ mod platform {
         session: BuildSession,
         binding: CapabilityBindingV3,
     ) -> Result<BrokeredCapabilities, String> {
+        receive_from_with_account(route, session, binding, None)
+    }
+
+    fn receive_from_with_account(
+        route: &BrokerRouteV3,
+        session: BuildSession,
+        binding: CapabilityBindingV3,
+        account: Option<ClientProfileAccountV3>,
+    ) -> Result<BrokeredCapabilities, String> {
+        if binding.native_profile_identity.is_some() != account.is_some() {
+            return Err("broker reader account/profile family differs".to_owned());
+        }
         if route.binding != binding {
             return Err(
                 "capability broker route does not match the requested profile/config/rustc identity"
                     .into(),
             );
+        }
+        if let Some(account) = &account {
+            // Prepay all incoming descriptor owners before recvmsg can create them.
+            // This is monotone: a malformed frame never refunds a live descriptor.
+            let storage = fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV3::FILE_STORAGE
+                .checked_mul(binding.descriptor_count() + 2).ok_or("native broker descriptor quota overflow")?;
+            account
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .with_budget(|budget| budget.reserve_storage(storage))
+                .map_err(|error| error.to_string())?;
         }
         route.peer.require_current_executable()?;
         let address = endpoint_address(&route.endpoint)?;
@@ -1432,43 +1707,81 @@ mod platform {
         let challenge = random_bytes()
             .map_err(|error| format!("failed to allocate broker client challenge: {error}"))?;
         let request = request_bytes(session, binding, challenge, &route.secret);
-        let request_auth: [u8; REQUEST_AUTH_BYTES] = request[REQUEST_BYTES - REQUEST_AUTH_BYTES..]
+        let request_auth: [u8; REQUEST_AUTH_BYTES] = request[request.len() - REQUEST_AUTH_BYTES..]
             .try_into()
             .expect("request authentication field has a fixed size");
         stream
             .write_all(&request)
             .map_err(|error| format!("failed to authenticate to capability broker: {error}"))?;
 
+        let descriptors =
+            receive_response(&stream, binding, &route.secret, challenge, request_auth)?;
+        let invocation_account = account.as_ref().map(Arc::clone);
+        let mut capabilities =
+            decode_received_descriptors_with_account(descriptors, binding, account)?;
+        capabilities.invocation_authority = Some(
+            BrokeredInvocationAuthorityV1::from_authenticated_stream_with_account(
+                stream,
+                invocation_account,
+            )?,
+        );
+        capabilities.authenticated_binding = Some(binding);
+        Ok(capabilities)
+    }
+
+    fn receive_response(
+        stream: &UnixStream,
+        binding: CapabilityBindingV3,
+        secret: &[u8; SECRET_BYTES],
+        challenge: [u8; CHALLENGE_BYTES],
+        request_auth: [u8; REQUEST_AUTH_BYTES],
+    ) -> Result<Vec<OwnedFd>, String> {
         let mut response = [0_u8; RESPONSE_BYTES];
         let mut iov = [IoSliceMut::new(&mut response)];
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-        let message = recvmsg(&stream, &mut iov, &mut ancillary, RecvFlags::CMSG_CLOEXEC)
+        let message = recvmsg(stream, &mut iov, &mut ancillary, RecvFlags::CMSG_CLOEXEC)
             .map_err(|error| format!("failed to receive brokered capabilities: {error}"))?;
+        let mut descriptors = Vec::new();
+        let mut unexpected = false;
+        for control in ancillary.drain() {
+            match control {
+                RecvAncillaryMessage::ScmRights(received) => descriptors.extend(received),
+                _ => unexpected = true,
+            }
+        }
         if message.flags.contains(ReturnFlags::CTRUNC) {
             return Err("capability broker descriptor response was truncated".to_string());
         }
-        let expected_response = response_bytes(&route.secret, challenge, request_auth);
+        let expected_response = response_bytes_for(binding, secret, challenge, request_auth);
         if message.bytes != RESPONSE_BYTES || response != expected_response {
             return Err("capability broker returned a malformed response".to_string());
         }
-        let mut descriptors = Vec::new();
-        for message in ancillary.drain() {
-            if let RecvAncillaryMessage::ScmRights(received) = message {
-                descriptors.extend(received);
-            }
+        if unexpected || descriptors.len() != binding.descriptor_count() {
+            return Err(
+                "capability broker returned an unexpected control message or descriptor count"
+                    .to_owned(),
+            );
         }
-        let mut capabilities = decode_received_descriptors(descriptors, binding)?;
-        capabilities.invocation_authority = Some(
-            BrokeredInvocationAuthorityV1::from_authenticated_stream(stream)?,
-        );
-        Ok(capabilities)
+        Ok(descriptors)
     }
 
+    #[cfg(test)]
     fn decode_received_descriptors(
-        mut descriptors: Vec<OwnedFd>,
+        descriptors: Vec<OwnedFd>,
         binding: CapabilityBindingV3,
     ) -> Result<BrokeredCapabilities, String> {
+        decode_received_descriptors_with_account(descriptors, binding, None)
+    }
+
+    fn decode_received_descriptors_with_account(
+        mut descriptors: Vec<OwnedFd>,
+        binding: CapabilityBindingV3,
+        account: Option<ClientProfileAccountV3>,
+    ) -> Result<BrokeredCapabilities, String> {
+        if binding.native_profile_identity.is_some() != account.is_some() {
+            return Err("descriptor decoder and profile family differ".to_owned());
+        }
         if descriptors.len() != binding.descriptor_count() {
             return Err(format!(
                 "capability broker returned {} descriptors instead of {} for the {} profile",
@@ -1477,16 +1790,49 @@ mod platform {
                 binding.profile.name(),
             ));
         }
+        // Each roster position names a different retained object. Reject aliases
+        // before any positional decoder can consume a duplicate of another role.
+        for (index, descriptor) in descriptors.iter().enumerate() {
+            let object = rustix::fs::fstat(descriptor).map_err(|error| error.to_string())?;
+            for previous in &descriptors[..index] {
+                let other = rustix::fs::fstat(previous).map_err(|error| error.to_string())?;
+                if (object.st_dev, object.st_ino) == (other.st_dev, other.st_ino) {
+                    return Err(
+                        "capability broker returned duplicate descriptor objects".to_owned()
+                    );
+                }
+            }
+        }
+        let mut compiler_execution_profile_v3 = None;
         let compiler_execution_profile = if binding.requires_compiler_closure_v2() {
-            let image = normalize_received_descriptor(
-                descriptors
-                    .pop()
-                    .expect("compiler-execution profile descriptor count checked"),
-                "compiler-execution client profile",
-            )?;
-            Some(CompilerExecutionClientProfileCapabilityV1::from_file(
-                image,
-            )?)
+            let descriptor = descriptors
+                .pop()
+                .expect("compiler-execution profile descriptor count checked");
+            if let Some(identity) = binding.native_profile_identity {
+                let profile = FundedClientProfileV3::from_received_with(
+                    account.expect("native account presence checked"),
+                    || {
+                        normalize_received_descriptor(
+                            descriptor,
+                            "compiler-execution client profile V3",
+                        )
+                    },
+                )?;
+                if *profile.profile().identity().as_bytes() != identity {
+                    return Err(
+                        "brokered native profile differs from authenticated profile identity"
+                            .to_owned(),
+                    );
+                }
+                compiler_execution_profile_v3 = Some(profile);
+                None
+            } else {
+                let image =
+                    normalize_received_descriptor(descriptor, "compiler-execution client profile")?;
+                Some(CompilerExecutionClientProfileCapabilityV1::from_file(
+                    image,
+                )?)
+            }
         } else {
             None
         };
@@ -1528,6 +1874,8 @@ mod platform {
             artifact,
             compiler_closure,
             compiler_execution_profile,
+            compiler_execution_profile_v3,
+            authenticated_binding: None,
             invocation_authority: None,
         })
     }
@@ -1553,7 +1901,7 @@ mod platform {
         backend: File,
         artifact: File,
         compiler_closure: Option<CompilerClosureCapabilityV1>,
-        compiler_execution_profile: Option<CompilerExecutionClientProfileCapabilityV1>,
+        compiler_execution_profile: Option<RetainedBrokerProfile>,
         source_isa_observer: Option<BrokerSourceIsaObserverV1>,
         authentication_timeout: Duration,
         invocation_frame_timeout: Duration,
@@ -1618,33 +1966,10 @@ mod platform {
                 .consume(client)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             deadline.require_remaining()?;
-            let mut request = vec![0_u8; REQUEST_BYTES];
+            let mut request = vec![0_u8; self.binding.request_bytes()];
             deadline.read_exact(stream, &mut request)?;
-            let challenge_start = REQUEST_MAGIC.len()
-                + 16
-                + 1
-                + CONFIG_ID_BYTES
-                + 1
-                + COMPILER_CLOSURE_ID_BYTES
-                + RUSTC_EXECUTABLE_ID_BYTES
-                + RETAINED_OBJECT_BINDING_BYTES;
-            let challenge: [u8; CHALLENGE_BYTES] = request
-                [challenge_start..challenge_start + CHALLENGE_BYTES]
-                .try_into()
-                .expect("request challenge has a fixed size");
-            let expected_request =
-                request_bytes(self.session, self.binding, challenge, &self.secret);
-            if request != expected_request {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "capability broker request is not bound to this broker, session, profile, and config",
-                ));
-            }
-            deadline.require_remaining()?;
-            let request_auth: [u8; REQUEST_AUTH_BYTES] = request
-                [REQUEST_BYTES - REQUEST_AUTH_BYTES..]
-                .try_into()
-                .expect("request authentication field has a fixed size");
+            let (challenge, request_auth) =
+                authenticate_request(&request, self.session, self.binding, &self.secret)?;
             deadline.require_remaining()?;
             let mut descriptors = vec![self.backend.as_fd(), self.artifact.as_fd()];
             let compiler_closure = self
@@ -1659,13 +1984,13 @@ mod platform {
             let compiler_execution_profile = self
                 .compiler_execution_profile
                 .as_ref()
-                .map(CompilerExecutionClientProfileCapabilityV1::try_clone_for_transfer)
+                .map(RetainedBrokerProfile::try_clone_for_transfer)
                 .transpose()
                 .map_err(io::Error::other)?;
             if let Some(compiler_execution_profile) = &compiler_execution_profile {
-                descriptors.push(compiler_execution_profile.as_fd());
+                descriptors.push(compiler_execution_profile.file().as_fd());
             }
-            let response = response_bytes(&self.secret, challenge, request_auth);
+            let response = response_bytes_for(self.binding, &self.secret, challenge, request_auth);
             self.shutdown
                 .send_response(stream, &response, &descriptors, deadline)?;
             self.serve_invocation_authority(stream, client)
@@ -2061,14 +2386,49 @@ mod platform {
         }
     }
 
+    fn authenticate_request(
+        request: &[u8],
+        session: BuildSession,
+        binding: CapabilityBindingV3,
+        secret: &[u8; SECRET_BYTES],
+    ) -> io::Result<([u8; CHALLENGE_BYTES], [u8; REQUEST_AUTH_BYTES])> {
+        if request.len() != binding.request_bytes() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "broker request has wrong family length",
+            ));
+        }
+        let challenge_start = request.len() - REQUEST_AUTH_BYTES - CHALLENGE_BYTES;
+        let challenge = request[challenge_start..challenge_start + CHALLENGE_BYTES]
+            .try_into()
+            .expect("exact request length checked");
+        if request != request_bytes(session, binding, challenge, secret) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "capability broker request is not bound to this broker, session, profile, and config",
+            ));
+        }
+        Ok((
+            challenge,
+            request[request.len() - REQUEST_AUTH_BYTES..]
+                .try_into()
+                .expect("exact request length checked"),
+        ))
+    }
+
     fn request_bytes(
         session: BuildSession,
         binding: CapabilityBindingV3,
         challenge: [u8; CHALLENGE_BYTES],
         secret: &[u8; SECRET_BYTES],
     ) -> Vec<u8> {
-        let mut request = Vec::with_capacity(REQUEST_BYTES);
-        request.extend_from_slice(binding.profile.request_magic());
+        let native = binding.native_profile_identity.is_some();
+        let mut request = Vec::with_capacity(binding.request_bytes());
+        request.extend_from_slice(if native {
+            REQUEST_MAGIC_V4
+        } else {
+            binding.profile.request_magic()
+        });
         request.extend_from_slice(session.as_bytes());
         match binding.config_identity {
             Some(identity) => {
@@ -2084,20 +2444,59 @@ mod platform {
         request.extend_from_slice(&binding.compiler_closure_sha256);
         request.extend_from_slice(&binding.rustc_executable_sha256);
         request.extend_from_slice(&binding.retained_object_binding_sha256);
+        if let Some(identity) = binding.native_profile_identity {
+            request.push(3);
+            request.extend_from_slice(&identity);
+        }
         request.extend_from_slice(&challenge);
-        let authentication = keyed_digest(REQUEST_AUTH_DOMAIN, secret, &[&request]);
+        let authentication = keyed_digest(
+            if native {
+                REQUEST_AUTH_DOMAIN_V4
+            } else {
+                REQUEST_AUTH_DOMAIN
+            },
+            secret,
+            &[&request],
+        );
         request.extend_from_slice(&authentication);
-        debug_assert_eq!(request.len(), REQUEST_BYTES);
+        debug_assert_eq!(request.len(), binding.request_bytes());
         request
     }
 
+    #[cfg(test)]
     fn response_bytes(
         secret: &[u8; SECRET_BYTES],
         challenge: [u8; CHALLENGE_BYTES],
         request_auth: [u8; REQUEST_AUTH_BYTES],
     ) -> [u8; RESPONSE_BYTES] {
-        let authentication =
-            keyed_digest(RESPONSE_AUTH_DOMAIN, secret, &[&challenge, &request_auth]);
+        response_bytes_with_domain(RESPONSE_AUTH_DOMAIN, secret, challenge, request_auth)
+    }
+
+    fn response_bytes_for(
+        binding: CapabilityBindingV3,
+        secret: &[u8; SECRET_BYTES],
+        challenge: [u8; CHALLENGE_BYTES],
+        request_auth: [u8; REQUEST_AUTH_BYTES],
+    ) -> [u8; RESPONSE_BYTES] {
+        response_bytes_with_domain(
+            if binding.native_profile_identity.is_some() {
+                RESPONSE_AUTH_DOMAIN_V4
+            } else {
+                RESPONSE_AUTH_DOMAIN
+            },
+            secret,
+            challenge,
+            request_auth,
+        )
+    }
+
+    fn response_bytes_with_domain(
+        domain: &[u8],
+        secret: &[u8; SECRET_BYTES],
+        challenge: [u8; CHALLENGE_BYTES],
+        request_auth: [u8; REQUEST_AUTH_BYTES],
+    ) -> [u8; RESPONSE_BYTES] {
+        let authentication = keyed_digest(domain, secret, &[&challenge, &request_auth]);
         let mut response = [0_u8; RESPONSE_BYTES];
         response[0] = 1;
         response[1..].copy_from_slice(&authentication);
@@ -2267,6 +2666,7 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::*;
+        include!("capability_broker_v4_tests.rs");
         use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation};
         use fe2o3_source_isa_observation::wire_v1::{
             MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
@@ -2455,7 +2855,13 @@ mod platform {
             let (result_sender, result_receiver) = std::sync::mpsc::channel();
             let worker = std::thread::spawn(move || {
                 result_sender
-                    .send(BrokeredInvocationAuthorityV1 { stream: client }.release())
+                    .send(
+                        BrokeredInvocationAuthorityV1 {
+                            stream: client,
+                            profile_account: None,
+                        }
+                        .release(),
+                    )
                     .unwrap();
             });
             let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
@@ -2487,9 +2893,12 @@ mod platform {
                     }
                 });
                 assert!(
-                    BrokeredInvocationAuthorityV1 { stream: client }
-                        .release()
-                        .is_err()
+                    BrokeredInvocationAuthorityV1 {
+                        stream: client,
+                        profile_account: None
+                    }
+                    .release()
+                    .is_err()
                 );
                 worker.join().unwrap();
             }
@@ -2615,8 +3024,11 @@ mod platform {
                         request,
                     )
                 });
-                let result = BrokeredInvocationAuthorityV1 { stream: client }
-                    .release_with_source_isa_observer(config, unit, request_attempt);
+                let result = BrokeredInvocationAuthorityV1 {
+                    stream: client,
+                    profile_account: None,
+                }
+                .release_with_source_isa_observer(config, unit, request_attempt);
                 let server_result = worker.join().unwrap();
                 assert_eq!(result.is_ok(), server_result.is_ok());
                 result
@@ -2628,9 +3040,12 @@ mod platform {
             let (client, mut server) = UnixStream::pair().unwrap();
             let (result_sender, result_receiver) = std::sync::mpsc::channel();
             let worker = std::thread::spawn(move || {
-                let result = BrokeredInvocationAuthorityV1 { stream: client }
-                    .release_with_source_isa_observer([0x30; 32], [0x40; 32], exact_attempt)
-                    .map(drop);
+                let result = BrokeredInvocationAuthorityV1 {
+                    stream: client,
+                    profile_account: None,
+                }
+                .release_with_source_isa_observer([0x30; 32], [0x40; 32], exact_attempt)
+                .map(drop);
                 result_sender.send(result).unwrap();
             });
             let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V2];
@@ -2669,9 +3084,12 @@ mod platform {
                 server.write_all(&[0xa5; 16]).unwrap();
             });
             assert!(
-                BrokeredInvocationAuthorityV1 { stream: client }
-                    .release_with_source_isa_observer([0x30; 32], units[0], exact_attempt,)
-                    .is_err()
+                BrokeredInvocationAuthorityV1 {
+                    stream: client,
+                    profile_account: None
+                }
+                .release_with_source_isa_observer([0x30; 32], units[0], exact_attempt,)
+                .is_err()
             );
             worker.join().unwrap();
 
@@ -3007,6 +3425,7 @@ mod unsupported {
         BrokeredInvocationCapabilityClaimV1, BuildAttempt, BuildSession,
     };
 
+    use crate::authority_release::profile::{ClientProfileAccountV3, FundedClientProfileV3};
     use crate::build_config::ProductionSourceIsaObserverPolicyV1;
     use crate::cargo_invocation_boundary::InvocationAuthorizationRegistryV1;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -3023,6 +3442,17 @@ mod unsupported {
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum CompilerExecutionProfileFamily {
+        LegacyV1,
+        NativeV3,
+    }
+
+    pub(crate) fn broker_route_family_from_environment()
+    -> Result<CompilerExecutionProfileFamily, String> {
+        Err("Cargo capability transport requires Linux x86_64".to_owned())
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
         Ordinary,
     }
@@ -3031,6 +3461,21 @@ mod unsupported {
     pub(crate) struct CapabilityBindingV3;
 
     impl CapabilityBindingV3 {
+        pub(crate) fn new_protected_v4(
+            _profile: CapabilityProfileV1,
+            _config_identity: Option<[u8; 32]>,
+            _compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            _retained_object_binding_sha256: [u8; 32],
+            _native_profile_identity: [u8; 32],
+        ) -> Result<Self, String> {
+            Err("Cargo capability transport requires Linux x86_64".to_owned())
+        }
+
+        pub(crate) fn from_environment_for_client_v4(
+            _profile: CapabilityProfileV1,
+        ) -> Result<Self, String> {
+            Err("Cargo capability transport requires Linux x86_64".to_owned())
+        }
         pub(crate) fn new(
             _profile: CapabilityProfileV1,
             _config_identity: Option<[u8; 32]>,
@@ -3086,6 +3531,19 @@ mod unsupported {
     }
 
     impl CapabilityBroker {
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn start_protected_v4(
+            _session: BuildSession,
+            _binding: CapabilityBindingV3,
+            _compiler_closure: fe2o3_build_authority::CompilerClosureV2,
+            _compiler_execution_profile: &FundedClientProfileV3,
+            _backend: &PinnedCodegenBackend,
+            _artifact: &PinnedDirectory,
+            _pinned_cargo_image: &PinnedExecutable,
+            _observer_policy: Option<&ProductionSourceIsaObserverPolicyV1>,
+        ) -> Result<Self, String> {
+            Err("Cargo capability transport requires Linux x86_64".to_owned())
+        }
         pub(crate) fn start(
             _session: BuildSession,
             _binding: CapabilityBindingV3,
@@ -3182,6 +3640,25 @@ mod unsupported {
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) compiler_execution_profile: Option<CompilerExecutionClientProfileCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
+    }
+
+    impl BrokeredCapabilities {
+        pub(crate) fn authenticated_client_profile_v3_identity(&self) -> Option<[u8; 32]> {
+            None
+        }
+        pub(crate) fn take_compiler_execution_profile_v3(
+            &mut self,
+        ) -> Result<FundedClientProfileV3, String> {
+            Err("Cargo capability transport requires Linux x86_64".to_owned())
+        }
+    }
+
+    pub(crate) fn receive_v4(
+        _session: BuildSession,
+        _binding: CapabilityBindingV3,
+        _account: ClientProfileAccountV3,
+    ) -> Result<BrokeredCapabilities, String> {
+        Err("Cargo capability transport requires Linux x86_64".to_owned())
     }
 
     pub(crate) fn receive(

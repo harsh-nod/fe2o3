@@ -7,6 +7,10 @@
 //!
 //! This module authenticates only launcher and handoff mechanics. It does not authenticate
 //! compiler origin, proof validity, generated artifacts, memory safety, or GPU execution.
+//!
+//! Frozen transport V3 carries a V1 client profile. The private, unselected V4
+//! launch carries only the fixed-origin V3 profile through the same validation
+//! and handshake engines. Its explicit child entry rejects every older family.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -23,12 +27,130 @@ use std::time::Duration;
 
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1;
-use fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1;
 use sha2::{Digest, Sha256};
 
 use crate::pinned_executable::PinnedExecutable;
 
+#[path = "authority_release_profile.rs"]
+pub(crate) mod profile;
+use profile::{FundedClientProfileV3, FundedProfileFileV3};
+
 pub(crate) const INTERNAL_CHILD_ARG: &str = "__fe2o3-authority-release-child-v1";
+pub(crate) const INTERNAL_CHILD_ARG_V4: &str = "__fe2o3-authority-release-child-v4";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReleaseFamily {
+    LegacyV3,
+    NativeV4,
+}
+
+impl ReleaseFamily {
+    const fn magic(self) -> &'static [u8; 8] {
+        match self {
+            Self::LegacyV3 => CONTRACT_MAGIC,
+            Self::NativeV4 => b"F2AURL4\0",
+        }
+    }
+    const fn version(self) -> u16 {
+        match self {
+            Self::LegacyV3 => CONTRACT_VERSION,
+            Self::NativeV4 => 4,
+        }
+    }
+    const fn child_arg(self) -> &'static str {
+        match self {
+            Self::LegacyV3 => INTERNAL_CHILD_ARG,
+            Self::NativeV4 => INTERNAL_CHILD_ARG_V4,
+        }
+    }
+    const fn contract_domain(self) -> &'static [u8] {
+        match self {
+            Self::LegacyV3 => CONTRACT_DOMAIN,
+            Self::NativeV4 => b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V4\0",
+        }
+    }
+    const fn grant_domain(self) -> &'static [u8] {
+        match self {
+            Self::LegacyV3 => GRANT_DOMAIN,
+            Self::NativeV4 => b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V4\0",
+        }
+    }
+    const fn accept_domain(self) -> &'static [u8] {
+        match self {
+            Self::LegacyV3 => ACCEPT_DOMAIN,
+            Self::NativeV4 => b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V4\0",
+        }
+    }
+    const fn ready_magic(self) -> &'static [u8; 8] {
+        match self {
+            Self::LegacyV3 => READY_MAGIC,
+            Self::NativeV4 => b"F2AURDY4",
+        }
+    }
+    const fn grant_magic(self) -> &'static [u8; 8] {
+        match self {
+            Self::LegacyV3 => GRANT_MAGIC,
+            Self::NativeV4 => b"F2AUGRT4",
+        }
+    }
+    const fn accept_magic(self) -> &'static [u8; 8] {
+        match self {
+            Self::LegacyV3 => ACCEPT_MAGIC,
+            Self::NativeV4 => b"F2AUACC4",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CompilerExecutionProfileIdentity {
+    V1([u8; 32]),
+    V3([u8; 32]),
+}
+
+impl CompilerExecutionProfileIdentity {
+    pub(crate) fn append_semantic_configuration(self, output: &mut Vec<u8>) {
+        let (domain, identity): (&[u8], _) = match self {
+            Self::V1(identity) => (b"fe2o3-compiler-execution-client-profile-v1\0", identity),
+            Self::V3(identity) => (b"fe2o3-compiler-execution-client-profile-v3\0", identity),
+        };
+        output.extend_from_slice(domain);
+        output.extend_from_slice(&identity);
+    }
+}
+
+enum ReleaseProfile {
+    V1(CompilerExecutionClientProfileCapabilityV1),
+    V3(FundedClientProfileV3),
+}
+
+enum ReleaseProfileFile {
+    V1(File),
+    V3(FundedProfileFileV3),
+}
+
+impl ReleaseProfileFile {
+    fn file(&self) -> &File {
+        match self {
+            Self::V1(file) => file,
+            Self::V3(file) => file.file(),
+        }
+    }
+}
+
+impl ReleaseProfile {
+    fn identity(&self) -> [u8; 32] {
+        match self {
+            Self::V1(profile) => *profile.profile().identity().as_bytes(),
+            Self::V3(profile) => *profile.profile().identity().as_bytes(),
+        }
+    }
+    fn try_clone_for_transfer(&self) -> Result<ReleaseProfileFile, String> {
+        match self {
+            Self::V1(profile) => profile.try_clone_for_transfer().map(ReleaseProfileFile::V1),
+            Self::V3(profile) => profile.try_clone_for_transfer().map(ReleaseProfileFile::V3),
+        }
+    }
+}
 
 const RELEASE_ARG: &str = "release";
 const PROBE_ARG: &str = "probe";
@@ -217,6 +339,7 @@ impl CompilerClosureObservation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ReleaseContract {
+    family: ReleaseFamily,
     attempt: [u8; 32],
     parent_uid: u32,
     parent_pid: u32,
@@ -284,8 +407,8 @@ impl ReleaseContract {
             .filter(|value| *value <= MAX_CONTRACT_BYTES)
             .ok_or_else(|| "release contract exceeds its byte bound".to_owned())?;
         let mut encoded = Vec::with_capacity(total);
-        encoded.extend_from_slice(CONTRACT_MAGIC);
-        encoded.extend_from_slice(&CONTRACT_VERSION.to_le_bytes());
+        encoded.extend_from_slice(self.family.magic());
+        encoded.extend_from_slice(&self.family.version().to_le_bytes());
         encoded.extend_from_slice(&(CONTRACT_HEADER_BYTES as u16).to_le_bytes());
         encoded.extend_from_slice(
             &u32::try_from(total)
@@ -294,21 +417,26 @@ impl ReleaseContract {
         );
         encoded.extend_from_slice(&0_u64.to_le_bytes());
         encoded.extend_from_slice(&body);
-        let identity = contract_identity(&encoded);
+        let identity = domain_hash(self.family.contract_domain(), &[&encoded]);
         encoded.extend_from_slice(&identity);
         Ok(encoded)
     }
 
+    #[cfg(test)]
     fn decode(encoded: &[u8]) -> Result<(Self, [u8; 32]), String> {
+        Self::decode_for(encoded, ReleaseFamily::LegacyV3)
+    }
+
+    fn decode_for(encoded: &[u8], family: ReleaseFamily) -> Result<(Self, [u8; 32]), String> {
         if encoded.len() < CONTRACT_HEADER_BYTES + CONTRACT_IDENTITY_BYTES
             || encoded.len() > MAX_CONTRACT_BYTES
         {
             return Err("release contract has an invalid encoded length".to_owned());
         }
-        if &encoded[..8] != CONTRACT_MAGIC {
+        if &encoded[..8] != family.magic() {
             return Err("release contract magic differs".to_owned());
         }
-        if u16::from_le_bytes(encoded[8..10].try_into().expect("fixed slice")) != CONTRACT_VERSION
+        if u16::from_le_bytes(encoded[8..10].try_into().expect("fixed slice")) != family.version()
             || usize::from(u16::from_le_bytes(
                 encoded[10..12].try_into().expect("fixed slice"),
             )) != CONTRACT_HEADER_BYTES
@@ -323,7 +451,7 @@ impl ReleaseContract {
             return Err("release contract length/reserved header differs".to_owned());
         }
         let identity_offset = encoded.len() - CONTRACT_IDENTITY_BYTES;
-        let expected = contract_identity(&encoded[..identity_offset]);
+        let expected = domain_hash(family.contract_domain(), &[&encoded[..identity_offset]]);
         let declared_identity: [u8; 32] = encoded[identity_offset..]
             .try_into()
             .expect("identity suffix has fixed length");
@@ -368,6 +496,7 @@ impl ReleaseContract {
         validate_fields(&argv, &environment)?;
         Ok((
             Self {
+                family,
                 attempt,
                 parent_uid,
                 parent_pid,
@@ -390,7 +519,7 @@ pub(crate) struct ProtectedReleaseAdmission {
     attempt: [u8; 32],
     contract_identity: [u8; 32],
     compiler_closure: CompilerClosureV2,
-    compiler_execution_profile: CompilerExecutionClientProfileCapabilityV1,
+    compiler_execution_profile: ReleaseProfile,
     control: UnixStream,
     child_image: File,
 }
@@ -408,14 +537,31 @@ impl ProtectedReleaseAdmission {
         self.compiler_closure
     }
 
-    pub(crate) const fn compiler_execution_profile(&self) -> &CompilerExecutionClientProfileV1 {
-        self.compiler_execution_profile.profile()
+    pub(crate) fn compiler_execution_profile_identity(&self) -> CompilerExecutionProfileIdentity {
+        match &self.compiler_execution_profile {
+            ReleaseProfile::V1(_) => {
+                CompilerExecutionProfileIdentity::V1(self.compiler_execution_profile.identity())
+            }
+            ReleaseProfile::V3(_) => {
+                CompilerExecutionProfileIdentity::V3(self.compiler_execution_profile.identity())
+            }
+        }
     }
 
     pub(crate) const fn compiler_execution_profile_capability(
         &self,
-    ) -> &CompilerExecutionClientProfileCapabilityV1 {
-        &self.compiler_execution_profile
+    ) -> Option<&CompilerExecutionClientProfileCapabilityV1> {
+        match &self.compiler_execution_profile {
+            ReleaseProfile::V1(profile) => Some(profile),
+            ReleaseProfile::V3(_) => None,
+        }
+    }
+
+    pub(crate) const fn compiler_execution_profile_v3(&self) -> Option<&FundedClientProfileV3> {
+        match &self.compiler_execution_profile {
+            ReleaseProfile::V1(_) => None,
+            ReleaseProfile::V3(profile) => Some(profile),
+        }
     }
 
     pub(crate) fn configure_descendant(&self, command: &mut Command) {
@@ -491,7 +637,15 @@ pub(crate) fn command(args: &[OsString]) -> ExitCode {
 }
 
 pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
-    let admission = match admit_child(args) {
+    run_child_for(args, ReleaseFamily::LegacyV3)
+}
+
+pub(crate) fn run_child_v4(args: &[OsString]) -> ExitCode {
+    run_child_for(args, ReleaseFamily::NativeV4)
+}
+
+fn run_child_for(args: &[OsString], family: ReleaseFamily) -> ExitCode {
+    let admission = match admit_child_for(args, family) {
         Ok(admission) => admission,
         Err(error) => {
             eprintln!("cargo fe2o3 authority release child: {error}");
@@ -499,8 +653,12 @@ pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
         }
     };
     if args.first().and_then(|value| value.to_str()) == Some(PROBE_ARG) {
+        let marker = match family {
+            ReleaseFamily::LegacyV3 => PROBE_OK_MARKER,
+            ReleaseFamily::NativeV4 => "FE2O3_PROTECTED_AUTHORITY_RELEASE_V4_OK",
+        };
         println!(
-            "{PROBE_OK_MARKER} attempt={} contract={} compiler={} runtime_authority=none gpu_authority=none",
+            "{marker} attempt={} contract={} compiler={} runtime_authority=none gpu_authority=none",
             hex(admission.attempt()),
             hex(admission.contract_identity()),
             hex(&admission.compiler_closure().identity_sha256())
@@ -511,19 +669,37 @@ pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
 }
 
 fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
+    launch_for(args, ReleaseFamily::LegacyV3)
+}
+
+// Private paired migration entry. No CLI/environment selector or default switch
+// exists until the consuming original-root receiver/wrapper path is integrated.
+#[allow(dead_code)]
+fn launch_v4(args: &[OsString]) -> Result<ExitStatus, String> {
+    launch_for(args, ReleaseFamily::NativeV4)
+}
+
+fn launch_for(args: &[OsString], family: ReleaseFamily) -> Result<ExitStatus, String> {
     reject_reserved_descriptors(&[0, 1, 2])?;
-    let compiler_execution_profile =
-        CompilerExecutionClientProfileCapabilityV1::from_production_profile().map_err(|error| {
-            format!("cannot admit the fixed compiler-execution client profile: {error}")
-        })?;
+    let compiler_execution_profile = match family {
+        ReleaseFamily::LegacyV3 => ReleaseProfile::V1(
+            CompilerExecutionClientProfileCapabilityV1::from_production_profile()?,
+        ),
+        ReleaseFamily::NativeV4 => {
+            ReleaseProfile::V3(FundedClientProfileV3::from_production_profile()?)
+        }
+    };
     let compiler_execution_profile_file = compiler_execution_profile
         .try_clone_for_transfer()
         .map_err(|error| format!("cannot retain compiler-execution client profile: {error}"))?;
-    let compiler_execution_profile_identity =
-        *compiler_execution_profile.profile().identity().as_bytes();
+    let compiler_execution_profile_identity = compiler_execution_profile.identity();
     let compiler = observe_compiler_closure()?;
     let environment = current_environment()?;
-    let argv = planned_child_argv(args)?;
+    let argv = child_argv_with_family(
+        OsStr::from_bytes(fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0),
+        args,
+        family,
+    )?;
     let attempt = random_identity()?;
     let parent_pid = std::process::id();
     let parent_uid = rustix::process::geteuid().as_raw();
@@ -587,11 +763,12 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         child_control_object,
         launcher_object,
         cwd,
-        ObjectIdentity::from_metadata(&compiler_execution_profile_file.metadata().map_err(
+        ObjectIdentity::from_metadata(&compiler_execution_profile_file.file().metadata().map_err(
             |error| format!("cannot inspect compiler-execution client profile: {error}"),
         )?),
     ];
     let mut contract = ReleaseContract {
+        family,
         attempt,
         parent_uid,
         parent_pid,
@@ -612,7 +789,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         return Err("release contract size did not converge".to_owned());
     }
     write_and_seal_contract(&contract_file, &encoded)?;
-    let (_, contract_identity) = ReleaseContract::decode(&encoded)?;
+    let (_, contract_identity) = ReleaseContract::decode_for(&encoded, family)?;
 
     let mut command = child_image
         .command()
@@ -622,7 +799,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         .arg0(OsStr::from_bytes(
             fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0,
         ))
-        .arg(INTERNAL_CHILD_ARG)
+        .arg(family.child_arg())
         .args(args)
         .env_clear()
         .envs(environment.iter().cloned());
@@ -633,7 +810,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
             control: &child_control,
             launcher: &launcher_file,
             cwd: &cwd_file,
-            client_profile: &compiler_execution_profile_file,
+            client_profile: compiler_execution_profile_file.file(),
         },
         &contract.descriptors[3..],
         contract.parent_pid,
@@ -662,9 +839,12 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
     Ok(status)
 }
 
-fn admit_child(args: &[OsString]) -> Result<ProtectedReleaseAdmission, String> {
+fn admit_child_for(
+    args: &[OsString],
+    family: ReleaseFamily,
+) -> Result<ProtectedReleaseAdmission, String> {
     let encoded = read_sealed_contract(CONTRACT_FD)?;
-    let (contract, contract_identity) = ReleaseContract::decode(&encoded)?;
+    let (contract, contract_identity) = ReleaseContract::decode_for(&encoded, family)?;
     let (child_image, compiler_execution_profile) = validate_child_state(&contract, args)?;
     let mut control = take_control_socket(CONTROL_FD)?;
     configure_timeouts(&control)?;
@@ -673,7 +853,7 @@ fn admit_child(args: &[OsString]) -> Result<ProtectedReleaseAdmission, String> {
     let start_ticks = process_start_time_ticks(pid)?;
 
     let mut ready = Vec::with_capacity(READY_BYTES);
-    ready.extend_from_slice(READY_MAGIC);
+    ready.extend_from_slice(family.ready_magic());
     ready.extend_from_slice(&contract.attempt);
     ready.extend_from_slice(&contract_identity);
     ready.extend_from_slice(&pid.to_le_bytes());
@@ -686,16 +866,16 @@ fn admit_child(args: &[OsString]) -> Result<ProtectedReleaseAdmission, String> {
     control
         .read_exact(&mut grant)
         .map_err(|error| format!("cannot receive release grant: {error}"))?;
-    if &grant[..8] != GRANT_MAGIC || grant[8..40] != contract.attempt {
+    if &grant[..8] != family.grant_magic() || grant[8..40] != contract.attempt {
         return Err("release grant frame does not match the exact attempt".to_owned());
     }
     let expected_grant = grant_identity(&contract, &contract_identity, pid, start_ticks);
     if grant[40..] != expected_grant {
         return Err("release grant identity differs".to_owned());
     }
-    let accept = accept_identity(&contract.attempt, &expected_grant);
+    let accept = accept_identity_for(family, &contract.attempt, &expected_grant);
     let mut frame = Vec::with_capacity(ACCEPT_BYTES);
-    frame.extend_from_slice(ACCEPT_MAGIC);
+    frame.extend_from_slice(family.accept_magic());
     frame.extend_from_slice(&accept);
     control
         .write_all(&frame)
@@ -725,7 +905,7 @@ fn parent_handshake(
     control
         .read_exact(&mut ready)
         .map_err(|error| format!("protected release child did not become ready: {error}"))?;
-    if &ready[..8] != READY_MAGIC
+    if &ready[..8] != contract.family.ready_magic()
         || ready[8..40] != contract.attempt
         || ready[40..72] != contract_identity
     {
@@ -743,7 +923,7 @@ fn parent_handshake(
     let grant = grant_identity(contract, &contract_identity, pid, start_ticks);
     configure_timeouts(control)?;
     let mut frame = Vec::with_capacity(GRANT_BYTES);
-    frame.extend_from_slice(GRANT_MAGIC);
+    frame.extend_from_slice(contract.family.grant_magic());
     frame.extend_from_slice(&contract.attempt);
     frame.extend_from_slice(&grant);
     control
@@ -753,7 +933,9 @@ fn parent_handshake(
     control
         .read_exact(&mut accept)
         .map_err(|error| format!("protected release child did not accept grant: {error}"))?;
-    if &accept[..8] != ACCEPT_MAGIC || accept[8..] != accept_identity(&contract.attempt, &grant) {
+    if &accept[..8] != contract.family.accept_magic()
+        || accept[8..] != accept_identity_for(contract.family, &contract.attempt, &grant)
+    {
         return Err("protected release acceptance identity differs".to_owned());
     }
     Ok(())
@@ -762,7 +944,7 @@ fn parent_handshake(
 fn validate_child_state(
     contract: &ReleaseContract,
     args: &[OsString],
-) -> Result<(File, CompilerExecutionClientProfileCapabilityV1), String> {
+) -> Result<(File, ReleaseProfile), String> {
     validate_release_environment()?;
     verify_parent_death_signal()?;
     let parent_pid = u32::try_from(rustix::process::Pid::as_raw(rustix::process::getppid()))
@@ -792,12 +974,19 @@ fn validate_child_state(
         ObjectIdentity::from_fd(CWD_FD, "release cwd")?,
         ObjectIdentity::from_fd(CLIENT_PROFILE_FD, "compiler-execution client profile")?,
     ];
-    let compiler_execution_profile = CompilerExecutionClientProfileCapabilityV1::from_file(
-        clone_fd(CLIENT_PROFILE_FD, "compiler-execution client profile")?,
-    )
-    .map_err(|error| format!("invalid inherited compiler-execution client profile: {error}"))?;
-    let compiler_execution_profile_identity =
-        *compiler_execution_profile.profile().identity().as_bytes();
+    let compiler_execution_profile = match contract.family {
+        ReleaseFamily::LegacyV3 => {
+            ReleaseProfile::V1(CompilerExecutionClientProfileCapabilityV1::from_file(
+                clone_fd(CLIENT_PROFILE_FD, "compiler-execution client profile")?,
+            )?)
+        }
+        ReleaseFamily::NativeV4 => {
+            ReleaseProfile::V3(FundedClientProfileV3::from_inherited(|| {
+                clone_fd(CLIENT_PROFILE_FD, "compiler-execution client profile V3")
+            })?)
+        }
+    };
+    let compiler_execution_profile_identity = compiler_execution_profile.identity();
     let launcher_file = clone_fd(LAUNCHER_IMAGE_FD, "launcher image")?;
     if image_identity(&launcher_file, contract.launcher.sha256)? != launcher {
         return Err("retained launcher image differs from the sealed contract".to_owned());
@@ -814,7 +1003,13 @@ fn validate_child_state(
             descriptors,
             compiler: observe_compiler_closure()?,
             compiler_execution_profile_identity,
-            argv: observed_child_argv(args)?,
+            argv: child_argv_with_family(
+                &env::args_os()
+                    .next()
+                    .ok_or("release child has no argv[0]")?,
+                args,
+                contract.family,
+            )?,
             environment: environment_bytes(&current_environment()?),
         },
     )?;
@@ -1048,24 +1243,14 @@ fn environment_bytes(values: &[(OsString, OsString)]) -> Vec<(Vec<u8>, Vec<u8>)>
         .collect()
 }
 
-fn planned_child_argv(args: &[OsString]) -> Result<Vec<Vec<u8>>, String> {
-    child_argv_with(
-        OsStr::from_bytes(fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0),
-        args,
-    )
-}
-
-fn observed_child_argv(args: &[OsString]) -> Result<Vec<Vec<u8>>, String> {
-    let argv0 = env::args_os()
-        .next()
-        .ok_or_else(|| "release child has no argv[0]".to_owned())?;
-    child_argv_with(&argv0, args)
-}
-
-fn child_argv_with(argv0: &OsStr, args: &[OsString]) -> Result<Vec<Vec<u8>>, String> {
+fn child_argv_with_family(
+    argv0: &OsStr,
+    args: &[OsString],
+    family: ReleaseFamily,
+) -> Result<Vec<Vec<u8>>, String> {
     let mut argv = Vec::with_capacity(args.len() + 2);
     argv.push(argv0.as_bytes().to_vec());
-    argv.push(INTERNAL_CHILD_ARG.as_bytes().to_vec());
+    argv.push(family.child_arg().as_bytes().to_vec());
     argv.extend(args.iter().map(|value| value.as_bytes().to_vec()));
     if argv.len() > MAX_ARGUMENTS || argv.iter().any(|value| value.is_empty()) {
         return Err("release child argv has an invalid count or empty argument".to_owned());
@@ -1441,6 +1626,7 @@ fn random_identity() -> Result<[u8; 32], String> {
     Ok(value)
 }
 
+#[cfg(test)]
 fn contract_identity(bytes: &[u8]) -> [u8; 32] {
     domain_hash(CONTRACT_DOMAIN, &[bytes])
 }
@@ -1452,7 +1638,7 @@ fn grant_identity(
     child_start: u64,
 ) -> [u8; 32] {
     domain_hash(
-        GRANT_DOMAIN,
+        contract.family.grant_domain(),
         &[
             &contract.attempt,
             contract_identity,
@@ -1467,8 +1653,13 @@ fn grant_identity(
     )
 }
 
+#[cfg(test)]
 fn accept_identity(attempt: &[u8; 32], grant: &[u8; 32]) -> [u8; 32] {
-    domain_hash(ACCEPT_DOMAIN, &[attempt, grant])
+    accept_identity_for(ReleaseFamily::LegacyV3, attempt, grant)
+}
+
+fn accept_identity_for(family: ReleaseFamily, attempt: &[u8; 32], grant: &[u8; 32]) -> [u8; 32] {
+    domain_hash(family.accept_domain(), &[attempt, grant])
 }
 
 fn domain_hash(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
@@ -1630,6 +1821,7 @@ fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("authority_release_v4_tests.rs");
 
     fn object(seed: u64, mode: u32) -> ObjectIdentity {
         ObjectIdentity {
@@ -1666,6 +1858,7 @@ mod tests {
 
     fn contract() -> ReleaseContract {
         ReleaseContract {
+            family: ReleaseFamily::LegacyV3,
             attempt: [5; 32],
             parent_uid: 1000,
             parent_pid: 123,
