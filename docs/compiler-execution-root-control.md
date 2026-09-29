@@ -110,10 +110,11 @@ constructor or root-end extraction. It enables passcred on both nonblocking,
 close-on-exec endpoints before exposing an issuer-side staging borrow. It checks
 the original account, Budget address, process and kernel thread on each operation.
 Closing its parent issuer alias is idempotent, but does not certify closure of
-external stage aliases or retire a compiler occurrence. The direct `launch_issuer`
-now constructs and stages this owner. The isolated MI350 startup matrix passes
-all ten cases, including the actual measured-issuer handshake and terminal
-cleanup. This does not cover the still-separate protected compiler/proof path.
+external stage aliases or retire a compiler occurrence. The direct
+`launch_root_attempt` constructs and stages this owner. The preceding
+[MI350 startup checkpoint](evidence/root-control-startup-20260929.md) passed all
+ten cases, including the measured-issuer handshake and terminal cleanup. That
+fixture does not cover the still-separate protected compiler/proof path.
 
 Linux automatically binds a PASSCRED socket to an abstract address on its first
 send. Endpoint checks accept unnamed addresses or the exact five-lowercase-hex
@@ -133,7 +134,7 @@ responsibility.
 
 The direct launcher now independently checks the actual retained issuer's running
 image after exact readiness and EOF, before returning the child. The same check
-runs during `ManagedIssuer::validate_ready`, inside its original account and
+runs during `NativeAttempt::validate_ready`, inside its original account and
 retained-policy view. Broker image mechanics are shared with V2/V3 self-admission:
 the policy length is enforced before payload reads, the static image/runtime are
 measured, and the current executable is reopened for an exact snapshot join.
@@ -190,8 +191,8 @@ authenticated reply must join that request, policy, manifest, epoch and generati
 The issuer answers only through its actual post-Admission, post-readiness gate.
 
 The root rechecks original custody, issuer liveness, profile, namespaces and image
-before returning `ManagedIssuer`. Subsequent readiness validation requires the
-original compiler trace again. The shared scoped APIs preserve the Budget's Work
+before returning `NativeAttempt`. Subsequent readiness validation uses that
+attempt's original compiler trace. The shared scoped APIs preserve the Budget's Work
 lifetime but still prevent borrowed payloads or observation views escaping.
 No decoded PID, policy hash, readiness frame or arbitrary descriptor can construct
 the original trace or its retained issuer child.
@@ -203,8 +204,15 @@ transport admission, not a proof, receipt, currentness check or safe GPU launch.
 
 ## Ownership and Retirement
 
-The production attempt must retain the actual original compiler trace and the
-actual root-observed `NativeOccurrence`, including both lease and token. A
+The private `NativeAttempt` consumes and retains its original `CompilerTrace`
+and `RootControlSessionV3` independently of its optional issuer. Issuer removal
+cannot extract or replace either owner, reset the original account, or reduce
+the full retained charge. Startup cancellation remains armed through the final
+fallible accounting scope; returned growth is above both consumed input owners.
+This owner grants neither compiler resume nor publication authority.
+
+The production attempt must also retain actual root-observed publication
+custody, including both lease and token. A
 subject, hash, PID, signed journal, or decoded carriage cannot recreate either
 owner. A failed send, issuer exit, or replacement connection must not release
 that occurrence or establish retirement.
@@ -215,6 +223,21 @@ descriptor, or wait authority. It cannot establish liveness: every operation
 still requires the original scoped view, account, thread, and continuity checks.
 The coordinator's per-attempt owner must keep that trace separate from the
 replaceable issuer connection and must not expose trace substitution.
+
+`RootPublicationCustodyV3` implements this publication owner separately. It
+observes through an actual original trace, recovers an inert V5 receipt without
+waiting on a writer's lock, quotes complete future lease/token retention, and
+funds the original cleanup slot before acquisition. Each acquired owner moves
+into that slot before further fallible accounting. Partial acquisition, unwind,
+and dropping the foreground handle do not release the installed owners. Terminal
+cleanup retires both under the artifact spawn-exclusion barrier, with work
+funded in proportion to the declared retained storage. Nonblocking lock
+acquisition is not a deadline guarantee for filesystem I/O.
+
+Coordinator/RPC integration of this owner is still unfinished. Concrete payload
+tests use actual V5 owners and OS locks but not a live production observation.
+There is no explicit publication-retirement API until the durable join below is
+implemented; connection authentication alone cannot authorize retirement.
 
 Retirement needs an exact durable publication join, fresh original custody
 validation, and destruction of both lock owners before acknowledgment. A
