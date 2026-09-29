@@ -4,6 +4,9 @@ use super::*;
 #[path = "tests/preallocation.rs"]
 mod preallocation;
 
+#[path = "tests/repeat_profile.rs"]
+mod repeat_profile;
+
 fn account(bytes: u64, records: usize) -> ResourceCreditAccountV1 {
     ResourceCreditAccountV1::new(
         ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, bytes),

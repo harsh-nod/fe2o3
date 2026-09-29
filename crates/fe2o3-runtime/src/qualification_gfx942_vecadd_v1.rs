@@ -169,6 +169,23 @@ impl AdmittedGfx942VecaddQualificationV1 {
             && exact_kernarg_and_geometry_v1(&request)
             && exact_abi_and_allocations_v1(&request, &self.initial_buffer_sha256)
     }
+
+    #[cfg(feature = "scale-qualification")]
+    pub(super) fn authorizes_repeat_kfd_request_v1(
+        &self,
+        request: KfdRuntimeAuthorityRequestV1<'_>,
+    ) -> bool {
+        request.semantic_launch == crate::KfdRuntimeSemanticLaunchV1::Ordinary
+            && request.signature
+                == crate::qualification_gfx942_vecadd_repeat_v1::GFX942_VECADD_REPEAT_QUALIFICATION_SIGNATURE_V1
+            && exact_object_v1(&request)
+            && exact_kernarg_and_geometry_v1(&request)
+            && exact_abi_and_allocations_with_output_v1(
+                &request,
+                &self.initial_buffer_sha256,
+                false,
+            )
+    }
 }
 
 /// Revalidates and admits the exact embedded qualification fixture.
@@ -452,12 +469,15 @@ pub fn gfx942_vecadd_qualification_bindings_v1(
 }
 
 fn exact_artifact_v1(request: &KfdRuntimeAuthorityRequestV1<'_>) -> bool {
+    exact_object_v1(request) && request.signature == GFX942_VECADD_QUALIFICATION_SIGNATURE_V1
+}
+
+fn exact_object_v1(request: &KfdRuntimeAuthorityRequestV1<'_>) -> bool {
     request.module_image == HSACO_BYTES_V1
         && request.module_sha256 == GFX942_VECADD_QUALIFICATION_HSACO_SHA256_V1
         && <[u8; 32]>::from(Sha256::digest(request.module_image))
             == GFX942_VECADD_QUALIFICATION_HSACO_SHA256_V1
         && request.kernel_name == GFX942_VECADD_QUALIFICATION_KERNEL_V1
-        && request.signature == GFX942_VECADD_QUALIFICATION_SIGNATURE_V1
 }
 
 fn exact_kernarg_and_geometry_v1(request: &KfdRuntimeAuthorityRequestV1<'_>) -> bool {
@@ -470,6 +490,14 @@ fn exact_kernarg_and_geometry_v1(request: &KfdRuntimeAuthorityRequestV1<'_>) -> 
 fn exact_abi_and_allocations_v1(
     request: &KfdRuntimeAuthorityRequestV1<'_>,
     initial_buffer_sha256: &[[u8; 32]; 3],
+) -> bool {
+    exact_abi_and_allocations_with_output_v1(request, initial_buffer_sha256, true)
+}
+
+fn exact_abi_and_allocations_with_output_v1(
+    request: &KfdRuntimeAuthorityRequestV1<'_>,
+    initial_buffer_sha256: &[[u8; 32]; 3],
+    require_initial_output: bool,
 ) -> bool {
     if request.bindings.len() != 3
         || request.dispatch_abi.len() != 3
@@ -512,7 +540,11 @@ fn exact_abi_and_allocations_v1(
                     && allocation.alignment >= GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1
                     && allocation.byte_offset == 0
                     && allocation.bytes.len() == GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1
-                    && allocation.content_sha256 == Some(initial_buffer_sha256[index])
+                    // The complete ABI/roster above establishes index 2 as the
+                    // distinct, whole-allocation WriteOnly output. Both input
+                    // digests remain mandatory for either exact profile.
+                    && ((!require_initial_output && index == 2)
+                        || allocation.content_sha256 == Some(initial_buffer_sha256[index]))
             })
     })
 }

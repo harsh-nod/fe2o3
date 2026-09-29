@@ -212,6 +212,53 @@ impl KfdRuntimeBackendV1 {
                 error.to_string(),
             )
         })?;
+        Self::open_gfx942_vecadd_scaled_v1(
+            device_unique_id,
+            host_table_budget_bytes,
+            max_host_table_reservations,
+            KfdRuntimeLaunchGateV1::ExactGfx942Vecadd(admitted),
+        )
+    }
+
+    /// Opens the distinct output-state-independent vecadd scale profile.
+    ///
+    /// Arbitrary output bytes are admitted from the first invocation. Both
+    /// exact input digests, fixed ABI, and ordinary custody/order checks remain
+    /// required. Ordered device reuse does not require host readback; host
+    /// observation and destructive reuse still require completion/quiescence.
+    /// Full overwrite is trusted for the exact fixture, not an ISA proof or
+    /// general native authority. No repeat-count or performance claim is made.
+    #[cfg(feature = "scale-qualification")]
+    pub fn open_gfx942_vecadd_repeat_scale_qualification_v1(
+        device_unique_id: u64,
+        host_table_budget_bytes: u64,
+        max_host_table_reservations: usize,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        if device_unique_id == 0 {
+            return Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "device unique id must be nonzero",
+            ));
+        }
+        let admitted = crate::qualification_gfx942_vecadd_repeat_v1::admit_gfx942_vecadd_repeat_qualification_v1()
+            .map_err(|error| KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch, error.to_string(),
+            ))?;
+        Self::open_gfx942_vecadd_scaled_v1(
+            device_unique_id,
+            host_table_budget_bytes,
+            max_host_table_reservations,
+            KfdRuntimeLaunchGateV1::ExactGfx942VecaddRepeat(admitted),
+        )
+    }
+
+    #[cfg(feature = "scale-qualification")]
+    fn open_gfx942_vecadd_scaled_v1(
+        device_unique_id: u64,
+        host_table_budget_bytes: u64,
+        max_host_table_reservations: usize,
+        gate: KfdRuntimeLaunchGateV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
         let dispatch = ResourceCreditAccountV1::new(
             ResourceVectorV1::ZERO.with(
                 ResourceKindV1::ControlResidentBytes,
@@ -229,7 +276,7 @@ impl KfdRuntimeBackendV1 {
         Ok(Self::new_with_dispatch_state_v1(
             Self::describe_device_v1(&device),
             Some(device),
-            KfdRuntimeLaunchGateV1::ExactGfx942Vecadd(admitted),
+            gate,
             StagingBudgetsV1 {
                 max_allocation_bytes: KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1,
                 max_context_bytes: KFD_RUNTIME_MAX_STAGED_CONTEXT_BYTES_V1,

@@ -2,11 +2,16 @@
 //! or a simultaneous native-depth witness.
 
 use super::*;
+use crate::qualification_gfx942_vecadd_repeat_v1::{
+    GFX942_VECADD_REPEAT_QUALIFICATION_POLICY_SHA256_V1,
+    GFX942_VECADD_REPEAT_QUALIFICATION_PROFILE_ID_V1,
+    Gfx942VecaddRepeatQualificationArgumentsV1 as Arguments,
+    admit_gfx942_vecadd_repeat_qualification_v1,
+};
 use crate::qualification_gfx942_vecadd_v1::{
     GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1 as ALIGNMENT,
     GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as BYTES,
     GFX942_VECADD_QUALIFICATION_GEOMETRY_V1 as GEOMETRY,
-    Gfx942VecaddQualificationArgumentsV1 as Arguments, admit_gfx942_vecadd_qualification_v1,
 };
 use crate::{
     RuntimeAllocationIdV1, RuntimeAsyncEngineCallErrorV1, RuntimeAsyncEngineConfigV1,
@@ -83,7 +88,7 @@ impl Prepared {
 fn allocate_triplets(
     context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
 ) -> [[RuntimeAllocationIdV1; 3]; LANES] {
-    let buffers = admit_gfx942_vecadd_qualification_v1()
+    let buffers = admit_gfx942_vecadd_repeat_qualification_v1()
         .unwrap()
         .host_buffers()
         .unwrap();
@@ -228,7 +233,7 @@ fn run_owned_waves(replace: bool) {
             .unwrap();
     let (engine, handle) = RuntimeAsyncOwnedEngineV1::spawn_with_progress(
         move || -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-            let mut backend = KfdRuntimeBackendV1::open_gfx942_vecadd_scale_qualification_v1(
+            let mut backend = KfdRuntimeBackendV1::open_gfx942_vecadd_repeat_scale_qualification_v1(
                 unique_id,
                 64 * 1024 * 1024,
                 32,
@@ -265,7 +270,7 @@ fn run_owned_waves(replace: bool) {
                     .clone();
                 let runtime_only = account.usage();
                 assert_eq!(runtime_only.retained_records, LANES);
-                let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
+                let admitted = admit_gfx942_vecadd_repeat_qualification_v1().unwrap();
                 let device = context.devices()[0].id();
                 let module = context.load_module(device, admitted.hsaco()).unwrap();
                 let kernel = Arc::new(
@@ -302,7 +307,7 @@ fn run_owned_waves(replace: bool) {
                 handle
                     .observer()
                     .enqueue_with_context(move |context| {
-                        let buffers = admit_gfx942_vecadd_qualification_v1()
+                        let buffers = admit_gfx942_vecadd_repeat_qualification_v1()
                             .unwrap()
                             .host_buffers()
                             .unwrap();
@@ -437,7 +442,7 @@ fn run_owned_waves(replace: bool) {
                             )
                         })
                         .collect::<Vec<_>>();
-                    let buffers = admit_gfx942_vecadd_qualification_v1()
+                    let buffers = admit_gfx942_vecadd_repeat_qualification_v1()
                         .unwrap()
                         .host_buffers()
                         .unwrap();
@@ -607,7 +612,10 @@ fn run_owned_waves(replace: bool) {
     println!(
         "scale_owner_waves_json={}",
         serde_json::json!({
-            "schema": "fe2o3.scale-owner-waves-development.v1", "unique_id": unique_id,
+            "schema": "fe2o3.scale-owner-waves-development.v2", "unique_id": unique_id,
+            "qualification_profile": GFX942_VECADD_REPEAT_QUALIFICATION_PROFILE_ID_V1,
+            "qualification_policy_sha256": GFX942_VECADD_REPEAT_QUALIFICATION_POLICY_SHA256_V1
+                .iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
             "waves": wave_records, "total_operations": WAVES * OPERATIONS, "replacement": replace,
             "unfinished_gpu_count": null, "physical_overlap": "unmeasured",
             "native_recipe_occurrence_observed": false,

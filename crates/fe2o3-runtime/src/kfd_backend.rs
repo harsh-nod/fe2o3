@@ -592,6 +592,10 @@ enum KfdRuntimeLaunchGateV1 {
     CopyOnlyQualification,
     #[cfg(feature = "hardware-qualification")]
     ExactGfx942Vecadd(crate::qualification_gfx942_vecadd_v1::AdmittedGfx942VecaddQualificationV1),
+    #[cfg(feature = "scale-qualification")]
+    ExactGfx942VecaddRepeat(
+        crate::qualification_gfx942_vecadd_repeat_v1::AdmittedGfx942VecaddRepeatQualificationV1,
+    ),
     #[cfg(feature = "hardware-qualification")]
     ExactGfx942R57N3(
         crate::qualification_gfx942_r57_n3_v1::AdmittedGfx942R57N3QualificationV1,
@@ -625,6 +629,8 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
             Self::CopyOnlyQualification => formatter.write_str("CopyOnlyQualification"),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(_) => formatter.write_str("ExactGfx942Vecadd"),
+            #[cfg(feature = "scale-qualification")]
+            Self::ExactGfx942VecaddRepeat(_) => formatter.write_str("ExactGfx942VecaddRepeat"),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942R57N3(_) => formatter.write_str("ExactGfx942R57N3"),
             #[cfg(feature = "hardware-qualification")]
@@ -649,6 +655,8 @@ impl KfdRuntimeLaunchGateV1 {
             Self::CopyOnlyQualification => false,
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
+            #[cfg(feature = "scale-qualification")]
+            Self::ExactGfx942VecaddRepeat(admitted) => admitted.authorizes_kfd_request_v1(request),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942R57N3(admitted) => admitted.authorizes_kfd_request_v1(request),
             #[cfg(feature = "hardware-qualification")]
