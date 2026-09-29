@@ -1,6 +1,9 @@
 //! Real descriptors and inert comparisons only; no runtime approval is invented.
 use super::*;
+use fe2o3_protected_service_spawn::ProtectedServiceCleanupServiceV2 as Cleanup;
 use fe2o3_protected_service_spawn::compiler_service_channel::encode_transfer as encode;
+
+const LIMIT: usize = 1 << 34;
 
 fn encode_transfer(child: u32, parent: u32) -> [u8; TRANSFER_BYTES] {
     encode(child, parent).unwrap()
@@ -103,26 +106,11 @@ fn prematurely_readable_or_closed_peer_refuses() {
 #[test]
 #[ignore = "requires isolated root, clone3, CAP_SETUID/SETGID/SETPCAP/SYS_PTRACE/KILL and static exec fixture"]
 fn native_child_channel_joins_original_pidfd_before_trace() {
-    for case in 0..6 {
-        run_native(case);
-    }
-}
-
-#[allow(unsafe_code)]
-fn run_native(case: usize) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
         CanonicalKernelIrWorkBudgetV1 as Work,
     };
-    use fe2o3_protected_service_spawn::{
-        ProtectedServiceCleanupServiceV2 as Cleanup,
-        ProtectedServiceDescriptorBindingV1 as Binding,
-        cleanup_bridge::CleanupPollV1 as CleanupPoll,
-        native_spawn::StagedProtectedServiceExecV2 as Stage,
-    };
-    use std::{ffi::CString, fs::File, os::unix::fs::PermissionsExt, time::Duration};
-
-    const LIMIT: usize = 1 << 34;
+    use std::time::Duration;
     struct Drain(Cleanup);
     impl Drop for Drain {
         fn drop(&mut self) {
@@ -142,6 +130,20 @@ fn run_native(case: usize) {
         }
     }
     let mut pool = Drain(Cleanup::admit(Account::new(Work::new(LIMIT), LIMIT)).unwrap());
+    for case in 0..6 {
+        run_native(case, &mut pool.0);
+    }
+}
+
+#[allow(unsafe_code)]
+fn run_native(case: usize, pool: &mut Cleanup) {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use fe2o3_protected_service_spawn::{
+        ProtectedServiceDescriptorBindingV1 as Binding,
+        cleanup_bridge::CleanupPollV1 as CleanupPoll,
+        native_spawn::StagedProtectedServiceExecV2 as Stage,
+    };
+    use std::{ffi::CString, fs::File, os::unix::fs::PermissionsExt, time::Duration};
     let dir = tempfile::tempdir().unwrap();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     // The isolated container can mount /tmp noexec. Use the explicit executable
@@ -182,16 +184,9 @@ fn run_native(case: usize) {
     let credentials = Credentials::new(65534, 65534).unwrap();
     // SAFETY: all source backing survives in the original cleanup slot; no
     // process is admitted as a compiler. The test retains this creator thread.
-    let (child, growth) = unsafe {
-        stage.spawn_retaining(
-            credentials,
-            (image, cwd, unused),
-            source,
-            &mut pool.0,
-            &mut b,
-        )
-    }
-    .unwrap();
+    let (child, growth) =
+        unsafe { stage.spawn_retaining(credentials, (image, cwd, unused), source, pool, &mut b) }
+            .unwrap();
     b.reserve_storage(growth.additional_storage()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     launch_io::await_profile_ready(
@@ -216,6 +211,8 @@ fn run_native(case: usize) {
         gate_reader,
         gate_writer,
     } = channels;
+    let (exit_observer, charge) = child.try_clone_pidfd(&mut b).unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
     let receive_deadline = if case == 1 { Instant::now() } else { deadline };
     if case == 2 {
         net::sockopt::set_socket_passcred(&root, false).unwrap();
@@ -266,6 +263,7 @@ fn run_native(case: usize) {
         // Receiver is consumed; neither the cloned pidfd nor a received right leaks.
         assert_eq!(fd_count() + 1, before_fds);
         drop(child);
+        drain_child(pool, exit_observer.as_fd());
         return;
     }
     let (channel, full) = received.unwrap();
@@ -315,18 +313,34 @@ fn run_native(case: usize) {
     require_idle(channel.client_pidfd.as_fd()).unwrap();
     require_idle(channel.service_peer.as_fd()).unwrap();
     assert_ne!(trace.cancel(), CleanupPoll::Quarantined);
-    let mut terminal = false;
-    for _ in 0..1024 {
-        if pool.0.shutdown().is_ok() {
-            terminal = true;
-            break;
-        }
-        pool.0
-            .pump(fe2o3_protected_service_spawn::MAX_PROTECTED_SERVICE_PROCESSES_V2)
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert!(terminal, "compiler child did not terminate");
+    drain_child(pool, exit_observer.as_fd());
     assert!(require_idle(channel.client_pidfd.as_fd()).is_err());
     drop((trace, channel));
+}
+
+fn drain_child(pool: &mut Cleanup, pidfd: BorrowedFd<'_>) {
+    for _ in 0..1024 {
+        pool.pump(fe2o3_protected_service_spawn::MAX_PROTECTED_SERVICE_PROCESSES_V2)
+            .unwrap();
+        let mut fds = [event::PollFd::new(&pidfd, event::PollFlags::IN)];
+        if event::poll(
+            &mut fds,
+            Some(&event::Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            }),
+        )
+        .unwrap()
+            == 1
+        {
+            assert!(fds[0].revents().contains(event::PollFlags::IN));
+            // A full final turn consumes the exited root record before the next
+            // attempt. Empty shutdown of the SAME pool is checked after all cases.
+            pool.pump(fe2o3_protected_service_spawn::MAX_PROTECTED_SERVICE_PROCESSES_V2)
+                .unwrap();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("compiler child did not terminate");
 }

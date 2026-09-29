@@ -188,12 +188,14 @@ The root-level `compiler_service_channel` module exports `TRANSFER_BYTES`,
 `transfer_matches(&wire, child_pid, parent_pid)`. Encoding returns `Option` and
 refuses zero, out-of-range or equal child/parent Linux PIDs. These are inert,
 bounded wire helpers, also available as `native_spawn::compiler_child_channel`;
-decoding a `Transfer`
-does not create process or endpoint authority. The root coordinator separately
+decoding a `Transfer` does not create process or endpoint authority. The private
+coordinator receiver separately
 receives with `launch_io::receive_ready_from::<24, true, _>`, binds actual
 SCM_CREDENTIALS and service SO_PEERCRED to admitted credentials and its retained
 original clone pidfd, checks exact child/parent wire claims and liveness, and
-owns gate release and terminal observation. Do not reopen a numeric PID or use
+is exercised with gated launch and terminal cleanup by an isolated diagnostic.
+The installed coordinator does not yet accept compiler attempts or compose this
+receiver with approved compiler/helper custody and an issuer. Do not reopen a numeric PID or use
 the public client's same-UID handoff for this distinct-UID root receipt. That
 public client path is unchanged.
 

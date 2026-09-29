@@ -231,6 +231,9 @@
   "crates/fe2o3-compiler-execution-client/tests/native_inherited/support.rs": {
     "block": 5
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/compiler_child_channel_tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs": {
     "block": 3
   },
@@ -1081,14 +1084,18 @@
   "crates/fe2o3-protected-service-spawn/src/native_child_tests.rs": {
     "block": 5
   },
+  "crates/fe2o3-protected-service-spawn/src/native_compiler_channel_syscall.rs": {
+    "block": 1,
+    "function": 1
+  },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_exec_tests.rs": {
     "block": 2
   },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_spawn.rs": {
-    "function": 1
+    "function": 2
   },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_spawn_tests.rs": {
-    "block": 2
+    "block": 3
   },
   "crates/fe2o3-protected-service-spawn/src/native_domain_spawn.rs": {
     "function": 1
