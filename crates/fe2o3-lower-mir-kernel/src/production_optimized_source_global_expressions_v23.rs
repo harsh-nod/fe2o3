@@ -19,8 +19,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
     ) -> SourceOwnedResultV18<()> {
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()
-            || optimized.slot != std::ptr::from_ref(budget) as usize
-            || optimized.ledger != budget.work_ledger_identity_v1()
+            || !optimized.has_original_account_v23(budget)
         {
             self.source.cleanup.deny_refund();
             return self.retain_query(Err(ArgumentResourceV1::Accounting.into()));

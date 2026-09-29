@@ -105,11 +105,11 @@ fn object_payload_and_anchor_publish_together_at_independent_resource_boundaries
 fn typed_anchor_owner_and_recorder_headers_match_independent_live_shapes() {
     assert_eq!(
         std::mem::size_of::<ScopedObjectCheckpointV29>(),
-        3 * std::mem::size_of::<usize>()
+        4 * std::mem::size_of::<usize>()
     );
     assert_eq!(
         std::mem::size_of::<Option<ScopedObjectCheckpointV29>>(),
-        std::mem::size_of::<Option<(usize, usize, usize)>>()
+        std::mem::size_of::<Option<(usize, usize, usize, usize)>>()
     );
     #[allow(dead_code)]
     enum AnchorKind {
@@ -142,6 +142,7 @@ fn typed_anchor_owner_and_recorder_headers_match_independent_live_shapes() {
         rows: Vec<Anchor>,
         payloads: Vec<ScopedObjectPayloadV29>,
         components: Vec<ScopedObjectComponentV29>,
+        zero_objects: Vec<ScopedZeroObjectV29>,
     }
     #[allow(dead_code)]
     struct Recorder {

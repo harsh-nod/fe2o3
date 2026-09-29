@@ -218,6 +218,13 @@ impl ProductionSourceCorrespondenceV18<'_> {
 }
 
 impl<'scope> ProductionOptimizedSourceCorrespondenceV18<'scope> {
+    // Identity only: callers must select the original account before observing
+    // its prior denial. This does not check a retained floor or confer authority.
+    pub(super) fn has_original_account_v23(&self, budget: &ArgumentBudgetV1<'_>) -> bool {
+        self.slot == std::ptr::from_ref(budget) as usize
+            && self.ledger == budget.work_ledger_identity_v1()
+    }
+
     // A pending native join authenticates both subjects before query debits.
     pub(super) fn pending_global_output_v18(
         &self,
