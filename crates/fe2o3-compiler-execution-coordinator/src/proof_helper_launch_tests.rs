@@ -1,4 +1,4 @@
-//! Actual descriptor/image staging and inert codec tests only. No retained
+//! Actual descriptor/image staging and inert lifecycle/account/codec tests. No retained
 //! runtime/backing/child or positive deployment is fabricated in these tests.
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     os::{fd::AsRawFd, unix::fs::PermissionsExt},
+    panic::{AssertUnwindSafe, catch_unwind},
 };
 
 const LIMIT: usize = 1 << 34;
@@ -22,10 +23,160 @@ fn closed_launch_signature_consumes_actual_backing_and_original_custody() {
         &mut Cleanup,
         &mut Budget<'_>,
     ) -> Result<(ManagedProofHelper, usize)> = launch;
-    let _: fn(ManagedProofHelper, Duration, &mut Budget<'_>) -> Result<CleanupPoll> =
+    let _: fn(&ManagedProofHelper, Duration, &mut Budget<'_>) -> Result<CleanupPoll> =
         ManagedProofHelper::finish;
+    let _: fn(&ManagedProofHelper) -> Result<CleanupPoll> = ManagedProofHelper::cancel;
     fn retained<T: Send + 'static>() {}
     retained::<ManagedProofHelper>();
+}
+
+#[test]
+fn compiler_cleanup_owner_can_borrow_and_stop_without_extracting_helper() {
+    // Type-check the future owner's composition without fabricating an approved
+    // runtime, backing, child, cleanup pool or successful native cancellation.
+    fn compose(owner: &RetainedChild<ManagedProofHelper>, b: &mut Budget<'_>) -> Result<()> {
+        owner.with_resources(b, |helper, b| {
+            helper.with_compiler(b, |compiler, b| -> Result<()> {
+                compiler.revalidate(b).map_err(BackingError::from)?;
+                Ok(())
+            })?;
+            let _ = helper.finish(Duration::from_secs(1), b)?;
+            let _ = helper.cancel()?;
+            Ok(())
+        })
+    }
+    let _: fn(&RetainedChild<ManagedProofHelper>, &mut Budget<'_>) -> Result<()> = compose;
+}
+
+#[test]
+fn lifecycle_permits_only_one_finish_and_no_access_after_it_starts() {
+    let mut phase = Phase::Ready;
+    phase.require_ready().unwrap();
+    phase.require_ready().unwrap();
+    phase.begin_finish().unwrap();
+    assert_eq!(phase, Phase::Finishing);
+    for result in [phase.require_ready(), phase.begin_finish()] {
+        assert!(matches!(
+            result,
+            Err(ProofHelperLaunchError::Invalid(
+                "proof helper lifecycle is closed"
+            ))
+        ));
+    }
+    assert_eq!(phase, Phase::Finishing);
+    phase.close();
+    assert_eq!(phase, Phase::Closed);
+    assert!(phase.require_ready().is_err());
+    assert!(phase.begin_finish().is_err());
+}
+
+#[test]
+fn cancellation_closes_every_phase_and_never_reopens_it() {
+    for mut phase in [Phase::Ready, Phase::Finishing, Phase::Closed] {
+        for _ in 0..2 {
+            phase.close();
+            assert_eq!(phase, Phase::Closed);
+            assert!(phase.require_ready().is_err());
+            assert!(phase.begin_finish().is_err());
+            assert_eq!(phase, Phase::Closed);
+        }
+    }
+}
+
+#[test]
+fn lifecycle_envelope_keeps_mutex_phase_and_complete_child_charge() {
+    assert_eq!(
+        ManagedProofHelper::ENVELOPE + size_of::<Child>() + size_of::<OwnedFd>(),
+        size_of::<(ManagedProofHelper, usize)>(),
+    );
+    assert!(ManagedProofHelper::ENVELOPE >= size_of::<Mutex<HelperChild>>() - size_of::<Child>());
+}
+
+#[test]
+fn lifecycle_scope_preserves_original_budget_and_retained_storage() {
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    let retained = size_of::<ManagedProofHelper>();
+    b.reserve_storage(retained).unwrap();
+    let address = &b as *const Budget<'_> as usize;
+    let ledger = b.work_ledger_identity_v1();
+    let start = b.work();
+    lifecycle_scope(retained, &mut b, |b| {
+        assert_eq!(b as *const Budget<'_> as usize, address);
+        assert!(b.work_ledger_identity_v1() == ledger);
+        assert_eq!(b.storage(), retained + FRAME);
+        b.reserve_storage(17)?;
+        b.charge_work(13)?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(b.storage(), retained);
+    assert_eq!(b.work() - start, LOCAL_WORK + 13);
+}
+
+#[test]
+fn lifecycle_scope_refuses_missing_retention_work_and_scratch_before_callback() {
+    let retained = size_of::<ManagedProofHelper>();
+    for mode in 0..3 {
+        let mut work = Work::new(if mode == 1 { LOCAL_WORK - 1 } else { LIMIT });
+        let mut b = Budget::new(
+            &mut work,
+            if mode == 2 {
+                retained + FRAME - 1
+            } else {
+                LIMIT
+            },
+        );
+        let floor = retained - usize::from(mode == 0);
+        b.reserve_storage(floor).unwrap();
+        let result =
+            lifecycle_scope::<()>(retained, &mut b, |_| panic!("unfunded lifecycle callback"));
+        match mode {
+            0 => assert!(matches!(
+                result,
+                Err(ProofHelperLaunchError::Resource(Resource::Accounting))
+            )),
+            1 => assert!(matches!(
+                result,
+                Err(ProofHelperLaunchError::Resource(Resource::Work(_)))
+            )),
+            _ => assert!(matches!(
+                result,
+                Err(ProofHelperLaunchError::Resource(Resource::Storage(_)))
+            )),
+        }
+        assert_eq!(b.storage(), floor);
+    }
+}
+
+#[test]
+fn lifecycle_scope_restores_storage_on_error_and_unwind_without_refunding_work() {
+    let retained = size_of::<ManagedProofHelper>();
+    for unwind in [false, true] {
+        let mut work = Work::new(LIMIT);
+        let mut b = Budget::new(&mut work, LIMIT);
+        b.reserve_storage(retained).unwrap();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            lifecycle_scope::<()>(retained, &mut b, |b| {
+                b.reserve_storage(17)?;
+                b.charge_work(13)?;
+                if unwind {
+                    panic!("inert lifecycle callback panic");
+                }
+                Err(ProofHelperLaunchError::Invalid("inert callback refusal"))
+            })
+        }));
+        if unwind {
+            assert!(result.is_err());
+        } else {
+            assert!(matches!(
+                result.unwrap(),
+                Err(ProofHelperLaunchError::Invalid("inert callback refusal"))
+            ));
+        }
+        assert_eq!(b.storage(), retained);
+        assert_eq!(b.work(), LOCAL_WORK + 13);
+    }
 }
 
 fn clone_bootstrap(channels: &Channels) -> File {

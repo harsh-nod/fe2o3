@@ -2,6 +2,7 @@
 //! The child retains the entire backing through aggregate cleanup. Root IDs,
 //! mapping readback, a READY record and a live pidfd are not deployment provenance.
 use crate::{
+    compiler_invocation_backing::CompilerInvocationBacking as Compiler,
     native_launch::{self as native, Channels, CompilerExecutionLaunchErrorV2 as NativeError},
     proof_helper_backing::{
         ProofHelperBacking as Backing, ProofHelperBackingError as BackingError,
@@ -38,6 +39,7 @@ use std::{
     fs::File,
     mem::size_of,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
+    sync::{Mutex, MutexGuard, TryLockError},
     time::{Duration, Instant},
 };
 
@@ -125,12 +127,66 @@ impl std::error::Error for ProofHelperLaunchError {
 /// Child drops first, so its prepaid cancellation/defer precedes bootstrap close.
 /// Pending/Quarantined cancellation retains the backing in the ORIGINAL pool.
 pub(crate) struct ManagedProofHelper {
-    child: Child,
+    child: Mutex<HelperChild>,
     bootstrap: OwnedFd,
     session: [u8; 32],
     runtime: [u8; 32],
     retained: usize,
 }
+
+#[derive(Debug, Eq, PartialEq)]
+enum Phase {
+    Ready,
+    Finishing,
+    Closed,
+}
+impl Phase {
+    fn require_ready(&self) -> Result<()> {
+        match self {
+            Self::Ready => Ok(()),
+            Self::Finishing | Self::Closed => Err(ProofHelperLaunchError::Invalid(
+                "proof helper lifecycle is closed",
+            )),
+        }
+    }
+    fn begin_finish(&mut self) -> Result<()> {
+        self.require_ready()?;
+        *self = Self::Finishing;
+        Ok(())
+    }
+    fn close(&mut self) {
+        *self = Self::Closed;
+    }
+}
+
+struct HelperChild {
+    child: Child,
+    phase: Phase,
+}
+impl HelperChild {
+    fn cancel(&mut self) -> CleanupPoll {
+        self.phase.close();
+        // Native cancellation caches its disposition and preserves the original
+        // slot on Pending/Quarantined. Keep the typed backing even after Reaped.
+        self.child.cancel()
+    }
+}
+
+struct FinishAttempt<'a>(&'a mut HelperChild);
+impl FinishAttempt<'_> {
+    fn child(&self) -> &Child {
+        &self.0.child
+    }
+    fn cancel(&mut self) -> CleanupPoll {
+        self.0.cancel()
+    }
+}
+impl Drop for FinishAttempt<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.cancel();
+    }
+}
+
 impl ManagedProofHelper {
     const ENVELOPE: usize = size_of::<(Self, usize)>() - size_of::<Child>() - size_of::<OwnedFd>();
 
@@ -138,27 +194,77 @@ impl ManagedProofHelper {
         self.retained
     }
 
-    /// Consuming handshake followed by one exclusive, prepaid cancellation step.
+    /// Scoped access to the fixed compiler owner while this lifecycle is ready.
+    /// The callback receives the SAME Budget and funds its own work and outputs.
+    /// No backing reference may escape; reserve returned growth after this call.
+    /// Reentry or concurrent access refuses without waiting for this mutex.
+    pub(crate) fn with_compiler<R, E>(
+        &self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(&Compiler, &mut Budget<'_>) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E>
+    where
+        E: From<ProofHelperLaunchError>,
+    {
+        lifecycle_scope(self.retained, b, |b| {
+            let child = self.lock_child()?;
+            child.phase.require_ready()?;
+            child.child.with_resources(b, |backing, b| -> Result<_> {
+                validate_backing(backing, self.runtime, b)?;
+                Ok(operation(backing.compiler(), b))
+            })
+        })
+        .map_err(E::from)?
+    }
+
+    fn lock_child(&self) -> Result<MutexGuard<'_, HelperChild>> {
+        match self.child.try_lock() {
+            Ok(child) => Ok(child),
+            Err(TryLockError::WouldBlock) => Err(ProofHelperLaunchError::Invalid(
+                "proof helper lifecycle is busy",
+            )),
+            Err(TryLockError::Poisoned(_)) => Err(AccessError::Poisoned.into()),
+        }
+    }
+
+    /// One prepaid cancellation step, callable through retained shared custody.
+    /// Repeated calls return the native cached disposition, never another step.
+    /// Poison recovery is ONLY for cancellation; it cannot reopen backing access.
+    pub(crate) fn cancel(&self) -> Result<CleanupPoll> {
+        let mut child = match self.child.try_lock() {
+            Ok(child) => child,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(ProofHelperLaunchError::Invalid(
+                    "proof helper lifecycle is busy",
+                ));
+            }
+        };
+        Ok(child.cancel())
+    }
+
+    /// One-use handshake followed by one exclusive, prepaid cancellation step.
+    /// Once started, refusal or unwind also cancels and permanently closes access.
     /// Only Reaped proves both terminal consuming wait and aggregate domain cleanup.
     /// It does NOT prove a graceful exit or status zero. Pending/Quarantined keep
-    /// the complete unresolved record/backing in the existing pool, not this view.
+    /// the complete unresolved record/backing in the existing pool. This view also
+    /// keeps its full backing and reservation until its enclosing owner drops it.
     /// The shared EOF scheduler may conservatively refuse a concurrent terminal
     /// race; no terminal observation is substituted for actual bootstrap EOF.
-    pub(crate) fn finish(mut self, timeout: Duration, b: &mut Budget<'_>) -> Result<CleanupPoll> {
-        b.with_prepaid_scope(self.retained, ENTRY_WORK, LOCAL_WORK, FRAME, |b| {
+    pub(crate) fn finish(&self, timeout: Duration, b: &mut Budget<'_>) -> Result<CleanupPoll> {
+        let mut child = self.lock_child()?;
+        child.phase.begin_finish()?;
+        // Install before budget/deadline admission: the old consuming finish also
+        // cancelled on those refusals. No backing/pool lock survives into Drop.
+        let mut attempt = FinishAttempt(&mut child);
+        lifecycle_scope(self.retained, b, |b| {
             let deadline = launch_io::bounded_deadline(timeout)?;
-            let credentials = self.child.with_resources(b, |backing, b| {
-                backing.revalidate(b)?;
-                if backing.runtime_identity() != self.runtime {
-                    return Err(ProofHelperLaunchError::Invalid(
-                        "proof helper runtime association changed",
-                    ));
-                }
-                Ok::<_, ProofHelperLaunchError>(backing.credentials())
-            })?;
-            validate_process(&self.child, credentials, b)?;
+            let child = attempt.child();
+            let credentials =
+                child.with_resources(b, |backing, b| validate_backing(backing, self.runtime, b))?;
+            validate_process(child, credentials, b)?;
             send_record(
-                &self.child,
+                child,
                 self.bootstrap.as_fd(),
                 Kind::Finish,
                 self.session,
@@ -167,7 +273,7 @@ impl ManagedProofHelper {
                 deadline,
             )?;
             receive_record(
-                &self.child,
+                child,
                 self.bootstrap.as_fd(),
                 credentials,
                 Kind::Finished,
@@ -178,16 +284,43 @@ impl ManagedProofHelper {
             )?;
             launch_io::await_exec_eof(
                 self.bootstrap.as_fd(),
-                &mut Observer {
-                    child: &self.child,
-                    budget: b,
-                },
+                &mut Observer { child, budget: b },
                 deadline,
             )?;
             ensure_deadline(deadline, "proof helper terminal handshake")?;
-            Ok(self.child.cancel())
+            Ok(attempt.cancel())
         })
     }
+}
+
+impl Drop for ManagedProofHelper {
+    fn drop(&mut self) {
+        // Exclusive destruction needs no lock and cannot lose poisoned custody.
+        let child = self.child.get_mut().unwrap_or_else(|e| e.into_inner());
+        let _ = child.cancel();
+    }
+}
+
+fn lifecycle_scope<T>(
+    retained: usize,
+    b: &mut Budget<'_>,
+    operation: impl FnOnce(&mut Budget<'_>) -> Result<T>,
+) -> Result<T> {
+    b.with_prepaid_scope(retained, ENTRY_WORK, LOCAL_WORK, FRAME, operation)
+}
+
+fn validate_backing(
+    backing: &Backing,
+    runtime: [u8; 32],
+    b: &mut Budget<'_>,
+) -> Result<Credentials> {
+    backing.revalidate(b)?;
+    if backing.runtime_identity() != runtime {
+        return Err(ProofHelperLaunchError::Invalid(
+            "proof helper runtime association changed",
+        ));
+    }
+    Ok(backing.credentials())
 }
 
 /// Launches only the helper selected and sealed by the consumed actual backing.
@@ -323,15 +456,7 @@ pub(crate) unsafe fn launch(
             b,
             deadline,
         )?;
-        child.with_resources(b, |backing, b| -> Result<()> {
-            backing.revalidate(b)?;
-            if backing.runtime_identity() != runtime {
-                return Err(ProofHelperLaunchError::Invalid(
-                    "proof helper runtime association changed",
-                ));
-            }
-            Ok(())
-        })?;
+        child.with_resources(b, |backing, b| validate_backing(backing, runtime, b))?;
         validate_process(&child, credentials, b)?;
         if !child.is_live(b)? {
             return Err(launch_io::Failure::ChildExited("proof helper ready").into());
@@ -353,7 +478,10 @@ pub(crate) unsafe fn launch(
         b.reserve_storage(ManagedProofHelper::ENVELOPE)?;
         Ok((
             ManagedProofHelper {
-                child,
+                child: Mutex::new(HelperChild {
+                    child,
+                    phase: Phase::Ready,
+                }),
                 bootstrap: root,
                 session,
                 runtime,
