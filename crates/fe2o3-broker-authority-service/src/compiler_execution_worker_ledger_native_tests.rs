@@ -2,6 +2,8 @@
 //! protected-process admission, independent administration, or GPU authority.
 #[path = "compiler_execution_publication_continuity_tests.rs"]
 mod continuity_tests;
+#[path = "compiler_execution_retirement_gate_tests.rs"]
+mod retirement_gate_tests;
 use super::super::worker::{ANCHOR, WORKER};
 use super::*;
 use ed25519_dalek::{Signer, SigningKey};
