@@ -77,6 +77,13 @@ pub use root_control_v3::{
     CompilerExecutionRootControlBindingV3, CompilerExecutionRootControlErrorV3,
     CompilerExecutionRootControlKindV3, CompilerExecutionRootControlRecordV3,
 };
+mod root_gate_v3;
+pub use root_gate_v3::{
+    COMPILER_EXECUTION_ROOT_GATE_STORAGE_V3, COMPILER_EXECUTION_ROOT_GATE_WORK_V3,
+    compiler_execution_root_gate_reply_v3, compiler_execution_root_gate_request_v3,
+    validate_compiler_execution_root_gate_reply_v3,
+    validate_compiler_execution_root_gate_request_v3,
+};
 mod service;
 mod service_native_adapter;
 mod service_ready;

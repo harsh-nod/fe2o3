@@ -218,6 +218,26 @@ impl Record {
         })
     }
 
+    /// Checks both launch identities and the actual manifest's policy binding.
+    /// Uses the ordinary codec work/scratch quotes with all three owners prepaid.
+    /// Does not authenticate a peer or establish epoch/generation freshness.
+    pub fn matches_launch(
+        &self,
+        policy: &Policy,
+        manifest: &Manifest,
+        b: &mut Budget<'_>,
+    ) -> Result<bool> {
+        metered(
+            b,
+            RETAINED + policy.retained_storage() + manifest.retained_storage(),
+            || {
+                Ok(manifest.policy_identity() == policy.identity()
+                    && &self.bytes[24..56] == policy.identity().as_bytes()
+                    && &self.bytes[56..88] == manifest.identity().as_bytes())
+            },
+        )
+    }
+
     /// Includes the original payload through its digest, not just an operation
     /// or numeric sequence. The caller must still check its own pending request.
     pub fn matches_reply(&self, request: &Self, b: &mut Budget<'_>) -> Result<bool> {
