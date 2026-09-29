@@ -45,6 +45,14 @@ fn bound_worklist_checks_nonempty_private_memory_and_retains_nominal_output() {
                         .all(|count| count > 0)
                 );
                 assert_eq!(output.execution().policy_version(), 9);
+                if output.report().passes()[0].changed() != changed {
+                    eprintln!(
+                        "bound private worklist expected changed={changed} report={:?}",
+                        output.report()
+                    );
+                    private_entry_integer_diagnostic_v20("input", source.canonical(budget)?);
+                    private_entry_integer_diagnostic_v20("output", output.owner());
+                }
                 assert_eq!(output.report().passes()[0].changed(), changed);
                 assert_eq!(
                     output.input_audit_bytes(),

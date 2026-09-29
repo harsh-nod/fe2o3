@@ -203,6 +203,14 @@ fn bound_private_handoff_retains_actual_changed_and_noop_fixed_integer_outputs()
                         .into_iter()
                         .all(|count| count > 0)
                 );
+                if output.report().passes()[0].changed() != changed {
+                    eprintln!(
+                        "bound private integer expected changed={changed} report={:?}",
+                        output.report()
+                    );
+                    private_entry_integer_diagnostic_v20("input", source.canonical(budget)?);
+                    private_entry_integer_diagnostic_v20("output", output.owner());
+                }
                 assert_eq!(output.report().passes()[0].changed(), changed);
                 assert_eq!(
                     output.owner().canonical_bytes() != output.input_audit_bytes(),
@@ -461,6 +469,10 @@ fn bound_private_live_reason_cursor_rejects_duplicate_skipped_missing_and_wrong_
                     };
                 let private =
                     with_private_source_completion_v21(original, optimized, budget, &mut consume);
+                assert!(
+                    completed.get().is_some() && settled.get(),
+                    "private cursor prerequisite did not complete: {private:?}"
+                );
                 if mode == 4 {
                     assert!(private.is_ok(), "{private:?}");
                 }

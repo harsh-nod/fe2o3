@@ -338,6 +338,58 @@ fn private_entry_typed_memory_census_v20(
     counts
 }
 
+// Failure-only bounded diagnostic for these fixed source fixtures. This does
+// not rewrite the owner or change the asserted changed/no-op classification.
+fn private_entry_integer_diagnostic_v20(
+    label: &str,
+    owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+) {
+    eprintln!(
+        "private integer {label} typed memory {:?}",
+        private_entry_typed_memory_census_v20(owner)
+    );
+    let mut remaining = 32;
+    for (fi, function) in owner.module().functions.iter().enumerate() {
+        let Some(body) = &function.body else {
+            continue;
+        };
+        for block in &body.blocks {
+            for (oi, operation) in block.operations.iter().enumerate() {
+                let OperationKind::Binary { op, lhs, rhs } = operation.kind else {
+                    continue;
+                };
+                if remaining == 0 {
+                    eprintln!("private integer {label} candidate limit");
+                    return;
+                }
+                remaining -= 1;
+                eprintln!(
+                    "private integer {label} function={fi} block={:?} operation={oi} kind={op:?} results={:?}",
+                    block.id, operation.results
+                );
+                for (side, value) in [("lhs", lhs), ("rhs", rhs)] {
+                    let producer =
+                        body.blocks
+                            .iter()
+                            .flat_map(|block| &block.operations)
+                            .find(|operation| {
+                                operation.results.iter().any(|result| result.id == value)
+                            });
+                    match producer.map(|operation| &operation.kind) {
+                        Some(OperationKind::Constant(constant)) => eprintln!(
+                            "private integer {label} {side}={value:?} constant={constant:?}"
+                        ),
+                        Some(kind) => {
+                            eprintln!("private integer {label} {side}={value:?} producer={kind:?}")
+                        }
+                        None => eprintln!("private integer {label} {side}={value:?} parameter"),
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn private_source_completion_owns_actual_integer_output_for_all_roots_and_nested_helpers() {
     for factory in [
@@ -486,6 +538,14 @@ fn private_source_completion_retains_real_changed_and_noop_integer_owners() {
                         .into_iter()
                         .all(|count| count > 0)
                 );
+                if output.report().passes()[0].changed() != changed {
+                    eprintln!(
+                        "private integer expected changed={changed} report={:?}",
+                        output.report()
+                    );
+                    private_entry_integer_diagnostic_v20("input", source.canonical(budget)?);
+                    private_entry_integer_diagnostic_v20("output", output.owner());
+                }
                 assert_eq!(output.report().passes()[0].changed(), changed);
                 assert_eq!(
                     output.owner().canonical_bytes() != output.input_audit_bytes(),

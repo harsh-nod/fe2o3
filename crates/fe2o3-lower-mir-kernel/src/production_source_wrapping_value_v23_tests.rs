@@ -259,6 +259,10 @@ fn wrapping_value_overflow_edges_keep_checked_contract_distinct_for_every_fixed_
 }
 
 fn explicit_checked_owner_v23() -> ProductionSemanticSsaOwnerV1 {
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
+        SemanticScalarValidityRangeV1,
+    };
     let base = private_entry_non_neutral_owner_v20();
     let semantic = base.source_semantic();
     let mut types = semantic.types().to_vec();
@@ -266,7 +270,16 @@ fn explicit_checked_owner_v23() -> ProductionSemanticSsaOwnerV1 {
     types.push(SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([241; 32]),
         SemanticLayoutIdentityV1::from_sha256([241; 32]),
-        SemanticTypeLayoutV1::new(Some(1), 1).unwrap(),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(1),
+            1,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                SemanticScalarValidityRangeV1::new(0, 1),
+            )),
+            false,
+        )
+        .unwrap(),
         SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
     ));
     let pair = SemanticTypeIdV1::from_index(types.len() as u32);
