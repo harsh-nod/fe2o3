@@ -1,4 +1,6 @@
-fn check_kernel_context_source_protocol() {
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn kernel_context_source_protocol_rejects_without_export_authority() {
     use fe2o3_rustc_front::{
         KERNEL_CONTEXT_FRONTEND_REGISTRATION_KIND_V1,
         KERNEL_CONTEXT_FRONTEND_REGISTRATION_MAGIC_V1,
