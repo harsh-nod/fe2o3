@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1;
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, WaitIdStatus};
 
 use crate::native_cgroup::NativeCgroupDomainV1;
 use crate::native_spawn::{ProtectedServiceSpawnErrorV2 as SpawnError, Result as SpawnResult};
@@ -204,6 +204,70 @@ impl ChildCleanupV1 {
         self.custody.terminal_reaped();
     }
 
+    /// Requires the untouched clone owner before a root-only SEIZE. The caller
+    /// retains its first-exec gate; this observation does not establish that gate.
+    pub(crate) fn prepare_root_trace(&self) -> SpawnResult<()> {
+        self.require_namespace_setup_custody()?;
+        let pidfd = self
+            .pidfd()
+            .ok_or(SpawnError::State("trace pidfd is absent"))?;
+        match rustix::process::waitid(
+            WaitId::PidFd(pidfd.as_fd()),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        ) {
+            Ok(None) => Ok(()),
+            Ok(Some(_)) => Err(SpawnError::State("trace child already terminated")),
+            Err(e) => {
+                if e == Errno::CHILD {
+                    self.ownership_lost();
+                }
+                Err(crate::native_spawn::io(
+                    "observe child before root trace",
+                    e,
+                ))
+            }
+        }
+    }
+
+    /// Only the closed native tracer calls this, with exclusive mutable custody.
+    /// No PID, supplied status, callback, or NOWAIT result can discharge a wait.
+    pub(crate) fn wait_root_trace(&mut self) -> SpawnResult<Option<WaitIdStatus>> {
+        self.require_namespace_setup_custody()?;
+        let pidfd = self
+            .pidfd()
+            .ok_or(SpawnError::State("trace pidfd is absent"))?;
+        let result = rustix::process::waitid(
+            WaitId::PidFd(pidfd.as_fd()),
+            WaitIdOptions::EXITED
+                | WaitIdOptions::STOPPED
+                | WaitIdOptions::NOHANG
+                | WaitIdOptions::from_bits_retain(libc::__WALL as u32),
+        );
+        match result {
+            Ok(status) => {
+                if status.as_ref().is_some_and(|s| {
+                    matches!(
+                        s.raw_code(),
+                        libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
+                    )
+                }) {
+                    // Notify before decoding, returning, or any other fallible work.
+                    self.terminal_reaped();
+                }
+                Ok(status)
+            }
+            Err(e) => {
+                if e == Errno::CHILD {
+                    self.ownership_lost();
+                }
+                Err(crate::native_spawn::io(
+                    "consume owned root trace status",
+                    e,
+                ))
+            }
+        }
+    }
+
     /// Attempts at most one pidfd KILL followed by one consuming NOHANG wait.
     ///
     /// There is no retry loop, allocation, or raw-PID fallback. Pending and
@@ -211,6 +275,9 @@ impl ChildCleanupV1 {
     /// lease. A retained domain receives at most one additional finite step.
     /// Root reaping stops root I/O, but only complete cleanup releases an
     /// unverified spawn lease. Repeated complete calls perform no I/O.
+    /// Native root tracing installs no TRACEEXIT or descendant options: SIGKILL
+    /// bypasses its signal/exec/group stops, so no ptrace resume is owed here.
+    /// Linux permits this exact-child terminal wait from another parent thread.
     pub fn step(&mut self) -> CleanupPollV1 {
         self.custody.step(&mut PidfdCleanupSyscallsV1)
     }

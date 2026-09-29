@@ -20,6 +20,10 @@ use std::{
     os::fd::{AsFd, OwnedFd},
 };
 
+#[path = "native_root_trace.rs"]
+pub(super) mod trace;
+pub use trace::{RootTaskTraceEventV2, RootTaskTraceV2};
+
 struct Custody(Option<(Child, ReapSlotV1<'static>)>);
 impl Drop for Custody {
     fn drop(&mut self) {
@@ -64,6 +68,18 @@ impl RootOwnedProtectedServiceChildV2 {
     pub const OPERATION_WORK: usize = ENTRY + 4 * (1024 + 64);
     /// Fixed logical control/error/descriptor staging, not generated stack or RSS.
     pub const OPERATION_SCRATCH: usize = 4 * Self::STORAGE + 1024;
+    /// Conservative GROWTH to reserve before consuming this owner into a trace.
+    /// It includes the complete trace frame in addition to the original owner.
+    pub const ROOT_TRACE_GROWTH: usize = size_of::<RootTaskTraceV2<'static>>();
+
+    /// Consumes this child into a thread-bound, root-task-only trace controller.
+    /// Reserve ROOT_TRACE_GROWTH on the original ledger before this call. Errors
+    /// cancel through the existing prepaid slot; no child owner is returned.
+    /// The caller must keep the native first-exec gate closed through this call
+    /// to observe that exec. This grants no descendant or executable admission.
+    pub fn into_root_trace<'work>(self, b: &mut Budget<'work>) -> Result<RootTaskTraceV2<'work>> {
+        RootTaskTraceV2::begin(self, Self::STORAGE + Self::ROOT_TRACE_GROWTH, b)
+    }
 
     pub(super) fn new(
         pid: Pid,
