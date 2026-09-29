@@ -143,6 +143,41 @@ struct Cfg {
     reachable: Vec<bool>,
     entry: usize,
 }
+
+fn check_assert_failure_sink(block: &BasicBlock, work: &mut Work<'_>) -> Result<()> {
+    work.charge_private_array_work(8)?;
+    if !block.parameters.is_empty()
+        || !matches!(block.terminator, Some(Terminator::Unreachable))
+        || block.operations.len() != 1
+    {
+        return Err(mismatch());
+    }
+    let operation = &block.operations[0];
+    let OperationKind::Call { callee, arguments } = &operation.kind else {
+        return Err(mismatch());
+    };
+    if !operation.results.is_empty() || !arguments.is_empty() {
+        return Err(mismatch());
+    }
+    // The existing decoder checks eight fixed descriptors. Empty arguments
+    // rule out the allocating Print cases before any operand copy.
+    work.charge_private_array_work(
+        callee
+            .as_str()
+            .len()
+            .checked_add(2)
+            .and_then(|n| n.checked_mul(8))
+            .ok_or_else(resource)?,
+    )?;
+    if !matches!(
+        AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+        Some(AmdGpuDiagnosticOperation::Trap)
+    ) {
+        return Err(mismatch());
+    }
+    Ok(())
+}
+
 impl Cfg {
     fn build(
         relation: &PrivateArrayFinalRelationV1<'_>,
@@ -188,20 +223,41 @@ impl Cfg {
             }
             ranges.push((start, cursor));
         }
-        // The source graph may conservatively retain extra edges, but an actual
-        // physical path may never invent a source edge or a different entry.
+        // Ordinary physical paths must remain original source edges. The
+        // existing lowering may append its one terminal assertion-failure
+        // sink: it has no memory effects or continuation into any source read.
+        // Full owner correspondence separately checks its synthetic span.
         let mut physical_blocks = scratch.vector(relation.body.blocks.len(), work)?;
         for block in &relation.body.blocks {
             work.charge_private_array_work(2)?;
             if block.id.0 as usize >= count {
-                return Err(mismatch());
+                if block.id.0 as usize != count {
+                    return Err(mismatch());
+                }
+                check_assert_failure_sink(block, work)?;
+                physical_blocks.push(block.id.0 as usize);
+                continue;
             }
             physical_blocks.push(block.id.0 as usize);
             block
                 .terminator
                 .as_ref()
                 .ok_or_else(mismatch)?
-                .try_visit_edges_v1(|to, _| {
+                .try_visit_edges_v1(|to, arguments| {
+                    work.charge_private_array_work(4)?;
+                    if to.0 as usize == count {
+                        if !arguments.is_empty()
+                            || !matches!(
+                                function.blocks()[block.id.0 as usize].terminator().kind(),
+                                SemanticTerminatorKindV1::Assert { .. }
+                                    | SemanticTerminatorKindV1::Abort
+                                    | SemanticTerminatorKindV1::UnwindTerminate
+                            )
+                        {
+                            return Err(mismatch());
+                        }
+                        return Ok(());
+                    }
                     private_array_binary_search_v1(
                         &edges,
                         |row| *row,
@@ -924,6 +980,8 @@ pub(in super::super) fn derive(
             Event,
             Kill,
             Read,
+            Option<AmdGpuDiagnosticOperation>,
+            (&BasicBlock, &FunctionId, &Vec<ValueId>),
         )>()
         .checked_add(std::mem::size_of::<(usize, usize, usize, usize)>() * 4)
         .ok_or_else(resource)?,

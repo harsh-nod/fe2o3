@@ -103,7 +103,7 @@ fn private_source_writes_check_cross_block_arithmetic_and_read_after_nonentry_st
                     private_entry_typed_memory_census_v20(output.output(budget)?.owner()),
                     before
                 );
-                assert!(!output.grants_artifact_or_launch_authority());
+                assert!(!output.output(budget)?.grants_authority());
                 output.discard(budget)?;
                 assert_eq!(budget.storage(), floor);
                 completed.set(true);

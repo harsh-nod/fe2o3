@@ -58,11 +58,19 @@ fn bound_private_pointer_reason_role_is_exact_not_a_general_escape_discharge() {
         })
     };
     assert_eq!(
-        private_formal_storage_pointer_v21(&read(3, access), &read(7, access), ValueId(3)),
+        ProductionPrivateMemoryCheckedNativePoliciesV18::test_private_formal_storage_pointer_v21(
+            &read(3, access),
+            &read(7, access),
+            ValueId(3)
+        ),
         Some(ValueId(7))
     );
     assert_eq!(
-        private_formal_storage_pointer_v21(&write(3, 4, access), &write(7, 8, access), ValueId(3)),
+        ProductionPrivateMemoryCheckedNativePoliciesV18::test_private_formal_storage_pointer_v21(
+            &write(3, 4, access),
+            &write(7, 8, access),
+            ValueId(3)
+        ),
         Some(ValueId(7))
     );
     for (before, after, pointer) in [
@@ -99,7 +107,7 @@ fn bound_private_pointer_reason_role_is_exact_not_a_general_escape_discharge() {
         (read(3, volatile), read(7, volatile), ValueId(3)),
     ] {
         assert_eq!(
-            private_formal_storage_pointer_v21(&before, &after, pointer),
+            ProductionPrivateMemoryCheckedNativePoliciesV18::test_private_formal_storage_pointer_v21(&before, &after, pointer),
             None
         );
     }
