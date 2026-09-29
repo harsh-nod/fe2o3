@@ -16,6 +16,15 @@ pub(super) fn has_closed_memory_effects(
     operation: &Operation,
     value_types: &BTreeMap<ValueId, Type>,
 ) -> bool {
+    has_closed_memory_effects_with_types(operation, |value| {
+        value_types.get(&value).and_then(Type::as_scalar)
+    })
+}
+
+pub(super) fn has_closed_memory_effects_with_types(
+    operation: &Operation,
+    value_type: impl Fn(ValueId) -> Option<ScalarType>,
+) -> bool {
     let OperationKind::InlineAssembly(assembly) = &operation.kind else {
         return false;
     };
@@ -27,10 +36,7 @@ pub(super) fn has_closed_memory_effects(
     }
     // Nonzero source IDs are structural requirements, not evidence that a
     // caller-authored module came from the Rust frontend.
-    validate_gfx942_inline_assembly_v1(operation, |value| {
-        value_types.get(&value).and_then(Type::as_scalar)
-    })
-    .is_ok_and(|validated| {
+    validate_gfx942_inline_assembly_v1(operation, value_type).is_ok_and(|validated| {
         validated.scalar_type() == ScalarType::U32
             && matches!(
                 validated.instruction(),

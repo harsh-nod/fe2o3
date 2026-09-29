@@ -123,6 +123,19 @@ fn unit_source(
     ProductionSemanticSsaOwnerV1,
     crate::ProductionSourceLaunchRosterV1,
 ) {
+    try_unit_source(case, calls_per_root).unwrap()
+}
+
+fn try_unit_source(
+    case: UnitCase,
+    calls_per_root: &[usize],
+) -> Result<
+    (
+        ProductionSemanticSsaOwnerV1,
+        crate::ProductionSourceLaunchRosterV1,
+    ),
+    fe2o3_pliron::ProductionSemanticSsaErrorV1,
+> {
     assert!((1..=2).contains(&calls_per_root.len()));
     assert!(calls_per_root.iter().all(|count| *count <= 2));
     assert!(calls_per_root.iter().any(|count| *count != 0));
@@ -433,11 +446,10 @@ fn unit_source(
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap();
     let ssa =
-        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())
-            .unwrap();
+        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())?;
     let launch =
         crate::ProductionSourceLaunchRosterV1::try_new(ssa.source_semantic(), &launches).unwrap();
-    (ssa, launch)
+    Ok((ssa, launch))
 }
 
 pub(super) fn unit_owner(

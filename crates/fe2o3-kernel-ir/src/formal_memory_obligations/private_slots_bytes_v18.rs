@@ -5,6 +5,9 @@ use crate::formal_memory_obligations::private_slots::engine::{
 };
 use crate::{verification_radix_sort_u32_bytes_v2, verification_types_equal_v1};
 
+#[path = "pointer_source_bytes_v18.rs"]
+pub(super) mod pointer_source_bytes_v18;
+
 struct Paid<'borrow, 'owner, 'work, 'budget, 'budget_work> {
     affine: &'borrow mut ActualOwnerAffineV18<'owner, 'work>,
     root_index: usize,

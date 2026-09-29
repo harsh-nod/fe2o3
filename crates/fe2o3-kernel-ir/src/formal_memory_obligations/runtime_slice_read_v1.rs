@@ -771,7 +771,7 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
 
 #[cfg(test)]
 #[path = "runtime_slice_read_v1_tests.rs"]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 #[path = "runtime_slice_read_origin_frames_v1_tests.rs"]

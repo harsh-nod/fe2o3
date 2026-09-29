@@ -57,6 +57,14 @@ fn array_owner_at_body(
     case: ArrayCase,
     helper: bool,
 ) -> Result<ProductionPreRankedKirOwnerV1, ProductionPreRankedKirErrorV1> {
+    array_owner_with_cfg(case, helper, |blocks| blocks)
+}
+
+fn array_owner_with_cfg(
+    case: ArrayCase,
+    helper: bool,
+    cfg: impl FnOnce(Vec<SemanticBasicBlockV1>) -> Vec<SemanticBasicBlockV1>,
+) -> Result<ProductionPreRankedKirOwnerV1, ProductionPreRankedKirErrorV1> {
     let old_types = types();
     let mut source_types = vec![
         old_types[0].clone(),
@@ -261,7 +269,7 @@ fn array_owner_at_body(
             })
             .collect(),
         SemanticBlockIdV1::from_index(0),
-        blocks,
+        cfg(blocks),
     )
     .unwrap()
     .with_kernel_entry(SemanticKernelEntryV1::new(
@@ -372,7 +380,7 @@ fn array_owner_at_body(
             .unwrap();
     let ssa =
         ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())
-            .unwrap();
+            .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
     let launch = crate::ProductionSourceLaunchRosterV1::try_new(
         ssa.source_semantic(),
         &[crate::ProductionSourceLaunchRootInputV1::new(
@@ -394,6 +402,9 @@ fn array_owner_at_body(
     assert_eq!(budget.storage(), FLOOR);
     owner
 }
+
+#[path = "production_private_array_cfg_source_v2_tests.rs"]
+mod cfg_source_tests;
 
 fn query(
     owner: &ProductionPreRankedKirOwnerV1,

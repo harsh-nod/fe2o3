@@ -2161,6 +2161,33 @@ struct SourceCorrelationChargeV18<'q, 'b, 'w, 'c> {
 }
 
 impl CorrelationChargeV18 for SourceCorrelationChargeV18<'_, '_, '_, '_> {
+    fn reserve_private_array_scratch(&mut self, bytes: usize) -> Option<()> {
+        if self.finite_denied {
+            return None;
+        }
+        self.ledger
+            .with_budget(|budget| budget.reserve_storage(bytes))
+            .ok()
+    }
+
+    fn release_private_array_scratch(&mut self, bytes: usize) -> Option<()> {
+        if self.finite_denied {
+            return None;
+        }
+        self.ledger
+            .with_budget(|budget| {
+                if budget
+                    .storage()
+                    .checked_sub(bytes)
+                    .is_none_or(|remaining| remaining < self.ledger.floor)
+                {
+                    return Err(ArgumentResourceV1::Accounting);
+                }
+                budget.release_storage(bytes)
+            })
+            .ok()
+    }
+
     fn charge_many(&mut self, amount: usize) -> Option<()> {
         if self.finite_denied
             || self.ledger.failure.get().is_some()
@@ -2238,6 +2265,20 @@ impl<'q, 'b, 'w, 'c> SourceTranslationChargeV18<'q, 'b, 'w, 'c> {
 }
 
 impl CorrelationChargeV18 for SourceTranslationChargeV18<'_, '_, '_, '_> {
+    fn reserve_private_array_scratch(&mut self, bytes: usize) -> Option<()> {
+        if !self.live() {
+            return None;
+        }
+        self.charge.reserve_private_array_scratch(bytes)
+    }
+
+    fn release_private_array_scratch(&mut self, bytes: usize) -> Option<()> {
+        if !self.live() {
+            return None;
+        }
+        self.charge.release_private_array_scratch(bytes)
+    }
+
     fn charge_many(&mut self, amount: usize) -> Option<()> {
         if !self.live() {
             return None;

@@ -118,6 +118,7 @@ struct PrivateArrayFinalRelationV1<'a> {
     slots: &'a [PrivateArraySlotV1],
     effects: &'a [PrivateArrayEffectV1],
     ranked_definitions: Vec<PrivateArrayRankedDefinitionV1<'a>>,
+    initialized_reads: Option<Vec<private_array_read_relation_v1::ReadInitializationV2>>,
     max_operations: usize,
 }
 
@@ -186,7 +187,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
             .get(instance.effect_start..instance.effect_end)
             .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
         let ranked_definitions = private_array_ranked_index_v1(recipe, max_operations, &mut work)?;
-        Ok(Some(Self {
+        let mut relation = Self {
             owner,
             function_id,
             semantic,
@@ -195,8 +196,19 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
             slots,
             effects,
             ranked_definitions,
+            initialized_reads: None,
             max_operations,
-        }))
+        };
+        for effect in effects {
+            work.charge_private_array_work(1)?;
+            if effect.access == PrivateArrayAccessV1::Read {
+                relation.initialized_reads = Some(private_array_read_relation_v1::derive(
+                    &relation, &mut work,
+                )?);
+                break;
+            }
+        }
+        Ok(Some(relation))
     }
 
     fn statement_range(

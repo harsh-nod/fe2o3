@@ -53,9 +53,11 @@ fn source_index_observer(
             }
             assert!(count > 0);
             assert_eq!(count, index.statements.len());
+            assert!(std::ptr::eq(index.owner, instances.owner()));
             // Independent field mirrors preserve explicit header premises.
             #[allow(dead_code)]
             struct Header<'a> {
+                owner: &'a ProductionSemanticSsaOwnerV1,
                 pending: &'a PendingScopedRootEmissionV29,
                 statements: Vec<Statement<'a>>,
                 terminators: Vec<Terminator<'a>>,

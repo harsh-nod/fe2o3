@@ -2872,6 +2872,15 @@ struct UnsupportedIndexCorrelationBudgetV1 {
 trait CorrelationChargeV18 {
     fn charge_many(&mut self, amount: usize) -> Option<()>;
 
+    // Historical correlation has only a finite work counter. Shared source
+    // adapters override these hooks on their original live byte ledger.
+    fn reserve_private_array_scratch(&mut self, _bytes: usize) -> Option<()> {
+        Some(())
+    }
+    fn release_private_array_scratch(&mut self, _bytes: usize) -> Option<()> {
+        Some(())
+    }
+
     fn normalized_node(&mut self) -> Option<()> {
         Some(())
     }

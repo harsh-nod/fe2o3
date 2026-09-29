@@ -76,6 +76,33 @@ fn erased_effect_fixture_mode_with_functions(
     ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedSemanticProjectionRootV1>,
 ) {
+    try_erased_effect_fixture_mode_with_functions(
+        expected,
+        root_count,
+        lifetime,
+        load_forwarding,
+        integer_identity,
+        redundant_store,
+        transform,
+    )
+    .unwrap()
+}
+
+fn try_erased_effect_fixture_mode_with_functions(
+    expected: bool,
+    root_count: usize,
+    lifetime: Option<SemanticStatementKindV1>,
+    load_forwarding: bool,
+    integer_identity: bool,
+    redundant_store: bool,
+    transform: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+) -> Result<
+    (
+        ProductionPreRankedKirOwnerV1,
+        Vec<ProductionRankedSemanticProjectionRootV1>,
+    ),
+    fe2o3_pliron::ProductionSemanticSsaErrorV1,
+> {
     use fe2o3_pliron::{
         ProductionConstructionV1, ProductionNumericalContractV2, ProductionRankedBlockV1,
         ProductionRankedKernelV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
@@ -315,15 +342,18 @@ fn erased_effect_fixture_mode_with_functions(
         }
         if integer_identity {
             let before_predicate = private_statements.len() - 1;
-            private_statements.insert(before_predicate, assignment(
-                8,
-                LOCAL_U64,
-                SemanticRvalueKindV1::Binary {
-                    operation: SemanticBinaryOpV1::BitXor,
-                    left: value(6, LOCAL_U64),
-                    right: constant(LOCAL_U64, 0, 8),
-                },
-            ));
+            private_statements.insert(
+                before_predicate,
+                assignment(
+                    8,
+                    LOCAL_U64,
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::BitXor,
+                        left: value(6, LOCAL_U64),
+                        right: constant(LOCAL_U64, 0, 8),
+                    },
+                ),
+            );
         }
         let dimensions = SemanticWorkgroupDimensionsV1::new([1, 1, 1]).unwrap();
         let old_entry = function.kernel_entry().unwrap();
@@ -407,8 +437,7 @@ fn erased_effect_fixture_mode_with_functions(
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap();
     let ssa =
-        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())
-            .unwrap();
+        ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())?;
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
     let fault_sites: Vec<_> = if lifetime.is_some() && !load_forwarding {
@@ -504,13 +533,20 @@ fn erased_effect_fixture_mode_with_functions(
             .unwrap();
             assert!(lowering.all_mandatory_reports_are_clean());
             // Optional private statements can move the fixture's global effect.
-            let mut global_sites = function.blocks().iter().enumerate().flat_map(|(block, body)| {
-                body.statements().iter().enumerate().filter_map(move |(statement, value)| {
-                    matches!(value.kind(), SemanticStatementKindV1::Store(store)
+            let mut global_sites =
+                function
+                    .blocks()
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(block, body)| {
+                        body.statements().iter().enumerate().filter_map(
+                            move |(statement, value)| {
+                                matches!(value.kind(), SemanticStatementKindV1::Store(store)
                         if store.destination().local() == SemanticLocalIdV1::from_index(2))
-                    .then_some((block as u32, statement as u32))
-                })
-            });
+                                .then_some((block as u32, statement as u32))
+                            },
+                        )
+                    });
             let (global_block, global_statement) = global_sites.next().unwrap();
             assert!(global_sites.next().is_none());
             ProductionRankedSemanticProjectionRootV1::new(
@@ -521,13 +557,15 @@ fn erased_effect_fixture_mode_with_functions(
                 vec![ProductionRankedAccessSourceV1::new(
                     global_block,
                     Some(global_statement),
-                    0, 0, 5,
+                    0,
+                    0,
+                    5,
                 )],
                 vec![],
             )
         })
         .collect();
-    (owner, roots)
+    Ok((owner, roots))
 }
 
 #[test]

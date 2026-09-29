@@ -51,16 +51,5 @@ pub(crate) fn allocate_vector_v2<T>(
 }
 
 pub(crate) fn prior_denial_v2(budget: &Budget<'_>) -> Result<(), Error> {
-    if let Some(actual) = budget.failed_work() {
-        return Err(Error::Work(crate::CanonicalKernelIrWorkLimitV1::new(
-            actual,
-            budget.work_limit_v1(),
-        )));
-    }
-    if let Some(actual) = budget.failed_storage() {
-        return Err(Error::Storage(
-            crate::CanonicalKernelIrVerificationStorageLimitV1::new(actual, budget.storage_limit()),
-        ));
-    }
-    Ok(())
+    budget.check_prior_denials_v1()
 }

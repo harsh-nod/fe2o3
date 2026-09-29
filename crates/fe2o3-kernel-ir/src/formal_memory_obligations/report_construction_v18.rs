@@ -66,8 +66,8 @@ impl BoundsReasonSinkV18 for Vec<FunctionOperationLocation> {
     }
 }
 
-struct LiveReportMeterV18<'budget, 'work> {
-    budget: &'budget mut Budget<'work>,
+pub(super) struct LiveReportMeterV18<'budget, 'work> {
+    pub(super) budget: &'budget mut Budget<'work>,
 }
 
 fn bytes<T>(capacity: usize) -> Result<usize, GuardedResourceErrorV1> {

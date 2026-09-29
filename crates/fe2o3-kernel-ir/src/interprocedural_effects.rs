@@ -2,6 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "interprocedural_effects_metered_v19.rs"]
+mod metered_v19;
+pub use metered_v19::*;
+
 use crate::{
     AssemblyOption, CompilerOrderingEffectSummaryV12, Function, FunctionId,
     FunctionOperationLocation, MemoryEffect, MemoryEffectSummary, Module, Operation,
@@ -348,6 +352,15 @@ fn is_closed_u32_assembly_effect_v30(
     operation: &Operation,
     types: &BTreeMap<ValueId, &Type>,
 ) -> bool {
+    is_closed_u32_assembly_with_types_v30(operation, |value| {
+        types.get(&value).and_then(|ty| ty.as_scalar())
+    })
+}
+
+fn is_closed_u32_assembly_with_types_v30(
+    operation: &Operation,
+    value_type: impl Fn(ValueId) -> Option<ScalarType>,
+) -> bool {
     let OperationKind::InlineAssembly(assembly) = &operation.kind else {
         return false;
     };
@@ -357,10 +370,7 @@ fn is_closed_u32_assembly_effect_v30(
     {
         return false;
     }
-    validate_gfx942_inline_assembly_v1(operation, |value| {
-        types.get(&value).and_then(|ty| ty.as_scalar())
-    })
-    .is_ok_and(|validated| {
+    validate_gfx942_inline_assembly_v1(operation, value_type).is_ok_and(|validated| {
         use crate::Gfx942InlineAssemblyInstructionV1 as Instruction;
         validated.scalar_type() == ScalarType::U32
             && matches!(

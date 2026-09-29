@@ -10,6 +10,9 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1;
 
+#[path = "production_geometry_envelope_v2.rs"]
+mod envelope_v2;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProductionGeometryV1 {
     rank: u8,
@@ -451,6 +454,10 @@ pub(crate) enum ProductionGeometryErrorV1 {
     },
     MissingTargetCapabilities,
     UnsupportedTargetWorkgroup([u32; 3]),
+    UnsupportedFormalCoordinateEnvelope {
+        rank: u8,
+        extents: [u64; 3],
+    },
     DynamicWorkgroupMemory,
     InvalidWorkgroupAlignment(u32),
     UnsizedWorkgroupType,
@@ -469,6 +476,10 @@ pub(crate) enum ProductionGeometryErrorV1 {
 impl fmt::Display for ProductionGeometryErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedFormalCoordinateEnvelope { rank, extents } => write!(
+                formatter,
+                "formal coordinate envelope for rank {rank} and extents {extents:?} requires authenticated multidimensional dispatch semantics",
+            ),
             Self::MissingSemanticKernelEntry => {
                 formatter.write_str("semantic root has no authenticated kernel entry")
             }

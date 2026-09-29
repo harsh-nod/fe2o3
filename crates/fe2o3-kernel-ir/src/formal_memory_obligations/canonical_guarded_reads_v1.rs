@@ -484,7 +484,7 @@ fn build_function<'g>(
     Ok(result)
 }
 
-fn collect_actual_definitions<'g, M: GuardMeter>(
+pub(super) fn collect_actual_definitions<'g, M: GuardMeter>(
     analysis: &mut GuardedAnalysisV1<'g, M>,
     function: &'g Function,
 ) -> std::result::Result<(), ResourceError> {
@@ -542,8 +542,20 @@ pub(super) fn collect_source_origins_v2<'g, M: GuardMeter>(
     function: &'g Function,
     flow: &IndexedControlFlow,
     output: &mut Vec<runtime_slice_read_v1::Origin<'g>>,
-    mut reachable: impl FnMut(&mut M, BlockId) -> std::result::Result<bool, ResourceError>,
+    reachable: impl FnMut(&mut M, BlockId) -> std::result::Result<bool, ResourceError>,
 ) -> std::result::Result<(), ResourceError> {
+    let retained = collect_source_origin_inputs_v3(meter, function, flow, output, reachable)?;
+    drop(retained);
+    Ok(())
+}
+
+pub(super) fn collect_source_origin_inputs_v3<'g, M: GuardMeter>(
+    meter: &mut M,
+    function: &'g Function,
+    flow: &IndexedControlFlow,
+    output: &mut Vec<runtime_slice_read_v1::Origin<'g>>,
+    mut reachable: impl FnMut(&mut M, BlockId) -> std::result::Result<bool, ResourceError>,
+) -> std::result::Result<(Vec<origins::Input>, Vec<ValueId>), ResourceError> {
     meter.storage(
         3_usize
             .checked_mul(size_of::<Vec<()>>())
@@ -596,14 +608,14 @@ pub(super) fn collect_source_origins_v2<'g, M: GuardMeter>(
     meter.sort(&mut types, 1, |a, b| a.0.cmp(&b.0))?;
     let resolved = origins::resolve(meter, &inputs, &incoming)?;
     meter.reserve(output, inputs.len())?;
-    for ((input, origin), (value, ty)) in inputs.into_iter().zip(resolved).zip(types) {
+    for ((input, origin), (value, ty)) in inputs.iter().zip(resolved).zip(types) {
         meter.charge(3)?;
         if input.value != value {
             return Err(ResourceError::Accounting);
         }
         output.push(runtime_slice_read_v1::Origin { value, origin, ty });
     }
-    Ok(())
+    Ok((inputs, incoming))
 }
 
 fn operation_coordinate(

@@ -100,8 +100,8 @@ fn make_uncaptured_owner(
         SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
     );
     let pointer = SemanticBackendScalarV1::initialized(
-        SemanticBackendPrimitiveV1::pointer(5, 4, 4),
-        SemanticScalarValidityRangeV1::new(0, u32::MAX.into()),
+        SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
     );
     let types = vec![
         SemanticTypeDeclV1::new(
@@ -142,8 +142,8 @@ fn make_uncaptured_owner(
             SemanticTypeIdentityV1::from_sha256(bytes(3)),
             SemanticLayoutIdentityV1::from_sha256(bytes(3)),
             SemanticTypeLayoutV1::new_with_backend_repr(
-                Some(4),
-                4,
+                Some(8),
+                8,
                 SemanticBackendReprV1::scalar(pointer),
                 false,
             )
@@ -152,8 +152,8 @@ fn make_uncaptured_owner(
                 SemanticPointerTypeV1::new(
                     WORD,
                     SemanticMutabilityV1::Mutable,
-                    5,
-                    32,
+                    0,
+                    64,
                     SemanticPointerMetadataV1::None,
                 )
                 .unwrap(),
@@ -601,15 +601,21 @@ fn actual_use_ssa_undefined_and_killed_values_cannot_acquire_a_source_owner() {
             statements,
             SemanticTerminatorKindV1::Return,
         )]);
-        if killed {
-            assert!(
-                matches!(result, Err(fe2o3_pliron::ProductionSemanticSsaErrorV1::Planner { function: FUNCTION, error: fe2o3_mir_model::SsaPlannerErrorV1::UndefinedAtUse { variable, .. } }) if variable.get() == 2)
-            );
-        } else {
-            assert!(
-                matches!(result, Err(fe2o3_pliron::ProductionSemanticSsaErrorV1::Planner { function: FUNCTION, error: fe2o3_mir_model::SsaPlannerErrorV1::UndefinedAtEntry { variable } }) if variable.get() == 2)
-            );
-        }
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("undefined or killed source value acquired an SSA owner"),
+        };
+        // A straight-line entry has no incoming-edge transport to validate.
+        // The original use fails at event zero, or after Define and Kill.
+        assert!(
+            matches!(&error, fe2o3_pliron::ProductionSemanticSsaErrorV1::Planner {
+                function: FUNCTION,
+                error: fe2o3_mir_model::SsaPlannerErrorV1::UndefinedAtUse { block, event, variable }
+            } if *block == fe2o3_mir_model::SsaBlockIdV1::new(0)
+                && *event == if killed { 2 } else { 0 }
+                && variable.get() == 2),
+            "unexpected source SSA refusal (killed={killed}): {error:?}",
+        );
     }
 }
 

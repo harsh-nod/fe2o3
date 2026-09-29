@@ -337,7 +337,12 @@ fn constant_index_transfer_has_exact_eleven_work_and_checked_offset_bounds() {
                 )
             ));
             assert_eq!(budget.work(), 7);
-            assert!(budget.charge_work(0).is_err());
+            budget.charge_work(0).unwrap();
+            assert!(matches!(
+                budget.check_prior_denials_v1(),
+                Err(ArgumentResourceV1::Work(error)) if error.actual() == 11 && error.limit() == 10
+            ));
+            assert_eq!(budget.work(), 7);
         }
         assert_eq!(budget.storage(), 0);
     }
@@ -648,4 +653,150 @@ fn observed_pointer_subcell_initialization_cannot_be_supplied_by_a_future_store(
     unsupported(result);
     assert!(attempted_history);
     assert_eq!(budget.storage(), 0);
+}
+
+#[test]
+fn static_projection_classification_keeps_value_and_tag_effects_distinct() {
+    let access = MemoryAccess::new(AddressSpace::Private, 8);
+    for step in [
+        ScopedObjectProjectionV29::Field(0),
+        ScopedObjectProjectionV29::ArrayIndex(ValueId(40)),
+    ] {
+        let operation = Operation::new(
+            vec![],
+            OperationKind::Storage(ScopedObjectOperationV29::Project { base: CELL, step }),
+        );
+        assert!(
+            source_address_value_access_v29(&operation)
+                .unwrap()
+                .is_none()
+        );
+    }
+    for operation in [
+        ScopedObjectOperationV29::Project {
+            base: CELL,
+            step: ScopedObjectProjectionV29::Variant { index: 0, access },
+        },
+        ScopedObjectOperationV29::Project {
+            base: CELL,
+            step: ScopedObjectProjectionV29::VariantForWrite { index: 0 },
+        },
+        ScopedObjectOperationV29::ReadDiscriminant {
+            address: CELL,
+            access,
+        },
+        ScopedObjectOperationV29::SetDiscriminant {
+            address: CELL,
+            variant: 0,
+            access,
+        },
+    ] {
+        let operation = Operation::new(vec![], OperationKind::Storage(operation));
+        assert!(
+            matches!(source_address_value_access_v29(&operation), Err(error)
+            if error.to_string() == scoped_object_pending_v29().to_string())
+        );
+    }
+    let (function, _, _, _) = pointer_subcell_fixture_v29(2);
+    let operations = &function.body.as_ref().unwrap().blocks[0].operations;
+    for (ordinal, writing, value) in [(7, true, A), (9, false, LOADED)] {
+        let row = source_address_value_access_v29(&operations[ordinal])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (row.pointer, row.value, row.writing, row.object),
+            (EXPOSED_A, value, writing, true)
+        );
+    }
+}
+
+#[test]
+fn nonaccess_array_projections_still_require_full_geometry_and_complete_access_census() {
+    use fe2o3_kernel_ir::StorageLayoutIdV1 as Id;
+    for fault in 0..9 {
+        let (mut function, slots, mut rows, layouts) = pointer_subcell_fixture_v29(2);
+        let operations = &mut function.body.as_mut().unwrap().blocks[0].operations;
+        // Even a projection with no value access must authenticate its producer
+        // and original layout. It never becomes an access-census row itself.
+        operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(60), Type::INDEX),
+            OperationKind::Constant(Constant::Index(if fault == 1 { 2 } else { 0 })),
+        ));
+        operations.push(Operation::effect_free(
+            ValueDef::new(
+                ValueId(61),
+                Type::pointer(
+                    Type::StorageObject(if fault == 4 { Id(0) } else { Id(1) }),
+                    AddressSpace::Private,
+                    AccessMode::ReadWrite,
+                ),
+            ),
+            OperationKind::Storage(ScopedObjectOperationV29::Project {
+                base: CELL,
+                step: if fault == 5 {
+                    ScopedObjectProjectionV29::VariantForWrite { index: 0 }
+                } else {
+                    ScopedObjectProjectionV29::ArrayIndex(ValueId(if fault == 3 { 40 } else { 60 }))
+                },
+            }),
+        ));
+        if fault == 2 {
+            operations[11].results[0].ty = Type::Scalar(ScalarType::U64);
+        }
+        if fault == 6 {
+            rows.remove(0);
+        }
+        if fault == 7 {
+            rows.insert(
+                0,
+                SourceAddressAccessV29 {
+                    block: BlockId(77),
+                    operation: 4,
+                    slot: 2,
+                },
+            );
+        }
+        if fault == 8 {
+            rows[0].slot = 0;
+        }
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+        budget.reserve_storage(FLOOR).unwrap();
+        let mut completed = false;
+        let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
+            let graph = SourceAddressMemoryV29::prepare_with_layouts(
+                &function, &slots, None, &rows, &layouts, budget,
+            )?
+            .solve(&slots, &rows, &[], budget)?;
+            check_source_address_currentness_v29(
+                &function,
+                &graph,
+                &slots,
+                &rows,
+                &[],
+                &[true; 3],
+                &[],
+                &[],
+                budget,
+            )?;
+            scoped_slot_uses_v29::check_expanded_scalar_addresses_v29(
+                &function,
+                &graph,
+                &slots,
+                &rows,
+                &[],
+                budget,
+            )?;
+            completed = true;
+            Ok(())
+        });
+        if fault == 0 {
+            result.unwrap();
+            assert!(completed);
+        } else {
+            unsupported(result);
+            assert!(!completed, "fault {fault}");
+        }
+        assert_eq!(budget.storage(), FLOOR, "fault {fault}");
+    }
 }

@@ -852,6 +852,27 @@ fn derive_kernel_memory_obligations_with_composition_context(
     )
 }
 
+#[path = "formal_memory_obligations/effect_reader_v19.rs"]
+mod effect_reader_v19;
+
+#[path = "formal_memory_obligations/body_engine_v19.rs"]
+mod body_engine_v19;
+#[path = "formal_memory_obligations/body_legacy_v19.rs"]
+mod body_legacy_v19;
+
+#[derive(Clone, Copy)]
+enum PhysicalLaunchInterpretationV2 {
+    Exact,
+    Envelope,
+}
+
+#[path = "formal_memory_obligations/physical_launch_envelope_v2.rs"]
+mod physical_launch_envelope_v2;
+pub use physical_launch_envelope_v2::{
+    FormalPhysicalLaunchEnvelopeV2, derive_kernel_memory_obligations_for_physical_envelope_v2,
+    derive_kernel_memory_obligations_from_verified_for_physical_envelope_v2,
+};
+
 fn derive_kernel_memory_obligations_from_authenticated_module(
     module: &Module,
     kernel_id: &KernelId,
@@ -861,6 +882,86 @@ fn derive_kernel_memory_obligations_from_authenticated_module(
     composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
     effect_summaries: &crate::InterproceduralEffectAnalysisV1,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    derive_kernel_memory_obligations_with_launch_interpretation(
+        module,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        composition,
+        effect_summaries,
+        PhysicalLaunchInterpretationV2::Exact,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_kernel_memory_obligations_with_launch_interpretation(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+    effect_summaries: &crate::InterproceduralEffectAnalysisV1,
+    interpretation: PhysicalLaunchInterpretationV2,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    let mut reader = effect_reader_v19::LegacyEffectReaderV19(effect_summaries);
+    match derive_kernel_memory_obligations_with_effect_reader_and_launch_v19(
+        module,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        composition,
+        &mut reader,
+        interpretation,
+    ) {
+        Ok(report) => Ok(report),
+        Err(effect_reader_v19::FormalEffectEngineErrorV19::Formal(error)) => Err(error),
+        Err(effect_reader_v19::FormalEffectEngineErrorV19::Reader(never)) => match never {},
+    }
+}
+
+// Only the call-effects query is parameterized. All other phases retain their
+// existing implementation and accounting designation, including legacy scopes.
+fn derive_kernel_memory_obligations_with_effect_reader_v19<
+    R: effect_reader_v19::EffectReaderV19,
+>(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+    effect_reader: &mut R,
+) -> Result<FormalMemoryObligationAnalysis, effect_reader_v19::FormalEffectEngineErrorV19<R::Error>>
+{
+    derive_kernel_memory_obligations_with_effect_reader_and_launch_v19(
+        module,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        composition,
+        effect_reader,
+        PhysicalLaunchInterpretationV2::Exact,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_kernel_memory_obligations_with_effect_reader_and_launch_v19<
+    R: effect_reader_v19::EffectReaderV19,
+>(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+    effect_reader: &mut R,
+    interpretation: PhysicalLaunchInterpretationV2,
+) -> Result<FormalMemoryObligationAnalysis, effect_reader_v19::FormalEffectEngineErrorV19<R::Error>>
+{
     let ordered_composition =
         composition.is_some_and(|owner| ordered_composition_v1::contains(owner, module, kernel_id));
     let complete_body_v19 = canonical_v19.is_some_and(|owner| {
@@ -887,7 +988,12 @@ fn derive_kernel_memory_obligations_from_authenticated_module(
     if !index_width_supported {
         reasons.insert(FormalMemoryIncompleteReason::UnsupportedIndexWidth { width: index_width });
     }
-    let invocations = resolve_invocations(&kernel.domain, launch_extent, &mut reasons)?;
+    let invocations = resolve_invocations_with_static_policy(
+        &kernel.domain,
+        launch_extent,
+        &mut reasons,
+        interpretation,
+    )?;
     let access_invocations = index_width_supported.then_some(invocations).flatten();
     let allocations = formal_allocations(function);
     let allocation_by_value: BTreeMap<_, _> = allocations
@@ -926,259 +1032,20 @@ fn derive_kernel_memory_obligations_from_authenticated_module(
     );
     let mut accesses = Vec::new();
 
-    for block in &body.blocks {
-        if !definitions.is_reachable(block.id) {
-            continue;
-        }
-        for (operation_index, operation) in block.operations.iter().enumerate() {
-            let location = FunctionOperationLocation::new(block.id, operation_index);
-            let proven_private = match operation.kind {
-                OperationKind::Load { pointer, access }
-                | OperationKind::Store {
-                    pointer, access, ..
-                }
-                | OperationKind::GuardedLoad {
-                    pointer, access, ..
-                }
-                | OperationKind::GuardedStore {
-                    pointer, access, ..
-                } if access.address_space == AddressSpace::Generic => {
-                    let exact = definitions.exact_ssa_origin(pointer, &value_types)
-                            .and_then(|origin| value_types.get(&origin))
-                            .is_some_and(|ty| matches!(ty, Type::Pointer(p) if p.address_space == AddressSpace::Private));
-                    exact
-                        || if let Some(guarded) = &mut context.guarded {
-                            guarded.proven_pointer_space_v18(pointer)?
-                                == Some(AddressSpace::Private)
-                        } else {
-                            false
-                        }
-                }
-                _ => false,
-            };
-            match &operation.kind {
-                OperationKind::Call { callee, .. }
-                    if !ordered_composition
-                        && !operation.has_complete_effect_summary()
-                        && !effect_summaries
-                            .function(callee)
-                            .is_some_and(|summary| summary.is_complete_and_pure()) =>
-                {
-                    reasons.insert(FormalMemoryIncompleteReason::CallEffectsUnavailable {
-                        location,
-                        callee: callee.clone(),
-                    });
-                }
-                OperationKind::Call { .. } => {}
-                OperationKind::Load { access, .. }
-                    if access.address_space == AddressSpace::Private || proven_private => {}
-                OperationKind::Load { pointer, access } => {
-                    if let Some(invocations) = access_invocations {
-                        match derive_access(
-                            location,
-                            *pointer,
-                            FormalMemoryAccessKind::Read,
-                            *access,
-                            invocations,
-                            None,
-                            &mut context,
-                        ) {
-                            Ok(access) => guarded_access_v1::report_push(
-                                &mut context.guarded,
-                                &mut accesses,
-                                access,
-                            )?,
-                            Err(AccessDerivationError::Incomplete(reason)) => {
-                                reasons.insert(reason);
-                            }
-                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
-                        }
-                    }
-                }
-                OperationKind::Store { access, .. }
-                    if access.address_space == AddressSpace::Private || proven_private => {}
-                OperationKind::Store {
-                    pointer, access, ..
-                }
-                | OperationKind::GuardedStore {
-                    pointer, access, ..
-                } => {
-                    if proven_private {
-                        continue;
-                    }
-                    if let Some(invocations) = access_invocations {
-                        match derive_access(
-                            location,
-                            *pointer,
-                            FormalMemoryAccessKind::Write,
-                            *access,
-                            invocations,
-                            match operation.kind {
-                                OperationKind::GuardedStore { predicate, .. } => Some(predicate),
-                                _ => None,
-                            },
-                            &mut context,
-                        ) {
-                            Ok(access) => guarded_access_v1::report_push(
-                                &mut context.guarded,
-                                &mut accesses,
-                                access,
-                            )?,
-                            Err(AccessDerivationError::Incomplete(reason)) => {
-                                reasons.insert(reason);
-                            }
-                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
-                        }
-                    }
-                }
-                OperationKind::Alloca {
-                    address_space: AddressSpace::Private,
-                    ..
-                } => {}
-                OperationKind::Matrix(matrix) if matrix.memory_effects().is_empty() => {}
-                // The verified gfx950 transpose chain owns its static LDS, accepts only a
-                // read-only global U8 slice, and defines guarded zero-fill for every source
-                // coordinate. It creates no caller-visible write or alias obligation.
-                OperationKind::Gfx950LdsTranspose(_) => {}
-                OperationKind::GuardedLoad { access, .. }
-                    if access.address_space == AddressSpace::Private || proven_private => {}
-                OperationKind::GuardedLoad {
-                    pointer,
-                    access,
-                    predicate,
-                    ..
-                } => {
-                    let mut checked_guard = false;
-                    if let Some(invocations) = access_invocations {
-                        match derive_access(
-                            location,
-                            *pointer,
-                            FormalMemoryAccessKind::Read,
-                            *access,
-                            invocations,
-                            Some(*predicate),
-                            &mut context,
-                        ) {
-                            Ok(access) => {
-                                checked_guard =
-                                    matches!(access.domain, FormalAccessDomainV1::SliceBounded(_));
-                                guarded_access_v1::report_push(
-                                    &mut context.guarded,
-                                    &mut accesses,
-                                    access,
-                                )?;
-                            }
-                            Err(AccessDerivationError::Incomplete(exact_reason)) => {
-                                match derive_conservative_guarded_access(
-                                    location,
-                                    *pointer,
-                                    *access,
-                                    invocations,
-                                    &mut context,
-                                ) {
-                                    Ok(access) => guarded_access_v1::report_push(
-                                        &mut context.guarded,
-                                        &mut accesses,
-                                        access,
-                                    )?,
-                                    Err(_) => {
-                                        reasons.insert(exact_reason);
-                                    }
-                                }
-                            }
-                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
-                        }
-                    }
-                    if !checked_guard {
-                        reasons.insert(
-                            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
-                                location,
-                            },
-                        );
-                    }
-                }
-                OperationKind::Atomic(atomic) => {
-                    if let Some(invocations) = access_invocations {
-                        match derive_access(
-                            location,
-                            atomic.pointer,
-                            FormalMemoryAccessKind::Atomic,
-                            atomic.access,
-                            invocations,
-                            None,
-                            &mut context,
-                        ) {
-                            Ok(access) => guarded_access_v1::report_push(
-                                &mut context.guarded,
-                                &mut accesses,
-                                access,
-                            )?,
-                            Err(AccessDerivationError::Incomplete(reason)) => {
-                                reasons.insert(reason);
-                            }
-                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
-                        }
-                    }
-                }
-                OperationKind::InlineAssembly(_)
-                    if gfx942_inline_u32_v30::has_closed_memory_effects(
-                        operation,
-                        &value_types,
-                    ) => {}
-                // U32 declaration/steps have no address or memory effect only
-                // in this actual immutable whole-profile V19 context. Their
-                // compiler ordering is unchanged; the real tail is above.
-                OperationKind::Gfx942CompleteBodyDeclaration(_)
-                | OperationKind::Gfx942CompleteBodyStep(_)
-                    if complete_body_v19 => {}
-                OperationKind::Gfx942OrderedProgram(_) if ordered_composition => {}
-                OperationKind::Storage(_)
-                | OperationKind::Execution(_)
-                | OperationKind::Gfx942OrderedRegion(_)
-                | OperationKind::Gfx942OrderedProgram(_)
-                | OperationKind::Gfx942CompleteBodyDeclaration(_)
-                | OperationKind::Gfx942CompleteBodyStep(_)
-                | OperationKind::Gfx942PhysicalEntryDeclaration(_)
-                | OperationKind::Gfx942PhysicalEntryStep(_)
-                | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
-                | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
-                | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
-                | OperationKind::Gfx942PhysicalLdsExchangeStep(_)
-                | OperationKind::VerificationContract(_)
-                | OperationKind::VectorLoad(_)
-                | OperationKind::VectorStore(_)
-                | OperationKind::VectorLayoutConvert(_)
-                | OperationKind::Alloca { .. }
-                | OperationKind::Barrier(_)
-                | OperationKind::Fence(_)
-                | OperationKind::Matrix(_)
-                | OperationKind::InlineAssembly(_)
-                | OperationKind::WorkgroupBarrier(_)
-                | OperationKind::WorkgroupMemory(_) => {
-                    reasons
-                        .insert(FormalMemoryIncompleteReason::UnsupportedMemoryEffect { location });
-                }
-                OperationKind::Constant(_)
-                | OperationKind::Intrinsic(_)
-                | OperationKind::MemoryIntrinsic(_)
-                | OperationKind::Wave(_)
-                | OperationKind::Unary { .. }
-                | OperationKind::Binary { .. }
-                | OperationKind::Compare { .. }
-                | OperationKind::Cast { .. }
-                | OperationKind::Select { .. }
-                | OperationKind::SliceLength { .. }
-                | OperationKind::SliceData { .. }
-                | OperationKind::GetElementPointer { .. } => {
-                    if !operation.memory_effects().is_empty() {
-                        reasons.insert(FormalMemoryIncompleteReason::UnsupportedMemoryEffect {
-                            location,
-                        });
-                    }
-                }
-            }
-        }
-    }
+    body_engine_v19::collect(
+        function,
+        access_invocations,
+        &mut body_legacy_v19::Legacy {
+            definitions: &definitions,
+            value_types: &value_types,
+            context: &mut context,
+            reasons: &mut reasons,
+            accesses: &mut accesses,
+            effects: effect_reader,
+            ordered: ordered_composition,
+            complete: complete_body_v19,
+        },
+    )?;
 
     let bounds_requirements =
         derive_bounds_requirements(&accesses, &mut reasons, &mut context.guarded)?;
@@ -1212,63 +1079,96 @@ fn resolve_invocations(
     launch_extent: ExplicitLaunchExtent,
     reasons: &mut BTreeSet<FormalMemoryIncompleteReason>,
 ) -> Result<Option<InvocationRange1d>, FormalMemoryObligationError> {
+    resolve_invocations_with_static_policy(
+        domain,
+        launch_extent,
+        reasons,
+        PhysicalLaunchInterpretationV2::Exact,
+    )
+}
+
+fn resolve_invocations_with_static_policy(
+    domain: &LaunchDomain,
+    launch_extent: ExplicitLaunchExtent,
+    reasons: &mut BTreeSet<FormalMemoryIncompleteReason>,
+    interpretation: PhysicalLaunchInterpretationV2,
+) -> Result<Option<InvocationRange1d>, FormalMemoryObligationError> {
+    match resolve_invocations_value_v19(domain, launch_extent, interpretation)
+        .map_err(FormalMemoryObligationError::InvalidInvocationRange)?
+    {
+        Ok(invocations) => Ok(Some(invocations)),
+        Err(reason) => {
+            reasons.insert(reason);
+            Ok(None)
+        }
+    }
+}
+
+// The original resolver reports at most one reason. Keep that fixed result
+// independent of the legacy tree or the same-ledger report's paid vector.
+fn resolve_invocations_value_v19(
+    domain: &LaunchDomain,
+    launch_extent: ExplicitLaunchExtent,
+    interpretation: PhysicalLaunchInterpretationV2,
+) -> Result<Result<InvocationRange1d, FormalMemoryIncompleteReason>, RegionValidationError> {
     let ExplicitLaunchExtent::Exact { rank, extents } = launch_extent else {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentUnknown);
-        return Ok(None);
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchExtentUnknown));
     };
     if !(1..=3).contains(&rank) {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchRankUnsupported { rank });
-        return Ok(None);
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchRankUnsupported {
+            rank,
+        }));
     }
     if domain.rank() != rank {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchRankMismatch {
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchRankMismatch {
             domain_rank: domain.rank(),
             extent_rank: rank,
-        });
-        return Ok(None);
+        }));
     }
     if (rank < 2 && extents[1] != 1) || (rank < 3 && extents[2] != 1) {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentShapeMismatch { rank, extents });
-        return Ok(None);
+        return Ok(Err(
+            FormalMemoryIncompleteReason::LaunchExtentShapeMismatch { rank, extents },
+        ));
     }
     if extents.contains(&0) {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentZero);
-        return Ok(None);
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchExtentZero));
     }
     for (index, expected) in domain.extents().enumerate() {
         let LaunchExtent::Static(expected) = expected else {
             continue;
         };
         let actual = extents[index];
-        if u64::from(expected) == actual {
+        let covered = match interpretation {
+            PhysicalLaunchInterpretationV2::Exact => u64::from(expected) == actual,
+            PhysicalLaunchInterpretationV2::Envelope => u64::from(expected) <= actual,
+        };
+        if covered {
             continue;
         }
         if rank == 1 {
-            reasons.insert(FormalMemoryIncompleteReason::StaticLaunchExtentMismatch {
-                expected,
-                actual,
-            });
+            return Ok(Err(
+                FormalMemoryIncompleteReason::StaticLaunchExtentMismatch { expected, actual },
+            ));
         } else {
-            reasons.insert(
+            return Ok(Err(
                 FormalMemoryIncompleteReason::StaticLaunchAxisExtentMismatch {
                     axis: [Axis::X, Axis::Y, Axis::Z][index],
                     expected,
                     actual,
                 },
-            );
+            ));
         }
-        return Ok(None);
     }
     let Some(count) = extents[..usize::from(rank)]
         .iter()
         .try_fold(1_u64, |count, extent| count.checked_mul(*extent))
     else {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentOverflow { rank, extents });
-        return Ok(None);
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchExtentOverflow {
+            rank,
+            extents,
+        }));
     };
-    InvocationRange1d::from_count(count)
-        .map(Some)
-        .map_err(FormalMemoryObligationError::InvalidInvocationRange)
+    InvocationRange1d::from_count(count).map(Ok)
 }
 
 fn formal_allocations(function: &Function) -> Vec<FormalAllocationParameter> {
@@ -1282,31 +1182,39 @@ fn formal_allocations(function: &Function) -> Vec<FormalAllocationParameter> {
         .zip(&function.signature.parameters)
         .enumerate()
         .filter_map(|(parameter_index, (value, ty))| {
-            let (kind, address_space, access) = match ty {
-                Type::Pointer(pointer) => (
-                    FormalParameterKind::Pointer,
-                    pointer.address_space,
-                    pointer.access,
-                ),
-                Type::Slice(slice) => (
-                    FormalParameterKind::Slice,
-                    slice.address_space,
-                    slice.access,
-                ),
-                _ => return None,
-            };
-            Some(FormalAllocationParameter {
-                identity: FormalAllocationIdentity {
-                    parameter_index: u32::try_from(parameter_index)
-                        .expect("verified body length fits ValueId space"),
-                },
-                value,
-                kind,
-                address_space,
-                access,
-            })
+            formal_allocation_parameter(parameter_index, value, ty)
         })
         .collect()
+}
+
+fn formal_allocation_parameter(
+    parameter_index: usize,
+    value: ValueId,
+    ty: &Type,
+) -> Option<FormalAllocationParameter> {
+    let (kind, address_space, access) = match ty {
+        Type::Pointer(pointer) => (
+            FormalParameterKind::Pointer,
+            pointer.address_space,
+            pointer.access,
+        ),
+        Type::Slice(slice) => (
+            FormalParameterKind::Slice,
+            slice.address_space,
+            slice.access,
+        ),
+        _ => return None,
+    };
+    Some(FormalAllocationParameter {
+        identity: FormalAllocationIdentity {
+            parameter_index: u32::try_from(parameter_index)
+                .expect("verified body length fits ValueId space"),
+        },
+        value,
+        kind,
+        address_space,
+        access,
+    })
 }
 
 struct Definitions<'module> {

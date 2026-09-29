@@ -8,13 +8,20 @@ fn check_source_array_component_index_v29(
     ordinal: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    budget.charge_work(0)?;
     if source_index.slot != std::ptr::from_ref(budget) as usize
         || source_index.ledger != budget.work_ledger_identity_v1()
-        || budget.storage() < source_index.required
-        || source_index.required < source_index.storage
     {
         return Err(ArgumentResourceV1::Accounting.into());
+    }
+    budget.check_prior_denials_v1()?;
+    if budget.storage() < source_index.required || source_index.required < source_index.storage {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    // Structural source hashes can be equal for distinct live owners. The
+    // ordinal instance/query must belong to the owner borrowed by this index.
+    budget.charge_work(1)?;
+    if !std::ptr::eq(source_index.owner, instances.owner()) {
+        return Err(scoped_object_error_v29());
     }
     budget.charge_work(12)?;
     if source_index.pending.coordinates.ssa != instances.owner().identity()

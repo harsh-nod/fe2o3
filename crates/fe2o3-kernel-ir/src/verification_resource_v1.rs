@@ -300,6 +300,32 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
             .map_err(CanonicalKernelIrVerificationResourceErrorV1::Work)
     }
 
+    /// Returns the recorded original work or storage denial without charging,
+    /// resetting, or reconstructing it from a new attempted charge.
+    ///
+    /// Work history takes precedence when both histories are present, matching
+    /// the existing typed-query policy; this does not establish chronological
+    /// order across resource kinds. A custody-bound caller must authenticate
+    /// its budget slot and ledger before inspecting this account's history.
+    /// This is accounting only, not semantic verification or authority.
+    pub fn check_prior_denials_v1(
+        &self,
+    ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+        use CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+        if let Some(actual) = self.failed_work() {
+            return Err(Resource::Work(crate::CanonicalKernelIrWorkLimitV1::new(
+                actual,
+                self.work.limit(),
+            )));
+        }
+        if let Some(actual) = self.failed_storage() {
+            return Err(Resource::Storage(
+                CanonicalKernelIrVerificationStorageLimitV1::new(actual, self.storage_limit()),
+            ));
+        }
+        Ok(())
+    }
+
     /// Admits additional coexisting logical payload before allocation. Callers
     /// preserve the existing unit convention and retain every live owner floor.
     pub fn reserve_storage(
@@ -459,6 +485,81 @@ mod owned_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prior_denials_replay_original_work_including_overflow_without_charging() {
+        type Resource = CanonicalKernelIrVerificationResourceErrorV1;
+        for overflow in [false, true] {
+            let mut work =
+                CanonicalKernelIrWorkBudgetV1::new(if overflow { usize::MAX } else { 5 });
+            let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 7);
+            budget.reserve_storage(3).unwrap();
+            budget.charge_work(1).unwrap();
+            assert_eq!(budget.check_prior_denials_v1(), Ok(()));
+            let first = budget
+                .charge_work(if overflow { usize::MAX } else { 7 })
+                .unwrap_err();
+            assert!(matches!(first, Resource::Work(_)));
+            // Preserve the documented low-level contract: a smaller accepted
+            // charge is allowed, but it does not erase the original denial.
+            budget.charge_work(1).unwrap();
+            budget.charge_work(0).unwrap();
+            assert!(budget.reserve_storage(9).is_err());
+            let state = (
+                budget.work(),
+                budget.storage(),
+                budget.peak_storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            );
+            for _ in 0..3 {
+                assert_eq!(budget.check_prior_denials_v1(), Err(first));
+                assert_eq!(
+                    (
+                        budget.work(),
+                        budget.storage(),
+                        budget.peak_storage(),
+                        budget.failed_work(),
+                        budget.failed_storage()
+                    ),
+                    state
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prior_denials_replay_storage_after_refund_and_preserve_work_priority() {
+        type Resource = CanonicalKernelIrVerificationResourceErrorV1;
+        for overflow in [false, true] {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(5);
+            let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(
+                &mut work,
+                if overflow { usize::MAX } else { 7 },
+            );
+            budget.reserve_storage(3).unwrap();
+            let first = budget
+                .reserve_storage(if overflow { usize::MAX } else { 9 })
+                .unwrap_err();
+            assert!(matches!(first, Resource::Storage(_)));
+            budget.release_storage(3).unwrap();
+            budget.reserve_storage(1).unwrap();
+            budget.charge_work(0).unwrap();
+            for _ in 0..3 {
+                assert_eq!(budget.check_prior_denials_v1(), Err(first));
+                assert_eq!(
+                    (budget.work(), budget.storage(), budget.peak_storage()),
+                    (0, 1, 3)
+                );
+            }
+            let work_error = budget.charge_work(9).unwrap_err();
+            assert_eq!(budget.check_prior_denials_v1(), Err(work_error));
+            assert_eq!(
+                (budget.failed_work(), budget.failed_storage()),
+                (Some(9), Some(if overflow { usize::MAX } else { 12 }))
+            );
+        }
+    }
 
     #[test]
     fn prepaid_scope_honors_variable_entry_cost_before_callback_or_scratch() {

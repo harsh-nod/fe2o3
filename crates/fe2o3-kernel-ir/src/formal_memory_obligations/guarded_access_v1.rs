@@ -422,6 +422,21 @@ pub(super) struct GuardedAnalysisV1<'module, M = GuardLedger> {
     rank_one: bool,
 }
 
+impl<'module, M> GuardedAnalysisV1<'module, M> {
+    fn replace_meter<N>(self, ledger: N) -> GuardedAnalysisV1<'module, N> {
+        GuardedAnalysisV1 {
+            ledger,
+            control: self.control,
+            definitions: self.definitions,
+            parameters: self.parameters,
+            truths: self.truths,
+            recipes: self.recipes,
+            runtime_reads: self.runtime_reads,
+            rank_one: self.rank_one,
+        }
+    }
+}
+
 impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
     pub(super) fn new(
         seed: GuardedControlV1<M>,

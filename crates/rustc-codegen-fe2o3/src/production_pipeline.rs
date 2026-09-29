@@ -545,6 +545,9 @@ struct AuthenticatedProductionBindings {
     transaction: ProductionTransactionBindings,
 }
 
+#[path = "production_pipeline/formal_envelope_preflight_v2.rs"]
+mod formal_envelope_preflight_v2;
+
 pub(super) struct AdmittedSemanticMirStage {
     semantic_mir: fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     bindings: AuthenticatedProductionBindings,
@@ -1121,8 +1124,12 @@ impl TargetNeutralProductionCompilation {
             ranked_verification,
             bindings,
         } = self;
-        let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered)
-            .map_err(ProductionPipelineError::FormalMemoryAdmission)?;
+        let envelopes = formal_envelope_preflight_v2::authenticated_envelopes(&lowered, &bindings)?;
+        let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit_for_launch_envelopes_v2(
+            lowered,
+            &envelopes,
+        )
+        .map_err(ProductionPipelineError::FormalMemoryAdmission)?;
         Ok(FormalMemoryAdmittedProductionCompilation {
             admitted,
             ranked_verification,

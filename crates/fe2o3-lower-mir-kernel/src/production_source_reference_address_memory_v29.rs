@@ -39,7 +39,7 @@ fn source_address_value_access_v29(
             access,
         }) => (address, access, Some(value), true),
         OperationKind::Storage(ScopedObjectOperationV29::Project {
-            step: ScopedObjectProjectionV29::Field(_),
+            step: ScopedObjectProjectionV29::Field(_) | ScopedObjectProjectionV29::ArrayIndex(_),
             ..
         }) => return Ok(None),
         OperationKind::Storage(_) => return Err(scoped_object_pending_v29()),

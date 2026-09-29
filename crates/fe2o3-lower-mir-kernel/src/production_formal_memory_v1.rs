@@ -45,6 +45,13 @@ pub enum ProductionFormalMemoryErrorV1 {
         /// Number of kernels present in the verified module.
         actual: usize,
     },
+    /// The descriptive envelope roster does not cover every original kernel.
+    LaunchEnvelopeCount {
+        /// Number of kernels in the actual retained source owner.
+        expected: usize,
+        /// Number of mathematical launch envelopes supplied by the caller.
+        actual: usize,
+    },
     /// Formal extraction rejected the verified module or selected kernel.
     Analysis(FormalMemoryObligationError),
     /// At least one memory effect has no complete formal derivation.
@@ -89,6 +96,10 @@ impl fmt::Display for ProductionFormalMemoryErrorV1 {
             Self::KernelCount { actual } => write!(
                 formatter,
                 "formal memory admission requires a nonempty kernel roster; found {actual}",
+            ),
+            Self::LaunchEnvelopeCount { expected, actual } => write!(
+                formatter,
+                "formal launch-envelope roster requires {expected} original roots; found {actual}",
             ),
             Self::Analysis(error) => write!(formatter, "formal memory extraction failed: {error}"),
             Self::Incomplete { reasons } => {
@@ -141,6 +152,7 @@ impl Error for ProductionFormalMemoryErrorV1 {
             Self::SemanticKir(error) => Some(error),
             Self::Analysis(error) => Some(error),
             Self::KernelCount { .. }
+            | Self::LaunchEnvelopeCount { .. }
             | Self::Incomplete { .. }
             | Self::CompilerOwnedWorkgroupDischarge { .. }
             | Self::UnsupportedIndexDischarge { .. }
@@ -163,6 +175,7 @@ impl Error for ProductionFormalMemoryErrorV1 {
 pub struct ProductionFormalMemoryOwnerV1 {
     semantic_kir: ProductionSemanticKirOwnerV1,
     kernels: Box<[ProductionFormalMemoryKernelV1]>,
+    launch_envelopes: Option<Box<[ProductionFormalMemoryEnvelopeV2]>>,
 }
 
 /// Exact formal-memory admission retained for one canonical module kernel.
@@ -195,6 +208,7 @@ impl ProductionFormalMemoryOwnerV1 {
         let owner = Self {
             semantic_kir,
             kernels,
+            launch_envelopes: None,
         };
         owner.verify_equivalence()?;
         Ok(owner)
@@ -206,6 +220,9 @@ impl ProductionFormalMemoryOwnerV1 {
         self.semantic_kir
             .verify_equivalence()
             .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
+        if let Some(envelopes) = &self.launch_envelopes {
+            envelope_v2::verify_envelopes(&self.semantic_kir, envelopes)?;
+        }
         let kernels = derive_admitted_obligations(&self.semantic_kir)?;
         if kernels != self.kernels {
             return Err(ProductionFormalMemoryErrorV1::ObligationMismatch);
@@ -465,13 +482,22 @@ fn derive_admitted_obligations_for_kernel(
     semantic_kir: &ProductionSemanticKirOwnerV1,
     kernel: &fe2o3_kernel_ir::Kernel,
 ) -> Result<ProductionFormalMemoryKernelV1, ProductionFormalMemoryErrorV1> {
+    derive_admitted_obligations_for_kernel_at_extent(
+        semantic_kir,
+        kernel,
+        witness_extents(&kernel.domain),
+    )
+}
+
+fn derive_admitted_obligations_for_kernel_at_extent(
+    semantic_kir: &ProductionSemanticKirOwnerV1,
+    kernel: &fe2o3_kernel_ir::Kernel,
+    extents: [u64; 3],
+) -> Result<ProductionFormalMemoryKernelV1, ProductionFormalMemoryErrorV1> {
     let module = semantic_kir.module();
     let domain = &kernel.domain;
     let rank = domain.rank();
-    let witness = ExplicitLaunchExtent::Exact {
-        rank,
-        extents: witness_extents(domain),
-    };
+    let witness = ExplicitLaunchExtent::Exact { rank, extents };
     let analysis = derive_kernel_memory_obligations_for_launch(
         module,
         &kernel.id,
@@ -479,6 +505,30 @@ fn derive_admitted_obligations_for_kernel(
         FormalIndexWidth::Bits64,
     )
     .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
+    admit_fresh_obligations_for_kernel(semantic_kir, kernel, extents, analysis)
+}
+
+fn derive_admitted_obligations_for_kernel_at_physical_envelope(
+    semantic_kir: &ProductionSemanticKirOwnerV1,
+    kernel: &fe2o3_kernel_ir::Kernel,
+    extents: [u64; 3],
+) -> Result<ProductionFormalMemoryKernelV1, ProductionFormalMemoryErrorV1> {
+    let analysis = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_physical_envelope_v2(
+        semantic_kir.module(),
+        &kernel.id,
+        fe2o3_kernel_ir::FormalPhysicalLaunchEnvelopeV2::new(kernel.domain.rank(), extents),
+        FormalIndexWidth::Bits64,
+    )
+    .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
+    admit_fresh_obligations_for_kernel(semantic_kir, kernel, extents, analysis)
+}
+
+fn admit_fresh_obligations_for_kernel(
+    semantic_kir: &ProductionSemanticKirOwnerV1,
+    kernel: &fe2o3_kernel_ir::Kernel,
+    extents: [u64; 3],
+    analysis: FormalMemoryObligationAnalysis,
+) -> Result<ProductionFormalMemoryKernelV1, ProductionFormalMemoryErrorV1> {
     let (obligations, ranked_discharged_reasons, compiler_discharged_reasons) = match analysis {
         FormalMemoryObligationAnalysis::Complete(obligations) => (
             obligations,
@@ -553,7 +603,7 @@ fn derive_admitted_obligations_for_kernel(
                             owner: semantic_kir,
                             kernel,
                             report: &partial,
-                            witness_extents: witness_extents(domain),
+                            witness_extents: extents,
                         },
                         &guarded_locations,
                     )
@@ -595,6 +645,10 @@ pub(crate) fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {
     }
     witness
 }
+
+#[path = "production_formal_memory_envelope_v2.rs"]
+mod envelope_v2;
+pub use envelope_v2::ProductionFormalMemoryEnvelopeV2;
 
 #[cfg(test)]
 mod tests {

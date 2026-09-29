@@ -265,6 +265,33 @@ fn final_erased_policy4_retains_source_lifetime_kill_refusals_after_erasure() {
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), vec![], ARRAY_SCALAR).unwrap(),
         ),
     ] {
+        if matches!(&killed, SemanticStatementKindV1::Deinitialize(_)) {
+            // This source is refused before erasure or final admission;
+            // retained-load fault injection cannot manufacture an SSA owner.
+            let error = match try_erased_effect_fixture_mode_with_functions(
+                true,
+                1,
+                Some(killed),
+                false,
+                false,
+                false,
+                |_| {},
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("deinitialized source unexpectedly admitted"),
+            };
+            assert_eq!(
+                error,
+                fe2o3_pliron::ProductionSemanticSsaErrorV1::PartialMove {
+                    function: SemanticFunctionIdV1::from_index(0),
+                    block: 1,
+                    statement: Some(2),
+                    local: 3,
+                    violation: fe2o3_pliron::SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+                }
+            );
+            continue;
+        }
         let original = erased_effect_fixture_with_lifetime(true, 1, Some(killed));
         let site = [(0, 1, Some(2), 3)];
         let input = retained_load_fault_v1_tests::with_exact_sites(&site, || {

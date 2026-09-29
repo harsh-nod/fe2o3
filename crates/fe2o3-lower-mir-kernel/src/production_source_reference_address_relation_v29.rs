@@ -33,6 +33,7 @@ impl SourceAddressTerminatorV29<'_> {
 // Sidecars can be compact, but original call-instance IDs never change. This
 // metadata index is not a graph or an independent source-admission authority.
 struct SourceAddressSourceIndexV29<'source> {
+    owner: &'source ProductionSemanticSsaOwnerV1,
     pending: &'source PendingScopedRootEmissionV29,
     statements: Vec<SourceAddressStatementV29<'source>>,
     terminators: Vec<SourceAddressTerminatorV29<'source>>,
@@ -44,8 +45,8 @@ struct SourceAddressSourceIndexV29<'source> {
 }
 
 impl<'source> SourceAddressSourceIndexV29<'source> {
-    fn new(
-        instances: &ExecutionInstancesV29<'_>,
+    fn new<'owner: 'source>(
+        instances: &ExecutionInstancesV29<'owner>,
         pending: &'source PendingScopedRootEmissionV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
@@ -222,6 +223,7 @@ impl<'source> SourceAddressSourceIndexV29<'source> {
             emitted.storage,
         ])?;
         Ok(Self {
+            owner: instances.owner(),
             pending,
             statements,
             terminators,

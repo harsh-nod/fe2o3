@@ -43,6 +43,8 @@ pub(in crate::formal_memory_obligations) struct ByteSourceContextV2<'source, 'wo
     flow: ByteAccountedIndexedControlFlowV2<'source, 'work>,
     index: ByteFunctionStateV2<'source, 'work>,
     origins: Vec<runtime_slice_read_v1::Origin<'source>>,
+    phi_inputs: Vec<origins::Input>,
+    incoming: Vec<ValueId>,
     slot: usize,
     ledger: crate::CanonicalKernelIrWorkLedgerIdentityV1,
     floor: usize,
@@ -74,9 +76,9 @@ impl<'source, 'work> ByteSourceContextV2<'source, 'work> {
             let mut origins = Vec::new();
             let flow_view = flow.indexed_v2(source, budget)?;
             let lookup_work = lookup_work_v2(flow_view.block_count())?;
-            {
+            let (phi_inputs, incoming) = {
                 let mut meter = LiveGuardMeter::new(budget, usize::MAX, usize::MAX, usize::MAX);
-                canonical_reads::collect_source_origins_v2(
+                canonical_reads::collect_source_origin_inputs_v3(
                     &mut meter,
                     source,
                     flow_view,
@@ -85,21 +87,26 @@ impl<'source, 'work> ByteSourceContextV2<'source, 'work> {
                         meter.charge(lookup_work)?;
                         Ok(flow_view.is_reachable(block))
                     },
-                )?;
-            }
-            // Original rows contain only copied IDs and borrowed source Types.
-            // The shared collector's input/SCC scratch has been dropped here.
-            let origin_bytes = vector_bytes_v2(&origins)?;
+                )?
+            };
+            // The genuine collector retains its original phi edge values;
+            // resolved SCC scratch and the temporary type roster are gone.
+            let input_bytes = vector_bytes_v2(&phi_inputs)?;
+            let incoming_bytes = vector_bytes_v2(&incoming)?;
+            let origin_bytes = vector_bytes_v2(&origins)?
+                .checked_add(input_bytes)
+                .and_then(|bytes| bytes.checked_add(incoming_bytes))
+                .ok_or(ResourceError::Arithmetic)?;
             let scratch = budget
                 .storage()
                 .checked_sub(origins_floor)
                 .and_then(|bytes| bytes.checked_sub(origin_bytes))
                 .ok_or(ResourceError::Accounting)?;
             budget.release_storage(scratch)?;
-            Ok((flow, index, origins))
+            Ok((flow, index, origins, phi_inputs, incoming))
         }));
         match result {
-            Ok(Ok((flow, index, origins))) => {
+            Ok(Ok((flow, index, origins, phi_inputs, incoming))) => {
                 // Both nested owners bound their protected floors after this
                 // envelope was paid. Retain it until the whole context drops.
                 let retained = budget
@@ -111,6 +118,8 @@ impl<'source, 'work> ByteSourceContextV2<'source, 'work> {
                     flow,
                     index,
                     origins,
+                    phi_inputs,
+                    incoming,
                     slot,
                     ledger,
                     floor,
@@ -267,6 +276,52 @@ impl<'source, 'work> ByteSourceContextV2<'source, 'work> {
         self.keep(result)
     }
 
+    pub(in crate::formal_memory_obligations) fn phi_input_count(
+        &mut self,
+        source: &Function,
+        value: ValueId,
+        budget: &mut Budget<'_>,
+    ) -> ContextResult<Option<usize>> {
+        self.check(source, budget)?;
+        let result =
+            verification_find_last_by_v1(&self.phi_inputs, 1, budget, |row| row.value.cmp(&value))
+                .map(|position| position.map(|index| self.phi_inputs[index].incoming.len()))
+                .map_err(Into::into);
+        self.keep(result)
+    }
+
+    pub(in crate::formal_memory_obligations) fn phi_input(
+        &mut self,
+        source: &Function,
+        value: ValueId,
+        ordinal: usize,
+        budget: &mut Budget<'_>,
+    ) -> ContextResult<Option<ValueId>> {
+        self.check(source, budget)?;
+        let result = (|| {
+            let Some(position) =
+                verification_find_last_by_v1(&self.phi_inputs, 1, budget, |row| {
+                    row.value.cmp(&value)
+                })?
+            else {
+                return Ok(None);
+            };
+            budget.charge_work(1)?;
+            let range = &self.phi_inputs[position].incoming;
+            if ordinal >= range.len() {
+                return Ok(None);
+            }
+            let index = range
+                .start
+                .checked_add(ordinal)
+                .ok_or(ResourceError::Arithmetic)?;
+            Ok(Some(
+                *self.incoming.get(index).ok_or(ResourceError::Accounting)?,
+            ))
+        })();
+        self.keep(result)
+    }
+
     pub(in crate::formal_memory_obligations) fn block(
         &mut self,
         source: &Function,
@@ -276,6 +331,25 @@ impl<'source, 'work> ByteSourceContextV2<'source, 'work> {
         self.check(source, budget)?;
         let result = self.index.block(source, block, budget).map_err(Into::into);
         self.keep(result)
+    }
+
+    pub(in crate::formal_memory_obligations) fn guarded_inputs(
+        &mut self,
+        source: &Function,
+        budget: &mut Budget<'_>,
+    ) -> ContextResult<(
+        &IndexedControlFlow,
+        &[runtime_slice_read_v1::Origin<'source>],
+    )> {
+        self.check(source, budget)?;
+        match self.flow.indexed_v2(source, budget) {
+            Ok(flow) => Ok((flow, &self.origins)),
+            Err(error) => {
+                let error = SourceContextErrorV2::from(error);
+                self.first_error.get_or_insert_with(|| error.clone());
+                Err(error)
+            }
+        }
     }
 
     pub(in crate::formal_memory_obligations) fn release(
@@ -309,6 +383,8 @@ fn context_frame_v2() -> usize {
         ByteAccountedIndexedControlFlowV2<'static, 'static>,
         ByteFunctionStateV2<'static, 'static>,
         Vec<runtime_slice_read_v1::Origin<'static>>,
+        Vec<origins::Input>,
+        Vec<ValueId>,
     );
     size_of::<Owner>()
         + size_of::<std::thread::Result<ContextResult<Rows>>>()
