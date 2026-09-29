@@ -1045,6 +1045,9 @@
   "crates/fe2o3-protected-service-spawn/src/native_domain_spawn_tests.rs": {
     "block": 2
   },
+  "crates/fe2o3-protected-service-spawn/src/native_namespace_spawn.rs": {
+    "function": 1
+  },
   "crates/fe2o3-protected-service-spawn/src/native_retained_child.rs": {
     "block": 1,
     "function": 1
@@ -1055,12 +1058,15 @@
   "crates/fe2o3-protected-service-spawn/src/native_spawn_tests.rs": {
     "block": 4
   },
+  "crates/fe2o3-protected-service-spawn/src/native_user_namespace.rs": {
+    "block": 3
+  },
   "crates/fe2o3-protected-service-spawn/src/profile_transition_tests.rs": {
-    "block": 4
+    "block": 5
   },
   "crates/fe2o3-protected-service-spawn/src/syscall.rs": {
-    "block": 40,
-    "function": 7
+    "block": 42,
+    "function": 9
   },
   "crates/fe2o3-runtime-protocol/src/worker_v3_load_envelope.rs": {
     "block": 1

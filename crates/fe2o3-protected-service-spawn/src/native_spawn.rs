@@ -57,6 +57,8 @@ pub use retained_child::RootOwnedRetainedServiceChildV2;
 #[path = "native_domain_spawn.rs"]
 mod domain_spawn;
 use domain_spawn::Placement;
+#[path = "native_namespace_spawn.rs"]
+mod namespace_spawn;
 
 pub(crate) const ENTRY: usize = 8;
 pub(crate) type Result<T> = std::result::Result<T, ProtectedServiceSpawnErrorV2>;
@@ -325,6 +327,9 @@ impl StagedProtectedServiceExecV2 {
     /// native image/context/key/lifecycle owners, and bind credentials to that exact
     /// deployment. Retain exclusive consuming-wait ownership of this direct child.
     /// No other thread/process may steal its waits or mutate staged inputs/profile.
+    /// Keep the actual cloning thread alive until this child terminates. Linux
+    /// PDEATHSIG follows that thread, not merely the parent process; TGID readback
+    /// alone cannot enforce the caller's spawning-thread lifetime obligation.
     /// Parent must independently check profile/namespaces before gate release,
     /// enforce finite readiness deadlines, and validate readiness, exec and endpoint
     /// identity before treating the child as an admitted service. This function

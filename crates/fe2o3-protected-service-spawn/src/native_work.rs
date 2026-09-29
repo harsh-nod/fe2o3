@@ -7,6 +7,10 @@ use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 const OPERATION_WORK: usize = 1024 + 64;
 const CONTROL_WORK: usize = 256;
 
+/// Optional pre-profile namespace gate: bounded reads and both child-side closes.
+pub(crate) const MAPPING_GATE_WORK: usize =
+    (crate::pre_exec::MAX_CHILD_GATE_ATTEMPTS_V2 + 2) * OPERATION_WORK + CONTROL_WORK;
+
 /// Covers every bounded attempt in `syscall::child_exec`, including its failure suffix.
 /// The caller must charge the returned work before clone; this function spends nothing.
 /// Unsupported descriptor counts or capability ceilings fail before arithmetic.

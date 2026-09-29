@@ -1,6 +1,11 @@
 use super::child_work;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 
+#[test]
+fn mapping_gate_prepays_read_retries_and_both_closes() {
+    assert_eq!(super::MAPPING_GATE_WORK, (64 + 2) * 1088 + 256);
+}
+
 // Independent syscall transcript, without the implementation's aggregated counts or weights.
 fn transcript_work(descriptors: usize, cap_last_cap: u32) -> usize {
     let mut work = 256;

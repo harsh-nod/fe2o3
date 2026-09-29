@@ -111,6 +111,16 @@ fn terminal(fd: &OwnedFd) -> bool {
 #[test]
 #[ignore = "requires isolated root cgroup-v2 lane and static descendant fixture"]
 fn root_exit_does_not_retire_live_descendant_domain() {
+    run_descendant(false);
+}
+
+#[test]
+#[ignore = "requires isolated root user-namespace/cgroup lane and static descendant fixture"]
+fn fresh_user_namespace_preserves_profile_and_aggregate_cleanup() {
+    run_descendant(true);
+}
+
+fn run_descendant(fresh_namespace: bool) {
     assert!(syscall::has_exact_root_identity());
     let helper =
         File::open(std::env::var_os("FE2O3_FRESH_DOMAIN_FIXTURE").expect("fixture path")).unwrap();
@@ -163,13 +173,24 @@ fn root_exit_does_not_retire_live_descendant_domain() {
     // Root-controlled private cgroup lane, immutable helper, no exported cgroup
     // handles, and this test is the sole direct-child consuming-wait owner.
     let (mut child, child_charge) = unsafe {
-        stage.spawn_retaining_in_fresh_domain(
-            credentials,
-            Input(drops.clone()),
-            INPUT_STORAGE,
-            &mut pool.0,
-            &mut budget,
-        )
+        if fresh_namespace {
+            stage.spawn_retaining_in_fresh_user_namespace(
+                credentials,
+                Credentials::new(uid.checked_add(1).unwrap(), gid.checked_add(1).unwrap()).unwrap(),
+                Input(drops.clone()),
+                INPUT_STORAGE,
+                &mut pool.0,
+                &mut budget,
+            )
+        } else {
+            stage.spawn_retaining_in_fresh_domain(
+                credentials,
+                Input(drops.clone()),
+                INPUT_STORAGE,
+                &mut pool.0,
+                &mut budget,
+            )
+        }
     }
     .unwrap();
     budget
@@ -184,6 +205,8 @@ fn root_exit_does_not_retire_live_descendant_domain() {
     let mut profile = [0];
     read_ready(&profile_read, &mut profile, deadline);
     assert_eq!(profile, [PROTECTED_SERVICE_PROFILE_READY_V1]);
+    let namespace =
+        fresh_namespace.then(|| assert_namespace_profile(child.pid().as_raw_pid(), uid, gid));
     assert_eq!(
         rustix::io::write(&gate_write, &[PROTECTED_SERVICE_GATE_RELEASE_V1]).unwrap(),
         1
@@ -200,6 +223,9 @@ fn root_exit_does_not_retire_live_descendant_domain() {
         .unwrap(),
     );
     assert!(!terminal(&descendant_pidfd.0));
+    if let Some(namespace) = namespace {
+        assert_eq!(assert_namespace_profile(descendant, uid, gid), namespace);
+    }
     while child.is_live(&mut budget).unwrap() {
         assert!(Instant::now() < deadline, "fixture root did not exit");
         std::thread::sleep(Duration::from_millis(1));
@@ -245,4 +271,65 @@ fn root_exit_does_not_retire_live_descendant_domain() {
     println!(
         "fresh-domain actual root exit, descendant cancellation and retained-input retirement passed"
     );
+}
+
+fn assert_namespace_profile(pid: i32, uid: u32, gid: u32) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    for kind in [
+        "user",
+        "pid",
+        "pid_for_children",
+        "time",
+        "time_for_children",
+    ] {
+        let parent = std::fs::metadata(format!("/proc/self/ns/{kind}")).unwrap();
+        let child = std::fs::metadata(format!("/proc/{pid}/ns/{kind}")).unwrap();
+        assert_eq!(parent.dev(), child.dev());
+        assert_eq!(parent.ino() == child.ino(), kind != "user");
+    }
+    for (kind, id) in [("uid_map", uid), ("gid_map", gid)] {
+        let map = std::fs::read_to_string(format!("/proc/{pid}/{kind}")).unwrap();
+        let rows: Vec<Vec<u32>> = map
+            .lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .map(|n| n.parse().unwrap())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![vec![0, 0, 1], vec![id, id, 1], vec![id + 1, id + 1, 1]]
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(format!("/proc/{pid}/setgroups")).unwrap(),
+        "allow\n"
+    );
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+    for (key, expected) in [
+        ("Uid:", vec![uid as u64; 4]),
+        ("Gid:", vec![gid as u64; 4]),
+        ("Groups:", vec![]),
+        ("NoNewPrivs:", vec![1]),
+    ] {
+        let values: Vec<u64> = status
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .unwrap()
+            .split_whitespace()
+            .map(|n| n.parse().unwrap())
+            .collect();
+        assert_eq!(values, expected, "{key}");
+    }
+    for key in ["CapInh:", "CapPrm:", "CapEff:", "CapBnd:", "CapAmb:"] {
+        let value = status
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .unwrap()
+            .trim();
+        assert_eq!(u64::from_str_radix(value, 16).unwrap(), 0, "{key}");
+    }
+    let namespace = std::fs::metadata(format!("/proc/{pid}/ns/user")).unwrap();
+    (namespace.dev(), namespace.ino())
 }

@@ -202,6 +202,12 @@ fn inert_owner(phase: Phase) -> NativeCgroupDomainV1 {
     }
 }
 
+impl NativeCgroupDomainV1 {
+    pub(crate) fn quarantined_fixture_for_cleanup() -> Self {
+        inert_owner(Phase::Quarantined)
+    }
+}
+
 #[test]
 fn prepared_and_no_creation_retire_without_touching_an_os_object() {
     for phase in [Phase::Prepared, Phase::NoCreation] {

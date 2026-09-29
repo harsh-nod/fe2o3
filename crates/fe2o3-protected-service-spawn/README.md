@@ -14,6 +14,9 @@ supplementary groups, empties and locks all capability paths, sets
 `no_new_privs`, nondumpability, a zero core limit, and umask `077`, and reads
 every property back. Credential transitions clear the parent-death setting, so
 the child rearms it and rechecks the exact parent after installing the profile.
+The unsafe native caller must also retain the actual cloning thread until the
+child terminates: Linux ties `PDEATHSIG` to that thread, and process-ID readback
+alone does not enforce its lifetime.
 The parent must independently validate the child and its
 namespaces before sending the one-byte release token. Only then does the child
 install the fixed descriptor table and execute the staged image with one fixed
@@ -114,10 +117,25 @@ All retained inputs and original service charges survive unresolved cleanup.
 
 This is mechanical custody, not proof isolation. The administrator caller must
 exclude competing privileged mutations and expose no cgroup control or migration
-path to the child. User-namespace isolation, authenticated proof-helper bootstrap,
-and production activation remain separate unfinished requirements. Existing
+path to the child. Existing
 service spawns retain their no-domain behavior; nothing silently enables a proof
 child dumpability exception or changes a compiler authority gate.
+
+`spawn_retaining_in_fresh_user_namespace` additionally uses `CLONE_NEWUSER` on
+that same gated cgroup path. Before the child drops privileges, a separate mapping
+gate holds it while the parent validates the actual nsfs handles, root ownership,
+parent namespace, exact child pidfd and unchanged PID/time namespaces. Single-use
+identity maps contain only root, helper and peer IDs. `setgroups` stays `allow`
+so the existing profile can empty supplementary groups. Exact map readback must
+succeed before release. The namespace owner enters complete child custody before
+any fallible map work and remains retained through aggregate cleanup, including
+partial configuration and quarantine. All work and storage are prepaid on the
+existing request and cleanup accounts.
+
+These namespace mechanics do not admit a protected proof helper. Administrator
+provenance, exclusion of external memory and backing-file writers, authenticated
+helper/compiler bootstrap, and production activation remain unfinished. No public
+safe FD/PID constructor can manufacture the concrete namespace owner.
 
 The native external-anchor coordinator now calls these primitives after deriving
 full charges and validating staged Files, and owns gated readiness/exec/endpoint

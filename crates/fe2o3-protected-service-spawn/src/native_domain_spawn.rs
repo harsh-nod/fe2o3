@@ -1,7 +1,9 @@
 //! Fresh-domain placement through the existing guarded native spawn and pool.
 //! This closes aggregate cleanup custody, not proof-process isolation admission.
 
+use super::namespace_spawn::MappingGate;
 use super::*;
+use crate::native_user_namespace::NativeUserNamespaceV1 as Namespace;
 use crate::{native_cgroup::NativeCgroupDomainV1 as Domain, process_reaper::ReapSlotV1};
 use fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1 as Lease;
 
@@ -9,6 +11,7 @@ use fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1 as Lease;
 pub(super) enum Placement {
     Current,
     Fresh,
+    FreshNamespace(Credentials),
 }
 
 impl StagedProtectedServiceExecV2 {
@@ -88,32 +91,58 @@ pub(super) fn clone_placed(
     if matches!(placement, Placement::Current) {
         return clone_guarded(staged, credentials, ceiling, lease, slot);
     }
-    b.with_prepaid_scope(
-        0,
-        0,
-        StagedProtectedServiceExecV2::FRESH_DOMAIN_WORK,
-        StagedProtectedServiceExecV2::FRESH_DOMAIN_SCRATCH,
-        |_| {
-            let mut pending = PreparedDomain(Some((Domain::prepare()?, slot)));
-            let (domain, _) = pending.0.as_mut().expect("prepared domain custody");
-            domain.create()?;
-            let fd = domain.clone_cgroup_fd()?;
-            let (pid, pidfd) = syscall::clone_child_with_cgroup(
-                staged,
-                credentials,
-                ceiling,
-                rustix::process::getpid(),
-                Some(fd),
-            )
-            .map_err(|e| io("clone native child into fresh cgroup", e))?;
-            // No fallible parent check or gate release precedes whole-owner adoption.
-            let (domain, slot) = pending.0.take().expect("prepared domain custody");
-            let child =
-                RootOwnedProtectedServiceChildV2::new_with_domain(pid, pidfd, lease, domain, slot);
-            child.check_pidfd()?;
-            Ok(child)
-        },
-    )
+    let (work, scratch) = match placement {
+        Placement::FreshNamespace(_) => (
+            StagedProtectedServiceExecV2::FRESH_NAMESPACE_WORK,
+            StagedProtectedServiceExecV2::FRESH_NAMESPACE_SCRATCH,
+        ),
+        _ => (
+            StagedProtectedServiceExecV2::FRESH_DOMAIN_WORK,
+            StagedProtectedServiceExecV2::FRESH_DOMAIN_SCRATCH,
+        ),
+    };
+    b.with_prepaid_scope(0, 0, work, scratch, |_| {
+        let namespace = match placement {
+            Placement::FreshNamespace(peer) => {
+                Some((Namespace::prepare(credentials, peer)?, MappingGate::new()?))
+            }
+            _ => None,
+        };
+        let mut pending = PreparedDomain(Some((Domain::prepare()?, slot)));
+        let (domain, _) = pending.0.as_mut().expect("prepared domain custody");
+        domain.create()?;
+        let fd = domain.clone_cgroup_fd()?;
+        let (pid, pidfd) = syscall::clone_child_with_cgroup(
+            staged,
+            credentials,
+            ceiling,
+            rustix::process::getpid(),
+            Some(fd),
+            namespace.as_ref().map(|(_, gate)| gate.child_ends()),
+        )
+        .map_err(|e| io("clone native child into fresh cgroup", e))?;
+        // No fallible parent check or gate release precedes whole-owner adoption.
+        let (domain, slot) = pending.0.take().expect("prepared domain custody");
+        match namespace {
+            Some((namespace, gate)) => {
+                let mut child = RootOwnedProtectedServiceChildV2::new_with_domain_and_namespace(
+                    pid, pidfd, lease, domain, namespace, slot,
+                );
+                child.check_pidfd()?;
+                child.configure_namespace()?;
+                child.revalidate_namespace()?;
+                gate.release()?;
+                Ok(child)
+            }
+            None => {
+                let child = RootOwnedProtectedServiceChildV2::new_with_domain(
+                    pid, pidfd, lease, domain, slot,
+                );
+                child.check_pidfd()?;
+                Ok(child)
+            }
+        }
+    })
 }
 
 #[cfg(test)]
