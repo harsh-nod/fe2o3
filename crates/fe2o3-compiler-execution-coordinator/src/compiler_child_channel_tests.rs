@@ -101,7 +101,7 @@ fn prematurely_readable_or_closed_peer_refuses() {
 }
 
 #[test]
-#[ignore = "requires isolated root, clone3, CAP_SETUID/SETGID/SETPCAP/SYS_PTRACE/KILL"]
+#[ignore = "requires isolated root, clone3, CAP_SETUID/SETGID/SETPCAP/SYS_PTRACE/KILL and static exec fixture"]
 fn native_child_channel_joins_original_pidfd_before_trace() {
     for case in 0..6 {
         run_native(case);
@@ -144,10 +144,12 @@ fn run_native(case: usize) {
     let mut pool = Drain(Cleanup::admit(Account::new(Work::new(LIMIT), LIMIT)).unwrap());
     let dir = tempfile::tempdir().unwrap();
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let path = dir.path().join("fixture");
-    std::fs::write(&path, crate::provisioning_entrypoint::static_pause_elf(0)).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let image = File::open(&path).unwrap();
+    // The isolated container can mount /tmp noexec. Use the explicit executable
+    // fixture mount, and keep only the cwd in writable scratch.
+    let image = File::open(
+        std::env::var_os("FE2O3_NATIVE_COMPILER_EXEC_FIXTURE").expect("static exec fixture"),
+    )
+    .unwrap();
     let cwd = File::open(dir.path()).unwrap();
     let unused = File::open("/dev/null").unwrap();
     let channels = native::Channels::new().unwrap();
@@ -229,8 +231,7 @@ fn run_native(case: usize) {
     }
     if case == 5 {
         // Exactly one work unit short of this receiver's prepaid local work.
-        b.charge_work(LIMIT - b.work() - ENTRY - LOCAL_WORK + 1)
-            .unwrap();
+        b.charge_work(LIMIT - b.work() - LOCAL_WORK + 1).unwrap();
     }
     let fd_count = || std::fs::read_dir("/proc/self/fd").unwrap().count();
     let before_fds = fd_count();
@@ -258,8 +259,8 @@ fn run_native(case: usize) {
                 error,
                 Error::Transport(launch_io::Failure::MalformedReadyTransfer)
             )),
-            4 => assert!(b.failed_storage().is_some()),
-            5 => assert!(b.failed_work().is_some()),
+            4 => assert_eq!(b.failed_storage(), Some(LIMIT + 1)),
+            5 => assert_eq!(b.failed_work(), Some(LIMIT + 1)),
             _ => unreachable!(),
         }
         // Receiver is consumed; neither the cloned pidfd nor a received right leaks.
@@ -294,7 +295,11 @@ fn run_native(case: usize) {
     for _ in 0..10000 {
         let event = trace.poll(&mut b).unwrap();
         if !event.is_pending() {
-            assert!(event.is_exec());
+            assert!(
+                event.is_exec(),
+                "unexpected {event:?}; child status {:?}",
+                net::recv(&exec_reader, &mut [0; 1], net::RecvFlags::DONTWAIT)
+            );
             observed = true;
             break;
         }
