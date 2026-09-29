@@ -16,6 +16,9 @@ use std::{
 const MARKER: &str = "FE2O3_NATIVE_ROOT_TRACE_CASE";
 const COMPLETE: &str = "FE2O3_NATIVE_ROOT_TRACE_COMPLETE";
 
+#[path = "native_root_trace_confirmation_tests.rs"]
+mod confirmation;
+
 #[test]
 fn real_root_trace_schedules_in_bounded_subprocesses() {
     for mode in [
@@ -34,42 +37,63 @@ fn real_root_trace_schedules_in_bounded_subprocesses() {
         "ledger",
         "thread",
     ] {
-        let completion = tempfile::NamedTempFile::new().unwrap();
-        let mut process = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "native_spawn::child::trace::tests::processes::root_trace_subprocess",
-                "--nocapture",
-            ])
-            .env_clear()
-            .env(MARKER, mode)
-            .env(COMPLETE, completion.path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while process.try_wait().unwrap().is_none() {
-            if Instant::now() >= deadline {
-                let _ = process.kill();
-                let _ = process.wait();
-                panic!("root trace subprocess timed out: {mode}");
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        let output = process.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{mode}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(
-            std::fs::read(completion.path()).unwrap(),
-            b"complete",
-            "{mode}"
-        );
+        subprocess(mode);
     }
+}
+
+#[test]
+fn moved_budget_refuses_original_ledger_at_another_address() {
+    subprocess("confirm-budget-address");
+}
+
+#[test]
+fn confirm_exec_requires_owned_stop_and_exact_funding() {
+    for mode in [
+        "confirm-exact",
+        "confirm-resumed",
+        "confirm-short-work",
+        "confirm-short-storage",
+    ] {
+        subprocess(mode);
+    }
+}
+
+fn subprocess(mode: &str) {
+    let completion = tempfile::NamedTempFile::new().unwrap();
+    let mut process = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "native_spawn::child::trace::tests::processes::root_trace_subprocess",
+            "--nocapture",
+        ])
+        .env_clear()
+        .env(MARKER, mode)
+        .env(COMPLETE, completion.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while process.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            let _ = process.kill();
+            let _ = process.wait();
+            panic!("root trace subprocess timed out: {mode}");
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let output = process.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{mode}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(completion.path()).unwrap(),
+        b"complete",
+        "{mode}"
+    );
 }
 
 // This fixture adopts a direct Command child only in tests. Its second exec is
@@ -77,11 +101,15 @@ fn real_root_trace_schedules_in_bounded_subprocesses() {
 fn spawn(slot: crate::process_reaper::ReapSlotV1<'static>) -> (Owner, OwnedFd, OwnedFd) {
     let lease = fe2o3_artifact_transaction::try_acquire_artifact_process_spawn_lease_v1().unwrap();
     let (read, gate) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
+    let (ready, report_ready) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )
+    .unwrap();
     let mut process = Command::new("/bin/sh")
-        .args(["-c", "read token; exec /bin/true"])
+        .args(["-c", "printf r; read token; exec /bin/true"])
         .env_clear()
         .stdin(Stdio::from(File::from(read)))
-        .stdout(Stdio::null())
+        .stdout(Stdio::from(File::from(report_ready)))
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
@@ -97,6 +125,26 @@ fn spawn(slot: crate::process_reaper::ReapSlotV1<'static>) -> (Owner, OwnedFd, O
     let witness = rustix::io::fcntl_dupfd_cloexec(&pidfd, 0).unwrap();
     let child = Owner::new(pid, Some(pidfd), lease, slot);
     drop(process);
+    // CLOEXEC pipe closure can wake Command::spawn before its initial exec
+    // event finishes. Wait for userspace before SEIZE; only the gated exec is
+    // then eligible for tracing. This fixture token releases no spawn lease.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut token = [0];
+    loop {
+        match rustix::io::read(&ready, &mut token) {
+            Ok(1) => {
+                assert_eq!(token, [b'r']);
+                break;
+            }
+            Err(Errno::AGAIN | Errno::INTR) => {}
+            other => panic!("root trace fixture readiness failed: {other:?}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "root trace fixture readiness timed out"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     (child, gate, witness)
 }
 
@@ -147,7 +195,9 @@ fn root_trace_subprocess() {
     let mut service = pool();
     let mut work = Work::new(LIMIT);
     let mut b = Budget::new(&mut work, LIMIT);
-    if mode.starts_with("retained") {
+    if mode.starts_with("confirm-") {
+        confirmation::run(&mode, &mut service, &mut b);
+    } else if mode.starts_with("retained") {
         retained(&mode, &mut service, &mut b);
     } else {
         run(&mode, &mut service, &mut b);
