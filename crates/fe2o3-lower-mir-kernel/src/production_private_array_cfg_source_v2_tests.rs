@@ -10,6 +10,7 @@ enum Shape {
     MoveRead,
     ElementOnly(u64),
     UnknownWrite,
+    AbortAfterRead,
 }
 
 fn go(target: u32) -> SemanticTerminatorKindV1 {
@@ -159,6 +160,13 @@ fn try_cfg_owner(
                     block(211, entry, go(1)),
                     block(212, vec![index, statements[2].clone()], go(2)),
                     block(213, vec![read], SemanticTerminatorKindV1::Return),
+                ]
+            }
+            Shape::AbortAfterRead => {
+                entry.push(initializer);
+                vec![
+                    block(211, entry, go(1)),
+                    block(212, vec![read], SemanticTerminatorKindV1::Abort),
                 ]
             }
         }
@@ -450,6 +458,126 @@ fn private_array_cfg_physical_paths_cannot_invent_or_omit_source_blocks() {
 }
 
 #[test]
+fn private_array_cfg_terminal_failure_sink_preserves_genuine_cross_block_initialization() {
+    let owner = cfg_owner(Shape::AbortAfterRead);
+    let recipe = recipe();
+    let mut budget = UnsupportedIndexCorrelationBudgetV1 {
+        remaining: usize::MAX,
+    };
+    let checked = relation(&owner, &recipe, &mut budget).unwrap();
+    assert_eq!(read_results(&checked, &mut budget), [true]);
+    let source_count = checked.function.blocks().len();
+    let sink = checked.body.blocks.last().unwrap();
+    assert_eq!(sink.id.0 as usize, source_count);
+    assert!(matches!(sink.terminator, Some(Terminator::Unreachable)));
+    assert!(
+        owner
+            .correspondence
+            .synthetic_operation_spans
+            .iter()
+            .any(|span| {
+                span.correspondence_owner == checked.owner
+                    && span.semantic_function == checked.function_id
+                    && span.kernel_ir_block == sink.id
+                    && span.rule == SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
+                    && span.first_operation_ordinal == 0
+                    && span.operation_count == 1
+            })
+    );
+}
+
+#[test]
+fn private_array_cfg_terminal_sink_cannot_hide_memory_parameters_or_returning_edges() {
+    let owner = cfg_owner(Shape::AbortAfterRead);
+    let recipe = recipe();
+    let ordinal = owner.correspondence.private_arrays.instances[0].module_function_ordinal;
+    for change in 0..13 {
+        let mut module = owner.executable().module().clone();
+        let body = module.functions[ordinal].body.as_mut().unwrap();
+        let sink_index = body.blocks.len() - 1;
+        let sink_id = body.blocks[sink_index].id;
+        match change {
+            0 => body.blocks[sink_index].terminator = Some(Terminator::Return { values: vec![] }),
+            1 => {
+                body.blocks[sink_index].terminator = Some(Terminator::Branch {
+                    target: body.blocks[1].id,
+                    arguments: vec![],
+                })
+            }
+            2 => body.blocks[sink_index].operations.push(Operation::new(
+                vec![],
+                OperationKind::Constant(Constant::Bool(false)),
+            )),
+            3 => {
+                body.blocks[sink_index].operations[0] =
+                    AmdGpuDiagnosticOperation::DebugTrap.operation(None)
+            }
+            4 => body.blocks[sink_index]
+                .parameters
+                .push(ValueDef::new(ValueId(9000), Type::BOOL)),
+            5 => {
+                body.blocks[0].terminator = Some(Terminator::Branch {
+                    target: sink_id,
+                    arguments: vec![],
+                })
+            }
+            6 => {
+                body.blocks[1].terminator = Some(Terminator::Branch {
+                    target: sink_id,
+                    arguments: vec![ValueId(9000)],
+                })
+            }
+            7 => {
+                body.blocks.pop();
+            }
+            8 => body.blocks.push(body.blocks[sink_index].clone()),
+            9 => {
+                let store = body.blocks[0]
+                    .operations
+                    .iter()
+                    .find(|operation| matches!(operation.kind, OperationKind::Store { .. }))
+                    .expect("genuine private initializer store")
+                    .clone();
+                body.blocks[sink_index].operations[0] = store;
+            }
+            10 => body.blocks[sink_index].operations[0]
+                .results
+                .push(ValueDef::new(ValueId(9000), Type::BOOL)),
+            11 => {
+                let OperationKind::Call { arguments, .. } =
+                    &mut body.blocks[sink_index].operations[0].kind
+                else {
+                    panic!("trap call");
+                };
+                arguments.push(ValueId(9000));
+            }
+            _ => body.blocks[sink_index].id = BlockId(sink_id.0 + 1),
+        }
+        let mut budget = UnsupportedIndexCorrelationBudgetV1 {
+            remaining: usize::MAX,
+        };
+        let checked = PrivateArrayFinalRelationV1::new(
+            &module,
+            &owner.correspondence,
+            Some(owner.semantic_ssa().source_semantic()),
+            ARRAY_ROOT,
+            ARRAY_ROOT,
+            &module.functions[ordinal],
+            &recipe,
+            10_000,
+            &mut budget,
+        );
+        assert!(
+            matches!(
+                checked,
+                Err(ProductionMirPlironTranslationErrorV1::KernelShape)
+            ),
+            "mutation {change}"
+        );
+    }
+}
+
+#[test]
 fn private_array_cfg_existing_production_translation_consumes_cross_block_initialization() {
     use fe2o3_pliron::{
         ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
@@ -714,58 +842,60 @@ fn private_array_cfg_shared_scratch_keeps_first_error_and_refuses_foreign_slot()
 
 #[test]
 fn private_array_cfg_shared_ledger_exact_and_one_short_cumulative_resources() {
-    let owner = cfg_owner(Shape::Diamond { both: true });
-    let recipe = recipe();
-    let run = |work_limit: usize, storage_limit: usize| {
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
-        let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
-        budget.reserve_storage(FLOOR).unwrap();
-        let cleanup = cleanup();
-        let ledger = CorrelationLedgerV18::new(&mut budget, &cleanup);
-        let mut charge = SourceCorrelationChargeV18 {
-            ledger: &ledger,
-            finite: UnsupportedIndexCorrelationBudgetV1 {
-                remaining: usize::MAX,
-            },
-            finite_denied: false,
+    for shape in [Shape::Diamond { both: true }, Shape::AbortAfterRead] {
+        let owner = cfg_owner(shape);
+        let recipe = recipe();
+        let run = |work_limit: usize, storage_limit: usize| {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+            let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+            budget.reserve_storage(FLOOR).unwrap();
+            let cleanup = cleanup();
+            let ledger = CorrelationLedgerV18::new(&mut budget, &cleanup);
+            let mut charge = SourceCorrelationChargeV18 {
+                ledger: &ledger,
+                finite: UnsupportedIndexCorrelationBudgetV1 {
+                    remaining: usize::MAX,
+                },
+                finite_denied: false,
+            };
+            let outcome = (|| {
+                let first = relation(&owner, &recipe, &mut charge)?;
+                let retained_first = ledger.budget.borrow().storage();
+                assert!(retained_first > FLOOR);
+                let second = relation(&owner, &recipe, &mut charge)?;
+                assert_eq!(
+                    ledger.budget.borrow().storage() - retained_first,
+                    retained_first - FLOOR
+                );
+                drop((first, second));
+                Ok::<_, ProductionMirPlironTranslationErrorV1>(())
+            })();
+            let failure = ledger.failure.get();
+            if outcome.is_err() {
+                assert!(failure.is_some());
+                assert!(charge.charge_many(0).is_none());
+                assert!(charge.reserve_private_array_scratch(0).is_none());
+                assert_eq!(ledger.failure.get(), failure);
+            }
+            drop(charge);
+            drop(ledger);
+            let used = budget.work();
+            let peak = budget.peak_storage();
+            let storage = budget.storage();
+            // The enclosing correlation scope owns failed/retained scratch until
+            // every relation has dropped. Restore only that same-ledger floor.
+            budget.release_storage(storage - FLOOR).unwrap();
+            assert_eq!(budget.storage(), FLOOR);
+            (outcome.is_ok(), used, peak, failure)
         };
-        let outcome = (|| {
-            let first = relation(&owner, &recipe, &mut charge)?;
-            let retained_first = ledger.budget.borrow().storage();
-            assert!(retained_first > FLOOR);
-            let second = relation(&owner, &recipe, &mut charge)?;
-            assert_eq!(
-                ledger.budget.borrow().storage() - retained_first,
-                retained_first - FLOOR
-            );
-            drop((first, second));
-            Ok::<_, ProductionMirPlironTranslationErrorV1>(())
-        })();
-        let failure = ledger.failure.get();
-        if outcome.is_err() {
-            assert!(failure.is_some());
-            assert!(charge.charge_many(0).is_none());
-            assert!(charge.reserve_private_array_scratch(0).is_none());
-            assert_eq!(ledger.failure.get(), failure);
-        }
-        drop(charge);
-        drop(ledger);
-        let used = budget.work();
-        let peak = budget.peak_storage();
-        let storage = budget.storage();
-        // The enclosing correlation scope owns failed/retained scratch until
-        // every relation has dropped. Restore only that same-ledger floor.
-        budget.release_storage(storage - FLOOR).unwrap();
-        assert_eq!(budget.storage(), FLOOR);
-        (outcome.is_ok(), used, peak, failure)
-    };
-    let measured = run(usize::MAX, usize::MAX);
-    assert!(measured.0);
-    assert!(run(measured.1, measured.2).0);
-    let short_work = run(measured.1 - 1, measured.2);
-    assert!(!short_work.0);
-    assert!(short_work.3.is_some());
-    let short_storage = run(measured.1, measured.2 - 1);
-    assert!(!short_storage.0);
-    assert!(short_storage.3.is_some());
+        let measured = run(usize::MAX, usize::MAX);
+        assert!(measured.0);
+        assert!(run(measured.1, measured.2).0);
+        let short_work = run(measured.1 - 1, measured.2);
+        assert!(!short_work.0);
+        assert!(short_work.3.is_some());
+        let short_storage = run(measured.1, measured.2 - 1);
+        assert!(!short_storage.0);
+        assert!(short_storage.3.is_some());
+    }
 }

@@ -1,5 +1,34 @@
 use super::*;
 
+#[test]
+fn private_array_assert_sink_decoder_has_independent_exact_work_and_no_byte_allocation() {
+    let mut block = BasicBlock::new(BlockId(3));
+    block
+        .operations
+        .push(AmdGpuDiagnosticOperation::Trap.operation(None));
+    block.terminator = Some(Terminator::Unreachable);
+    let OperationKind::Call { callee, .. } = &block.operations[0].kind else {
+        panic!("trap call");
+    };
+    // Eight structural checks, then eight complete fixed descriptor comparisons.
+    let exact = 8 + 8 * (callee.as_str().len() + 2);
+    for limit in [exact, exact - 1] {
+        let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: limit };
+        let result = check_assert_failure_sink(
+            &block,
+            &mut Work {
+                budget: &mut budget,
+            },
+        );
+        if limit == exact {
+            assert!(result.is_ok());
+            assert_eq!(budget.remaining, 0);
+        } else {
+            assert!(matches!(result, Err(Error::ResourceLimit)));
+        }
+    }
+}
+
 // This is a concrete finite-product path interpreter, not the production
 // may-uninitialized propagation algorithm. Both initial states at a join are
 // retained independently, so a single uninitialized path remains observable.

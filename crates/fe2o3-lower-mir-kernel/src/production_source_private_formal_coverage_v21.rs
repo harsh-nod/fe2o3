@@ -6,6 +6,15 @@ impl From<ArgumentResourceV1> for ProductionSourceNativeLifecycleErrorV18 {
 }
 
 impl ProductionPrivateMemoryCheckedNativePoliciesV18<'_, '_> {
+    #[cfg(test)]
+    pub(in crate::production_semantic_kir_v1) fn test_private_formal_storage_pointer_v21(
+        before: &fe2o3_kernel_ir::OperationKind,
+        after: &fe2o3_kernel_ir::OperationKind,
+        pointer: ValueId,
+    ) -> Option<ValueId> {
+        private_formal_storage_pointer_v21(before, after, pointer)
+    }
+
     pub(crate) fn check_formal_report_subject_v21(
         &self,
         report: &fe2o3_kernel_ir::CanonicalFormalReportViewV19<'_, '_>,
