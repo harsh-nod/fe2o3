@@ -68,6 +68,31 @@ The framing API does not own sockets, retry, advance a sequence, maintain a
 retirement tombstone, or activate the FD12 ABI. A root RPC consumer is still
 required.
 
+## Connection Replay
+
+The private broker `RootControlReplayWindowV3` orders inert records for one
+connection. It is not yet connected to an admitted root session. It retains a
+binding and at most one request/reply pair, with the full maximum storage charge
+prepaid even while empty. Every operation checks the original ledger, Budget
+address, process and kernel thread. Its work and scratch quotes include nested
+protocol comparisons; refusal restores entry storage without refunding work or
+denial history.
+
+The first request must have sequence 1. An exact duplicate of a pending request
+is reported as pending, never as a new operation. Completion requires a reply
+bound to the exact original request, then retains both records before any send.
+A duplicate completed request selects the cached reply. Only the next sequence
+can replace that pair; changed content, direction or association, skipped/stale
+sequences, and sequence overflow refuse without altering state. Send failure or
+caller unwind does not clear this separately retained window.
+
+This is ordering, not permission to execute an operation. Authentication,
+operation-specific validation and bounded cumulative attempts remain session
+obligations. In particular the window is **not a retirement tombstone**: the
+root-owned occurrence and exact retirement record must survive independently
+when a new sequence replaces the cached reply or a new issuer replaces the
+connection. There is no reset, authority conversion, or durable recovery API.
+
 ## Startup Migration
 
 The broker now owns `RootLaunchChannelV3`, a root-created pair with no `from_fd`
@@ -78,6 +103,16 @@ Closing its parent issuer alias is idempotent, but does not certify closure of
 external stage aliases or retire a compiler occurrence. The owner is not yet
 connected to `launch_issuer` or a broker root session. Positive privileged socket
 validation remains required.
+
+Its private packet methods reuse the shared transport after checking that its
+own parent issuer alias is closed and the root endpoint still has the exact
+required shape. Each call prepays one complete nonblocking attempt on the
+original account. Receive output is unreserved inert data; send success is not
+an acknowledgment. Neither method exports the root descriptor, authenticates a
+deployment, or changes occurrence/replay state. Caller-supplied sender values
+must still be derived from the actual admitted issuer, with liveness checks and
+a fresh post-readiness challenge. External staging aliases remain the launcher's
+responsibility.
 
 The direct launcher now independently checks the actual retained issuer's running
 image after exact readiness and EOF, before returning the child. The same check

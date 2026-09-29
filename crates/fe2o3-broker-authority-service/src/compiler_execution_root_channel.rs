@@ -304,6 +304,10 @@ impl fmt::Debug for RootLaunchChannelV3<'_> {
 mod lifecycle_tests;
 
 #[cfg(test)]
+#[path = "compiler_execution_root_channel_packet_tests.rs"]
+mod packet_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
