@@ -4,7 +4,9 @@
 //! are compared with the separately retained unsafe Worker authority; neither a
 //! matching hash nor successful request preparation establishes that authority.
 
-use fe2o3_kfd::{ConditionalDispatchPremisesV1, Gfx942KfdDispatchRequestV1};
+use fe2o3_kfd::{
+    ConditionalDispatchPremisesV1, Gfx942KfdDispatchRequestV1, MixedConditionalDispatchPremisesV26,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{Gfx942RuntimeDispatchInputsV1, Gfx942RuntimePreparationErrorV1};
@@ -24,6 +26,10 @@ pub enum Gfx942RuntimeInvocationBindingV1 {
         contract_identity: [u8; 32],
         premise_identity: [u8; 32],
     },
+    ConditionalMixedV26 {
+        contract_identity: [u8; 32],
+        premise_identity: [u8; 32],
+    },
 }
 
 /// A conditional variant always owns its complete bounded payload. No fallback
@@ -31,6 +37,7 @@ pub enum Gfx942RuntimeInvocationBindingV1 {
 pub(crate) enum RuntimeInvocationPremisesV1 {
     OrdinaryV1,
     ConditionalNominalV4(ConditionalDispatchPremisesV1),
+    ConditionalMixedV26(MixedConditionalDispatchPremisesV26),
 }
 
 impl RuntimeInvocationPremisesV1 {
@@ -38,6 +45,7 @@ impl RuntimeInvocationPremisesV1 {
         match self {
             Self::OrdinaryV1 => Gfx942RuntimeInvocationBindingV1::OrdinaryV1,
             Self::ConditionalNominalV4(premises) => conditional_binding(premises),
+            Self::ConditionalMixedV26(premises) => mixed_binding(premises),
         }
     }
 
@@ -49,6 +57,9 @@ impl RuntimeInvocationPremisesV1 {
             Self::OrdinaryV1 => Ok(request),
             Self::ConditionalNominalV4(premises) => {
                 Ok(request.with_conditional_premises_v1(premises)?)
+            }
+            Self::ConditionalMixedV26(premises) => {
+                Ok(request.with_mixed_conditional_premises_v26(premises)?)
             }
         }
     }
@@ -89,6 +100,28 @@ impl Gfx942RuntimeDispatchInputsV1 {
     pub fn invocation_binding(&self) -> Gfx942RuntimeInvocationBindingV1 {
         self.invocation.binding()
     }
+
+    /// Retains the full mixed payload without constructing Worker authority.
+    /// No conversion to the ordinary or single-output family is available.
+    pub fn with_mixed_conditional_premises_v26(
+        mut self,
+        premises: MixedConditionalDispatchPremisesV26,
+    ) -> Result<Self, Gfx942RuntimePreparationErrorV1> {
+        if !matches!(self.invocation, RuntimeInvocationPremisesV1::OrdinaryV1) {
+            return Err(Gfx942RuntimePreparationErrorV1::ConditionalPremisesAlreadyBound);
+        }
+        self.invocation = RuntimeInvocationPremisesV1::ConditionalMixedV26(premises);
+        Ok(self)
+    }
+}
+
+fn mixed_binding(
+    premises: &MixedConditionalDispatchPremisesV26,
+) -> Gfx942RuntimeInvocationBindingV1 {
+    Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 {
+        contract_identity: *premises.contract_identity(),
+        premise_identity: *premises.identity(),
+    }
 }
 
 fn conditional_binding(
@@ -103,6 +136,9 @@ fn conditional_binding(
 pub(crate) fn request_binding(
     request: &Gfx942KfdDispatchRequestV1,
 ) -> Gfx942RuntimeInvocationBindingV1 {
+    if let Some(premises) = request.mixed_conditional_premises_v26() {
+        return mixed_binding(premises);
+    }
     match request.conditional_premises_v1() {
         Some(premises) => conditional_binding(premises),
         None => Gfx942RuntimeInvocationBindingV1::OrdinaryV1,
@@ -123,6 +159,18 @@ pub(crate) fn dispatch_identity(
             let mut hash = Sha256::new();
             hash.update(CONDITIONAL_DISPATCH_DOMAIN_V1);
             hash.update(CONDITIONAL_NOMINAL_V4_TAG.to_le_bytes());
+            hash.update(ordinary_identity);
+            hash.update(contract_identity);
+            hash.update(premise_identity);
+            hash.finalize().into()
+        }
+        Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 {
+            contract_identity,
+            premise_identity,
+        } => {
+            let mut hash = Sha256::new();
+            hash.update(b"FE2O3/RUNTIME/GFX942/CONDITIONAL-MIXED-V26-DISPATCH/V1\0");
+            hash.update(26_u16.to_le_bytes());
             hash.update(ordinary_identity);
             hash.update(contract_identity);
             hash.update(premise_identity);
