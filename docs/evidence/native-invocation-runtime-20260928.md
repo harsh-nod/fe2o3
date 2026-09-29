@@ -3,6 +3,8 @@
 Date: 2026-09-28 (Pacific). Continues the
 [native proof helper bootstrap checkpoint](native-proof-helper-bootstrap-20260928.md).
 
+Next checkpoint: [native compiler exec and capture](native-compiler-exec-20260928.md).
+
 **M0-M7 and the 47/47 production-to-safe-GPU-launch gate remain incomplete.**
 No tutorial entry changes classification. This checkpoint adds exact invocation
 custody, approved helper configuration and bounded runtime admission, not an
