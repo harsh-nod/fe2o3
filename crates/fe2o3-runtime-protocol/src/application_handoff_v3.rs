@@ -9,7 +9,9 @@ use core::fmt;
 
 use sha2::{Digest, Sha256};
 
-use fe2o3_static_executable_format::{SealedStaticApplicationErrorV1, validate_sealed_static_elf_v1};
+use fe2o3_static_executable_format::{
+    SealedStaticApplicationErrorV1, validate_sealed_static_elf_v1,
+};
 
 const FRAME_HEADER_BYTES_V1: usize = 8 + 2 + 2 + 4 + 4;
 const FRAME_CHECKSUM_BYTES_V1: usize = 32;

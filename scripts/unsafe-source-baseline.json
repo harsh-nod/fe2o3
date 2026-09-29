@@ -1051,8 +1051,11 @@
   "crates/fe2o3-protected-service-spawn/src/launch_io_credential_tests.rs": {
     "block": 1
   },
+  "crates/fe2o3-protected-service-spawn/src/launch_io_send_tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-protected-service-spawn/src/launch_io_tests.rs": {
-    "block": 5
+    "block": 3
   },
   "crates/fe2o3-protected-service-spawn/src/native_child.rs": {
     "function": 1

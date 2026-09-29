@@ -216,9 +216,7 @@ pub fn sealed_static_application_identity_v1(
 }
 
 /// Validates only the closed static ELF format, without hashing or admitting it.
-pub fn validate_sealed_static_elf_v1(
-    bytes: &[u8],
-) -> Result<(), SealedStaticApplicationErrorV1> {
+pub fn validate_sealed_static_elf_v1(bytes: &[u8]) -> Result<(), SealedStaticApplicationErrorV1> {
     let header = bytes
         .get(..ELF_HEADER_BYTES)
         .ok_or(SealedStaticApplicationErrorV1::InvalidElf)?;
