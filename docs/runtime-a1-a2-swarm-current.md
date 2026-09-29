@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [complete bound-cancellation refinement](evidence/dev-bound-cancellation-2026-09-28/README.md)
+shares all executed retention/count/bitmap/pin checks and phase-only cancellation
+between production and Verus. Its signed 31-stage campaign passes 25 obligations
+and all 23 executable negatives, including exact refusal custody and malformed
+neighbor frames, without assuming a valid roster or Ready owner. Completion
+tests pass 52/0, broader KFD regressions 1412/0 (320 construction tests explicitly
+excluded), full runtime 1828/0 with 30 hardware ignores, and doctests 124/0;
+static checks pass. The initial strict rejection of a verifier informational
+note remains recorded; only that exact note is now recognized. Complete batch
+release and source rollback composition, native authority and GPU/performance
+qualification remain open. A1/A2 and accepted lane checkpoints are unchanged.
+
 The [aggregate batch-release pin budget check](evidence/dev-batch-release-pin-budget-2026-09-28/README.md)
 now prevents partial pin decrements for undercounted aliasing rosters in all three
 batch release paths, preserving legacy validation precedence and exact refusal
