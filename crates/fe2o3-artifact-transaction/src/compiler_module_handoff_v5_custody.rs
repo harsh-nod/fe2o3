@@ -5,6 +5,33 @@ use fe2o3_compiler_ffi::INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_S
 
 const PATH_GUARD_CAPACITY: usize = 16 * 1024;
 
+/// Recovers an inert V5 receipt without waiting for a cooperating writer's lock.
+/// Uses the same recovery, decoding, and accounting as ordinary V5 recovery.
+/// A contended output/path lock returns `Busy` before recovery mutates any slot.
+/// The actual originating-process barrier protects temporary lock destruction
+/// through all resource-scope exits; no currentness owner escapes this operation.
+/// Filesystem I/O and short internal mutex acquisition are not deadline bounded.
+pub fn try_recover_compiler_module_handoff_receipt_v5(
+    output: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    barrier: &Barrier,
+    budget: &mut Budget<'_>,
+) -> Result<CompilerModuleHandoffReceiptV5> {
+    entry(budget, 0, |resources| {
+        if !barrier.guards_artifact_locks() {
+            return Err(Resource::Accounting.into());
+        }
+        Ok(currentness::try_recover::<Schema>(
+            output,
+            producer,
+            attempt,
+            CompilerModuleHandoffSlotV5::Production,
+            resources,
+        )?)
+    })
+}
+
 /// Inert allocation quote for one exact receipt and input allocation shape.
 /// This proves no publication, currentness, compiler identity, or retirement authority.
 ///

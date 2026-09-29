@@ -629,11 +629,36 @@ pub(super) fn recover<S: Schema>(
     slot: S::Slot,
     resources: &mut Resources<'_, '_>,
 ) -> Result<S::Receipt> {
+    recover_with_lock::<S>(output_dir, producer, attempt, slot, false, resources)
+}
+
+pub(super) fn try_recover<S: Schema>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: S::Slot,
+    resources: &mut Resources<'_, '_>,
+) -> Result<S::Receipt> {
+    recover_with_lock::<S>(output_dir, producer, attempt, slot, true, resources)
+}
+
+fn recover_with_lock<S: Schema>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: S::Slot,
+    nonblocking: bool,
+    resources: &mut Resources<'_, '_>,
+) -> Result<S::Receipt> {
     resources.scoped(|resources| {
         resources.require::<S>()?;
         resources.reserve(std::mem::size_of::<Sha256>())?;
         let output = PinnedOutput::open_existing(output_dir)?;
-        let _lock = output.lock()?;
+        let _lock = if nonblocking {
+            output.try_lock()?.ok_or(HandoffEngineError::Busy)?
+        } else {
+            output.lock()?
+        };
         output.verify_path_identity()?;
         authorize_for_custody(&output, producer, attempt, S::ATTEMPT_CUSTODY)?;
         let producer_identity = producer_identity_for::<S>(producer);

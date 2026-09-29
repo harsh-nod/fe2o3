@@ -66,6 +66,77 @@ fn assert_lock(f: &Fixture, held: bool) {
 }
 
 #[test]
+fn try_recovery_refuses_real_writers_without_mutation_then_recovers_exactly() {
+    if isolated("try_recovery_refuses_real_writers_without_mutation_then_recovers_exactly") {
+        return;
+    }
+    let f = Fixture::new();
+    let receipt = published(&f);
+    let ready = fs::read(f.slot().join(READY_ENTRY)).unwrap();
+    let payload = fs::read(f.slot().join(PAYLOAD_ENTRY)).unwrap();
+    let output = PinnedOutput::open(&f.path).unwrap();
+    let barrier = crate::try_acquire_artifact_lock_retirement_barrier_v1().unwrap();
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    budget.reserve_storage(17).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    for kernel_only in [false, true] {
+        // Cover the real cooperating writer and, separately, contention that
+        // bypasses the process reservation table and reaches the OS OFD lock.
+        let writer = if kernel_only {
+            let fd = rustix::fs::open(
+                f.path.join(crate::LOCK_FILE),
+                OFlags::RDWR | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .unwrap();
+            assert!(crate::acquire_linux_ofd_exclusive_lock(&fd, true).unwrap());
+            (None, Some(fd))
+        } else {
+            (Some(output.try_lock().unwrap().unwrap()), None)
+        };
+        let before = budget.work();
+        assert!(matches!(
+            try_recover_compiler_module_handoff_receipt_v5(
+                &f.path,
+                &f.producer,
+                f.attempt,
+                &barrier,
+                &mut budget
+            ),
+            Err(Error::Busy)
+        ));
+        assert!(budget.work() > before);
+        assert_eq!(budget.storage(), 17);
+        assert!(ledger == budget.work_ledger_identity_v1());
+        assert_eq!(fs::read(f.slot().join(READY_ENTRY)).unwrap(), ready);
+        assert_eq!(fs::read(f.slot().join(PAYLOAD_ENTRY)).unwrap(), payload);
+        f.ready();
+        assert_lock(&f, true);
+        drop(writer);
+        let before = budget.work();
+        assert_eq!(
+            try_recover_compiler_module_handoff_receipt_v5(
+                &f.path,
+                &f.producer,
+                f.attempt,
+                &barrier,
+                &mut budget
+            )
+            .unwrap(),
+            receipt
+        );
+        assert!(budget.work() > before);
+        assert_eq!(budget.storage(), 17);
+        assert!(ledger == budget.work_ledger_identity_v1());
+        assert_eq!(fs::read(f.slot().join(READY_ENTRY)).unwrap(), ready);
+        assert_eq!(fs::read(f.slot().join(PAYLOAD_ENTRY)).unwrap(), payload);
+        f.ready();
+        assert_lock(&f, false);
+    }
+}
+
+#[test]
 fn quote_uses_receipt_length_and_actual_input_capacities() {
     let f = Fixture::new();
     let receipt = published(&f);

@@ -99,6 +99,7 @@ pub use compiler_module_handoff::conditional_v5::{
     quote_compiler_module_handoff_currentness_custody_v5,
     recover_compiler_module_handoff_receipt_v5,
     rederive_compiler_module_handoff_receipt_for_replay_v5,
+    try_recover_compiler_module_handoff_receipt_v5,
 };
 pub use compiler_module_handoff::native_v4::receipt_transport_v2::{
     COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V2, COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V2,

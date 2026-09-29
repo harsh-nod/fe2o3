@@ -24,6 +24,7 @@ pub use custody::{
     CompilerModuleHandoffCurrentnessCustodyQuoteV5,
     acquire_compiler_module_handoff_currentness_lease_with_quote_v5,
     quote_compiler_module_handoff_currentness_custody_v5,
+    try_recover_compiler_module_handoff_receipt_v5,
 };
 #[path = "compiler_module_handoff_v5_admission.rs"]
 mod admission;
