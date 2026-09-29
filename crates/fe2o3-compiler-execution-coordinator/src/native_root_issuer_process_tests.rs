@@ -12,7 +12,9 @@
 // procfs, clone3/ptrace and CHOWN/FOWNER/SETUID/SETGID/SETPCAP/SYS_PTRACE/KILL, plus
 // DAC_READ_SEARCH (or DAC_OVERRIDE) for real root-bound lifecycle revalidation.
 // Use read-only fixture/root mounts, no network/GPU, bounded memory/CPU/PIDs,
-// and an outer 600-second timeout. Startup mechanics only, no production credit.
+// and an outer 600-second timeout. The separate publication matrix observes an
+// inert V5 fixture through that same held trace. Neither matrix grants production
+// rustc, protected proof, root RPC, durable retirement or GPU qualification credit.
 use super::super::*;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionIssuerMeasurementV1 as Measurement, CompilerExecutionIssuerPolicyV3 as Policy,
@@ -28,6 +30,12 @@ mod preparation {
 }
 mod compiler {
     include!("native_root_issuer_process_compiler_tests.rs");
+}
+mod publication_fixture {
+    include!("native_root_issuer_process_publication_fixture_tests.rs");
+}
+mod publication {
+    include!("native_root_issuer_process_publication_tests.rs");
 }
 mod cleanup {
     include!("native_root_issuer_process_cleanup_tests.rs");
@@ -74,6 +82,18 @@ fn native_root_issuer_startup_matrix() {
             .unwrap();
         require_output(output, &format!("NATIVE_ROOT_ISSUER_V3_OK case={case} "));
     }
+}
+
+#[test]
+#[ignore = "opt-in isolated root; real native trace and inert V5 publication custody, not production rustc"]
+fn native_root_publication_matrix() {
+    publication::matrix();
+}
+
+#[test]
+#[ignore = "subprocess role; invoke native_root_publication_matrix instead"]
+fn native_root_publication_case() {
+    publication::case();
 }
 
 fn test_name(role: &str) -> String {
