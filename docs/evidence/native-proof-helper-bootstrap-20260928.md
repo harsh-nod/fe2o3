@@ -3,6 +3,8 @@
 Date: 2026-09-28 (Pacific). Continues the
 [bootstrap and isolation checkpoint](native-bootstrap-isolation-20260928.md).
 
+Follow-up: [exact invocation custody, V2 helper approval and real protected-runtime accounting](native-invocation-runtime-20260928.md).
+
 **M0-M7 and the 47/47 production-to-safe-GPU-launch gate remain incomplete.**
 No tutorial kernel changes classification. This checkpoint implements helper
 startup, shutdown and private root-side custody, not proof RPC or an integrated
