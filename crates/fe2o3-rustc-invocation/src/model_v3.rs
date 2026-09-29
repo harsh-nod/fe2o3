@@ -21,6 +21,18 @@ pub struct RustcInvocationDescriptorV3 {
 }
 
 impl RustcInvocationDescriptorV3 {
+    /// Measures this inert owner, including all embedded V2 backing capacity.
+    ///
+    /// Uses the same bounded, allocation-free traversal and accounting contract
+    /// as [`RustcInvocationDescriptorV2::retained_storage_bytes`]. `None` means
+    /// checked arithmetic overflow; the result is not authority or a reservation.
+    pub fn retained_storage_bytes(&self) -> Option<usize> {
+        self.descriptor_v2
+            .retained_storage_bytes()?
+            .checked_sub(std::mem::size_of::<RustcInvocationDescriptorV2>())?
+            .checked_add(std::mem::size_of::<Self>())
+    }
+
     /// Constructs V3 from an exact V2 process descriptor and a compiler closure.
     ///
     /// This is the explicit V2-plus-closure upgrade. It rejects a closure whose
