@@ -372,3 +372,26 @@ and required masks. Divergent waves identify the nonparticipating local lane;
 mismatched waves identify the expected operation site; invalid tiled shuffles
 include source lane and tile width. These are logical KIR diagnostics, not GPU
 `EXEC` state, ISA simulation, or hardware-wave claims.
+
+## Diagnostic V18 CPU Input
+
+`fe2o3-kir-sim --diagnostic-kir-v18 kernel-v18.kir --request request.json`
+uses the existing generic CPU engine after exact, budgeted canonical V18
+admission. The original layout table, function roles, version, digest and byte
+length are preserved. Inert layout metadata is accepted; executable storage
+operations and storage-object types still produce explicit preflight refusals.
+
+This opt-in diagnostic path grants no source, compiler, proof, launch or hardware
+authority. It does not predict GPU performance. Persisted schedule recording,
+replay, exploration and reduction are rejected before file IO; existing formats
+and input routes are unchanged. New `kir_v18_*` error codes add precise diagnostic
+work, storage, allocation, arithmetic and accounting refusals to the existing
+error-document shape.
+
+The path/byte library loaders take the caller's verification budget and return
+an unreserved CPU-view receipt. Reserve it immediately on that same ledger and
+retain it until the entire input, or a backend consuming its module, is dropped.
+The CLI does this inside a scope that also handles errors and unwinding. File
+capture, request parsing and execution retain their separate existing limits;
+the receipt is not combined allocation or RSS accounting. Layout admission is
+bounded to 4,096 rows, 32,768 edges, depth 64 and 256 MiB objects.
