@@ -5,8 +5,6 @@ const ENTRY_WORK: usize = 8;
 // Fixed comparisons, process-security queries, opens/fstats/flags, and closes.
 // Each image pass and nested native owner separately prepays its own operation.
 const OUTER_WORK: usize = ENTRY_WORK + 64 * 1024;
-const IMAGE_IO_WORK: usize = ENTRY_WORK + 16 * 1024;
-const IMAGE_FRAME: usize = SEALED_STATIC_APPLICATION_WORKSPACE_BYTES_V1 + 8192;
 
 /// Unreserved growth over all consumed inputs, never a second full owner charge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,134 +166,35 @@ fn require_work_ledger(expected: Ledger, budget: &Budget<'_>) -> Result<()> {
 }
 
 fn check_policy(measurements: Measurements, policy: &Policy) -> Result<()> {
-    if measurements.executable != policy.executable() {
-        return Err(IssuerInspectionError::new(
-            Kind::ExecutablePolicyMismatch,
-            "running issuer executable does not match the pinned native policy",
-        )
-        .into());
-    }
-    if measurements.runtime != policy.runtime() {
-        return Err(IssuerInspectionError::new(
-            Kind::RuntimePolicyMismatch,
-            "issuer runtime closure does not match the pinned native policy",
-        )
-        .into());
-    }
-    Ok(())
+    super::native_image::check_policy(measurements, policy.executable(), policy.runtime())
+        .map_err(Into::into)
 }
 
 fn observe_executable(budget: &mut Budget<'_>) -> Result<Executable> {
-    let image = rustix::fs::open(
-        "/proc/self/exe",
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-    )
-    .map(File::from)
-    .map_err(|error| {
-        IssuerInspectionError::io(
-            Kind::ExecutableInspect,
-            "cannot open the running issuer executable",
-            error.into(),
-        )
-    })?;
-    let snapshot = inspect_executable(&image)?;
-    let measurements = measure_executable(&image, snapshot, budget)?;
-    Ok(Executable {
-        image,
-        snapshot,
-        measurements,
-    })
+    super::native_image::observe_self(budget).map_err(Into::into)
 }
 
+#[cfg(test)]
 fn inspect_executable(image: &File) -> Result<Snapshot> {
-    require_close_on_exec(image, Kind::ExecutableCloseOnExec)?;
-    Ok(validate_executable_snapshot(image)?)
+    super::native_image::inspect_executable(image).map_err(Into::into)
 }
 
 fn validate_executable(executable: &Executable, budget: &mut Budget<'_>) -> Result<()> {
-    let snapshot = inspect_executable(&executable.image)?;
-    if snapshot != executable.snapshot
-        || measure_executable(&executable.image, snapshot, budget)? != executable.measurements
-    {
-        return Err(IssuerInspectionError::new(
-            Kind::ExecutableChanged,
-            "retained issuer executable metadata or bytes changed",
-        )
-        .into());
-    }
-    Ok(())
+    super::native_image::validate_executable(executable, budget).map_err(Into::into)
 }
 
-// Each pass reserves its whole image and parser workspace before allocation or
-// I/O. Read and EOF probes each make one syscall; refusal never retries V1 I/O.
+#[cfg(test)]
 fn measure_executable(
     image: &File,
     before: Snapshot,
     budget: &mut Budget<'_>,
 ) -> Result<Measurements> {
-    let length = usize::try_from(before.size).map_err(|_| Resource::Arithmetic)?;
-    let (work, storage) = image_resources(length)?;
-    budget.with_prepaid_scope(size_of::<File>(), ENTRY_WORK, work, storage, |_| {
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(length)
-            .map_err(|_| Resource::Allocation)?;
-        bytes.resize(length, 0);
-        read_image(image, &mut bytes, before)?;
-        let sealed_static_identity = sealed_static_application_identity_v1(&bytes)
-            .map_err(|error| Error(Failure::StaticImage(error)))?;
-        let executable =
-            CompilerExecutionIssuerMeasurementV1::new(Sha256::digest(&bytes).into(), before.size)
-                .map_err(|error| Error(Failure::Protocol(error)))?;
-        Ok(Measurements {
-            executable,
-            runtime: sealed_static_issuer_runtime_measurement_v1(),
-            sealed_static_identity,
-        })
-    })
+    super::native_image::measure_executable(image, before, budget).map_err(Into::into)
 }
 
+#[cfg(test)]
 fn image_resources(length: usize) -> Result<(usize, usize)> {
-    let parser = sealed_static_application_work_bound_v1(length).ok_or(Resource::Arithmetic)?;
-    // Initialization, two hashes, comparisons and deallocation, above parser visits.
-    let work = length
-        .checked_mul(64)
-        .and_then(|bytes| bytes.checked_add(parser))
-        .and_then(|work| work.checked_add(IMAGE_IO_WORK))
-        .ok_or(Resource::Arithmetic)?;
-    let storage = length
-        .checked_add(IMAGE_FRAME)
-        .ok_or(Resource::Arithmetic)?;
-    Ok((work, storage))
-}
-
-fn read_image(image: &File, bytes: &mut [u8], before: Snapshot) -> Result<()> {
-    let read = rustix::io::pread(image, &mut *bytes, 0).map_err(|error| {
-        IssuerInspectionError::io(
-            Kind::ExecutableRead,
-            "cannot read issuer executable",
-            error.into(),
-        )
-    })?;
-    let mut trailing = [0_u8; 1];
-    if read != bytes.len()
-        || rustix::io::pread(image, &mut trailing, before.size).map_err(|error| {
-            IssuerInspectionError::io(
-                Kind::ExecutableRead,
-                "cannot check issuer executable EOF",
-                error.into(),
-            )
-        })? != 0
-        || Snapshot::inspect(image, Kind::ExecutableInspect)? != before
-    {
-        return Err(IssuerInspectionError::new(
-            Kind::ExecutableChanged,
-            "issuer executable changed or returned a short read",
-        )
-        .into());
-    }
-    Ok(())
+    super::native_image::image_resources(length).map_err(Into::into)
 }
 
 /// Native refusal with preserved resource errors; formatting is a caller operation.
@@ -341,6 +240,17 @@ impl Error {
 impl From<Resource> for Error {
     fn from(error: Resource) -> Self {
         Self(Failure::Resource(error))
+    }
+}
+impl From<super::native_image::ImageError> for Error {
+    fn from(error: super::native_image::ImageError) -> Self {
+        use super::native_image::ImageError;
+        Self(match error {
+            ImageError::Resource(e) => Failure::Resource(e),
+            ImageError::Inspection(e) => Failure::Inspection(e),
+            ImageError::StaticImage(e) => Failure::StaticImage(e),
+            ImageError::Protocol(e) => Failure::Protocol(e),
+        })
     }
 }
 impl From<IssuerInspectionError> for Error {

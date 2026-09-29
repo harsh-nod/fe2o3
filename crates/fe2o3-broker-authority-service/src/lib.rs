@@ -172,8 +172,10 @@ pub use compiler_execution_issuer::{
     ProtectedCompilerExecutionIssuerAdmissionV2, ProtectedCompilerExecutionIssuerAdmissionV3,
     ProtectedCompilerExecutionIssuerServiceErrorV2, ProtectedCompilerExecutionIssuerServiceErrorV3,
     ProtectedCompilerExecutionIssuerStorageV2, ProtectedCompilerExecutionIssuerStorageV3,
-    ProtectedIssuerProcessV1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
-    current_static_issuer_measurements_v1, sealed_static_issuer_runtime_measurement_v1,
+    ProtectedIssuerProcessV1, RootIssuerImageErrorV3, RootIssuerImageQuotaV3,
+    SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1, current_static_issuer_measurements_v1,
+    retained_issuer_image_quota_v3, sealed_static_issuer_runtime_measurement_v1,
+    validate_retained_issuer_image_v3,
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_issuer_durable::{
