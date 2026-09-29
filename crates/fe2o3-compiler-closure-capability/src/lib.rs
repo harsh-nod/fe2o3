@@ -17,7 +17,7 @@ use std::process::Command;
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
-mod compiler_approval_v1;
+mod compiler_approval_v2;
 mod compiler_execution_client_profile;
 mod compiler_execution_client_profile_native;
 mod compiler_execution_client_profile_v2;
@@ -59,8 +59,8 @@ mod rustc_invocation;
 mod sealed_image;
 mod trusted_profile_tree;
 
-pub use compiler_approval_v1::{
-    ApprovedCompilerPolicyV1, CompilerApprovalErrorV1, CompilerApprovalStorageV1,
+pub use compiler_approval_v2::{
+    ApprovedCompilerPolicyV2, CompilerApprovalErrorV2, CompilerApprovalStorageV2,
 };
 pub use compiler_execution_client_profile::CompilerExecutionClientProfileCapabilityV1;
 pub use compiler_execution_client_profile_v2::CompilerExecutionClientProfileCapabilityV2;

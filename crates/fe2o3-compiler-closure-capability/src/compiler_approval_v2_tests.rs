@@ -1,7 +1,7 @@
 //! Synthetic root-policy intake only: no production approval or runtime-guard evidence.
 use super::*;
 use ed25519_dalek::SigningKey;
-use fe2o3_build_authority::COMPILER_APPROVAL_POLICY_WORK_V1 as POLICY_WORK;
+use fe2o3_build_authority::COMPILER_APPROVAL_POLICY_WORK_V2 as POLICY_WORK;
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V3 as PROFILE_STORAGE,
     COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V3 as PROFILE_WORK,
@@ -21,13 +21,14 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-type Owner = ApprovedCompilerPolicyV1;
-type Error = CompilerApprovalErrorV1;
-const POLICY_REL: &str = "etc/fe2o3/build-authority/policy-v1";
+type Owner = ApprovedCompilerPolicyV2;
+type Error = CompilerApprovalErrorV2;
+const POLICY_REL: &str = "etc/fe2o3/build-authority/policy-v2";
 const PROFILE_REL: &str = "etc/fe2o3/compiler-execution/client-profile-v3";
 const FLOOR: usize = 19;
 const LIMIT: usize = 8_000_000;
-const LOAD_WORK: usize = IO_WORK + POLICY_WORK + PROFILE_WORK + ProfileCapability::IO_WORK + 32;
+const LOAD_WORK: usize =
+    IO_WORK + POLICY_WORK + PROFILE_WORK + ProfileCapability::IO_WORK + BIND_WORK;
 const REVALIDATE_WORK: usize =
     8 + IO_WORK + ProfileCapability::IO_WORK + POLICY_BYTES + PROFILE_BYTES;
 
@@ -95,7 +96,7 @@ fn fixture_profile(seed: u8) -> Profile {
 
 struct Tree {
     root: PathBuf,
-    policy: CompilerApprovalPolicyV1,
+    policy: CompilerApprovalPolicyV2,
     profile: Profile,
 }
 impl Tree {
@@ -121,11 +122,13 @@ impl Tree {
         let profile = fixture_profile(7);
         let closure =
             CompilerClosureV2::new([1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]).unwrap();
-        let policy = CompilerApprovalPolicyV1::new(
+        let policy = CompilerApprovalPolicyV2::new(
             closure,
             *profile.identity().as_bytes(),
             [8; 32],
             1,
+            1002,
+            1002,
             |_| Ok::<_, Resource>(()),
         )
         .unwrap();
@@ -162,7 +165,7 @@ impl Tree {
         &self,
         probe: ImmutableCheck,
         budget: &mut Budget<'_>,
-    ) -> Result<(Owner, CompilerApprovalStorageV1)> {
+    ) -> Result<(Owner, CompilerApprovalStorageV2)> {
         let (uid, gid) = owners();
         Owner::load_using(|| self.open(), uid, gid, probe, budget)
     }
@@ -235,7 +238,9 @@ fn failure<T>(result: Result<T>) -> Error {
 fn resource(error: Error) -> Resource {
     match error {
         Error::Resource(error)
-        | Error::Codec(CompilerApprovalPolicyErrorV1::Charge(error))
+        | Error::Codec(CompilerApprovalPolicyErrorV2::Framing(
+            fe2o3_build_authority::CompilerApprovalPolicyErrorV1::Charge(error),
+        ))
         | Error::Capability(CapabilityError::Resource(error))
         | Error::Capability(CapabilityError::ProfileV3(ProfileError::Resource(error))) => error,
         error => panic!("expected resource refusal: {error:?}"),
@@ -369,11 +374,11 @@ fn nested_decode_and_capability_work_use_the_original_ledger_without_refunds() {
             IO_WORK + POLICY_WORK + PROFILE_WORK,
         ),
         (
-            LOAD_WORK - 33,
+            LOAD_WORK - BIND_WORK - 1,
             IO_WORK + POLICY_WORK + PROFILE_WORK + 8,
-            LOAD_WORK - 32,
+            LOAD_WORK - BIND_WORK,
         ),
-        (LOAD_WORK - 1, LOAD_WORK - 32, LOAD_WORK),
+        (LOAD_WORK - 1, LOAD_WORK - BIND_WORK, LOAD_WORK),
     ] {
         let (result, usage) = observe(limit, LIMIT, |b| tree.load(fixture_immutable, b));
         assert!(matches!(resource(failure(result)), Resource::Work(_)));
@@ -394,7 +399,7 @@ fn exact_and_one_short_storage_include_nested_profile_and_retained_owner() {
     assert_eq!(
         retained,
         size_of::<Owner>()
-            + size_of::<CompilerApprovalStorageV1>()
+            + size_of::<CompilerApprovalStorageV2>()
             + size_of::<(
                 ProfileCapability,
                 crate::CompilerExecutionCapabilityStorageV2,
@@ -803,7 +808,9 @@ fn missing_or_legacy_profile_and_malformed_policy_never_create_an_owner() {
     tree.write(POLICY_REL, &[0; POLICY_BYTES]);
     assert!(matches!(
         failure(observe(LIMIT, LIMIT, |b| tree.load(fixture_immutable, b)).0),
-        Error::Codec(CompilerApprovalPolicyErrorV1::Header)
+        Error::Codec(CompilerApprovalPolicyErrorV2::Framing(
+            fe2o3_build_authority::CompilerApprovalPolicyErrorV1::Header,
+        ))
     ));
     fs::remove_file(tree.path(POLICY_REL)).unwrap();
     assert!(matches!(
@@ -828,6 +835,150 @@ fn correctly_encoded_but_unbound_v3_profile_is_a_typed_mismatch() {
     ));
     assert_eq!(usage.work, LOAD_WORK);
     assert_eq!(usage.live, FLOOR);
+}
+
+#[test]
+fn each_helper_credential_must_be_separate_from_both_bound_profile_services() {
+    let tree = Tree::new();
+    let anchor = tree.profile.external_anchor_service();
+    for (uid, gid, message) in [
+        (
+            tree.profile.supervisor_uid(),
+            1002,
+            "proof helper UID aliases a V3 profile service",
+        ),
+        (
+            anchor.uid(),
+            1002,
+            "proof helper UID aliases a V3 profile service",
+        ),
+        (
+            1002,
+            tree.profile.supervisor_gid(),
+            "proof helper GID aliases a V3 profile service",
+        ),
+        (
+            1002,
+            anchor.gid(),
+            "proof helper GID aliases a V3 profile service",
+        ),
+    ] {
+        let policy = CompilerApprovalPolicyV2::new(
+            tree.policy.compiler_closure(),
+            *tree.profile.identity().as_bytes(),
+            *tree.policy.runtime_manifest_identity(),
+            1,
+            uid,
+            gid,
+            |_| Ok::<_, Resource>(()),
+        )
+        .unwrap();
+        assert!(!policy.grants_authority());
+        tree.write(POLICY_REL, policy.canonical_bytes());
+        let (result, usage) = observe(LOAD_WORK, LIMIT, |b| tree.load(fixture_immutable, b));
+        assert!(matches!(failure(result), Error::Mismatch(actual) if actual == message));
+        assert_eq!(usage.work, LOAD_WORK);
+        assert_eq!(usage.live, FLOOR);
+    }
+    tree.write(POLICY_REL, tree.policy.canonical_bytes());
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    let owner = tree.retained(&mut budget);
+    assert_eq!(owner.policy().proof_helper_uid(), 1002);
+    assert_eq!(owner.policy().proof_helper_gid(), 1002);
+    tree.revalidate(&owner, fixture_immutable, &mut budget)
+        .unwrap();
+}
+
+#[test]
+fn invalid_helper_credentials_in_root_policy_bytes_never_create_an_owner() {
+    use fe2o3_build_authority::COMPILER_APPROVAL_POLICY_IDENTITY_DOMAIN_V2 as DOMAIN;
+    use sha2::{Digest, Sha256};
+    let tree = Tree::new();
+    for (offset, expected) in [
+        (20, CompilerApprovalPolicyErrorV2::InvalidProofHelperUid),
+        (24, CompilerApprovalPolicyErrorV2::InvalidProofHelperGid),
+    ] {
+        for value in [0_u32, u32::MAX] {
+            let mut bytes = *tree.policy.canonical_bytes();
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            let mut hash = Sha256::new();
+            hash.update(DOMAIN);
+            hash.update(320_u64.to_le_bytes());
+            hash.update(&bytes[..320]);
+            bytes[320..].copy_from_slice(&hash.finalize());
+            tree.write(POLICY_REL, &bytes);
+            let (result, usage) = observe(LOAD_WORK, LIMIT, |b| tree.load(fixture_immutable, b));
+            assert!(matches!(failure(result), Error::Codec(actual) if actual == expected));
+            assert_eq!(usage.work, IO_WORK + POLICY_WORK);
+            assert_eq!(usage.live, FLOOR);
+        }
+    }
+}
+
+#[test]
+fn legacy_policy_path_and_v1_bytes_never_supply_production_approval() {
+    use fe2o3_build_authority::{CompilerApprovalPolicyErrorV1, CompilerApprovalPolicyV1};
+    let tree = Tree::new();
+    let legacy = CompilerApprovalPolicyV1::new(
+        tree.policy.compiler_closure(),
+        *tree.profile.identity().as_bytes(),
+        *tree.policy.runtime_manifest_identity(),
+        1,
+        |_| Ok::<_, Resource>(()),
+    )
+    .unwrap();
+    let old_path = "etc/fe2o3/build-authority/policy-v1";
+    for bytes in [legacy.canonical_bytes(), tree.policy.canonical_bytes()] {
+        tree.write(old_path, bytes);
+        if tree.path(POLICY_REL).exists() {
+            fs::remove_file(tree.path(POLICY_REL)).unwrap();
+        }
+        assert!(matches!(
+            failure(observe(LIMIT, LIMIT, |b| tree.load(fixture_immutable, b)).0),
+            Error::Capability(CapabilityError::Io {
+                errno: libc::ENOENT,
+                ..
+            })
+        ));
+    }
+    tree.write(POLICY_REL, legacy.canonical_bytes());
+    assert!(matches!(
+        failure(observe(LIMIT, LIMIT, |b| tree.load(fixture_immutable, b)).0),
+        Error::Codec(CompilerApprovalPolicyErrorV2::Framing(
+            CompilerApprovalPolicyErrorV1::Header
+        ))
+    ));
+}
+
+#[test]
+fn changing_only_helper_credentials_invalidates_the_retained_policy_origin() {
+    for (uid, gid) in [(1003, 1002), (1002, 1003)] {
+        let tree = Tree::new();
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        let owner = tree.retained(&mut budget);
+        let changed = CompilerApprovalPolicyV2::new(
+            tree.policy.compiler_closure(),
+            *tree.profile.identity().as_bytes(),
+            *tree.policy.runtime_manifest_identity(),
+            1,
+            uid,
+            gid,
+            |_| Ok::<_, Resource>(()),
+        )
+        .unwrap();
+        assert_eq!(
+            changed.client_profile_identity(),
+            tree.policy.client_profile_identity()
+        );
+        assert_ne!(changed.identity(), tree.policy.identity());
+        tree.write(POLICY_REL, changed.canonical_bytes());
+        assert!(
+            tree.revalidate(&owner, fixture_immutable, &mut budget)
+                .is_err()
+        );
+    }
 }
 
 #[test]

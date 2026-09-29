@@ -248,7 +248,7 @@ verify_elf() {
   for required_path in \
     /usr/libexec/fe2o3/cargo-fe2o3-authority-launcher \
     /usr/libexec/fe2o3/cargo-fe2o3 \
-    /etc/fe2o3/build-authority/policy-v1 \
+    /etc/fe2o3/build-authority/policy-v2 \
     /etc/ld.so.preload; do
     if ! run_clean /usr/bin/strings --all -- "${executable}" |
       run_clean /usr/bin/grep -Fx -- "${required_path}" >/dev/null; then

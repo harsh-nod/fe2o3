@@ -12,7 +12,9 @@ authority requires a broker-owned durable replay registry and session capability
 
 mod broker_v4;
 mod cargo_environment_v1;
+mod compiler_approval_policy_codec;
 mod compiler_approval_policy_v1;
+mod compiler_approval_policy_v2;
 mod compiler_closure;
 mod compiler_runtime_manifest_v1;
 
@@ -52,6 +54,13 @@ pub use compiler_approval_policy_v1::{
     COMPILER_APPROVAL_POLICY_RUNTIME_ENFORCEMENT_VERSION_V1, COMPILER_APPROVAL_POLICY_STORAGE_V1,
     COMPILER_APPROVAL_POLICY_VERSION_V1, COMPILER_APPROVAL_POLICY_WORK_V1,
     CompilerApprovalPolicyErrorV1, CompilerApprovalPolicyV1,
+};
+pub use compiler_approval_policy_v2::{
+    COMPILER_APPROVAL_POLICY_BYTES_V2, COMPILER_APPROVAL_POLICY_HEADER_LEN_V2,
+    COMPILER_APPROVAL_POLICY_IDENTITY_DOMAIN_V2, COMPILER_APPROVAL_POLICY_MAGIC_V2,
+    COMPILER_APPROVAL_POLICY_RUNTIME_ENFORCEMENT_VERSION_V2, COMPILER_APPROVAL_POLICY_STORAGE_V2,
+    COMPILER_APPROVAL_POLICY_VERSION_V2, COMPILER_APPROVAL_POLICY_WORK_V2,
+    CompilerApprovalPolicyErrorV2, CompilerApprovalPolicyV2,
 };
 pub use compiler_closure::{
     CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, COMPILER_CLOSURE_IDENTITY_DOMAIN_V2,

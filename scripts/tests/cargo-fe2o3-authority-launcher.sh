@@ -16,7 +16,7 @@ readonly PRELOAD_DIR="${TEST_ROOT}/preload"
 readonly BUILD_DIR="${TEST_ROOT}/build"
 readonly FIXTURE_DIR="${TEST_ROOT}/fixtures"
 readonly EXECUTABLE="${EXECUTABLE_DIR}/cargo-fe2o3"
-readonly POLICY="${POLICY_DIR}/policy-v1"
+readonly POLICY="${POLICY_DIR}/policy-v2"
 readonly PRELOAD="${PRELOAD_DIR}/ld.so.preload"
 readonly BASE_LAUNCHER="${LAUNCHER_DIR}/authority-launcher"
 readonly WATCHDOG_SECONDS=30
@@ -847,6 +847,12 @@ run_watchdog "${BUILD}" "${PRODUCTION_LAUNCHER}" >/dev/null
 run_watchdog "${BUILD}" --verify "${PRODUCTION_LAUNCHER}" >/dev/null
 assert_static_pie "${PRODUCTION_LAUNCHER}"
 assert_no_test_marker "${PRODUCTION_LAUNCHER}"
+strings --all -- "${PRODUCTION_LAUNCHER}" >"${BUILD_DIR}/production-strings"
+grep -Fxq '/etc/fe2o3/build-authority/policy-v2' "${BUILD_DIR}/production-strings" ||
+  fail 'production launcher lacks the exclusive V2 policy path'
+if grep -Fxq '/etc/fe2o3/build-authority/policy-v1' "${BUILD_DIR}/production-strings"; then
+  fail 'production launcher retains the legacy policy path'
+fi
 [[ "$(stat -c '%a:%h' "${PRODUCTION_LAUNCHER}")" == 555:1 ]] ||
   fail 'production build output mode or link count changed'
 expect_failure build_relative 'usage:' "${BUILD}" relative-output
@@ -915,6 +921,12 @@ if run_watchdog /usr/bin/cc -std=c11 -O2 -fPIE -static-pie -Werror \
 fi
 
 compile_launcher "${BASE_LAUNCHER}"
+
+# A legacy policy file never supplies the exclusive V2 policy descriptor.
+mv "${POLICY}" "${POLICY_DIR}/policy-v1"
+expect_failure missing_v2_policy 'fixed path, owner, mode, link' \
+  "${BASE_LAUNCHER}" -- probe rejected
+mv "${POLICY_DIR}/policy-v1" "${POLICY}"
 
 readonly PROC_FALLBACK_LAUNCHER="${LAUNCHER_DIR}/proc-fallback-launcher"
 compile_launcher "${PROC_FALLBACK_LAUNCHER}" \
@@ -1062,7 +1074,7 @@ expect_failure wrong_owner 'fixed path, owner, mode, link' \
 
 readonly NONCANONICAL_LAUNCHER="${LAUNCHER_DIR}/noncanonical-launcher"
 compile_launcher "${NONCANONICAL_LAUNCHER}" \
-  "${EXECUTABLE}" "${POLICY_DIR}/../policy/policy-v1"
+  "${EXECUTABLE}" "${POLICY_DIR}/../policy/policy-v2"
 expect_failure noncanonical_policy 'fixed path, owner, mode, link' \
   "${NONCANONICAL_LAUNCHER}" -- probe rejected
 

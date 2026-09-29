@@ -2,7 +2,8 @@
 //! This codec never reads that path or establishes its ownership or provenance.
 use crate::CompilerClosureErrorV2;
 use crate::CompilerClosureV2;
-use sha2::{Digest, Sha256};
+use crate::compiler_approval_policy_codec as codec;
+use sha2::Sha256;
 use std::{convert::Infallible, fmt, mem::size_of};
 
 /// Closed compiler approval policy discriminator.
@@ -33,11 +34,6 @@ pub const COMPILER_APPROVAL_POLICY_STORAGE_V1: usize = size_of::<CompilerApprova
     + 4 * size_of::<CompilerClosureV2>()
     + 2 * size_of::<Sha256>()
     + 512;
-const HEADER: usize = COMPILER_APPROVAL_POLICY_HEADER_LEN_V1;
-const LENGTH: usize = COMPILER_APPROVAL_POLICY_BYTES_V1;
-const CLOSURE_END: usize = HEADER + 7 * 32;
-const PROFILE_END: usize = CLOSURE_END + 32;
-const PAYLOAD_END: usize = PROFILE_END + 32;
 
 /// Strict framing, inherited compiler-closure validation, or caller work refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,7 +113,7 @@ impl<E: std::error::Error + 'static> std::error::Error for Error<E> {
 /// grant compiler, publication, loading, or execution authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompilerApprovalPolicyV1 {
-    bytes: [u8; LENGTH],
+    bytes: [u8; codec::LENGTH],
     closure: CompilerClosureV2,
 }
 impl CompilerApprovalPolicyV1 {
@@ -133,39 +129,18 @@ impl CompilerApprovalPolicyV1 {
     ) -> Result<Self, Error<E>> {
         charge(COMPILER_APPROVAL_POLICY_WORK_V1).map_err(Error::Charge)?;
         drop(charge);
-        validate_requirements(
-            &client_profile_identity,
-            &runtime_manifest_identity,
+        let record = codec::encode(
+            closure,
+            client_profile_identity,
+            runtime_manifest_identity,
             required_runtime_enforcement_version,
+            [0; 12],
+            SCHEMA,
         )?;
-        let mut bytes = [0; LENGTH];
-        bytes[..8].copy_from_slice(&COMPILER_APPROVAL_POLICY_MAGIC_V1);
-        bytes[8..10].copy_from_slice(&COMPILER_APPROVAL_POLICY_VERSION_V1.to_le_bytes());
-        bytes[10..12].copy_from_slice(&(HEADER as u16).to_le_bytes());
-        bytes[12..16].copy_from_slice(&(LENGTH as u32).to_le_bytes());
-        bytes[16..18].copy_from_slice(
-            &closure
-                .cargo_binding_transition_protocol_version()
-                .to_le_bytes(),
-        );
-        bytes[18..20].copy_from_slice(&required_runtime_enforcement_version.to_le_bytes());
-        let digests = [
-            closure.cargo_executable_sha256(),
-            closure.cargo_binding_trampoline_sha256(),
-            closure.cargo_fe2o3_binding_wrapper_sha256(),
-            closure.rustc_executable_sha256(),
-            closure.rustc_runtime_tree_sha256(),
-            closure.codegen_backend_sha256(),
-            closure.identity_sha256(),
-        ];
-        for (slot, digest) in bytes[HEADER..CLOSURE_END].chunks_exact_mut(32).zip(digests) {
-            slot.copy_from_slice(&digest);
-        }
-        bytes[CLOSURE_END..PROFILE_END].copy_from_slice(&client_profile_identity);
-        bytes[PROFILE_END..PAYLOAD_END].copy_from_slice(&runtime_manifest_identity);
-        let identity = hash(&bytes[..PAYLOAD_END]);
-        bytes[PAYLOAD_END..].copy_from_slice(&identity);
-        Ok(Self { bytes, closure })
+        Ok(Self {
+            bytes: record.bytes,
+            closure: record.closure,
+        })
     }
 
     /// Decode exactly one fixed V1 record, without allocation or legacy fallback.
@@ -176,106 +151,25 @@ impl CompilerApprovalPolicyV1 {
         bytes: &[u8],
         mut charge: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Self, Error<E>> {
-        if bytes.len() != LENGTH {
-            return Err(Error::Length);
-        }
+        codec::require_length(bytes)?;
         charge(COMPILER_APPROVAL_POLICY_WORK_V1).map_err(Error::Charge)?;
         drop(charge);
-        if bytes[..8] != COMPILER_APPROVAL_POLICY_MAGIC_V1
-            || bytes[8..10] != COMPILER_APPROVAL_POLICY_VERSION_V1.to_le_bytes()
-            || bytes[10..12] != (HEADER as u16).to_le_bytes()
-        {
-            return Err(Error::Header);
-        }
-        if bytes[12..16] != (LENGTH as u32).to_le_bytes() {
-            return Err(Error::Length);
-        }
-        if bytes[20..HEADER] != [0; 12] {
+        codec::require_header(bytes, SCHEMA)?;
+        if bytes[20..32] != [0; 12] {
             return Err(Error::Reserved);
         }
-        let version = u16::from_le_bytes(bytes[18..20].try_into().expect("fixed header"));
-        validate_requirements(
-            &bytes[CLOSURE_END..PROFILE_END],
-            &bytes[PROFILE_END..PAYLOAD_END],
-            version,
-        )?;
-        if bytes[PAYLOAD_END..] != hash(&bytes[..PAYLOAD_END]) {
-            return Err(Error::Identity);
-        }
-        let digests: [[u8; 32]; 7] = bytes[HEADER..CLOSURE_END]
-            .as_chunks::<32>()
-            .0
-            .try_into()
-            .expect("fixed closure");
-        let closure = CompilerClosureV2::from_pins_and_identity(
-            digests[0],
-            digests[1],
-            digests[2],
-            digests[3],
-            digests[4],
-            digests[5],
-            u16::from_le_bytes(bytes[16..18].try_into().expect("fixed header")),
-            digests[6],
-        )
-        .map_err(Error::CompilerClosure)?;
+        let record = codec::decode_payload(bytes, SCHEMA)?;
         Ok(Self {
-            bytes: bytes.try_into().expect("checked fixed record"),
-            closure,
+            bytes: record.bytes,
+            closure: record.closure,
         })
     }
 
-    /// Complete canonical inert record, including its terminal digest.
-    pub const fn canonical_bytes(&self) -> &[u8; COMPILER_APPROVAL_POLICY_BYTES_V1] {
-        &self.bytes
-    }
-    /// Validated six-pin compiler closure, not an approved executable owner.
-    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
-        self.closure
-    }
-    /// Exact V3 client-profile identity; its generation is already identity-bound.
-    pub fn client_profile_identity(&self) -> &[u8; 32] {
-        self.bytes[CLOSURE_END..PROFILE_END]
-            .try_into()
-            .expect("fixed profile identity")
-    }
-    /// Claimed runtime manifest identity, not authenticated runtime custody.
-    pub fn runtime_manifest_identity(&self) -> &[u8; 32] {
-        self.bytes[PROFILE_END..PAYLOAD_END]
-            .try_into()
-            .expect("fixed manifest identity")
-    }
-    /// Requested closed rule set, not a claim that any runtime supports or enforces it.
-    pub const fn required_runtime_enforcement_version(&self) -> u16 {
-        COMPILER_APPROVAL_POLICY_RUNTIME_ENFORCEMENT_VERSION_V1
-    }
-    /// Domain-separated exact record identity, not a signature or approval.
-    pub fn identity(&self) -> &[u8; 32] {
-        self.bytes[PAYLOAD_END..]
-            .try_into()
-            .expect("fixed record identity")
-    }
-    /// Public policy bytes grant no authority.
-    pub const fn grants_authority(&self) -> bool {
-        false
-    }
+    codec::accessors!();
 }
 
-fn validate_requirements<E>(profile: &[u8], runtime: &[u8], version: u16) -> Result<(), Error<E>> {
-    if version != COMPILER_APPROVAL_POLICY_RUNTIME_ENFORCEMENT_VERSION_V1 {
-        return Err(Error::UnsupportedRuntimeEnforcementVersion { version });
-    }
-    if profile == [0; 32] {
-        return Err(Error::ZeroClientProfileIdentity);
-    }
-    if runtime == [0; 32] {
-        return Err(Error::ZeroRuntimeManifestIdentity);
-    }
-    Ok(())
-}
-fn hash(bytes: &[u8]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(COMPILER_APPROVAL_POLICY_IDENTITY_DOMAIN_V1);
-    hash.update((bytes.len() as u64).to_le_bytes());
-    hash.update(bytes);
-    hash.finalize().into()
-}
+const SCHEMA: codec::Schema = codec::Schema {
+    magic: COMPILER_APPROVAL_POLICY_MAGIC_V1,
+    version: COMPILER_APPROVAL_POLICY_VERSION_V1,
+    domain: COMPILER_APPROVAL_POLICY_IDENTITY_DOMAIN_V1,
+};
