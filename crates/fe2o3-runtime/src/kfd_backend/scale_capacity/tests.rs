@@ -87,9 +87,8 @@ fn rejected<T>(
 fn scaled_exact_vecadd_output_metadata_denial_settles_and_refunds_without_native_work() {
     use crate::qualification_gfx942_vecadd_v1::{
         GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1,
-        GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1,
-        GFX942_VECADD_QUALIFICATION_SIGNATURE_V1, admit_gfx942_vecadd_qualification_v1,
-        gfx942_vecadd_qualification_bindings_v1,
+        GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1, GFX942_VECADD_QUALIFICATION_SIGNATURE_V1,
+        admit_gfx942_vecadd_qualification_v1, gfx942_vecadd_qualification_bindings_v1,
         gfx942_vecadd_qualification_explicit_kernarg_v1,
     };
 
@@ -101,15 +100,21 @@ fn scaled_exact_vecadd_output_metadata_denial_settles_and_refunds_without_native
         let stream = backend.create_stream_v1(7).unwrap();
         let module = backend.load_module_v1(7, admitted.hsaco()).unwrap();
         let kernel = backend
-            .resolve_kernel_v1(module, admitted.kernel_name(), GFX942_VECADD_QUALIFICATION_SIGNATURE_V1)
+            .resolve_kernel_v1(
+                module,
+                admitted.kernel_name(),
+                GFX942_VECADD_QUALIFICATION_SIGNATURE_V1,
+            )
             .unwrap();
         let allocations = [buffers.left(), buffers.right(), buffers.output()].map(|bytes| {
-            let allocation = backend.allocate_v1(
-                7,
-                RuntimeMemoryKindV1::HostVisible,
-                GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
-                GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1,
-            ).unwrap();
+            let allocation = backend
+                .allocate_v1(
+                    7,
+                    RuntimeMemoryKindV1::HostVisible,
+                    GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+                    GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1,
+                )
+                .unwrap();
             backend.write_allocation_v1(allocation, 0, bytes).unwrap();
             allocation
         });
@@ -117,19 +122,29 @@ fn scaled_exact_vecadd_output_metadata_denial_settles_and_refunds_without_native
             stream,
             kernel,
             explicit_kernarg: gfx942_vecadd_qualification_explicit_kernarg_v1().into(),
-            bindings: gfx942_vecadd_qualification_bindings_v1(allocations).unwrap().into(),
+            bindings: gfx942_vecadd_qualification_bindings_v1(allocations)
+                .unwrap()
+                .into(),
             geometry: admitted.geometry(),
             semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
         };
         for reuse_bound_recipe in [false, true] {
-            backend.prepare_launch(launch.borrowed(), false, reuse_bound_recipe).unwrap();
+            backend
+                .prepare_launch(launch.borrowed(), false, reuse_bound_recipe)
+                .unwrap();
         }
         if truthful_completed_output {
-            backend.write_allocation_v1(allocations[2], 0, buffers.expected_output()).unwrap();
+            backend
+                .write_allocation_v1(allocations[2], 0, buffers.expected_output())
+                .unwrap();
         } else {
             // Model only the host metadata invalidation from logical writeback.
             // No native completion, queue, DATA lease or receipt is fabricated.
-            backend.allocations.get_mut(&allocations[2]).unwrap().content_sha256 = None;
+            backend
+                .allocations
+                .get_mut(&allocations[2])
+                .unwrap()
+                .content_sha256 = None;
         }
         let expected_detail = "direct KFD launch authority denied the exact invocation";
         for reuse_bound_recipe in [false, true] {
@@ -144,7 +159,10 @@ fn scaled_exact_vecadd_output_metadata_denial_settles_and_refunds_without_native
         // storage remains Synthetic and no native backing is claimed.
         for allocation in allocations {
             let record = backend.allocations.get_mut(&allocation).unwrap();
-            assert!(matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Synthetic));
+            assert!(matches!(
+                record.sdma_storage,
+                KfdRuntimeSdmaStorageV1::Synthetic
+            ));
             record.sdma_backed = true;
             record.sdma_initialized = true;
         }
@@ -156,7 +174,10 @@ fn scaled_exact_vecadd_output_metadata_denial_settles_and_refunds_without_native
         let first = backend.submit_v1(launch.borrowed()).unwrap();
         let second = backend.submit_v1(launch.borrowed()).unwrap();
         for submission in [first, second] {
-            assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Failed { code: -1 });
+            assert_eq!(
+                backend.poll_v1(submission).unwrap(),
+                BackendPollV1::Failed { code: -1 }
+            );
             assert!(!backend.submissions[&submission].profile_dispatch_published);
         }
         let diagnostic = take_unpublished_compute_failure_for_test_v1().unwrap();
@@ -167,12 +188,24 @@ fn scaled_exact_vecadd_output_metadata_denial_settles_and_refunds_without_native
         assert!(!diagnostic.quiescent && !diagnostic.detail_truncated);
         assert!(take_unpublished_compute_failure_for_test_v1().is_none());
         assert!(backend.pending_compute.is_empty() && backend.pending_compute_streams.is_empty());
-        assert!(backend.allocation_custody.is_empty() && backend.compute_module_retain_counts.is_empty());
-        assert!(backend.compute_dependency_retain_counts.is_empty() && backend.stream_compute_lanes.is_empty());
+        assert!(
+            backend.allocation_custody.is_empty()
+                && backend.compute_module_retain_counts.is_empty()
+        );
+        assert!(
+            backend.compute_dependency_retain_counts.is_empty()
+                && backend.stream_compute_lanes.is_empty()
+        );
         assert_eq!(backend.compute_completion_reservations, 0);
         assert_eq!(account.usage(), before);
-        assert!(!backend.terminal && backend.active.is_none() && backend.compute_pipeline.is_empty());
-        assert!(backend.queue.is_none() && backend.admitted_device.is_none() && backend.terminal_memory.is_none());
+        assert!(
+            !backend.terminal && backend.active.is_none() && backend.compute_pipeline.is_empty()
+        );
+        assert!(
+            backend.queue.is_none()
+                && backend.admitted_device.is_none()
+                && backend.terminal_memory.is_none()
+        );
         assert!(backend.native_compute_lanes.iter().all(Option::is_none));
         for submission in [second, first] {
             backend.release_submission_v1(submission).unwrap();

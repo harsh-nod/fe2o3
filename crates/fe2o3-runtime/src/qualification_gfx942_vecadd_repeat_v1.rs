@@ -206,11 +206,18 @@ mod tests {
             Gfx942VecaddQualificationArgumentsV1::SIGNATURE_V1
         );
         let admitted = admit_gfx942_vecadd_repeat_qualification_v1().unwrap();
-        assert_eq!(admitted.signature(), Gfx942VecaddRepeatQualificationArgumentsV1::SIGNATURE_V1);
+        assert_eq!(
+            admitted.signature(),
+            Gfx942VecaddRepeatQualificationArgumentsV1::SIGNATURE_V1
+        );
         assert_eq!(admitted.hsaco(), gfx942_vecadd_qualification_hsaco_v1());
-        assert!(std::str::from_utf8(POLICY_BYTES_V1).unwrap().contains(
-            &format!("profile={GFX942_VECADD_REPEAT_QUALIFICATION_PROFILE_ID_V1}\n")
-        ));
+        assert!(
+            std::str::from_utf8(POLICY_BYTES_V1)
+                .unwrap()
+                .contains(&format!(
+                    "profile={GFX942_VECADD_REPEAT_QUALIFICATION_PROFILE_ID_V1}\n"
+                ))
+        );
     }
 
     #[test]
@@ -239,19 +246,28 @@ mod tests {
                 let mut allocations = request.allocations.to_vec();
                 allocations[2].bytes = &output;
                 allocations[2].content_sha256 = digest;
-                let changed = KfdRuntimeAuthorityRequestV1 { allocations: &allocations, ..request };
+                let changed = KfdRuntimeAuthorityRequestV1 {
+                    allocations: &allocations,
+                    ..request
+                };
                 assert!(repeat.authorizes_kfd_request_v1(changed));
-                assert!(!original.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                    signature: GFX942_VECADD_QUALIFICATION_SIGNATURE_V1, ..changed
-                }));
+                assert!(
+                    !original.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                        signature: GFX942_VECADD_QUALIFICATION_SIGNATURE_V1,
+                        ..changed
+                    })
+                );
             }
             output.copy_from_slice(repeat.host_buffers().unwrap().expected_output());
             let mut allocations = request.allocations.to_vec();
             allocations[2].bytes = &output;
             allocations[2].content_sha256 = None;
-            assert!(repeat.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                allocations: &allocations, ..request
-            }));
+            assert!(
+                repeat.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                    allocations: &allocations,
+                    ..request
+                })
+            );
         });
     }
 
@@ -260,12 +276,20 @@ mod tests {
         let admitted = admit_gfx942_vecadd_repeat_qualification_v1().unwrap();
         with_request(|request| {
             for index in 0..2 {
-                for digest in [None, Some([0; 32]), request.allocations[1 - index].content_sha256] {
+                for digest in [
+                    None,
+                    Some([0; 32]),
+                    request.allocations[1 - index].content_sha256,
+                ] {
                     let mut allocations = request.allocations.to_vec();
                     allocations[index].content_sha256 = digest;
-                    assert!(!admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                        allocations: &allocations, ..request
-                    }), "input {index} digest");
+                    assert!(
+                        !admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                            allocations: &allocations,
+                            ..request
+                        }),
+                        "input {index} digest"
+                    );
                 }
             }
         });
@@ -277,9 +301,13 @@ mod tests {
         with_request(|request| {
             macro_rules! rejects {
                 ($field:ident, $value:expr) => {
-                    assert!(!admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                        $field: $value, ..request
-                    }), stringify!($field));
+                    assert!(
+                        !admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                            $field: $value,
+                            ..request
+                        }),
+                        stringify!($field)
+                    );
                 };
             }
             let mut object = request.module_image.to_vec();
@@ -295,7 +323,10 @@ mod tests {
                 rejects!(complete_kernarg_template, &kernarg);
             }
             rejects!(explicit_kernarg, &request.explicit_kernarg[..47]);
-            rejects!(complete_kernarg_template, &request.complete_kernarg_template[..47]);
+            rejects!(
+                complete_kernarg_template,
+                &request.complete_kernarg_template[..47]
+            );
             for axis in 0..3 {
                 let mut geometry = request.geometry;
                 geometry.grid[axis] += 1;
@@ -307,21 +338,27 @@ mod tests {
             let mut geometry = request.geometry;
             geometry.dynamic_shared_bytes = 4;
             rejects!(geometry, geometry);
-            rejects!(semantic_launch, KfdRuntimeSemanticLaunchV1::Atomic(crate::RuntimeAtomicLaunchContractV1 {
-                operation: crate::RuntimeAtomicOperationV1::Add,
-                scope: crate::RuntimeMemoryScopeV1::Workgroup,
-                order: crate::RuntimeMemoryOrderV1::Relaxed,
-                failure_order: None,
-                weak: false,
-                geometry: request.geometry,
-            }));
-            rejects!(semantic_launch, KfdRuntimeSemanticLaunchV1::Collective(crate::RuntimeCollectiveLaunchContractV1 {
-                operation: crate::RuntimeCollectiveOperationV1::ReduceSum,
-                scope: crate::RuntimeMemoryScopeV1::Workgroup,
-                order: crate::RuntimeMemoryOrderV1::Relaxed,
-                participants: 256,
-                geometry: request.geometry,
-            }));
+            rejects!(
+                semantic_launch,
+                KfdRuntimeSemanticLaunchV1::Atomic(crate::RuntimeAtomicLaunchContractV1 {
+                    operation: crate::RuntimeAtomicOperationV1::Add,
+                    scope: crate::RuntimeMemoryScopeV1::Workgroup,
+                    order: crate::RuntimeMemoryOrderV1::Relaxed,
+                    failure_order: None,
+                    weak: false,
+                    geometry: request.geometry,
+                })
+            );
+            rejects!(
+                semantic_launch,
+                KfdRuntimeSemanticLaunchV1::Collective(crate::RuntimeCollectiveLaunchContractV1 {
+                    operation: crate::RuntimeCollectiveOperationV1::ReduceSum,
+                    scope: crate::RuntimeMemoryScopeV1::Workgroup,
+                    order: crate::RuntimeMemoryOrderV1::Relaxed,
+                    participants: 256,
+                    geometry: request.geometry,
+                })
+            );
         });
     }
 
@@ -341,18 +378,34 @@ mod tests {
                 }
                 binding_rejects!(kernarg_byte_offset, 99);
                 binding_rejects!(region.access, RuntimeAccessV1::ReadWrite);
-                binding_rejects!(region.access, if index == 2 { RuntimeAccessV1::Read } else { RuntimeAccessV1::Write });
+                binding_rejects!(
+                    region.access,
+                    if index == 2 {
+                        RuntimeAccessV1::Read
+                    } else {
+                        RuntimeAccessV1::Write
+                    }
+                );
                 binding_rejects!(region.byte_offset, 4);
                 binding_rejects!(region.byte_len, 4);
                 binding_rejects!(region.allocation, 999);
-                binding_rejects!(region.allocation, request.bindings[(index + 1) % 3].region.allocation);
+                binding_rejects!(
+                    region.allocation,
+                    request.bindings[(index + 1) % 3].region.allocation
+                );
                 macro_rules! abi_rejects {
                     ($field:ident, $value:expr) => {{
                         let mut abi = request.dispatch_abi.to_vec();
                         abi[index].$field = $value;
-                        assert!(!admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                            dispatch_abi: &abi, ..request
-                        }), "ABI {} {}", index, stringify!($field));
+                        assert!(
+                            !admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                                dispatch_abi: &abi,
+                                ..request
+                            }),
+                            "ABI {} {}",
+                            index,
+                            stringify!($field)
+                        );
                     }};
                 }
                 abi_rejects!(explicit_argument_index, 99);
@@ -364,9 +417,15 @@ mod tests {
                     ($field:ident, $value:expr) => {{
                         let mut allocations = request.allocations.to_vec();
                         allocations[index].$field = $value;
-                        assert!(!admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                            allocations: &allocations, ..request
-                        }), "allocation {} {}", index, stringify!($field));
+                        assert!(
+                            !admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                                allocations: &allocations,
+                                ..request
+                            }),
+                            "allocation {} {}",
+                            index,
+                            stringify!($field)
+                        );
                     }};
                 }
                 allocation_rejects!(allocation, 999);
@@ -381,19 +440,28 @@ mod tests {
             for count in [0, 1, 2, 4] {
                 let mut bindings = request.bindings.to_vec();
                 bindings.resize(count, bindings[0]);
-                assert!(!admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                    bindings: &bindings, ..request
-                }));
+                assert!(
+                    !admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                        bindings: &bindings,
+                        ..request
+                    })
+                );
                 let mut abi = request.dispatch_abi.to_vec();
                 abi.resize(count, abi[0]);
-                assert!(!admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                    dispatch_abi: &abi, ..request
-                }));
+                assert!(
+                    !admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                        dispatch_abi: &abi,
+                        ..request
+                    })
+                );
                 let mut allocations = request.allocations.to_vec();
                 allocations.resize(count, allocations[0]);
-                assert!(!admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
-                    allocations: &allocations, ..request
-                }));
+                assert!(
+                    !admitted.authorizes_kfd_request_v1(KfdRuntimeAuthorityRequestV1 {
+                        allocations: &allocations,
+                        ..request
+                    })
+                );
             }
         });
     }

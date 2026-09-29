@@ -1450,7 +1450,10 @@ impl KfdRuntimeBackendV1 {
                 | RuntimeBackendFailureV1::Quiescent(_)) => {
                     #[cfg(test)]
                     record_unpublished_compute_failure_for_test_v1(
-                        pending.id, pending.launch.stream, "staging", &_failure,
+                        pending.id,
+                        pending.launch.stream,
+                        "staging",
+                        &_failure,
                     );
                     self.settle_failed_unpublished_compute_v1(pending, -1)
                 }
@@ -1530,11 +1533,16 @@ impl KfdRuntimeBackendV1 {
                     )),
                 }
             }
-            Err(_failure @ (RuntimeBackendFailureV1::Rejected(_)
-            | RuntimeBackendFailureV1::Quiescent(_))) => {
+            Err(
+                _failure @ (RuntimeBackendFailureV1::Rejected(_)
+                | RuntimeBackendFailureV1::Quiescent(_)),
+            ) => {
                 #[cfg(test)]
                 record_unpublished_compute_failure_for_test_v1(
-                    pending.id, pending.launch.stream, "preparation-or-publication", &_failure,
+                    pending.id,
+                    pending.launch.stream,
+                    "preparation-or-publication",
+                    &_failure,
                 );
                 self.release_compute_lane_lease_v1(pending.launch.stream, lane);
                 self.settle_failed_unpublished_compute_v1(pending, -1)

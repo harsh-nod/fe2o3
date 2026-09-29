@@ -187,12 +187,15 @@ fn fail_owned_observation(
         },
         Err(error) => serde_json::json!({"snapshot_enqueue_error": format!("{error:?}")}),
     };
-    eprintln!("scale_owner_failure_json={}", serde_json::json!({
-        "wave": wave, "ordinal": ordinal, "state": state,
-        "observation": format!("{:?}", result.observation),
-        "rejected_observations": result.rejected_observations,
-        "last_rejected_observation": format!("{:?}", result.last_rejected_observation),
-    }));
+    eprintln!(
+        "scale_owner_failure_json={}",
+        serde_json::json!({
+            "wave": wave, "ordinal": ordinal, "state": state,
+            "observation": format!("{:?}", result.observation),
+            "rejected_observations": result.rejected_observations,
+            "last_rejected_observation": format!("{:?}", result.last_rejected_observation),
+        })
+    );
     // Stop and join through the owning engine. Failure never authorizes manual
     // native teardown, and a retained disposition is not cleanup success.
     let shutdown = match engine.shutdown() {
@@ -233,11 +236,12 @@ fn run_owned_waves(replace: bool) {
             .unwrap();
     let (engine, handle) = RuntimeAsyncOwnedEngineV1::spawn_with_progress(
         move || -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
-            let mut backend = KfdRuntimeBackendV1::open_gfx942_vecadd_repeat_scale_qualification_v1(
-                unique_id,
-                64 * 1024 * 1024,
-                32,
-            )?;
+            let mut backend =
+                KfdRuntimeBackendV1::open_gfx942_vecadd_repeat_scale_qualification_v1(
+                    unique_id,
+                    64 * 1024 * 1024,
+                    32,
+                )?;
             backend
                 .configure_host_visible_backing_budget_v1(NATIVE_BACKING_BUDGET)
                 .map_err(|error| format!("host backing budget: {error:?}"))?;

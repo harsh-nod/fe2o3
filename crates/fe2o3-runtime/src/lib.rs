@@ -17,10 +17,10 @@ pub mod qualification_gfx942_inplace_transform_v1;
 pub mod qualification_gfx942_mixed_duration_v1;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_r57_n3_v1;
-#[cfg(feature = "hardware-qualification")]
-pub mod qualification_gfx942_vecadd_v1;
 #[cfg(feature = "scale-qualification")]
 pub mod qualification_gfx942_vecadd_repeat_v1;
+#[cfg(feature = "hardware-qualification")]
+pub mod qualification_gfx942_vecadd_v1;
 mod resource_credits;
 #[cfg(test)]
 #[path = "kfd_backend/tests/synthetic_cov6.rs"]
