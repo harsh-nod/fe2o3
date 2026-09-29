@@ -153,22 +153,6 @@ impl CleanupRecordV1 {
             Self::UnspawnedDomain(domain) => domain.custody.step(&mut PidfdCleanupSyscallsV1),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn child(&self) -> &ChildCleanupV1 {
-        match self {
-            Self::Child(child) => child,
-            Self::UnspawnedDomain(_) => panic!("fixture expected child custody"),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn child_mut(&mut self) -> &mut ChildCleanupV1 {
-        match self {
-            Self::Child(child) => child,
-            Self::UnspawnedDomain(_) => panic!("fixture expected child custody"),
-        }
-    }
 }
 
 pub(crate) struct UnspawnedDomainCleanupV1 {

@@ -3,6 +3,22 @@ use std::collections::VecDeque;
 
 use super::*;
 
+impl CleanupRecordV1 {
+    pub(crate) fn child(&self) -> &ChildCleanupV1 {
+        match self {
+            Self::Child(child) => child,
+            Self::UnspawnedDomain(_) => panic!("fixture expected child custody"),
+        }
+    }
+
+    pub(crate) fn child_mut(&mut self) -> &mut ChildCleanupV1 {
+        match self {
+            Self::Child(child) => child,
+            Self::UnspawnedDomain(_) => panic!("fixture expected child custody"),
+        }
+    }
+}
+
 #[derive(Default)]
 struct ResourceDropsV1 {
     pidfd: Cell<usize>,
