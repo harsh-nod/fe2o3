@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_wrapping_value_v23_tests.rs"]
+mod wrapping_value_v23;
+
 fn private_cross_block_owner_v22() -> ProductionSemanticSsaOwnerV1 {
     let base = private_entry_neutral_owner_v20();
     let semantic = base.source_semantic();

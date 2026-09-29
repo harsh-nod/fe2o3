@@ -870,6 +870,15 @@ trait KirCorrelationGraphV18 {
         })
     }
 
+    fn scalar_binary_overflow(
+        &self,
+        _: &Function,
+        _: ValueId,
+        overflow: ProductionOverflowContractV2,
+    ) -> Option<ProductionOverflowContractV2> {
+        Some(overflow)
+    }
+
     // Outer None is failure; inner None means this is not a block argument.
     // Some(0) is a genuine block argument with no incoming edges, not an origin.
     fn visit_incoming(
@@ -2411,6 +2420,16 @@ trait SourceScalarNormalizationV18 {
         scalar: ProductionSemanticScalarTypeV2,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<NormalizedScalarExpressionV1>;
+
+    fn binary_overflow(
+        &self,
+        _: &Function,
+        _: ValueId,
+        overflow: ProductionOverflowContractV2,
+        _: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionOverflowContractV2> {
+        Ok(overflow)
+    }
 }
 
 impl InventoryCorrelationV18<'_, '_, '_, '_, '_, '_> {
@@ -2554,6 +2573,20 @@ impl KirCorrelationGraphV18 for InventoryCorrelationV18<'_, '_, '_, '_, '_, '_> 
             return Some(None);
         };
         self.source_scalar_query(|budget| source.leaf(function, value, budget))
+    }
+
+    fn scalar_binary_overflow(
+        &self,
+        function: &Function,
+        value: ValueId,
+        overflow: ProductionOverflowContractV2,
+    ) -> Option<ProductionOverflowContractV2> {
+        match self.scalar_source {
+            Some(source) => self.source_scalar_query(|budget| {
+                source.binary_overflow(function, value, overflow, budget)
+            }),
+            None => Some(overflow),
+        }
     }
 
     fn scalar_argument(

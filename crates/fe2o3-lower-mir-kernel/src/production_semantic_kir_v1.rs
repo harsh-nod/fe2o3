@@ -4725,6 +4725,7 @@ fn normalize_kir_expression_inner_v1(
         },
         OperationKind::Binary { op, lhs, rhs } => {
             let (operation, overflow) = normalize_kir_binary_v1(*op, operation, value)?;
+            let overflow = kir.scalar_binary_overflow(function, value, overflow)?;
             NormalizedScalarExpressionV1::Binary {
                 operation,
                 scalar,

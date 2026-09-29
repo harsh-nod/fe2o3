@@ -30,6 +30,7 @@ pub struct ProductionOptimizedSourceScalarLeavesV18<'scope> {
     optimized: &'scope ProductionOptimizedSourceCorrespondenceV18<'scope>,
     function: &'scope fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'scope>,
     reads: &'scope [OptimizedSourceScalarReadV18],
+    wrapping: &'scope [SourceWrappingValueV23],
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     floor: usize,
@@ -244,16 +245,15 @@ impl ProductionSourceCorrespondenceV18<'_> {
             #[cfg(test)]
             test_optimized_scalar_attempt_header_v18(budget);
             let floor = budget.storage();
-            let (reads, function, retained) = self.retain_query(scoped_source_attempt_v29(
-                self.source.cleanup,
-                budget,
-                floor,
-                |budget| {
+            let (reads, wrapping, function, retained) = self.retain_query(
+                scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
                     let floor = budget.storage();
                     self.retain_query((|| {
                         budget.reserve_storage(argument_sum_v1(&[
                             size_of::<ProductionOptimizedSourceScalarLeavesV18<'_>>(),
                             size_of::<Vec<OptimizedSourceScalarReadV18>>(),
+                            size_of::<Vec<SourceWrappingValueV23>>(),
+                            size_of::<SourceWrappingValueV23>(),
                             size_of::<std::thread::Result<Result<T, E>>>(),
                             source_reference_cleanup_headers_v29()?,
                         ])?)?;
@@ -261,19 +261,22 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         let function =
                             optimized_source_root_function_v18(self, optimized, root, budget)?;
                         let reads = optimized_source_scalar_reads_v18(original, optimized, budget)?;
+                        let wrapping =
+                            optimized_source_wrapping_values_v23(original, optimized, budget)?;
                         let retained = budget
                             .storage()
                             .checked_sub(floor)
                             .ok_or(ArgumentResourceV1::Accounting)?;
-                        Ok((reads, function, retained))
+                        Ok((reads, wrapping, function, retained))
                     })())
-                },
-            ))?;
+                }),
+            )?;
             let leaves = ProductionOptimizedSourceScalarLeavesV18 {
                 original,
                 optimized,
                 function,
                 reads: &reads,
+                wrapping: &wrapping,
                 slot: std::ptr::from_ref(budget) as usize,
                 ledger: budget.work_ledger_identity_v1(),
                 floor: budget.storage(),
@@ -288,6 +291,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
             };
             drop(leaves);
             drop(reads);
+            drop(wrapping);
             let released = if self.source.cleanup.is_denied() {
                 Err(ArgumentResourceV1::Accounting)
             } else {
@@ -519,6 +523,45 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
 }
 
 impl SourceScalarNormalizationV18 for OptimizedSourceScalarNormalizationV18<'_> {
+    fn binary_overflow(
+        &self,
+        function: &Function,
+        value: ValueId,
+        overflow: ProductionOverflowContractV2,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionOverflowContractV2> {
+        if overflow != ProductionOverflowContractV2::Checked
+            || !self.leaves.original.leaves.private_writes
+        {
+            return Ok(overflow);
+        }
+        let relation = self.leaves.original.leaves.relation;
+        relation.retain_query((|| {
+            self.leaves.check(budget)?;
+            budget.charge_work(1)?;
+            if !std::ptr::eq(function, self.leaves.function.function) {
+                return relation
+                    .source
+                    .missing("wrapping scalar substituted output function");
+            }
+            let Some(row) = source_wrapping_find_v23(self.leaves.wrapping, value, budget)? else {
+                return Ok(overflow);
+            };
+            let output = self.leaves.optimized.output_inventory(budget)?;
+            let actual = source_operation_row_v18(output, row.operation, budget)?;
+            budget.charge_work(7)?;
+            if row.operation.block.function != self.leaves.function.coordinate
+                || source_wrapping_result_v23(actual.operation, row.operator, row.scalar)
+                    != Some(value)
+            {
+                return relation
+                    .source
+                    .missing("wrapping scalar output occurrence differs");
+            }
+            Ok(ProductionOverflowContractV2::Wrapping)
+        })())
+    }
+
     fn leaf(
         &self,
         function: &Function,
@@ -834,6 +877,7 @@ fn optimized_source_scalar_expression_endpoint_v18(
             size_of::<InventoryCorrelationV18<'_, '_, '_, '_, '_, '_>>(),
             size_of::<BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>>(),
             source_scalar_constant_fold_headers_v18()?,
+            source_scalar_overflow_query_headers_v23()?,
         ])?;
         source_scalar_normalization_scratch_v18(relation.source.cleanup, budget, storage, run)
     })())

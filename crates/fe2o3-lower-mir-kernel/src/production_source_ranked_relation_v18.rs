@@ -174,6 +174,7 @@ struct SourceScalarLeavesV18<'relation, 'source> {
     root: usize,
     rows: Vec<SourceScalarLeafRowV18>,
     lookup: Vec<SourceScalarLeafLookupV18>,
+    wrapping: Vec<SourceWrappingValueV23>,
     floor: usize,
     private_writes: bool,
 }
@@ -380,6 +381,7 @@ fn source_scalar_expression_endpoint_v18(
             size_of::<InventoryCorrelationV18<'_, '_, '_, '_, '_, '_>>(),
             size_of::<BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>>(),
             source_scalar_constant_fold_headers_v18()?,
+            source_scalar_overflow_query_headers_v23()?,
             argument_product_v1(
                 fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2,
                 argument_product_v1(2, size_of::<NormalizedScalarExpressionV1>())?,
@@ -524,6 +526,17 @@ fn source_scalar_normalization_scratch_v18<'work>(
 }
 
 impl SourceScalarNormalizationV18 for SourceScalarNormalizationInputV18<'_, '_, '_> {
+    fn binary_overflow(
+        &self,
+        function: &Function,
+        value: ValueId,
+        overflow: ProductionOverflowContractV2,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionOverflowContractV2> {
+        self.leaves
+            .wrapping_value_v23(function, value, overflow, budget)
+    }
+
     fn leaf(
         &self,
         function: &Function,
@@ -1611,6 +1624,7 @@ fn assign_source_leaf_symbols_v18(
 }
 
 include!("production_source_leaf_lookup_work_v18.rs");
+include!("production_source_wrapping_value_v23.rs");
 
 impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
     fn observe_custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
@@ -1781,7 +1795,10 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
             // All temporary census credit remains in the containing checked
             // scope until its concrete owners have been destroyed.
             drop(reserved);
-            Ok(Self { relation, root, rows, lookup, floor: budget.storage(),
+            let wrapping = if matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22) {
+                source_wrapping_values_v23(relation, root, budget)?
+            } else { Vec::new() };
+            Ok(Self { relation, root, rows, lookup, wrapping, floor: budget.storage(),
                 private_writes: matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22) })
         })())
     }
