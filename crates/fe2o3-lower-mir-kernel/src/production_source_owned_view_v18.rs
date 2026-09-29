@@ -290,9 +290,14 @@ impl ProductionPendingScopedSourceOwnerV29 {
             &mut ArgumentBudgetV1<'work>,
         ) -> SourceOwnedResultV18<T>,
     ) -> SourceOwnedResultV18<T> {
+        let mut consume = SourceCallbackCustodyV29::new(consume);
         self.check_source_owned_floor_v18(budget)?;
         let floor = budget.storage();
-        with_scoped_source_cleanup_v29(budget, floor, |cleanup, budget| {
+        with_scoped_source_cleanup_v29(budget, floor, move |cleanup, budget| {
+            let Some(consume) = consume.take() else {
+                cleanup.deny_refund();
+                return Err(ArgumentResourceV1::Accounting.into());
+            };
             self.with_checked_source_with_cleanup_v18(cleanup, budget, consume)
         })
     }
@@ -339,11 +344,14 @@ impl ProductionPendingScopedSourceOwnerV29 {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
-        self.check_source_owned_floor_v18(budget)?;
+        let consume = SourceCallbackCustodyV29::new(consume);
+        if let Err(error) = self.check_source_owned_floor_v18(budget) {
+            drop(consume);
+            return Err(error.into());
+        }
         let floor = budget.storage();
-        let mut consume = Some(consume);
-        let prepared = scoped_source_attempt_v29(cleanup, budget, floor, |budget| {
-            (|| {
+        let (headers, mut consume) =
+            scoped_source_attempt_v29(cleanup, budget, floor, move |budget| {
                 let headers = argument_sum_v1(&[
                     source_owned_finish_preflight_v26::<T, E>(budget)?,
                     std::mem::size_of_val(&consume),
@@ -354,23 +362,8 @@ impl ProductionPendingScopedSourceOwnerV29 {
                 ])?;
                 budget.reserve_storage(headers)?;
                 self.inner.replay_with_cleanup(cleanup, budget)?;
-                Ok::<_, ProductionSourceOwnedViewErrorV18>(headers)
-            })()
-            .inspect_err(|_| {
-                source_reference_discard_v29(consume.take());
-            })
-        });
-        let headers = match prepared {
-            Ok(headers) => headers,
-            Err(error) => {
-                source_reference_discard_v29(consume.take());
-                return Err(error.into());
-            }
-        };
-        let Some(consume) = consume.take() else {
-            cleanup.deny_refund();
-            return Err(ArgumentResourceV1::Accounting.into());
-        };
+                Ok::<_, ProductionSourceOwnedViewErrorV18>((headers, consume))
+            })?;
         let guard = SourceOwnedQueryGuardV18::new(self, budget);
         let view = ProductionSourceOwnedViewV18 {
             owner: self,
@@ -383,7 +376,17 @@ impl ProductionPendingScopedSourceOwnerV29 {
             // A refused first query still disposes the owned callback before
             // settling this view's already accepted header credit.
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                view.query(budget)?;
+                if let Err(error) = view.query(budget) {
+                    drop(consume);
+                    return Err(error.into());
+                }
+                let Some(consume) = consume.take() else {
+                    cleanup.deny_refund();
+                    return Err(ProductionSourceOwnedViewErrorV18::from(
+                        ArgumentResourceV1::Accounting,
+                    )
+                    .into());
+                };
                 consume(view, budget)
             }))
         };
@@ -462,11 +465,13 @@ impl ProductionPreparedSourceV18 {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        let mut consume = SourceCallbackCustodyV29::new(consume);
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()
             || self.source.input.ledger != self.ledger
             || budget.storage() < self.retained
         {
+            drop(consume);
             return Err(ArgumentResourceV1::Accounting.into());
         }
         let floor = budget.storage() - self.retained;
@@ -475,6 +480,7 @@ impl ProductionPreparedSourceV18 {
         ) {
             Ok(boundary) => boundary,
             Err(error) => {
+                drop(consume);
                 let retained = self.retained;
                 drop(self);
                 let _ = budget.release_storage(retained);
@@ -486,8 +492,20 @@ impl ProductionPreparedSourceV18 {
         let entry = &entered;
         let result = boundary.run(budget, move |cleanup, budget| {
             entry.set(true);
-            let (pending, retained) = self.into_pending_with_cleanup_v18(cleanup, budget)?;
+            let prepared =
+                self.into_pending_with_callback_custody_v29(cleanup, budget, &mut consume);
+            let (pending, retained) = match prepared {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    drop(consume);
+                    return Err(error.into());
+                }
+            };
             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let Some(consume) = consume.take() else {
+                    cleanup.deny_refund();
+                    return Err(ArgumentResourceV1::Accounting.into());
+                };
                 pending.with_source_consumer_with_cleanup_v18(cleanup, budget, consume)
             }));
             drop(pending);
@@ -505,6 +523,19 @@ impl ProductionPreparedSourceV18 {
         self,
         cleanup: &ScopedSourceCleanupV29,
         budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<(ProductionPendingScopedSourceOwnerV29, usize)> {
+        self.into_pending_with_callback_custody_v29(
+            cleanup,
+            budget,
+            &mut SourceCallbackCustodyV29::new(()),
+        )
+    }
+
+    fn into_pending_with_callback_custody_v29<F>(
+        self,
+        cleanup: &ScopedSourceCleanupV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+        consume: &mut SourceCallbackCustodyV29<F>,
     ) -> SourceOwnedResultV18<(ProductionPendingScopedSourceOwnerV29, usize)> {
         let input_storage = self.source.input.retained_storage;
         if cleanup.is_denied()
@@ -525,9 +556,17 @@ impl ProductionPreparedSourceV18 {
         }) {
             Ok(headers) => headers,
             Err(error) => {
+                source_reference_discard_v29(consume.take());
                 let retained = self.retained;
+                let slot = self.slot;
+                let ledger = self.ledger;
                 drop(self);
-                if budget.release_storage(retained).is_err() {
+                if cleanup.is_denied()
+                    || slot != std::ptr::from_ref(budget) as usize
+                    || ledger != budget.work_ledger_identity_v1()
+                    || floor.checked_add(retained) != Some(budget.storage())
+                    || budget.release_storage(retained).is_err()
+                {
                     cleanup.deny_refund();
                 }
                 return Err(error.into());
@@ -555,7 +594,7 @@ impl ProductionPreparedSourceV18 {
         };
         let remaining =
             argument_sum_v1(&[headers, size_of::<Self>(), capture_storage, live_source]);
-        let valid = !cleanup.is_denied()
+        let mut valid = !cleanup.is_denied()
             && slot == std::ptr::from_ref(budget) as usize
             && ledger == budget.work_ledger_identity_v1()
             && remaining
@@ -565,6 +604,19 @@ impl ProductionPreparedSourceV18 {
             cleanup.deny_refund();
         }
         drop(donor);
+        if !valid || !matches!(&caught, Ok(Ok(_))) {
+            source_reference_discard_v29(consume.take());
+            valid = valid
+                && !cleanup.is_denied()
+                && slot == std::ptr::from_ref(budget) as usize
+                && ledger == budget.work_ledger_identity_v1()
+                && remaining
+                    .as_ref()
+                    .is_ok_and(|&owned| floor.checked_add(owned) == Some(budget.storage()));
+            if !valid {
+                cleanup.deny_refund();
+            }
+        }
         match caught {
             Ok(Ok(inner)) if valid => {
                 let retained = argument_sum_v1(&[inner.retained_storage, capture_storage])?;
@@ -614,6 +666,7 @@ fn prepared_source_transition_headers_v18() -> Result<usize, ArgumentResourceV1>
         size_of::<Box<dyn std::any::Any + Send>>(),
         9 * size_of::<usize>(),
         size_of::<bool>(),
+        2 * size_of::<&mut SourceCallbackCustodyV29<()>>(),
     ])
 }
 

@@ -378,6 +378,9 @@ fn install_optimized_issued_roles_inner_v18(
     });
     let mut accesses =
         emission_vec_v1(rows.accesses.len(), budget).map_err(source_emission_error_v18)?;
+    budget.reserve_storage(std::mem::size_of::<Vec<SourceIssuedPointerTransportV26>>())?;
+    let mut pointer_transports =
+        emission_vec_v1(rows.accesses.len(), budget).map_err(source_emission_error_v18)?;
     let mut users =
         emission_vec_v1(rows.issuers.len(), budget).map_err(source_emission_error_v18)?;
     budget.charge_work(rows.issuers.len())?;
@@ -385,7 +388,7 @@ fn install_optimized_issued_roles_inner_v18(
     for row in &rows.accesses {
         charge_execution_cfg_lookup_v29(order.len(), budget).map_err(source_emission_error_v18)?;
         let index = order
-            .binary_search_by_key(&(row.instance.index(), row.issuer), |&index| {
+            .binary_search_by_key(&(row.issuer_instance.index(), row.issuer), |&index| {
                 (
                     rows.issuers[index].instance.index(),
                     rows.issuers[index].definition,
@@ -485,7 +488,19 @@ fn install_optimized_issued_roles_inner_v18(
             ))?;
         budget.charge_work(6)?;
         if access.object
-            || access.pointer != issuer.physical.pointer
+            || !matches!(
+                access.access.address_space,
+                AddressSpace::Global | AddressSpace::Generic
+            )
+            || !source_issued_memory_pointer_v26(
+                &actual,
+                access.pointer,
+                access.access,
+                access.writing,
+                issuer.physical.element,
+                budget,
+            )
+            .map_err(source_emission_error_v18)?
             || access.writing != row.writing
             || access.access != row.access
             || *actual
@@ -498,6 +513,11 @@ fn install_optimized_issued_roles_inner_v18(
                 .source
                 .missing("issued output memory attributes or pointer differ");
         }
+        budget.charge_work(3)?;
+        pointer_transports.push(SourceIssuedPointerTransportV26 {
+            pointer: access.pointer,
+            issuer: issuer.physical.pointer,
+        });
         let guard = original
             .inventory
             .block_for_id(input.block.function, row.guard_block, budget)
@@ -583,6 +603,7 @@ fn install_optimized_issued_roles_inner_v18(
             roles,
             row.instance.index(),
             GlobalSourceAccessOriginV18::Issued {
+                instance: row.issuer_instance.index(),
                 definition: row.issuer,
             },
             GlobalSourceLogicalEndpointV18 {
@@ -636,6 +657,13 @@ fn install_optimized_issued_roles_inner_v18(
         )?;
         users[index].1 = true;
     }
+    check_source_issued_pointer_transports_v26(
+        function.function,
+        &actual,
+        &pointer_transports,
+        budget,
+    )
+    .map_err(source_emission_error_v18)?;
     let mut valid = true;
     budget.charge_work(argument_sum_v1(&[facts.len(), accesses.len()])?)?;
     fe2o3_kernel_ir::with_function_control_flow_v1(

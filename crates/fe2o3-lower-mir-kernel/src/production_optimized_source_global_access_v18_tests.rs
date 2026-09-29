@@ -961,6 +961,72 @@ fn pending_global_commoned_metadata_keeps_unreachable_and_rewritten_consumers_cl
 }
 
 #[test]
+fn pending_global_generic_helper_accesses_preserve_actual_space_and_exact_issuer() {
+    for nested in [false, true] {
+        let owner = global_expression_helper_owner_v23(nested);
+        let abi = issued_descriptor_role_abi_v18(&owner);
+        let count = std::cell::Cell::new(0);
+        let (result, _, _) = run_descriptor_role_owner_with_abi_v18(
+            owner,
+            abi,
+            OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+            MODULE_LIMIT,
+            |original, optimized, budget| {
+                count.set(slice_view_v1::test_issued_generic_global_domains_v26(
+                    original, optimized, budget,
+                )?);
+                Ok(())
+            },
+        );
+        result.unwrap();
+        assert!(
+            count.get() > 0,
+            "nested={nested}: genuine Generic helper accesses"
+        );
+    }
+}
+
+#[test]
+fn pending_global_generic_helper_domains_have_exact_and_one_short_transaction_limits() {
+    let run = |work, storage| {
+        let owner = global_expression_helper_owner_v23(true);
+        let abi = issued_descriptor_role_abi_v18(&owner);
+        run_descriptor_role_owner_with_abi_v18(
+            owner,
+            abi,
+            work,
+            storage,
+            |original, optimized, budget| {
+                assert!(
+                    slice_view_v1::test_issued_generic_global_domains_v26(
+                        original, optimized, budget
+                    )? > 0
+                );
+                Ok(())
+            },
+        )
+    };
+    let (result, work, peak) = run(OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
+    result.unwrap();
+    assert!(work > 0 && peak > MODULE_FLOOR);
+    let (result, exact_work, exact_peak) = run(work, peak);
+    result.unwrap();
+    assert_eq!((exact_work, exact_peak), (work, peak));
+    assert!(matches!(
+        source_slot_tests::original_repeated_source_resource_v29(
+            run(work - 1, peak).0.unwrap_err()
+        ),
+        ArgumentResourceV1::Work(_)
+    ));
+    assert!(matches!(
+        source_slot_tests::original_repeated_source_resource_v29(
+            run(work, peak - 1).0.unwrap_err()
+        ),
+        ArgumentResourceV1::Storage(_)
+    ));
+}
+
+#[test]
 fn pending_global_commoned_metadata_rejects_genuine_foreign_function_coordinates() {
     for mode in [2, 3] {
         let owner = issued_metadata_two_root_owner_v18();

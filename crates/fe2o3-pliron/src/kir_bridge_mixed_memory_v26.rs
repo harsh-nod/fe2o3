@@ -162,6 +162,13 @@ impl NativePrivateInputV1 for NativeCanonicalMixedAdmissionV26<'_> {
     fn operation_count(&self) -> usize {
         self.private.operation_count()
     }
+    fn cfg_domain_v26(&self) -> crate::kir_bridge_v1::NativeCfgDomainV26 {
+        // This adapter retains the complete exact V18 graph, including original
+        // failure blocks left disconnected by source lowering. Policy9 does not
+        // run CFG deletion. Neither source nor memory coverage is inferred from
+        // a disconnected block; their complete original censuses remain intact.
+        crate::kir_bridge_v1::NativeCfgDomainV26::EntryReachableSubgraphV26
+    }
     fn supports_conditional_globals_v26(&self) -> bool {
         true
     }

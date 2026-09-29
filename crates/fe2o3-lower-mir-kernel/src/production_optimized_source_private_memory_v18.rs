@@ -262,15 +262,15 @@ pub(super) fn with_source_private_physical_profile_v25<'work, const SPILLS: bool
 where
     E: From<ProductionSourceOwnedViewErrorV18>,
 {
+    let consume = SourceCallbackCustodyV29::new(consume);
     optimized_source_endpoints_v18(original, optimized, budget)?;
     let floor = budget.storage();
-    let mut consume = Some(consume);
     let capture = std::mem::size_of_val(&consume);
     let alignment = std::mem::align_of_val(&consume);
     let prepared = scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
-        let floor = budget.storage();
-        original
-            .retain_query((|| {
+        consume.prepare(|| {
+            let floor = budget.storage();
+            original.retain_query((|| {
                 let disposal = source_owned_finish_preflight_v26::<T, E>(budget)?;
                 budget.reserve_storage(argument_sum_v1(&[
                     disposal,
@@ -346,18 +346,14 @@ where
                     .ok_or(ArgumentResourceV1::Accounting)?;
                 Ok((physical, allocations, retained))
             })())
-            .inspect_err(|_| {
-                source_reference_discard_v29(consume.take());
-            })
+        })
     });
-    let (physical, allocations, retained) = match prepared {
+    let ((physical, allocations, retained), mut consume) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
-            source_reference_discard_v29(consume);
             return Err(error.into());
         }
     };
-    let consume = consume.expect("private preparation retained its callback");
     let view = CheckedSourcePrivatePhysicalV18 {
         original,
         optimized,
@@ -367,7 +363,11 @@ where
         ledger: budget.work_ledger_identity_v1(),
         floor: budget.storage(),
     };
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        consume
+            .take()
+            .expect("private preparation retained its callback")(&view, budget)
+    }));
     let first = original.source.guard.first.get();
     let postflight = if matches!(&caught, Ok(Ok(_))) {
         view.check(budget)
@@ -1824,14 +1824,14 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        let consume = SourceCallbackCustodyV29::new(consume);
+        let extend = SourceCallbackCustodyV29::new(extend);
         self.check(budget)?;
         currentness.check_scope_v18(self.original, self.optimized, root, budget)?;
         entries.check_for(self.original, self.optimized, root, budget)?;
         let floor = budget.storage();
-        let mut consume = Some(consume);
         let capture = std::mem::size_of_val(&consume);
         let alignment = std::mem::align_of_val(&consume);
-        let mut extend = Some(extend);
         let extend_bytes = std::mem::size_of_val(&extend);
         let extend_alignment = if extend_bytes == 0 {
             0
@@ -1840,9 +1840,10 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
         };
         let prepared =
             scoped_source_attempt_v29(self.original.source.cleanup, budget, floor, |budget| {
-                let floor = budget.storage();
-                self.original
-                    .retain_query((|| {
+                consume.prepare(|| {
+                    let mut extend = extend;
+                    let floor = budget.storage();
+                    self.original.retain_query((|| {
                         let disposal = source_owned_finish_preflight_v26::<T, E>(budget)?;
                         budget.reserve_storage(argument_sum_v1(&[
                             disposal,
@@ -1886,7 +1887,11 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
                             entries,
                             root,
                             budget,
-                            extend.take().ok_or(ArgumentResourceV1::Accounting)?,
+                            |root, rows, budget| {
+                                extend.take().ok_or(ArgumentResourceV1::Accounting)?(
+                                    root, rows, budget,
+                                )
+                            },
                         )?;
                         let retained = budget
                             .storage()
@@ -1894,20 +1899,14 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
                             .ok_or(ArgumentResourceV1::Accounting)?;
                         Ok((first, rows, retained))
                     })())
-                    .inspect_err(|_| {
-                        source_reference_discard_v29(extend.take());
-                        source_reference_discard_v29(consume.take());
-                    })
+                })
             });
-        let (first, rows, retained) = match prepared {
+        let ((first, rows, retained), mut consume) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                source_reference_discard_v29(extend);
-                source_reference_discard_v29(consume);
                 return Err(error.into());
             }
         };
-        let consume = consume.expect("private root preparation retained its callback");
         let view = CheckedSourcePrivateMemoryV18 {
             physical: self,
             currentness,
@@ -1917,8 +1916,11 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
             rows: &rows,
             floor: budget.storage(),
         };
-        let caught =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)));
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            consume
+                .take()
+                .expect("private root preparation retained its callback")(&view, budget)
+        }));
         let first = self.original.source.guard.first.get();
         let postflight = if matches!(&caught, Ok(Ok(_))) {
             view.check(budget)

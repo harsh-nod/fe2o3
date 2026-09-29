@@ -5,12 +5,26 @@ mod native_private_seal {
     pub(super) trait Sealed {}
 }
 
+/// Analysis domain of an authenticated, complete native function. No caller
+/// can supply this contract independently of its sealed graph/epoch adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NativeCfgDomainV26 {
+    AllBlocksReachableV1,
+    /// Retain disconnected blocks without granting facts for them. Every native
+    /// schema remains checked, and entry reachability is recomputed from every
+    /// actual successor before proving bounds on executable accesses.
+    EntryReachableSubgraphV26,
+}
+
 pub(crate) trait NativePrivateInputV1: native_private_seal::Sealed {
     fn context(&self) -> &Context;
     fn function(&self) -> &FuncOp;
     fn ordinal(&self) -> usize;
     fn epoch(&self) -> u64;
     fn operation_count(&self) -> usize;
+    fn cfg_domain_v26(&self) -> NativeCfgDomainV26 {
+        NativeCfgDomainV26::AllBlocksReachableV1
+    }
     fn supports_conditional_globals_v26(&self) -> bool {
         false
     }

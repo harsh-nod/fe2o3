@@ -129,13 +129,16 @@ fn execution_main_attempt_header_oracle_v18<F>(_: &F) -> usize {
         Run<'a, F>,
     );
     type Capture<'a, 'work, F> = (
-        Run<'a, F>,
+        &'a mut Option<Run<'a, F>>,
         &'a mut ArgumentBudgetV1<'work>,
-        &'a mut usize,
-        &'a mut usize,
+        &'a Result<(), ArgumentResourceV1>,
+        &'a mut Option<usize>,
+        &'a usize,
     );
     size_of::<Run<'_, F>>()
         + align_of::<Run<'_, F>>()
+        + size_of::<Option<Run<'_, F>>>()
+        + align_of::<Option<Run<'_, F>>>()
         + size_of::<Frame<'_, '_, F>>()
         + size_of::<Capture<'_, '_, F>>()
         + size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>()
@@ -145,10 +148,12 @@ fn execution_main_attempt_header_oracle_v18<F>(_: &F) -> usize {
         + size_of::<Error>()
         + size_of::<Box<dyn std::any::Any + Send>>()
         + size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>()
-        + 7 * size_of::<usize>()
+        + 8 * size_of::<usize>()
+        + size_of::<Option<usize>>()
         + size_of::<bool>()
         + size_of::<Result<usize, ArgumentResourceV1>>()
         + size_of::<Result<(), ArgumentResourceV1>>()
+        + source_owned_finish_header_oracle_v26::<Value<F>, Error>()
 }
 
 fn execution_has_main_attempt_header_v18() -> bool {
@@ -158,12 +163,12 @@ fn execution_has_main_attempt_header_v18() -> bool {
         fault_storage: std::cell::Cell::new(None),
         fault_skip: std::cell::Cell::new(0),
     };
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(1);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(32 + 2 + 1 + 4);
     let mut budget = ArgumentBudgetV1::new(&mut work, 0);
     let result = scoped_source_attempt_v29(&cleanup, &mut budget, 0, |_| {
         Ok::<(), ArgumentResourceV1>(())
     });
-    assert_eq!((budget.work(), budget.storage()), (0, 0));
+    assert_eq!((budget.work(), budget.storage()), (32 + 2 + 1 + 4, 0));
     assert!(!cleanup.is_denied());
     match result {
         Err(ArgumentResourceV1::Storage(error)) => {
@@ -226,7 +231,7 @@ fn execution_main_helper_header_refusal_settles_only_accepted_local_credit() {
                 assert_eq!(error.actual(), MODULE_LIMIT + helper);
                 assert_eq!(
                     budget.work(),
-                    before.0 + 1,
+                    before.0 + 1 + 32 + 2 + 1 + 4,
                     "MAIN generic header refuses before recipe census"
                 );
             } else {

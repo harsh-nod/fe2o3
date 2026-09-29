@@ -93,18 +93,14 @@ fn pending_first_view_query_drop_panic_retires_exact_inner_and_outer_headers() {
             MODULE_LIMIT,
             "replay exhausted exactly the paid prefix"
         );
-        if raw_drop {
-            assert_eq!(*caught.unwrap_err().downcast::<u64>().unwrap(), 0x1751_0001);
-        } else {
-            assert!(
-                matches!(caught.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(error)))
-                if error.actual() == MODULE_LIMIT + 1 && error.limit() == MODULE_LIMIT)
-            );
-        }
+        assert!(
+            matches!(caught.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(error)))
+            if error.actual() == MODULE_LIMIT + 1 && error.limit() == MODULE_LIMIT)
+        );
         assert_eq!(
             budget.storage(),
             incoming,
-            "no inner paid view header may survive the raw Drop path"
+            "protected capture disposal preserves the first query refusal and exact refund"
         );
         budget.release_storage(size_of::<u64>()).unwrap();
         let retained = pending.adopted_storage();
@@ -152,7 +148,10 @@ fn prepared_first_view_query_drop_panic_retires_pending_owner_and_inner_headers(
             Ok(())
         })
     }));
-    assert_eq!(*caught.unwrap_err().downcast::<u64>().unwrap(), 0x1751_0002);
+    assert!(
+        matches!(caught.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(error)))
+        if error.actual() == MODULE_LIMIT + 1 && error.limit() == MODULE_LIMIT)
+    );
     assert_eq!((invoked.get(), drops.get()), (0, 1));
     assert_eq!(budget.work(), MODULE_LIMIT);
     assert_eq!(
@@ -210,7 +209,10 @@ fn pending_first_view_query_drop_observes_linked_denial_before_any_header_refund
                         .with_source_consumer_with_cleanup_v18(cleanup, budget, consume)
                         .map_err(|error| error.0)
                 }));
-                assert_eq!(*caught.unwrap_err().downcast::<u64>().unwrap(), 0x1751_0003);
+                assert!(
+                    matches!(caught.unwrap(), Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(error)))
+                    if error.actual() == MODULE_LIMIT + 1 && error.limit() == MODULE_LIMIT)
+                );
                 assert_eq!((invoked.get(), drops.get()), (0, 1));
                 assert_eq!(budget.work(), MODULE_LIMIT);
                 let headers = owned_headers

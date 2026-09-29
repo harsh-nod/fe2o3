@@ -142,6 +142,51 @@ fn mixed_contract_retains_complete_multiaccess_rows_and_distinct_coordinate_spac
 }
 
 #[test]
+fn mixed_contract_preserves_generic_access_representation_without_relabeling_global() {
+    let args = [argument(0, 1, 0)];
+    let global = occurrence(0, 1, false);
+    let mut generic = global;
+    generic.address_space = MixedMemorySpaceV26::Generic;
+    let old_bytes = encoded(subjects(), &args, &[global]);
+    let bytes = encoded(subjects(), &args, &[generic]);
+    assert_eq!(bytes.len(), old_bytes.len());
+    let differences: Vec<_> = bytes
+        .iter()
+        .zip(&old_bytes)
+        .enumerate()
+        .filter_map(|(i, (a, b))| (a != b).then_some(i))
+        .collect();
+    assert_eq!(
+        differences.len(),
+        1,
+        "legacy Global encoding changes at no other field"
+    );
+    let at = differences[0];
+    assert_eq!((old_bytes[at], bytes[at]), (1, 2));
+    let old = decode_mixed_contract_v26(&old_bytes, &mut pay).unwrap();
+    let view = decode_mixed_contract_v26(&bytes, &mut pay).unwrap();
+    assert_eq!(old.occurrence(0, &mut pay).unwrap(), global);
+    assert_eq!(view.occurrence(0, &mut pay).unwrap(), generic);
+    assert_ne!(
+        old.occurrence_identity(0, &mut pay).unwrap(),
+        view.occurrence_identity(0, &mut pay).unwrap()
+    );
+    assert_ne!(old.identity(), view.identity());
+    assert!(!view.grants_artifact_or_launch_authority());
+    // The historical decoder accepted precisely tag 1. New representation must
+    // be rejected by that contract, never silently interpreted as Global.
+    assert_ne!(bytes[at], 1);
+    for tag in [0, 3, 4, 5, 255] {
+        let mut changed = bytes.clone();
+        changed[at] = tag;
+        assert!(matches!(
+            decode_mixed_contract_v26(&changed, &mut pay),
+            Err(MixedContractErrorV26::Invalid("mixed memory space"))
+        ));
+    }
+}
+
+#[test]
 fn mixed_contract_same_count_guard_address_rhs_subject_and_identity_substitutions_change_commitment()
  {
     let args = [argument(0, 0, 1)];

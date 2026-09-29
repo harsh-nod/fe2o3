@@ -478,7 +478,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), PendingGlobalReadConditionErrorV18> {
         self.roles.original.retain_query((|| {
-            budget.charge_work(96)?;
+            budget.charge_work(96 + 4)?;
             let endpoint = &pair.output;
             let domain = *fact.domain();
             let root = optimized_source_definition_row_v18(inventory, endpoint.logical.root, budget)?;
@@ -548,7 +548,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
                 return self.roles.original.source.missing("pending global read length result");
             };
             if pair.output.writing || endpoint.memory.volatile
-                || endpoint.memory.address_space != AddressSpace::Global
+                || !global_source_memory_space_v26(&pair.origin, endpoint.memory.address_space)
                 || !std::ptr::eq(fact.owner(), inventory.owner())
                 || fact.operation() != endpoint.logical.access.operation
                 || root.coordinate != (SliceDefinition::FunctionArgument {

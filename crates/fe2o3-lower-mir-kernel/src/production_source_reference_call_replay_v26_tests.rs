@@ -211,10 +211,11 @@ fn observe_actual_reference_call_capture_v26(
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let mut captures = 0;
     for target in emitted.iter().flatten() {
-        let Some(entry) = &target.invocation_entry else {
+        let Some(inputs) = &target.direct_call_inputs else {
             continue;
         };
-        for input in &entry.inputs {
+        assert!(target.invocation_entry.is_none());
+        for input in inputs {
             let Some(transport) = input.reference_call_transport else {
                 continue;
             };
@@ -276,6 +277,109 @@ fn observe_actual_reference_call_capture_v26(
     Ok(())
 }
 
+thread_local! {
+    static ACTUAL_DIRECT_CALL_INPUT_FAULT_V26: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+fn mutate_actual_direct_call_inputs_v26(
+    source: &ExecutionLifecycleSourceV29<'_>,
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    observe_actual_reference_call_capture_v26(source, instances, emitted, slots, budget)?;
+    // Mutate only the first candidate, never its independent reconstruction.
+    SCOPED_SLOT_OBSERVER_V29.set(None);
+    let target = emitted
+        .iter_mut()
+        .flatten()
+        .find(|target| {
+            target.direct_call_inputs.as_ref().is_some_and(|inputs| {
+                inputs
+                    .iter()
+                    .any(|input| input.reference_call_transport.is_some())
+            })
+        })
+        .unwrap();
+    match ACTUAL_DIRECT_CALL_INPUT_FAULT_V26.get() {
+        1 => target.direct_call_inputs = None,
+        2 => {
+            let input = target
+                .direct_call_inputs
+                .as_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|input| input.reference_call_transport.is_some())
+                .unwrap();
+            input.source_argument ^= 1;
+        }
+        3 => {
+            let input = target
+                .direct_call_inputs
+                .as_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|input| input.reference_call_transport.is_some())
+                .unwrap();
+            let transport = input.reference_call_transport.as_mut().unwrap();
+            transport.input = transport.output;
+        }
+        4 => {
+            let input = target
+                .direct_call_inputs
+                .as_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|input| input.reference_call_transport.is_some())
+                .unwrap();
+            input.reference_call_transport = None;
+        }
+        5 => target.direct_call_inputs.as_mut().unwrap().clear(),
+        _ => panic!("unexpected direct-call input mutation"),
+    }
+    Ok(())
+}
+
+#[test]
+fn original_straight_line_reference_call_inputs_reject_omission_and_same_count_rebinding() {
+    struct Restore(Option<ScopedSlotObserverV29>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED_SLOT_OBSERVER_V29.set(self.0);
+            ACTUAL_DIRECT_CALL_INPUT_FAULT_V26.set(0);
+        }
+    }
+    let _restore =
+        Restore(SCOPED_SLOT_OBSERVER_V29.replace(Some(mutate_actual_direct_call_inputs_v26)));
+    for nested in [false, true] {
+        for fault in 1..=5 {
+            SCOPED_SLOT_OBSERVER_V29.set(Some(mutate_actual_direct_call_inputs_v26));
+            ACTUAL_DIRECT_CALL_INPUT_FAULT_V26.set(fault);
+            let owner = global_expression_helper_owner_v23(nested);
+            let abi = issued_descriptor_role_abi_v18(&owner);
+            let completed = std::cell::Cell::new(false);
+            let result = run_descriptor_role_owner_with_abi_v18(
+                owner,
+                abi,
+                OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+                MODULE_LIMIT,
+                |_, _, _| {
+                    completed.set(true);
+                    Ok(())
+                },
+            )
+            .0;
+            assert!(result.is_err(), "nested={nested}, fault={fault}");
+            assert!(
+                !completed.get(),
+                "mutated input table reached source consumer"
+            );
+            assert_eq!(ACTUAL_REFERENCE_CALL_CAPTURES_V26.get(), 1);
+        }
+    }
+}
+
 #[test]
 fn original_reference_argument_emission_retains_the_actual_cast_for_independent_replay() {
     struct Restore(Option<ScopedSlotObserverV29>);
@@ -307,3 +411,5 @@ fn original_reference_argument_emission_retains_the_actual_cast_for_independent_
         assert_eq!(ACTUAL_REFERENCE_CALL_CAPTURES_V26.get(), 1);
     }
 }
+
+include!("production_source_issued_call_owner_v26_tests.rs");

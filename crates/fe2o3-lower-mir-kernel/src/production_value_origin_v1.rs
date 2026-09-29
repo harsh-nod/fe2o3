@@ -189,7 +189,7 @@ where
         &relation.source.owner.inner.pending.graph,
         function,
         budget,
-        consume,
+        super::SourceCallbackCustodyV29::new(consume),
     )
 }
 
@@ -204,18 +204,23 @@ pub(super) fn with_optimized_whole_value_origins_v18<'a, 'work, R, E>(
 where
     E: From<super::ProductionSourceOwnedViewErrorV18>,
 {
-    relation.query(budget)?;
-    budget
-        .charge_work(3)
-        .map_err(super::ProductionSourceOwnedViewErrorV18::from)?;
-    if !std::ptr::eq(relation.inventory, optimized.input_inventory(budget)?)
-        || !std::ptr::eq(relation.source, optimized.original_source(budget)?)
-        || !std::ptr::eq(inventory, optimized.output_inventory(budget)?)
-    {
-        return relation
-            .source
-            .missing("optimized whole-value endpoint association")
-            .map_err(Into::into);
+    let consume = super::SourceCallbackCustodyV29::new(consume);
+    let checked = (|| -> super::SourceOwnedResultV18<()> {
+        relation.query(budget)?;
+        budget.charge_work(3)?;
+        if !std::ptr::eq(relation.inventory, optimized.input_inventory(budget)?)
+            || !std::ptr::eq(relation.source, optimized.original_source(budget)?)
+            || !std::ptr::eq(inventory, optimized.output_inventory(budget)?)
+        {
+            return relation
+                .source
+                .missing("optimized whole-value endpoint association");
+        }
+        Ok(())
+    })();
+    if let Err(error) = checked {
+        drop(consume);
+        return Err(error.into());
     }
     with_source_inventory_origins_v18(
         relation,
@@ -233,7 +238,9 @@ fn with_source_inventory_origins_v18<'a, 'work, R, E>(
     expected_owner: &VerifiedCanonicalKernelIrModuleV18,
     function: Function,
     budget: &mut Budget<'work>,
-    consume: impl FnOnce(&WholeValueOriginsV18<'a>, &mut Budget<'work>) -> std::result::Result<R, E>,
+    consume: super::SourceCallbackCustodyV29<
+        impl FnOnce(&WholeValueOriginsV18<'a>, &mut Budget<'work>) -> std::result::Result<R, E>,
+    >,
 ) -> std::result::Result<R, E>
 where
     E: From<super::ProductionSourceOwnedViewErrorV18>,
@@ -243,55 +250,46 @@ where
         Error::Resource(error) => ViewError::Resource(error),
         Error::InconsistentOwner => ViewError::Binding("whole-value inventory association"),
     };
-    relation.query(budget)?;
+    if let Err(error) = relation.query(budget) {
+        drop(consume);
+        return Err(error.into());
+    }
     let floor = budget.storage();
-    let mut consume = Some(consume);
-    let prepared =
-        super::scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
-            (|| {
-                let floor = budget.storage();
-                let headers = super::argument_sum_v1(&[
-                    super::source_owned_finish_preflight_v26::<R, E>(budget)?,
-                    std::mem::size_of_val(&consume),
-                    std::mem::align_of_val(&consume),
-                    std::mem::size_of::<WholeValueOriginsV18<'_>>(),
-                    std::mem::size_of::<std::thread::Result<std::result::Result<R, E>>>(),
-                ])?;
-                budget.reserve_storage(headers)?;
-                let origins = relation.retain_query(
-                    prepare_inner(inventory, expected_owner, function, budget).map_err(query_error),
-                )?;
-                let retained =
-                    super::argument_product_v1(origins.origins.len(), std::mem::size_of::<Origin>())?;
-                let storage = super::argument_sum_v1(&[headers, retained])?;
-                let scratch = budget
-                    .storage()
-                    .checked_sub(floor)
-                    .and_then(|live| live.checked_sub(storage))
-                    .ok_or(Resource::Accounting)?;
-                budget.release_storage(scratch)?;
-                Ok::<_, ViewError>((origins, storage))
-            })()
-            .inspect_err(|_| {
-                super::source_reference_discard_v29(consume.take());
-            })
-        });
-    let (origins, storage) = match prepared {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            super::source_reference_discard_v29(consume.take());
-            return Err(error.into());
-        }
-    };
-    let Some(consume) = consume.take() else {
-        relation.source.cleanup.deny_refund();
-        return Err(ViewError::Resource(Resource::Accounting).into());
-    };
+    let (origins, storage, mut consume) =
+        super::scoped_source_attempt_v29(relation.source.cleanup, budget, floor, move |budget| {
+            let floor = budget.storage();
+            let headers = super::argument_sum_v1(&[
+                super::source_owned_finish_preflight_v26::<R, E>(budget)?,
+                std::mem::size_of_val(&consume),
+                std::mem::align_of_val(&consume),
+                std::mem::size_of::<WholeValueOriginsV18<'_>>(),
+                std::mem::size_of::<std::thread::Result<std::result::Result<R, E>>>(),
+            ])?;
+            budget.reserve_storage(headers)?;
+            let origins = relation.retain_query(
+                prepare_inner(inventory, expected_owner, function, budget).map_err(query_error),
+            )?;
+            let retained =
+                super::argument_product_v1(origins.origins.len(), std::mem::size_of::<Origin>())?;
+            let storage = super::argument_sum_v1(&[headers, retained])?;
+            let scratch = budget
+                .storage()
+                .checked_sub(floor)
+                .and_then(|live| live.checked_sub(storage))
+                .ok_or(Resource::Accounting)?;
+            budget.release_storage(scratch)?;
+            Ok::<_, ViewError>((origins, storage, consume))
+        })?;
     let slot = std::ptr::from_ref(budget) as usize;
     let ledger = budget.work_ledger_identity_v1();
     let live_floor = budget.storage();
-    let caught =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&origins, budget)));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Some(consume) = consume.take() else {
+            relation.source.cleanup.deny_refund();
+            return Err(ViewError::Resource(Resource::Accounting).into());
+        };
+        consume(&origins, budget)
+    }));
     let prior = relation.source.guard.first.get();
     let invalid = slot != std::ptr::from_ref(budget) as usize
         || ledger != budget.work_ledger_identity_v1()

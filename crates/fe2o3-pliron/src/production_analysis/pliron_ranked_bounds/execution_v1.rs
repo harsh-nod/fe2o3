@@ -329,8 +329,19 @@ fn run_pliron_ranked_bounds_inner_v1<A: NativePrivateInputV1>(
         Ok(reachable) => reachable,
         Err(finding) => return finding_failure(finding, observer),
     };
+    if let Err(finding) = budget.work(1) {
+        return finding_failure(finding, observer);
+    }
+    // Authentication and complete schema/edge validation above remain required
+    // for both domains. This changes no reachability fact and supplies no access
+    // proof: dataflow and access checking below still cover every reachable node.
+    let cfg_domain = private.map_or(
+        crate::kir_bridge_v1::NativeCfgDomainV26::AllBlocksReachableV1,
+        NativePrivateInputV1::cfg_domain_v26,
+    );
     for (block, is_reachable) in reachable.iter().copied().enumerate() {
         if !is_reachable
+            && cfg_domain == crate::kir_bridge_v1::NativeCfgDomainV26::AllBlocksReachableV1
             && let Err(finding) = push_finding(&mut findings, &mut budget, || {
                 RankedBoundsFindingV1::UnreachableBlock { block }
             })

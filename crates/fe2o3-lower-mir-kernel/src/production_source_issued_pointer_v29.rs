@@ -2,6 +2,7 @@
 // pointer. The actual descriptor tail and guarded access are checked separately.
 include!("production_source_issued_roles_v29.rs");
 include!("production_source_issued_semantic_v29.rs");
+include!("production_source_issued_call_provenance_v26.rs");
 #[cfg(test)]
 #[path = "production_source_issued_pointer_source_v29_tests.rs"]
 mod source_issued_pointer_source_tests_v29;

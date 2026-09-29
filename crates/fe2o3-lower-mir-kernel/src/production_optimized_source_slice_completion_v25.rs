@@ -121,21 +121,16 @@ fn slice_completion_add_v25(
         .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
             "slice runtime argument ordinal differs",
         ))?;
-    let row = slot.get_or_insert(SourceSliceArgumentCompletionV25 {
-        parameter: entry.optimized_parameter(),
-        ty: entry.abi.ty(),
-        identity: entry.abi.identity(),
-        scalar: entry.abi.scalar(),
-        exclusive: entry.abi.is_exclusive_contract(),
-        reads: 0,
-        writes: 0,
-        axis: None,
-        different_projection: false,
-    });
+    let row = slot
+        .as_mut()
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "slice access has no complete parameter census row",
+        ))?;
     row.add(entry, projection, budget)
 }
 
 include!("production_optimized_source_global_completion_v26.rs");
+include!("production_optimized_source_slice_parameters_v26.rs");
 
 impl PendingSharedEntryRegionsV18<'_, '_> {
     fn with_complete_slice_domains_v25<'work, F>(
@@ -236,6 +231,7 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
                 .map_err(source_argument_error_v18)?;
             budget.charge_work(count)?;
             arguments.resize(count, None);
+            index.complete_parameters_v26(&mut arguments, budget)?;
             let mut observed = [0_usize; 2];
             for row in self.source.roles.rows {
                 budget.charge_work(4)?;
@@ -380,6 +376,7 @@ fn slice_completion_headers_v25<F>() -> Result<usize, ArgumentResourceV1> {
         size_of::<Frame<'_>>(),
         argument_product_v1(2, size_of::<SourceOwnedResultV18<Frame<'_>>>())?,
         argument_product_v1(4, size_of::<&mut F>())?,
+        slice_parameters_headers_v26()?,
     ])
 }
 

@@ -384,7 +384,10 @@ impl<'a> SourceIssuedActualV29<'a> {
 struct SourceIssuedAccessV29 {
     instance: usize,
     anchor: usize,
+    issuer_instance: ProductionCallInstanceIdV1,
     issuer: SsaValueV1,
+    pointer: ValueId,
+    issuer_pointer: ValueId,
     access: MemoryAccess,
     writing: bool,
     present: ValueId,

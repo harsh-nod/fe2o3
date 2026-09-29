@@ -286,7 +286,11 @@ fn build_execution_parameters_with_references_v29<'scope>(
     let mut values = emission_vec_v1(plan.parameter_values.len(), budget)?;
     let mut nominal_floor = 0u32;
     let mut next = 0usize;
-    let mut invocation_inputs = (!row.ssa().plan().entry_arguments().is_empty()).then(Vec::new);
+    // Source call transport is independent of whether the callee needs an
+    // invocation preheader for an entry backedge. Retain the complete roster.
+    let mut invocation_inputs = (references.is_some()
+        || !row.ssa().plan().entry_arguments().is_empty())
+    .then(Vec::new);
     for (local, declaration) in row.declaration().locals().iter().enumerate() {
         budget.charge_work(1)?;
         if !declaration.role().is_entry_argument() {
@@ -620,7 +624,8 @@ impl<'a> ExecutionAvailabilityV29<'a> {
             return Err(execution_call_error_v29());
         }
         if self.invocation_inputs.is_some()
-            || prepared.invocation_inputs.is_some() != !self.ssa.plan().entry_arguments().is_empty()
+            || prepared.invocation_inputs.is_some()
+                != (self.references.is_some() || !self.ssa.plan().entry_arguments().is_empty())
         {
             return Err(invocation_entry_error_v1());
         }
@@ -634,5 +639,26 @@ impl<'a> ExecutionAvailabilityV29<'a> {
             locals[local] = Some(binding);
         }
         Ok(prepared.nominal_floor)
+    }
+}
+
+impl SemanticFunctionLoweringV1<'_, '_> {
+    fn take_direct_call_inputs_v26(
+        &mut self,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<Option<Vec<InvocationInputRowV1>>, ProductionSemanticKirErrorV1> {
+        let Some(cursor) = self.execution.as_mut() else {
+            return Ok(None);
+        };
+        cursor.check_ledger(budget)?;
+        budget.charge_work(2)?;
+        if !cursor.ssa.plan().entry_arguments().is_empty()
+            && cursor.invocation_inputs.is_some()
+        {
+            return Err(invocation_entry_error_v1());
+        }
+        // A real invocation edge already consumed its rows. The remaining
+        // source-call inputs belong to a callee without a synthetic preheader.
+        Ok(cursor.invocation_inputs.take())
     }
 }

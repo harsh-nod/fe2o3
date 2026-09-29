@@ -224,7 +224,9 @@ fn source_consumer_preparation_refusal_drops_uncalled_capture_before_attempt_ref
                         + size_of::<
                             std::thread::Result<Result<(), ProductionSourceOwnedViewErrorV18>>,
                         >();
-                    let remaining = 32 + 2 + 1 + 4 - usize::from(!accepted_view_headers);
+                    // The generic attempt is admitted before the view's own
+                    // disposal preflight reaches the selected refusal phase.
+                    let remaining = 2 * (32 + 2 + 1 + 4) - usize::from(!accepted_view_headers);
                     budget
                         .charge_work(MODULE_LIMIT - budget.work() - remaining)
                         .unwrap();
@@ -234,13 +236,29 @@ fn source_consumer_preparation_refusal_drops_uncalled_capture_before_attempt_ref
                     }));
                     assert!(dropped.get());
                     assert!(!invoked.get());
-                    let Ok(Err(SourceConsumerErrorV18(
-                        ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(
-                            error,
-                        )),
-                    ))) = caught
-                    else {
+                    let Ok(Err(SourceConsumerErrorV18(error))) = caught else {
                         panic!("typed preparation refusal must survive uncalled callback Drop");
+                    };
+                    if accepted_view_headers {
+                        assert!(
+                            matches!(&error, ProductionSourceOwnedViewErrorV18::Source(_)),
+                            "replay refusal retains its original source wrapper: {error:?}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(
+                                &error,
+                                ProductionSourceOwnedViewErrorV18::Resource(
+                                    ArgumentResourceV1::Work(_)
+                                )
+                            ),
+                            "disposal preflight is a direct work refusal: {error:?}"
+                        );
+                    }
+                    let ArgumentResourceV1::Work(error) =
+                        source_slot_tests::original_repeated_source_resource_v29(error)
+                    else {
+                        panic!("the selected preparation refusal must be the original work limit");
                     };
                     assert_eq!(error.limit(), MODULE_LIMIT);
                     assert_eq!(budget.failed_work(), Some(error.actual()));
@@ -274,6 +292,96 @@ fn source_consumer_preparation_refusal_drops_uncalled_capture_before_attempt_ref
                 budget.release_storage(retained + capture).unwrap();
                 assert_eq!(budget.storage(), MODULE_FLOOR);
             }
+        }
+    }
+}
+
+#[test]
+fn source_consumer_raw_replay_panic_disposes_uncalled_capture_before_outer_credit() {
+    for deny in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let (pending, capture_storage) = pending_query_drop_fixture_v1751(&mut budget);
+        let incoming = budget.storage();
+        let reached = std::cell::Cell::new(false);
+        let outer = with_scoped_source_cleanup_v29(
+            &mut budget,
+            incoming,
+            |cleanup, budget| -> SourceOwnedResultV18<()> {
+                let dropped = std::cell::Cell::new(false);
+                let invoked = std::cell::Cell::new(false);
+                let capture = SourceFinishDropV26 {
+                    cleanup,
+                    dropped: &dropped,
+                    deny,
+                };
+                let invoked_ref = &invoked;
+                let consume = move |_: &ProductionSourceOwnedViewV18<'_>,
+                                    _: &mut ArgumentBudgetV1<'_>| {
+                    std::hint::black_box(&capture);
+                    invoked_ref.set(true);
+                    Ok::<(), ProductionSourceOwnedViewErrorV18>(())
+                };
+                fn capture_header<F>(_: &F) -> usize {
+                    size_of::<Option<F>>() + std::mem::align_of::<Option<F>>()
+                }
+                let view_headers = capture_header(&consume)
+                    + source_owned_finish_header_oracle_v26::<(), ProductionSourceOwnedViewErrorV18>(
+                    )
+                    + size_of::<SourceOwnedQueryGuardV18>()
+                    + size_of::<ProductionSourceOwnedViewV18<'_>>()
+                    + size_of::<std::thread::Result<Result<(), ProductionSourceOwnedViewErrorV18>>>(
+                    );
+                let (payload, address, payload_drops) = cleanup_panic_v29(1797_29);
+                assert!(
+                    cleanup
+                        .fault
+                        .replace(Some(ScopedSourceCleanupFaultV29::Panic {
+                            undercut: false,
+                            payload,
+                        }))
+                        .is_none()
+                );
+                let floor = budget.storage();
+                let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    pending.with_source_consumer_with_cleanup_v18(cleanup, budget, consume)
+                }));
+                assert!(dropped.get());
+                assert!(!invoked.get());
+                let Err(payload) = caught else {
+                    panic!("the original raw source-constructor panic must propagate");
+                };
+                require_cleanup_panic_v29(payload, address, 1797_29, &payload_drops);
+                assert_eq!(cleanup.is_denied(), deny);
+                if deny {
+                    assert!(budget.storage() >= floor + view_headers);
+                } else {
+                    assert_eq!(budget.storage(), floor);
+                }
+                assert!(cleanup.fault.borrow().is_none());
+                reached.set(true);
+                Ok(())
+            },
+        );
+        assert!(reached.get());
+        if deny {
+            assert!(matches!(
+                outer,
+                Err(ProductionSourceOwnedViewErrorV18::Resource(
+                    ArgumentResourceV1::Accounting
+                ))
+            ));
+            assert!(budget.storage() > incoming);
+        } else {
+            outer.unwrap();
+            assert_eq!(budget.storage(), incoming);
+        }
+        let retained = pending.adopted_storage();
+        drop(pending);
+        if !deny {
+            budget.release_storage(retained + capture_storage).unwrap();
+            assert_eq!(budget.storage(), MODULE_FLOOR);
         }
     }
 }

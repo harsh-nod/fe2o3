@@ -1001,7 +1001,7 @@ impl ProductionSourceScalarLeavesV18<'_> {
     pub fn visit_store_inputs<'work, E>(
         &self,
         budget: &mut ArgumentBudgetV1<'work>,
-        mut consume: impl for<'request> FnMut(
+        consume: impl for<'request> FnMut(
             &ProductionSourceScalarStoreV18<'request>,
             &mut ArgumentBudgetV1<'work>,
         ) -> Result<(), E>,
@@ -1009,20 +1009,23 @@ impl ProductionSourceScalarLeavesV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        let consume = SourceCallbackCustodyV29::new(consume);
         let leaves = self.leaves;
         let relation = leaves.relation;
         leaves.query(budget)?;
         let floor = budget.storage();
-        let mut consume = Some(consume);
+        let capture = std::mem::size_of_val(&consume);
+        let alignment = std::mem::align_of_val(&consume);
         let prepared =
             scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
-                let floor = budget.storage();
-                relation
-                    .retain_query((|| {
+                consume.prepare(|| {
+                    let floor = budget.storage();
+                    relation.retain_query((|| {
                         let headers = argument_sum_v1(&[
-                            std::mem::size_of_val(&consume),
-                            std::mem::align_of_val(&consume),
+                            capture,
+                            alignment,
                             size_of::<ProductionSourceScalarStoreV18<'_>>(),
+                            source_callback_custody_finish_preflight_v29::<usize, E>(budget)?,
                             source_owned_finish_preflight_v26::<usize, E>(budget)?,
                         ])?;
                         budget.reserve_storage(headers)?;
@@ -1048,18 +1051,14 @@ impl ProductionSourceScalarLeavesV18<'_> {
                             .ok_or(ArgumentResourceV1::Accounting)?;
                         Ok((arguments, inline_scalar, function, retained))
                     })())
-                    .inspect_err(|_| {
-                        source_reference_discard_v29(consume.take());
-                    })
+                })
             });
-        let (arguments, inline_scalar, function, retained) = match prepared {
+        let ((arguments, inline_scalar, function, retained), mut consume) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                source_reference_discard_v29(consume);
                 return Err(error.into());
             }
         };
-        let mut consume = consume.expect("scalar store preparation retained its callback");
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             value_origin_v1::with_whole_value_origins_v18(
                 relation,
@@ -1178,7 +1177,11 @@ impl ProductionSourceScalarLeavesV18<'_> {
                             let Some(request) = request else {
                                 continue;
                             };
-                            consume(&request, budget)?;
+                            consume
+                                .as_mut()
+                                .expect("scalar store visitor remains in custody")(
+                                &request, budget,
+                            )?;
                             if budget.storage() < retained_floor {
                                 relation.source.cleanup.deny_refund();
                                 return relation
@@ -1197,6 +1200,7 @@ impl ProductionSourceScalarLeavesV18<'_> {
                 },
             )
         }));
+        let caught = consume.finish(caught);
         let prior = relation.source.guard.first.get();
         let postflight = leaves.observe_custody(budget);
         drop((arguments, inline_scalar));
@@ -1437,9 +1441,11 @@ impl ProductionSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        let consume = SourceCallbackCustodyV29::new(consume);
         self.query(budget)?;
         let floor = budget.storage();
-        let mut consume = Some(consume);
+        let capture = std::mem::size_of_val(&consume);
+        let alignment = std::mem::align_of_val(&consume);
         // Attempt-header refusal happens before the constructor callback can
         // retain it. It is still the first failure of this source query.
         let prepared = self.retain_query(scoped_source_attempt_v29(
@@ -1447,44 +1453,45 @@ impl ProductionSourceCorrespondenceV18<'_> {
             budget,
             floor,
             |budget| {
-                let floor = budget.storage();
-                self.retain_query((|| {
-                    let headers = argument_sum_v1(&[
-                        std::mem::size_of_val(&consume),
-                        std::mem::align_of_val(&consume),
-                        source_owned_finish_preflight_v26::<T, E>(budget)?,
-                        size_of::<ProductionSourceScalarLeavesV18<'_>>(),
-                        size_of::<SourceScalarNamespaceV18<'_>>(),
-                        size_of::<&SourceScalarNamespaceV18<'_>>(),
-                        size_of::<std::thread::Result<Result<T, E>>>(),
-                    ])?;
-                    budget.reserve_storage(headers)?;
-                    let leaves = SourceScalarLeavesV18::build(self, root, namespace, budget)?;
-                    let retained = budget
-                        .storage()
-                        .checked_sub(floor)
-                        .ok_or(ArgumentResourceV1::Accounting)?;
-                    Ok((leaves, retained))
-                })())
-                .inspect_err(|_| {
-                    source_reference_discard_v29(consume.take());
+                consume.prepare(|| {
+                    let floor = budget.storage();
+                    self.retain_query((|| {
+                        let headers = argument_sum_v1(&[
+                            capture,
+                            alignment,
+                            source_owned_finish_preflight_v26::<T, E>(budget)?,
+                            size_of::<ProductionSourceScalarLeavesV18<'_>>(),
+                            size_of::<SourceScalarNamespaceV18<'_>>(),
+                            size_of::<&SourceScalarNamespaceV18<'_>>(),
+                            size_of::<std::thread::Result<Result<T, E>>>(),
+                        ])?;
+                        budget.reserve_storage(headers)?;
+                        let leaves = SourceScalarLeavesV18::build(self, root, namespace, budget)?;
+                        let retained = budget
+                            .storage()
+                            .checked_sub(floor)
+                            .ok_or(ArgumentResourceV1::Accounting)?;
+                        Ok((leaves, retained))
+                    })())
                 })
             },
         ));
-        let (mut leaves, retained) = match prepared {
+        let ((mut leaves, retained), mut consume) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                source_reference_discard_v29(consume);
                 return Err(error.into());
             }
         };
         // The constructor's own callback header has now been settled. Only
         // the still-live leaf scope contributes to the returned custody floor.
-        let consume = consume.expect("scalar leaf preparation retained its callback");
         leaves.floor = budget.storage();
         let view = ProductionSourceScalarLeavesV18 { leaves: &leaves };
-        let caught =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&view, budget)));
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            consume
+                .take()
+                .expect("scalar leaf consumer is invoked once")(&view, budget)
+        }));
+        drop(consume);
         let prior = self.source.guard.first.get();
         let postflight = if matches!(&caught, Ok(Ok(_))) {
             leaves.query(budget)

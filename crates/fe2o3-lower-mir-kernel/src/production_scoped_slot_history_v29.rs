@@ -480,7 +480,21 @@ pub(super) fn check_expanded_scalar_addresses_v29(
     kills: &[SourceAddressKillV29],
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> UseResult<()> {
-    if !graph.projections.is_empty() {
+    // Unprojected aggregate storage still needs byte-range history rather than
+    // the single-cell scalar equations. No physical access implies no seed.
+    let mut object_history = !graph.projections.is_empty();
+    for slot in slots {
+        budget.charge_work(1)?;
+        if let ScopedSlotRepresentationV29::Object { schema, .. } = slot.representation {
+            budget.charge_work(1)?;
+            let layout = graph
+                .object_layouts
+                .get(schema.0 as usize)
+                .ok_or_else(|| invalid("expanded history has no exact object layout"))?;
+            object_history |= matches!(layout.value, SourceStaticObjectValueV29::Aggregate);
+        }
+    }
+    if object_history {
         return check_expanded_static_object_history_v29(
             function,
             graph,

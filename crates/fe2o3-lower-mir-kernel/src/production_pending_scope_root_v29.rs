@@ -122,6 +122,7 @@ fn pending_active_instance_index_v1(
 struct PendingInstanceSidecarsV29 {
     next_value: u32,
     execution_observation: Option<ExecutionArchiveV29>,
+    direct_call_inputs: Option<Vec<InvocationInputRowV1>>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
     invocation_entry: Option<InvocationEntryRelationV1>,
     scoped_slot_origins: Option<Vec<ScopedSlotOriginV29>>,
@@ -152,6 +153,7 @@ impl PendingInstanceSidecarsV29 {
         let LoweredFunctionResultV1 {
             next_value,
             execution_observation,
+            direct_call_inputs,
             source_call_instance,
             invocation_entry,
             scoped_slot_origins,
@@ -180,6 +182,7 @@ impl PendingInstanceSidecarsV29 {
             Self {
                 next_value,
                 execution_observation,
+                direct_call_inputs,
                 source_call_instance,
                 invocation_entry,
                 scoped_slot_origins,

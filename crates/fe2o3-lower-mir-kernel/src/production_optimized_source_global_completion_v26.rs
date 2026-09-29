@@ -70,9 +70,10 @@ impl ProductionMixedSliceRuntimePremiseV26 {
     pub const fn index_width(&self) -> fe2o3_kernel_ir::FormalIndexWidth {
         self.width
     }
-    /// Always true: runtime must bind a valid, correctly aligned allocation extent.
+    /// Reports whether memory accesses require a valid, aligned extent.
+    /// Unused parameters still require complete argument/buffer transport.
     pub const fn requires_valid_aligned_extent(&self) -> bool {
-        true
+        self.reads != 0 || self.writes != 0
     }
     /// Reports whether any read requires an initialized runtime extent.
     pub const fn requires_initialized_extent(&self) -> bool {
@@ -470,7 +471,8 @@ where
                                         && !actual.requires_exclusive_runtime_binding())
                                     || (row.writes != 0 && !actual.requires_exact_launch_binding())
                                     || (row.reads != 0 && !actual.requires_initialized_extent())
-                                    || !actual.requires_valid_aligned_extent()
+                                    || actual.requires_valid_aligned_extent()
+                                        != (row.reads != 0 || row.writes != 0)
                                 {
                                     return original.source.missing(
                                         "mixed global source and conditional parameter differ",

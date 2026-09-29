@@ -375,22 +375,29 @@ wire_struct! {
     }
 }
 
-/// This profile never relabels Private, Generic, Constant or Workgroup memory.
+/// Exact physical access representation, distinct from the Global allocation
+/// domain. Generic is never relabeled Global and does not prove its origin.
+/// Older decoders reject the new Generic tag instead of interpreting it as 1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MixedMemorySpaceV26 {
     Global,
+    Generic,
 }
 impl Wire for MixedMemorySpaceV26 {
     const BYTES: usize = 1;
     fn read(r: &mut Reader<'_>) -> Format<Self> {
-        if u8::read(r)? == 1 {
-            Ok(Self::Global)
-        } else {
-            Err("mixed memory space")
+        match u8::read(r)? {
+            1 => Ok(Self::Global),
+            2 => Ok(Self::Generic),
+            _ => Err("mixed memory space"),
         }
     }
     fn write(&self, w: &mut Output<'_>) {
-        1u8.write(w);
+        match self {
+            Self::Global => 1u8,
+            Self::Generic => 2u8,
+        }
+        .write(w);
     }
 }
 wire_struct! {

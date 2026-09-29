@@ -482,7 +482,7 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
         &self,
         source_writes: bool,
         budget: &mut ArgumentBudgetV1<'work>,
-        mut check_request: impl for<'request> FnMut(
+        check_request: impl for<'request> FnMut(
             &ProductionSourceEntryWriteV18<'request>,
             &mut ArgumentBudgetV1<'work>,
         ) -> Result<(), E>,
@@ -494,112 +494,118 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        let check_request = SourceCallbackCustodyV29::new(check_request);
+        let consume = SourceCallbackCustodyV29::new(consume);
         self.check(budget)?;
         let original = self.original.leaves.relation;
         let root = self.original.leaves.root;
         let floor = budget.storage();
-        let mut check_request = Some(check_request);
-        let mut consume = Some(consume);
+        let callback_headers = original.retain_query(
+            source_entry_write_callback_headers_v18(
+                std::mem::size_of_val(&check_request),
+                std::mem::align_of_val(&check_request),
+                std::mem::size_of_val(&consume),
+                std::mem::align_of_val(&consume),
+            )
+            .map_err(ProductionSourceOwnedViewErrorV18::from),
+        )?;
         let prepared =
             scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
-                let floor = budget.storage();
-                original
-                    .retain_query((|| {
-                        let disposal = source_owned_finish_preflight_v26::<T, E>(budget)?;
-                        budget.reserve_storage(argument_sum_v1(&[
-                            disposal,
-                            source_entry_write_headers_v18::<T, E>()?,
-                            source_entry_write_callback_headers_v18(
-                                std::mem::size_of_val(&check_request),
-                                std::mem::align_of_val(&check_request),
-                                std::mem::size_of_val(&consume),
-                                std::mem::align_of_val(&consume),
-                            )?,
-                        ])?)?;
-                        let physical = original.source.root(root, budget)?.1;
-                        let function = original.inventory.functions().get(physical).ok_or(
-                            ProductionSourceOwnedViewErrorV18::Binding("typed entry root"),
-                        )?;
-                        let mut rows = emission_vec_v1(function.operations.len(), budget)
-                            .map_err(source_emission_error_v18)?;
-                        visit_optimized_source_objects_v18(
-                            original,
-                            self.optimized,
-                            root,
-                            budget,
-                            |row, budget| {
-                                if let Some(entry) = source_private_write_row_v22(
-                                    original,
-                                    root,
-                                    &row,
-                                    source_writes,
-                                    budget,
-                                )? {
-                                    if rows.len() == rows.capacity() {
-                                        return original
-                                            .source
-                                            .missing("typed entry census capacity");
+                check_request.prepare(|| {
+                    consume.prepare(|| {
+                        let floor = budget.storage();
+                        original.retain_query((|| {
+                            let disposal = source_owned_finish_preflight_v26::<T, E>(budget)?;
+                            let visitor_disposal =
+                                source_callback_custody_finish_preflight_v29::<T, E>(budget)?;
+                            budget.reserve_storage(argument_sum_v1(&[
+                                disposal,
+                                visitor_disposal,
+                                source_entry_write_headers_v18::<T, E>()?,
+                                callback_headers,
+                            ])?)?;
+                            let physical = original.source.root(root, budget)?.1;
+                            let function = original.inventory.functions().get(physical).ok_or(
+                                ProductionSourceOwnedViewErrorV18::Binding("typed entry root"),
+                            )?;
+                            let mut rows = emission_vec_v1(function.operations.len(), budget)
+                                .map_err(source_emission_error_v18)?;
+                            visit_optimized_source_objects_v18(
+                                original,
+                                self.optimized,
+                                root,
+                                budget,
+                                |row, budget| {
+                                    if let Some(entry) = source_private_write_row_v22(
+                                        original,
+                                        root,
+                                        &row,
+                                        source_writes,
+                                        budget,
+                                    )? {
+                                        if rows.len() == rows.capacity() {
+                                            return original
+                                                .source
+                                                .missing("typed entry census capacity");
+                                        }
+                                        rows.push(entry);
                                     }
-                                    rows.push(entry);
+                                    Ok(())
+                                },
+                            )?;
+                            private_array_heapsort_v1(
+                                &mut rows,
+                                |row| [row.instance, row.anchor],
+                                &mut SourceCorrespondenceWorkV18(budget),
+                                || ArgumentResourceV1::Arithmetic.into(),
+                            )?;
+                            for pair in rows.windows(2) {
+                                budget.charge_work(1)?;
+                                if (pair[0].instance, pair[0].anchor)
+                                    == (pair[1].instance, pair[1].anchor)
+                                {
+                                    return original
+                                        .source
+                                        .missing("typed entry census repeated source anchor");
                                 }
-                                Ok(())
-                            },
-                        )?;
-                        private_array_heapsort_v1(
-                            &mut rows,
-                            |row| [row.instance, row.anchor],
-                            &mut SourceCorrespondenceWorkV18(budget),
-                            || ArgumentResourceV1::Arithmetic.into(),
-                        )?;
-                        for pair in rows.windows(2) {
-                            budget.charge_work(1)?;
-                            if (pair[0].instance, pair[0].anchor)
-                                == (pair[1].instance, pair[1].anchor)
-                            {
-                                return original
-                                    .source
-                                    .missing("typed entry census repeated source anchor");
                             }
-                        }
-                        let arguments = SourceRootArgumentsV18::build(original, root, budget)?;
-                        let input_inline = Gfx942InlineScalarCorrespondenceV30::build_source_v18(
-                            original, root, budget,
-                        )?;
-                        let output_inline = input_inline.transport_optimized_source_v18(
-                            original,
-                            self.optimized,
-                            root,
-                            budget,
-                        )?;
-                        let retained = budget
-                            .storage()
-                            .checked_sub(floor)
-                            .ok_or(ArgumentResourceV1::Accounting)?;
-                        Ok((
-                            rows,
-                            arguments,
-                            input_inline,
-                            output_inline,
-                            function.coordinate,
-                            retained,
-                        ))
-                    })())
-                    .inspect_err(|_| {
-                        source_reference_discard_v29(check_request.take());
-                        source_reference_discard_v29(consume.take());
+                            let arguments = SourceRootArgumentsV18::build(original, root, budget)?;
+                            let input_inline =
+                                Gfx942InlineScalarCorrespondenceV30::build_source_v18(
+                                    original, root, budget,
+                                )?;
+                            let output_inline = input_inline.transport_optimized_source_v18(
+                                original,
+                                self.optimized,
+                                root,
+                                budget,
+                            )?;
+                            let retained = budget
+                                .storage()
+                                .checked_sub(floor)
+                                .ok_or(ArgumentResourceV1::Accounting)?;
+                            Ok((
+                                rows,
+                                arguments,
+                                input_inline,
+                                output_inline,
+                                function.coordinate,
+                                retained,
+                            ))
+                        })())
                     })
+                })
             });
-        let (rows, arguments, input_inline, output_inline, function, retained) = match prepared {
+        let (
+            ((rows, arguments, input_inline, output_inline, function, retained), mut consume),
+            mut check_request,
+        ) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
-                source_reference_discard_v29(check_request);
-                source_reference_discard_v29(consume);
                 return Err(error.into());
             }
         };
         let retained_floor = budget.storage();
-        let mut check_request = check_request.expect("entry preparation retained its checker");
-        let consume = consume.expect("entry preparation retained its consumer");
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             value_origin_v1::with_whole_value_origins_v18(
                 original,
@@ -631,7 +637,11 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                                     floor: request_floor,
                                     source_writes,
                                 };
-                                check_request(&request, budget)?;
+                                check_request
+                                    .as_mut()
+                                    .expect("entry checker remains in custody")(
+                                    &request, budget
+                                )?;
                                 request.check(budget)?;
                                 if !completed.get() {
                                     return original
@@ -648,12 +658,16 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                                 floor: request_floor,
                                 source_writes,
                             };
-                            consume(&checked, budget)
+                            consume.take().expect("entry consumer is invoked once")(
+                                &checked, budget,
+                            )
                         },
                     )
                 },
             )
         }));
+        let caught = check_request.finish(caught);
+        drop(consume);
         let prior = original.source.guard.first.get();
         let postflight = if budget.storage() < retained_floor {
             original.source.cleanup.deny_refund();

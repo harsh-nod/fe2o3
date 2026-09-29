@@ -132,9 +132,38 @@ fn shared_capture_caller_owner_v26<const MUTATE: bool>() -> ProductionSemanticSs
     functions[3] = function(
         150,
         SemanticFunctionRoleV1::InternalHelper,
-        abi(151, false, &[shared])
-            .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::SharedBorrow])
-            .unwrap(),
+        SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([151; 32]),
+            SemanticLayoutIdentityV1::from_sha256([250; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            1,
+            vec![SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                shared,
+                SemanticAbiPassModeV1::Direct(
+                    SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(
+                            true,
+                            Some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                            true,
+                            true,
+                            false,
+                            true,
+                        ),
+                        SemanticAbiExtensionV1::None,
+                        4,
+                        Some(4),
+                    )
+                    .unwrap(),
+                ),
+            ))],
+            SemanticAbiValueV1::new(UNIT, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap()
+        .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::SharedBorrow])
+        .unwrap(),
         vec![
             local(160, UNIT, SemanticLocalRoleV1::Return),
             local(161, shared, SemanticLocalRoleV1::Argument(0)),
@@ -199,6 +228,33 @@ fn shared_capture_caller_owner_v26<const MUTATE: bool>() -> ProductionSemanticSs
     .unwrap()
 }
 
+#[test]
+fn private_shared_capture_fixture_retains_exact_frozen_reference_abi() {
+    for factory in [
+        shared_capture_caller_owner_v26::<false> as fn() -> _,
+        shared_capture_caller_owner_v26::<true>,
+    ] {
+        let owner = factory();
+        let abi = owner.source_semantic().functions()[3].abi();
+        assert_eq!(
+            abi.source_argument_ownership(),
+            &[SemanticSourceArgumentOwnershipV1::SharedBorrow]
+        );
+        let SemanticAbiPassModeV1::Direct(attributes) = abi.arguments()[0].mode() else {
+            panic!("original shared reference must have a direct ABI");
+        };
+        let regular = attributes.regular();
+        assert!(
+            regular.no_alias() && regular.non_null() && regular.read_only() && regular.no_undef()
+        );
+        assert!(!regular.in_register());
+        assert_eq!(
+            regular.pointer_capture(),
+            Some(SemanticAbiPointerCaptureV1::CapturesReadOnly)
+        );
+    }
+}
+
 fn shared_capture_complete_v26(
     factory: fn() -> ProductionSemanticSsaOwnerV1,
     work_limit: usize,
@@ -244,14 +300,18 @@ fn shared_capture_complete_v26(
                 ProductionKernelArgumentAbiInputV18 { roots: &roots },
                 budget,
             )?;
-            handoff.check_original_source(source.source_ssa(budget)?, budget)?;
-            assert!(
-                census(handoff.output(budget)?.owner())
-                    .into_iter()
-                    .all(|count| count > 0)
-            );
-            assert!(!handoff.output(budget)?.grants_authority());
-            handoff.discard(budget)?;
+            let checked = (|| -> Result<(), ProductionPrivateSourceHandoffErrorV20> {
+                handoff.check_original_source(source.source_ssa(budget)?, budget)?;
+                assert!(
+                    census(handoff.output(budget)?.owner())
+                        .into_iter()
+                        .all(|count| count > 0)
+                );
+                assert!(!handoff.output(budget)?.grants_authority());
+                Ok(())
+            })();
+            let settled = handoff.discard(budget).map_err(Into::into);
+            checked.and(settled)?;
             assert_eq!(budget.storage(), floor);
             completed.set(true);
             Ok(())
@@ -286,10 +346,17 @@ fn private_shared_capture_never_hides_an_intervening_source_write() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared = private_memory_prepared_v18(shared_capture_owner_v26::<4>, &mut budget);
+    let entered = std::cell::Cell::new(false);
+    let replayed = private_memory_prepared_v18(shared_capture_owner_v26::<4>, &mut budget)
+        .and_then(|prepared| {
+            prepared.with_source_consumer_v18(&mut budget, |_, _| {
+                entered.set(true);
+                Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+            })
+        });
     assert!(
-        prepared.is_err(),
-        "a live shared borrow survived a source write"
+        replayed.is_err() && !entered.get(),
+        "a live shared borrow survived original source replay: {replayed:?}"
     );
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
@@ -306,33 +373,73 @@ fn private_shared_capture_rejoins_original_helper_arguments_and_rejects_stale_ca
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let stale = private_memory_prepared_v18(shared_capture_caller_owner_v26::<true>, &mut budget);
+    let entered = std::cell::Cell::new(false);
+    let stale = private_memory_prepared_v18(shared_capture_caller_owner_v26::<true>, &mut budget)
+        .and_then(|prepared| {
+            prepared.with_source_consumer_v18(&mut budget, |_, _| {
+                entered.set(true);
+                Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+            })
+        });
     assert!(
-        stale.is_err(),
-        "stale caller borrow reached a helper argument"
+        stale.is_err() && !entered.get(),
+        "stale caller borrow reached a helper argument: {stale:?}"
     );
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
 #[test]
-fn private_shared_capture_uses_exact_and_one_short_cumulative_budgets() {
-    let (full, work, peak, completed) = shared_capture_complete_v26(
-        shared_capture_owner_v26::<1>,
-        OPTIMIZED_SOURCE_WORK_LIMIT_V18,
-        MODULE_LIMIT,
+fn private_shared_caller_keeps_ordinary_activations_with_source_raw_helper() {
+    run_production_optimized_consumer_v18(
+        shared_capture_caller_owner_v26::<false>,
+        |original, optimized, budget| {
+            let semantic = original.source.source_ssa(budget)?.source_semantic();
+            assert!(semantic.types().iter().any(|ty| matches!(
+                ty.shape(), SemanticTypeShapeV1::Pointer(pointer)
+                    if pointer.kind() == SemanticPointerKindV1::Raw
+            )));
+            assert!(semantic.functions().iter().any(|function| function.blocks().iter().any(|block| {
+                block.statements().iter().any(|statement| matches!(
+                    statement.kind(), SemanticStatementKindV1::Assign(assignment)
+                        if matches!(assignment.value().kind(), SemanticRvalueKindV1::AddressOf { .. })
+                ))
+            })));
+            // The admitted raw source use can be captured as a scalar before
+            // physical emission; it need not retain a raw formation alternative.
+            let [ordinary, _raw] =
+                scoped_raw_admission_v29::test_mixed_scalar_activation_census_v26(
+                    original, 0, budget,
+                )?;
+            assert!(
+                ordinary > 0,
+                "ordinary scalar activations were suppressed by raw memory"
+            );
+            original.check_optimized_source_currentness_v18(optimized, budget)?;
+            Ok(())
+        },
     );
-    assert!(full.is_ok(), "{full:?}");
-    assert!(completed);
-    let (exact, actual_work, actual_peak, completed) =
-        shared_capture_complete_v26(shared_capture_owner_v26::<1>, work, peak);
-    assert!(exact.is_ok(), "{exact:?}");
-    assert!(completed);
-    assert_eq!((actual_work, actual_peak), (work, peak));
-    for (work, storage) in [(work - 1, peak), (work, peak - 1)] {
-        let (short, _, _, completed) =
-            shared_capture_complete_v26(shared_capture_owner_v26::<1>, work, storage);
-        assert!(short.is_err());
-        assert!(!completed);
+}
+
+#[test]
+fn private_shared_capture_uses_exact_and_one_short_cumulative_budgets() {
+    for factory in [
+        shared_capture_owner_v26::<1> as fn() -> _,
+        shared_capture_caller_owner_v26::<false>,
+    ] {
+        let (full, work, peak, completed) =
+            shared_capture_complete_v26(factory, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
+        assert!(full.is_ok(), "{full:?}");
+        assert!(completed);
+        let (exact, actual_work, actual_peak, completed) =
+            shared_capture_complete_v26(factory, work, peak);
+        assert!(exact.is_ok(), "{exact:?}");
+        assert!(completed);
+        assert_eq!((actual_work, actual_peak), (work, peak));
+        for (work, storage) in [(work - 1, peak), (work, peak - 1)] {
+            let (short, _, _, completed) = shared_capture_complete_v26(factory, work, storage);
+            assert!(short.is_err());
+            assert!(!completed);
+        }
     }
 }
 

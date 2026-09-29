@@ -255,7 +255,23 @@ fn check_scoped_defined_call_phases_with_references_v29(
                         | SemanticKirCallReturnKindV1::NoNormalReturnCall { arguments_first, call_operation, .. } => (arguments_first, call_operation),
                         SemanticKirCallReturnKindV1::Return { .. } => return Err(mismatch()),
                     };
-                    if let Some(entry) = &target.invocation_entry {
+                    let inputs = match (&target.invocation_entry, &target.direct_call_inputs) {
+                        (Some(entry), None) => Some(&entry.inputs),
+                        (None, inputs) => inputs.as_ref(),
+                        (Some(_), Some(_)) => return Err(mismatch()),
+                    };
+                    if references.is_some() && inputs.is_none() {
+                        return Err(mismatch());
+                    }
+                    if let Some(inputs) = inputs {
+                        if references.is_some() || target.direct_call_inputs.is_some() {
+                            invocation_check_inputs_v1(
+                                callee.declaration(),
+                                inputs,
+                                target.function.signature.parameters.len(),
+                                budget,
+                            )?;
+                        }
                         check_reference_call_replay_v26(
                             instances.owner().source_semantic().types(),
                             source.declaration(),
@@ -263,7 +279,7 @@ fn check_scoped_defined_call_phases_with_references_v29(
                             occurrence,
                             source_call,
                             &target.function,
-                            &entry.inputs,
+                            inputs,
                             block,
                             arguments_first as usize,
                             call_operation as usize,

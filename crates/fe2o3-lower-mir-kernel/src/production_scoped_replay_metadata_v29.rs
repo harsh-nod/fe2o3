@@ -492,6 +492,7 @@ fn sidecar(
     let PendingInstanceSidecarsV29 {
         next_value,
         execution_observation: _,
+        direct_call_inputs,
         source_call_instance,
         scoped_slot_origins,
         scoped_initialization,
@@ -560,6 +561,11 @@ fn sidecar(
         b.scoped_memory_anchors.as_ref(),
         budget,
         memory,
+    )? && optional(
+        direct_call_inputs.as_ref(),
+        b.direct_call_inputs.as_ref(),
+        budget,
+        |a, b, budget| fixed_rows(a, b, budget),
     )? && optional(
         invocation_entry.as_ref(),
         b.invocation_entry.as_ref(),

@@ -29,8 +29,10 @@ fn global_header_oracle_v18() -> usize {
         + h::<(
             &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
             GlobalSourceLogicalEndpointV18,
+            &GlobalSourceAccessOriginV18,
             &mut ArgumentBudgetV1<'_>,
         )>()
+        + h::<(&GlobalSourceAccessOriginV18, AddressSpace, bool)>()
         + h::<(
             &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
             fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1,

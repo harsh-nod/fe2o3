@@ -452,14 +452,14 @@ fn strict_partial_tree_unwind_drops_before_eligible_scope_refund() {
         scoped_source_attempt_header_oracle_v29::<(), ProductionSourceOwnedViewErrorV18, F>()
     }
     let envelope = attempt_header(&attempt);
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(9);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(32 + 2 + 1 + 4 + 9);
     let mut budget = ArgumentBudgetV1::new(&mut work, FLOOR + envelope + headers + bytes);
     budget.reserve_storage(FLOOR).unwrap();
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         scoped_source_attempt_v29(&cleanup, &mut budget, FLOOR, attempt)
     }));
     assert!(caught.is_err());
-    assert_eq!(budget.work(), 9);
+    assert_eq!(budget.work(), 32 + 2 + 1 + 4 + 9);
     assert_eq!(budget.peak_storage(), FLOOR + envelope + headers + bytes);
     assert_eq!(budget.storage(), FLOOR);
     assert_eq!(budget.failed_storage(), None);

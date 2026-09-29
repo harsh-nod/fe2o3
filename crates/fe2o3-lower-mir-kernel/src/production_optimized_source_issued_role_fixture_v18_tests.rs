@@ -159,30 +159,68 @@ fn issued_descriptor_role_abi_v18(
     };
     let mut abi = kernel_argument_abi_v18::tests::FixtureKernelAbiV18::new(owner);
     let semantic = owner.source_semantic();
-    let arguments = abi.arguments_mut(0);
-    assert_eq!(arguments.len(), 2);
     let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::U32));
     let layout =
         DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::U32));
-    for (ordinal, argument) in arguments.iter_mut().enumerate() {
-        assert_eq!(
-            argument.semantic_type_identity,
-            semantic.types()[4].identity()
-        );
-        argument.kind = ProductionKernelArgumentAbiKindV18::Descriptor {
-            source: SourceTypeDescriptorV3::DisjointSlice(ScalarTypeV1::U32),
-            argument: LogicalArgumentV1::disjoint_slice(
-                ordinal as u16,
-                ValidName::new(format!("issued{ordinal}")).unwrap(),
-                &source,
-                &layout,
-                fe2o3_kernel_descriptor::AccessMode::ReadWrite,
-                (ordinal * 16) as u32,
-            )
-            .unwrap(),
-        };
+    for root in 0..semantic.roots().len() {
+        let arguments = abi.arguments_mut(root);
+        assert_eq!(arguments.len(), 2);
+        for (ordinal, argument) in arguments.iter_mut().enumerate() {
+            assert_eq!(
+                argument.semantic_type_identity,
+                semantic.types()[4].identity()
+            );
+            argument.kind = ProductionKernelArgumentAbiKindV18::Descriptor {
+                source: SourceTypeDescriptorV3::DisjointSlice(ScalarTypeV1::U32),
+                argument: LogicalArgumentV1::disjoint_slice(
+                    ordinal as u16,
+                    ValidName::new(format!("issued{ordinal}")).unwrap(),
+                    &source,
+                    &layout,
+                    fe2o3_kernel_descriptor::AccessMode::ReadWrite,
+                    (ordinal * 16) as u32,
+                )
+                .unwrap(),
+            };
+        }
     }
     abi
+}
+
+#[test]
+fn issued_descriptor_fixture_covers_every_original_root_without_rebinding_exports() {
+    let owner = issued_metadata_two_root_owner_v18();
+    let abi = issued_descriptor_role_abi_v18(&owner);
+    let roots = abi.roots();
+    assert_eq!(roots.len(), 2);
+    assert_ne!(roots[0].kernel_binding, roots[1].kernel_binding);
+    assert_ne!(roots[0].export, roots[1].export);
+    for (ordinal, root) in roots.iter().enumerate() {
+        let source = &owner.source_semantic().functions()
+            [owner.source_semantic().roots()[ordinal].index() as usize];
+        let entry = source.kernel_entry().unwrap();
+        assert_eq!(
+            root.kernel_binding,
+            entry.kernel_binding_identity().as_bytes()
+        );
+        assert_eq!(root.export.as_bytes(), entry.export_symbol().as_bytes());
+        assert_eq!(root.arguments.len(), 2);
+        for (slot, argument) in root.arguments.iter().enumerate() {
+            let ProductionKernelArgumentAbiKindV18::Descriptor { source, argument } =
+                &argument.kind
+            else {
+                panic!("every root requires its original nominal issued slice ABI");
+            };
+            assert_eq!(
+                *source,
+                fe2o3_kernel_descriptor::SourceTypeDescriptorV3::DisjointSlice(
+                    fe2o3_kernel_descriptor::ScalarTypeV1::U32
+                )
+            );
+            assert_eq!(argument.source_index(), slot as u16);
+            assert_eq!(argument.physical_components().count(), 2);
+        }
+    }
 }
 
 #[test]

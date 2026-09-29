@@ -89,21 +89,6 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             std::mem::size_of::<(SourceIssuedRootTransportV29, PendingSourceIssuedIssuerV29)>(),
             std::mem::size_of::<Result<(SourceIssuedRootTransportV29, PendingSourceIssuedIssuerV29), ProductionSemanticKirErrorV1>>(),
         ])?)?;
-        charge_execution_cfg_lookup_v29(self.originals.len(), budget)?;
-        if !self.originals.contains_key(&instance.index()) {
-            let original =
-                SourceIssuedOriginalV29::new(self.instances, instance, self.source_index, budget)?;
-            reserve_execution_cfg_map_entry_v29::<usize, SourceIssuedOriginalV29<'_, '_, '_>>(
-                self.originals.len(),
-                budget,
-            )?;
-            self.originals.insert(instance.index(), original);
-        }
-        charge_execution_cfg_lookup_v29(self.originals.len(), budget)?;
-        let original = self
-            .originals
-            .get_mut(&instance.index())
-            .ok_or_else(source_issued_error_v29)?;
         budget.charge_work(5)?;
         let frame = row.source.ok_or_else(source_issued_error_v29)?;
         let Some(ScopedMemoryRoleV29::Operand(role)) = frame.role else {
@@ -114,13 +99,16 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
         {
             return Err(source_issued_error_v29());
         }
-        let definition = original.use_value(frame.site, role, place, budget)?;
-        let recipe = original.resolve(definition, budget)?;
-        let accepted = if let Some(recipe) = recipe {
+        let resolved = self.resolve_access_v26(instance, frame.site, role, place, budget)?;
+        let accepted = if let Some(SourceIssuedResolvedAccessV26 {
+            issuer_instance,
+            recipe,
+            pointer,
+        }) = resolved
+        {
             if recipe.form != SourceIssuedFormV29::Pointer {
                 return Err(source_issued_error_v29());
             }
-            original.check_archive(definition, recipe, budget)?;
             let function = self
                 .instances
                 .instance(instance)
@@ -132,9 +120,14 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             {
                 return Err(source_issued_error_v29());
             }
-            let key = (instance.index(), recipe.issuer);
+            let key = (issuer_instance.index(), recipe.issuer);
             charge_execution_cfg_lookup_v29(self.issuers.len(), budget)?;
             if !self.issuers.contains(&key) {
+                charge_execution_cfg_lookup_v29(self.originals.len(), budget)?;
+                let original = self
+                    .originals
+                    .get(&issuer_instance.index())
+                    .ok_or_else(source_issued_error_v29)?;
                 let (transport, retained) =
                     original.actual_issuer(recipe, references, &self.actual, budget)?;
                 emission_push_v1(&mut self.transports, transport, budget)?;
@@ -159,8 +152,19 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             let access =
                 source_address_value_access_v29(operation)?.ok_or_else(source_issued_error_v29)?;
             if access.object
-                || access.pointer != recipe.pointer
-                || access.access.address_space != AddressSpace::Global
+                || access.pointer != pointer
+                || !matches!(
+                    access.access.address_space,
+                    AddressSpace::Global | AddressSpace::Generic
+                )
+                || !source_issued_memory_pointer_v26(
+                    &self.actual,
+                    pointer,
+                    access.access,
+                    access.writing,
+                    recipe.element,
+                    budget,
+                )?
                 || access.access.alignment == 0
                 || u64::from(access.access.alignment)
                     > self.instances.owner().source_semantic().types()[place.ty().index() as usize]
@@ -172,6 +176,11 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             {
                 return Err(source_issued_error_v29());
             }
+            charge_execution_cfg_lookup_v29(self.originals.len(), budget)?;
+            let original = self
+                .originals
+                .get(&instance.index())
+                .ok_or_else(source_issued_error_v29)?;
             check_source_issued_payload_v29(original, row, operation, &self.actual, budget)?;
             let (block, _) = self
                 .source_index
@@ -188,7 +197,10 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
                 SourceIssuedAccessV29 {
                     instance: instance.index(),
                     anchor,
+                    issuer_instance,
                     issuer: recipe.issuer,
+                    pointer,
+                    issuer_pointer: recipe.pointer,
                     access: access.access,
                     writing: access.writing,
                     present: recipe.present,
@@ -246,6 +258,21 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
         ])?)?;
         let guards =
             source_issued_guards_v29(&self.source_index.pending.function, &self.actual, budget)?;
+        budget.reserve_storage(std::mem::size_of::<Vec<SourceIssuedPointerTransportV26>>())?;
+        let mut pointer_transports = emission_vec_v1(self.queries.len(), budget)?;
+        for query in &self.queries {
+            budget.charge_work(3)?;
+            pointer_transports.push(SourceIssuedPointerTransportV26 {
+                pointer: query.pointer,
+                issuer: query.issuer_pointer,
+            });
+        }
+        check_source_issued_pointer_transports_v26(
+            &self.source_index.pending.function,
+            &self.actual,
+            &pointer_transports,
+            budget,
+        )?;
         // Precompute ranges outside the CFG scope: it exclusively owns the
         // ledger and permits only closed, live-metered graph queries inside.
         let mut ranges = emission_vec_v1(self.queries.len(), budget)?;
@@ -301,7 +328,9 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
                 PendingSourceIssuedAccessV29 {
                     instance,
                     anchor: query.anchor,
+                    issuer_instance: query.issuer_instance,
                     issuer: query.issuer,
+                    pointer: query.pointer,
                     access: query.access,
                     writing: query.writing,
                     guard_block,

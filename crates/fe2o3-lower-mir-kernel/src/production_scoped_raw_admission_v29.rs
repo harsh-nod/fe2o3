@@ -1937,6 +1937,34 @@ pub(super) fn test_ordinary_activation_census_v29(
     Ok(pending.accesses.len())
 }
 
+#[cfg(test)]
+pub(super) fn test_mixed_scalar_activation_census_v26(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<[usize; 2]> {
+    original.query(budget)?;
+    let owner = original.source.root_row(root)?;
+    let pending = owner.source_slots.pending_memory.as_ref().unwrap();
+    assert!(!pending.lifetimes.is_empty());
+    assert_eq!(pending.initial.len(), owner.source_slots.slots.len());
+    let mut counts = [0, 0];
+    for access in &pending.accesses {
+        let slot = &owner.source_slots.slots[access.physical.slot];
+        if !matches!(slot.representation, ScopedSlotRepresentationV29::ScalarArray(_)) {
+            continue;
+        }
+        assert!(!access.alternatives.is_empty());
+        for alternative in &pending.alternatives[access.alternatives.clone()] {
+            assert_eq!(alternative.slot, access.physical.slot);
+            assert_eq!(alternative.instance, slot.instance);
+            assert_eq!(alternative.local.index(), slot.legacy_local().unwrap());
+            counts[usize::from(alternative.formation.is_some())] += 1;
+        }
+    }
+    Ok(counts)
+}
+
 // Scalar-element arrays use the existing indexed history at immutable replay.
 // Descriptor effects are classified from their original source separately;
 // the physical origin equations must still prove they cannot alias these slots.
@@ -2297,8 +2325,26 @@ fn retain_pending_memory_v29(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<PendingSourceMemoryV29, ProductionSemanticKirErrorV1> {
     budget.charge_work(indices.len())?;
-    let ordinary_indices = indices.iter().any(|row| row.load_anchor.is_some())
+    let mut ordinary_indices = indices.iter().any(|row| row.load_anchor.is_some())
         || !original_census(instances, Some(plan), budget)?.requires_physical();
+    // A raw/typed access elsewhere does not remove the activation obligation
+    // of an ordinary scalar access. Retain candidates for the actual source
+    // roster; the complete lifetime/currentness check still proves reachability.
+    if !ordinary_indices {
+        for source in sources {
+            budget.charge_work(2)?;
+            if source.raw.is_none()
+                && matches!(
+                    slots.slots.get(source.physical.slot)
+                        .ok_or_else(source_raw_physical_error_v29)?.representation,
+                    ScopedSlotRepresentationV29::ScalarArray(_)
+                )
+            {
+                ordinary_indices = true;
+                break;
+            }
+        }
+    }
     // This is only a may-roster of original activation boundaries for each
     // exact object. It never proves that any one site reaches an access. The
     // immutable all-path lifetime equations remain mandatory for every row.

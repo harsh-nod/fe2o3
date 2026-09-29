@@ -44,6 +44,9 @@ type Error = ClosedScalarTargetLlvmErrorV29;
 
 include!("production_pipeline_source_owned_target_policy_v29.rs");
 
+#[path = "production_pipeline_source_owned_target_mixed_v26.rs"]
+pub(crate) mod mixed_v26;
+
 pub(crate) type ClosedScalarTargetLlvmV29<'handoff, 'view, 'source> =
     TargetLlvmV29<'handoff, 'view, 'source, Handoff<'view, 'source>>;
 pub(crate) type ScalarCfgTargetLlvmV29<'handoff, 'view, 'source> =
@@ -53,7 +56,7 @@ pub(crate) type BoundScalarTargetLlvmV19<'handoff, 'view, 'source> =
 
 /// Inert LLVM IR, not final ISA, worker/default compilation or launch authority.
 /// The result cannot outlive either real source or adopted V18 handoff.
-/// Formal and target engines keep their separate bounded allocation/work
+/// Policy checks and target engines keep their separate bounded allocation/work
 /// policy; only this wrapper, conservatively retained entry frames and actual
 /// String capacity are retained credit.
 #[must_use = "discard the target text before its borrowed handoff"]

@@ -6,6 +6,8 @@ thread_local! {
     static ZERO_OBSERVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static ZERO_MUTATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ZERO_LOAN_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ZERO_FOREIGN_CUSTODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ZERO_FOREIGN_CUSTODY_OBSERVED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ZERO_SOURCE_FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static ZERO_BINDING_FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static ZERO_BINDING_MUTATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -573,19 +575,34 @@ fn zero_custody_observer(
     let result = references.check_grid_leader_origin_v29(loan, proof.ty, source_type, budget);
     references.claimed[loan].set(saved_claim);
     exact(result);
-    let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
-    let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
-    foreign.reserve_storage(budget.storage()).unwrap();
-    let before = foreign.storage();
-    assert!(matches!(
-        references.check_grid_leader_origin_v29(loan, proof.ty, source_type, &mut foreign),
-        Err(
-            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
-                ArgumentResourceV1::Accounting
+    if ZERO_FOREIGN_CUSTODY.get() {
+        let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
+        foreign.reserve_storage(budget.storage()).unwrap();
+        let before = (foreign.storage(), foreign.work());
+        assert!(matches!(
+            references.check_grid_leader_origin_v29(loan, proof.ty, source_type, &mut foreign),
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Accounting
+                )
             )
-        )
-    ));
-    assert_eq!(foreign.storage(), before);
+        ));
+        assert_eq!((foreign.storage(), foreign.work()), before);
+        let before = (budget.storage(), budget.work());
+        assert!(matches!(
+            references.check_grid_leader_origin_v29(loan, proof.ty, source_type, budget),
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Accounting
+                )
+            )
+        ));
+        assert_eq!((budget.storage(), budget.work()), before);
+        ZERO_FOREIGN_CUSTODY_OBSERVED.set(true);
+        // Swallowing the local error must not revive the enclosing transaction.
+        return Ok(());
+    }
     references.check_grid_leader_origin_v29(loan, proof.ty, source_type, budget)?;
     ZERO_LOAN_CHECKS.set(ZERO_LOAN_CHECKS.get() + 1);
     Ok(())
@@ -689,6 +706,37 @@ fn original_grid_leader_zero_effect_and_nested_shared_loan_reach_source_memory()
             ZERO_LOAN_CHECKS.get() >= 2,
             "custody assertions complete outside protected emission"
         );
+    }
+}
+
+#[test]
+fn original_grid_leader_foreign_ledger_refusal_is_sticky_without_debit() {
+    struct Restore(bool, bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ZERO_FOREIGN_CUSTODY.set(self.0);
+            ZERO_FOREIGN_CUSTODY_OBSERVED.set(self.1);
+        }
+    }
+    let _restore = Restore(
+        ZERO_FOREIGN_CUSTODY.replace(true),
+        ZERO_FOREIGN_CUSTODY_OBSERVED.replace(false),
+    );
+    for nested in [false, true] {
+        ZERO_FOREIGN_CUSTODY_OBSERVED.set(false);
+        let (result, completed) = run_zero(false, nested, 0);
+        assert!(ZERO_FOREIGN_CUSTODY_OBSERVED.get());
+        assert!(!completed);
+        assert!(matches!(
+            result,
+            Err(ProductionSourceOwnedViewErrorV18::Source(
+                ProductionPendingScopedSourceErrorV29::Source(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Accounting
+                    )
+                )
+            ))
+        ));
     }
 }
 

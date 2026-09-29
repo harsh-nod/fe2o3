@@ -98,7 +98,7 @@ pub(crate) fn genuine_cfg_case(
     )
 }
 
-fn genuine_case_for<H: TargetOutputHandoffV29>(
+pub(super) fn genuine_case_for<H: TargetOutputHandoffV29>(
     source: &Source<'_>,
     handoff: &H,
     target: TargetProfile,

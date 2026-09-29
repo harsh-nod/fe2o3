@@ -889,6 +889,7 @@ struct UnassembledFunctionFrameV1<'source> {
     emitted_operations: usize,
     next_value: u32,
     execution_observation: Option<ExecutionArchiveV29>,
+    direct_call_inputs: Option<Vec<InvocationInputRowV1>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1238,6 +1239,8 @@ impl<'source> PreparedFunctionFrameV1<'source, '_> {
                     _ => ProductionSemanticKirErrorV1::CorrespondenceMismatch,
                 })?;
         }
+        let direct_call_inputs = lowering
+            .with_emission_budget_v1(|this, budget| this.take_direct_call_inputs_v26(budget))?;
         let execution_observation = lowering
             .with_emission_budget_v1(|this, budget| this.take_execution_archive_v29(budget))?;
         let infallible_asserts = lowering.infallible_asserts;
@@ -1269,6 +1272,7 @@ impl<'source> PreparedFunctionFrameV1<'source, '_> {
             emitted_operations,
             next_value,
             execution_observation,
+            direct_call_inputs,
         })
     }
 }
@@ -1298,6 +1302,7 @@ impl UnassembledFunctionFrameV1<'_> {
             emitted_operations,
             next_value,
             execution_observation,
+            direct_call_inputs,
         } = self;
         let plan = &*assembly;
         let function = context.function;
@@ -1418,6 +1423,7 @@ impl UnassembledFunctionFrameV1<'_> {
         Ok(LoweredFunctionResultV1 {
             next_value,
             execution_observation,
+            direct_call_inputs,
             source_call_instance: context.source_call_instance,
             invocation_entry: context.invocation_entry,
             scoped_slot_origins,

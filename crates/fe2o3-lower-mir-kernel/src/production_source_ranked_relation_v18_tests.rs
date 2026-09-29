@@ -113,6 +113,9 @@ enum SourceConsumerTestErrorV18 {
 
 #[test]
 fn caught_correspondence_construction_refusal_poison_is_not_lost_before_callback() {
+    // Independent settlement/prepayment equation: 32 fixed settlement steps
+    // plus the seven-step bounded panic-payload retry, after one entry query.
+    const ENTRY_AND_DISPOSAL: usize = 1 + 32 + 7;
     let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
@@ -150,8 +153,8 @@ fn caught_correspondence_construction_refusal_poison_is_not_lost_before_callback
                     assert_eq!(budget.failed_storage(), Some(MODULE_LIMIT + 1));
                     assert_eq!(
                         budget.work(),
-                        before + 1,
-                        "only original entry query precedes prepayment"
+                        before + ENTRY_AND_DISPOSAL,
+                        "entry query and disposal preflight precede header reservation"
                     );
                     observed.set(Some(error));
                     budget.release_storage(padding).unwrap();
@@ -178,6 +181,8 @@ fn caught_correspondence_construction_refusal_poison_is_not_lost_before_callback
 
 #[test]
 fn caught_analysis_header_and_framework_construction_denials_remain_original() {
+    const ENTRY_AND_DISPOSAL: usize = 1 + 32 + 7;
+    const FRAMEWORK_PREFLIGHT: usize = 4;
     for phase in 0..3 {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
@@ -210,10 +215,11 @@ fn caught_analysis_header_and_framework_construction_denials_remain_original() {
                     budget.reserve_storage(padding).unwrap();
                     padding
                 } else {
-                    // Entry query consumes one unit. The shared framework then
-                    // prepays four. Phase 1 is one short for that exact atomic
-                    // batch; phase 2 reaches the real inventory constructor.
-                    let available = if phase == 1 { 4 } else { 5 };
+                    // Leave the complete entry/disposal preflight before the
+                    // framework's four-unit atomic batch. Phase 1 is one short
+                    // for that batch; phase 2 reaches the inventory constructor.
+                    let available =
+                        ENTRY_AND_DISPOSAL + FRAMEWORK_PREFLIGHT - usize::from(phase == 1);
                     budget
                         .charge_work(MODULE_LIMIT - budget.work() - available)
                         .unwrap();
@@ -227,10 +233,15 @@ fn caught_analysis_header_and_framework_construction_denials_remain_original() {
                 if phase == 0 {
                     assert!(matches!(error, ArgumentResourceV1::Storage(_)));
                     assert_eq!(budget.failed_storage(), Some(MODULE_LIMIT + 1));
-                    assert_eq!(budget.work(), before + 1);
+                    assert_eq!(budget.work(), before + ENTRY_AND_DISPOSAL);
                 } else {
                     assert!(matches!(error, ArgumentResourceV1::Work(_)));
-                    assert_eq!(budget.work(), before + if phase == 1 { 1 } else { 5 });
+                    assert_eq!(
+                        budget.work(),
+                        before
+                            + ENTRY_AND_DISPOSAL
+                            + if phase == 1 { 0 } else { FRAMEWORK_PREFLIGHT }
+                    );
                 }
                 observed.set(Some(error));
                 budget.release_storage(padding).unwrap();

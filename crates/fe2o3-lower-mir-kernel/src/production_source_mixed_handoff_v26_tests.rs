@@ -1,3 +1,36 @@
+mod source_contract_v26 {
+    use super::*;
+    include!("production_source_mixed_contract_v26_tests.rs");
+}
+
+include!("production_source_synthetic_traps_v26_tests.rs");
+
+thread_local! {
+    static MIXED_FIXTURE_SOURCE_TRAPS_V26: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn mixed_private_spill_walker_leaves_genuine_global_reads_and_writes_to_global_completion() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            scoped_raw_admission_v29::SPILL_GLOBAL_VISITS_V26.with(|visits| visits.set(None));
+        }
+    }
+    let _reset = Reset;
+    for exclusive in [false, true] {
+        scoped_raw_admission_v29::SPILL_GLOBAL_VISITS_V26.with(|visits| visits.set(Some([0, 0])));
+        let (result, _, _, completed) =
+            run_mixed_handoff_v26(exclusive, 0, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
+        assert!(result.is_ok(), "exclusive={exclusive}: {result:?}");
+        assert!(completed);
+        let [reads, writes] =
+            scoped_raw_admission_v29::SPILL_GLOBAL_VISITS_V26.with(|visits| visits.get().unwrap());
+        assert!(reads > 0);
+        assert_eq!(writes > 0, exclusive);
+    }
+}
+
 fn run_mixed_handoff_v26(
     exclusive: bool,
     fault: usize,
@@ -9,6 +42,7 @@ fn run_mixed_handoff_v26(
     usize,
     bool,
 ) {
+    MIXED_FIXTURE_SOURCE_TRAPS_V26.set(0);
     let owner = if exclusive {
         issued_descriptor_role_owner_v18(DescriptorRoleSourceV18::Arithmetic)
     } else {
@@ -67,6 +101,16 @@ fn run_mixed_handoff_v26(
                 };
                 source.root_count(budget)?
             ];
+            // Independent test census over actual original source spans. Not
+            // every slice-access source contains a lowered Rust assertion.
+            let mut source_traps = 0;
+            for root in 0..launches.len() {
+                source_traps += source.root_row(root)?.coordinates.spans.rows.iter()
+                    .filter(|span| matches!(span.source, InstanceSpanSourceV1::Synthetic(source)
+                        if source.rule == SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap))
+                    .count();
+            }
+            MIXED_FIXTURE_SOURCE_TRAPS_V26.set(source_traps);
             let width = if fault == 1 {
                 fe2o3_kernel_ir::FormalIndexWidth::Unknown
             } else {
@@ -87,6 +131,10 @@ fn run_mixed_handoff_v26(
                 width,
                 budget,
             )?;
+            let inspected = (|| -> Result<(), ProductionMixedSourceHandoffErrorV26> {
+            if fault == 4 {
+                budget.charge_work(work_limit.checked_sub(budget.work()).unwrap())?;
+            }
             handoff.check_original_source(source.source_ssa(budget)?, budget)?;
             handoff.check_original_argument_abi_v26(
                 ProductionKernelArgumentAbiInputV18 { roots: &roots },
@@ -136,14 +184,40 @@ fn run_mixed_handoff_v26(
             assert!(!handoff.ranked_verification_is_complete());
             assert!(!handoff.grants_artifact_or_launch_authority());
             assert_eq!(budget.storage(), floor + handoff.retained_storage(budget)?);
-            handoff.discard(budget)?;
+            Ok(())
+            })();
+            // A paid query can refuse after successful owning adoption. Always
+            // destroy/refund that exact owner before propagating the first error.
+            let cleanup = handoff.discard(budget);
             assert_eq!(budget.storage(), floor);
+            inspected?;
+            cleanup?;
             completed = true;
             Ok::<_, ProductionMixedSourceHandoffErrorV26>(())
         })
     })();
     assert_eq!(budget.storage(), MODULE_FLOOR, "{result:?}");
     (result, budget.work(), budget.peak_storage(), completed)
+}
+
+#[test]
+fn mixed_handoff_v26_late_query_work_refusal_disposes_owned_output_before_return() {
+    for exclusive in [false, true] {
+        let (result, _, _, completed) =
+            run_mixed_handoff_v26(exclusive, 4, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
+        assert!(!completed);
+        assert!(
+            matches!(
+                result,
+                Err(ProductionMixedSourceHandoffErrorV26::Check(
+                    ProductionMixedSourceCheckErrorV26::Source(
+                        ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(_))
+                    )
+                ))
+            ),
+            "exclusive={exclusive}: {result:?}"
+        );
+    }
 }
 
 #[test]
@@ -262,6 +336,7 @@ fn mixed_native_public_and_preparation_refusals_protect_uncalled_capture_destruc
                                 .missing::<()>("mixed public sticky preflight fixture");
                         }
                         let before = budget.work();
+                        let checked_floor = budget.storage();
                         let result = optimized.with_mixed_memory_native_policies_v26(
                             checked,
                             layouts,
@@ -289,6 +364,15 @@ fn mixed_native_public_and_preparation_refusals_protect_uncalled_capture_destruc
                         if fault == 2 {
                             assert_eq!(budget.work(), before);
                         }
+                        assert_eq!(
+                            budget.storage(),
+                            checked_floor,
+                            "mixed wrapper must settle inside the pending callback before returning to the ranked view"
+                        );
+                        assert!(
+                            std::ptr::eq(checked.inventory(budget).unwrap(), output),
+                            "typed source refusal must leave exact ranked custody queryable"
+                        );
                         Ok::<_, CanonicalRankedViewErrorV1>(result)
                     },
                 )

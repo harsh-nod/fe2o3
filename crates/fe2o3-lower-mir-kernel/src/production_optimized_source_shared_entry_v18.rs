@@ -75,17 +75,21 @@ fn shared_entry_consume_v18<'work>(
     budget: &mut ArgumentBudgetV1<'work>,
     consume: impl FnOnce(&mut ArgumentBudgetV1<'work>) -> SourceOwnedResultV18<()>,
 ) -> SourceOwnedResultV18<()> {
+    let mut consume = SourceCallbackCustodyV29::new(consume);
     original.check(budget)?;
     let prepared = original.retain_query((|| {
-        let storage =
-            source_owned_finish_preflight_v26::<(), ProductionSourceOwnedViewErrorV18>(budget)?;
+        let storage = argument_sum_v1(&[
+            source_owned_finish_preflight_v26::<(), ProductionSourceOwnedViewErrorV18>(budget)?,
+            std::mem::size_of_val(&consume),
+            std::mem::align_of_val(&consume),
+        ])?;
         budget.reserve_storage(storage)?;
         Ok(storage)
     })());
     let storage = match prepared {
         Ok(storage) => storage,
         Err(error) => {
-            source_reference_discard_v29(consume);
+            source_reference_discard_v29(consume.take());
             return Err(error);
         }
     };
@@ -93,7 +97,11 @@ fn shared_entry_consume_v18<'work>(
     let slot = std::ptr::from_ref(&*budget) as usize;
     let ledger = budget.work_ledger_identity_v1();
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        original.retain_query(consume(budget))
+        original.retain_query(consume
+            .take()
+            .expect("shared entry callback is invoked once")(
+            budget
+        ))
     }));
     let first = original.source.guard.first.get();
     let custody = slot == std::ptr::from_ref(&*budget) as usize
@@ -338,11 +346,12 @@ impl PendingGlobalSourceAccessesV18<'_> {
     fn with_shared_entry_regions_v18<'work>(
         &self,
         budget: &mut ArgumentBudgetV1<'work>,
-        mut consume: impl for<'s, 'a> FnMut(
+        consume: impl for<'s, 'a> FnMut(
             &PendingSharedEntryRegionsV18<'s, 'a>,
             &mut ArgumentBudgetV1<'work>,
         ) -> SourceOwnedResultV18<()>,
     ) -> SourceOwnedResultV18<()> {
+        let mut consume = SourceCallbackCustodyV29::new(consume);
         let original = self.original();
         original.check(budget)?;
         original.retain_query(self.roles.observe_custody(budget))?;
@@ -354,6 +363,10 @@ impl PendingGlobalSourceAccessesV18<'_> {
                     fixed,
                     capture,
                     alignment,
+                    source_callback_custody_finish_preflight_v29::<
+                        (),
+                        ProductionSourceOwnedViewErrorV18,
+                    >(budget)?,
                     source_owned_finish_preflight_v26::<(), ProductionSourceOwnedViewErrorV18>(
                         budget,
                     )?,
@@ -365,7 +378,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
         let storage = match prepared {
             Ok(storage) => storage,
             Err(error) => {
-                source_reference_discard_v29(consume);
+                source_reference_discard_v29(consume.take());
                 return Err(error);
             }
         };
@@ -401,7 +414,11 @@ impl PendingGlobalSourceAccessesV18<'_> {
                                 physical_function,
                             };
                             shared_entry_consume_v18(original, budget, |budget| {
-                                consume(&scope, budget)
+                                consume
+                                    .as_mut()
+                                    .expect("shared entry visitor remains in custody")(
+                                    &scope, budget,
+                                )
                             })
                             .map_err(source_slice_query_error_v18)
                         },
@@ -410,10 +427,9 @@ impl PendingGlobalSourceAccessesV18<'_> {
             );
             // Both the complete query result and earlier retained failures are
             // settled before the still-prepaid external callback is destroyed.
-            let result = original.retain_query(result);
-            drop(consume);
-            result
+            original.retain_query(result)
         }));
+        let caught = consume.finish(caught);
         let first = original.source.guard.first.get();
         let custody = slot == std::ptr::from_ref(&*budget) as usize
             && ledger == budget.work_ledger_identity_v1()
@@ -452,11 +468,12 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
         facts: &GlobalReadFactsV18<'_, '_>,
         operation: SliceOperation,
         budget: &mut ArgumentBudgetV1<'work>,
-        mut consume: impl for<'s, 'g> FnMut(
+        consume: impl for<'s, 'g> FnMut(
             &PendingSharedEntryRegionV18<'s, 'g>,
             &mut ArgumentBudgetV1<'work>,
         ) -> SourceOwnedResultV18<()>,
     ) -> Result<(), PendingGlobalReadConditionErrorV18> {
+        let mut consume = SourceCallbackCustodyV29::new(consume);
         let original = self.original();
         original.check(budget)?;
         original.retain_query(self.source.roles.observe_custody(budget))?;
@@ -467,8 +484,15 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
         )?;
         let cleanup = original.source.cleanup;
         let floor = budget.storage();
-        let run = move |budget: &mut ArgumentBudgetV1<'work>| {
-            self.source.with_local_read_conditions_v18(native, facts, operation, budget, move |read, budget| {
+        let visitor_disposal = original.retain_query(
+            source_callback_custody_finish_preflight_v29::<(), PendingGlobalReadConditionErrorV18>(
+                budget,
+            )
+            .map_err(ProductionSourceOwnedViewErrorV18::from),
+        )?;
+        let run = move |budget: &mut ArgumentBudgetV1<'work>| -> Result<(), PendingGlobalReadConditionErrorV18> {
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.source.with_local_read_conditions_v18(native, facts, operation, budget, |read, budget| {
             let original = self.original();
             let result = (|| {
                 source_scalar_normalization_scratch_v18(original.source.cleanup, budget, 0, |budget| {
@@ -523,7 +547,7 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
                                 }
                                 invoked = 1;
                                 let view = PendingSharedEntryRegionV18 { root: self.root(), source: node, abi: &entry, read };
-                                shared_entry_consume_v18(original, budget, |budget| consume(&view, budget))
+                                shared_entry_consume_v18(original, budget, |budget| consume.as_mut().expect("shared region visitor remains in custody")(&view, budget))
                                     .map_err(source_slice_query_error_v18)?;
                             }
                             Ok(())
@@ -535,6 +559,11 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
             })();
             original.retain_query(result).map_err(Into::into)
         })
+            }));
+            match consume.finish(caught) {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            }
         };
         let attempt = move |budget: &mut ArgumentBudgetV1<'work>| {
             let required = budget.storage();
@@ -545,6 +574,7 @@ impl PendingSharedEntryRegionsV18<'_, '_> {
                 .and_then(|fixed| {
                     argument_sum_v1(&[
                         fixed,
+                        visitor_disposal,
                         std::mem::size_of_val(&attempt),
                         std::mem::align_of_val(&attempt),
                     ])

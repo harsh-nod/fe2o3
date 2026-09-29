@@ -1,7 +1,7 @@
 //! Exact paired private proof and actual producer report at each shared checkpoint.
 use super::*;
-use crate::kir_bridge_v1::NativePrivateInputV1;
 use crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1;
+use crate::kir_bridge_v1::{NativeCfgDomainV26, NativePrivateInputV1};
 use crate::production_analysis::canonical_ranked_checks_v1::private::PrivateOperationKindV1;
 use pliron::{builtin::op_interfaces::OneRegionInterface, linked_list::ContainsLinkedList};
 
@@ -14,6 +14,7 @@ struct PrivateStageCoverageV1 {
     pass: KernelCheckPassKindV1,
     epoch: u64,
     identity: crate::PlironStructuralIdentityLabelV1,
+    cfg_domain: NativeCfgDomainV26,
     operations: usize,
     private_counts: [usize; 5],
     global_counts: [usize; 2],
@@ -60,6 +61,17 @@ impl CanonicalMixedPipelineReportV26 {
     pub fn paired_stage_count(&self) -> usize {
         self.coverage.len()
     }
+    /// Version of the CFG analysis contract paired with this exact stage's
+    /// graph identity, epoch, pass, and complete operation coverage.
+    pub fn cfg_domain_version(&self, position: usize) -> Option<u32> {
+        self.coverage
+            .stages
+            .get(position)
+            .map(|stage| match stage.cfg_domain {
+                NativeCfgDomainV26::AllBlocksReachableV1 => 1,
+                NativeCfgDomainV26::EntryReachableSubgraphV26 => 26,
+            })
+    }
     pub fn global_access_counts(&self, position: usize) -> Option<[usize; 2]> {
         self.coverage
             .stages
@@ -89,6 +101,7 @@ pub(crate) struct CanonicalPrivatePipelineOutcomeV1 {
 pub(super) struct SessionV1<'a, A: NativePrivateInputV1 = NativeCanonicalPrivateAdmissionV1<'a>> {
     input: &'a A,
     mixed: bool,
+    cfg_domain: NativeCfgDomainV26,
     ordinary: ProductionAnalysisReportValidationSessionV1<'a>,
     manager: usize,
     identity: crate::PlironStructuralIdentityLabelV1,
@@ -161,7 +174,13 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             resources::setup().map_err(|e| observed_pipeline_resource_error_v1(observer, e))?;
         invocation_receipt_v1::require_observed_v1(limits, phase, Ok(header), observer)
             .map_err(|e| observed_pipeline_resource_error_v1(observer, e))?;
+        let cfg_domain = if mixed {
+            NativeCfgDomainV26::EntryReachableSubgraphV26
+        } else {
+            NativeCfgDomainV26::AllBlocksReachableV1
+        };
         if input.supports_conditional_globals_v26() != mixed
+            || input.cfg_domain_v26() != cfg_domain
             || input.conditional_global_counts_v26().is_some() != mixed
             || !input.authenticate(endpoint.0, endpoint.1)
             || input
@@ -197,6 +216,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
         Ok(Self {
             input,
             mixed,
+            cfg_domain,
             ordinary,
             manager: analyses as *const _ as usize,
             identity,
@@ -213,6 +233,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
 
     fn current_at(&self, endpoint: (&Context, &FuncOp)) -> bool {
         self.input.supports_conditional_globals_v26() == self.mixed
+            && self.input.cfg_domain_v26() == self.cfg_domain
             && self.input.conditional_global_counts_v26().is_some() == self.mixed
             && self.input.authenticate(endpoint.0, endpoint.1)
             && self
@@ -336,11 +357,11 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
         if visited != self.input.operation_count()
             || globals != self.input.conditional_global_counts_v26().unwrap_or([0; 2])
             || !self.current()
-            || self
-                .stages
-                .iter()
-                .flatten()
-                .any(|stage| stage.private_counts != counts || stage.global_counts != globals)
+            || self.stages.iter().flatten().any(|stage| {
+                stage.private_counts != counts
+                    || stage.global_counts != globals
+                    || stage.cfg_domain != self.cfg_domain
+            })
         {
             return Err(PipelineErrorV1::CanonicalPrivateInput);
         }
@@ -352,6 +373,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             pass,
             epoch: self.input.epoch(),
             identity: self.identity,
+            cfg_domain: self.cfg_domain,
             operations: self.input.operation_count(),
             private_counts: counts,
             global_counts: globals,
@@ -365,6 +387,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             || coverage.pass != pass
             || coverage.epoch != self.input.epoch()
             || coverage.identity != self.identity
+            || coverage.cfg_domain != self.cfg_domain
             || coverage.operations != self.input.operation_count()
             || coverage.private_counts != counts
             || coverage.global_counts != globals
@@ -399,6 +422,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
             || checkpoint.pass() != coverage.pass
             || stage.pass != coverage.pass
             || checkpoint.identity() != coverage.identity
+            || coverage.cfg_domain != self.cfg_domain
             || checkpoint.mutation_epoch() != coverage.epoch
             || self.stages[self.next].is_some()
         {
@@ -467,6 +491,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
                 || coverage.pass != PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2[position]
                 || coverage.epoch != self.input.epoch()
                 || coverage.identity != self.identity
+                || coverage.cfg_domain != self.cfg_domain
                 || coverage.operations != self.input.operation_count()
                 || coverage.global_counts
                     != self.input.conditional_global_counts_v26().unwrap_or([0; 2])
@@ -474,6 +499,7 @@ impl<'a, A: NativePrivateInputV1> SessionV1<'a, A> {
                 || self.stages[0].as_ref().is_none_or(|first| {
                     first.private_counts != coverage.private_counts
                         || first.global_counts != coverage.global_counts
+                        || first.cfg_domain != coverage.cfg_domain
                 })
             {
                 return Err(PipelineErrorV1::CanonicalPrivateInput);

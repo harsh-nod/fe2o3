@@ -1,4 +1,4 @@
-//! Public-entry cleanup and the existing independent, unchanged nine-stage oracle.
+//! Public-entry cleanup and the independent nine-stage/domain accounting oracle.
 use super::super::super::tests::{noop, with_checked};
 use super::super::tests::{fixture, nine_oracle as oracle};
 use super::*;
@@ -222,7 +222,19 @@ fn physical_entry_retains_exact_existing_independent_nine_stage_numbers() {
     // and retained credit by15 each. The second-function peak adds the first15.
     // Mixed coverage adds 1337 work and 21 retained units per function;
     // the helper's dominating peak holds the caller's additional 21 units.
-    assert_eq!((full.w, full.r, full.p), (339644059, 96824, 19995780));
+    // CFG-domain setup, prepare, record, and finish costs add 271 work and
+    // 11 retained units per definition. Only the caller's retained increment
+    // is live at the helper's dominating trace peak.
+    let domain_work = 11 + 4 + 9 * 20 + 9 * 4 + 9 * 4 + 4;
+    let domain_retained = 9 + 1 + 1;
+    assert_eq!(
+        (full.w, full.r, full.p),
+        (
+            339644059 + 2 * domain_work,
+            96824 + 2 * domain_retained,
+            19995780 + domain_retained,
+        )
+    );
     with_checked(&fixture(), |checked, budget| {
         let entry = budget.storage();
         with_memory_checks(

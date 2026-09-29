@@ -217,29 +217,40 @@ pub(super) fn test_shared_entry_region_v18(
                 with_local_read_native_test_view_v18(original, optimized, budget, |native, budget| {
                     if matches!(mode, SharedEntryTestV18::RootHeaderDropPanic) {
                         source.with_shared_entry_regions_v18(budget, |_, _| Ok(()))?;
-                        struct DropPanic;
-                        impl Drop for DropPanic {
-                            fn drop(&mut self) { std::panic::resume_unwind(Box::new(0x169a_u64)); }
+                        struct DropPanic<'a>(&'a std::cell::Cell<bool>);
+                        impl Drop for DropPanic<'_> {
+                            fn drop(&mut self) {
+                                self.0.set(true);
+                                std::panic::resume_unwind(Box::new(0x169a_u64));
+                            }
                         }
                         let floor = budget.storage();
                         budget.reserve_storage(size_of::<u64>()).unwrap();
                         let fill = budget.storage_limit() - budget.storage();
                         budget.reserve_storage(fill).unwrap();
                         let before = (budget.work(), budget.storage());
-                        let dropper = DropPanic;
+                        let dropped = std::cell::Cell::new(false);
+                        let dropper = DropPanic(&dropped);
                         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             source.with_shared_entry_regions_v18(budget, move |_, _| {
                                 let _owned = &dropper;
                                 panic!("first constructor reservation must deny before root callback");
                             })
                         }));
-                        assert_eq!(*caught.unwrap_err().downcast::<u64>().unwrap(), 0x169a);
-                        assert_eq!((budget.work(), budget.storage()), before);
+                        let refused = caught.expect("uncalled capture panic must not replace the selected storage refusal");
+                        let Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(selected))) = refused
+                            else { panic!("original constructor storage refusal must survive protected drop"); };
+                        assert!(dropped.get());
+                        // Four-retry visitor disposal and its four envelope
+                        // steps, then the separate 32-retry value finalizer.
+                        let after_preflight = (before.0 + (4 + 4) + (32 + 7), before.1);
+                        assert_eq!((budget.work(), budget.storage()), after_preflight);
                         let Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(first)))
                             = original.check(budget) else { panic!("constructor storage failure must precede callback drop"); };
                         assert_eq!(first.limit(), budget.storage_limit());
                         assert!(first.actual() > first.limit());
-                        assert_eq!((budget.work(), budget.storage()), before);
+                        assert_eq!(selected, first);
+                        assert_eq!((budget.work(), budget.storage()), after_preflight);
                         assert!(matches!(original.check(budget), Err(ProductionSourceOwnedViewErrorV18::Resource(
                             ArgumentResourceV1::Storage(error))) if error == first));
                         budget.release_storage(fill + size_of::<u64>()).unwrap();

@@ -98,7 +98,8 @@ impl ProductionConditionalMixedOutputHandoffV26<'_, '_> {
             .source
             .require_kernel_argument_abi_v18(abi, budget)
     }
-    /// Returns accessed-argument premises; concrete runtime facts remain required.
+    /// Returns every original slice argument, including explicit zero-use rows;
+    /// concrete runtime facts remain required for the recorded accesses.
     pub fn runtime_premises(
         &self,
         budget: &ArgumentBudgetV1<'_>,
@@ -356,3 +357,5 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
         })
     }
 }
+
+include!("production_source_mixed_contract_v26.rs");

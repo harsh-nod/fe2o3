@@ -361,42 +361,37 @@ impl ProductionSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        let consume = SourceCallbackCustodyV29::new(consume);
         // Exact subject/custody precedes scope entry and its new storage/work.
         optimized.check_exact_original_v18(self, budget)?;
         optimized_source_endpoints_v18(self, optimized, budget)?;
         let outer_floor = budget.storage();
-        let mut consume = Some(consume);
+        let capture = std::mem::size_of_val(&consume);
+        let alignment = std::mem::align_of_val(&consume);
         // Retain failures of the attempt envelope as well as its constructor.
         let prepared = self.retain_query(scoped_source_attempt_v29(
             self.source.cleanup,
             budget,
             outer_floor,
             |budget| {
-                self.source
-                    .retain_construction(|| {
+                consume.prepare(|| {
+                    self.source.retain_construction(|| {
                         let headers = argument_sum_v1(&[
-                            descriptor_role_outer_headers_v18::<T, E>(
-                                std::mem::size_of_val(&consume),
-                                std::mem::align_of_val(&consume),
-                            )?,
+                            descriptor_role_outer_headers_v18::<T, E>(capture, alignment)?,
                             source_owned_finish_preflight_v26::<T, E>(budget)?,
                         ])?;
                         budget.reserve_storage(headers)?;
                         Ok(headers)
                     })
-                    .inspect_err(|_| {
-                        source_reference_discard_v29(consume.take());
-                    })
+                })
             },
         ));
-        let outer_retained = match prepared {
+        let (outer_retained, mut consume) = match prepared {
             Ok(retained) => retained,
             Err(error) => {
-                source_reference_discard_v29(consume);
                 return Err(error.into());
             }
         };
-        let consume = consume.expect("descriptor role preparation retained its callback");
         let outer_scope = DescriptorRoleScopeV18::new(budget);
         let outer_caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let consume_leaves =
@@ -436,7 +431,11 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         scope: DescriptorRoleScopeV18::new(budget),
                     };
                     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        consume(&view, budget)
+                        consume
+                            .take()
+                            .expect("descriptor role consumer is invoked once")(
+                            &view, budget
+                        )
                     }));
                     let prior = self.source.guard.first.get();
                     let postflight = if matches!(&caught, Ok(Ok(_))) {
@@ -478,6 +477,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 ),
             }
         }));
+        drop(consume);
         let outer_prior = self.source.guard.first.get();
         let outer_postflight = if matches!(&outer_caught, Ok(Ok(_))) {
             self.retain_query(outer_scope.observe(self, budget))

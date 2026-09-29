@@ -369,6 +369,10 @@ fn private_nine_oracle_literal_native_census_and_real_source_fixture() {
 
 #[test]
 fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stages() {
+    // Independent delta: 11 retained domains; setup selection/join, nine
+    // preparations, nine records, and the final copy/currentness check.
+    const DOMAIN_WORK: usize = 11 + 4 + 9 * 20 + 9 * 4 + 9 * 4 + 4;
+    const DOMAIN_RETAINED: usize = 9 + 1 + 1;
     assert_eq!(
         PROFILE,
         "PRIVATE35_NATIVE_DIRECT_SSA_RANK1_CALLER2_HELPER5_GRAPH_FIRST"
@@ -383,13 +387,13 @@ fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stage
             o.complete,
             [
                 Triple {
-                    w: 126722054,
-                    r: 39483,
+                    w: 126722054 + DOMAIN_WORK,
+                    r: 39483 + DOMAIN_RETAINED,
                     p: 19940272
                 },
                 Triple {
-                    w: 212922005,
-                    r: 57341,
+                    w: 212922005 + DOMAIN_WORK,
+                    r: 57341 + DOMAIN_RETAINED,
                     p: 19956297
                 },
             ][ordinal]
@@ -398,7 +402,7 @@ fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stage
         assert_eq!(o.gates.len(), [186, 216][ordinal]);
         assert_eq!(o.gates.iter().filter(|gate| gate.work_cut).count(), 85);
         assert_eq!(o.identity.structural[0].w, 512 * (o.shape.o + 1).pow(2) + 1);
-        assert_eq!(o.shape.coverage().w, 32 * (o.shape.o + 1).pow(2) + 128);
+        assert_eq!(o.shape.coverage().w, 32 * (o.shape.o + 1).pow(2) + 128 + 20);
         assert_eq!(o.progress, Triple::new(2112, 1056, 1072));
         assert_eq!(
             numbers::progress_graph(o.shape),
@@ -446,9 +450,11 @@ fn private_nine_oracle_independent_profile_has_both_lookup_charges_and_all_stage
     assert_eq!(
         numbers::module(),
         Triple {
-            w: 339644059,
-            r: 96824,
-            p: 19995780
+            w: 339644059 + 2 * DOMAIN_WORK,
+            r: 96824 + 2 * DOMAIN_RETAINED,
+            // The helper trace peak holds the caller's domain slots. Its own
+            // slots are allocated later and do not raise that local peak.
+            p: 19995780 + DOMAIN_RETAINED
         }
     );
 }

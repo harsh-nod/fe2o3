@@ -136,6 +136,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
             &mut ArgumentBudgetV1<'work>,
         ) -> Result<(), PendingGlobalNativeErrorV18>,
     ) -> Result<(), PendingGlobalNativeErrorV18> {
+        let mut consume = SourceCallbackCustodyV29::new(consume);
         self.roles.original.check(budget)?;
         self.roles.observe_custody(budget)?;
         let inventory = self
@@ -156,7 +157,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
         let storage = match prepared {
             Ok(storage) => storage,
             Err(error) => {
-                source_reference_discard_v29(consume);
+                source_reference_discard_v29(consume.take());
                 return Err(error.into());
             }
         };
@@ -166,10 +167,16 @@ impl PendingGlobalSourceAccessesV18<'_> {
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let pair = self.access(operation, budget)?;
             match pair {
-                None => consume(None, budget)?,
+                None => consume
+                    .take()
+                    .expect("native access callback is invoked once")(
+                    None, budget
+                )?,
                 Some(pair) => {
                     self.check_native_pair_v18(native, pair, budget)?;
-                    consume(
+                    consume
+                        .take()
+                        .expect("native access callback is invoked once")(
                         Some(&PendingGlobalSourceNativeAccessV18 { pair, native }),
                         budget,
                     )?;
@@ -179,6 +186,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
                 .check_owner(inventory.owner(), budget)
                 .map_err(PendingGlobalNativeErrorV18::Native)
         }));
+        drop(consume);
         let prior = self.roles.original.source.guard.first.get();
         let custody = ledger == budget.work_ledger_identity_v1()
             && slot == std::ptr::from_ref(&*budget) as usize

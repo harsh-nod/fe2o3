@@ -7,6 +7,62 @@ struct SourcePrivateSpillShapeV25 {
     element: PrivateRetainedSlotFactsV1,
 }
 
+enum SourcePrivateSpillAccessV26 {
+    Removed,
+    Global,
+    Private(usize, SourcePrivateOperationV18),
+}
+
+fn source_private_spill_global_pair_v26(
+    before: &Type,
+    after: &Type,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<bool> {
+    budget.charge_work(4)?;
+    let before =
+        matches!(before, Type::Pointer(pointer) if pointer.address_space == AddressSpace::Global);
+    let after =
+        matches!(after, Type::Pointer(pointer) if pointer.address_space == AddressSpace::Global);
+    if before != after {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "private spill scope changed Global pointer classification",
+        ));
+    }
+    Ok(before && after)
+}
+
+fn source_private_spill_global_origin_v26(
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
+    function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    pointer: ValueId,
+    ty: &Type,
+    origins: &SourceIssuedGlobalOriginsV26<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<bool> {
+    budget.charge_work(5)?;
+    match ty {
+        Type::Pointer(pointer) if pointer.address_space == AddressSpace::Global => Ok(true),
+        Type::Pointer(pointer_type) if pointer_type.address_space == AddressSpace::Generic => {
+            let row = inventory
+                .functions()
+                .get(function.0 as usize)
+                .filter(|row| row.coordinate == function)
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "private spill Generic pointer function absent",
+                ))?;
+            origins
+                .query(row.function, pointer, budget)
+                .map(|origin| origin.is_some())
+                .map_err(source_emission_error_v18)
+        }
+        _ => Ok(false),
+    }
+}
+
+#[cfg(test)]
+#[path = "production_source_private_spill_scope_v26_tests.rs"]
+mod spill_scope_v26_tests;
+
 fn source_private_spill_shape_headers_v25() -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
         source_private_header_v18::<SourcePrivateSpillShapeV25>()?,
@@ -64,7 +120,22 @@ fn source_private_spill_rows_headers_v25() -> Result<usize, ArgumentResourceV1> 
         source_private_header_v18::<ScopedMemoryStoreSourceV29>()?,
         source_private_header_v18::<ScopedMemoryReadV29>()?,
         source_private_header_v18::<(usize, SourcePrivateOperationV18)>()?,
-        source_private_header_v18::<Option<(usize, SourcePrivateOperationV18)>>()?,
+        source_private_header_v18::<SourcePrivateSpillAccessV26>()?,
+        source_private_header_v18::<(&Type, &Type, usize, ValueId, ValueId, bool, bool, bool)>()?,
+        source_private_header_v18::<(
+            &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
+            fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+            ValueId,
+            &Type,
+            &SourceIssuedGlobalOriginsV26<'_>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()?,
+        source_private_header_v18::<&fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>>()?,
+        source_private_header_v18::<(bool, bool, bool)>()?,
+        source_private_header_v18::<(
+            &SourceIssuedGlobalOriginsV26<'_>,
+            &SourceIssuedGlobalOriginsV26<'_>,
+        )>()?,
         source_private_header_v18::<(ValueId, ValueId, ValueId, ValueId, bool)>()?,
         source_private_header_v18::<ProductionSemanticExpressionV2>()?,
         source_private_header_v18::<CanonicalKirDefinitionCoordinateV1>()?,
@@ -98,6 +169,10 @@ fn source_private_spill_rows_headers_v25() -> Result<usize, ArgumentResourceV1> 
             usize,
             usize,
             CanonicalKirOperationCoordinateV1,
+            (
+                &SourceIssuedGlobalOriginsV26<'_>,
+                &SourceIssuedGlobalOriginsV26<'_>,
+            ),
             &mut ArgumentBudgetV1<'_>,
         )>()?,
         source_private_header_v18::<(
@@ -309,8 +384,12 @@ fn source_private_spill_access_v25(
     instance: usize,
     anchor: usize,
     input: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    origins: (
+        &SourceIssuedGlobalOriginsV26<'_>,
+        &SourceIssuedGlobalOriginsV26<'_>,
+    ),
     budget: &mut ArgumentBudgetV1<'_>,
-) -> SourceOwnedResultV18<Option<(usize, SourcePrivateOperationV18)>> {
+) -> SourceOwnedResultV18<SourcePrivateSpillAccessV26> {
     use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Definition;
     let original = core.original;
     core.check(budget)?;
@@ -321,11 +400,108 @@ fn source_private_spill_access_v25(
             "private spill lacks scalar source transport",
         ))?;
     let Some(output) = transport.output() else {
-        return Ok(None);
+        return Ok(SourcePrivateSpillAccessV26::Removed);
     };
     let inventory = core.optimized.output_inventory(budget)?;
     let before = source_operation_row_v18(original.inventory, input, budget)?.operation;
     let after = source_operation_row_v18(inventory, output, budget)?.operation;
+    let (before_pointer, after_pointer, _read) = match (&before.kind, &after.kind) {
+        (
+            OperationKind::Load {
+                pointer: before, ..
+            }
+            | OperationKind::GuardedLoad {
+                pointer: before, ..
+            },
+            OperationKind::Load { pointer: after, .. }
+            | OperationKind::GuardedLoad { pointer: after, .. },
+        ) => (*before, *after, true),
+        (
+            OperationKind::Store {
+                pointer: before, ..
+            }
+            | OperationKind::GuardedStore {
+                pointer: before, ..
+            },
+            OperationKind::Store { pointer: after, .. }
+            | OperationKind::GuardedStore { pointer: after, .. },
+        ) => (*before, *after, false),
+        _ => {
+            return original
+                .source
+                .missing("private spill scalar access family changed");
+        }
+    };
+    let ordinal = source_private_operation_index_v18(inventory, output, budget)?;
+    let definition = inventory
+        .definition_index_for_value(output.block.function, after_pointer, budget)
+        .map_err(|error| {
+            ProductionSourceOwnedViewErrorV18::from(
+                fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
+            )
+        })?
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "private spill pointer definition absent",
+        ))?;
+    let original_definition = original
+        .inventory
+        .definition_index_for_value(input.block.function, before_pointer, budget)
+        .map_err(|error| {
+            ProductionSourceOwnedViewErrorV18::from(
+                fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
+            )
+        })?
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "private spill original pointer definition absent",
+        ))?;
+    // Generic alone is not a Global classification. Follow the same typed
+    // cast/CFG origin walker used by issued-source replay on both actual graphs.
+    // This only selects the owner; the separate global census must still prove
+    // the exact source root, pointer, guard and access domain.
+    let before_type = original.inventory.definitions()[original_definition].ty;
+    let after_type = inventory.definitions()[definition].ty;
+    budget.charge_work(4)?;
+    let global = if matches!(before_type, Type::Pointer(pointer) if pointer.address_space == AddressSpace::Generic)
+        || matches!(after_type, Type::Pointer(pointer) if pointer.address_space == AddressSpace::Generic)
+    {
+        let before = source_private_spill_global_origin_v26(
+            original.inventory,
+            input.block.function,
+            before_pointer,
+            before_type,
+            origins.0,
+            budget,
+        )?;
+        let after = source_private_spill_global_origin_v26(
+            inventory,
+            output.block.function,
+            after_pointer,
+            after_type,
+            origins.1,
+            budget,
+        )?;
+        budget.charge_work(2)?;
+        if before != after {
+            return original
+                .source
+                .missing("private spill scope changed Global pointer classification");
+        }
+        before && after
+    } else {
+        source_private_spill_global_pair_v26(before_type, after_type, budget)?
+    };
+    if global {
+        #[cfg(test)]
+        SPILL_GLOBAL_VISITS_V26.with(|visits| {
+            if let Some(mut counts) = visits.get() {
+                assert!(!core.physical.operation(ordinal));
+                assert!(core.physical.address(definition).is_none());
+                counts[usize::from(!_read)] += 1;
+                visits.set(Some(counts));
+            }
+        });
+        return Ok(SourcePrivateSpillAccessV26::Global);
+    }
     let (before_pointer, after_pointer, before_value, after_value, read) =
         match (&before.kind, &after.kind) {
             (
@@ -387,17 +563,6 @@ fn source_private_spill_access_v25(
                     .missing("private spill requires an ordinary Load or Store");
             }
         };
-    let ordinal = source_private_operation_index_v18(inventory, output, budget)?;
-    let definition = inventory
-        .definition_index_for_value(output.block.function, after_pointer, budget)
-        .map_err(|error| {
-            ProductionSourceOwnedViewErrorV18::from(
-                fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
-            )
-        })?
-        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-            "private spill pointer definition absent",
-        ))?;
     let address =
         core.physical
             .address(definition)
@@ -533,7 +698,7 @@ fn source_private_spill_access_v25(
                 .missing("private spill original scalar role differs");
         }
     };
-    Ok(Some((
+    Ok(SourcePrivateSpillAccessV26::Private(
         ordinal,
         SourcePrivateOperationV18 {
             root,
@@ -546,7 +711,7 @@ fn source_private_spill_access_v25(
             input_value: Some(before_value),
             output_value: Some(after_value),
         },
-    )))
+    ))
 }
 
 fn source_private_spill_install_v25(
@@ -598,6 +763,20 @@ fn source_private_spill_rows_v25(
             .source
             .missing("private spill expression owners differ");
     }
+    let original_function = original
+        .inventory
+        .functions()
+        .get(original.source.root_row(root)?.function_ordinal)
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "private spill original root function absent",
+        ))?
+        .function;
+    let output_function =
+        optimized_source_root_function_v18(original, core.optimized, root, budget)?.function;
+    let before_origins = SourceIssuedGlobalOriginsV26::prepare(original_function, budget)
+        .map_err(source_emission_error_v18)?;
+    let after_origins = SourceIssuedGlobalOriginsV26::prepare(output_function, budget)
+        .map_err(source_emission_error_v18)?;
     let visit = |disposition: &ProductionOptimizedSourceScalarStoreDispositionV18<'_>,
                  budget: &mut ArgumentBudgetV1<'_>| {
         let ProductionOptimizedSourceScalarStoreDispositionV18::Retained(request) = disposition
@@ -606,18 +785,24 @@ fn source_private_spill_rows_v25(
         };
         let floor = budget.storage();
         scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
-            let (ordinal, row) = source_private_spill_access_v25(
+            let (ordinal, row) = match source_private_spill_access_v25(
                 core,
                 currentness,
                 root,
                 request.original.instance,
                 request.original.row,
                 request.original.operation,
+                (&before_origins, &after_origins),
                 budget,
-            )?
-            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                "retained private spill Store became removed",
-            ))?;
+            )? {
+                SourcePrivateSpillAccessV26::Global => return Ok(()),
+                SourcePrivateSpillAccessV26::Private(ordinal, row) => (ordinal, row),
+                SourcePrivateSpillAccessV26::Removed => {
+                    return original
+                        .source
+                        .missing("retained private spill Store became removed");
+                }
+            };
             if row.output != request.output
                 || row.input_value != Some(request.original.value)
                 || row.output_value != Some(request.value)
@@ -699,15 +884,18 @@ fn source_private_spill_rows_v25(
                     .source
                     .missing("private spill read lost original operation");
             };
-            if let Some((ordinal, row)) = source_private_spill_access_v25(
-                core,
-                currentness,
-                root,
-                instance,
-                anchor,
-                input,
-                budget,
-            )? {
+            if let SourcePrivateSpillAccessV26::Private(ordinal, row) =
+                source_private_spill_access_v25(
+                    core,
+                    currentness,
+                    root,
+                    instance,
+                    anchor,
+                    input,
+                    (&before_origins, &after_origins),
+                    budget,
+                )?
+            {
                 if !matches!(row.kind, SourcePrivateOperationKindV18::Read { .. }) {
                     return original.source.missing("private spill read became a write");
                 }
@@ -770,6 +958,7 @@ impl CheckedSourcePrivatePhysicalV18<'_> {
 thread_local! {
     pub(super) static SPILL_FAULT_V25: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
     pub(super) static SPILL_FAULT_FINISHED_V25: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static SPILL_GLOBAL_VISITS_V26: std::cell::Cell<Option<[usize; 2]>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]

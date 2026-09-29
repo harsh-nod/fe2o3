@@ -179,6 +179,16 @@ fn check_immutable_issued_roles_v18(
     original.retain_query(budget.release_storage(retained).map_err(Into::into))
 }
 
+#[cfg(test)]
+pub(super) fn test_issued_copied_rows_replay_v26(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    rows: &PendingSourceIssuedRolesV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<()> {
+    check_immutable_issued_roles_v18(original, root, rows, budget)
+}
+
 fn check_immutable_issued_roles_inner_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
     root: usize,
@@ -309,6 +319,9 @@ fn check_immutable_issued_roles_inner_v18(
     }
     let mut accesses =
         emission_vec_v1(rows.accesses.len(), budget).map_err(immutable_memory_error_v29)?;
+    budget.reserve_storage(std::mem::size_of::<Vec<SourceIssuedPointerTransportV26>>())?;
+    let mut pointer_transports =
+        emission_vec_v1(rows.accesses.len(), budget).map_err(immutable_memory_error_v29)?;
     let mut previous = None;
     for row in &rows.issuers {
         let key = (row.instance.index(), row.block.index());
@@ -379,7 +392,7 @@ fn check_immutable_issued_roles_inner_v18(
         charge_execution_cfg_lookup_v29(issuers.len(), budget)
             .map_err(immutable_memory_error_v29)?;
         let issuer = issuers
-            .binary_search_by_key(&(row.instance.index(), row.issuer), |&index| {
+            .binary_search_by_key(&(row.issuer_instance.index(), row.issuer), |&index| {
                 (
                     rows.issuers[index].instance.index(),
                     rows.issuers[index].definition,
@@ -410,7 +423,7 @@ fn check_immutable_issued_roles_inner_v18(
             return original.source.missing("issued access actual position");
         };
         let Some(access) =
-            original.retained_memory_access(root, coordinate, issuer.pointer, budget)?
+            original.retained_memory_access(root, coordinate, row.pointer, budget)?
         else {
             return original
                 .source
@@ -442,8 +455,20 @@ fn check_immutable_issued_roles_inner_v18(
             ))?;
         budget.charge_work(8)?;
         if value.object
-            || value.pointer != issuer.pointer
-            || value.access.address_space != AddressSpace::Global
+            || value.pointer != row.pointer
+            || !matches!(
+                value.access.address_space,
+                AddressSpace::Global | AddressSpace::Generic
+            )
+            || !source_issued_memory_pointer_v26(
+                &actual,
+                value.pointer,
+                value.access,
+                value.writing,
+                issuer.element,
+                budget,
+            )
+            .map_err(immutable_memory_error_v29)?
             || (value.writing && issuer.access != AccessMode::ReadWrite)
             || value.access != row.access
             || value.writing != row.writing
@@ -455,6 +480,11 @@ fn check_immutable_issued_roles_inner_v18(
         {
             return Err(immutable_memory_error_v29(source_issued_error_v29()));
         }
+        budget.charge_work(3)?;
+        pointer_transports.push(SourceIssuedPointerTransportV26 {
+            pointer: value.pointer,
+            issuer: issuer.pointer,
+        });
         charge_execution_cfg_lookup_v29(guards.len(), budget)
             .map_err(immutable_memory_error_v29)?;
         if guards
@@ -480,6 +510,8 @@ fn check_immutable_issued_roles_inner_v18(
             .id;
         accesses.push((row.guard_block, row.guard_edge, block));
     }
+    check_source_issued_pointer_transports_v26(function, &actual, &pointer_transports, budget)
+        .map_err(immutable_memory_error_v29)?;
     budget.charge_work(argument_product_v1(
         2,
         argument_sum_v1(&[rows.issuers.len(), accesses.len()])?,

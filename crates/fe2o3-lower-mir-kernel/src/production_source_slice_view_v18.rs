@@ -119,6 +119,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
             &SourceSliceReplayFactsV18<'s>,
         ) -> SliceResult<R>,
     ) -> SourceOwnedResultV18<R> {
+        let mut use_view = SourceCallbackCustodyV29::new(use_view);
         self.retain_query((|| {
             self.query(budget)?;
             let floor = budget.storage();
@@ -229,7 +230,13 @@ impl ProductionSourceCorrespondenceV18<'_> {
                                         }
                                     }
                                 }
-                                use_view(view, direct_local, &facts)
+                                use_view
+                                    .take()
+                                    .expect("slice access consumer is invoked once")(
+                                    view,
+                                    direct_local,
+                                    &facts,
+                                )
                             },
                         )
                     })

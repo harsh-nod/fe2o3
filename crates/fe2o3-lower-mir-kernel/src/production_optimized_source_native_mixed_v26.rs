@@ -409,8 +409,12 @@ fn mixed_source_traps_v26(
             completed[index] = true;
         }
     }
+    synthetic_traps_v26::complete(original, optimized, &mut completed, budget)?;
     Ok(completed)
 }
+
+#[path = "production_source_synthetic_traps_v26.rs"]
+mod synthetic_traps_v26;
 
 fn join_mixed_source_obligations_v26(
     recipes: &ProductionOptimizedExecutionRecipesV18<'_>,
@@ -610,7 +614,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
         let floor = budget.storage();
         let slot = std::ptr::from_ref(budget) as usize;
         let ledger = budget.work_ledger_identity_v1();
-        let mut required = floor;
+        let mut entered = false;
         let mut check_root = Some(check_root);
         let mut consume = Some(consume);
         let mut caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -620,22 +624,23 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
                 source_reference_cleanup_headers_v29()?,
                 source_owned_finish_preflight_v26::<Result<(), E>, NativeError>(budget)
                     .map_err(ProductionSourceOwnedViewErrorV18::from)?,
+                size_of::<(
+                    [usize; 2],
+                    std::thread::Result<Result<Result<(), E>, NativeError>>,
+                    std::thread::Result<Result<Result<(), E>, NativeError>>,
+                    Result<Result<(), E>, NativeError>,
+                    SourceOwnedResultV18<()>,
+                    Result<usize, ArgumentResourceV1>,
+                    [bool; 2],
+                )>(),
                 argument_product_v1(3, std::mem::size_of_val(&check_root))?,
                 std::mem::align_of_val(&check_root),
                 argument_product_v1(3, std::mem::size_of_val(&consume))?,
                 std::mem::align_of_val(&consume),
             ])
             .map_err(ProductionSourceOwnedViewErrorV18::from)?;
-            budget
-                .reserve_storage(headers)
-                .map_err(ProductionSourceOwnedViewErrorV18::from)?;
-            required = budget.storage();
-            budget
-                .charge_work(
-                    argument_product_v1(2, SOURCE_REFERENCE_ENTRY_WORK_V29)
-                        .map_err(ProductionSourceOwnedViewErrorV18::from)?,
-                )
-                .map_err(ProductionSourceOwnedViewErrorV18::from)?;
+            // Ranked queries require their exact retained balance. The pending
+            // callback below owns and settles additional wrapper storage.
             let inventory = checked
                 .inventory(budget)
                 .map_err(|error| self.native_pending_error(error.into()))?;
@@ -653,8 +658,21 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
                 layouts,
                 budget,
                 |pending, budget| {
-                    Ok(
-                    self.with_execution_recipes_prepaid_v18(budget, |recipes, budget| {
+                    entered = true;
+                    let inner_floor = budget.storage();
+                    let mut required = inner_floor;
+                    let mut caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        budget
+                            .reserve_storage(headers)
+                            .map_err(ProductionSourceOwnedViewErrorV18::from)?;
+                        required = budget.storage();
+                        budget
+                            .charge_work(
+                                argument_product_v1(2, SOURCE_REFERENCE_ENTRY_WORK_V29)
+                                    .map_err(ProductionSourceOwnedViewErrorV18::from)?,
+                            )
+                            .map_err(ProductionSourceOwnedViewErrorV18::from)?;
+                        let result = self.with_execution_recipes_prepaid_v18(budget, |recipes, budget| {
                         scoped_raw_admission_v29::with_source_private_physical_profile_v25::<
                             true,
                             _,
@@ -691,23 +709,76 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
                                 )
                             },
                         )
-                    }),
-                )
+                        });
+                        match result {
+                            Err(PrivateNativeFlowV18::Native(error)) => Err(error),
+                            Err(PrivateNativeFlowV18::Callback(error)) => Ok(Err(error)),
+                            Ok(()) => Ok(Ok(())),
+                        }
+                    }));
+                    let dropped_root = source_reference_discard_v29(check_root.take());
+                    let dropped_consume = source_reference_discard_v29(consume.take());
+                    if (dropped_root || dropped_consume) && matches!(caught, Ok(Ok(Ok(())))) {
+                        source_reference_discard_v29(caught);
+                        caught = Ok(Err(self
+                            .original
+                            .source
+                            .missing::<()>("mixed public callback capture panicked")
+                            .unwrap_err()
+                            .into()));
+                    }
+                    let custody = if slot != std::ptr::from_ref(budget) as usize
+                        || ledger != budget.work_ledger_identity_v1()
+                        || budget.storage() != required
+                    {
+                        self.original.source.cleanup.deny_refund();
+                        Err(self
+                            .original
+                            .retain_query_resource_error_v18(ArgumentResourceV1::Accounting))
+                    } else {
+                        self.original.observe_custody(budget)
+                    };
+                    let storage = required
+                        .checked_sub(inner_floor)
+                        .ok_or(ArgumentResourceV1::Accounting)?;
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        source_owned_finish_callback_v18(
+                            caught,
+                            self.original.source.guard.first.get(),
+                            custody,
+                            self.original.source.cleanup,
+                            budget,
+                            storage,
+                        )
+                    }));
+                    if self.original.source.cleanup.is_denied() {
+                        pending.refuse_retained_custody();
+                    }
+                    match result {
+                        Ok(result) => Ok(result),
+                        Err(payload) => std::panic::resume_unwind(payload),
+                    }
                 },
             );
             match result {
                 Err(error) => Err(self
                     .native_pending_error(error)
                     .with_diagnostic(diagnostic.get())),
-                Ok(Err(PrivateNativeFlowV18::Native(error))) => {
-                    Err(error.with_diagnostic(diagnostic.get()))
-                }
-                Ok(Err(PrivateNativeFlowV18::Callback(error))) => Ok(Err(error)),
-                Ok(Ok(())) => Ok(Ok(())),
+                Ok(Err(error)) => Err(error.with_diagnostic(diagnostic.get())),
+                Ok(Ok(result)) => Ok(result),
             }
         }));
         let dropped_root = source_reference_discard_v29(check_root.take());
         let dropped_consume = source_reference_discard_v29(consume.take());
+        if entered {
+            // The inner finalizer already disposed rejected user payloads and
+            // settled its exact credit before Pending's exact postflight. No
+            // new fallible payload settlement may run after that refund.
+            return match caught {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
+        }
         if (dropped_root || dropped_consume) && matches!(caught, Ok(Ok(Ok(())))) {
             source_reference_discard_v29(caught);
             caught = Ok(Err(self
@@ -719,7 +790,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
         }
         let custody = if slot != std::ptr::from_ref(budget) as usize
             || ledger != budget.work_ledger_identity_v1()
-            || budget.storage() < required
+            || budget.storage() < floor
         {
             self.original.source.cleanup.deny_refund();
             Err(self
@@ -728,20 +799,21 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
         } else {
             self.original.observe_custody(budget)
         };
-        let storage =
-            required
-                .checked_sub(floor)
-                .ok_or(ProductionSourceOwnedViewErrorV18::from(
-                    ArgumentResourceV1::Accounting,
-                ))?;
-        source_owned_finish_callback_v18(
-            caught,
-            self.original.source.guard.first.get(),
-            custody,
-            self.original.source.cleanup,
-            budget,
-            storage,
-        )
+        // No user callback ran and no mixed header was accepted on this path.
+        // Preserve the concrete ingress refusal even if uncalled captures deny
+        // custody while being destroyed; there is no credit to refund.
+        let _ = custody;
+        match caught {
+            Ok(Err(error)) => Err(error),
+            Err(payload) => std::panic::resume_unwind(payload),
+            Ok(Ok(value)) => {
+                source_reference_discard_v29(value);
+                Err(self
+                    .original
+                    .retain_query_resource_error_v18(ArgumentResourceV1::Accounting)
+                    .into())
+            }
+        }
     }
 }
 

@@ -15,6 +15,7 @@ include!("production_optimized_source_global_read_conditions_v18_tests.rs");
 include!("production_optimized_source_shared_entry_v18_tests.rs");
 include!("production_optimized_source_slice_entry_v25_tests.rs");
 include!("production_source_mixed_handoff_v26_tests.rs");
+include!("production_source_mixed_unused_parameters_v26_tests.rs");
 include!("production_optimized_source_native_mixed_v26_tests.rs");
 include!("production_optimized_source_issued_role_fixture_v18_tests.rs");
 include!("production_optimized_source_global_expressions_v23_tests.rs");
@@ -859,19 +860,24 @@ fn original_descriptor_role_outer_header_refuses_before_unsupported_namespace() 
                 published.set(true);
                 Ok(())
             };
+            let callback = Some(callback);
             let headers =
                 descriptor_role_outer_headers_v18::<(), ProductionSourceOwnedViewErrorV18>(
                     std::mem::size_of_val(&callback),
                     std::mem::align_of_val(&callback),
                 )
-                .unwrap();
-            // The outer constructor borrows the source and callback while its
-            // attempt envelope remains live across the explicit capture debit.
-            let attempt = scoped_source_attempt_header_oracle_v29::<
-                usize,
-                ProductionSourceOwnedViewErrorV18,
-                (&ProductionSourceOwnedViewV18<'_>, &()),
-            >();
+                .unwrap()
+                + source_owned_finish_header_oracle_v26::<(), ProductionSourceOwnedViewErrorV18>();
+            // The constructor carries the owned guard and returns it beside
+            // the header credit; the three references are source/layout inputs.
+            fn attempt_header<F>(_: &Option<F>) -> usize {
+                scoped_source_attempt_header_oracle_v29::<
+                    (usize, Option<F>),
+                    ProductionSourceOwnedViewErrorV18,
+                    (Option<F>, &ProductionSourceOwnedViewV18<'_>, &usize, &usize),
+                >()
+            }
+            let attempt = attempt_header(&callback);
             let floor = budget.storage();
             let limit = budget.storage_limit();
             let remaining = match cut {
@@ -884,7 +890,7 @@ fn original_descriptor_role_outer_header_refuses_before_unsupported_namespace() 
             budget.reserve_storage(padding).unwrap();
             let padded_floor = budget.storage();
             let refused =
-                original.with_descriptor_source_roles_v18(optimized, 0, &recipe, budget, callback);
+                original.with_descriptor_source_roles_v18(optimized, 0, &recipe, budget, callback.expect("owned callback"));
             let Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(
                 error,
             ))) = refused

@@ -23,24 +23,29 @@ pub(super) fn native_header(
     let consume = |_: &ProductionLifecycleCheckedNativePoliciesV18<'_, '_>,
                    _: &mut ArgumentBudgetV1<'_>|
      -> NativeResult { panic!("header/backing cut reached native consumer") };
+    let consume = Some(consume);
     let source = recipes.optimized.original.source;
-    // This uninvoked closure mirrors the constructor's three reference
-    // captures; its inferred F supplies layout only, never a production debit.
+    // This uninvoked closure models four pointer-sized constructor inputs and
+    // the owned Option capture, which is returned beside the constructed rows.
     let attempt_header = {
-        let capture = |budget: &mut ArgumentBudgetV1<'_>| {
-            source.retain_construction(|| {
-                let _ = std::mem::size_of_val(&consume);
+        let callback = consume;
+        let bytes = std::mem::size_of_val(&callback);
+        let alignment = std::mem::align_of_val(&callback);
+        let capture = move |budget: &mut ArgumentBudgetV1<'_>| {
+            let rows = source.retain_construction(|| {
+                std::hint::black_box((bytes, alignment));
                 recipes.output_recipes(budget)
-            })
+            })?;
+            Ok::<_, ProductionSourceOwnedViewErrorV18>((rows, callback))
         };
-        fn header<F>(_: &F) -> usize {
+        fn header<F, C>(_: &F, _: &Option<C>) -> usize {
             crate::production_semantic_kir_v1::scoped_source_attempt_header_oracle_v29::<
-                Vec<OutputRecipe>,
+                (Vec<OutputRecipe>, Option<C>),
                 ProductionSourceOwnedViewErrorV18,
                 F,
             >()
         }
-        header(&capture)
+        header(&capture, &consume)
     };
     // MAIN keeps the transient attempt frame live through the explicit native
     // header and first vector reserve. Exact combined headers leave no backing
@@ -50,7 +55,10 @@ pub(super) fn native_header(
         + 2 * size_of::<SourceOwnedResultV18<Vec<OutputRecipe>>>()
         + size_of::<std::thread::Result<NativeResult>>()
         + 2 * size_of::<NativeResult>()
-        + 2;
+        + std::mem::size_of_val(&consume)
+        + 2 * std::mem::align_of_val(&consume)
+        + crate::production_semantic_kir_v1::source_owned_finish_header_oracle_v26::<(), NativeError>(
+        );
     assert!(!attempt_only || short);
     let header = attempt_header + if attempt_only { 0 } else { native_header };
     let retained = recipes
@@ -63,7 +71,12 @@ pub(super) fn native_header(
     let padding = limit - floor - header + usize::from(short);
     budget.reserve_storage(padding).unwrap();
     let work = budget.work();
-    let result = recipes.with_pending_native_policies_v18(pending, budget, &diagnostic, consume);
+    let result = recipes.with_pending_native_policies_v18(
+        pending,
+        budget,
+        &diagnostic,
+        consume.expect("owned callback"),
+    );
     let expected = limit
         + if short {
             1
@@ -77,7 +90,11 @@ pub(super) fn native_header(
     assert_eq!(budget.failed_storage(), Some(expected));
     assert_eq!(
         budget.work() - work,
-        if short { 0 } else { recipes.rows.len() + 1 }
+        if attempt_only {
+            32 + 7
+        } else {
+            2 * (32 + 7) + if short { 0 } else { recipes.rows.len() + 1 }
+        }
     );
     assert!(diagnostic.get().is_none());
     assert_eq!(budget.storage(), floor + padding);

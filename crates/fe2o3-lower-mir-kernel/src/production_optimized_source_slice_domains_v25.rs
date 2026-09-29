@@ -69,7 +69,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
                     .source
                     .missing("slice Store source or formal scope differs");
             }
-            budget.charge_work(160)?;
+            budget.charge_work(160 + 4)?;
             let endpoint = &pair.output;
             let domain = fact.domain();
             let root =
@@ -176,7 +176,7 @@ impl PendingGlobalSourceAccessesV18<'_> {
             if !endpoint.writing
                 || !pair.input.writing
                 || endpoint.memory.volatile
-                || endpoint.memory.address_space != AddressSpace::Global
+                || !global_source_memory_space_v26(&pair.origin, endpoint.memory.address_space)
                 || fact.operation() != endpoint.logical.access.operation
                 || root.coordinate
                     != (SliceDefinition::FunctionArgument {

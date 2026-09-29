@@ -324,6 +324,50 @@ fn generated_mixed_pack_preserves_multiple_accesses_real_borrows_and_runtime_fam
 }
 
 #[test]
+fn generated_mixed_generic_representation_preserves_distinct_conditional_occurrence_binding() {
+    let descriptor = descriptor();
+    let table = decode_device_descriptor_table_v3(&descriptor, &mut free).unwrap();
+    let global_bytes = contract(&table, false, |_, _, _| {});
+    let generic_bytes = contract(&table, false, |_, _, rows| {
+        for row in rows {
+            row.address_space = MixedMemorySpaceV26::Generic;
+        }
+    });
+    let global = decode_mixed_contract_v26(&global_bytes, &mut free).unwrap();
+    let generic = decode_mixed_contract_v26(&generic_bytes, &mut free).unwrap();
+    assert_ne!(global.identity(), generic.identity());
+    assert!(!generic.grants_artifact_or_launch_authority());
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    let input = [1, 2, 3];
+    let mut output = [0; 3];
+    let bound = packed(&input, &mut output, &mut budget)
+        .bind_mixed_conditional_premises_v26(&table, &generic, geometry(), &mut budget)
+        .unwrap();
+    let (value, premises) = bound.into_parts();
+    assert_eq!(premises.accesses().len(), 3);
+    for (i, access) in premises.accesses().iter().enumerate() {
+        assert_eq!(
+            access.occurrence_identity,
+            generic.occurrence_identity(i, &mut free).unwrap()
+        );
+        assert_ne!(
+            access.occurrence_identity,
+            global.occurrence_identity(i, &mut free).unwrap()
+        );
+        assert_eq!(
+            access.writing,
+            generic.occurrence(i, &mut free).unwrap().writing
+        );
+    }
+    assert_eq!(value.pointer_fixups.len(), 2);
+    let plan_storage = value.source_plan_storage;
+    drop((value, premises));
+    budget.release_storage(plan_storage).unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
+#[test]
 fn generated_mixed_unused_slice_keeps_complete_actual_mapping_without_fake_read() {
     let descriptor = descriptor();
     let table = decode_device_descriptor_table_v3(&descriptor, &mut free).unwrap();

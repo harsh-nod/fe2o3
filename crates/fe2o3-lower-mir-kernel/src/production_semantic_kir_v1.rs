@@ -11035,6 +11035,7 @@ struct LoweredFunctionResultV1 {
     )]
     next_value: u32,
     execution_observation: Option<ExecutionArchiveV29>,
+    direct_call_inputs: Option<Vec<InvocationInputRowV1>>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
     invocation_entry: Option<InvocationEntryRelationV1>,
     scoped_slot_origins: Option<Vec<ScopedSlotOriginV29>>,
@@ -11755,6 +11756,8 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
             .record(state.source, plan, &lowering, emission_budget)?;
         lowering.emission_work = Some(emission_budget);
     }
+    let direct_call_inputs =
+        lowering.with_emission_budget_v1(|this, budget| this.take_direct_call_inputs_v26(budget))?;
     let execution_observation =
         lowering.with_emission_budget_v1(|this, budget| this.take_execution_archive_v29(budget))?;
     drop(lowering.emission_work.take());
@@ -11872,6 +11875,7 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
     Ok(LoweredFunctionResultV1 {
         next_value,
         execution_observation,
+        direct_call_inputs,
         invocation_entry: None,
         source_call_instance,
         scoped_slot_origins,

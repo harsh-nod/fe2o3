@@ -20,8 +20,26 @@ struct GlobalSourceLogicalEndpointV18 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GlobalSourceAccessOriginV18 {
     Assertion(ProductionSliceAccessSiteV1),
-    Issued { definition: SsaValueV1 },
+    Issued {
+        instance: usize,
+        definition: SsaValueV1,
+    },
 }
+
+// Issued rows cannot escape their constructor until complete original/output
+// pointer transport replay has established the exact Global issuer. This is a
+// representation gate only; native domains independently rejoin that origin.
+fn global_source_memory_space_v26(
+    origin: &GlobalSourceAccessOriginV18,
+    space: AddressSpace,
+) -> bool {
+    space == AddressSpace::Global
+        || (space == AddressSpace::Generic
+            && matches!(origin, GlobalSourceAccessOriginV18::Issued { .. }))
+}
+
+#[cfg(test)]
+include!("production_source_generic_global_domains_v26_tests.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GlobalSourceAccessEndpointV18 {
@@ -168,9 +186,10 @@ fn global_source_guard_definition_v18(
 fn global_source_endpoint_v18(
     inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
     logical: GlobalSourceLogicalEndpointV18,
+    origin: &GlobalSourceAccessOriginV18,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<Option<GlobalSourceAccessEndpointV18>> {
-    budget.charge_work(32)?;
+    budget.charge_work(32 + 4)?;
     let row = source_operation_row_v18(inventory, logical.access.operation, budget)?;
     let (pointer, value, memory, scalar, writing) = match &row.operation.kind {
         OperationKind::Load { pointer, access } => {
@@ -206,7 +225,7 @@ fn global_source_endpoint_v18(
             ));
         }
     };
-    if memory.address_space != AddressSpace::Global || memory.volatile {
+    if !global_source_memory_space_v26(origin, memory.address_space) || memory.volatile {
         return Ok(None);
     }
     if logical.access.effect != 0
@@ -252,11 +271,12 @@ fn install_global_source_access_v18(
     after: GlobalSourceLogicalEndpointV18,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
-    let Some(input) = global_source_endpoint_v18(original.inventory, before, budget)? else {
+    let Some(input) = global_source_endpoint_v18(original.inventory, before, &origin, budget)?
+    else {
         return Ok(());
     };
     let Some(output) =
-        global_source_endpoint_v18(optimized.output_inventory(budget)?, after, budget)?
+        global_source_endpoint_v18(optimized.output_inventory(budget)?, after, &origin, budget)?
     else {
         return Ok(());
     };
@@ -326,8 +346,10 @@ fn global_source_headers_v18() -> Result<usize, ArgumentResourceV1> {
         h::<(
             &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
             GlobalSourceLogicalEndpointV18,
+            &GlobalSourceAccessOriginV18,
             &mut ArgumentBudgetV1<'_>,
         )>()?,
+        h::<(&GlobalSourceAccessOriginV18, AddressSpace, bool)>()?,
         h::<(
             &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
             fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1,

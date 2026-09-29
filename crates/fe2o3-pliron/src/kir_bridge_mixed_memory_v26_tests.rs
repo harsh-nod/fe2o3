@@ -13,6 +13,9 @@ use fe2o3_kernel_ir::{
 };
 use std::cell::Cell;
 
+#[path = "kir_bridge_mixed_cfg_domain_v26_tests.rs"]
+mod cfg_domain_v26;
+
 const AMPLE: usize = 1 << 40;
 const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
     rows: 16,
@@ -192,6 +195,28 @@ fn fault(graph: &mut KirPlironGraphV18<'_>, fault: usize) {
             .0
     };
     match fault {
+        16 => {
+            let entry = *graph
+                .coordinates
+                .iter()
+                .find(|(_, coordinate)| {
+                    **coordinate
+                        == KirBridgeCoordinateV1::Terminator {
+                            function: 0,
+                            block: 0,
+                        }
+                })
+                .unwrap()
+                .0;
+            let target = *graph
+                .origins
+                .blocks
+                .iter()
+                .find(|(_, original)| **original == (0, BlockId(40)))
+                .unwrap()
+                .0;
+            Operation::replace_successor(entry, context, 0, target);
+        }
         1 => Operation::replace_operand(op(0, 4), context, 0, val(3)),
         2 => Operation::replace_operand(op(1, 1), context, 1, val(3)),
         3 => Operation::replace_operand(op(1, 2), context, 1, val(8)),
@@ -607,7 +632,7 @@ fn mixed_native_v26_fixed_nine_retain_separate_global_counts() {
 #[test]
 fn mixed_native_v26_fixed_nine_rejects_missing_duplicate_and_swapped_effect_coverage() {
     for position in 0..9 {
-        for kind in 0..8 {
+        for kind in 0..9 {
             let reached = Cell::new(false);
             let (result, _, _, calls) =
                 run_case(AMPLE, AMPLE, 0, |input| {

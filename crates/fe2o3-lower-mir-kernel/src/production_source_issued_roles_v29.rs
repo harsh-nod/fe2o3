@@ -28,7 +28,9 @@ struct PendingSourceIssuedIssuerV29 {
 struct PendingSourceIssuedAccessV29 {
     instance: ProductionCallInstanceIdV1,
     anchor: usize,
+    issuer_instance: ProductionCallInstanceIdV1,
     issuer: SsaValueV1,
+    pointer: ValueId,
     access: MemoryAccess,
     writing: bool,
     guard_block: BlockId,

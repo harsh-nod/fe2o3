@@ -83,7 +83,8 @@ impl Shape {
         512 * (self.o + 1) * (self.o + 1)
     }
     pub fn coverage(self) -> Triple {
-        Triple::new(32 * (self.o + 1) * (self.o + 1) + 128, 0, 9)
+        // The domain is compared with preceding stages and current input twice.
+        Triple::new(32 * (self.o + 1) * (self.o + 1) + 128 + 20, 0, 9)
     }
 }
 
@@ -545,7 +546,9 @@ impl Oracle {
         walk.commit(after_trace);
         // No Native Call/Constant trace success: downstream exact trace admission
         // is None. Sparse launch is nevertheless the resolved [1], not [] or [64].
-        let private_setup = Triple::new(149, 149, 0);
+        // Nine final slots, one pending slot, and the session retain the domain;
+        // selection and the profile/domain join require four further work units.
+        let private_setup = Triple::new(149 + 11 + 4, 149 + 11, 0);
         walk.admit(
             "private setup",
             Phase::ReportValidation,
@@ -802,7 +805,7 @@ impl Oracle {
                 true,
             );
             walk.commit(checkpoint);
-            let header = Triple::new(48, 0, 4);
+            let header = Triple::new(48 + 4, 0, 4);
             walk.admit(
                 "private record",
                 Phase::ReportValidation,
@@ -879,7 +882,7 @@ impl Oracle {
         walk.cache(
             "private finish",
             Phase::ReportValidation,
-            Triple::new(424, 0, 4),
+            Triple::new(424 + 9 * 4 + 4, 0, 4),
         );
         let cache_release = sparse.r + 2 + 10 + trace.r + 3 + 1 + 1024 + graph.r;
         let complete = walk.current.replace(cache_release, Triple::ZERO);

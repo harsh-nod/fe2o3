@@ -20,7 +20,7 @@ pub(crate) fn with_coverage_fault<T>(
     kind: u8,
     run: impl FnOnce() -> T,
 ) -> (T, bool) {
-    assert!(position < 9 && kind < 8);
+    assert!(position < 9 && kind < 9);
     assert!(FAULT.with(|fault| fault.get()).is_none());
     let _reset = Reset;
     FAULT.with(|fault| fault.set(Some((position, kind))));
@@ -54,6 +54,16 @@ pub(super) fn inject(position: usize, pending: &mut Option<PrivateStageCoverageV
                 .checked_sub(1)
                 .expect("fixture has private Store");
             row.global_counts[1] += 1;
+        }
+        8 => {
+            row.cfg_domain = match row.cfg_domain {
+                NativeCfgDomainV26::AllBlocksReachableV1 => {
+                    NativeCfgDomainV26::EntryReachableSubgraphV26
+                }
+                NativeCfgDomainV26::EntryReachableSubgraphV26 => {
+                    NativeCfgDomainV26::AllBlocksReachableV1
+                }
+            };
         }
         _ => unreachable!("closed coverage fault"),
     }
@@ -105,7 +115,7 @@ fn literal_private_increment_formulas_and_each_exact_one_under_limit() {
             setup.retained_storage_upper_bound(),
             setup.peak_storage_upper_bound()
         ),
-        (149, 149, 149)
+        (164, 160, 160)
     );
     let record = resources::record().unwrap();
     assert_eq!(
@@ -114,7 +124,7 @@ fn literal_private_increment_formulas_and_each_exact_one_under_limit() {
             record.retained_storage_upper_bound(),
             record.peak_storage_upper_bound()
         ),
-        (48, 0, 4)
+        (52, 0, 4)
     );
     let finish = resources::finish().unwrap();
     assert_eq!(
@@ -123,7 +133,7 @@ fn literal_private_increment_formulas_and_each_exact_one_under_limit() {
             finish.retained_storage_upper_bound(),
             finish.peak_storage_upper_bound()
         ),
-        (424, 0, 4)
+        (464, 0, 4)
     );
     for bound in [setup, record, finish] {
         let work = bound.work_upper_bound();
@@ -149,7 +159,7 @@ fn literal_private_increment_formulas_and_each_exact_one_under_limit() {
             projection.with_function(ordinal, budget, |input| {
                 assert_eq!(input.operation_count(), rows);
                 let stage = resources::stage(input, phase).unwrap();
-                let expected = 32 * (rows + 1) * (rows + 1) + 128;
+                let expected = 32 * (rows + 1) * (rows + 1) + 148;
                 assert_eq!(
                     (
                         stage.work_upper_bound(),

@@ -78,6 +78,58 @@ impl<'a> SourceDescriptorRootAbiV29<'a> {
         writing: bool,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Option<SourceSliceEntryAbiV25<'a>>, ProductionSemanticKirErrorV1> {
+        self.slice_parameter_contract_v26(argument, ty, physical, Some(writing), budget)
+    }
+
+    // A declaration has an ABI even when it has no memory-access occurrence.
+    // None below requests no read/write authority, including for WriteOnly.
+    pub(super) fn slice_parameter_v26(
+        self,
+        argument: u32,
+        ty: SemanticTypeIdV1,
+        physical: &Type,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<SourceSliceEntryAbiV25<'a>>, ProductionSemanticKirErrorV1> {
+        self.slice_parameter_contract_v26(argument, ty, physical, None, budget)
+    }
+
+    pub(super) fn slice_parameter_type_v26(
+        self,
+        argument: u32,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<SemanticTypeIdV1>, ProductionSemanticKirErrorV1> {
+        budget.charge_work(8)?;
+        let root = self
+            .profile
+            .roots
+            .get(self.original_root)
+            .ok_or_else(mismatch)?;
+        let ordinal = usize::try_from(argument).map_err(|_| mismatch())?;
+        let index = root
+            .arguments
+            .start
+            .checked_add(ordinal)
+            .ok_or_else(mismatch)?;
+        if index >= root.arguments.end {
+            return Err(mismatch());
+        }
+        let row = self.profile.arguments.get(index).ok_or_else(mismatch)?;
+        Ok(match row.kind {
+            Kind::Descriptor(
+                SourceTypeDescriptorV3::SharedSlice(_) | SourceTypeDescriptorV3::DisjointSlice(_),
+            ) => Some(row.ty),
+            _ => None,
+        })
+    }
+
+    fn slice_parameter_contract_v26(
+        self,
+        argument: u32,
+        ty: SemanticTypeIdV1,
+        physical: &Type,
+        writing: Option<bool>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<SourceSliceEntryAbiV25<'a>>, ProductionSemanticKirErrorV1> {
         budget.charge_work(24)?;
         let root = self
             .profile
@@ -114,8 +166,9 @@ impl<'a> SourceDescriptorRootAbiV29<'a> {
             AliasSemantics::SharedReadOnly
         };
         let access_permits = match (row.access, writing) {
-            (DescriptorAccess::ReadOnly, false) | (DescriptorAccess::ReadWrite, _) => true,
-            (DescriptorAccess::WriteOnly, true) => true,
+            (_, None) | (DescriptorAccess::ReadWrite, _) => true,
+            (DescriptorAccess::ReadOnly, Some(false))
+            | (DescriptorAccess::WriteOnly, Some(true)) => true,
             _ => false,
         };
         let Type::Slice(slice) = physical else {
@@ -123,7 +176,7 @@ impl<'a> SourceDescriptorRootAbiV29<'a> {
         };
         if row.ownership != expected_ownership
             || row.alias != expected_alias
-            || (!exclusive && (writing || row.access != DescriptorAccess::ReadOnly))
+            || (!exclusive && (writing == Some(true) || row.access != DescriptorAccess::ReadOnly))
             || !access_permits
             || slice.address_space != AddressSpace::Global
             || slice.element.as_ref() != &Type::Scalar(descriptor_scalar(scalar))
@@ -166,6 +219,7 @@ pub(super) fn slice_entry_abi_headers_v25() -> Result<usize, ArgumentResourceV1>
         SemanticTypeIdV1,
         &'a Type,
         bool,
+        Option<bool>,
         &'a mut ArgumentBudgetV1<'a>,
         &'a Root,
         Option<&'a Root>,
@@ -211,6 +265,17 @@ impl SourceDescriptorRootAbiV29<'_> {
         };
         let entry = self.slice_entry_v25(argument, ty, physical, false, budget)?;
         let entry = entry.expect("captured source slice ABI");
+        let parameter = self
+            .slice_parameter_v26(argument, ty, physical, budget)?
+            .expect("captured source slice declaration");
+        assert_eq!(self.slice_parameter_type_v26(argument, budget)?, Some(ty));
+        assert_eq!(parameter.argument(), entry.argument());
+        assert_eq!(parameter.identity(), entry.identity());
+        assert_eq!(parameter.scalar(), entry.scalar());
+        assert_eq!(
+            parameter.is_exclusive_contract(),
+            entry.is_exclusive_contract()
+        );
         assert_eq!(entry.argument(), argument);
         assert_eq!(entry.ty(), ty);
         assert_eq!(entry.is_exclusive_contract(), exclusive);
@@ -258,6 +323,10 @@ impl SourceDescriptorRootAbiV29<'_> {
                 },
             ),
         ] {
+            assert!(
+                self.slice_parameter_v26(argument, ty, &changed, budget)
+                    .is_err()
+            );
             assert!(matches!(
                 self.slice_entry_v25(argument, ty, &changed, false, budget),
                 Err(ProductionSemanticKirErrorV1::Unsupported {

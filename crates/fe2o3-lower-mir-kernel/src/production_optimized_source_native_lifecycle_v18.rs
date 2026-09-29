@@ -623,6 +623,7 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
             &mut ArgumentBudgetV1<'work>,
         ) -> NativeResult,
     ) -> NativeResult {
+        let mut consume = SourceCallbackCustodyV29::new(consume);
         self.check(budget)?;
         let inventory = checked
             .inventory(budget)
@@ -636,7 +637,14 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
             layouts,
             budget,
             |pending, budget| {
-                Ok(self.with_pending_native_policies_v18(pending, budget, &diagnostic, consume))
+                Ok(self.with_pending_native_policies_v18(
+                    pending,
+                    budget,
+                    &diagnostic,
+                    consume
+                        .take()
+                        .expect("native policy continuation is entered once"),
+                ))
             },
         )
         .map_err(|error| self.pending_error(error))
@@ -654,17 +662,19 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
             &mut ArgumentBudgetV1<'work>,
         ) -> NativeResult,
     ) -> NativeResult {
+        let consume = SourceCallbackCustodyV29::new(consume);
         self.check(budget)?;
         let source = self.optimized.original.source;
         let floor = budget.storage();
-        let mut consume = Some(consume);
+        let capture = std::mem::size_of_val(&consume);
+        let alignment = std::mem::align_of_val(&consume);
         let prepared = source.retain_query(scoped_source_attempt_v29(
             source.cleanup,
             budget,
             floor,
             |budget| {
-                source
-                    .retain_construction(|| {
+                consume.prepare(|| {
+                    source.retain_construction(|| {
                         let disposal =
                             source_owned_finish_preflight_v26::<(), NativeError>(budget)?;
                         budget.reserve_storage(argument_sum_v1(&[
@@ -674,20 +684,17 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
                             2 * size_of::<SourceOwnedResultV18<Vec<OutputRecipe>>>(),
                             size_of::<std::thread::Result<NativeResult>>(),
                             2 * size_of::<NativeResult>(),
-                            std::mem::size_of_val(&consume),
-                            2 * std::mem::align_of_val(&consume),
+                            capture,
+                            2 * alignment,
                         ])?)?;
                         self.output_recipes(budget)
                     })
-                    .inspect_err(|_| {
-                        source_reference_discard_v29(consume.take());
-                    })
+                })
             },
         ));
-        let rows = match prepared {
+        let (rows, mut consume) = match prepared {
             Ok(rows) => rows,
             Err(error) => {
-                source_reference_discard_v29(consume);
                 return Err(error.into());
             }
         };
@@ -695,7 +702,6 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
             .storage()
             .checked_sub(floor)
             .ok_or_else(|| self.pending_error(ArgumentResourceV1::Accounting.into()))?;
-        let consume = consume.expect("native lifecycle preparation retained its callback");
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let owner = pending
                 .owner(budget)
@@ -720,13 +726,18 @@ impl ProductionOptimizedExecutionRecipesV18<'_> {
                     recipes: self,
                     native,
                 };
-                Ok(consume(&view, budget))
+                Ok(consume
+                    .take()
+                    .expect("native lifecycle consumer is invoked once")(
+                    &view, budget,
+                ))
             });
             if let Err(error) = &observed {
                 diagnostic.set(Some(NativeDiagnostic::from_error(error)));
             }
             observed.map_err(|error| self.native_error(error))?
         }));
+        drop(consume);
         let prior = source.guard.first.get();
         let postflight = if matches!(&caught, Ok(Ok(()))) {
             self.check(budget)

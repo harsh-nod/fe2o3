@@ -87,6 +87,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
             let PendingInstanceSidecarsV29 {
                 next_value: _,
                 execution_observation: _,
+                direct_call_inputs,
                 source_call_instance: _,
                 invocation_entry,
                 scoped_slot_origins: _,
@@ -258,6 +259,27 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                     }
                     row = argument_sum_v1(&[row, 1])?;
                 }
+            }
+            for input in direct_call_inputs.iter().flatten() {
+                let InvocationInputRowV1 {
+                    local: _,
+                    ty: _,
+                    source_argument: _,
+                    tuple_field: _,
+                    first_parameter: _,
+                    parameter_count: _,
+                    reference_call_transport: _,
+                } = *input;
+                self.emit(
+                    self.key(
+                        Family::RawSidecar,
+                        instance.index(),
+                        row,
+                        Field::RawInvocationInputMap,
+                    ),
+                    TileAttachmentLocationV29::NoOutput,
+                )?;
+                row = argument_sum_v1(&[row, 1])?;
             }
             for entry in blocks {
                 let SemanticKirBlockCorrespondenceV1 {

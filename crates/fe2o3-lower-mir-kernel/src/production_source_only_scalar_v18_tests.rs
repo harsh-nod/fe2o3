@@ -221,22 +221,50 @@ fn source_only_scalar_constructor_keeps_first_storage_refusal() {
             let result =
                 with_entry_fixture_v18(typed_entry_rhs_owner_v18, |original, optimized, budget| {
                     let floor = budget.storage();
+                    // The optimized adapter moves both borrowed subjects, the
+                    // root ordinal, and the guarded ZST user continuation.
+                    type Adapter<'a, 's> = (
+                        &'a ProductionSourceCorrespondenceV18<'s>,
+                        &'a ProductionOptimizedSourceCorrespondenceV18<'s>,
+                        usize,
+                        Option<()>,
+                    );
                     let headers = std::mem::size_of::<ProductionSourceScalarLeavesV18<'_>>()
                         + std::mem::size_of::<SourceScalarNamespaceV18<'_>>()
                         + std::mem::size_of::<&SourceScalarNamespaceV18<'_>>()
                         + std::mem::size_of::<
                             std::thread::Result<Result<(), ProductionSourceOwnedViewErrorV18>>,
-                        >();
-                    type Capture<'a, 's> = (
+                        >()
+                        + source_owned_finish_header_oracle_v26::<
+                            (),
+                            ProductionSourceOwnedViewErrorV18,
+                        >()
+                        + if optimized_scope {
+                            std::mem::size_of::<Option<Adapter<'_, '_>>>()
+                                + std::mem::align_of::<Option<Adapter<'_, '_>>>()
+                        } else {
+                            std::mem::size_of::<Option<()>>() + std::mem::align_of::<Option<()>>()
+                        };
+                    type Capture<'a, 's, F> = (
+                        Option<F>,
                         &'a ProductionSourceCorrespondenceV18<'s>,
                         &'a usize,
                         &'a SourceScalarNamespaceV18<'s>,
+                        &'a usize,
+                        &'a usize,
                     );
-                    let envelope = scoped_source_attempt_header_oracle_v29::<
-                        (SourceScalarLeavesV18<'_, '_>, usize),
-                        ProductionSourceOwnedViewErrorV18,
-                        Capture<'_, '_>,
-                    >();
+                    fn envelope<F>() -> usize {
+                        scoped_source_attempt_header_oracle_v29::<
+                            ((SourceScalarLeavesV18<'_, '_>, usize), Option<F>),
+                            ProductionSourceOwnedViewErrorV18,
+                            Capture<'_, '_, F>,
+                        >()
+                    }
+                    let envelope = if optimized_scope {
+                        envelope::<Adapter<'_, '_>>()
+                    } else {
+                        envelope::<()>()
+                    };
                     let target = envelope + if attempt_header { 0 } else { headers };
                     let padding = MODULE_LIMIT - floor - target + 1;
                     budget.reserve_storage(padding)?;
@@ -471,4 +499,61 @@ fn source_only_scalar_scopes_refuse_foreign_ledger_and_lost_live_floor() {
         ));
         assert!(budget.storage() > MODULE_FLOOR);
     }
+}
+#[test]
+fn source_slice_initial_query_refusal_protects_uncalled_capture() {
+    let dropped = std::cell::Cell::new(0);
+    let reached = std::cell::Cell::new(false);
+    let result = with_entry_fixture_v18(typed_entry_rhs_owner_v18, |original, _, budget| {
+        let selected = original.retain_query::<()>(Err(ArgumentResourceV1::Accounting.into()));
+        assert!(matches!(
+            selected,
+            Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Accounting
+            ))
+        ));
+        let capture = SourceQueryDropV1751 {
+            drops: &dropped,
+            deny: None,
+            payload: Some(Box::new(0x1797_0030_u64)),
+        };
+        let before = (budget.work(), budget.storage());
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            original.with_checked_slice_access_v18(
+                0,
+                0,
+                ProductionSliceAccessSiteV1::new(
+                    SemanticFunctionIdV1::from_index(0),
+                    SemanticFunctionIdV1::from_index(0),
+                    SemanticBlockIdV1::from_index(0),
+                    None,
+                    0,
+                    SemanticBlockIdV1::from_index(0),
+                ),
+                budget,
+                move |_, _| -> Result<(), ProductionSemanticKirErrorV1> {
+                    std::hint::black_box(&capture);
+                    panic!("sticky source refusal invoked slice consumer");
+                },
+            )
+        }));
+        assert_eq!(dropped.get(), 1);
+        let result = caught.expect("uncalled capture panic replaced source refusal");
+        assert!(matches!(
+            result,
+            Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Accounting
+            ))
+        ));
+        assert_eq!((budget.work(), budget.storage()), before);
+        reached.set(true);
+        result
+    });
+    assert!(reached.get());
+    assert!(matches!(
+        result,
+        Err(ProductionSourceOwnedViewErrorV18::Resource(
+            ArgumentResourceV1::Accounting
+        ))
+    ));
 }

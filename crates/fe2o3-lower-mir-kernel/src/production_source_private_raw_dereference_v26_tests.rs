@@ -4,7 +4,9 @@ fn raw_owner<const FLAGS: u8>() -> ProductionSemanticSsaOwnerV1 {
     let root = FLAGS & 8 != 0;
     let base = typed_entry_rhs_fixture_v18(root);
     let semantic = base.source_semantic();
-    let mut types = semantic.types().to_vec();
+    // Replacing the captured pointer removes its only use. Rebuild its type
+    // from the live Unit/U32 prefix rather than retaining an orphaned type.
+    let mut types = semantic.types()[..2].to_vec();
     let mutable = FLAGS & 1 != 0;
     let moved = FLAGS & 2 != 0;
     let cast = FLAGS & 4 != 0;
@@ -18,11 +20,11 @@ fn raw_owner<const FLAGS: u8>() -> ProductionSemanticSsaOwnerV1 {
     let at = usize::from(!root);
     let leaf = &functions[at];
     let mut locals = leaf.locals().to_vec();
-    locals[2] = local(162, pointer, SemanticLocalRoleV1::Temporary);
+    locals[2] = local(72, pointer, SemanticLocalRoleV1::Temporary);
     let mut statements = Vec::new();
     if cast {
         let borrowed = reference(&mut types, U32, mutability, false);
-        locals.push(local(164, borrowed, SemanticLocalRoleV1::Temporary));
+        locals.push(local(74, borrowed, SemanticLocalRoleV1::Temporary));
         statements.push(assign(
             place(4, borrowed),
             SemanticRvalueKindV1::Borrow {
@@ -100,6 +102,57 @@ fn raw_owner<const FLAGS: u8>() -> ProductionSemanticSsaOwnerV1 {
         ProductionSemanticSsaLimitsV1::default(),
     )
     .unwrap()
+}
+
+#[test]
+fn private_raw_fixture_has_only_its_exact_original_pointer_type_closure() {
+    for (flags, factory) in [
+        raw_owner::<0> as fn() -> _,
+        raw_owner::<1>,
+        raw_owner::<2>,
+        raw_owner::<3>,
+        raw_owner::<4>,
+        raw_owner::<5>,
+        raw_owner::<6>,
+        raw_owner::<7>,
+        raw_owner::<8>,
+        raw_owner::<9>,
+        raw_owner::<10>,
+        raw_owner::<11>,
+        raw_owner::<12>,
+        raw_owner::<13>,
+        raw_owner::<14>,
+        raw_owner::<15>,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let owner = factory();
+        let semantic = owner.source_semantic();
+        let types = semantic.types();
+        let cast = flags & 4 != 0;
+        assert_eq!(types.len(), if cast { 4 } else { 3 }, "flags={flags}");
+        let mutability = if flags & 1 != 0 {
+            SemanticMutabilityV1::Mutable
+        } else {
+            SemanticMutabilityV1::Immutable
+        };
+        assert!(
+            matches!(types[2].shape(), SemanticTypeShapeV1::Pointer(pointer)
+            if pointer.kind() == SemanticPointerKindV1::Raw && pointer.mutability() == mutability)
+        );
+        if cast {
+            assert!(
+                matches!(types[3].shape(), SemanticTypeShapeV1::Pointer(pointer)
+                if pointer.kind() == SemanticPointerKindV1::Reference && pointer.mutability() == mutability)
+            );
+        }
+        let leaf = &semantic.functions()[usize::from(flags & 8 == 0)];
+        assert_eq!(leaf.locals()[2].ty().index(), 2);
+        if cast {
+            assert_eq!(leaf.locals()[4].ty().index(), 3);
+        }
+    }
 }
 
 #[test]

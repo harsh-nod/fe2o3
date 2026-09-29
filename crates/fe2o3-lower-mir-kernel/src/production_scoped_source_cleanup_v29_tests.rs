@@ -407,7 +407,9 @@ fn source_cleanup_header_is_charged_once_and_obeys_independent_exact_limits() {
         (complete, 5, 3, None),
         (complete, 4, 3, None),
     ] {
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_allowance + 32 + 2 + 1 + 4);
+        // One boundary and two nested constructor-attempt disposal preflights.
+        let disposal_work = 32 + 2 + 1 + 4;
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_allowance + 3 * disposal_work);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_FLOOR + allowance);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let state = State {
@@ -442,7 +444,7 @@ fn source_cleanup_header_is_charged_once_and_obeys_independent_exact_limits() {
                 if allowance < header {
                     0
                 } else {
-                    32 + 2 + 1 + 4
+                    (stage + 1) * disposal_work
                 }
             );
         } else if work_allowance < 5 {
@@ -454,23 +456,28 @@ fn source_cleanup_header_is_charged_once_and_obeys_independent_exact_limits() {
                     )
                 ))
             ));
+            assert_eq!(budget.work(), 3 * disposal_work);
+            assert_eq!(budget.failed_work(), Some(3 * disposal_work + 5));
+            assert_eq!(budget.failed_storage(), None);
         } else {
             result.unwrap();
             assert_eq!(budget.peak_storage(), MODULE_FLOOR + complete);
-            assert_eq!(budget.work(), 5 + 32 + 2 + 1 + 4);
+            assert_eq!(budget.work(), 5 + 3 * disposal_work);
         }
     }
 }
 
 fn cleanup_callback_header_oracle_v1766<T, E, F>() -> usize {
     type Capture<'a, 'w, F> = (
-        F,
-        &'a ScopedSourceCleanupBoundaryV29,
+        &'a mut Option<F>,
+        &'a ScopedSourceCleanupV29,
         &'a mut ArgumentBudgetV1<'w>,
-        Result<(), ArgumentResourceV1>,
+        &'a Result<(), ArgumentResourceV1>,
     );
     size_of::<F>()
         + std::mem::align_of::<F>()
+        + size_of::<Option<F>>()
+        + std::mem::align_of::<Option<F>>()
         + size_of::<Capture<'_, '_, F>>()
         + size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>()
         + size_of::<(F, &ScopedSourceCleanupV29, &mut ArgumentBudgetV1<'_>)>()
@@ -492,13 +499,16 @@ fn cleanup_attempt_header_oracle_v1766<T, E, F>() -> usize {
         F,
     );
     type Capture<'a, 'w, F> = (
-        F,
+        &'a mut Option<F>,
         &'a mut ArgumentBudgetV1<'w>,
-        &'a mut usize,
-        &'a mut usize,
+        &'a Result<(), ArgumentResourceV1>,
+        &'a mut Option<usize>,
+        &'a usize,
     );
     size_of::<F>()
         + std::mem::align_of::<F>()
+        + size_of::<Option<F>>()
+        + std::mem::align_of::<Option<F>>()
         + size_of::<Frame<'_, '_, F>>()
         + size_of::<Capture<'_, '_, F>>()
         + size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>()
@@ -508,11 +518,15 @@ fn cleanup_attempt_header_oracle_v1766<T, E, F>() -> usize {
         + size_of::<E>()
         + size_of::<Box<dyn std::any::Any + Send>>()
         + size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>()
-        + 7 * size_of::<usize>()
+        + 8 * size_of::<usize>()
+        + size_of::<Option<usize>>()
         + size_of::<bool>()
         + size_of::<Result<usize, ArgumentResourceV1>>()
         + size_of::<Result<(), ArgumentResourceV1>>()
+        + source_owned_finish_header_oracle_v26::<T, E>()
 }
+
+include!("production_source_callback_ingress_v29_tests.rs");
 
 #[test]
 fn source_cleanup_new_settlement_preflight_preserves_refusal_through_uncalled_capture_drop() {

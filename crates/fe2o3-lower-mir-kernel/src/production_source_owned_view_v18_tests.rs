@@ -1500,8 +1500,8 @@ fn source_preparation_boundary_header_has_independent_exact_and_short_costs() {
                     assert_eq!(budget.failed_storage(), Some(entry + next));
                     assert_eq!(
                         budget.work(),
-                        before,
-                        "headers are checked before occurrence/source work"
+                        before + if short { 0 } else { 32 + 7 },
+                        "admitted boundary prepays disposal before callback header reservation; source replay stays unentered"
                     );
                 },
             );
@@ -1544,7 +1544,9 @@ fn prepared_source_callback_header_refusal_drops_capture_and_restores_adopted_cr
                 if error.actual() > MODULE_LIMIT && error.limit() == MODULE_LIMIT
         ));
         assert_eq!(drops.get(), 1);
-        assert_eq!((budget.storage(), budget.work()), (floor, before));
+        // The boundary prepays 32 settlement and seven bounded-disposal steps
+        // before its callback header reservation can refuse storage.
+        assert_eq!((budget.storage(), budget.work()), (floor, before + 32 + 7));
         assert_eq!(budget.peak_storage(), MODULE_LIMIT);
         budget.release_storage(filler).unwrap();
         assert_eq!(budget.storage(), MODULE_FLOOR);
@@ -1839,3 +1841,41 @@ fn source_callback_diagnostic_does_not_replace_an_earlier_c2_query_failure() {
 }
 
 include!("production_source_owned_entry_callbacks_v18_tests.rs");
+#[test]
+fn pending_source_initial_custody_refusal_protects_uncalled_capture_drop() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    foreign.reserve_storage(MODULE_FLOOR).unwrap();
+    let (pending, capture_storage) = pending_query_drop_fixture_v1751(&mut budget);
+    budget.reserve_storage(size_of::<u64>()).unwrap();
+    let original_storage = budget.storage();
+    let dropped = std::cell::Cell::new(0);
+    let capture = SourceQueryDropV1751 {
+        drops: &dropped,
+        deny: None,
+        payload: Some(Box::new(0x1797_0029_u64)),
+    };
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pending.with_checked_source_v18(&mut foreign, move |_, _| -> SourceOwnedResultV18<()> {
+            std::hint::black_box(&capture);
+            panic!("foreign-ledger refusal entered the source callback");
+        })
+    }));
+    assert_eq!(dropped.get(), 1);
+    assert!(matches!(
+        caught,
+        Ok(Err(ProductionSourceOwnedViewErrorV18::Resource(
+            ArgumentResourceV1::Accounting
+        )))
+    ));
+    assert_eq!((foreign.storage(), foreign.work()), (MODULE_FLOOR, 0));
+    assert_eq!(budget.storage(), original_storage);
+    budget.release_storage(size_of::<u64>()).unwrap();
+    let retained = pending.adopted_storage();
+    drop(pending);
+    budget.release_storage(retained + capture_storage).unwrap();
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}

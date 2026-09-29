@@ -240,8 +240,9 @@ impl ProductionSourceCorrespondenceV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        let mut consume = SourceCallbackCustodyV29::new(consume);
         optimized_source_endpoints_v18(self, optimized, budget)?;
-        self.with_scalar_leaf_namespace_v18(root, namespace, budget, |original, budget| {
+        self.with_scalar_leaf_namespace_v18(root, namespace, budget, move |original, budget| {
             #[cfg(test)]
             test_optimized_scalar_attempt_header_v18(budget);
             let floor = budget.storage();
@@ -281,8 +282,14 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 ledger: budget.work_ledger_identity_v1(),
                 floor: budget.storage(),
             };
-            let caught =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(&leaves, budget)));
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                consume
+                    .take()
+                    .expect("optimized leaf consumer is invoked once")(
+                    &leaves, budget
+                )
+            }));
+            drop(consume);
             let prior = self.source.guard.first.get();
             let postflight = if matches!(&caught, Ok(Ok(_))) {
                 leaves.check(budget)
@@ -361,7 +368,7 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
     pub fn visit_store_inputs<'work, E>(
         &self,
         budget: &mut ArgumentBudgetV1<'work>,
-        mut consume: impl for<'request> FnMut(
+        consume: impl for<'request> FnMut(
             &ProductionOptimizedSourceScalarStoreDispositionV18<'request>,
             &mut ArgumentBudgetV1<'work>,
         ) -> Result<(), E>,
@@ -369,20 +376,23 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
     where
         E: From<ProductionSourceOwnedViewErrorV18>,
     {
+        let consume = SourceCallbackCustodyV29::new(consume);
         self.check(budget)?;
         let relation = self.original.leaves.relation;
         let root = self.original.leaves.root;
         let inventory = self.optimized.output_inventory(budget)?;
         let floor = budget.storage();
-        let mut consume = Some(consume);
+        let capture = std::mem::size_of_val(&consume);
+        let alignment = std::mem::align_of_val(&consume);
         let prepared =
             scoped_source_attempt_v29(relation.source.cleanup, budget, floor, |budget| {
-                let prepared = (|| {
+                consume.prepare(|| {
                     let headers = argument_sum_v1(&[
-                        std::mem::size_of_val(&consume),
-                        std::mem::align_of_val(&consume),
+                        capture,
+                        alignment,
                         // Both the inner result and its outer forwarding boundary
                         // can reject a consumer error, including inline=None.
+                        source_callback_custody_finish_preflight_v29::<usize, E>(budget)?,
                         source_owned_finish_preflight_v26::<usize, E>(budget)?,
                         source_owned_finish_preflight_v26::<usize, E>(budget)?,
                         size_of::<ProductionOptimizedSourceScalarStoreDispositionV18<'_>>(),
@@ -392,20 +402,14 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                     ])?;
                     relation.retain_query(budget.reserve_storage(headers).map_err(Into::into))?;
                     Ok::<_, ProductionSourceOwnedViewErrorV18>(headers)
-                })();
-                if prepared.is_err() {
-                    source_reference_discard_v29(consume.take());
-                }
-                prepared
+                })
             });
-        let headers = match prepared {
+        let (headers, mut consume) = match prepared {
             Ok(headers) => headers,
             Err(error) => {
-                source_reference_discard_v29(consume);
                 return Err(error.into());
             }
         };
-        let mut consume = consume.expect("optimized scalar preparation retained its callback");
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             value_origin_v1::with_optimized_whole_value_origins_v18(
                 relation,
@@ -423,7 +427,7 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                         let output = match self.optimized.operation(request.operation, budget)? {
                             ProductionOptimizedSourceOperationV18::Retained { output, .. } => output,
                             ProductionOptimizedSourceOperationV18::RemovedUnreachable { .. } => {
-                                return consume(&ProductionOptimizedSourceScalarStoreDispositionV18::RemovedUnreachable {
+                                return consume.as_mut().expect("scalar visitor remains in custody")(&ProductionOptimizedSourceScalarStoreDispositionV18::RemovedUnreachable {
                                     input: request.operation,
                                 }, budget);
                             }
@@ -454,7 +458,7 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                             inline_scalar: inline.as_ref().expect("installed optimized inline correspondence"),
                             output, value,
                         };
-                        consume(&ProductionOptimizedSourceScalarStoreDispositionV18::Retained(request), budget)
+                        consume.as_mut().expect("scalar visitor remains in custody")(&ProductionOptimizedSourceScalarStoreDispositionV18::Retained(request), budget)
                     })
                     }));
                     let prior = relation.source.guard.first.get();
@@ -471,6 +475,7 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                 },
             )
         }));
+        let caught = consume.finish(caught);
         let prior = relation.source.guard.first.get();
         let postflight = if matches!(&caught, Ok(Ok(_))) {
             self.check(budget)
