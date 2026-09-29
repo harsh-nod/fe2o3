@@ -9346,7 +9346,22 @@ impl PipelineScalarProjectorV1<'_, '_, '_, '_, '_> {
             return Ok(ProjectedPipelineScalarV1::Value(index.value));
         }
         let definition = if let Some((index, facts)) = self.scalar_ssa.as_mut() {
-            match index.resolve(self.function, local, use_site, &mut **facts)? {
+            match index
+                .resolve(self.function, local, use_site, &mut **facts)
+                .inspect_err(|error| {
+                    if matches!(
+                        error,
+                        ProductionRankedProjectionErrorV1::Incomplete(
+                            "a pipeline scalar requires an unsupported SSA block argument"
+                        )
+                    ) {
+                        pipeline_scalar_ssa_v1::trace_induction_association_v2(
+                            self.uniform_inductions,
+                            local,
+                            use_site,
+                        );
+                    }
+                })? {
                 pipeline_scalar_ssa_v1::Origin::Argument { argument, .. } => {
                     return self.argument(argument as usize);
                 }

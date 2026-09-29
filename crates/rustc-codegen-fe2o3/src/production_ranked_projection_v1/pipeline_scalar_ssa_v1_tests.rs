@@ -438,6 +438,75 @@ fn actual_use_ssa_keeps_branch_and_backedge_phis_explicit() {
             &mut Facts(&mut budget),
             |index, facts| {
                 let use_site = site(if backedge { 1 } else { 3 }, 0);
+                let before_storage = facts.scalar_private_storage_v1()?;
+                let before_identity = facts.helper_value_ledger_v1()?;
+                let plan = owner.plan_for_function(FUNCTION).unwrap().plan();
+                let value = plan
+                    .resolved_events(fe2o3_mir_model::SsaBlockIdV1::new(use_site.block as u32))
+                    .unwrap()
+                    .iter()
+                    .find_map(|(_, event)| match event {
+                        fe2o3_mir_model::SsaResolvedEventV1::Use { variable, value }
+                            if variable.get() == 2 =>
+                        {
+                            Some(*value)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(matches!(
+                    value,
+                    fe2o3_mir_model::SsaValueV1::BlockArgument { .. }
+                ));
+                let mut output = Vec::new();
+                pipeline_scalar_ssa_v1::write_block_argument_v2(
+                    false,
+                    &mut output,
+                    index,
+                    2,
+                    use_site,
+                    value,
+                )
+                .unwrap();
+                assert!(output.is_empty());
+                pipeline_scalar_ssa_v1::write_block_argument_v2(
+                    true,
+                    &mut output,
+                    index,
+                    2,
+                    use_site,
+                    value,
+                )
+                .unwrap();
+                let text = String::from_utf8(output).unwrap();
+                assert_eq!(text.matches("PIPELINE_SSA_PHI_V2 ").count(), 1);
+                assert_eq!(text.matches("PIPELINE_SSA_PHI_EDGE_V2 ").count(), 2);
+                assert_eq!(text.matches("PIPELINE_SSA_PHI_DEFINITION_V2 ").count(), 2);
+                assert!(text.contains("literal_present=1 literal_bits=1"));
+                assert!(text.contains("literal_present=1 literal_bits=2"));
+                assert!(text.contains("rows=2 truncated=0"));
+                struct RefuseWrites;
+                impl std::io::Write for RefuseWrites {
+                    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                        Err(std::io::ErrorKind::BrokenPipe.into())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        Ok(())
+                    }
+                }
+                assert!(
+                    pipeline_scalar_ssa_v1::write_block_argument_v2(
+                        true,
+                        &mut RefuseWrites,
+                        index,
+                        2,
+                        use_site,
+                        value
+                    )
+                    .is_err()
+                );
+                assert_eq!(facts.scalar_private_storage_v1()?, before_storage);
+                assert!(facts.helper_value_ledger_v1()? == before_identity);
                 incomplete(
                     index.resolve(function(&owner), 2, use_site, facts),
                     "a pipeline scalar requires an unsupported SSA block argument",
@@ -453,6 +522,98 @@ fn actual_use_ssa_keeps_branch_and_backedge_phis_explicit() {
         assert!(completed.get());
         assert_eq!(budget.storage(), 0);
     }
+    phi_trace_final_incoming_edge_is_explicitly_truncated();
+}
+
+fn phi_trace_final_incoming_edge_is_explicitly_truncated() {
+    let mut blocks = vec![block(
+        60,
+        vec![],
+        SemanticTerminatorKindV1::SwitchInt {
+            discriminant: copy(1),
+            targets: SemanticSwitchTargetsV1::new(
+                (0..64)
+                    .map(|value| {
+                        SemanticSwitchTargetV1::new(
+                            value as u128,
+                            cfg_edge(SemanticEdgeRoleV1::SwitchValue, value + 1),
+                        )
+                    })
+                    .collect(),
+                cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 65),
+            )
+            .unwrap(),
+        },
+    )];
+    for predecessor in 1..=65 {
+        blocks.push(block(
+            60 + predecessor as u8,
+            vec![assign(2, literal(predecessor as u64))],
+            goto(66),
+        ));
+    }
+    blocks.push(block(
+        126,
+        vec![assign(3, copy(2))],
+        SemanticTerminatorKindV1::Return,
+    ));
+    let owner = make_owner(blocks, true);
+    let mut work = Work::new(1_000_000);
+    let mut budget = Budget::new(&mut work, 1_000_000);
+    let completed = Cell::new(false);
+    let result = with_index(
+        source(&owner),
+        function(&owner),
+        &mut Facts(&mut budget),
+        |index, facts| {
+            let use_site = site(66, 0);
+            let plan = owner.plan_for_function(FUNCTION).unwrap().plan();
+            let value = plan
+                .resolved_events(fe2o3_mir_model::SsaBlockIdV1::new(66))
+                .unwrap()
+                .iter()
+                .find_map(|(_, event)| match event {
+                    fe2o3_mir_model::SsaResolvedEventV1::Use { variable, value }
+                        if variable.get() == 2 =>
+                    {
+                        Some(*value)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert!(matches!(
+                value,
+                fe2o3_mir_model::SsaValueV1::BlockArgument { .. }
+            ));
+            let mut output = Vec::new();
+            pipeline_scalar_ssa_v1::write_block_argument_v2(
+                true,
+                &mut output,
+                index,
+                2,
+                use_site,
+                value,
+            )
+            .unwrap();
+            let text = String::from_utf8(output).unwrap();
+            assert_eq!(text.matches("PIPELINE_SSA_PHI_EDGE_V2 ").count(), 64);
+            assert!(text.contains("literal_bits=64"));
+            assert!(!text.contains("literal_bits=65"));
+            assert!(text.contains("scanned=130 edges=130 rows=64 truncated=1"));
+            incomplete(
+                index.resolve(function(&owner), 2, use_site, facts),
+                "a pipeline scalar requires an unsupported SSA block argument",
+            );
+            completed.set(true);
+            Ok(())
+        },
+    );
+    incomplete(
+        result,
+        "a pipeline scalar requires an unsupported SSA block argument",
+    );
+    assert!(completed.get());
+    assert_eq!(budget.storage(), 0);
 }
 
 #[test]

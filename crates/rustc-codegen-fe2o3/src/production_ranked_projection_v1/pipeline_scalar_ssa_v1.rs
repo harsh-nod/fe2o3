@@ -19,6 +19,8 @@ use std::{
 
 type Result<T> = std::result::Result<T, ProductionRankedProjectionErrorV1>;
 
+include!("pipeline_scalar_ssa_trace_v2.rs");
+
 #[derive(Clone, Copy)]
 pub(super) struct Source<'s> {
     pub(super) owner: &'s ProductionSemanticSsaOwnerV1,
@@ -239,6 +241,7 @@ impl Index<'_> {
             return self.fail("a pipeline scalar has no captured use at its exact source site");
         };
         let SsaValueV1::Definition(id) = value else {
+            trace_block_argument_v2(self, local, use_site, value);
             return self.fail("a pipeline scalar requires an unsupported SSA block argument");
         };
         match self.definitions.get(id.get() as usize).copied().flatten() {
