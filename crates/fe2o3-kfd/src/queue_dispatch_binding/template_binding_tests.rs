@@ -1,4 +1,25 @@
 use super::*;
+
+#[path = "ordinary_binding_classification_tests.rs"]
+mod ordinary_binding_classification_tests;
+
+#[test]
+fn abi_predicate_matches_array_equality_at_every_byte() {
+    for base in [0, 127, 255] {
+        let layout = [base; 32];
+        for index in 0..32 {
+            for value in 0..=u8::MAX {
+                let mut abi = layout;
+                abi[index] = value;
+                assert_eq!(
+                    prepared_kernarg_layout_matches_code(true, layout, abi),
+                    layout == abi
+                );
+                assert!(prepared_kernarg_layout_matches_code(false, layout, abi));
+            }
+        }
+    }
+}
 use crate::queue::completion::CompletionSignalArenaOwnerV1;
 use crate::queue::dispatch_binding::control_release::{
     ReturningControlCleanupCustodyV1, ReturningControlModeV1,

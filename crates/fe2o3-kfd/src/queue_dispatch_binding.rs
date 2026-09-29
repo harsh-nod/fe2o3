@@ -10,6 +10,7 @@
 include!("queue_dispatch_binding/epoch_cancel_body.rs");
 include!("queue_dispatch_binding/epoch_reserve_body.rs");
 include!("queue_dispatch_binding/cancel_binding_body.rs");
+include!("queue_dispatch_binding/template_prepare_body.rs");
 
 macro_rules! dispatch_rust_expr {
     ($body:expr) => {
@@ -2296,7 +2297,27 @@ fn prepared_kernarg_layout_matches_code(
     kernarg_layout_identity: [u8; 32],
     dispatch_abi_identity: [u8; 32],
 ) -> bool {
-    !code_bound || kernarg_layout_identity == dispatch_abi_identity
+    dispatch_template_abi_matches_body!(
+        dispatch_rust_expr,
+        code_bound,
+        kernarg_layout_identity,
+        dispatch_abi_identity
+    )
+}
+
+fn prepare_dispatch_templates_v1(
+    packets: &[PreparedDispatchPacketV1],
+    code_identity: &[ResolvedCodeIdentityV1],
+    queue: QueueKeyV1,
+    generation: u64,
+) -> Result<Vec<CompletionPacketTemplateV1>, Gfx942DispatchBindingErrorV1> {
+    dispatch_prepare_templates_body!(
+        dispatch_rust_expr,
+        packets,
+        code_identity,
+        queue,
+        generation
+    )
 }
 
 /// Queue-retained real resource owner for one prepared batch shape.
@@ -2547,41 +2568,8 @@ impl DispatchResourceOwnerV1 {
             });
         }
         let (_, generation, _) = self.generation.preflight_reservation(queue)?;
-        let templates: Vec<_> = self
-            .packets
-            .iter()
-            .enumerate()
-            .map(|(packet_index, packet)| {
-                let code = self.code_identity.get(packet.code_index).ok_or(
-                    Gfx942DispatchBindingErrorV1::InvalidCode("packet program index"),
-                )?;
-                if !prepared_kernarg_layout_matches_code(
-                    packet.code_bound_kernarg_layout,
-                    packet.kernarg_layout_identity,
-                    code.dispatch_abi_identity,
-                ) {
-                    return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                        packet: packet_index,
-                        detail: "prepared kernarg dispatch ABI identity",
-                    });
-                }
-                Ok(CompletionPacketTemplateV1::new(
-                    packet.geometry,
-                    packet.ordering,
-                    packet.private_segment_size,
-                    packet.group_segment_size,
-                    code.descriptor_address,
-                    packet.kernarg_address,
-                    packet.kernarg_alignment,
-                    CompletionDispatchGenerationBindingV1::new(
-                        queue,
-                        code.mapping,
-                        packet.kernarg_mapping,
-                        generation,
-                    ),
-                ))
-            })
-            .collect::<Result<Vec<_>, Gfx942DispatchBindingErrorV1>>()?;
+        let templates =
+            prepare_dispatch_templates_v1(&self.packets, &self.code_identity, queue, generation)?;
         // Keep the roster heap-backed through submission, including large-N
         // refusals whose return ABI must not reserve a template array on stack.
         let templates: Box<[CompletionPacketTemplateV1; N]> = templates

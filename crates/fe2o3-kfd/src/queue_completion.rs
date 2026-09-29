@@ -31,6 +31,7 @@ include!("queue_completion/rollback_adapters_body.rs");
 include!("queue_completion/event_bind_body.rs");
 include!("queue_completion/event_issue_body.rs");
 include!("queue_completion/batch_bind_body.rs");
+include!("queue_dispatch_binding/template_prepare_body.rs");
 
 macro_rules! completion_rust_expr {
     ($body:expr) => {
@@ -254,12 +255,13 @@ impl CompletionDispatchGenerationBindingV1 {
         kernarg: MemoryMappingKeyV1,
         dispatch_generation: u64,
     ) -> Self {
-        Self {
+        dispatch_template_generation_new_body!(
+            completion_rust_expr,
             queue,
             code,
             kernarg,
-            dispatch_generation,
-        }
+            dispatch_generation
+        )
     }
 }
 
@@ -306,7 +308,8 @@ impl CompletionPacketTemplateV1 {
         kernarg_alignment: u64,
         generations: CompletionDispatchGenerationBindingV1,
     ) -> Self {
-        Self {
+        dispatch_template_new_body!(
+            completion_rust_expr,
             geometry,
             ordering,
             private_segment_size,
@@ -314,8 +317,8 @@ impl CompletionPacketTemplateV1 {
             kernel_object,
             kernarg_address,
             kernarg_alignment,
-            generations,
-        }
+            generations
+        )
     }
 
     pub(super) const fn generations(self) -> CompletionDispatchGenerationBindingV1 {

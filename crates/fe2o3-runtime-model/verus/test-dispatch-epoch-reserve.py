@@ -69,9 +69,10 @@ def wiring(source):
     need(compact(re.sub(r"//[^\n]*", "", prefix)) ==
          '#![allow(dead_code)]include!("queue_dispatch_binding/epoch_cancel_body.rs");'
          'include!("queue_dispatch_binding/epoch_reserve_body.rs");'
-         'include!("queue_dispatch_binding/cancel_binding_body.rs");', "exact active include prefix")
+         'include!("queue_dispatch_binding/cancel_binding_body.rs");'
+         'include!("queue_dispatch_binding/template_prepare_body.rs");', "exact active include prefix")
     source = compact(code_only(source))
-    need(source.count("include!(") == 3, "only the three active dispatch includes")
+    need(source.count("include!(") == 4, "only the four active dispatch includes")
     for pattern in patterns:
         if not pattern.startswith("include!"):
             need(source.count(pattern) == 1, "exact production wrapper: " + pattern)

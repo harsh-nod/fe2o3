@@ -4582,6 +4582,19 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         mode: FixedDispatchBindingModeV1,
     ) -> Result<Gfx942DispatchBatchV1<N>, FixedDispatchSubmissionFailureV1> {
+        self.submit_fixed_dispatch_inner_classified_using(mode, |session, packets| {
+            session.submit_prepared_batch_classified(packets)
+        })
+    }
+
+    fn submit_fixed_dispatch_inner_classified_using<const N: usize>(
+        &mut self,
+        mode: FixedDispatchBindingModeV1,
+        native_submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<N>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
+    ) -> Result<Gfx942DispatchBatchV1<N>, FixedDispatchSubmissionFailureV1> {
         if self.terminal_poisoned {
             return Err(FixedDispatchSubmissionFailureV1::Terminal(
                 Gfx942DispatchBindingErrorV1::Poisoned.into(),
@@ -4598,7 +4611,7 @@ impl ComputeAqlQueueSessionV1 {
                 return self.terminalize_fixed_dispatch_submission_result_v1(Err(error));
             }
         };
-        let completion = self.submit_with_completions_classified(templates);
+        let completion = self.submit_with_completions_classified_using(templates, native_submit);
         let completion = match completion {
             Ok(completion) => {
                 if let Err(error) = self
@@ -4621,6 +4634,42 @@ impl ComputeAqlQueueSessionV1 {
                 .cancel_binding(identity)
         });
         self.terminalize_fixed_dispatch_submission_result_v1(result)
+    }
+
+    #[cfg(test)]
+    pub(in crate::queue) fn submit_ordinary_binding_for_test<const N: usize>(
+        &mut self,
+        native_submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<N>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
+    ) -> Result<Gfx942DispatchBatchV1<N>, Gfx942FixedDispatchSubmissionFailureV1> {
+        self.submit_fixed_dispatch_inner_classified_using(
+            FixedDispatchBindingModeV1::Ordinary,
+            native_submit,
+        )
+        .map_err(FixedDispatchSubmissionFailureV1::into_public)
+    }
+
+    #[cfg(test)]
+    pub(in crate::queue) fn with_ordinary_binding_session_v1<R>(
+        queue: QueueKeyV1,
+        owner: DispatchResourceOwnerV1,
+        operation: impl FnOnce(&mut Self) -> R,
+    ) -> (
+        R,
+        DispatchResourceOwnerV1,
+        bool,
+        [super::completion::CompletionCustodySnapshotV1; 2],
+    ) {
+        let mut session = tests::persistent_compute_cancellation_test_session(queue, None, None);
+        session.dispatch = Some(owner);
+        let before = session.completion_owner.custody_snapshot_for_test();
+        let result = operation(&mut session);
+        session.completion_owner.ensure_releasable().unwrap();
+        let after = session.completion_owner.custody_snapshot_for_test();
+        let owner = session.dispatch.take().unwrap();
+        (result, owner, session.terminal_poisoned, [before, after])
     }
 
     #[cfg(test)]

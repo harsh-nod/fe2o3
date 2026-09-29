@@ -5,6 +5,7 @@ use super::*;
 use fe2o3_profiler_protocol::{KfdRuntimeProfileEventV1, ProfileIdentityV1};
 use fe2o3_resource_accounting::ResourceCreditUsageV1;
 
+mod async_owner;
 mod checker;
 mod native_capacity;
 mod tests;
