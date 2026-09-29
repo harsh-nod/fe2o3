@@ -10,6 +10,9 @@ use fe2o3_rustc_invocation::{
     RustcInvocationDescriptorV2, RustcInvocationDescriptorV3, RustcUnitV2, ValidationError,
 };
 
+#[path = "inert_rustc_stdio_capture.rs"]
+pub(crate) mod stdio;
+
 /// An in-memory description of prepared rustc inputs.
 ///
 /// This value is inert coordination data. It is not an execution receipt,
