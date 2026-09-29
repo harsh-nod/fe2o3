@@ -36,6 +36,10 @@ mod consuming {
         "3",
         "2"
     );
+    // Private composition only; production attempt/observer integration is separate.
+    pub(crate) mod root_issuer {
+        include!("native_root_issuer.rs");
+    }
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -43,3 +47,4 @@ mod consuming {
     }
 }
 pub use consuming::RootManagedCompilerExecutionServiceV3;
+pub(crate) use consuming::root_issuer::{IssuerCleanupQuota, ManagedIssuer};

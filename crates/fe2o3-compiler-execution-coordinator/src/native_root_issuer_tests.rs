@@ -1,0 +1,310 @@
+use super::*;
+use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionExternalAnchorServiceIdentityV1 as Service,
+    CompilerExecutionIssuerMeasurementV1 as Measurement, CompilerExecutionIssuerPolicyV3 as Policy,
+};
+use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+use std::fs::File;
+
+const LIMIT: usize = 1 << 30;
+
+// Inert records only: no fabricated Prepared, dependency, protected admission or
+// successful provisioning. These tests cannot provide production launch evidence.
+fn records() -> (Policy, Manifest, [u8; READY_BYTES]) {
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    let public = |seed| {
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes()
+    };
+    let (policy, c) = Policy::new(
+        7,
+        Measurement::new([1; 32], 11).unwrap(),
+        Measurement::new([2; 32], 12).unwrap(),
+        public(7),
+        public(9),
+        &mut b,
+    )
+    .unwrap();
+    b.reserve_storage(c.additional_storage()).unwrap();
+    let (manifest, c) = Manifest::new(
+        Client::new(42, 1000, 1000).unwrap(),
+        Service::new(2000, 2000).unwrap(),
+        &policy,
+        &mut b,
+    )
+    .unwrap();
+    b.reserve_storage(c.additional_storage()).unwrap();
+    let (ready, _) = Ready::new(77, &manifest, &policy, &mut b).unwrap();
+    (policy, manifest, *ready.canonical_bytes())
+}
+
+#[test]
+fn issuer_records_require_exact_pid_manifest_and_pinned_policy() {
+    let (policy, manifest, bytes) = records();
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(policy.retained_storage() + manifest.retained_storage() + bytes.len())
+        .unwrap();
+    let (ready, c) = Ready::decode(&bytes, &mut b).unwrap();
+    assert_eq!(c.additional_storage(), READY_OWNER);
+    b.reserve_storage(c.additional_storage()).unwrap();
+    match_ready_records(&ready, 77, &manifest, &policy, &mut b).unwrap();
+    assert!(matches!(
+        match_ready_records(&ready, 78, &manifest, &policy, &mut b),
+        Err(Error::Invalid(_))
+    ));
+    for (client, service) in [
+        (
+            Client::new(43, 1000, 1000).unwrap(),
+            manifest.external_anchor_service(),
+        ),
+        (manifest.client(), Service::new(2001, 2000).unwrap()),
+    ] {
+        let (other, c) = Manifest::new(client, service, &policy, &mut b).unwrap();
+        b.reserve_storage(c.additional_storage()).unwrap();
+        assert!(matches!(
+            match_ready_records(&ready, 77, &other, &policy, &mut b),
+            Err(Error::Invalid(_))
+        ));
+        drop(other);
+        b.release_storage(c.additional_storage()).unwrap();
+    }
+    let (other_policy, c) = Policy::new(
+        8,
+        policy.executable(),
+        policy.runtime(),
+        ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+            .verifying_key()
+            .to_bytes(),
+        ed25519_dalek::SigningKey::from_bytes(&[9; 32])
+            .verifying_key()
+            .to_bytes(),
+        &mut b,
+    )
+    .unwrap();
+    b.reserve_storage(c.additional_storage()).unwrap();
+    assert!(matches!(
+        match_ready_records(&ready, 77, &manifest, &other_policy, &mut b),
+        Err(Error::Invalid(_))
+    ));
+}
+
+#[test]
+fn issuer_ready_decode_accounting_and_short_inputs_stay_on_original_ledger() {
+    let (_, _, bytes) = records();
+    for mode in 0..4 {
+        let floor = bytes.len() - usize::from(mode == 1);
+        let mut work = Work::new(READY_WORK - usize::from(mode == 2));
+        let mut b = Budget::new(&mut work, floor + READY_SCRATCH - usize::from(mode == 3));
+        b.reserve_storage(floor).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let result = Ready::decode(&bytes, &mut b);
+        assert_eq!(result.is_ok(), mode == 0);
+        assert_eq!(b.storage(), floor);
+        assert!(b.work_ledger_identity_v1() == ledger);
+        if mode == 0 {
+            assert_eq!(b.work(), READY_WORK);
+            assert_eq!(b.peak_storage(), floor + READY_SCRATCH);
+        }
+        if mode == 2 {
+            assert!(b.failed_work().is_some());
+        }
+        if mode == 3 {
+            assert!(b.failed_storage().is_some());
+        }
+    }
+    for length in [0, 88, 119, 121] {
+        let mut work = Work::new(READY_WORK);
+        let mut b = Budget::new(&mut work, LIMIT);
+        let mut candidate = bytes.to_vec();
+        candidate.resize(length, 0);
+        b.reserve_storage(candidate.len()).unwrap();
+        assert!(Ready::decode(&candidate, &mut b).is_err());
+    }
+    let mut altered = bytes;
+    altered[READY_BYTES - 1] ^= 1;
+    let mut work = Work::new(READY_WORK);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(altered.len()).unwrap();
+    assert!(Ready::decode(&altered, &mut b).is_err());
+}
+
+#[test]
+fn issuer_staged_peer_cannot_be_replaced_by_same_credential_socket() {
+    let pair = || {
+        net::socketpair(
+            net::AddressFamily::UNIX,
+            net::SocketType::SEQPACKET,
+            net::SocketFlags::CLOEXEC | net::SocketFlags::NONBLOCK,
+            None,
+        )
+        .unwrap()
+    };
+    let (_client, original) = pair();
+    let (_other_client, different) = pair();
+    let duplicate = io::fcntl_dupfd_cloexec(&original, 0).unwrap();
+    let expected = Client::new(
+        rustix::process::getpid().as_raw_pid() as u32,
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+    staging::validate_peer(original.as_fd(), expected).unwrap();
+    staging::validate_peer(different.as_fd(), expected).unwrap();
+    staging::validate_duplicate(original.as_fd(), duplicate.as_fd()).unwrap();
+    assert!(staging::validate_duplicate(original.as_fd(), different.as_fd()).is_err());
+    io::fcntl_setfd(&duplicate, io::FdFlags::empty()).unwrap();
+    assert!(staging::validate_duplicate(original.as_fd(), duplicate.as_fd()).is_err());
+}
+
+#[test]
+fn issuer_staged_sources_charge_full_image_and_checked_overflow() {
+    let a = staging::source_storage(11).unwrap();
+    let z = staging::source_storage(1011).unwrap();
+    assert_eq!(z - a, 1000);
+    assert!(staging::source_storage(0).is_err());
+    assert!(staging::source_storage(u64::MAX).is_err());
+    assert!(payload_storage::<()>(usize::MAX, 1, 1, 1).is_err());
+    let payload = size_of::<Payload<()>>() + 4096;
+    let child = Child::<()>::storage_for(payload).unwrap();
+    assert!(child > payload);
+    assert!(Stage::storage_for_sources(a).unwrap() > a);
+    assert!(Stage::spawn_retaining_scratch::<Payload<()>>(payload).unwrap() > payload);
+    assert!(Child::<()>::storage_for(usize::MAX).is_err());
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close() {
+    let channels = Channels::new().unwrap();
+    let files: [File; 9] = std::array::from_fn(|_| tempfile::tempfile().unwrap());
+    let sources = [
+        files[0].as_fd(),
+        files[1].as_fd(),
+        files[2].as_fd(),
+        files[3].as_fd(),
+        files[4].as_fd(),
+        files[5].as_fd(),
+        channels.ready_writer.as_fd(),
+        files[6].as_fd(),
+        files[7].as_fd(),
+    ];
+    let bindings = staging::bindings(sources).unwrap();
+    assert_eq!(
+        bindings.map(|binding| binding.destination()),
+        staging::DESTINATIONS
+    );
+    assert_eq!(staging::DESTINATIONS, [3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    let sources_charge = 13 * FILE_STORAGE + staging::BINDINGS_STORAGE;
+    let mut work = Work::new(Stage::STAGING_WORK);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(sources_charge).unwrap();
+    // SAFETY: mechanical FD-table test only. Every empty file/channel/binding is
+    // prepaid and kept live. This stage is NEVER spawned or treated as admitted.
+    let (stage, c) = unsafe {
+        Stage::stage(
+            &files[8],
+            &bindings,
+            channels.profile_writer.as_fd(),
+            channels.gate_reader.as_fd(),
+            channels.exec_writer.as_fd(),
+            sources_charge,
+            &mut b,
+        )
+    }
+    .unwrap();
+    assert_eq!(
+        c.additional_storage(),
+        Stage::storage_for_sources(sources_charge).unwrap()
+    );
+    b.reserve_storage(c.additional_storage()).unwrap();
+    for (source, destination) in sources.into_iter().zip(staging::DESTINATIONS) {
+        staging::validate_duplicate(source, stage.binding(destination).unwrap().as_fd()).unwrap();
+    }
+    assert!(stage.binding(12).is_none());
+    assert!(stage.binding(220).is_none());
+    staging::validate_duplicate(files[8].as_fd(), stage.executable().as_fd()).unwrap();
+    // The only remaining writer is Stage's alias after the parent channel closes.
+    let readers = channels.close_child_ends();
+    assert_eq!(
+        io::read(&readers.ready, &mut [0u8; 1]),
+        Err(io::Errno::AGAIN)
+    );
+    drop(stage);
+    b.release_storage(c.additional_storage()).unwrap();
+    assert_eq!(io::read(&readers.ready, &mut [0u8; 1]).unwrap(), 0);
+}
+
+#[test]
+fn issuer_finite_launch_quota_includes_each_nested_operation_and_output_overlap() {
+    let payload = size_of::<Payload<()>>() + 65536;
+    let source = staging::source_storage(11).unwrap();
+    let zero = Quota {
+        work: 0,
+        scratch: 0,
+    };
+    let base =
+        quota::launch_quota::<()>(payload, source, zero, zero, zero, zero, zero, zero).unwrap();
+    for index in 0..6 {
+        let mut inputs = [zero; 6];
+        inputs[index] = Quota {
+            work: 13,
+            scratch: 17,
+        };
+        let actual = quota::launch_quota::<()>(
+            payload, source, inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5],
+        )
+        .unwrap();
+        assert_eq!(
+            actual.work() - base.work(),
+            if index == 5 { 26 } else { 13 }
+        );
+        assert_eq!(actual.scratch() - base.scratch(), 17);
+    }
+    assert!(
+        base.work()
+            >= launch_io::MAX_PIPE_WORK
+                + launch_io::MAX_WORK
+                + (launch_io::MAX_PIPE_LIVENESS_CHECKS + launch_io::MAX_LIVENESS_CHECKS)
+                    * PlainChild::OPERATION_WORK
+    );
+    assert!(base.scratch() > Stage::spawn_retaining_scratch::<Payload<()>>(payload).unwrap());
+    assert!(
+        quota::launch_quota::<()>(usize::MAX, source, zero, zero, zero, zero, zero, zero).is_err()
+    );
+    assert!(
+        quota::launch_quota::<()>(payload, usize::MAX, zero, zero, zero, zero, zero, zero).is_err()
+    );
+    let overflow = Quota {
+        work: usize::MAX,
+        scratch: 0,
+    };
+    assert!(
+        quota::launch_quota::<()>(payload, source, overflow, zero, zero, zero, zero, zero).is_err()
+    );
+}
+
+#[test]
+fn issuer_cleanup_funds_full_payload_on_existing_pool_with_finite_turns() {
+    let payload = size_of::<Payload<()>>() + 65536;
+    let one = quota::cleanup_quota::<()>(payload, 1).unwrap();
+    let two = quota::cleanup_quota::<()>(payload, 2).unwrap();
+    assert_eq!(
+        one.additional_storage(),
+        Resources::<Payload<()>>::payload_storage(payload).unwrap()
+    );
+    assert_eq!(two.additional_storage(), one.additional_storage());
+    assert_eq!(
+        two.work() - one.work(),
+        Cleanup::pump_work(fe2o3_protected_service_spawn::MAX_PROTECTED_SERVICE_PROCESSES_V2)
+            .unwrap()
+            + Cleanup::shutdown_work()
+    );
+    assert!(one.work() > Cleanup::retained_launch_work::<Payload<()>>(payload).unwrap());
+    assert!(quota::cleanup_quota::<()>(payload, 0).is_err());
+    assert!(quota::cleanup_quota::<()>(payload, usize::MAX).is_err());
+    assert!(quota::cleanup_quota::<()>(size_of::<Payload<()>>() - 1, 1).is_err());
+    assert!(quota::cleanup_quota::<()>(usize::MAX, 1).is_err());
+}
