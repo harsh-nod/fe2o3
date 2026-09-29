@@ -1,4 +1,9 @@
 use super::*;
+use crate::compiler_execution_supervision::NativeObservationError;
+use fe2o3_protected_service_spawn::{
+    ProtectedServiceCleanupErrorV2 as CleanupError,
+    native_spawn::ProtectedServiceSpawnErrorV2 as SpawnError,
+};
 
 /// Failure of a consuming native issuer session. No successful response is
 /// released after a custody, resource, currentness or durable-storage refusal.
@@ -92,6 +97,32 @@ impl NativeIssuerServiceError {
             Failure::Directory(
                 fe2o3_artifact_transaction::RetainedDurableDirectoryErrorV2::Resource(e),
             ) => Some(*e),
+            Failure::Occurrence(e) => match e {
+                OccurrenceError::Resource(e)
+                | OccurrenceError::Subject(SubjectError::Resource(e)) => Some(*e),
+                OccurrenceError::Observation(e) => match e {
+                    NativeObservationError::Resource(e)
+                    | NativeObservationError::Capability(KeyError::Resource(e)) => Some(*e),
+                    NativeObservationError::Service(e) => e.resource(),
+                    NativeObservationError::Spawn(e) => match e {
+                        SpawnError::Resource(e)
+                        | SpawnError::Cleanup(CleanupError::Resource(e)) => Some(*e),
+                        SpawnError::Profile(_)
+                        | SpawnError::Cleanup(_)
+                        | SpawnError::Retained(_)
+                        | SpawnError::SpawnLease(_)
+                        | SpawnError::State(_)
+                        | SpawnError::Io { .. } => None,
+                    },
+                    _ => None,
+                },
+                // Both nominal handoff errors expose their typed Resource as the
+                // immediate source. Do not reinterpret I/O or framing diagnostics.
+                OccurrenceError::Handoff(e) => std::error::Error::source(e)
+                    .and_then(|source| source.downcast_ref::<Resource>())
+                    .copied(),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -125,3 +156,7 @@ impl std::fmt::Display for NativeIssuerServiceError {
     }
 }
 impl std::error::Error for NativeIssuerServiceError {}
+
+#[cfg(test)]
+#[path = "compiler_execution_issuer_native_error_tests.rs"]
+mod tests;
