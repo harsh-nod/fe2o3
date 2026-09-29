@@ -315,38 +315,14 @@ fn canonicalize<B: IntegerIdentityBudgetV1>(
                     let Some(identity) = match_identity(operation, context, &mut scratch)? else {
                         continue;
                     };
-                    let count = if identity.checked { 2 } else { 1 };
-                    scratch.work(count + 1)?;
-                    let uses = operation
-                        .deref(context)
-                        .results()
-                        .try_fold(0usize, |sum, value| {
-                            sum.checked_add(value.num_uses(context))
-                        })
-                        .ok_or(IntegerIdentityErrorV1::Overflow)?;
-                    scratch.work(uses)?;
-                    reserve_vec(&mut replacements, count, &mut scratch)?;
-                    let replacement_bytes = bytes::<Value, B::Error>(replacements.capacity())?;
-                    if identity.checked {
-                        scratch.work(1)?;
-                    }
-                    replacements.push(identity.value);
-                    if identity.checked {
-                        let boolean = IntegerType::get(context, 1, Signedness::Signless);
-                        let constant = ConstantOp::new(
-                            context,
-                            Box::new(IntegerAttr::new(boolean, APInt::zero(bw(1)))),
-                        );
-                        rewriter.set_insertion_point(OpInsertionPoint::BeforeOperation(operation));
-                        rewriter.insert_op(context, &constant);
-                        replacements.push(constant.get_operation().deref(context).get_result(0));
-                    }
-                    rewriter.replace_operation_with_values(
-                        context,
+                    rewrite_identity(
                         operation,
-                        std::mem::take(&mut replacements),
-                    );
-                    scratch.release(replacement_bytes);
+                        identity,
+                        context,
+                        &mut scratch,
+                        &mut rewriter,
+                        &mut replacements,
+                    )?;
                 }
             }
         }
@@ -355,6 +331,48 @@ fn canonicalize<B: IntegerIdentityBudgetV1>(
     }
     Ok(rewriter.is_modified().into())
 }
+
+fn rewrite_identity<B: IntegerIdentityBudgetV1>(
+    operation: Ptr<Operation>,
+    identity: Identity,
+    context: &mut Context,
+    scratch: &mut Scratch<'_, B>,
+    rewriter: &mut IRRewriter<DummyListener>,
+    replacements: &mut Vec<Value>,
+) -> Result<(), IntegerIdentityErrorV1<B::Error>> {
+    let count = if identity.checked { 2 } else { 1 };
+    scratch.work(count + 1)?;
+    let uses = operation
+        .deref(context)
+        .results()
+        .try_fold(0usize, |sum, value| {
+            sum.checked_add(value.num_uses(context))
+        })
+        .ok_or(IntegerIdentityErrorV1::Overflow)?;
+    scratch.work(uses)?;
+    reserve_vec(replacements, count, scratch)?;
+    let replacement_bytes = bytes::<Value, B::Error>(replacements.capacity())?;
+    if identity.checked {
+        scratch.work(1)?;
+    }
+    replacements.push(identity.value);
+    if identity.checked {
+        let boolean = IntegerType::get(context, 1, Signedness::Signless);
+        let constant = ConstantOp::new(
+            context,
+            Box::new(IntegerAttr::new(boolean, APInt::zero(bw(1)))),
+        );
+        rewriter.set_insertion_point(OpInsertionPoint::BeforeOperation(operation));
+        rewriter.insert_op(context, &constant);
+        replacements.push(constant.get_operation().deref(context).get_result(0));
+    }
+    rewriter.replace_operation_with_values(context, operation, std::mem::take(replacements));
+    scratch.release(replacement_bytes);
+    Ok(())
+}
+
+#[path = "integer_identity_worklist_v2.rs"]
+pub mod worklist_v2;
 
 #[cfg(test)]
 mod tests {
