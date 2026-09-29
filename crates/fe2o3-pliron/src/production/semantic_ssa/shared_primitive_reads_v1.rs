@@ -413,3 +413,10 @@ impl<'s> ProductionSemanticSharedReadsV1<'s> {
         cleanup.map_err(Failure::Resource)
     }
 }
+
+// Inert concrete observer owner; ordinary SharedReads construction is unchanged.
+#[allow(dead_code)]
+#[path = "shared_primitive_reads_retained_observer_v1.rs"]
+mod retained_observer;
+#[allow(unused_imports)]
+pub(super) use retained_observer::RetainedSharedObserverV1;

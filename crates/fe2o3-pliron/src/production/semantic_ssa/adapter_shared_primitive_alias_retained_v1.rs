@@ -1,5 +1,6 @@
 //! Inert retained alias-state primitives; no whole Shared construction or routing.
 //! The real statement/rvalue/install producer and source/SSA join remain separate.
+use super::super::super::shared_primitive_reads_v1::RetainedSharedObserverV1;
 use super::*;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -93,6 +94,11 @@ pub(super) struct RetainedAliasStateV1<'a> {
     output: Vec<Alias>,
     place: Option<&'a SemanticPlaceV1>,
     path: Option<Path<'a>>,
+    selected: Vec<Alias>,
+    fields: Vec<u32>,
+    operand: Option<&'a SemanticOperandV1>,
+    observer: RetainedSharedObserverV1<'a>,
+    site: Option<SemanticTransparentBorrowSiteV1>,
 }
 impl<'a> RetainedAliasStateV1<'a> {
     pub(super) fn new() -> Self {
@@ -117,7 +123,38 @@ impl<'a> RetainedAliasStateV1<'a> {
             output: Vec::new(),
             place: None,
             path: None,
+            selected: Vec::new(),
+            fields: Vec::new(),
+            operand: None,
+            observer: RetainedSharedObserverV1::new(),
+            site: None,
         }
+    }
+    pub(super) fn prepare_observer_into(
+        &mut self,
+        function: &'a SemanticFunctionDeclV1,
+        types: &'a [SemanticTypeDeclV1],
+        scratch: usize,
+        units: usize,
+        budget: &mut Budget<'_>,
+        owned: &mut usize,
+    ) -> RetainedResult<()> {
+        let fresh = self.phase == Phase::Fresh;
+        self.phase = Phase::Terminal;
+        if !fresh {
+            return Err(self.failure.unwrap_or(Resource::Accounting).into());
+        }
+        self.observer.prepare_into(
+            function,
+            types,
+            scratch,
+            units,
+            budget,
+            owned,
+            &mut self.failure,
+        )?;
+        self.phase = Phase::Fresh;
+        Ok(())
     }
     fn check(
         &self,
@@ -126,6 +163,8 @@ impl<'a> RetainedAliasStateV1<'a> {
         budget: &Budget<'_>,
         owned: &usize,
     ) -> RetainedResult<()> {
+        self.observer
+            .check_if_prepared(function, types, budget, owned, &self.failure)?;
         let source = self.source.ok_or(Resource::Accounting)?;
         let before = self.entry.ok_or(Resource::Accounting)?;
         let now = snapshot(budget, owned);
@@ -202,6 +241,10 @@ impl<'s, 'a, 'w> RetainedAliasSessionV1<'s, 'a, 'w> {
         if !fresh || entry.denied_work || entry.denied_storage || entry.owned > entry.storage {
             return Err(Resource::Accounting.into());
         }
+        owner
+            .observer
+            .check_if_prepared(function, types, budget, owned, &owner.failure)
+            .map_err(|error| *owner.failure.get_or_insert(error))?;
         owner.source = Some(Source {
             function,
             types,
@@ -740,14 +783,15 @@ fn frame() -> std::result::Result<usize, Resource> {
             &mut Resource,
         )>(),
         size_of::<(
-            [usize; 17],
-            std::array::IntoIter<usize, 17>,
+            [usize; 18],
+            std::array::IntoIter<usize, 18>,
             usize,
             usize,
             std::result::Result<usize, Resource>,
             Resource,
         )>(),
         place_ops::frame()?,
+        read_ops::frame()?,
     ];
     rows.into_iter().try_fold(0usize, |sum, bytes| {
         sum.checked_add(bytes).ok_or(Resource::Arithmetic)
@@ -755,6 +799,8 @@ fn frame() -> std::result::Result<usize, Resource> {
 }
 #[path = "adapter_shared_primitive_place_retained_v1.rs"]
 mod place_ops;
+#[path = "adapter_shared_primitive_read_retained_v1.rs"]
+mod read_ops;
 #[cfg(test)]
 #[path = "adapter_shared_primitive_alias_retained_v1_tests.rs"]
 mod tests;
