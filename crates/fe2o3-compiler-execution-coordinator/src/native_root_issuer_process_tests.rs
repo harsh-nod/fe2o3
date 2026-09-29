@@ -17,16 +17,16 @@ use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::{fs as disk, os::unix::fs::MetadataExt, process::Command};
 
 mod fixtures {
-    include!("native_root_issuer_process_fixtures.rs");
+    include!("native_root_issuer_process_fixtures_tests.rs");
 }
 mod preparation {
-    include!("native_root_issuer_process_preparation.rs");
+    include!("native_root_issuer_process_preparation_tests.rs");
 }
 mod compiler {
-    include!("native_root_issuer_process_compiler.rs");
+    include!("native_root_issuer_process_compiler_tests.rs");
 }
 mod cleanup {
-    include!("native_root_issuer_process_cleanup.rs");
+    include!("native_root_issuer_process_cleanup_tests.rs");
 }
 
 const WORK: usize = 1_000_000_000_000;

@@ -68,7 +68,15 @@ descriptor checks, profile validation, independent exec EOF, exact readiness plu
 EOF, and liveness checks do not remove the caller's creator-thread, exclusive-wait,
 bounded-Drop and inherited-lock-alias obligations. Its one test-only unsafe block
 stages inert files to check the fixed descriptor map; it never spawns or admits
-them. The shared pipe framer and socket-mode normalization use safe descriptor
+them. The opt-in isolated root startup matrix adds four reviewed call blocks:
+compiler staging, retained clone, held-exec confirmation, and actual V3 issuer
+launch. It constructs genuine prepared inputs, closes all inherited lock aliases,
+keeps the compiler at its first exec stop, and drains the independently funded
+cleanup pool before its creator exits, including during unwinding. These tests
+do not resume a compiler or admit a deployment. The scoped root observation view
+uses safe pidfd/procfs wrappers; its original thread/account and unreaped custody
+checks grant neither compiler admission nor tree supervision.
+The shared pipe framer and socket-mode normalization use safe descriptor
 APIs. This inventory does not establish installed production integration, an
 authorized compiler occurrence, protected proof execution or GPU qualification.
 

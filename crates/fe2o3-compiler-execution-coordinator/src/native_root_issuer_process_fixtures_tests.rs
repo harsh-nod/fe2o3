@@ -154,7 +154,7 @@ impl Fixture {
     }
 
     pub fn bind(&mut self) -> OwnedFd {
-        let socket = net::socket(
+        let socket = net::socket_with(
             net::AddressFamily::UNIX,
             net::SocketType::SEQPACKET,
             net::SocketFlags::CLOEXEC | net::SocketFlags::NONBLOCK,

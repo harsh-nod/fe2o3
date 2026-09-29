@@ -120,7 +120,8 @@ pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
             );
             assert!(matches!(
                 trace.with_task_observation::<_, Error>(b, |_, b| {
-                    b.release_storage(b.storage())?;
+                    // Damage only the scoped frame, not the live trace's floor.
+                    b.release_storage(1)?;
                     Ok(())
                 }),
                 Err(Error::Resource(Resource::Accounting))
