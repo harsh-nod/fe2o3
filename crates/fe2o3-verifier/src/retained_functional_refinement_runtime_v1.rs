@@ -55,7 +55,7 @@ pub enum RetainedFunctionalRefinementRuntimeErrorKindV1 {
     SymlinkOrTraversal,
     /// A required object is absent or has the wrong filesystem type.
     ObjectType,
-    /// Ownership, permissions, or hard-link count differs from policy.
+    /// Ownership, permissions, hard-link count, or accounting access differs from policy.
     Protection,
     /// Directory membership differs from the exact manifest.
     InventoryMismatch,
@@ -198,12 +198,23 @@ fn open_with_manifest(
 }
 
 impl RetainedGeneratedVerusRuntimeBackendV1 {
+    fn with_legacy_access<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, RetainedFunctionalRefinementRuntimeErrorV1>,
+    ) -> Result<T, RetainedFunctionalRefinementRuntimeErrorV1> {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let bounded = self.accounting.is_some();
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let bounded = false;
+        with_legacy_runtime_access(bounded, operation)
+    }
+
     pub(crate) fn begin_attempt(
         &self,
     ) -> Result<RuntimeAttemptV1, RetainedFunctionalRefinementRuntimeErrorV1> {
         // Existing execution/toolchain checks run under this guard. Acquiring
         // it does not add another full runtime hash pass or grant admission.
-        RuntimeAttemptV1::begin()
+        self.with_legacy_access(RuntimeAttemptV1::begin)
     }
     pub(crate) fn root(&self) -> &Path {
         &self.root
@@ -214,13 +225,15 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-        self.check_owner_process().map_err(|kind| {
-            RetainedFunctionalRefinementRuntimeErrorV1::new(
-                kind,
-                "runtime closure lease crossed a process boundary",
-            )
-        })?;
-        self.revalidate_closure()
+        self.with_legacy_access(|| {
+            self.check_owner_process().map_err(|kind| {
+                RetainedFunctionalRefinementRuntimeErrorV1::new(
+                    kind,
+                    "runtime closure lease crossed a process boundary",
+                )
+            })?;
+            self.revalidate_closure()
+        })
     }
 
     fn check_owner_process(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorKindV1> {
@@ -254,25 +267,42 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
         RetainedFunctionalRefinementRuntimeOutputV1,
         RetainedFunctionalRefinementRuntimeErrorV1,
     > {
-        attempt.check()?;
-        self.revalidate()?;
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let result = linux::execute_functional_refinement_generated_rust_verify(
-            attempt,
-            std::sync::Arc::clone(&self.retained),
-            source,
-            deadline,
-            output_limit,
-        );
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        let result = Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
-            RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
-            "sealed generated rust_verify execution requires Linux x86-64",
-        ));
-        attempt.complete()?;
-        self.revalidate()?;
-        result
+        self.with_legacy_access(|| {
+            attempt.check()?;
+            self.revalidate()?;
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            let result = linux::execute_functional_refinement_generated_rust_verify(
+                attempt,
+                std::sync::Arc::clone(&self.retained),
+                source,
+                deadline,
+                output_limit,
+            );
+            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            let result = Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+                RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
+                "sealed generated rust_verify execution requires Linux x86-64",
+            ));
+            attempt.complete()?;
+            self.revalidate()?;
+            result
+        })
     }
+}
+
+// This gate precedes filesystem scans, attempt custody and execution dispatch.
+// Only the bounded API may operate on an original-budget-bound owner.
+fn with_legacy_runtime_access<T>(
+    bounded: bool,
+    operation: impl FnOnce() -> Result<T, RetainedFunctionalRefinementRuntimeErrorV1>,
+) -> Result<T, RetainedFunctionalRefinementRuntimeErrorV1> {
+    if bounded {
+        return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection,
+            "bounded runtime refuses legacy access without its original budget",
+        ));
+    }
+    operation()
 }
 
 fn functional_refinement_closure_identity_v1() -> [u8; 32] {
@@ -758,6 +788,35 @@ impl ByteLines for [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_legacy_access_refuses_before_operation() {
+        let error = with_legacy_runtime_access::<()>(true, || {
+            panic!("bounded owner reached legacy scan, attempt custody or execution")
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection
+        );
+    }
+
+    #[test]
+    fn legacy_access_preserves_operation_results_and_refusals() {
+        assert_eq!(with_legacy_runtime_access(false, || Ok(17)).unwrap(), 17);
+        let error = with_legacy_runtime_access::<()>(false, || {
+            Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+                RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged,
+                "scalar refusal",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged
+        );
+        assert_eq!(error.detail, "scalar refusal");
+    }
 
     #[test]
     fn manifest_has_no_workload_proof_inventory() {

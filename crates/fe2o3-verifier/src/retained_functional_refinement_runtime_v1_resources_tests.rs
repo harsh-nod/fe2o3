@@ -375,6 +375,29 @@ fn protected_runtime_retains_complete_backing_on_original_budget() {
     runtime.revalidate_bounded_v1(&mut b).unwrap();
     assert_eq!(b.storage(), charge.retained_storage());
 
+    let before_legacy = (b.work(), b.storage());
+    assert_eq!(
+        runtime.revalidate().unwrap_err().kind(),
+        RuntimeKind::Protection
+    );
+    assert_eq!(
+        runtime
+            .begin_attempt()
+            .err()
+            .expect("legacy attempt refused")
+            .kind(),
+        RuntimeKind::Protection
+    );
+    // Exercise the execution entry gate without proof input or attempt custody.
+    assert_eq!(
+        runtime
+            .with_legacy_access::<()>(|| panic!("legacy execution dispatch reached"))
+            .unwrap_err()
+            .kind(),
+        RuntimeKind::Protection
+    );
+    assert_eq!((b.work(), b.storage()), before_legacy);
+
     let original_ledger = b.work_ledger_identity_v1();
     let original_work = b.work();
     let mut other_work = Work::new(usize::MAX);
