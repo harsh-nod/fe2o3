@@ -119,3 +119,6 @@ connection changes and refusal paths.
 
 Parser, journal, startup, and compile-only tests establish their individual
 properties. They do not substitute for the later gates.
+
+The [checkpoint evidence](evidence/root-control-foundations-20260929.md) records
+the tested source, observed failures, and remaining validation limits.
