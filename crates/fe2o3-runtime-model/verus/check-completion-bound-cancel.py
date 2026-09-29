@@ -15,6 +15,10 @@ BODY = Path("crates/fe2o3-kfd/src/queue_completion/bound_cancel_body.rs")
 PROOF = V / "completion_bound_cancel_v1.rs"
 FUNCTIONS = ("validate_packet_count", "validate_bound", "validate_retention",
              "require_unpinned", "cancel_bound_retaining")
+BITVECTOR_ENUMERATION_NOTE = (
+    "bitvector assertion not satisfied: not all errors may have been reported; "
+    "rerun with a higher value for --multiple-errors to find other potential errors in this function"
+)
 
 
 def need(value, message):
@@ -88,6 +92,16 @@ def campaign():
     module.EXPECTED = dict(module.EXPECTED, verified=25)
     module.mutations = mutations
     module.selection_notes = selection_notes
+    inherited = module.inherited
+
+    def with_bitvector_enumeration():
+        classifier = inherited()
+        # The pinned verifier emits this informational enumeration note even on
+        # successful bitvector queries with --multiple-errors 0.
+        classifier.ENUMERATION_NOTES = classifier.ENUMERATION_NOTES | {BITVECTOR_ENUMERATION_NOTE}
+        return classifier
+
+    module.inherited = with_bitvector_enumeration
     return module
 
 

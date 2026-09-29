@@ -62,4 +62,17 @@ need(classifier.proof_positive(0, json.dumps(success), "", verifier, campaign.EX
      "exact positive accepted")
 need(not classifier.proof_positive(1, json.dumps(success), "", verifier, campaign.EXPECTED, {path}),
      "failed positive rejected")
+bit_note = dict(error, level="note", message=runner["BITVECTOR_ENUMERATION_NOTE"])
+positive = lambda diagnostic: classifier.proof_positive(0, json.dumps(success), json.dumps(diagnostic),
+    verifier, campaign.EXPECTED, {path})
+need(positive(bit_note), "exact informational bitvector enumeration accepted")
+need(not positive(dict(bit_note, level="error")), "bitvector error never accepted as a note")
+need(not positive(dict(bit_note, message=bit_note["message"] + " unknown")), "unknown enumeration rejected")
+need(not positive(dict(bit_note, spans=[{"is_primary": True, "file_name": "/foreign.rs"}])),
+     "foreign positive enumeration rejected")
+need(not positive(dict(bit_note, children=[error])), "nested error rejected")
+need(not check([bit_note]), "enumeration alone is not a negative control")
+need(check([bit_note, error]), "exact enumeration permits a separate authenticated logical error")
+need(not check([dict(bit_note, message=bit_note["message"] + " Resource limit (rlimit) exceeded"), error]),
+     "resource-bearing enumeration rejected")
 print("PASS: completion bound cancellation calibration (4 groups)")
