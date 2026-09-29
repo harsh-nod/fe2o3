@@ -798,6 +798,7 @@ dependencies = [
  "fe2o3-host-link-closure",
  "fe2o3-kernel-ir",
  "fe2o3-process-identity",
+ "fe2o3-protected-service-profile",
  "fe2o3-protected-service-spawn",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",

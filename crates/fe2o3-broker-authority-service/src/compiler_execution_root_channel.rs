@@ -208,6 +208,12 @@ impl<'work> RootLaunchChannelV3<'work> {
         validate_endpoint(self.root.as_fd(), self.process)
     }
 
+    pub(crate) fn validate_root_endpoint(&self, b: &mut Budget<'_>) -> Result<()> {
+        b.with_prepaid_scope(Self::STORAGE, ENTRY, WORK, FRAME, |b| {
+            self.check_packet_endpoint(b)
+        })
+    }
+
     pub const fn retained_storage(&self) -> usize {
         Self::STORAGE
     }
