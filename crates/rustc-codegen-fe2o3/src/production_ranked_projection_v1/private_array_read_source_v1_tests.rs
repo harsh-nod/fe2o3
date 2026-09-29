@@ -84,7 +84,10 @@ fn private_array_copy_read_attaches_and_resets_each_statement_ordinal() {
 
 #[test]
 fn private_array_read_requires_independent_initialization() {
-    use fe2o3_lower_mir_kernel::{ProductionPreRankedKirErrorV1, ProductionSemanticKirErrorV1};
+    use fe2o3_lower_mir_kernel::{
+        ProductionMirPlironTranslationErrorV1, ProductionPreRankedKirErrorV1,
+        ProductionSemanticKirErrorV1,
+    };
     for binary in [false, true] {
         for legacy in [false, true] {
             let old = if binary {
@@ -127,6 +130,7 @@ fn private_array_read_requires_independent_initialization() {
             .with_kernel_entry(old.kernel_entry().unwrap().clone());
             // A genuine all-path initializer in the predecessor is sufficient;
             // the final relation no longer imposes the old same-block shortcut.
+            let read_completed = std::cell::Cell::new(false);
             let result =
                 attach_private_write_fixture_v1(function.clone(), legacy, |materialized, root| {
                     assert_eq!(root.access_sources.len(), if binary { 9 } else { 10 });
@@ -148,10 +152,26 @@ fn private_array_read_requires_independent_initialization() {
                         Ok(())
                     })
                     .unwrap();
+                    read_completed.set(true);
                 });
-            let owner =
-                result.unwrap_or_else(|error| panic!("binary={binary} legacy={legacy}: {error:?}"));
-            assert!(!owner.grants_artifact_or_launch_authority());
+            assert!(read_completed.get());
+            if binary {
+                // This fixture also writes the arithmetic result into the
+                // array. Proving its read does not prove that destination value.
+                assert!(matches!(
+                    result,
+                    Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
+                        ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
+                            semantic_block: 1,
+                            semantic_statement: Some(0),
+                            semantic_access_ordinal: 1,
+                        }
+                    ))
+                ));
+            } else {
+                let owner = result.unwrap_or_else(|error| panic!("legacy={legacy}: {error:?}"));
+                assert!(!owner.grants_artifact_or_launch_authority());
+            }
 
             // Remove the whole-array initializer without changing the observed
             // read or its independent indexed write. This source is rejected

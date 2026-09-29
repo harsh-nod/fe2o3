@@ -426,7 +426,7 @@ fn bound_worklist_actual_fixture_keeps_private_borrows_checked_chain_and_distinc
         source
             .contains("let first = loaded ^ 0;\n    observe(&seed);\n    let second = first ^ 0;\n    observe(&seed);\n    let third = second ^ 0;\n    seed = third;")
     );
-    assert!(source.contains("seed = second;\n    observe(&seed);"));
+    assert!(source.contains("seed = third;\n    observe(&seed);"));
     assert!(source.contains("max_grid = [3, 1, 1]"));
     assert!(source.contains("max_grid = [5, 1, 1]"));
     assert!(!source.contains("unsafe"));

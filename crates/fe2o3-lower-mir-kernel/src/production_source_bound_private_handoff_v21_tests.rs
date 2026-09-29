@@ -331,8 +331,11 @@ fn bound_private_resource_cause_v21(
         {
             return Some(*resource);
         }
-        if let Some(fe2o3_kernel_ir::CanonicalFormalReportErrorV19::Resource(resource)) =
-            error.downcast_ref::<fe2o3_kernel_ir::CanonicalFormalReportErrorV19>()
+        if let Some(resource) = error.downcast_ref::<ArgumentResourceV1>() {
+            return Some(*resource);
+        }
+        if let Some(resource) =
+            error.downcast_ref::<fe2o3_kernel_ir::FormalGuardedMemoryResourceErrorV1>()
         {
             return Some(optimized_source_formal_resource_v18(*resource));
         }
@@ -521,9 +524,11 @@ fn private_handoff_cut_v21(cut: Option<(bool, usize)>) -> (usize, usize, bool) {
                     bound_private_resource_cause_v21(&error).expect("typed resource chain");
                 match (is_work, resource) {
                     (true, ArgumentResourceV1::Work(refusal)) => {
+                        assert_eq!(refusal.limit(), OPTIMIZED_SOURCE_WORK_LIMIT_V18);
                         assert!(refusal.actual() > refusal.limit())
                     }
                     (false, ArgumentResourceV1::Storage(refusal)) => {
+                        assert_eq!(refusal.limit(), MODULE_LIMIT);
                         assert!(refusal.actual() > refusal.limit())
                     }
                     _ => panic!("wrong boundary error: {error:?}"),
@@ -587,17 +592,17 @@ fn bound_private_reason_attempt_header_one_short_latches_before_inner_work_and_r
                 completed.set(true);
                 Err::<(), _>(error)
             });
-                // Report settlement independently observes the same denied
-                // ledger, so its exact Formal error precedes ConsumerRejected.
+                // The containing effects scope independently observes the same
+                // denied ledger before report consumer settlement completes.
                 assert!(
                     matches!(
                         &result,
                         Err(ProductionOptimizedSourceReportsErrorV19::Formal {
-                            error: fe2o3_kernel_ir::CanonicalFormalReportErrorV19::Resource(
-                                fe2o3_kernel_ir::FormalGuardedMemoryResourceErrorV1::Storage { actual, limit }),
+                            error: fe2o3_kernel_ir::CanonicalFormalReportErrorV19::Effects(
+                                fe2o3_kernel_ir::CanonicalEffectErrorV19::Resource(ArgumentResourceV1::Storage(refusal))),
                             source_refusal: ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(first)),
-                        }) if *actual == MODULE_LIMIT + 1 && *limit == MODULE_LIMIT
-                            && first.actual() == *actual && first.limit() == *limit
+                        }) if refusal.actual() == MODULE_LIMIT + 1 && refusal.limit() == MODULE_LIMIT
+                            && first == refusal
                     ),
                     "{result:?}"
                 );

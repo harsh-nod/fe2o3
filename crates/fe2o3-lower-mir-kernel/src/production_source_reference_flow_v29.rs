@@ -180,6 +180,19 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                         budget,
                     );
                 }
+                let source = self.plan.instances.owner().source_semantic();
+                if source_reference_grid_leader_constant_v29(
+                    source.types(),
+                    source.callables(),
+                    assignment,
+                    budget,
+                )? {
+                    return self.assign_constructed(
+                        site,
+                        SourceReferenceConstructionV29::GridLeaderZero(assignment),
+                        budget,
+                    );
+                }
                 let node = self.rvalue(site, assignment.value(), budget)?;
                 self.assign(site, assignment.destination(), node, budget)
             }

@@ -46,7 +46,17 @@ impl fmt::Display for CanonicalFormalReportErrorV19 {
         write!(out, "canonical owner formal report V19: {self:?}")
     }
 }
-impl std::error::Error for CanonicalFormalReportErrorV19 {}
+impl std::error::Error for CanonicalFormalReportErrorV19 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::ControlFlow(error) => Some(error),
+            Self::Effects(error) => Some(error),
+            Self::Invocation(error) => Some(error),
+            Self::ConsumerRejected | Self::Panicked => None,
+        }
+    }
+}
 impl From<Failure> for CanonicalFormalReportErrorV19 {
     fn from(error: Failure) -> Self {
         match error {

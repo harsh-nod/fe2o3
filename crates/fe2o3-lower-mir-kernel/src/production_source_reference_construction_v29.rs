@@ -2,6 +2,37 @@
 enum SourceReferenceConstructionV29<'a, 'source> {
     Intrinsic(&'a production_call_instances_v1::ProductionInstanceCallV1<'source>),
     CheckedBinary(&'a fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1),
+    GridLeaderZero(&'a fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1),
+}
+
+fn source_reference_grid_leader_constant_v29(
+    types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    assignment: &fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    let SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(constant)) =
+        assignment.value().kind()
+    else {
+        return Ok(false);
+    };
+    if !matches!(constant.value(), SemanticConstantValueV1::ZeroSized)
+        || !matches!(
+            types
+                .get(constant.ty().index() as usize)
+                .map(|ty| ty.shape()),
+            Some(SemanticTypeShapeV1::Aggregate(_))
+        )
+    {
+        return Ok(false);
+    }
+    budget.charge_work(3)?;
+    if constant.ty() != assignment.destination().ty()
+        || constant.ty() != assignment.value().result_type()
+    {
+        return Ok(false);
+    }
+    source_grid_leader_zero_type_v29(types, callables, constant.ty(), budget)
 }
 
 fn source_reference_construction_headers_v29() -> Result<usize, ArgumentResourceV1> {
@@ -120,6 +151,28 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                     let node = self.rvalue(site, assignment.value(), budget)?;
                     (assignment.destination(), node)
                 }
+                SourceReferenceConstructionV29::GridLeaderZero(assignment) => {
+                    let statement = site
+                        .statement
+                        .and_then(|index| block.statements().get(index))
+                        .ok_or_else(source_reference_construction_error_v29)?;
+                    let SemanticStatementKindV1::Assign(original) = statement.kind() else {
+                        return Err(source_reference_construction_error_v29());
+                    };
+                    let source = instances.owner().source_semantic();
+                    if !std::ptr::eq(original, assignment)
+                        || !source_reference_grid_leader_constant_v29(
+                            source.types(),
+                            source.callables(),
+                            assignment,
+                            budget,
+                        )?
+                    {
+                        return Err(source_reference_construction_error_v29());
+                    }
+                    let node = self.rvalue(site, assignment.value(), budget)?;
+                    (assignment.destination(), node)
+                }
             };
             if self.plan.nodes[node].ty != place.ty() {
                 return Err(source_reference_construction_error_v29());
@@ -127,6 +180,8 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             let target = self.write_place(site, place, budget)?;
             // A normal return/checked result constructs a valid value. This does not
             // establish nominal identity, pointer provenance, or an enum selector.
+            // An exact GridLeader zero constant only initializes storage here;
+            // its active-Some availability and live-loan proof remain emission gates.
             self.mutate_storage_place(
                 &target,
                 source_storage_v29::SourceStorageRootMutationV29::Initialize,

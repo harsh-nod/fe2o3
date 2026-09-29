@@ -740,6 +740,91 @@ fn original_grid_leader_zero_type_requires_registered_identity_not_layout() {
 }
 
 #[test]
+fn original_grid_leader_zero_constructor_requires_exact_constant_type_and_paid_identity() {
+    let owner = zero_owner(false, false);
+    let source = owner.source_semantic();
+    let SemanticStatementKindV1::Assign(original) =
+        source.functions()[0].blocks()[2].statements()[0].kind()
+    else {
+        panic!("original zero-sized assignment");
+    };
+    let leader = original.destination().ty();
+    let ordinal = source
+        .callables()
+        .iter()
+        .position(|callable| {
+            matches!(callable,
+        SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { grid_leader }, ..
+        } if *grid_leader == leader)
+        })
+        .unwrap();
+    // Three constant/type checks, eight nominal layout checks, two per callable.
+    let exact = 3 + 8 + 2 * (ordinal + 1);
+    for limit in [exact, exact - 1] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        let result = source_reference_grid_leader_constant_v29(
+            source.types(),
+            source.callables(),
+            original,
+            &mut budget,
+        );
+        if limit == exact {
+            assert_eq!(result.unwrap(), true);
+            assert_eq!(budget.work(), exact);
+        } else {
+            let error = result.unwrap_err();
+            assert!(
+                matches!(error,
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Work(denial)) if denial.limit() == limit && denial.actual() > limit),
+                "{error:?}"
+            );
+        }
+        assert_eq!(budget.storage(), 0);
+    }
+    let mut types = source.types().to_vec();
+    let duplicate = SemanticTypeIdV1::from_index(types.len() as u32);
+    types.push(types[leader.index() as usize].clone());
+    let assignment = |destination, result, operand| {
+        SemanticAssignmentV1::new(
+            place(4, destination),
+            SemanticRvalueV1::new(result, SemanticRvalueKindV1::Use(operand)),
+        )
+    };
+    let zero = |ty| {
+        SemanticOperandV1::Constant(SemanticConstantV1::new(
+            ty,
+            SemanticConstantValueV1::ZeroSized,
+        ))
+    };
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    for candidate in [
+        assignment(leader, leader, SemanticOperandV1::Copy(place(4, leader))),
+        assignment(UNIT, leader, zero(leader)),
+        assignment(leader, UNIT, zero(leader)),
+        assignment(UNIT, UNIT, zero(UNIT)),
+        assignment(duplicate, duplicate, zero(duplicate)),
+    ] {
+        assert!(
+            !source_reference_grid_leader_constant_v29(
+                &types,
+                source.callables(),
+                &candidate,
+                &mut budget,
+            )
+            .unwrap()
+        );
+    }
+    assert!(
+        !source_reference_grid_leader_constant_v29(&types, &[], original, &mut budget,).unwrap()
+    );
+    assert_eq!(budget.storage(), 0);
+}
+
+#[test]
 fn original_grid_leader_zero_source_scope_settles_exact_and_short_shared_budgets() {
     let (baseline, completed, work, peak) =
         run_zero_limits(false, true, 0, MODULE_LIMIT, MODULE_LIMIT);

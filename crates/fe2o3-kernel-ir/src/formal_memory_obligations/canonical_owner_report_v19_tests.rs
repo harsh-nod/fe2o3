@@ -424,3 +424,92 @@ fn public_report_prior_denial_survives_panicking_rejected_capture() {
         assert_eq!(dropped.get(), 1);
     });
 }
+
+#[test]
+fn public_report_error_sources_retain_exact_effect_and_resource_causes() {
+    use std::error::Error as _;
+
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(7);
+    let mut budget = Budget::new(&mut work, 11);
+    let work = budget.charge_work(8).unwrap_err();
+    let storage = budget.reserve_storage(12).unwrap_err();
+    for resource in [
+        work,
+        storage,
+        Resource::Allocation,
+        Resource::Accounting,
+        Resource::Arithmetic,
+    ] {
+        let error = Error::Effects(CanonicalEffectErrorV19::Resource(resource));
+        let effects = error.source().unwrap();
+        assert_eq!(
+            effects.downcast_ref::<CanonicalEffectErrorV19>(),
+            Some(&CanonicalEffectErrorV19::Resource(resource))
+        );
+        let cause = effects.source().unwrap();
+        assert_eq!(cause.downcast_ref::<Resource>(), Some(&resource));
+        match resource {
+            Resource::Work(expected) => {
+                assert_eq!(
+                    cause
+                        .source()
+                        .unwrap()
+                        .downcast_ref::<crate::CanonicalKernelIrWorkLimitV1>(),
+                    Some(&expected)
+                );
+            }
+            Resource::Storage(expected) => {
+                assert_eq!(
+                    cause
+                        .source()
+                        .unwrap()
+                        .downcast_ref::<crate::CanonicalKernelIrVerificationStorageLimitV1>(),
+                    Some(&expected)
+                );
+            }
+            Resource::Allocation | Resource::Accounting | Resource::Arithmetic => {
+                assert!(cause.source().is_none());
+            }
+        }
+        let direct = Error::Resource(resource.into());
+        assert_eq!(
+            direct
+                .source()
+                .unwrap()
+                .downcast_ref::<FormalGuardedMemoryResourceErrorV1>(),
+            Some(&resource.into())
+        );
+    }
+    let flow = crate::ControlFlowError::EmptyFunction;
+    assert_eq!(
+        Error::ControlFlow(flow.clone())
+            .source()
+            .unwrap()
+            .downcast_ref::<crate::ControlFlowError>(),
+        Some(&flow)
+    );
+    let invocation = RegionValidationError::UnboundedExpression;
+    assert_eq!(
+        Error::Invocation(invocation)
+            .source()
+            .unwrap()
+            .downcast_ref::<RegionValidationError>(),
+        Some(&invocation)
+    );
+    for effect in [
+        CanonicalEffectErrorV19::ForeignOwner,
+        CanonicalEffectErrorV19::Consumer,
+        CanonicalEffectErrorV19::Panicked,
+    ] {
+        assert!(effect.source().is_none());
+        assert_eq!(
+            Error::Effects(effect)
+                .source()
+                .unwrap()
+                .downcast_ref::<CanonicalEffectErrorV19>(),
+            Some(&effect)
+        );
+    }
+    assert!(Error::ConsumerRejected.source().is_none());
+    assert!(Error::Panicked.source().is_none());
+}

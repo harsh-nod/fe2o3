@@ -45,7 +45,14 @@ impl fmt::Display for CanonicalEffectErrorV19 {
         write!(out, "canonical metered effects V19: {self:?}")
     }
 }
-impl std::error::Error for CanonicalEffectErrorV19 {}
+impl std::error::Error for CanonicalEffectErrorV19 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::ForeignOwner | Self::Consumer | Self::Panicked => None,
+        }
+    }
+}
 type Error = CanonicalEffectErrorV19;
 type Result<T> = std::result::Result<T, Error>;
 
