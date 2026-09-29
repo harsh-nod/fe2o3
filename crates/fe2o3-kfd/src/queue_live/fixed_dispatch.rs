@@ -3,6 +3,7 @@
 use super::*;
 
 include!("../queue_completion/source_rollback_body.rs");
+include!("../queue_completion/source_publish_body.rs");
 include!("dependency_source_failure_body.rs");
 
 #[cfg(test)]
@@ -4540,19 +4541,13 @@ impl ComputeAqlQueueSessionV1 {
         let (packets, retention) = bound.into_parts();
         match submit(self, packets) {
             Ok(last_packet_id) => {
-                let batch = self
-                    .completion_owner
-                    .mark_published_retaining(retention, last_packet_id)
-                    .map_err(|(error, _retention)| {
-                        FixedDispatchSubmissionFailureV1::Terminal(error.into())
-                    })?;
-                let events = self
-                    .completion_owner
-                    .bind_dependency_event_batch_v1(events, &batch)
-                    .map_err(|(error, _events)| {
-                        FixedDispatchSubmissionFailureV1::Terminal(error.into())
-                    })?;
-                Ok((batch, events))
+                completion_source_publish_body!(
+                    dependency_source_rust_expr,
+                    self.completion_owner,
+                    retention,
+                    last_packet_id,
+                    events
+                )
             }
             Err(NativeAqlSubmissionFailureV1::RetryableBeforeSideEffect(error)) => {
                 if let Err(error) = completion_source_rollback_body!(

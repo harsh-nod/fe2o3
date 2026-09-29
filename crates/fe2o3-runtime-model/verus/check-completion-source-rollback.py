@@ -10,7 +10,7 @@ import types
 ROOT = Path(__file__).resolve().parents[3]
 V = Path("crates/fe2o3-runtime-model/verus")
 BASE = V / "check-completion-event-batch-release.py"
-BASE_SHA = "902960463775eadef11fa0bad6d8823ac2fbb2dbd6269f42ca9f8b081d854779"
+BASE_SHA = "7e7fb8fb8300bd6b538d3ea6b8ad64b5696167fda870701bcf30dc0d5cce8a4d"
 PROOF = V / "completion_source_rollback_v1.rs"
 BODY = Path("crates/fe2o3-kfd/src/queue_completion/source_rollback_body.rs")
 ADAPTERS = BODY.with_name("rollback_adapters_body.rs")
@@ -40,7 +40,7 @@ def inherited():
 
 def closure(base):
     files = [PROOF, BODY, ADAPTERS, BOUND_BODY, BOUND_EXECUTION,
-             base.SCHEMA, base.EXECUTION, base.BODY, base.SINGLE, base.CONTRACTS]
+             base.SCHEMA, base.EXECUTION, base.BODY, base.SINGLE, base.CONTRACTS, base.CORE]
     edges = {
         PROOF: [
             ('#[path = "completion_hash_reserve_contracts_v1.rs"]\nmod reserve_contracts;', base.CONTRACTS),

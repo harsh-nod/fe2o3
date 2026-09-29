@@ -372,7 +372,8 @@ impl CompletionSignalArenaOwnerV1 {
         Ok(event)
     }
 
-    /// Binds a complete event roster to one exact published batch atomically.
+    /// Binds a complete event roster to one exact published batch atomically,
+    /// without allocating after publication.
     #[allow(clippy::result_large_err)]
     pub(super) fn bind_compute_event_batch_after_publication<const N: usize>(
         &mut self,
@@ -382,51 +383,7 @@ impl CompletionSignalArenaOwnerV1 {
         Vec<Gfx942ComputeEventOccurrenceV1>,
         (Gfx942CompletionErrorV1, Vec<Gfx942ComputeEventOccurrenceV1>),
     > {
-        let result = (|| {
-            self.require_ready()?;
-            self.validate_published(&batch.retention)?;
-            if events.len() != N {
-                return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
-            }
-            let mut exact = Vec::new();
-            exact
-                .try_reserve_exact(N)
-                .map_err(|_| Gfx942CompletionErrorV1::DependencyLedgerAllocation)?;
-            for (batch_index, event) in events.iter().enumerate() {
-                if event.exact.packet_id.is_some() {
-                    return Err(Gfx942CompletionErrorV1::EventAlreadyBound);
-                }
-                self.validate_active_event(event)?;
-                let packet_id = packet_id_at(&batch.retention, batch_index)?;
-                let expected = exact_occurrence(
-                    event.exact.session_occurrence,
-                    event.exact.source_acceptance_epoch,
-                    &batch.retention,
-                    batch_index,
-                    Some(packet_id),
-                )?;
-                let mut unbound = expected;
-                unbound.packet_id = None;
-                if event.exact != unbound {
-                    return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
-                }
-                exact.push(expected);
-            }
-            Ok(exact)
-        })();
-        let exact = match result {
-            Ok(exact) => exact,
-            Err(error) => return Err((error, events)),
-        };
-        for (event, exact) in events.iter_mut().zip(exact) {
-            *self
-                .dependency_ledger
-                .events
-                .get_mut(&event.event_id)
-                .expect("event batch was authenticated before binding") = exact;
-            event.exact = exact;
-        }
-        Ok(events)
+        completion_bind_event_batch_body!(completion_rust_expr, self, events, batch, N)
     }
 
     /// Reserves one native dependency read while returning event custody.
@@ -1014,43 +971,21 @@ fn exact_occurrence<const N: usize>(
     batch_index: usize,
     packet_id: Option<u64>,
 ) -> Result<ExactCompletionOccurrenceV1, Gfx942CompletionErrorV1> {
-    let slot = *retention
-        .slots
-        .get(batch_index)
-        .ok_or(Gfx942CompletionErrorV1::StaleBatchGeneration)?;
-    let dispatch = retention
-        .dispatches
-        .get(batch_index)
-        .ok_or(Gfx942CompletionErrorV1::StaleBatchGeneration)?;
-    Ok(ExactCompletionOccurrenceV1 {
+    completion_exact_occurrence_body!(
+        completion_rust_expr,
         session_occurrence,
         source_acceptance_epoch,
-        batch_id: retention.batch_id,
-        queue: retention.queue,
-        signal_mapping: retention.signal_mapping,
-        slot,
-        dispatch_generation: dispatch.dispatch_generation,
-        packet_id,
-    })
+        retention,
+        batch_index,
+        packet_id
+    )
 }
 
 fn packet_id_at<const N: usize>(
     retention: &CompletionBatchRetentionV1<N>,
     batch_index: usize,
 ) -> Result<u64, Gfx942CompletionErrorV1> {
-    if batch_index >= N {
-        return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
-    }
-    let packet_count =
-        u64::try_from(N).map_err(|_| Gfx942CompletionErrorV1::StaleBatchGeneration)?;
-    let batch_index =
-        u64::try_from(batch_index).map_err(|_| Gfx942CompletionErrorV1::StaleBatchGeneration)?;
-    retention
-        .last_packet_id
-        .and_then(|last| last.checked_add(1))
-        .and_then(|next| next.checked_sub(packet_count))
-        .and_then(|first| first.checked_add(batch_index))
-        .ok_or(Gfx942CompletionErrorV1::StaleBatchGeneration)
+    completion_packet_id_at_body!(completion_rust_expr, retention, batch_index, N)
 }
 
 #[cfg(test)]

@@ -28,6 +28,7 @@ use crate::wait::MonotonicWaitV1;
 include!("queue_completion/event_release_body.rs");
 include!("queue_completion/bound_cancel_body.rs");
 include!("queue_completion/rollback_adapters_body.rs");
+include!("queue_completion/event_bind_body.rs");
 
 macro_rules! completion_rust_expr {
     ($body:expr) => {
@@ -1644,16 +1645,13 @@ impl CompletionSignalArenaOwnerV1 {
         last_packet_id: u64,
     ) -> Result<Gfx942CompletionBatchV1<N>, (Gfx942CompletionErrorV1, CompletionBatchRetentionV1<N>)>
     {
-        if let Err(error) = self.validate_bound(&retention) {
-            return Err((error, retention));
-        }
-        for slot in retention.slots.iter() {
-            self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Published {
-                batch_id: retention.batch_id,
-            };
-        }
-        retention.last_packet_id = Some(last_packet_id);
-        Ok(Gfx942CompletionBatchV1 { retention })
+        completion_mark_published_retaining_body!(
+            completion_rust_expr,
+            self,
+            retention,
+            last_packet_id,
+            N
+        )
     }
 
     pub(super) fn observe_once<const N: usize, B: NativeCompletionSignalBackendV1>(
@@ -2096,15 +2094,7 @@ impl CompletionSignalArenaOwnerV1 {
         &self,
         retention: &CompletionBatchRetentionV1<N>,
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        if retention.last_packet_id.is_none() {
-            return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
-        }
-        self.validate_retention(
-            retention,
-            CompletionSlotPhaseV1::Published {
-                batch_id: retention.batch_id,
-            },
-        )
+        completion_validate_published_body!(completion_rust_expr, self, retention)
     }
 
     fn validate_completed<const N: usize>(
@@ -2397,7 +2387,7 @@ impl CompletionSignalArenaOwnerV1 {
         Vec<Gfx942ComputeEventOccurrenceV1>,
         (Gfx942CompletionErrorV1, Vec<Gfx942ComputeEventOccurrenceV1>),
     > {
-        self.bind_compute_event_batch_after_publication(events, batch)
+        completion_bind_dependency_event_batch_body!(completion_rust_expr, self, events, batch)
     }
 
     #[allow(clippy::result_large_err)]

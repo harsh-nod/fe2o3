@@ -19,7 +19,8 @@ CONTRACTS = V / "completion_hash_reserve_contracts_v1.rs"
 CONTRACTS_SHA = "a3c6d3bd3f022470323da7bf44e4148097e9691fb055634a85f161cf12199a49"
 SCHEMA = V / "completion_owner_schema_v1.rs"
 EXECUTION = V / "completion_event_batch_release_execution_v1.rs"
-FILES = [BODY, SINGLE, PROOF, CONTRACTS, SCHEMA, EXECUTION]
+CORE = V / "completion_event_core_v1.rs"
+FILES = [BODY, SINGLE, PROOF, CONTRACTS, SCHEMA, EXECUTION, CORE]
 ALLOWED_INPUTS = {
     PROOF: [
         ('#[path = "completion_hash_reserve_contracts_v1.rs"]\nmod reserve_contracts;', CONTRACTS),
@@ -29,6 +30,7 @@ ALLOWED_INPUTS = {
     EXECUTION: [
         ('include!("../../fe2o3-kfd/src/queue_completion/event_release_body.rs");', SINGLE),
         ('include!("../../fe2o3-kfd/src/queue_completion/batch_event_release_body.rs");', BODY),
+        ('include!("completion_event_core_v1.rs");', CORE),
     ],
 }
 FUNCTION = "*release_compute_event_batch"

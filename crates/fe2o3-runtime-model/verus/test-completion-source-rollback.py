@@ -14,7 +14,7 @@ files, edges = runner["closure"](base)
 inputs = {path: (root / path).read_bytes().decode("utf-8") for path in files}
 audit = lambda values: base.audit(values, files, edges, runner["PROOF"])
 audit(inputs)
-need(len(files) == 10, "exact ten-file closure")
+need(len(files) == 11, "exact eleven-file closure")
 for path in files:
     for suffix in ('\nassume(false);', '\n#[verifier::external_body]', '\nmod foreign;', '\ninclude!("foreign.rs");', '\nenv!("FOREIGN");'):
         try:

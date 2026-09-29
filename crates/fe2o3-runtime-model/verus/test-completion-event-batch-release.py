@@ -65,7 +65,7 @@ need(parent.count("completion_release_event_batch_body!(completion_rust_expr, se
      "complete production method wiring")
 need(inputs[runner["EXECUTION"]].count("completion_release_event_batch_body!(@annotated") == 1,
      "complete proof method wiring")
-need(campaign.FILES == runner["FILES"] and len(campaign.FILES) == 6, "six-file relocation closure")
+need(campaign.FILES == runner["FILES"] and len(campaign.FILES) == 7, "seven-file relocation closure")
 
 classifier = campaign.inherited()
 leaf = classifier.inherited()

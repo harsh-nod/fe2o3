@@ -2518,6 +2518,10 @@ pub(crate) mod tests {
     mod node_properties;
     pub(super) mod prechecked_reads;
 
+    pub(crate) fn count_allocations_for_test<R>(operation: impl FnOnce() -> R) -> (R, usize) {
+        directory_entries::allocation_counter::counted(operation)
+    }
+
     use super::*;
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
