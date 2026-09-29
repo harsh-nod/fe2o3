@@ -8,6 +8,7 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 readonly REPO_ROOT
 python3 "${REPO_ROOT}/scripts/tests/tutorial_kernel_manifest.py"
+python3 -I -B "${REPO_ROOT}/scripts/tests/issue272_m0_contract.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_occurrences.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_identities.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_fixture_bindings.py"

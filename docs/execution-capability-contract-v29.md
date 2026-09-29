@@ -17,8 +17,12 @@ These versions do not activate intermediate historical formats. Semantic MIR
 V16-V26, held numerical V27 and historical KIR V13/V14 remain separate. Match
 explicit supported schemas, not a numeric range that admits those drafts.
 
-The following tags are allocated together. Only the five callable MIR encodings
-and four semantic MIR roles are implemented here; KIR/SO codecs remain pending.
+The following tags are allocated together. The five callable MIR encodings and
+four semantic MIR roles are implemented, as are the inert KIR V15/SO3 codecs
+and structural/lifecycle checks described in the
+[unified integration contract](unified-simt-tile-integration.md#inert-execution-model).
+These codecs do not establish source authentication, checked scheduling, proof,
+publication or launch authority.
 
 | Operation | MIR intrinsic | KIR operation | Execution opcode |
 | --- | --- | --- | --- |
