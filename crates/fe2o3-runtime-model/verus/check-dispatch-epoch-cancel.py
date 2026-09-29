@@ -35,7 +35,14 @@ def mutations(body):
         "Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)", poison)
     add("ignores-recipe", "$identity.recipe_occurrence != $owner.recipe_occurrence", "false", identity)
     add("ignores-queue", "Some($identity.queue) != $owner.recipe_queue", "false", identity)
-    add("ignores-bounds", "$identity.slot_index as usize >= $owner.slots.len()", "false", identity)
+    add("accepts-out-of-bounds", "$identity.slot_index as usize >= $owner.slots.len()", "false", identity)
+    # Return a safely wrong success, so the negative is a local postcondition
+    # failure rather than an unauthenticated primary span inside vstd's Vec spec.
+    text, focus = cases["accepts-out-of-bounds"]
+    site = "            let slot = $owner.slots[$identity.slot_index as usize];"
+    need(text.count(site) == 1, "exact false-success site")
+    cases["accepts-out-of-bounds"] = (text.replace(site,
+        "            if $identity.slot_index as usize >= $owner.slots.len() { return Ok(()); }\n" + site), focus)
     add("ignores-slot-generation", "slot.slot_generation != $identity.slot_generation", "false", identity)
     add("ignores-phase", "slot.phase != $expected", "false", identity)
     add("ignores-dispatch-generation", "dispatch_generation == $identity.dispatch_generation", "true", roster)
