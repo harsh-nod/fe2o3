@@ -198,7 +198,8 @@ fn hex(bytes: [u8; 32]) -> String {
 
 fn changed_invocation(original: &Descriptor) -> Descriptor {
     let mut argv: Vec<String> = original.rustc().argv().map(str::to_owned).collect();
-    argv.push("--cfg=published_invocation_mismatch".into());
+    // Canonical invocation admission requires its authenticated backend last.
+    argv.insert(argv.len() - 1, "--cfg=published_invocation_mismatch".into());
     Descriptor::new(
         RustcInvocationDescriptorV2::new(
             *original.rustc_executable_sha256(),
