@@ -2034,6 +2034,16 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             )?;
             return Ok(true);
         }
+        // Temporary observation only: do not reinterpret an unsupported leaf.
+        source_object_leaf_context_diagnostic_v1792(
+            self.semantic_function.index(),
+            block,
+            statement,
+            place,
+            value,
+            self.types,
+            destination.projected_schema,
+        );
         let expected = self.source_object_leaf_type_v29(
             block,
             statement,
@@ -2430,4 +2440,78 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             Ok(())
         })
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn source_object_leaf_context_diagnostic_v1792(
+    function: u32,
+    block: SemanticBlockIdV1,
+    statement: Option<u32>,
+    place: &SemanticPlaceV1,
+    value: &SemanticValueBindingV1,
+    types: &[SemanticTypeDeclV1],
+    schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let enabled = std::env::var_os("FE2O3_DIAG_ALLOCATION_CONTRACT_V1791")
+            .is_some_and(|value| value == "1" || value == "backtrace");
+        if !enabled {
+            return;
+        }
+        let Some(declaration) = types.get(place.ty().index() as usize) else {
+            return;
+        };
+        let shape = match declaration.shape() {
+            SemanticTypeShapeV1::Scalar(_)
+            | SemanticTypeShapeV1::ValidityScalar(_)
+            | SemanticTypeShapeV1::Pointer(_) => return,
+            SemanticTypeShapeV1::Unit => "unit",
+            SemanticTypeShapeV1::Never => "never",
+            SemanticTypeShapeV1::Array { .. } => "array",
+            SemanticTypeShapeV1::Slice { .. } => "slice",
+            SemanticTypeShapeV1::Tuple(_) => "tuple",
+            SemanticTypeShapeV1::Aggregate(_) => "aggregate",
+            SemanticTypeShapeV1::Union(_) => "union",
+            SemanticTypeShapeV1::Enum { .. } => "enum",
+            SemanticTypeShapeV1::FunctionPointer { .. } => "function_pointer",
+            SemanticTypeShapeV1::Opaque => "opaque",
+        };
+        static EMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if EMITTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let physical = match value {
+            SemanticValueBindingV1::Value {
+                ty: Type::Slice(_), ..
+            } => "slice",
+            SemanticValueBindingV1::Value {
+                ty: Type::Pointer(_),
+                ..
+            } => "pointer",
+            SemanticValueBindingV1::Value {
+                ty: Type::Scalar(_),
+                ..
+            } => "scalar",
+            SemanticValueBindingV1::Value { .. } => "other_value",
+            _ => "non_value",
+        };
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "ALLOCATION_LEAF_CONTEXT_V1792 function={} block={} statement={:?} local={} projections={} type={} schema={} shape={} binding={} physical={} size={:?} alignment={} uninhabited={}",
+            function,
+            block.index(),
+            statement,
+            place.local().index(),
+            place.projections().len(),
+            place.ty().index(),
+            schema.0,
+            shape,
+            semantic_binding_kind_v1(value),
+            physical,
+            declaration.layout().size_bytes(),
+            declaration.layout().alignment_bytes(),
+            declaration.layout().is_uninhabited(),
+        );
+    }));
 }
