@@ -60,6 +60,18 @@ neither constructs a positive runtime or deployment. The shared send test's two
 blocks reset/unblock SIGPIPE only in a disposable subprocess, checking that the
 real send uses NOSIGNAL; no application or host signal policy is changed.
 
+The private root-to-V3-issuer composition has two unsafe functions and four call
+blocks: delegation with the original confirmed compiler trace, sealed staging,
+retained spawning, and exec confirmation. These calls retain the actual prepared
+owners and compiler backing in the funded cleanup slot before clone. Final
+descriptor checks, profile validation, independent exec EOF, exact readiness plus
+EOF, and liveness checks do not remove the caller's creator-thread, exclusive-wait,
+bounded-Drop and inherited-lock-alias obligations. Its one test-only unsafe block
+stages inert files to check the fixed descriptor map; it never spawns or admits
+them. The shared pipe framer and socket-mode normalization use safe descriptor
+APIs. This inventory does not establish installed production integration, an
+authorized compiler occurrence, protected proof execution or GPU qualification.
+
 The gated namespace collector in `child_namespace_report.rs` uses six unsafe
 blocks and one private syscall function because post-clone observation cannot
 use allocating or TLS-dependent wrappers. Its x86-64 stat buffer layout and
@@ -658,6 +670,22 @@ the declared child PID and the service socket's creation credentials. No new
 production unsafe block is needed. Its relay test registers one existing scalar
 send helper in a child-only pre-exec hook. The original same-UID/GID relationship,
 pidfd liveness and protected-runtime refusals remain unchanged.
+
+## Compiler Trace And Key Transfer
+
+The private compiler-channel trace adds one unsafe confirmation function and one
+forwarding block. It preserves the existing original-thread/account trace and
+requires the caller to establish exact native exec-status EOF and closure of all
+inherited artifact-lock aliases, including any in untraced descendants. Its
+diagnostic adds one call block while the non-forking native stage's first exec
+is held. Confirmation releases only the spawn lease, not compiler authority.
+
+The fresh service-owned V3 key transfer adds no production unsafe site. Its
+isolated receiver test adds two scalar libc blocks to drop real/effective/saved
+GID then UID before exercising the unchanged receiver admission. The test requires
+an exact single-test invocation in a disposable process with CHOWN/SETGID/SETUID;
+it is not a shared-process credential API. The root template remains unchanged,
+and a separate read-only sealed image is assigned the deployment's credentials.
 
 ## Initial Reduction
 

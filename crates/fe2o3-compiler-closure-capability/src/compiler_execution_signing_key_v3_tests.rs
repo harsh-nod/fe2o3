@@ -9,7 +9,7 @@ use std::{error::Error as _, os::fd::AsRawFd, panic::AssertUnwindSafe};
 
 type Cap = CompilerExecutionSigningKeyCapabilityV3;
 
-fn policy(generation: u64, budget: &mut Budget<'_>) -> Policy {
+pub(super) fn policy(generation: u64, budget: &mut Budget<'_>) -> Policy {
     let (policy, storage) = Policy::new(
         generation,
         Measurement::new([11; 32], 123).unwrap(),
@@ -25,7 +25,7 @@ fn policy(generation: u64, budget: &mut Budget<'_>) -> Policy {
     policy
 }
 
-fn key(policy: &Policy, budget: &mut Budget<'_>) -> Cap {
+pub(super) fn key(policy: &Policy, budget: &mut Budget<'_>) -> Cap {
     let mut seed = [7; KEY_BYTES];
     budget.reserve_storage(KEY_BYTES).unwrap();
     let (cap, storage) = Cap::create_and_zeroize(&mut seed, policy, budget).unwrap();

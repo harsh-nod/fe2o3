@@ -1,4 +1,30 @@
 // One consuming native lifecycle; each module supplies genuine family types.
+use fe2o3_protected_service_spawn::launch_io::{
+    ExactPipeFrame, PIPE_ATTEMPT_SCRATCH, PipeFrameError,
+};
+use std::os::fd::AsFd;
+
+fn read_readiness(
+    frame: &mut ExactPipeFrame<READY_BYTES>,
+    reader: &OwnedFd,
+) -> Result<Option<[u8; READY_BYTES]>> {
+    frame
+        .read_fd_nonblocking(reader.as_fd())
+        .map_err(|error| match error {
+            PipeFrameError::Truncated => Error::State("native readiness is truncated"),
+            PipeFrameError::Trailing => Error::State("native readiness has trailing bytes"),
+            PipeFrameError::Io { source: errno, eof } => Error::Io {
+                operation: if eof {
+                    "read native readiness EOF"
+                } else {
+                    "read native readiness"
+                },
+                errno,
+            },
+            PipeFrameError::Finished => Error::State("native readiness frame already consumed"),
+        })
+}
+
 /// Fixed outer work for pipes, staging, parent descriptor closure, transfer and Drop.
 /// Native observations, child execution and finite waits charge additional work.
 const LAUNCH_WORK: usize = ENTRY + 128 * 1024;
@@ -12,6 +38,7 @@ const LAUNCH_SCRATCH: usize = 8 * size_of::<Session<'static, 'static>>()
     + 16 * size_of::<OwnedFd>()
     + 8192;
 const SESSION_SCRATCH: usize = 4 * size_of::<Session<'static, 'static>>() + 4 * READY_BYTES + 4096;
+const READINESS_SCRATCH: usize = SESSION_SCRATCH + PIPE_ATTEMPT_SCRATCH;
 const OWNER_GROWTH: usize = size_of::<Session<'static, 'static>>();
 
 struct Core<'s> {
@@ -128,7 +155,7 @@ impl<'a, 'work> Launched<'a, 'work> {
             floor,
             ENTRY,
             limits.work(),
-            SESSION_SCRATCH,
+            READINESS_SCRATCH,
             |b| {
                 let deadline = limits.deadline()?;
                 core.supervisor.revalidate(b)?;
@@ -138,34 +165,10 @@ impl<'a, 'work> Launched<'a, 'work> {
                     .readiness_reader
                     .as_ref()
                     .ok_or(Error::State("private readiness reader is absent"))?;
-                let mut bytes = [0; READY_BYTES];
-                let mut used = 0;
-                attempts(limits, deadline, Boundary::Readiness, || {
+                let mut frame = ExactPipeFrame::default();
+                let bytes = attempts(limits, deadline, Boundary::Readiness, || {
                     live(&core.process, Boundary::Readiness)?;
-                    if used == bytes.len() {
-                        let mut trailing = [0];
-                        return match rustix::io::read(reader, &mut trailing) {
-                            Ok(0) => Ok(Some(())),
-                            Ok(_) => Err(Error::State("native readiness has trailing bytes")),
-                            Err(Errno::AGAIN | Errno::INTR) => Ok(None),
-                            Err(errno) => Err(Error::Io {
-                                operation: "read native readiness EOF",
-                                errno,
-                            }),
-                        };
-                    }
-                    match rustix::io::read(reader, &mut bytes[used..]) {
-                        Ok(0) => Err(Error::State("native readiness is truncated")),
-                        Ok(count) => {
-                            used += count;
-                            Ok(None)
-                        }
-                        Err(Errno::AGAIN | Errno::INTR) => Ok(None),
-                        Err(errno) => Err(Error::Io {
-                            operation: "read native readiness",
-                            errno,
-                        }),
-                    }
+                    read_readiness(&mut frame, reader)
                 })?;
                 let (readiness, growth) = Readiness::decode(&bytes, b)?;
                 b.reserve_storage(growth.additional_storage())?;

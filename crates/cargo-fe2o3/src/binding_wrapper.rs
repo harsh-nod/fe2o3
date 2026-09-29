@@ -698,6 +698,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             inert_rustc_invocation,
             rustc_invocation_capability,
             Some(stdio),
+            pinned_execution_directory,
         )
         .map_err(|error| BindingWrapperError::ChildCapability(error.to_string()))?;
         let mut child = match command.spawn() {

@@ -3,6 +3,8 @@ use crate::native::CompilerExecutionPreparationErrorV2 as Preparation;
 use fe2o3_compiler_closure_capability::CompilerExecutionCapabilityErrorV2 as Capability;
 use fe2o3_compiler_execution_lifecycle::LifecycleLeaseErrorV2 as Lifecycle;
 use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionServiceLaunchManifestErrorV3 as ManifestV3,
+    CompilerExecutionServiceReadyErrorV3 as ServiceReadyV3,
     CompilerExecutionSupervisorReadyErrorV2 as ReadyV2,
     CompilerExecutionSupervisorReadyErrorV3 as ReadyV3,
 };
@@ -60,6 +62,10 @@ pub enum CompilerExecutionLaunchErrorV2 {
     ReadyV2(ReadyV2),
     /// Native V3 readiness framing or context refused.
     ReadyV3(ReadyV3),
+    /// Private native V3 issuer launch manifest refused.
+    ManifestV3(ManifestV3),
+    /// Private native V3 issuer readiness framing refused.
+    ServiceReadyV3(ServiceReadyV3),
     /// Finite shared readiness transport refused.
     Transport(launch_io::Failure),
     /// Fixed contextual or lifecycle mismatch.
@@ -102,7 +108,8 @@ macro_rules! errors {
 errors!(Resource => Resource, Preparation => Preparation, Capability => Capability,
     Lifecycle => Lifecycle, Inputs => ServiceInputs, Anchor => Anchor, Image => Executable,
     Spawn => Spawn, Cleanup => Cleanup, Retained => Retained, Profile => Profile,
-    observations::Error => Observation, ReadyV2 => ReadyV2, ReadyV3 => ReadyV3);
+    observations::Error => Observation, ReadyV2 => ReadyV2, ReadyV3 => ReadyV3,
+    ManifestV3 => ManifestV3, ServiceReadyV3 => ServiceReadyV3);
 
 impl From<launch_io::Failure> for Failure {
     fn from(error: launch_io::Failure) -> Self {

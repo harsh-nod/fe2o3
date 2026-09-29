@@ -116,6 +116,10 @@ crate::compiler_execution_signing_key_native::signing_key_capability!(
     Error::from
 );
 
+#[path = "compiler_execution_signing_key_service_transfer_v3.rs"]
+mod service_transfer;
+pub use service_transfer::CompilerExecutionSigningKeyServiceTransferV3;
+
 #[cfg(test)]
 #[path = "compiler_execution_signing_key_v3_tests.rs"]
 mod tests;

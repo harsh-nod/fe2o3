@@ -4,7 +4,10 @@ use super::child::{RootTaskTraceEventV2, RootTaskTraceV2};
 use super::{
     ProtectedServiceSpawnStorageV2 as Storage, Result, RootOwnedProtectedServiceChildV2 as Child,
 };
-use crate::{RetainedResourcesV2 as Resources, process_cleanup::CleanupPollV1};
+use crate::{
+    RetainedDependencyQuotaV2, RetainedDependencyV2, RetainedResourcesV2 as Resources,
+    process_cleanup::CleanupPollV1,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
@@ -131,6 +134,38 @@ impl<T: Send + 'static> RootRetainedTaskTraceV2<'_, T> {
     /// Complete original backing and trace charge, including overlap with the pool.
     pub fn retained_storage(&self) -> usize {
         self.trace.retained_storage()
+    }
+
+    /// Complete fixed work and extra scratch for retain_dependencies, including
+    /// full output overlap. Inspects no descriptor, Budget, payload or authority.
+    /// Persistent cleanup must separately fund a payload containing that output.
+    pub fn dependency_quota(&self) -> Result<RetainedDependencyQuotaV2> {
+        let mut quota = self.resources.dependency_quota()?;
+        quota.work = quota
+            .work
+            .checked_add(super::ENTRY)
+            .ok_or(Resource::Arithmetic)?;
+        Ok(quota)
+    }
+
+    /// Retains only this trace's original backing for another cleanup payload.
+    /// Checks the ORIGINAL budget identity/address and complete trace floor,
+    /// then prepays fixed refcount/retirement work and full output overlap.
+    /// The returned Send + 'static handle reports its FULL UNRESERVED charge;
+    /// preserve the source reservation separately and reserve the new charge
+    /// before keeping it or transferring it to the issuer's funded cleanup slot.
+    /// No lock, new payload, T clone, wait, pidfd or descriptor access occurs.
+    pub fn retain_dependencies(&self, b: &mut Budget<'_>) -> Result<RetainedDependencyV2<T>> {
+        b.with_prepaid_scope(
+            self.retained_storage(),
+            super::ENTRY,
+            super::ENTRY,
+            0,
+            |b| {
+                self.trace.check_budget(b)?;
+                Ok(self.resources.retain_dependency(b)?)
+            },
+        )
     }
 
     /// Exact root identity, not separate signal or wait authority.

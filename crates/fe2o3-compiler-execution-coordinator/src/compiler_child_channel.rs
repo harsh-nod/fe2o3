@@ -9,7 +9,7 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_protected_service_profile::ProtectedServiceCredentialProfileV1 as Credentials;
 use fe2o3_protected_service_spawn::{
-    compiler_service_channel::{TRANSFER_BYTES, transfer_matches},
+    compiler_service_channel::{TRANSFER_BYTES, encode_transfer, transfer_matches},
     launch_io::{self, MessageSender},
     native_spawn::RootOwnedRetainedServiceChildV2 as Child,
 };
@@ -31,7 +31,7 @@ const FRAME: usize = launch_io::ATTEMPT_SCRATCH
 /// Inert descriptors joined to the original clone-owned child, not launch authority.
 /// The caller retains the actual child/backing and sole wait ownership separately.
 /// No constructor accepts a numeric PID, caller-created pidfd or public handoff.
-pub(crate) struct CompilerChildChannel {
+struct CompilerChildChannel {
     service_peer: OwnedFd,
     client_pidfd: OwnedFd,
     client: Identity,
@@ -49,7 +49,7 @@ impl CompilerChildChannel {
     /// charge only after this call and reserve the result before retaining it.
     /// Work/deadline/shape failures close every received descriptor; the caller
     /// remains responsible for cancelling the same child in its original pool.
-    pub(crate) fn receive<T: Send + 'static>(
+    fn receive<T: Send + 'static>(
         child: &Child<T>,
         receiver: OwnedFd,
         credentials: Credentials,
@@ -115,7 +115,20 @@ impl CompilerChildChannel {
             ))
         })
     }
+
+    /// Rechecks the original escrow, not a caller-supplied replacement endpoint.
+    fn revalidate(&self) -> Result<()> {
+        let parent = native::pid_u32(rustix::process::getpid())?;
+        let bytes = encode_transfer(self.client.pid(), parent)
+            .ok_or(Error::Invalid("invalid compiler channel identities"))?;
+        validate_transfer(&bytes, self.service_peer.as_fd(), self.client, parent)?;
+        require_idle(self.client_pidfd.as_fd())
+    }
 }
+
+#[path = "compiler_channel_trace.rs"]
+mod trace;
+pub(crate) use trace::CompilerTrace;
 
 fn require_live<T: Send + 'static>(child: &Child<T>, b: &mut Budget<'_>) -> Result<()> {
     if !child.is_live(b)? {

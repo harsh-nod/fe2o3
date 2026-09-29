@@ -5,12 +5,25 @@ use crate::inert_rustc_invocation_capture::{
 };
 use fe2o3_compiler_closure_capability::RustcInvocationCapabilityV1;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+use fe2o3_process_identity::PinnedWorkingDirectoryV3;
 use std::{ffi::OsString, path::Path, process::Command};
 
 const LIMIT: usize = 4_000_000;
 const WORK: usize = 30_000_000;
 
 fn parent(mutation: usize) -> ParentRustcInvocationCustody {
+    parent_with_directory(
+        mutation,
+        PinnedWorkingDirectoryV3::open(Path::new("/")).unwrap(),
+        Path::new(if mutation == 4 {
+            "/other"
+        } else {
+            "/workspace"
+        }),
+    )
+}
+
+fn capture_v2(mutation: usize, path: &Path) -> InertRustcInvocationCaptureV2 {
     let mut command = Command::new("/proc/self/fd/9");
     command.args([
         "--crate-name",
@@ -38,19 +51,23 @@ fn parent(mutation: usize) -> ParentRustcInvocationCustody {
         ("FE2O3_VERIFY_KERNEL_IR", "1"),
     ]
     .map(|(k, v)| (OsString::from(k), OsString::from(v)));
-    let capture = InertRustcInvocationCaptureV2::capture(
+    InertRustcInvocationCaptureV2::capture(
         &command,
         Path::new("/toolchains/rustc").as_os_str(),
-        Path::new(if mutation == 4 {
-            "/other"
-        } else {
-            "/workspace"
-        }),
+        path,
         &environment,
         [4; 32],
         [6; 32],
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn parent_with_directory(
+    mutation: usize,
+    directory: PinnedWorkingDirectoryV3,
+    path: &Path,
+) -> ParentRustcInvocationCustody {
+    let capture = capture_v2(mutation, path);
     let closure = CompilerClosureV2::new(
         [if mutation == 5 { 9 } else { 1 }; 32],
         [2; 32],
@@ -66,10 +83,14 @@ fn parent(mutation: usize) -> ParentRustcInvocationCustody {
         Some(InertPreparedRustcInvocationCapture::V3(Box::new(capture))),
         Some(capability),
         None,
+        directory,
     )
     .unwrap()
     .unwrap()
 }
+
+#[path = "protected_compiler_handoff_directory_tests.rs"]
+mod directory;
 
 #[test]
 fn native_parent_requires_exact_capture_seal_and_observed_invocation() {

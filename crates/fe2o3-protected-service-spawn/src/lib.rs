@@ -17,7 +17,10 @@ pub mod native_spawn;
 /// Shared inert compiler channel wire codec; no process or endpoint authority.
 pub use native_spawn::compiler_child_channel as compiler_service_channel;
 mod retained_resources;
-pub use retained_resources::{RetainedResourceAccessErrorV2, RetainedResourcesV2};
+pub use retained_resources::{
+    RetainedDependencyQuotaV2, RetainedDependencyV2, RetainedResourceAccessErrorV2,
+    RetainedResourcesV2,
+};
 mod native_cgroup;
 #[allow(unsafe_code)]
 mod native_user_namespace;
