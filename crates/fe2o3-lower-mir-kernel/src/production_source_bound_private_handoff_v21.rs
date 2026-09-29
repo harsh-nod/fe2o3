@@ -210,7 +210,7 @@ impl ProductionBoundPrivateOutputHandoffV21<'_, '_> {
 struct PrivateFormalReasonCursorV21<'view, 'report, 'owner> {
     report: &'view fe2o3_kernel_ir::CanonicalFormalReportViewV19<'report, 'owner>,
     next: usize,
-    previous: Option<fe2o3_kernel_ir::FunctionOperationLocation>,
+    previous: Option<usize>,
     refused: bool,
 }
 impl<'view, 'report, 'owner> PrivateFormalReasonCursorV21<'view, 'report, 'owner> {
@@ -242,29 +242,34 @@ impl<'view, 'report, 'owner> PrivateFormalReasonCursorV21<'view, 'report, 'owner
         }
         // A failed occurrence cannot later be replaced by a successful retry.
         self.refused = true;
-        budget.charge_work(4)?;
+        budget.charge_work(10)?;
         if ordinal != self.next {
             return Err(Error::Roster);
         }
-        let Some(fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedMemoryEffect {
-            location,
-        }) = self.report.analysis().incomplete_reasons().get(ordinal)
-        else {
+        let reasons = self.report.analysis().incomplete_reasons();
+        let Some(reason) = reasons.get(ordinal) else {
             return Err(Error::Reason(ordinal));
         };
+        if !matches!(
+            reason,
+            fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }
+                | fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedPointerDerivation { .. }
+        ) {
+            return Err(Error::Reason(ordinal));
+        }
         native
             .check_formal_reason_v21(self.report, ordinal, budget)
             .map_err(|error| Error::Coverage { ordinal, error })?;
-        // The paid report sorts/deduplicates reasons by their derived Ord;
-        // within this one variant that is original block ID, then operation.
-        if self.previous.is_some_and(|old| old >= *location) {
+        // The unchanged report orders variants before original locations.
+        // One operation may need both its effect and pointer-use proof.
+        if self.previous.is_some_and(|old| reasons[old] >= *reason) {
             return Err(Error::Roster);
         }
         self.next = self
             .next
             .checked_add(1)
             .ok_or(ArgumentResourceV1::Arithmetic)?;
-        self.previous = Some(*location);
+        self.previous = Some(ordinal);
         self.refused = false;
         Ok(())
     }

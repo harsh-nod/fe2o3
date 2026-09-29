@@ -1,7 +1,7 @@
 //! Independent V857 source arithmetic. Never call a production preflight here.
 use super::Phase;
 
-pub(super) const PROFILE: &str = "V851_PLUS_NATIVE_V854_RESOLVED_LAUNCH_RANK1";
+pub(super) const PROFILE: &str = "V851_PLUS_NATIVE_V854_RESOLVED_LAUNCH_RANK1_GRAPH_FIRST";
 pub(super) const WORK_RESOURCE: &str = "work upper bound";
 pub(super) const PEAK_RESOURCE: &str = "peak storage upper bound";
 pub(super) const N: usize = 1 << 20;
@@ -150,8 +150,8 @@ pub(super) struct Oracle {
     pub stages: Vec<Stage>,
     pub before_finish: Triple,
     pub complete: Triple,
-    pub native_work: usize,
-    pub native_temporary: usize,
+    pub before_progress_graph: Triple,
+    pub progress_graph: Triple,
     pub progress: Triple,
     pub finish: Triple,
     pub cache_release: usize,
@@ -240,22 +240,23 @@ impl Oracle {
             4 * 256 + i + 4096,
             120 * b + 11 * e + 6 * o + 1024 * b + 96 + 4 * 1024 + 2 * 4096,
         );
-        let q = e * (2 + b * e);
-        let scalar_calls = 8 * (b + e) + e + 8 * q + e * q;
-        let clone_cost = 552 + 32;
-        let native_work = mul(scalar_calls, clone_cost);
-        let native_temporary = 192 + 128_usize.div_ceil(64);
-        let progress = Triple::new(
-            4 * 15
-                + 47
-                + 30
-                + 42
-                + q * (8 + 24 * e + 11 * a)
-                + e * (e + 1) * (48 + a * (16 + 4))
-                + native_work,
-            (b + e) * (1024 + 16) + 128 * e + b,
-            2 * 15 + 14 * b + 8 * e + (15 + b * b + a) + 3 + (3 + 4 * a) + 14 + native_temporary,
+        // The census lacks a region count, so preparation pays all4096 regions.
+        // Results1/attrs3/blockargs0 are the independently checked fixture.
+        let structure = sum(&[4096, b, o, a, 1, 3, 0, e]);
+        let probes = |n| 64 + 32 * (4 * n + 20);
+        let progress_graph = Triple::new(
+            64 + 16 * structure
+                + 64 * (b + e)
+                + b * b
+                + 3 * o * probes(o)
+                + (3 * b + e) * probes(b),
+            64 + 1024 + 48 * b + 12 * e + 8 * o,
+            64 + 1024 + 16 * b + 4 * e + 8 * o + 2 * structure,
         );
+        // The genuine two-block source is acyclic; only the fixed diagnostic
+        // continuation remains. This does not replace the cyclic-case bound.
+        let diagnostic = 1024 + 32;
+        let progress = Triple::new(2 * diagnostic, diagnostic, diagnostic + 16);
         let semantic = Triple::new(2 * o + progress.w, progress.r, progress.p - progress.r);
         // Six empty findings-only reports; private Vec capacities stay a premise.
         let validation = Triple::new(49 + 2080, 1 + 2048, 1 + 1024);
@@ -328,6 +329,10 @@ impl Oracle {
             0,
         );
         current = current.then(Triple::new(1, 1, 0));
+        // Pure pipeline admission runs first but commits no work or storage.
+        // The paid graph remains live through all later stages and cache drop.
+        let before_progress_graph = current;
+        current = current.then(progress_graph);
         push_stage(
             &mut stages,
             &mut current,
@@ -381,7 +386,16 @@ impl Oracle {
         let before_finish = current;
         let finish = Triple::new(k + 9 + 4, k + 9 + 2, h);
         current = current.replace(h, finish);
-        let cache_release = sum(&[sparse.r, presburger.r, 10, trace.r, 3, 1, 1024]);
+        let cache_release = sum(&[
+            sparse.r,
+            presburger.r,
+            10,
+            trace.r,
+            3,
+            1,
+            1024,
+            progress_graph.r,
+        ]);
         let complete = current.replace(cache_release, Triple::ZERO);
         Self {
             identity,
@@ -393,8 +407,8 @@ impl Oracle {
             stages,
             before_finish,
             complete,
-            native_work,
-            native_temporary,
+            before_progress_graph,
+            progress_graph,
             progress,
             finish,
             cache_release,
@@ -487,8 +501,14 @@ impl Oracle {
             Cut {
                 name: "pipeline prerequisite",
                 phase: Phase::PipelineProtocol,
-                limit: barrier.before.w + 13 - 1,
-                accepted: barrier.before,
+                limit: self.before_progress_graph.w + 13 - 1,
+                accepted: self.before_progress_graph,
+            },
+            Cut {
+                name: "progress graph preparation",
+                phase: Phase::Progress,
+                limit: self.before_progress_graph.w + self.progress_graph.w - 1,
+                accepted: self.before_progress_graph,
             },
             Cut {
                 name: "barrier local",

@@ -377,15 +377,12 @@ impl SemanticFunctionLoweringV1<'_, '_> {
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         Ok({
             self.require_call_argument_count(block, call, 3)?;
-            let leader = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-            if !matches!(leader, SemanticValueBindingV1::GridLeader { .. }) {
-                return Err(unsupported(
-                    0,
-                    Some(block.index()),
-                    None,
-                    "exclusive access lacks grid-leader authority",
-                ));
-            }
+            self.lower_grid_leader_argument_v29(
+                block,
+                call,
+                operations,
+                "exclusive access lacks grid-leader authority",
+            )?;
             let index = self.lower_operand(block, None, &call.arguments()[2], operations)?;
             let index = self.coerce_index(block, operations, index)?;
             self.lower_checked_slice_access(block, call, operations, 0, index, None)?

@@ -13,18 +13,26 @@ fn program(body: &str) -> String {
     format!(
         r#"use fe2o3_device::kernel;
 #[inline(never)]
-fn private_chain(seed: u32) {{
-    let reference = &seed;
-    let loaded = *reference;
-    let zero = 0_u32;
-    let first = zero + 0;
-    let second = first + 0;
-    let _last = loaded + second;
+fn observe(value: &u32) {{
+    let _observed = *value;
+}}
+#[inline(never)]
+fn private_chain(mut seed: u32) {{
+    observe(&seed);
+    let loaded = seed;
+    let first = loaded ^ 0;
+    observe(&seed);
+    let second = first ^ 0;
+    observe(&seed);
+    let third = second ^ 0;
+    seed = third;
+    observe(&seed);
 }}
 #[inline(never)]
 fn private_plain(seed: u32) {{
-    let reference = &seed;
-    let _loaded = *reference;
+    let second = seed;
+    observe(&seed);
+    observe(&second);
 }}
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [3, 1, 1]))]
 pub fn worklist_first(seed: u32, _word: usize) {{ {body} }}
@@ -406,13 +414,19 @@ fn actual_original_bound_worklist_preserves_private_memory_and_rewrites_cross_bl
 
 #[test]
 fn bound_worklist_actual_fixture_keeps_private_borrows_checked_chain_and_distinct_geometry() {
+    // Retain the historical parent identity. The chain is checked against both
+    // actual owners; its arithmetic is total XOR, not checked-add tuple syntax.
     let source = program("private_chain(seed);");
     assert_eq!(source.matches("#[kernel(typed,").count(), 2);
     assert_eq!(source.matches("_word: usize").count(), 2);
-    assert_eq!(source.matches("let reference = &seed;").count(), 2);
-    assert!(source.contains("let first = zero + 0;"));
-    assert!(source.contains("let second = first + 0;"));
-    assert!(source.contains("let _last = loaded + second;"));
+    assert!(source.contains("fn observe(value: &u32)"));
+    assert_eq!(source.matches("observe(&seed);").count(), 5);
+    assert!(source.contains("observe(&second);"));
+    assert!(
+        source
+            .contains("let first = loaded ^ 0;\n    observe(&seed);\n    let second = first ^ 0;\n    observe(&seed);\n    let third = second ^ 0;\n    seed = third;")
+    );
+    assert!(source.contains("seed = second;\n    observe(&seed);"));
     assert!(source.contains("max_grid = [3, 1, 1]"));
     assert!(source.contains("max_grid = [5, 1, 1]"));
     assert!(!source.contains("unsafe"));

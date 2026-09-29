@@ -250,12 +250,14 @@ fn memory(
         rows,
         objects,
         object_components,
+        zero_objects,
     } = a;
     ledger(subject.ledger, b.subject.ledger, budget)?;
     Ok(
         fixed((*subject, *placement), (b.subject, b.placement), budget)?
             && fixed_rows(rows, &b.rows, budget)?
             && fixed_rows(objects, &b.objects, budget)?
+            && fixed_rows(zero_objects, &b.zero_objects, budget)?
             && fixed_rows(object_components, &b.object_components, budget)?,
     )
 }

@@ -511,6 +511,7 @@ struct ScopedMemoryAnchorsV29 {
     rows: Vec<ScopedMemoryAnchorV29>,
     objects: Vec<ScopedObjectPayloadV29>,
     object_components: Vec<ScopedObjectComponentV29>,
+    zero_objects: Vec<ScopedZeroObjectV29>,
 }
 
 impl ScopedMemoryAnchorsV29 {
@@ -527,6 +528,10 @@ impl ScopedMemoryAnchorsV29 {
             argument_product_v1(
                 self.object_components.capacity(),
                 std::mem::size_of::<ScopedObjectComponentV29>(),
+            )?,
+            argument_product_v1(
+                self.zero_objects.capacity(),
+                std::mem::size_of::<ScopedZeroObjectV29>(),
             )?,
         ])?)
     }
@@ -553,6 +558,7 @@ impl ScopedMemoryRecorderV29 {
                 rows: Vec::new(),
                 objects: Vec::new(),
                 object_components: Vec::new(),
+                zero_objects: Vec::new(),
             },
             block: None,
             frame: None,

@@ -39,12 +39,79 @@ fn memory_census_v21(owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18
 }
 
 #[test]
+fn bound_private_pointer_reason_role_is_exact_not_a_general_escape_discharge() {
+    use fe2o3_kernel_ir::{AddressSpace, MemoryAccess, StorageOperationV1, StorageProjectionV1};
+    let access = MemoryAccess::new(AddressSpace::Private, 4);
+    let mut volatile = access;
+    volatile.volatile = true;
+    let read = |address, access| {
+        OperationKind::Storage(StorageOperationV1::ReadValue {
+            address: ValueId(address),
+            access,
+        })
+    };
+    let write = |address, value, access| {
+        OperationKind::Storage(StorageOperationV1::WriteValue {
+            address: ValueId(address),
+            value: ValueId(value),
+            access,
+        })
+    };
+    assert_eq!(
+        private_formal_storage_pointer_v21(&read(3, access), &read(7, access), ValueId(3)),
+        Some(ValueId(7))
+    );
+    assert_eq!(
+        private_formal_storage_pointer_v21(&write(3, 4, access), &write(7, 8, access), ValueId(3)),
+        Some(ValueId(7))
+    );
+    for (before, after, pointer) in [
+        (read(3, access), read(7, access), ValueId(4)),
+        (write(3, 4, access), write(7, 8, access), ValueId(4)),
+        (read(3, access), write(7, 8, access), ValueId(3)),
+        (write(3, 4, access), read(7, access), ValueId(3)),
+        (
+            read(3, access),
+            read(7, MemoryAccess::new(AddressSpace::Private, 8)),
+            ValueId(3),
+        ),
+        (
+            read(3, MemoryAccess::new(AddressSpace::Global, 4)),
+            read(7, MemoryAccess::new(AddressSpace::Global, 4)),
+            ValueId(3),
+        ),
+        (
+            OperationKind::Storage(StorageOperationV1::Project {
+                base: ValueId(3),
+                step: StorageProjectionV1::Field(0),
+            }),
+            read(7, access),
+            ValueId(3),
+        ),
+        (
+            OperationKind::Load {
+                pointer: ValueId(3),
+                access,
+            },
+            read(7, access),
+            ValueId(3),
+        ),
+        (read(3, volatile), read(7, volatile), ValueId(3)),
+    ] {
+        assert_eq!(
+            private_formal_storage_pointer_v21(&before, &after, pointer),
+            None
+        );
+    }
+}
+
+#[test]
 fn bound_private_handoff_keeps_actual_nonempty_load_store_owners_and_final_boundary() {
     for factory in [
         private_entry_forward_owner_v20 as fn() -> _,
         private_entry_constant_owner_v20,
         private_entry_captured_owner_v20,
-        typed_root_entry_rhs_owner_v18,
+        private_entry_root_owner_v20,
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
@@ -256,6 +323,11 @@ fn bound_private_resource_cause_v21(
         {
             return Some(*resource);
         }
+        if let Some(fe2o3_kernel_ir::CanonicalFormalReportErrorV19::Resource(resource)) =
+            error.downcast_ref::<fe2o3_kernel_ir::CanonicalFormalReportErrorV19>()
+        {
+            return Some(optimized_source_formal_resource_v18(*resource));
+        }
         current = error.source();
     }
     None
@@ -310,7 +382,7 @@ fn bound_private_handoff_header_failure_is_first_and_retry_spends_nothing() {
 
 #[test]
 fn bound_private_live_reason_cursor_rejects_duplicate_skipped_missing_and_wrong_site_coverage() {
-    for mode in 0..4 {
+    for mode in 0..5 {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
         let headers = private_source_completion_headers_v20().unwrap()
@@ -341,10 +413,23 @@ fn bound_private_live_reason_cursor_rejects_duplicate_skipped_missing_and_wrong_
                         assert!(functions > 0);
                         assert!(native.report(functions, budget)?.is_none());
                         assert!(native.history(functions, budget)?.is_none());
-                        let result = original.with_optimized_formal_reports_v19(optimized, &launches, fe2o3_kernel_ir::FormalIndexWidth::Bits64, fe2o3_kernel_ir::ControlFlowLimits::DEFAULT, budget, |before, _, budget| {
+                        let result = original.with_optimized_formal_reports_v19(optimized, &launches, fe2o3_kernel_ir::FormalIndexWidth::Bits64, fe2o3_kernel_ir::ControlFlowLimits::DEFAULT, budget, |before, after, budget| {
                     let count = before.analysis().incomplete_reasons().len();
-                    assert!(count > 1, "genuine typed memory produces distinct exact occurrences");
+                    assert_eq!(count, 3, "two typed accesses plus their conservative private-pointer reason: {:?}", before.analysis().incomplete_reasons());
+                    assert!(matches!(before.analysis().incomplete_reasons()[0], fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }));
+                    assert!(matches!(before.analysis().incomplete_reasons()[1], fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }));
+                    assert!(matches!(before.analysis().incomplete_reasons()[2], fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedPointerDerivation { .. }));
                     let mut cursor = PrivateFormalReasonCursorV21::new(native, before, budget)?;
+                    if mode == 4 {
+                        for ordinal in 0..count { cursor.check_next(native, ordinal, budget)?; }
+                        cursor.finish(native, budget)?;
+                        // The output owner has an independent invariant lifetime.
+                        let mut output_cursor = PrivateFormalReasonCursorV21::new(native, after, budget)?;
+                        for ordinal in 0..after.analysis().incomplete_reasons().len() { output_cursor.check_next(native, ordinal, budget)?; }
+                        output_cursor.finish(native, budget)?;
+                        completed.set(Some(count));
+                        return Ok(());
+                    }
                     let error = match mode {
                         0 => { cursor.check_next(native, 0, budget)?; let error = cursor.check_next(native, 0, budget).unwrap_err(); assert!(matches!(cursor.check_next(native, 1, budget), Err(ProductionBoundPrivateResidualV21::Roster))); assert!(matches!(cursor.finish(native, budget), Err(ProductionBoundPrivateResidualV21::Roster))); error },
                         1 => { let error = cursor.check_next(native, 1, budget).unwrap_err(); assert!(matches!(cursor.check_next(native, 0, budget), Err(ProductionBoundPrivateResidualV21::Roster))); error },
@@ -359,12 +444,15 @@ fn bound_private_live_reason_cursor_rejects_duplicate_skipped_missing_and_wrong_
                     completed.set(Some(count));
                     Err::<(), _>(error)
                 });
-                        assert!(result.is_err());
+                        assert_eq!(result.is_ok(), mode == 4, "{result:?}");
                         settled.set(true);
                         Ok(())
                     };
-                let _ =
+                let private =
                     with_private_source_completion_v21(original, optimized, budget, &mut consume);
+                if mode == 4 {
+                    assert!(private.is_ok(), "{private:?}");
+                }
                 Err::<(), _>(ProductionSourceOwnedViewErrorV18::Binding(
                     "selected private reason control complete",
                 ))
@@ -382,7 +470,7 @@ fn private_handoff_cut_v21(cut: Option<(bool, usize)>) -> (usize, usize, bool) {
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
     let (prepared, fixture) =
-        integer_handoff_prepared_v18(typed_root_entry_rhs_owner_v18, &mut budget);
+        integer_handoff_prepared_v18(private_entry_root_owner_v20, &mut budget);
     let roots = fixture.roots();
     let completed = std::cell::Cell::new(None);
     let result = prepared.with_source_consumer_v18(&mut budget, |source, budget| {
@@ -474,7 +562,7 @@ fn bound_private_reason_attempt_header_one_short_latches_before_inner_work_and_r
                                budget: &mut ArgumentBudgetV1<'_>| {
                 let result = original.with_optimized_formal_reports_v19(optimized, &launches, fe2o3_kernel_ir::FormalIndexWidth::Bits64, fe2o3_kernel_ir::ControlFlowLimits::DEFAULT, budget, |before, _, budget| {
                 assert!(!before.analysis().incomplete_reasons().is_empty());
-                native.check_formal_reason_v21(before, 0, budget)?;
+                native.check_formal_reason_v21(before, 0, budget).unwrap_or_else(|error| panic!("positive reason query failed before header cut: {error:?}; reasons={:?}", before.analysis().incomplete_reasons()));
                 let floor = budget.storage();
                 let header = scoped_source_attempt_header_oracle_v29::<(), ProductionSourceNativeLifecycleErrorV18, [usize; 5]>();
                 let padding = MODULE_LIMIT - floor - header + 1;
@@ -491,12 +579,20 @@ fn bound_private_reason_attempt_header_one_short_latches_before_inner_work_and_r
                 completed.set(true);
                 Err::<(), _>(error)
             });
-                assert!(matches!(
-                    result,
-                    Err(ProductionOptimizedSourceReportsErrorV19::Source(
-                        ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(_))
-                    ))
-                ));
+                // Report settlement independently observes the same denied
+                // ledger, so its exact Formal error precedes ConsumerRejected.
+                assert!(
+                    matches!(
+                        &result,
+                        Err(ProductionOptimizedSourceReportsErrorV19::Formal {
+                            error: fe2o3_kernel_ir::CanonicalFormalReportErrorV19::Resource(
+                                fe2o3_kernel_ir::FormalGuardedMemoryResourceErrorV1::Storage { actual, limit }),
+                            source_refusal: ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(first)),
+                        }) if *actual == MODULE_LIMIT + 1 && *limit == MODULE_LIMIT
+                            && first.actual() == *actual && first.limit() == *limit
+                    ),
+                    "{result:?}"
+                );
                 settled.set(true);
                 Ok(())
             };
@@ -786,7 +882,19 @@ fn bound_private_external_rows_remain_required_even_when_every_conflict_path_is_
                     (true, ProductionBoundPrivateObligationV21::Conflict)
                 );
                 let original = report.analysis().obligations().inter_invocation_conflicts();
-                assert_eq!(original.len(), 3);
+                // Distinct formal allocations have a runtime alias obligation;
+                // each store separately has an inter-invocation self-conflict.
+                let accesses = report.analysis().obligations().accesses();
+                assert_eq!(accesses.len(), 2);
+                assert_eq!(original.len(), 2);
+                for (conflict, access) in original.iter().zip(accesses) {
+                    assert_eq!(conflict.left(), access.location());
+                    assert_eq!(conflict.right(), access.location());
+                    assert_eq!(conflict.allocation(), access.allocation());
+                }
+                let aliases = report.analysis().obligations().runtime_alias_requirements();
+                assert_eq!(aliases.len(), 1);
+                assert_ne!(aliases[0].left(), aliases[0].right());
                 let session =
                     with_presburger_queries_v4(Default::default(), budget, |queries, budget| {
                         let source = report.source_scope_v20(budget).unwrap();

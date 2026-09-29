@@ -119,6 +119,10 @@ fn private_source_completion_headers_v20() -> Result<usize, ArgumentResourceV1> 
         )>()?,
         h::<[usize; 16]>()?,
         h::<[u32; 8]>()?,
+        original_private_expression_headers_v22()?,
+        // The identity walk has fewer carriers than the existing constant
+        // folding frame, but is paid separately for its live caller frames.
+        source_scalar_constant_fold_headers_v18()?,
     ])
 }
 
@@ -130,16 +134,42 @@ fn complete_private_source_root_v20(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
     let root = request.root(budget)?;
-    original.with_optimized_source_scalar_leaves_v18(optimized, root, budget, |leaves, budget| {
-        leaves.with_checked_entry_writes_v18(
-            budget,
-            |entry, budget| {
-                let expression = index.expression(leaves, entry, budget)?;
-                entry.check_expression(&expression, budget)
-            },
-            |entries, budget| request.check_entry_writes(entries, budget),
-        )
-    })
+    original.with_optimized_scalar_leaf_namespace_v18(
+        optimized,
+        root,
+        &SourceScalarNamespaceV18::PrivateSourceWritesV22,
+        budget,
+        |leaves, budget| {
+            leaves.with_checked_write_profile_v22(
+                true,
+                budget,
+                |entry, budget| {
+                    let floor = budget.storage();
+                    scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
+                        let expression = if !entry.row.source_write {
+                            index.expression(leaves, entry, budget)?
+                        } else {
+                            index.source_write_expression_v22(leaves, entry, budget)?
+                        };
+                        entry.check_expression(&expression, budget)?;
+                        drop(expression);
+                        Ok::<(), ProductionSourceOwnedViewErrorV18>(())
+                    })?;
+                    original.retain_query(
+                        budget
+                            .release_storage(
+                                budget
+                                    .storage()
+                                    .checked_sub(floor)
+                                    .ok_or(ArgumentResourceV1::Accounting)?,
+                            )
+                            .map_err(Into::into),
+                    )
+                },
+                |entries, budget| request.check_entry_writes(entries, budget),
+            )
+        },
+    )
 }
 
 fn private_source_completion_v20(
@@ -268,7 +298,9 @@ impl<'source> ProductionSourceOwnedViewV18<'source> {
     ///
     /// Original entry expressions support exact scalar root inputs, constants,
     /// retained reads, and SSA Copy/Move/Use forwarding across helper instances.
-    /// Arithmetic, block arguments and other derivations are refused. Every
+    /// Later whole-scalar writes additionally support bounded SSA integer
+    /// arithmetic and exact typed read names. Entry forwarding still refuses
+    /// arithmetic, and all block arguments remain unsupported. Every
     /// root must complete the existing private proof without a caller override.
     ///
     /// The returned owner is deliberately still unqualified. These checks do

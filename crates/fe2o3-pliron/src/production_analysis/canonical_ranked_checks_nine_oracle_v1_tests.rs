@@ -310,6 +310,15 @@ fn independent_native_oracle_fixture_has_literal_authenticated_census() {
                             ..Census::default()
                         }
                     );
+                    assert_eq!(
+                        crate::production_analysis::pliron_progress::MAX_PLIRON_PROGRESS_REGIONS_V1,
+                        4096
+                    );
+                    let graph = crate::production_analysis::pliron_progress::preflight_progress_graph_resource_upper_bound_v2(
+                        session.input_census_v1(),
+                        Limits::production_hard_ceiling(),
+                    ).unwrap();
+                    assert_eq!(bound(graph), Oracle::derive().progress_graph);
                     drop(session);
                 })
                 .unwrap();
@@ -319,7 +328,10 @@ fn independent_native_oracle_fixture_has_literal_authenticated_census() {
 
 #[test]
 fn independent_native_oracle_arithmetic_is_pinned_to_one_profile() {
-    assert_eq!(PROFILE, "V851_PLUS_NATIVE_V854_RESOLVED_LAUNCH_RANK1");
+    assert_eq!(
+        PROFILE,
+        "V851_PLUS_NATIVE_V854_RESOLVED_LAUNCH_RANK1_GRAPH_FIRST"
+    );
     let o = Oracle::derive();
     assert_eq!(numbers::identity_text(), (515, 1113, 160));
     assert_eq!(
@@ -330,13 +342,20 @@ fn independent_native_oracle_arithmetic_is_pinned_to_one_profile() {
             p: 328696
         }
     );
-    assert_eq!((o.native_work, o.native_temporary), (61 * 584, 194));
+    assert_eq!(
+        o.progress_graph,
+        Triple {
+            w: 82484,
+            r: 1220,
+            p: 10582
+        }
+    );
     assert_eq!(
         o.progress,
         Triple {
-            w: 36111,
-            r: 3250,
-            p: 3554
+            w: 2112,
+            r: 1056,
+            p: 2128
         }
     );
     assert_eq!(
@@ -347,25 +366,25 @@ fn independent_native_oracle_arithmetic_is_pinned_to_one_profile() {
             p: 23614
         }
     );
-    assert_eq!(o.cache_release, 17826886);
+    assert_eq!(o.cache_release, 17828106);
     assert_eq!(
         o.complete,
         Triple {
-            w: 129828378,
-            r: 46622,
+            w: 129876863,
+            r: 44428,
             p: 19947359
         }
     );
     assert_eq!(
         o.module(2),
         Triple {
-            w: 259656756,
-            r: 93244,
-            p: 19993981
+            w: 259753726,
+            r: 88856,
+            p: 19991787
         }
     );
     assert_eq!(o.stage_work_cuts().len(), 27);
-    assert_eq!(o.extra_work_cuts().len(), 9);
+    assert_eq!(o.extra_work_cuts().len(), 10);
     assert_eq!(o.storage_cuts().len(), 11);
 }
 

@@ -14,6 +14,7 @@ struct SourcePrivateAllocationV18<'a> {
 enum SourcePrivateOperationKindV18 {
     Allocation,
     EntryWrite,
+    SourceWrite,
     Read { writer: usize },
 }
 
@@ -704,6 +705,60 @@ fn source_private_entry_destination_v18(
     Ok(())
 }
 
+fn source_private_write_destination_v22(
+    allocation: &SourcePrivateAllocationV18<'_>,
+    object: &OptimizedSourceObjectV18<'_>,
+    source_writes: bool,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<bool> {
+    if matches!(
+        object.original.source.role,
+        ScopedObjectRoleV29::WriteValue {
+            value: ScopedObjectValueOriginV29::Original(
+                ScopedMemoryStoreSourceV29::EntryArgument { .. }
+            ),
+            ..
+        }
+    ) || !source_writes
+    {
+        source_private_entry_destination_v18(allocation, object, budget)?;
+        return Ok(false);
+    }
+    budget.charge_work(8)?;
+    let ScopedSlotRepresentationV29::Object { schema, .. } = allocation.original.representation
+    else {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "private source write allocation schema",
+        ));
+    };
+    let ScopedObjectRoleV29::WriteValue {
+        destination,
+        value:
+            ScopedObjectValueOriginV29::Original(
+                ScopedMemoryStoreSourceV29::Assignment { ty, .. }
+                | ScopedMemoryStoreSourceV29::Operand { ty, .. },
+            ),
+    } = object.original.source.role
+    else {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "private source write original value role",
+        ));
+    };
+    if ty != allocation.original.origin.semantic_type
+        || destination.root_type != ty
+        || destination.projected_type != ty
+        || destination.root_schema != schema
+        || destination.projected_schema != schema
+        || destination.path.count != 0
+        || object.original.anchor.source.is_none()
+    {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "private source write destination differs from current slot",
+        ));
+    }
+    Ok(true)
+}
+
 fn source_private_access_row_v18(
     core: &CheckedSourcePrivatePhysicalV18<'_>,
     currentness: &CheckedOptimizedSourceMemoryV18<'_>,
@@ -827,7 +882,12 @@ fn source_private_access_row_v18(
                 value: output_rhs, ..
             },
         ) => {
-            source_private_entry_destination_v18(allocation, object, budget)?;
+            let source_write = source_private_write_destination_v22(
+                allocation,
+                object,
+                entries.source_writes,
+                budget,
+            )?;
             let definition = output
                 .definition_for_value(object.output.block.function, output_rhs, budget)
                 .map_err(|error| {
@@ -861,7 +921,11 @@ fn source_private_access_row_v18(
                 schema,
                 budget,
             )?;
-            SourcePrivateOperationKindV18::EntryWrite
+            if source_write {
+                SourcePrivateOperationKindV18::SourceWrite
+            } else {
+                SourcePrivateOperationKindV18::EntryWrite
+            }
         }
         _ => unreachable!(),
     };
@@ -999,8 +1063,11 @@ fn source_private_root_rows_v18(
                     "source private read-from Store lacks a completed source entry",
                 ))?;
             budget.charge_work(3)?;
-            if writer.kind != SourcePrivateOperationKindV18::EntryWrite
-                || writer.root != root
+            if !matches!(
+                writer.kind,
+                SourcePrivateOperationKindV18::EntryWrite
+                    | SourcePrivateOperationKindV18::SourceWrite
+            ) || writer.root != root
                 || writer.allocation != row.allocation
             {
                 return core.original.source.missing(
@@ -1502,7 +1569,8 @@ impl CheckedSourcePrivateMemoryV18<'_> {
             budget.charge_work(2)?;
             let kind = match row.kind {
                 SourcePrivateOperationKindV18::Allocation => 0,
-                SourcePrivateOperationKindV18::EntryWrite => 1,
+                SourcePrivateOperationKindV18::EntryWrite
+                | SourcePrivateOperationKindV18::SourceWrite => 1,
                 SourcePrivateOperationKindV18::Read { .. } => 2,
             };
             counts[kind] = counts[kind]

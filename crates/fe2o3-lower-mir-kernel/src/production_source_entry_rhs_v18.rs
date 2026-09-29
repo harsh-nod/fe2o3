@@ -3,6 +3,8 @@ use scoped_raw_admission_v29::{
     visit_optimized_source_objects_v18,
 };
 
+include!("production_source_private_write_rhs_v22.rs");
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SourceEntryWriteRowV18 {
     instance: usize,
@@ -15,6 +17,7 @@ struct SourceEntryWriteRowV18 {
     ty: SemanticTypeIdV1,
     scalar: ProductionSemanticScalarTypeV2,
     schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    source_write: bool,
 }
 
 /// One exact typed scalar entry write. The source argument must be resolved
@@ -30,6 +33,7 @@ pub struct ProductionSourceEntryWriteV18<'scope> {
     row: SourceEntryWriteRowV18,
     completed: &'scope std::cell::Cell<bool>,
     floor: usize,
+    source_writes: bool,
 }
 
 /// Lexical exact-entry RHS correspondence. This contains only requests whose
@@ -38,6 +42,7 @@ pub struct ProductionCheckedSourceEntryWritesV18<'scope> {
     leaves: &'scope ProductionOptimizedSourceScalarLeavesV18<'scope>,
     rows: &'scope [SourceEntryWriteRowV18],
     floor: usize,
+    source_writes: bool,
 }
 
 fn source_entry_write_row_v18(
@@ -127,6 +132,7 @@ fn source_entry_write_row_v18(
         ty,
         scalar,
         schema: destination.projected_schema,
+        source_write: false,
     }))
 }
 
@@ -176,7 +182,7 @@ impl ProductionSourceEntryWriteV18<'_> {
                         .missing("typed entry changed exact retained operation");
                 }
             };
-            let candidate = source_entry_write_row_v18(
+            let candidate = source_private_write_row_v22(
                 original,
                 root,
                 &OptimizedSourceObjectV18 {
@@ -185,6 +191,7 @@ impl ProductionSourceEntryWriteV18<'_> {
                     output: self.row.output,
                     actual,
                 },
+                self.source_writes,
                 budget,
             )?;
             if candidate != Some(self.row) {
@@ -216,6 +223,11 @@ impl ProductionSourceEntryWriteV18<'_> {
         original.retain_query((|| {
             self.check(budget)?;
             budget.charge_work(2)?;
+            if self.row.source_write {
+                return original
+                    .source
+                    .missing("private source write is not an entry argument");
+            }
             if !std::ptr::eq(function, self.function) {
                 return original
                     .source
@@ -451,6 +463,25 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
     pub fn with_checked_entry_writes_v18<'work, T, E>(
         &self,
         budget: &mut ArgumentBudgetV1<'work>,
+        check_request: impl for<'request> FnMut(
+            &ProductionSourceEntryWriteV18<'request>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<(), E>,
+        consume: impl for<'scope> FnOnce(
+            &ProductionCheckedSourceEntryWritesV18<'scope>,
+            &mut ArgumentBudgetV1<'work>,
+        ) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<ProductionSourceOwnedViewErrorV18>,
+    {
+        self.with_checked_write_profile_v22(false, budget, check_request, consume)
+    }
+
+    fn with_checked_write_profile_v22<'work, T, E>(
+        &self,
+        source_writes: bool,
+        budget: &mut ArgumentBudgetV1<'work>,
         mut check_request: impl for<'request> FnMut(
             &ProductionSourceEntryWriteV18<'request>,
             &mut ArgumentBudgetV1<'work>,
@@ -492,9 +523,13 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                         root,
                         budget,
                         |row, budget| {
-                            if let Some(entry) =
-                                source_entry_write_row_v18(original, root, &row, budget)?
-                            {
+                            if let Some(entry) = source_private_write_row_v22(
+                                original,
+                                root,
+                                &row,
+                                source_writes,
+                                budget,
+                            )? {
                                 if rows.len() == rows.capacity() {
                                     return original.source.missing("typed entry census capacity");
                                 }
@@ -572,6 +607,7 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                                     row: *row,
                                     completed: &completed,
                                     floor: request_floor,
+                                    source_writes,
                                 };
                                 check_request(&request, budget)?;
                                 request.check(budget)?;
@@ -588,6 +624,7 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                                 leaves: self,
                                 rows: &rows,
                                 floor: request_floor,
+                                source_writes,
                             };
                             consume(&checked, budget)
                         },

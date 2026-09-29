@@ -65,6 +65,13 @@ impl ProductionPrivateMemoryCheckedNativePoliciesV18<'_, '_> {
                 size_of::<&CanonicalRankedSourceObligationV18>(),
                 size_of::<Option<&CanonicalRankedSourceObligationV18>>(),
                 size_of::<Option<&fe2o3_kernel_ir::FormalMemoryIncompleteReason>>(),
+                size_of::<Option<ValueId>>() * 2,
+                size_of::<Option<usize>>(),
+                size_of::<&fe2o3_kernel_analysis::CanonicalKirPrivateMemoryAddressV1>(),
+                size_of::<Option<&fe2o3_kernel_analysis::CanonicalKirPrivateMemoryAddressV1>>(),
+                size_of::<(&fe2o3_kernel_ir::OperationKind, &fe2o3_kernel_ir::OperationKind, ValueId)>(),
+                size_of::<(ValueId, ValueId, &fe2o3_kernel_ir::MemoryAccess, &fe2o3_kernel_ir::MemoryAccess)>(),
+                size_of::<Result<Option<usize>, fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1>>(),
                 size_of::<fe2o3_kernel_ir::FunctionOperationLocation>(),
                 size_of::<OpCoordinate>() * 2,
                 size_of::<CanonicalRankedSourceRequirementV18>(),
@@ -88,13 +95,21 @@ impl ProductionPrivateMemoryCheckedNativePoliciesV18<'_, '_> {
                     .recipes
                     .source_failure("private formal report changed owner"));
             };
-            let Some(fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedMemoryEffect {
-                location,
-            }) = report.analysis().incomplete_reasons().get(reason)
-            else {
-                return Err(self
-                    .recipes
-                    .source_failure("private formal reason lacks exact memory occurrence"));
+            let (location, pointer) = match report.analysis().incomplete_reasons().get(reason) {
+                Some(fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedMemoryEffect {
+                    location,
+                }) => (location, None),
+                Some(
+                    fe2o3_kernel_ir::FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+                        location,
+                        pointer,
+                    },
+                ) => (location, Some(*pointer)),
+                _ => {
+                    return Err(self
+                        .recipes
+                        .source_failure("private formal reason lacks exact memory occurrence"));
+                }
             };
             let function = inventory
                 .kernels()
@@ -185,6 +200,41 @@ impl ProductionPrivateMemoryCheckedNativePoliciesV18<'_, '_> {
                     .recipes
                     .source_failure("private formal reason output role differs"));
             }
+            if let Some(pointer) = pointer {
+                original.retain_query(budget.charge_work(16).map_err(Into::into))?;
+                let before = &inventory.operations()[actual].operation.kind;
+                let after = &output.operations()[index].operation.kind;
+                let address = private_formal_storage_pointer_v21(before, after, pointer)
+                    .ok_or_else(|| {
+                        self.recipes.source_failure(
+                            "private formal pointer reason is not an exact typed private access",
+                        )
+                    })?;
+                let definition = output
+                    .definition_index_for_value(mapped.block.function, address, budget)
+                    .map_err(|error| {
+                        ProductionSourceOwnedViewErrorV18::from(
+                            fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        self.recipes.source_failure(
+                            "private formal pointer reason has no output definition",
+                        )
+                    })?;
+                let proof = self.completion.physical.native_physical_v18(budget)?;
+                if self.completion.coverage.get(index) != Some(&true)
+                    || !proof.address(definition).is_some_and(|address| {
+                        address.offset() == 0
+                            && address.length() == 1
+                            && self.completion.coverage.get(address.allocation()) == Some(&true)
+                    })
+                {
+                    return Err(self.recipes.source_failure(
+                        "private formal pointer reason lacks completed whole-scalar coverage",
+                    ));
+                }
+            }
             let key = operation_key(mapped);
             let (mut lo, mut hi) = (0, self.obligations.len());
             while lo < hi {
@@ -247,4 +297,45 @@ impl ProductionPrivateMemoryCheckedNativePoliciesV18<'_, '_> {
             },
         )
     }
+}
+
+// The legacy affine private-slot classifier conservatively records typed
+// Storage operands as escapes. Only the exact address role can be discharged
+// here; stored pointers, copies, projections and unrelated escapes stay pending.
+fn private_formal_storage_pointer_v21(
+    before: &fe2o3_kernel_ir::OperationKind,
+    after: &fe2o3_kernel_ir::OperationKind,
+    pointer: ValueId,
+) -> Option<ValueId> {
+    use fe2o3_kernel_ir::{AddressSpace, OperationKind, StorageOperationV1};
+    let (original, output, first, second) = match (before, after) {
+        (
+            OperationKind::Storage(StorageOperationV1::ReadValue {
+                address: original,
+                access: first,
+            }),
+            OperationKind::Storage(StorageOperationV1::ReadValue {
+                address: output,
+                access: second,
+            }),
+        )
+        | (
+            OperationKind::Storage(StorageOperationV1::WriteValue {
+                address: original,
+                access: first,
+                ..
+            }),
+            OperationKind::Storage(StorageOperationV1::WriteValue {
+                address: output,
+                access: second,
+                ..
+            }),
+        ) => (*original, *output, first, second),
+        _ => return None,
+    };
+    (original == pointer
+        && first == second
+        && first.address_space == AddressSpace::Private
+        && !first.volatile)
+        .then_some(output)
 }

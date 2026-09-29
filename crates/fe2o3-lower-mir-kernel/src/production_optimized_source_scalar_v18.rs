@@ -103,11 +103,15 @@ fn optimized_source_scalar_reads_v18(
                 }
             };
             let operation = source_operation_row_v18(output, actual, budget)?;
-            let OperationKind::Load { .. } = &operation.operation.kind else {
+            if !(if source.typed_private {
+                source_scalar_read_kind_v22(&operation.operation.kind, true)
+            } else {
+                matches!(operation.operation.kind, OperationKind::Load { .. })
+            }) {
                 return relation
                     .source
                     .missing("optimized scalar source read changed operation kind");
-            };
+            }
             let [result] = operation.operation.results.as_slice() else {
                 return relation
                     .source
@@ -780,7 +784,12 @@ fn optimized_source_scalar_expression_endpoint_v18(
                 .zip(actual.as_mut())
                 .and_then(|(expected, actual)| {
                     source_scalar_constant_fold_v18(expected, 0, &mut charge)?;
-                    source_scalar_constant_fold_v18(actual, 0, &mut charge)
+                    source_scalar_constant_fold_v18(actual, 0, &mut charge)?;
+                    if leaves.private_writes {
+                        source_private_integer_identity_v22(expected, 0, &mut charge)?;
+                        source_private_integer_identity_v22(actual, 0, &mut charge)?;
+                    }
+                    Some(())
                 })
                 .is_some();
             let equality_work =

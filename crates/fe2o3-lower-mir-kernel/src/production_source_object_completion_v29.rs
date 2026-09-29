@@ -937,6 +937,14 @@ fn check_source_object_effect_census_v29(
     call_splice_sort_work_v1(argument_product_v1(aggregate_fields.len(), 2)?, budget)
         .map_err(source_address_call_error_v29)?;
     aggregate_fields.sort_unstable();
+    check_source_grid_leader_zero_census_v29(
+        instances,
+        plan,
+        source_index,
+        slots,
+        &mut terminal,
+        budget,
+    )?;
     let mut next_aggregate_field = 0;
     for (index, access) in plan.accesses.iter().enumerate() {
         budget.charge_work(4)?;

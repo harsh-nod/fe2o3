@@ -20356,10 +20356,13 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             }
             SemanticWriteOnlyDisjointWriteKindV1::GridExclusive => {
                 self.require_call_argument_count(block, call, 4)?;
-                let leader = self.lower_operand(block, None, &call.arguments()[1], operations)?;
-                if !matches!(leader, SemanticValueBindingV1::GridLeader { .. })
-                    || index_space != SemanticDisjointIndexSpaceV1::GridExclusive
-                {
+                self.lower_grid_leader_argument_v29(
+                    block,
+                    call,
+                    operations,
+                    "write-only exclusive write lacks grid-leader authority",
+                )?;
+                if index_space != SemanticDisjointIndexSpaceV1::GridExclusive {
                     return Err(unsupported(
                         0,
                         Some(block.index()),

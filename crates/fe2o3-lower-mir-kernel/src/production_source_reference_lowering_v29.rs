@@ -31,6 +31,7 @@ struct SemanticSourceReferenceBindingV29 {
 struct SourceReferenceEmissionV29<'a, 'source> {
     plan: &'a SourceReferencePlanV29<'a, 'source>,
     claimed: Vec<std::cell::Cell<bool>>,
+    grid_leaders: Vec<std::cell::Cell<Option<SourceGridLeaderBorrowV29>>>,
     sites: Vec<((usize, u32, usize), usize)>,
     block_sites: Vec<((usize, u32, usize), usize)>,
     cell_accesses: Vec<std::cell::Cell<Option<SourceReferenceCellUseV29>>>,
@@ -174,6 +175,9 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
         let mut claimed = source_reference_owned_vec_v29(plan, plan.loans.len(), budget)?;
         budget.source_reference_charge_v29(plan, plan.loans.len())?;
         claimed.resize_with(plan.loans.len(), || std::cell::Cell::new(false));
+        let mut grid_leaders = source_reference_owned_vec_v29(plan, plan.loans.len(), budget)?;
+        budget.source_reference_charge_v29(plan, plan.loans.len())?;
+        grid_leaders.resize_with(plan.loans.len(), || std::cell::Cell::new(None));
         let mut sites = source_reference_owned_vec_v29(plan, plan.loans.len(), budget)?;
         for (index, loan) in plan.loans.iter().enumerate() {
             budget.source_reference_charge_v29(plan, 4)?;
@@ -229,6 +233,7 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
         Ok(Self {
             plan,
             claimed,
+            grid_leaders,
             sites,
             block_sites,
             cell_accesses,
@@ -972,6 +977,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             }
             Ok(())
         })?;
+        let grid_leader =
+            self.capture_grid_leader_borrow_v29(site, statement, place, loan, operations)?;
         let referent = if matches!(
             references.plan.cells.strategies.get(loan),
             Some(SourceReferenceCellStrategyV29::Object(_))
@@ -1015,6 +1022,17 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             source_reference_validate_binding_v29(references.plan, &binding, budget)?;
             if references.claim(site, budget)? != loan {
                 return Err(ArgumentResourceV1::Accounting.into());
+            }
+            if let Some(proof) = grid_leader {
+                budget.source_reference_charge_v29(references.plan, 3)?;
+                let held = references
+                    .grid_leaders
+                    .get(loan)
+                    .ok_or_else(source_grid_leader_zero_error_v29)?;
+                if held.get().is_some() {
+                    return Err(source_grid_leader_zero_error_v29());
+                }
+                held.set(Some(proof));
             }
             Ok(Some(SemanticValueBindingV1::SourceReference(binding)))
         })

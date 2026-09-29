@@ -321,6 +321,7 @@ fn fresh_anchors(
         rows: Vec::new(),
         objects: Vec::new(),
         object_components: Vec::new(),
+        zero_objects: Vec::new(),
     }
 }
 

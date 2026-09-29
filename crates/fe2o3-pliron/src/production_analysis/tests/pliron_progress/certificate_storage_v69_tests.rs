@@ -160,7 +160,7 @@ mod certificate_storage_v69_tests {
                 identifier_bytes,
                 ..ProductionAnalysisInputCensusV1::default()
             };
-            // S=19; charged=67; dominators=50; loops=120; parallel payloads=2976.
+            // S=19; charged=67; dominators=50; loops=120.
             // Retained=5586; scoped base temporary=120, plus payload owner19.
             // Common-entry validation adds12*(48+(16+4*2)*4)=1728 work and
             // the actual fixed Copy seed/source/type headers, with no heap.
@@ -170,18 +170,27 @@ mod certificate_storage_v69_tests {
                 + std::mem::size_of::<pliron::value::Value>()
                 + 2 * std::mem::size_of::<pliron::r#type::TypeHandle>())
             .div_ceil(std::mem::size_of::<usize>());
-            // B=2,E=3,D=2: Q=24, scalar sites=307, per-site cost=616.
-            let native_work = (8 * (2 + 3) + 3 + 8 * 24 + 3 * 24) * (552 + 32 * 2);
+            // Each edge has one external query plus at most1+E parallel/nested
+            // queries. B=2,E=3,D=2: Q=15, scalar sites208, per-site cost616.
+            let queries = 3 * (2 + 3);
+            let parallel_work = queries * (8 + 24 * 3 + 11 * 4);
+            let scalar_sites = 8 * (2 + 3) + 3 + 8 * queries + 3 * queries;
+            let native_work = scalar_sites * (552 + 32 * 2);
+            let scoped_base = 4 * 19 + 67 + 50 + 120 + parallel_work + 1728;
+            assert_eq!(
+                (queries, parallel_work, scalar_sites, scoped_base),
+                (15, 1860, 208, 3901)
+            );
             let native_temporary = 192 + 128_usize.div_ceil(usize::BITS as usize);
             for (scoped, work, peak) in [
                 (
                     true,
-                    5_017 + native_work,
+                    scoped_base + native_work,
                     5_725 + entry_headers + native_temporary,
                 ),
                 (
                     false,
-                    5_029 + native_work,
+                    scoped_base + 12 + native_work,
                     5_722 + entry_headers + native_temporary,
                 ),
             ] {

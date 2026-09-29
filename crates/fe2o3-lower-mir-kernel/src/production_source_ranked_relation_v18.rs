@@ -158,6 +158,7 @@ struct SourceScalarLeafRowV18 {
     value: ValueId,
     scalar: ProductionSemanticScalarTypeV2,
     symbol: u32,
+    typed_private: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -174,6 +175,7 @@ struct SourceScalarLeavesV18<'relation, 'source> {
     rows: Vec<SourceScalarLeafRowV18>,
     lookup: Vec<SourceScalarLeafLookupV18>,
     floor: usize,
+    private_writes: bool,
 }
 
 struct SourceScalarNormalizationInputV18<'a, 'relation, 'source> {
@@ -445,7 +447,12 @@ fn source_scalar_expression_endpoint_v18(
                     .zip(actual.as_mut())
                     .and_then(|(expected, actual)| {
                         source_scalar_constant_fold_v18(expected, 0, &mut charge)?;
-                        source_scalar_constant_fold_v18(actual, 0, &mut charge)
+                        source_scalar_constant_fold_v18(actual, 0, &mut charge)?;
+                        if leaves.private_writes {
+                            source_private_integer_identity_v22(expected, 0, &mut charge)?;
+                            source_private_integer_identity_v22(actual, 0, &mut charge)?;
+                        }
+                        Some(())
                     })
                     .is_some();
                 let resource = ledger.failure.get();
@@ -1330,7 +1337,10 @@ impl ProductionSourceScalarLeavesV18<'_> {
 enum SourceScalarNamespaceV18<'a> {
     Ranked(&'a fe2o3_pliron::ProductionRankedKernelV1),
     SourceOnly,
+    PrivateSourceWritesV22,
 }
+
+include!("production_source_private_scalar_leaves_v22.rs");
 
 impl ProductionSourceCorrespondenceV18<'_> {
     /// Gives the shared source resolver private read names over this exact
@@ -1674,9 +1684,8 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                     .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf original memory census"))?;
                 for anchor in &anchors.rows {
                     budget.charge_work(1)?;
-                    if matches!(anchor.kind, ScopedMemoryAnchorKindV29::Access {
-                        payload: Some(ScopedMemoryPayloadV29::Load { .. }), ..
-                    }) {
+                    if source_scalar_read_capture_v22(anchors, anchor,
+                        matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22))?.is_some() {
                         capacity = capacity.checked_add(1).ok_or(ArgumentResourceV1::Arithmetic)?;
                     }
                 }
@@ -1690,8 +1699,9 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                     .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf original memory census"))?;
                 for (anchor_index, anchor) in anchors.rows.iter().enumerate() {
                     budget.charge_work(1)?;
-                    let ScopedMemoryAnchorKindV29::Access { payload: Some(ScopedMemoryPayloadV29::Load { read, .. }), .. }
-                        = &anchor.kind else { continue; };
+                    let Some((read, typed_private)) = source_scalar_read_capture_v22(anchors, anchor,
+                        matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22))?
+                        else { continue; };
                     let original = semantic.functions().get(source.function.index() as usize)
                         .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf original instance function"))?;
                     let place = match scoped_source_operand_v29(original, read.site, read.role) {
@@ -1718,18 +1728,16 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                         relation.mapped_source_operation(position.location, budget)? else {
                             return relation.source.missing("scalar leaf has no actual emitted Load");
                         };
-                    let access = SourcePhysicalAccessV18 { instance, row: anchor_index, anchor };
-                    let payload = relation.retained_scalar_payload_v18(root, operation, &access, budget)?
-                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf payload absent"))?;
+                    let value = source_scalar_read_value_v22(relation, root, instance,
+                        anchor_index, anchor, operation, read, typed_private, budget)?;
                     let actual = function.function.body.as_ref()
                         .and_then(|body| body.blocks.get(operation.block.block as usize))
                         .and_then(|block| block.operations.get(operation.operation as usize))
                         .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf actual Load"))?;
                     budget.charge_work(4)?;
                     if operation.block.function != function.coordinate
-                        || !matches!(actual.results.as_slice(), [result] if result.id == payload.value && result.ty == lowered)
-                        || !matches!(&actual.kind, OperationKind::Load { access, .. }
-                            | OperationKind::GuardedLoad { access, .. } if !access.volatile)
+                        || !matches!(actual.results.as_slice(), [result] if result.id == value && result.ty == lowered)
+                        || !source_scalar_read_kind_v22(&actual.kind, typed_private)
                     {
                         return relation.source.missing("scalar leaf physical type or Load changed");
                     }
@@ -1742,7 +1750,7 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                         return relation.source.missing("scalar leaf census exceeds its paid rows");
                     }
                     rows.push(SourceScalarLeafRowV18 { instance, anchor: anchor_index, place,
-                        read: *read, operation, value: payload.value, scalar, symbol: 0 });
+                        read: *read, operation, value, scalar, symbol: 0, typed_private });
                 }
             }
             private_array_heapsort_v1(&mut rows, source_leaf_original_order_v18,
@@ -1773,7 +1781,8 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
             // All temporary census credit remains in the containing checked
             // scope until its concrete owners have been destroyed.
             drop(reserved);
-            Ok(Self { relation, root, rows, lookup, floor: budget.storage() })
+            Ok(Self { relation, root, rows, lookup, floor: budget.storage(),
+                private_writes: matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22) })
         })())
     }
 
@@ -1857,26 +1866,19 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                     .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                         "scalar leaf original anchor",
                     ))?;
-            let payload = self
-                .relation
-                .retained_scalar_payload_v18(
-                    self.root,
-                    row.operation,
-                    &SourcePhysicalAccessV18 {
-                        instance: row.instance,
-                        row: row.anchor,
-                        anchor,
-                    },
-                    budget,
-                )?
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                    "scalar leaf original payload absent",
-                ))?;
+            let value = source_scalar_read_value_v22(
+                self.relation,
+                self.root,
+                row.instance,
+                row.anchor,
+                anchor,
+                row.operation,
+                &row.read,
+                row.typed_private,
+                budget,
+            )?;
             budget.charge_work(4)?;
-            if payload.value != row.value
-                || !matches!(payload.source,
-                ScopedMemoryPayloadV29::Load { read, .. } if *read == row.read)
-            {
+            if value != row.value {
                 return self
                     .relation
                     .source
@@ -1947,32 +1949,66 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
         self.relation.retain_query((|| {
             self.query(budget)?;
             let physical = self.relation.source.root(self.root, budget)?.1;
-            let original = self.relation.inventory.functions().get(physical)
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf physical root"))?;
+            let original = self.relation.inventory.functions().get(physical).ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("scalar leaf physical root"),
+            )?;
             budget.charge_work(1)?;
             if !std::ptr::eq(original.function, function) {
-                return self.relation.source.missing("scalar leaf substituted physical root");
+                return self
+                    .relation
+                    .source
+                    .missing("scalar leaf substituted physical root");
             }
-            let Some(row) = self.find([1, value.0 as usize, 0], budget)? else { return Ok(None); };
-            let definition = self.relation.inventory.definition_for_value(original.coordinate, value, budget)
+            let Some(row) = self.find([1, value.0 as usize, 0], budget)? else {
+                return Ok(None);
+            };
+            let definition = self
+                .relation
+                .inventory
+                .definition_for_value(original.coordinate, value, budget)
                 .map_err(source_pointer_inventory_error_v18)?
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf actual definition missing"))?;
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "scalar leaf actual definition missing",
+                ))?;
             budget.charge_work(2)?;
-            if definition.coordinate != (fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::Result {
-                operation: row.operation, result: 0,
-            }) {
-                return self.relation.source.missing("scalar leaf actual definition changed");
-            }
-            let anchors = self.relation.source.sidecar(self.root, row.instance, budget)?.scoped_memory_anchors.as_ref()
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding("scalar leaf original memory census"))?;
-            budget.charge_work(3)?;
-            if !matches!(anchors.rows.get(row.anchor).map(|anchor| &anchor.kind),
-                Some(ScopedMemoryAnchorKindV29::Access { payload: Some(ScopedMemoryPayloadV29::Load { read, .. }), .. })
-                    if *read == row.read)
+            if definition.coordinate
+                != (fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::Result {
+                    operation: row.operation,
+                    result: 0,
+                })
             {
-                return self.relation.source.missing("scalar leaf changed original read capture");
+                return self
+                    .relation
+                    .source
+                    .missing("scalar leaf actual definition changed");
             }
-            Ok(Some(NormalizedScalarExpressionV1::Symbol { symbol: row.symbol, scalar: row.scalar }))
+            let anchors = self
+                .relation
+                .source
+                .sidecar(self.root, row.instance, budget)?
+                .scoped_memory_anchors
+                .as_ref()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "scalar leaf original memory census",
+                ))?;
+            budget.charge_work(3)?;
+            if !anchors
+                .rows
+                .get(row.anchor)
+                .map(|anchor| source_scalar_read_capture_v22(anchors, anchor, row.typed_private))
+                .transpose()?
+                .flatten()
+                .is_some_and(|(read, typed)| *read == row.read && typed == row.typed_private)
+            {
+                return self
+                    .relation
+                    .source
+                    .missing("scalar leaf changed original read capture");
+            }
+            Ok(Some(NormalizedScalarExpressionV1::Symbol {
+                symbol: row.symbol,
+                scalar: row.scalar,
+            }))
         })())
     }
 }

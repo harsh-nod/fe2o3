@@ -7,6 +7,9 @@ thread_local! {
 
 include!("production_source_object_lane_v29_tests.rs");
 
+#[path = "production_source_grid_leader_zero_v29_tests.rs"]
+mod grid_leader_zero_tests;
+
 fn static_field_owner_v29() -> ProductionSemanticSsaOwnerV1 {
     let base = module_fixture_owner(ModuleFixture::Ordinary);
     let semantic = base.source_semantic();

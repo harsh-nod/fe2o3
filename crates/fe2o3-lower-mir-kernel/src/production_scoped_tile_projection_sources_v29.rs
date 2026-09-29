@@ -580,6 +580,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                 rows,
                 objects,
                 object_components: _,
+                zero_objects,
             }) = &sidecar.scoped_memory_anchors
             else {
                 continue;
@@ -750,6 +751,23 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                         None => self.emit(key, TileAttachmentLocationV29::NoOutput)?,
                     }
                 }
+            }
+            // Logical zero-component effects have positions, but no definitions
+            // or uses. Keep their gap correspondence in the same complete walk.
+            for (ordinal, zero) in zero_objects.iter().enumerate() {
+                self.budget.charge_work(1)?;
+                let key = self.key(
+                    Family::MemoryAnchor,
+                    instance.index(),
+                    argument_sum_v1(&[rows.len(), ordinal])?,
+                    Field::MemoryPosition,
+                );
+                self.emitted_gap(
+                    key,
+                    instance,
+                    zero.block,
+                    tile_attachment_u32_v29(zero.gap)?,
+                )?;
             }
         }
         Ok(())

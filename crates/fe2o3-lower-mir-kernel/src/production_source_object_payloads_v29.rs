@@ -3,6 +3,7 @@
 type ScopedObjectOperationV29 = fe2o3_kernel_ir::StorageOperationV1;
 type ScopedObjectProjectionV29 = fe2o3_kernel_ir::StorageProjectionV1;
 include!("production_source_object_completion_v29.rs");
+include!("production_source_grid_leader_zero_v29.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ScopedObjectPathV29 {
@@ -203,6 +204,7 @@ struct ScopedObjectCheckpointV29 {
     rows: usize,
     objects: usize,
     components: usize,
+    zero_objects: usize,
 }
 
 fn scoped_object_error_v29() -> ProductionSemanticKirErrorV1 {
@@ -587,6 +589,7 @@ impl ScopedMemoryAnchorsV29 {
             rows: self.rows.len(),
             objects: self.objects.len(),
             components: self.object_components.len(),
+            zero_objects: self.zero_objects.len(),
         }
     }
 
@@ -594,6 +597,7 @@ impl ScopedMemoryAnchorsV29 {
         self.rows.truncate(checkpoint.rows);
         self.objects.truncate(checkpoint.objects);
         self.object_components.truncate(checkpoint.components);
+        self.zero_objects.truncate(checkpoint.zero_objects);
     }
 
     fn append_object_path(

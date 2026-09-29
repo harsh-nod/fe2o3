@@ -9,6 +9,9 @@ enum PrivateEntryFixtureV20 {
     NonNeutral,
 }
 
+#[path = "production_source_private_writes_v22_tests.rs"]
+mod source_writes_v22;
+
 fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSsaOwnerV1 {
     let base = module_fixture_owner(ModuleFixture::Ordinary);
     let semantic = base.source_semantic();
@@ -272,6 +275,43 @@ fn private_entry_non_neutral_owner_v20() -> ProductionSemanticSsaOwnerV1 {
     private_entry_owner_v20(PrivateEntryFixtureV20::NonNeutral)
 }
 
+fn private_entry_root_owner_v20() -> ProductionSemanticSsaOwnerV1 {
+    let base = typed_root_entry_rhs_owner_v18();
+    let source = base.source_semantic();
+    let old = &source.functions()[0];
+    let root = function(
+        60,
+        SemanticFunctionRoleV1::KernelRoot,
+        abi(61, true, &[U32])
+            .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
+            .unwrap(),
+        old.locals().to_vec(),
+        old.blocks().to_vec(),
+    )
+    .with_kernel_entry(old.kernel_entry().unwrap().clone());
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        source.target(),
+        source.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        vec![root],
+        vec![SemanticCallableDeclV1::defined(
+            SemanticFunctionIdV1::from_index(0),
+        )],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
 fn private_entry_typed_memory_census_v20(
     owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
 ) -> [usize; 3] {
@@ -304,7 +344,7 @@ fn private_source_completion_owns_actual_integer_output_for_all_roots_and_nested
         private_entry_forward_owner_v20 as fn() -> _,
         private_entry_constant_owner_v20,
         private_entry_captured_owner_v20,
-        typed_root_entry_rhs_owner_v18,
+        private_entry_root_owner_v20,
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
@@ -328,18 +368,9 @@ fn private_source_completion_owns_actual_integer_output_for_all_roots_and_nested
                 assert_eq!(output.owner().module().kernels.len(), roots.len());
                 assert_eq!(output.report().passes().len(), 2);
                 assert!(
-                    output
-                        .owner()
-                        .module()
-                        .functions
-                        .iter()
-                        .filter_map(|f| f.body.as_ref())
-                        .flat_map(|b| &b.blocks)
-                        .flat_map(|b| &b.operations)
-                        .any(|o| matches!(
-                            o.kind,
-                            OperationKind::Load { .. } | OperationKind::Store { .. }
-                        ))
+                    private_entry_typed_memory_census_v20(output.owner())
+                        .into_iter()
+                        .all(|count| count > 0)
                 );
                 handoff.discard(budget)?;
                 assert_eq!(budget.storage(), floor);

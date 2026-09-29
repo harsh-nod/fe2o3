@@ -1828,6 +1828,28 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         else {
             return Ok(None);
         };
+        if self.types[place.ty().index() as usize]
+            .layout()
+            .size_bytes()
+            == Some(0)
+            && self.with_emission_budget_v1(|this, budget| {
+                source_grid_leader_zero_type_v29(this.types, this.callables, place.ty(), budget)
+            })?
+        {
+            self.record_grid_leader_zero_v29(
+                block,
+                statement,
+                place,
+                source,
+                SourceReferenceAccessV29::Read,
+                None,
+                volatility,
+                operations.len(),
+            )?;
+            // Continue through the original local/promoted binding and its
+            // availability check; zero physical bytes cannot reconstruct a token.
+            return Ok(None);
+        }
         let ty = self.source_object_leaf_type_v29(
             block,
             statement,
@@ -2020,6 +2042,19 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         else {
             return Ok(false);
         };
+        if matches!(value, SemanticValueBindingV1::GridLeader { .. }) {
+            self.record_grid_leader_zero_v29(
+                block,
+                statement,
+                place,
+                destination,
+                SourceReferenceAccessV29::Write,
+                Some(value),
+                volatility,
+                operations.len(),
+            )?;
+            return Ok(true);
+        }
         if let SemanticValueBindingV1::Aggregate(fields) = value {
             self.write_source_object_aggregate_fields_v29(
                 block,
