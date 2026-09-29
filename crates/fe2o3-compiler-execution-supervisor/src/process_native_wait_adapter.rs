@@ -43,7 +43,9 @@ macro_rules! native_wait {
             /// optional poll; byte/field work covers the largest frame and its sentinel.
             /// Additionally prepays the shared readiness pipe's full fstat/F_GETFL/read
             /// and framing quote, including retries, on the original wait account.
-            pub const ATTEMPT_WORK: usize = 4 * 1024 + 8 * WAIT_RECORD_BYTES + 256
+            pub const ATTEMPT_WORK: usize = 4 * 1024
+                + 8 * WAIT_RECORD_BYTES
+                + 256
                 + fe2o3_protected_service_spawn::launch_io::Boundary::ReadyPipe.work();
 
             /// Admits bounded inert limits without any I/O or budget creation.
