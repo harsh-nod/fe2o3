@@ -1,6 +1,6 @@
 # Bounded CPU loaded-input adapter
 
-Explicit CPU-only APIs for a guarded precheck → historical two-pass read → postcheck. Module initialization makes no application filesystem/provider call and starts no child; Node loader IO is separate. The operational entry remains unactivated: this package supplies mechanisms, not a current scope, approved cap, complete source graph, or execution authority.
+Explicit CPU-only APIs for a guarded precheck → historical two-pass read → postcheck. Module initialization makes no application filesystem/provider call and starts no child; Node loader IO is separate. The historical operational workflow remains unactivated: this package supplies mechanisms, not a current scope, approved cap, complete source graph, or execution authority.
 
 The package uses the adjacent loaded-input-reader and loaded-profile modules. It does not ship the historical adapter-plan bridge, historical controls, host-specific graph seed, fixture data, or raw host receipts.
 
@@ -33,8 +33,59 @@ Run the fixture-free controls from the repository root:
 
     node --test tools/debugger/loaded-cpu-adapter/adapter-controls.test.mjs
 
-There are 76 authored fixture-free controls using only injected memory providers. They import neither the operational filesystem entry nor a fixture reader. This README does not claim a root execution or qualification result; that requires a separate complete root-owned receipt and source audit.
+There are 76 fixture-free controls using only injected memory providers. They import neither the operational filesystem entry nor a fixture reader. Root qualification passed those controls within the 202-control combined installed reader/profile/graph/adapter suite, and passed the 10 external historical controls separately. CPU receipt SHA-256: `1789ce1fd0cb0e0eea3787799e023a1a0e5110753b965250d4e241f61f068a41`. This is component evidence, not complete operational currentness or native qualification.
 
 A further 10 historical bridge controls remain external to this package. They require the explicit bounded 76-role FE2O3_LOADED_REVIEW_FIXTURES manifest, with missing configuration/data failing rather than skipping. They are not included in the 76 fixture-free count and do not establish operational currentness or native acceptance.
 
 Before any filesystem activation, root must bind the final individually pinned static source/import/runtime/loader/launcher graph, exact request Buffers, current CPU-only policy, finite process/resource ceilings, new output identities and external timeout/readback. Provider-level accounting is not a measurement of all OS loader or kernel IO; synchronous calls cannot be preempted by the in-process guard.
+
+## Opt-in real-filesystem controls
+
+The separate Linux fixture test is `filesystem-adapter-controls.mjs`. It is not
+part of the default 76 memory-provider controls. Seven cases exercise fresh
+regular files, an independently selected alias target, an empty file, bounded
+absence, wrong hashes, no-replace publication, expired policy and bounded
+serialization. Missing or wrong root configuration refuses instead of skipping.
+
+Use a fresh, private, empty, canonical directory that you own. The following
+binds its initial six stat fields before starting the test:
+
+~~~sh
+export FE2O3_ADAPTER_FS_TEST_ROOT="$(mktemp -d /tmp/fe2o3-adapter-test.XXXXXX)"
+export FE2O3_ADAPTER_FS_TEST_ROOT_IDENTITY="$(node -e 'const fs=require("node:fs");const s=fs.lstatSync(process.env.FE2O3_ADAPTER_FS_TEST_ROOT,{bigint:true});process.stdout.write(JSON.stringify(["dev","ino","size","mode","mtimeNs","ctimeNs"].map(k=>String(s[k]))));')"
+node --test tools/debugger/loaded-cpu-adapter/filesystem-adapter-controls.mjs
+~~~
+
+These opt-in controls use the MI350 qualification resource floors: at least
+40 GiB free disk and 64 GiB available RAM, with a 512 MiB process-RSS ceiling.
+They are not the portable low-resource default suite. Each case's finite guard
+expires 60 seconds after policy creation, with a one-second not-before allowance,
+a 30-second elapsed bound and at most 64 resource probes.
+Use a separately bounded outer supervisor when qualifying a run; an in-process
+guard cannot preempt every synchronous filesystem call.
+
+The root identity is checked before fixture creation; short semantic role labels
+do not depend on the root path length. Each case reserves at most 512 KiB per
+evidence name (the aggregate-size refusal case uses 4 KiB). Seven cases create
+seven 65,537-byte input bodies; the conservative evidence-name ceiling is 7 MiB.
+This fixture setup and its complete output readback are separate from reader
+provider accounting.
+
+Root qualification passed all seven cases and the missing-root/wrong-identity
+admission controls. Receipt SHA-256:
+`42968ee118231c0746655cfbdcd8eaea3a131dace83159682185a90da20efb72`.
+Root read back all seven output rosters and all 102,681 named output bytes.
+An earlier fixture incorrectly expected the aggregate serializer bound at a
+one-byte cap; the stricter key bound correctly refused first. That failed run
+is preserved and is not counted as passing.
+
+Tests retain their directories and print their names for inspection. Success
+retains both hard-link names; refused publication preserves existing sentinels.
+There is no automatic deletion. Reruns need a new empty root and fresh identity;
+cleanup is a separate owner decision.
+
+This invokes the filesystem binding only on test-owned synthetic data. It does
+not activate historical input replay, prove ancestor/writer exclusion, renew
+native coordination, start GDB or an inferior, dispatch a GPU kernel, or produce
+physical register/LDS visualization samples. The two environment variables
+configure this test harness only, not the production Buffer API.
