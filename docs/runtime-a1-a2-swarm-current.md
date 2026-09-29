@@ -24,6 +24,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [complete event-batch release refinement](evidence/dev-event-batch-release-2026-09-28/README.md)
+now shares both reservation stages, ordered validation, aggregate pin checking
+and consuming commit with production. The signed 32-stage campaign passes 28
+obligations and 24 executable negatives, including fabricated allocation refusals.
+This is conditional on two hash-table reservation contents contracts: it explicitly
+does not use the earlier `--no-cheating` profile. Exact supplement/source closure
+is pinned, with strict diagnostics and source guardrails. Final completion tests
+pass 55/0, broader KFD 1415/0 (320 construction tests excluded), runtime 1828/0
+with 30 hardware ignores, and doctests 124/0; static checks pass. Complete source
+rollback composition, native authority and GPU/performance qualification remain
+open. A1/A2 and accepted lane checkpoints are unchanged.
+
 The [complete bound-cancellation refinement](evidence/dev-bound-cancellation-2026-09-28/README.md)
 shares all executed retention/count/bitmap/pin checks and phase-only cancellation
 between production and Verus. Its signed 31-stage campaign passes 25 obligations
