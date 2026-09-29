@@ -97,7 +97,8 @@ pub(super) fn test_issued_generic_global_domains_v26(
                     .map_err(source_emission_error_v18)?;
                 assert_eq!(budget.storage(), query_floor);
                 let formation = source_operation_row_v18(inventory, endpoint.logical.address, budget)?;
-                assert!(matches!(formation.operation.results.as_slice(), [value] if origin == Some(value.id)));
+                assert!(matches!(formation.operation.results.as_slice(), [value] if origin == Some(value.id) && value.id == endpoint.formation_pointer));
+                assert_ne!(endpoint.formation_pointer, endpoint.pointer);
                 assert_eq!(global_source_endpoint_v18(inventory, endpoint.logical, &pair.origin, budget)?, Some(*endpoint));
                 let assertion = GlobalSourceAccessOriginV18::Assertion(ProductionSliceAccessSiteV1::new(
                     SemanticFunctionIdV1::from_index(0), SemanticFunctionIdV1::from_index(0),

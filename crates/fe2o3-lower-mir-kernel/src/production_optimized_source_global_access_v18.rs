@@ -46,6 +46,8 @@ struct GlobalSourceAccessEndpointV18 {
     logical: GlobalSourceLogicalEndpointV18,
     // The checked address operand may be an Index representation of logical.index.
     address_index: SliceDefinition,
+    // Exact GEP result, distinct from the actual access after issued transport.
+    formation_pointer: ValueId,
     pointer: ValueId,
     value: ValueId,
     memory: MemoryAccess,
@@ -236,13 +238,28 @@ fn global_source_endpoint_v18(
             "pending global access effect or guard owner",
         ));
     }
-    budget.charge_work(8)?;
+    budget.charge_work(8 + 4)?;
     let address = source_operation_row_v18(inventory, logical.address, budget)?;
     let OperationKind::GetElementPointer { offset, .. } = &address.operation.kind else {
         return Err(ProductionSourceOwnedViewErrorV18::Binding(
             "pending global checked address is not a GEP",
         ));
     };
+    let formation_pointer = match address.operation.results.as_slice() {
+        [result] => result.id,
+        _ => {
+            return Err(ProductionSourceOwnedViewErrorV18::Binding(
+                "pending global address formation result census",
+            ));
+        }
+    };
+    // Issued rows become visible only after complete original/output typed
+    // pointer transport replay. Assertion rows retain their direct-pointer rule.
+    if matches!(origin, GlobalSourceAccessOriginV18::Assertion(_)) && formation_pointer != pointer {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "pending global assertion changed direct address pointer",
+        ));
+    }
     let address_index = inventory
         .definition_for_value(logical.access.operation.block.function, *offset, budget)
         .map_err(source_pointer_inventory_error_v18)?
@@ -253,6 +270,7 @@ fn global_source_endpoint_v18(
     Ok(Some(GlobalSourceAccessEndpointV18 {
         logical,
         address_index,
+        formation_pointer,
         pointer,
         value,
         memory,
@@ -408,7 +426,8 @@ fn global_source_headers_v18() -> Result<usize, ArgumentResourceV1> {
         h::<&MemoryAccess>()?,
         h::<Option<ScalarType>>()?,
         h::<(ValueId, ValueId, MemoryAccess, ScalarType, bool)>()?,
-        argument_product_v1(3, h::<ValueId>()?)?,
+        argument_product_v1(4, h::<ValueId>()?)?,
+        h::<&fe2o3_kernel_ir::ValueDef>()?,
         h::<MemoryAccess>()?,
         h::<ScalarType>()?,
         h::<bool>()?,

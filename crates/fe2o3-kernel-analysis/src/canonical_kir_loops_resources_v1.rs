@@ -101,8 +101,8 @@ fn count(kind: &'static str, actual: usize, limit: usize) -> Result<()> {
         Ok(())
     }
 }
-fn input_limits(
-    inventory: &Inventory<'_>,
+fn input_limits<O>(
+    inventory: &Inventory<'_, O>,
     limits: CanonicalKirLoopLimitsV1,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
@@ -126,7 +126,11 @@ fn input_limits(
     }
     Ok(())
 }
-fn block_index(inventory: &Inventory<'_>, block: Block, budget: &mut Budget<'_>) -> Result<usize> {
+fn block_index<O>(
+    inventory: &Inventory<'_, O>,
+    block: Block,
+    budget: &mut Budget<'_>,
+) -> Result<usize> {
     budget.charge_work(4)?;
     let function = inventory
         .functions()
@@ -147,8 +151,8 @@ fn block_index(inventory: &Inventory<'_>, block: Block, budget: &mut Budget<'_>)
     }
     Ok(index)
 }
-fn operation<'a, 'g>(
-    inventory: &'a Inventory<'g>,
+fn operation<'a, 'g, O>(
+    inventory: &'a Inventory<'g, O>,
     coordinate: Operation,
     budget: &mut Budget<'_>,
 ) -> Result<&'a crate::CanonicalKirOperationRefV1<'g>> {
@@ -175,7 +179,7 @@ struct Incidence {
     targets: Vec<usize>,
 }
 impl Incidence {
-    fn build(inventory: &Inventory<'_>, budget: &mut Budget<'_>) -> Result<Self> {
+    fn build<O>(inventory: &Inventory<'_, O>, budget: &mut Budget<'_>) -> Result<Self> {
         let b = inventory.blocks().len();
         let e = inventory.edges().len();
         let mut offsets = filled(

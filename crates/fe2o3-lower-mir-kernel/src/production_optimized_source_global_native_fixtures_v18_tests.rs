@@ -106,7 +106,7 @@ fn pending_global_source_native_conservatively_preserves_genuine_load_store_back
 
 #[test]
 fn pending_global_source_native_rejects_changed_rhs_pointer_index_root_guard_and_direction() {
-    for fault in 0..7 {
+    for fault in 0..9 {
         let reached = std::cell::Cell::new(false);
         let result = run_descriptor_roles_v18(
             DescriptorRoleEntranceV18::IssuedDisjointSlice,
@@ -125,6 +125,29 @@ fn pending_global_source_native_rejects_changed_rhs_pointer_index_root_guard_and
             result,
             Err(ProductionSourceOwnedViewErrorV18::Binding(_))
         ));
+    }
+}
+
+#[test]
+fn pending_global_native_keeps_actual_formation_and_helper_access_pointers_distinct() {
+    for nested in [false, true] {
+        let owner = global_expression_helper_owner_v23(nested);
+        let abi = issued_descriptor_role_abi_v18(&owner);
+        let count = std::cell::Cell::new(0);
+        let result = run_descriptor_role_owner_with_abi_v18(
+            owner,
+            abi,
+            OPTIMIZED_SOURCE_WORK_LIMIT_V18,
+            MODULE_LIMIT,
+            |original, optimized, budget| {
+                slice_view_v1::test_pending_global_native_distinct_formation_v26(
+                    original, optimized, budget, &count,
+                )
+            },
+        )
+        .0;
+        assert!(result.is_ok(), "nested={nested}: {result:?}");
+        assert!(count.get() > 0);
     }
 }
 

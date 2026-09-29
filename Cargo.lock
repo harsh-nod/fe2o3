@@ -2814,7 +2814,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 [[package]]
 name = "pliron"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=90ef1c11647cc33bbadc83c29d21525cbd8e4c2c#90ef1c11647cc33bbadc83c29d21525cbd8e4c2c"
 dependencies = [
  "awint",
  "combine",
@@ -2841,7 +2841,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=90ef1c11647cc33bbadc83c29d21525cbd8e4c2c#90ef1c11647cc33bbadc83c29d21525cbd8e4c2c"
 dependencies = [
  "combine",
  "convert_case",
@@ -2855,7 +2855,7 @@ dependencies = [
 [[package]]
 name = "pliron-llvm"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=90ef1c11647cc33bbadc83c29d21525cbd8e4c2c#90ef1c11647cc33bbadc83c29d21525cbd8e4c2c"
 dependencies = [
  "bitflags",
  "log",

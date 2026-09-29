@@ -318,6 +318,8 @@ pub(super) fn test_pending_global_native_mutations_v18(
                 4 => changed.output.logical.guard_condition = changed.output.logical.index,
                 5 => changed.output.writing = false,
                 6 => changed.output.logical.guard_edge.successor = u32::MAX,
+                7 => changed.output.formation_pointer = changed.output.value,
+                8 => changed.input.formation_pointer = changed.input.value,
                 _ => unreachable!(),
             }
             assert!(matches!(
@@ -325,6 +327,44 @@ pub(super) fn test_pending_global_native_mutations_v18(
                 Err(PendingGlobalNativeErrorV18::Source(_))
             ));
             reached.set(true);
+        })
+    })
+}
+
+pub(super) fn test_pending_global_native_distinct_formation_v26(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+    counts: &std::cell::Cell<usize>,
+) -> SourceOwnedResultV18<()> {
+    original.with_global_source_expressions_v23(optimized, budget, &mut |_, source, budget| {
+        with_native_global_test_view_v18(optimized, budget, |native, budget| {
+            for row in source.roles.rows {
+                let Some(pair) = row.global.as_ref() else {
+                    continue;
+                };
+                if pair.output.memory.address_space != AddressSpace::Generic {
+                    continue;
+                }
+                assert!(matches!(
+                    pair.origin,
+                    GlobalSourceAccessOriginV18::Issued { .. }
+                ));
+                assert!(!row.write_recipe_pending);
+                assert_ne!(pair.input.formation_pointer, pair.input.pointer);
+                assert_ne!(pair.output.formation_pointer, pair.output.pointer);
+                let floor = budget.storage();
+                source
+                    .with_native_access_v18(native, row.output, budget, |joined, _| {
+                        let joined = joined.expect("genuine Generic source/native access");
+                        assert_eq!(joined.pair, pair);
+                        assert!(!joined.grants_memory_or_launch_authority());
+                        counts.set(counts.get() + 1);
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(budget.storage(), floor);
+            }
         })
     })
 }

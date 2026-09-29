@@ -1,4 +1,6 @@
 use super::*;
+#[path = "canonical_kir_loops_v18_tests.rs"]
+mod storage_v18;
 use fe2o3_kernel_ir::{
     BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work,
     CanonicalKirFunctionCoordinateV1 as Function, Function as KirFunction, Module,

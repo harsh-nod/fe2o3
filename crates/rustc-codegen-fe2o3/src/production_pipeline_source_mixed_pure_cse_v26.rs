@@ -23,6 +23,30 @@ source_handoff_policy_v29!(@impl ConditionalMixedPureCse, MixedHandoff,
 );
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    #[cfg(test)]
+    pub(crate) fn with_original_source_conditional_mixed_pure_cse_test_limits_v27<R, F>(
+        self,
+        work: usize,
+        storage: usize,
+        consume: F,
+    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error>
+    where
+        F: for<'view, 'source, 'abi, 'work> FnOnce(
+            &'view Source<'source>,
+            &MixedHandoff<'view, 'source>,
+            &[AbiRoot<'abi>],
+            TargetProfile,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    {
+        self.with_source_owned_custody_policy_v29::<ConditionalMixedPureCse, R, F>(
+            ImportProfile::NominalV35,
+            work,
+            storage,
+            consume,
+        )
+    }
+
     /// Executes the distinct fixed Policy10 source route: integer worklist,
     /// local pure CSE, dominance pure CSE, and DCE. Original source, complete
     /// ABI and authenticated target launch bounds remain attached to its owner.

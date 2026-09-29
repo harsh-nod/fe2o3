@@ -50,8 +50,12 @@ pub(crate) enum Error {
     BoundScalarHandoff(ProductionBoundScalarHandoffErrorV19),
     BoundPrivateWorklistHandoff(fe2o3_lower_mir_kernel::ProductionBoundPrivateHandoffErrorV21),
     ConditionalMixedHandoff(fe2o3_lower_mir_kernel::ProductionMixedSourceHandoffErrorV26),
+    ConditionalMixedCfg(fe2o3_verifier::MixedOptimizerRefinementErrorV26),
     TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
     MixedWorkerInput(target_result::mixed_v26::worker_input_v26::MixedWorkerInputErrorV26),
+    MixedPureCseWorkerInput(
+        target_result::mixed_pure_cse_v26::worker_input_v26::MixedWorkerInputErrorV26,
+    ),
     FormalReports(Box<formal_context_v19::ReportOptimizationErrorV19>),
     FormalPaths(Box<formal_context_v19::PathOptimizationErrorV20>),
     Resource(Resource),
@@ -74,8 +78,10 @@ impl std::error::Error for Error {
             Self::BoundScalarHandoff(error) => Some(error),
             Self::BoundPrivateWorklistHandoff(error) => Some(error),
             Self::ConditionalMixedHandoff(error) => Some(error),
+            Self::ConditionalMixedCfg(error) => Some(error),
             Self::TargetLlvm(error) => Some(error),
             Self::MixedWorkerInput(error) => Some(error),
+            Self::MixedPureCseWorkerInput(error) => Some(error),
             Self::FormalReports(error) => Some(error.as_ref()),
             Self::FormalPaths(error) => Some(error.as_ref()),
             Self::Resource(error) => Some(error),
@@ -132,6 +138,14 @@ impl From<target_result::ClosedScalarTargetLlvmErrorV29> for Error {
 impl From<target_result::mixed_v26::worker_input_v26::MixedWorkerInputErrorV26> for Error {
     fn from(error: target_result::mixed_v26::worker_input_v26::MixedWorkerInputErrorV26) -> Self {
         Self::MixedWorkerInput(error)
+    }
+}
+
+impl From<target_result::mixed_pure_cse_v26::worker_input_v26::MixedWorkerInputErrorV26> for Error {
+    fn from(
+        error: target_result::mixed_pure_cse_v26::worker_input_v26::MixedWorkerInputErrorV26,
+    ) -> Self {
+        Self::MixedPureCseWorkerInput(error)
     }
 }
 
@@ -361,6 +375,9 @@ mod mixed_worklist_v26;
 
 #[path = "production_pipeline_source_mixed_pure_cse_v26.rs"]
 mod mixed_pure_cse_v26;
+
+#[path = "production_pipeline_source_mixed_cfg_v27.rs"]
+mod mixed_cfg_v27;
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// The fixed source profile is selected before any semantic admission.

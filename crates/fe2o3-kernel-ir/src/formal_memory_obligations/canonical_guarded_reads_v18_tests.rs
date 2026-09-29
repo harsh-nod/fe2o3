@@ -10,6 +10,9 @@ mod resources;
 #[path = "canonical_guarded_read_origins_v18_tests.rs"]
 mod read_origins;
 
+#[path = "canonical_guarded_pointer_carriers_v18_tests.rs"]
+mod pointer_carriers;
+
 const LIMITS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
     rows: 8,
     edges: 16,

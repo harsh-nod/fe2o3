@@ -19,6 +19,35 @@ pub(crate) enum Mode {
     RestoredFloor,
 }
 
+#[test]
+fn mixed_worker_input_frames_have_an_independent_header_oracle() {
+    type Owner<'a> = PreparedMixedWorkerInputV26<'a, 'a, 'a, 'a, 'a, 'a>;
+    type Frame<'a> = (
+        &'a ConditionalMixedTargetLlvmV26<'a, 'a, 'a>,
+        &'a DeviceDescriptorTableV3<'a>,
+        Abi<'a>,
+        &'a mut Budget<'a>,
+        Cell<usize>,
+        &'a Cell<usize>,
+        Vec<Vec<u8>>,
+        Vec<u8>,
+        Vec<u8>,
+        [usize; 12],
+        [u8; 32],
+        Result<Vec<Vec<u8>>>,
+        std::thread::Result<Result<Vec<Vec<u8>>>>,
+        KernelDescriptorRefV3<'a, 'a>,
+        std::slice::Iter<'a, Root<'a>>,
+    );
+    let expected = size_of::<Owner<'_>>()
+        + align_of::<Owner<'_>>()
+        + size_of::<Frame<'_>>()
+        + align_of::<Frame<'_>>()
+        + size_of::<AssertUnwindSafe<Frame<'_>>>()
+        + size_of::<Result<Owner<'_>>>();
+    assert_eq!(headers().unwrap(), expected);
+}
+
 // This builder is deliberately a test-data producer, not a signed compiler
 // descriptor. The real constructor must independently replay every source row.
 fn descriptor_fixture(

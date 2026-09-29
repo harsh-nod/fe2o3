@@ -316,7 +316,10 @@ impl PendingGlobalSourceAccessesV18<'_> {
                 || !matches!(length.kind, OperationKind::SliceLength { slice } if slice == root)
                 || !matches!(address.kind, OperationKind::GetElementPointer { base, offset }
                     if base == data_value && offset == index)
-                || !matches!(address.results.as_slice(), [value] if value.id == endpoint.pointer)
+                // Exact formation and actual access are joined independently.
+                // The authenticated private pair already replayed every issued
+                // Global/Generic cast and ancestor call edge between them.
+                || !matches!(address.results.as_slice(), [value] if value.id == endpoint.formation_pointer)
                 || (!endpoint.writing && !matches!(access.results.as_slice(), [value]
                     if value.id == endpoint.value && value.ty == Type::Scalar(endpoint.scalar)))
             { return self.roles.original.source.missing("pending global native changed exact access recipe"); }

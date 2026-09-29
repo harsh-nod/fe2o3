@@ -47,6 +47,9 @@ include!("production_pipeline_source_owned_target_policy_v29.rs");
 #[path = "production_pipeline_source_owned_target_mixed_v26.rs"]
 pub(crate) mod mixed_v26;
 
+#[path = "production_pipeline_source_owned_target_mixed_pure_cse_v26.rs"]
+pub(crate) mod mixed_pure_cse_v26;
+
 pub(crate) type ClosedScalarTargetLlvmV29<'handoff, 'view, 'source> =
     TargetLlvmV29<'handoff, 'view, 'source, Handoff<'view, 'source>>;
 pub(crate) type ScalarCfgTargetLlvmV29<'handoff, 'view, 'source> =

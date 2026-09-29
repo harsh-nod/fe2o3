@@ -114,7 +114,7 @@ struct MixedCallbacks {
     result: Option<Result<Observation, String>>,
 }
 
-fn paid_text(text: &str, budget: &mut Budget<'_>) -> Result<String, Error> {
+pub(super) fn paid_text(text: &str, budget: &mut Budget<'_>) -> Result<String, Error> {
     budget.charge_work(text.len())?;
     budget.reserve_storage(text.len())?;
     let mut copied = String::new();
@@ -626,7 +626,7 @@ fn actual_original_mixed_reference_calls_keep_repeated_mutable_and_multiroot_own
     );
 }
 
-fn parse_and_verify_target_llvm(text: &str) {
+pub(super) fn parse_and_verify_target_llvm(text: &str) {
     let opt = PathBuf::from(
         env::var_os("FE2O3_OPT").expect("FE2O3_OPT must name the explicit pinned LLVM 22 verifier"),
     );

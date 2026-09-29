@@ -1,5 +1,14 @@
 //! Actual rustc capture through the distinct source-bound Policy10 continuation.
+use super::mixed_worklist_tests::{paid_text, parse_and_verify_target_llvm};
 use super::*;
+use crate::production_pipeline::source_owned_v29::target_result::{
+    mixed_pure_cse_v26::{
+        check_and_lower_mixed_target_llvm_v26,
+        tests::genuine_mixed_case,
+        worker_input_v26::tests::{Mode as WorkerMode, genuine_worker_input_case},
+    },
+    tests::Mode as TargetMode,
+};
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_pure_cse_tests::mixed_pure_cse_child";
 const DUPLICATE: &str = r#"
@@ -46,6 +55,10 @@ struct Observation {
     foreign_owner_refused: bool,
     incomplete_abi_refused: bool,
     callback_error_preserved: bool,
+    target: String,
+    llvm: String,
+    target_controls_checked: bool,
+    worker_input_controls_checked: bool,
 }
 
 #[derive(Default)]
@@ -67,7 +80,7 @@ impl Callbacks for PureCseCallbacks {
                 .map_err(|error| format!("independent Policy10 source: {error:?}"))?;
             let continuation = transaction()?
                 .with_original_source_conditional_mixed_pure_cse_v26(
-                    |source, handoff, roots, _, budget| {
+                    |source, handoff, roots, target, budget| {
                         handoff.check_original_source(source.source_ssa(budget)?, budget)?;
                         handoff.check_original_argument_abi_v26(AbiInput { roots }, budget)?;
                         let original = source.canonical(budget)?;
@@ -135,6 +148,18 @@ impl Callbacks for PureCseCallbacks {
                                 .sum::<usize>(),
                             writes
                         );
+                        let native =
+                            check_and_lower_mixed_target_llvm_v26(source, handoff, target, budget)?;
+                        let inspected: Result<String, Error> = (|| {
+                            assert_eq!(native.target(budget)?, target);
+                            let text = native.llvm_ir(budget)?;
+                            assert!(text.contains("kir-version:18"));
+                            assert!(!text.contains("kir-version:12"));
+                            paid_text(text, budget)
+                        })();
+                        let released = native.discard(budget);
+                        let llvm = inspected?;
+                        released?;
                         Ok(Observation {
                             policy: output.execution().policy_version(),
                             historical_policy: 0,
@@ -151,6 +176,10 @@ impl Callbacks for PureCseCallbacks {
                             foreign_owner_refused: false,
                             incomplete_abi_refused: false,
                             callback_error_preserved: false,
+                            target: paid_text(target.device_target(), budget)?,
+                            llvm,
+                            target_controls_checked: false,
+                            worker_input_controls_checked: false,
                         })
                     },
                 )
@@ -202,6 +231,62 @@ impl Callbacks for PureCseCallbacks {
                 callback_result,
                 Err(Error::Unsupported("Policy10 consumer refusal"))
             );
+            for mode in [
+                TargetMode::Success,
+                TargetMode::ExactStorage,
+                TargetMode::ShortStorage,
+                TargetMode::WorkRefusal,
+                TargetMode::ForeignEntry,
+                TargetMode::RestoredFloor,
+            ] {
+                let result = transaction()?.with_original_source_conditional_mixed_pure_cse_v26(
+                    |source, handoff, _, target, budget| {
+                        genuine_mixed_case(source, handoff, target, budget, mode)?;
+                        Ok(())
+                    },
+                );
+                if matches!(mode, TargetMode::Success | TargetMode::ExactStorage) {
+                    result
+                        .map_err(|error| format!("Policy10 target {mode:?}: {error:?}"))?
+                        .into_observation();
+                } else {
+                    assert!(matches!(
+                        result.err().expect("target refusal required"),
+                        Error::TargetLlvm(_)
+                    ));
+                }
+            }
+            observation.target_controls_checked = true;
+            for mode in [
+                WorkerMode::Success,
+                WorkerMode::WrongTarget,
+                WorkerMode::WrongBinding,
+                WorkerMode::WrongType,
+                WorkerMode::IncompleteAbi,
+                WorkerMode::ForeignLedger,
+                WorkerMode::ExactStorage,
+                WorkerMode::ShortStorage,
+                WorkerMode::WorkRefusal,
+                WorkerMode::RestoredFloor,
+            ] {
+                let result = transaction()?.with_original_source_conditional_mixed_pure_cse_v26(
+                    |source, handoff, roots, target, budget| {
+                        genuine_worker_input_case(source, handoff, roots, target, budget, mode)?;
+                        Ok(())
+                    },
+                );
+                if matches!(mode, WorkerMode::Success | WorkerMode::ExactStorage) {
+                    result
+                        .map_err(|error| format!("Policy10 Worker input {mode:?}: {error:?}"))?
+                        .into_observation();
+                } else {
+                    assert!(matches!(
+                        result.err().expect("Worker input refusal required"),
+                        Error::MixedPureCseWorkerInput(_)
+                    ));
+                }
+            }
+            observation.worker_input_controls_checked = true;
             Ok(observation)
         })());
         Compilation::Stop
@@ -209,6 +294,7 @@ impl Callbacks for PureCseCallbacks {
 }
 
 #[test]
+#[ignore = "process helper; requires an exact actual-source request from its parent"]
 fn mixed_pure_cse_child() {
     let Some(path) = env::var_os(ARGS) else {
         return;
@@ -226,7 +312,7 @@ fn mixed_pure_cse_child() {
 }
 
 #[test]
-#[ignore = "requires pinned nightly rust-src and authentic AMD dependencies"]
+#[ignore = "requires pinned nightly rust-src, authentic AMD dependencies and FE2O3_OPT LLVM 22"]
 fn actual_original_mixed_pure_cse_preserves_memory_contracts_and_observes_real_rewrites() {
     run_actual_sources::<Observation>(
         &[
@@ -249,6 +335,41 @@ fn actual_original_mixed_pure_cse_preserves_memory_contracts_and_observes_real_r
             }
             assert!(report.foreign_owner_refused && report.incomplete_abi_refused);
             assert!(report.callback_error_preserved);
+            assert!(report.target.starts_with("gfx942") || report.target.starts_with("gfx950"));
+            assert!(report.target_controls_checked && report.worker_input_controls_checked);
+            parse_and_verify_target_llvm(&report.llvm);
         },
+    );
+}
+
+#[test]
+fn mixed_pure_cse_worker_input_keeps_its_nominal_backend_error() {
+    use crate::production_pipeline::source_owned_v29::target_result::{
+        mixed_pure_cse_v26::worker_input_v26 as pure, mixed_v26::worker_input_v26 as worklist,
+    };
+    let error = Error::from(pure::MixedWorkerInputErrorV26::Mismatch(
+        "original root ordinal",
+    ));
+    assert!(matches!(
+        error,
+        Error::MixedPureCseWorkerInput(pure::MixedWorkerInputErrorV26::Mismatch(
+            "original root ordinal"
+        ))
+    ));
+    assert!(std::error::Error::source(&error).is_some());
+    assert_ne!(
+        std::any::type_name::<
+            pure::PreparedMixedWorkerInputV26<'static, 'static, 'static, 'static, 'static, 'static>,
+        >(),
+        std::any::type_name::<
+            worklist::PreparedMixedWorkerInputV26<
+                'static,
+                'static,
+                'static,
+                'static,
+                'static,
+                'static,
+            >,
+        >(),
     );
 }

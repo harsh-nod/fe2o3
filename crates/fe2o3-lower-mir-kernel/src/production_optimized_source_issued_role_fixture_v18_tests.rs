@@ -428,7 +428,14 @@ fn issued_scalar_scratch_storage_oracle_v18<Outer, Inner>() -> usize {
 
 type IssuedScratchTwoRefsV18<'a> = (&'a usize, &'a usize);
 type IssuedScratchFourRefsV18<'a> = (&'a usize, &'a usize, &'a usize, &'a usize);
-type IssuedScratchFiveRefsV18<'a> = (&'a usize, &'a usize, &'a usize, &'a usize, &'a usize);
+type IssuedScratchSixRefsV18<'a> = (
+    &'a usize,
+    &'a usize,
+    &'a usize,
+    &'a usize,
+    &'a usize,
+    &'a usize,
+);
 
 #[test]
 fn original_issued_descriptor_scalar_scratch_has_independent_exact_and_short_bounds() {
@@ -503,7 +510,8 @@ fn original_issued_descriptor_scalar_scratch_refunds_after_fixed_and_partial_den
             size_of::<(&std::cell::Cell<bool>, Box<[u8; 32]>)>() + size_of::<[u8; 32]>();
         let limit = issued_scalar_scratch_storage_oracle_v18::<
             IssuedScratchFourRefsV18<'_>,
-            IssuedScratchFiveRefsV18<'_>,
+            // floor, fixed, entered, fault, dropped, and limit are all borrowed.
+            IssuedScratchSixRefsV18<'_>,
         >() + allocation;
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = ArgumentBudgetV1::new(&mut work, limit);

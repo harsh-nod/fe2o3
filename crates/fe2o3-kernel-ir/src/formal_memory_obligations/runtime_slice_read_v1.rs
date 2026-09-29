@@ -621,16 +621,18 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         {
             return Ok(None);
         }
-        let Some(pointer_operation) = self.definition(pointer)? else {
-            return Ok(None);
-        };
-        let (gep_pointer, gep) = if matches!(
-            pointer_operation.kind,
-            OperationKind::Cast {
-                kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
-                ..
-            }
-        ) {
+        let pointer_operation = self.definition(pointer)?;
+        // A preserved block parameter has no operation definition. Its unique
+        // typed edge origin must enter the same checked cast/alias peeler.
+        let (gep_pointer, gep) = if pointer_operation.is_none_or(|operation| {
+            matches!(
+                operation.kind,
+                OperationKind::Cast {
+                    kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                    ..
+                }
+            )
+        }) {
             let Some(source) = self.peel_pointer_casts(pointer)? else {
                 return Ok(None);
             };
@@ -639,7 +641,10 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
             };
             (source, operation)
         } else {
-            (pointer, pointer_operation)
+            (
+                pointer,
+                pointer_operation.expect("non-cast operation was selected"),
+            )
         };
         let OperationKind::GetElementPointer { base, offset } = gep.kind else {
             return Ok(None);
@@ -682,19 +687,28 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         if !matches!(actual_type, Type::Pointer(p) if p.address_space == access.address_space) {
             return Ok(None);
         }
-        let Some(base_operation) = self.definition(base)? else {
-            return Ok(None);
-        };
-        if !single_type(base_operation, &result.ty) {
-            return Ok(None);
-        }
-        let data = if matches!(
-            base_operation.kind,
-            OperationKind::Cast {
-                kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
-                ..
+        let base_operation = self.definition(base)?;
+        if let Some(operation) = base_operation {
+            if !single_type(operation, &result.ty) {
+                return Ok(None);
             }
-        ) {
+        } else {
+            // The GEP still consumes exactly its actual base type. The peeler
+            // checks resolved carrier endpoint and cast types in the verified CFG.
+            self.ledger.charge(4)?;
+            if self.runtime_type(base)? != Some(&result.ty) {
+                return Ok(None);
+            }
+        }
+        let data = if base_operation.is_none_or(|operation| {
+            matches!(
+                operation.kind,
+                OperationKind::Cast {
+                    kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                    ..
+                }
+            )
+        }) {
             let Some(source) = self.peel_pointer_casts(base)? else {
                 return Ok(None);
             };
@@ -703,7 +717,7 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
             };
             operation
         } else {
-            base_operation
+            base_operation.expect("non-cast base operation was selected")
         };
         let [data_result] = data.results.as_slice() else {
             return Ok(None);

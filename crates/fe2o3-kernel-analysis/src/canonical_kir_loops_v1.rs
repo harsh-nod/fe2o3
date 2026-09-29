@@ -9,7 +9,8 @@ use fe2o3_kernel_ir::{
     CanonicalKirControlFlowScopeErrorV1, CanonicalKirDefinitionCoordinateV1 as Definition,
     CanonicalKirEdgeCoordinateV1 as Edge, CanonicalKirOperationCoordinateV1 as Operation,
     CheckedBinaryOperator, Constant, OperationKind, ScalarType, Terminator, Type,
-    with_canonical_kir_control_flow_v1,
+    VerifiedCanonicalKernelIrModuleV12 as Owner12, VerifiedCanonicalKernelIrModuleV18 as Owner18,
+    with_canonical_kir_control_flow_v1, with_canonical_kir_control_flow_v18,
 };
 use std::{
     fmt,
@@ -193,14 +194,17 @@ impl CanonicalKirLoopStorageV1 {
 /// }
 /// ```
 #[derive(Debug)]
-pub struct CanonicalKirLoopsV1<'i, 'g> {
-    inventory: &'i Inventory<'g>,
+pub struct CanonicalKirLoopsV1<'i, 'g, O = Owner12> {
+    inventory: &'i Inventory<'g, O>,
     loops: Vec<NaturalLoop>,
     members: Vec<Block>,
     edges: Vec<Edge>,
     recurrences: Vec<Recurrence>,
     retained: usize,
 }
+/// Natural loops and exact recurrences of the actual storage-capable inventory.
+pub type CanonicalKirLoopsV18<'i, 'g> = CanonicalKirLoopsV1<'i, 'g, Owner18>;
+
 impl<'i, 'g> CanonicalKirLoopsV1<'i, 'g> {
     /// Reuses one existing live-metered CFG per defined function. Beyond that
     /// bounded algorithm, discovery is O(F+(H+1)*(B+E)+D*log(D+1)+O+R), H <= B.
@@ -215,15 +219,35 @@ impl<'i, 'g> CanonicalKirLoopsV1<'i, 'g> {
         budget: &mut Budget<'_>,
     ) -> Result<(Self, CanonicalKirLoopStorageV1)> {
         scoped(budget, |budget| {
-            let report = Self::build(inventory, limits, budget)?;
+            let report = Self::build(inventory, limits, budget, seed_flow_v12)?;
             let receipt = CanonicalKirLoopStorageV1(report.retained);
             Ok((report, receipt))
         })
     }
-    pub fn inventory(&self) -> &'i Inventory<'g> {
+}
+
+impl<'i, 'g> CanonicalKirLoopsV18<'i, 'g> {
+    /// Uses the same bounded discovery and independent exact-edge replay as V12,
+    /// while borrowing the original V18 inventory and storage-aware graph.
+    /// The report receipt is unreserved; reserve it before any further work.
+    pub fn derive_v18(
+        inventory: &'i Inventory<'g, Owner18>,
+        limits: CanonicalKirLoopLimitsV1,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, CanonicalKirLoopStorageV1)> {
+        scoped(budget, |budget| {
+            let report = Self::build(inventory, limits, budget, seed_flow_v18)?;
+            let receipt = CanonicalKirLoopStorageV1(report.retained);
+            Ok((report, receipt))
+        })
+    }
+}
+
+impl<'i, 'g, O> CanonicalKirLoopsV1<'i, 'g, O> {
+    pub fn inventory(&self) -> &'i Inventory<'g, O> {
         self.inventory
     }
-    pub fn belongs_to(&self, inventory: &Inventory<'_>) -> bool {
+    pub fn belongs_to(&self, inventory: &Inventory<'_, O>) -> bool {
         std::ptr::eq(self.inventory, inventory)
     }
     pub fn loop_count(&self) -> usize {
@@ -264,7 +288,7 @@ impl<'i, 'g> CanonicalKirLoopsV1<'i, 'g> {
     /// Worst-case O(F+(B+1)*(B+E)+R+D*log(D+1)+O); exhaustion remains an error.
     pub fn replay(
         &self,
-        inventory: &Inventory<'_>,
+        inventory: &Inventory<'_, O>,
         limits: CanonicalKirLoopLimitsV1,
         budget: &mut Budget<'_>,
     ) -> Result<()> {
