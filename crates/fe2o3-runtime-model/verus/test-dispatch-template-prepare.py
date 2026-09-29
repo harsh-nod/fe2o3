@@ -66,15 +66,15 @@ def active_includes(source, expected):
 
 
 BINDING_INCLUDES = [f'include!("queue_dispatch_binding/{name}_body.rs");'
-                    for name in ("epoch_cancel", "epoch_reserve", "cancel_binding", "template_prepare", "template_preflight")]
+                    for name in ("epoch_cancel", "epoch_reserve", "cancel_binding", "template_prepare", "template_preflight", "template_bind")]
 COMPLETION_INCLUDES = [f'include!("queue_completion/{name}_body.rs");'
-                      for name in ("event_release", "bound_cancel", "rollback_adapters", "event_bind", "event_issue", "batch_bind")]
+                      for name in ("event_release", "bound_cancel", "rollback_adapters", "event_bind", "event_issue", "batch_bind", "dispatch_roster")]
 COMPLETION_INCLUDES.append('include!("queue_dispatch_binding/template_prepare_body.rs");')
 BINDING_WRAPPERS = [
     'macro_rules!dispatch_rust_expr{($body:expr)=>{$body};}',
     'fnprepared_kernarg_layout_matches_code(code_bound:bool,kernarg_layout_identity:[u8;32],dispatch_abi_identity:[u8;32])->bool{dispatch_template_abi_matches_body!(dispatch_rust_expr,code_bound,kernarg_layout_identity,dispatch_abi_identity)}',
     'fnprepare_dispatch_templates_v1(packets:&[PreparedDispatchPacketV1],code_identity:&[ResolvedCodeIdentityV1],queue:QueueKeyV1,generation:u64)->Result<Vec<CompletionPacketTemplateV1>,Gfx942DispatchBindingErrorV1>{dispatch_prepare_templates_body!(dispatch_rust_expr,packets,code_identity,queue,generation)}',
-    'lettemplates=prepare_dispatch_templates_v1(&self.packets,&self.code_identity,queue,generation)?;',
+    'dispatch_bind_templates_body!(dispatch_rust_expr,self,N,queue)',
 ]
 COMPLETION_WRAPPERS = [
     'macro_rules!completion_rust_expr{($body:expr)=>{$body};}',
@@ -91,20 +91,11 @@ pub(super) fn bind_templates<const N: usize>(
     (Box<[CompletionPacketTemplateV1; N]>, DispatchEpochIdentityV1,),
     Gfx942DispatchBindingErrorV1,
 > {
-    let generation = self.preflight_templates::<N>(queue)?;
-    let templates = prepare_dispatch_templates_v1(&self.packets, &self.code_identity, queue, generation)?;
-    let templates: Box<[CompletionPacketTemplateV1; N]> = templates
-        .into_boxed_slice().try_into()
-        .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidKernarg {
-            packet: 0, detail: "prepared packet cardinality",
-        })?;
-    let dispatches: Vec<_> = templates.iter().map(|template| template.generations()).collect();
-    let expected_roster = completion_dispatch_roster_v1(&dispatches)?;
-    let identity = self.generation.reserve(queue, expected_roster)?;
-    debug_assert_eq!(identity.dispatch_generation, generation);
-    Ok((templates, identity))
+    dispatch_bind_templates_body!(dispatch_rust_expr, self, N, queue)
 }
 '''))
+BINDER_GUARD = runpy.run_path(str(root / r["V"] / "check-dispatch-template-bind.py"))
+BINDER_BODY = (root / BINDER_GUARD["BODY"]).read_text()
 
 
 def balanced_body(source, start, opener="{", closer="}"):
@@ -124,6 +115,7 @@ def named_impl(source, name):
 
 
 def binder_join(source):
+    BINDER_GUARD["binder_wiring"](source, BINDER_BODY)
     code = compact(code_only(source))
     need(len(re.findall(r"fnbind_templates[<(]", code)) == 1, "unique template binder method")
     prefix = "implDispatchResourceOwnerV1{"
@@ -140,7 +132,7 @@ def binder_join(source):
     need(owner.count(BINDER_METHOD) == 1, "exact real binder source order")
     before = owner[:owner.index(BINDER_METHOD)]
     need(before.count("{") == before.count("}"), "direct dispatch resource method")
-    need(BINDER_METHOD.count(BINDING_WRAPPERS[-1]) == 1, "exact single preparation call in binder")
+    need(BINDER_METHOD.count(BINDING_WRAPPERS[-1]) == 1, "exact single shared body call in binder")
 
 
 def wiring(binding, completion):
@@ -211,27 +203,29 @@ for column, source, includes, patterns in (
             texts[column] = source.replace(statement, replacement)
             rejects(lambda: wiring(*texts))
 
-call = "prepare_dispatch_templates_v1(&self.packets, &self.code_identity, queue, generation)?;"
+call = "dispatch_bind_templates_body!(dispatch_rust_expr, self, N, queue)"
 need(binding.count(call) == 1, "real binder call relocation site")
-moved_call = binding.replace(call, "Vec::new();") + '''
+moved_call = binding.replace(call, "unimplemented!()") + '''
 impl DispatchResourceOwnerV1 {
     #[allow(dead_code)]
     fn unrelated_template_call_for_guard(&self, queue: QueueKeyV1, generation: u64)
         -> Result<(), Gfx942DispatchBindingErrorV1> {
-        let templates = ''' + call + '''
-        let _ = templates;
-        Ok(())
+        ''' + call + '''
     }
 }
 '''
 need(compact(code_only(moved_call)).count(BINDING_WRAPPERS[-1]) == 1, "decoy preserves global active call")
 rejects(lambda: wiring(moved_call, completion))
 for old, new in (
-    ("self.preflight_templates::<N>(queue)?", "0"),
-    ("self.preflight_templates::<N>(queue)?", "self.preflight_templates::<N>(other_queue)?"),
-    ("self.generation.reserve(queue, expected_roster)?", "self.generation.reserve(queue, other_roster)?"),
+    ("dispatch_bind_templates_body!(dispatch_rust_expr, self, N, queue)", "dispatch_bind_templates_body!(dispatch_rust_expr, self, N, other_queue)"),
+    ("dispatch_bind_templates_body!(dispatch_rust_expr, self, N, queue)", "dispatch_bind_templates_body!(dispatch_rust_expr, other, N, queue)"),
+    ("dispatch_bind_templates_body!(dispatch_rust_expr, self, N, queue)", "dispatch_bind_templates_body!(dispatch_rust_expr, self, M, queue)"),
 ):
     rejects(lambda: binder_join(binding.replace(old, new)))
+for old, new in (("$owner.preflight_templates::<$n>($queue)?", "0"),
+                 ("$owner.generation.reserve($queue, $roster)?", "$owner.generation.reserve($queue, other_roster)?")):
+    need(old in BINDER_BODY, "shared composition mutation site")
+    rejects(lambda: BINDER_GUARD["binder_wiring"](binding, BINDER_BODY.replace(old, new)))
 
 
 def shape(source, name):

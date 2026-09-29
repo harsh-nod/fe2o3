@@ -110,7 +110,15 @@ fn scaled_publication_exhaustion_precedes_recycled_detach_and_resident_consumpti
                     .clone()
             })
             .collect::<Vec<_>>();
-        let result = backend.publish(123, 1, None, Arc::new(launch.clone()), prepared);
+        let result = backend.publish(
+            123,
+            1,
+            None,
+            Arc::new(RetainedComputeLaunchV1::unaccounted_for_test(
+                launch.unaccounted_copy_for_test(),
+            )),
+            prepared,
+        );
         assert!(
             matches!(result, Err(RuntimeBackendFailureV1::Rejected(ref error))
             if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity

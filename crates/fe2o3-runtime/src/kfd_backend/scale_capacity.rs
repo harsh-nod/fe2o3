@@ -252,6 +252,45 @@ impl KfdRuntimeBackendV1 {
         )
     }
 
+    /// Opens the repeat profile with an immutable retained-launch payload account.
+    ///
+    /// Each owned kernarg/binding slice pair reserves its checked byte extent as
+    /// `ControlResidentBytes` and one record before copying or acceptance. Arc
+    /// aliases share one charge until the final slice owner is disposed. Pass a
+    /// clone of an existing account or root child to share its ancestor limits;
+    /// this constructor creates no new accounting domain or native authority.
+    ///
+    /// The existing host-table budget remains separate and unchanged. This does
+    /// not cover dependencies, other pending/active metadata, Arc/allocator
+    /// overhead, Context registries, native backing, RSS or aggregate memory.
+    /// Fallible vector reservation does not make Rust Arc allocation OOM-safe.
+    #[cfg(feature = "scale-qualification")]
+    pub fn open_gfx942_vecadd_repeat_scale_qualification_with_launch_payload_account_v1(
+        device_unique_id: u64,
+        host_table_budget_bytes: u64,
+        max_host_table_reservations: usize,
+        payload_account: ResourceCreditAccountV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let mut backend = Self::open_gfx942_vecadd_repeat_scale_qualification_v1(
+            device_unique_id,
+            host_table_budget_bytes,
+            max_host_table_reservations,
+        )?;
+        backend.launch_payload_account = Some(payload_account);
+        Ok(backend)
+    }
+
+    /// Usage of the attached account, including any other participating owners.
+    /// Neither zero usage nor disposal grants native quiescence authority.
+    #[cfg(feature = "scale-qualification")]
+    pub fn scale_qualification_launch_payload_account_usage_v1(
+        &self,
+    ) -> Option<fe2o3_resource_accounting::ResourceCreditUsageV1> {
+        self.launch_payload_account
+            .as_ref()
+            .map(ResourceCreditAccountV1::usage)
+    }
+
     #[cfg(feature = "scale-qualification")]
     fn open_gfx942_vecadd_scaled_v1(
         device_unique_id: u64,

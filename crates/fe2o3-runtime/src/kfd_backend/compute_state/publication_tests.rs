@@ -36,18 +36,20 @@ fn active(id: u64) -> ActiveSubmissionV1 {
         data_offset: 8,
         byte_len: 16,
     });
-    owner.ordinary_recipe = Some(Arc::new(OwnedComputeLaunchV1 {
-        stream: owner.stream,
-        kernel: owner.kernel,
-        explicit_kernarg: vec![1, 2, 3].into_boxed_slice(),
-        bindings: Box::new([]),
-        geometry: crate::RuntimeLaunchGeometryV1 {
-            grid: [1, 1, 1],
-            workgroup: [1, 1, 1],
-            dynamic_shared_bytes: 0,
+    owner.ordinary_recipe = Some(Arc::new(RetainedComputeLaunchV1::unaccounted_for_test(
+        OwnedComputeLaunchV1 {
+            stream: owner.stream,
+            kernel: owner.kernel,
+            explicit_kernarg: vec![1, 2, 3].into_boxed_slice(),
+            bindings: Box::new([]),
+            geometry: crate::RuntimeLaunchGeometryV1 {
+                grid: [1, 1, 1],
+                workgroup: [1, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+            semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
         },
-        semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
-    }));
+    )));
     owner.execution = Some(ActiveComputeExecutionV1::ScriptedMaterialized);
     owner
 }
@@ -70,7 +72,7 @@ struct Owner {
     residents: Vec<ResidentDataDescriptorV1>,
     resident_address: usize,
     resident_capacity: usize,
-    recipe: Option<Arc<OwnedComputeLaunchV1>>,
+    recipe: Option<Arc<RetainedComputeLaunchV1>>,
     recipe_address: Option<usize>,
     shape: [u8; 32],
     published_at: Instant,

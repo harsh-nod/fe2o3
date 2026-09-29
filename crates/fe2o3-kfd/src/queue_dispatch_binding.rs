@@ -12,6 +12,7 @@ include!("queue_dispatch_binding/epoch_reserve_body.rs");
 include!("queue_dispatch_binding/cancel_binding_body.rs");
 include!("queue_dispatch_binding/template_prepare_body.rs");
 include!("queue_dispatch_binding/template_preflight_body.rs");
+include!("queue_dispatch_binding/template_bind_body.rs");
 
 macro_rules! dispatch_rust_expr {
     ($body:expr) => {
@@ -69,11 +70,13 @@ use fe2o3_hsaco::{
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 use sha2::{Digest, Sha256};
 
+#[cfg(any(test, feature = "cpu-runtime-fixtures"))]
+use super::completion::completion_dispatch_roster_v1;
 use super::completion::{
     CompletionBatchOccurrenceV1, CompletionDispatchGenerationBindingV1, CompletionDispatchRosterV1,
     CompletionPacketTemplateV1, Gfx942CompletedBatchV1, Gfx942CompletionBatchV1,
     Gfx942CompletionErrorV1, Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1,
-    Gfx942CompletionProgressV1, completion_dispatch_roster_v1,
+    Gfx942CompletionProgressV1, completion_template_dispatch_roster_v1,
 };
 use super::device_content::{Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1};
 use crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
@@ -2548,26 +2551,7 @@ impl DispatchResourceOwnerV1 {
         ),
         Gfx942DispatchBindingErrorV1,
     > {
-        let generation = self.preflight_templates::<N>(queue)?;
-        let templates =
-            prepare_dispatch_templates_v1(&self.packets, &self.code_identity, queue, generation)?;
-        // Keep the roster heap-backed through submission, including large-N
-        // refusals whose return ABI must not reserve a template array on stack.
-        let templates: Box<[CompletionPacketTemplateV1; N]> = templates
-            .into_boxed_slice()
-            .try_into()
-            .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidKernarg {
-                packet: 0,
-                detail: "prepared packet cardinality",
-            })?;
-        let dispatches: Vec<_> = templates
-            .iter()
-            .map(|template| template.generations())
-            .collect();
-        let expected_roster = completion_dispatch_roster_v1(&dispatches)?;
-        let identity = self.generation.reserve(queue, expected_roster)?;
-        debug_assert_eq!(identity.dispatch_generation, generation);
-        Ok((templates, identity))
+        dispatch_bind_templates_body!(dispatch_rust_expr, self, N, queue)
     }
 
     pub(super) fn cancel_binding(

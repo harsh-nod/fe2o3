@@ -32,6 +32,7 @@ include!("queue_completion/event_bind_body.rs");
 include!("queue_completion/event_issue_body.rs");
 include!("queue_completion/batch_bind_body.rs");
 include!("queue_dispatch_binding/template_prepare_body.rs");
+include!("queue_completion/dispatch_roster_body.rs");
 
 macro_rules! completion_rust_expr {
     ($body:expr) => {
@@ -178,33 +179,41 @@ pub(super) fn completion_dispatch_roster_v1(
 fn completion_dispatch_roster_with_visits_v1(
     dispatches: &[CompletionDispatchGenerationBindingV1],
 ) -> Result<(CompletionDispatchRosterV1, usize), Gfx942CompletionErrorV1> {
-    let first = dispatches
-        .first()
-        .ok_or(Gfx942CompletionErrorV1::ZeroPacketCount)?;
-    if first.dispatch_generation == 0 {
-        return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
-    }
-    let mut hasher = CompletionOccurrenceHasherV1(Sha256::new());
-    dispatches.len().hash(&mut hasher);
     let mut visits = 0;
-    for dispatch in dispatches {
+    let roster = completion_dispatch_roster_projected_v1(dispatches, |dispatch| {
         visits += 1;
-        if dispatch.queue != first.queue
-            || dispatch.dispatch_generation != first.dispatch_generation
-        {
-            return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
-        }
-        dispatch.hash(&mut hasher);
-    }
-    Ok((
-        CompletionDispatchRosterV1 {
-            queue: first.queue,
-            packet_count: dispatches.len(),
-            dispatch_generation: first.dispatch_generation,
-            roster_sha256: hasher.0.finalize().into(),
-        },
-        visits,
-    ))
+        *dispatch
+    })?;
+    Ok((roster, visits))
+}
+
+pub(super) fn completion_template_dispatch_roster_v1(
+    templates: &[CompletionPacketTemplateV1],
+) -> Result<CompletionDispatchRosterV1, Gfx942CompletionErrorV1> {
+    completion_dispatch_roster_projected_v1(templates, |template| template.generations())
+}
+
+fn completion_dispatch_roster_projected_v1<T>(
+    values: &[T],
+    project: impl FnMut(&T) -> CompletionDispatchGenerationBindingV1,
+) -> Result<CompletionDispatchRosterV1, Gfx942CompletionErrorV1> {
+    let mut hasher = CompletionOccurrenceHasherV1(Sha256::new());
+    let (queue, dispatch_generation) =
+        hash_completion_dispatch_roster_projected_v1(values, project, &mut hasher)?;
+    Ok(CompletionDispatchRosterV1 {
+        queue,
+        packet_count: values.len(),
+        dispatch_generation,
+        roster_sha256: hasher.0.finalize().into(),
+    })
+}
+
+fn hash_completion_dispatch_roster_projected_v1<T, H: Hasher>(
+    values: &[T],
+    mut project: impl FnMut(&T) -> CompletionDispatchGenerationBindingV1,
+    hasher: &mut H,
+) -> Result<(QueueKeyV1, u64), Gfx942CompletionErrorV1> {
+    completion_hash_roster_body!(completion_rust_expr, values, project, hasher)
 }
 
 fn completion_batch_occurrence_v1<const N: usize>(
@@ -2573,6 +2582,10 @@ pub(super) fn initialize_pending_completion_signal_arena(
 fn validate_packet_count<const N: usize>() -> Result<(), Gfx942CompletionErrorV1> {
     completion_packet_count_body!(completion_rust_expr, N)
 }
+
+#[cfg(test)]
+#[path = "queue_completion/roster_projection_tests.rs"]
+mod roster_projection_tests;
 
 #[cfg(test)]
 mod tests {

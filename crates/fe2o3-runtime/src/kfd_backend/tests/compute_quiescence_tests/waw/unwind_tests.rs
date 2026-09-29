@@ -50,7 +50,7 @@ fn inspect_and_drop(mode: &str) {
             (
                 pending.id,
                 pending.module,
-                pending.launch.as_ref().clone(),
+                pending.launch.unaccounted_copy_for_test(),
                 pending.retained_allocations.clone(),
                 pending.ordered_predecessor,
                 pending.explicit_success_dependencies.clone(),

@@ -134,7 +134,7 @@ fn inspect_failure_and_drop(
                     (
                         pending.id,
                         pending.module,
-                        pending.launch.as_ref().clone(),
+                        pending.launch.unaccounted_copy_for_test(),
                         pending.retained_allocations.clone(),
                         pending.ordered_predecessor,
                         pending.explicit_success_dependencies.clone(),

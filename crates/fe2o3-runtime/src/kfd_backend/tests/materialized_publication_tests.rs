@@ -40,7 +40,7 @@ struct Fixture {
     predecessor: u64,
     first: u64,
     trailing: u64,
-    recipe: Arc<OwnedComputeLaunchV1>,
+    recipe: Arc<RetainedComputeLaunchV1>,
     trailing_recipe: String,
     primary: Option<String>,
 }

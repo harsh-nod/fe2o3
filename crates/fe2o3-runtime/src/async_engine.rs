@@ -2164,22 +2164,18 @@ mod tests {
                 return Err(error);
             }
             let handle = self.next();
-            self.state
-                .lock()
-                .unwrap()
+            // Observing an issue must also expose its initial polling status.
+            let mut state = self.state.lock().unwrap();
+            state
                 .submission_dependencies
                 .insert(handle, launch.dependencies.to_vec());
-            self.state.lock().unwrap().issues.push((
+            state.issues.push((
                 launch.stream,
                 handle,
                 launch.explicit_kernarg.to_vec(),
                 launch.bindings.to_vec(),
             ));
-            self.state
-                .lock()
-                .unwrap()
-                .statuses
-                .insert(handle, BackendPollV1::Pending);
+            state.statuses.insert(handle, BackendPollV1::Pending);
             Ok(handle)
         }
 

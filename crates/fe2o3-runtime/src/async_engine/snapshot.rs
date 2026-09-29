@@ -218,6 +218,55 @@ impl<A: RuntimeArgumentsV1> RuntimeAsyncLaunchRequestV1<A> {
     }
 }
 
+#[cfg(all(test, feature = "scale-qualification"))]
+impl<A: RuntimeArgumentsV1> RuntimeAsyncLaunchRequestV1<A> {
+    /// CPU handoff fixture: actual enqueue/factory/driver, without a progress
+    /// thread or stream flush. The inspection must settle the accepted request.
+    pub(crate) fn consume_with_handoff_inspection_for_test_v1<B: RuntimeBackendV1 + 'static>(
+        self,
+        context: &mut RuntimeContextV1<B>,
+        inspect: impl FnOnce(&mut RuntimeContextV1<B>, usize),
+    ) -> RuntimeAsyncOperationResultV1<A, B::Error> {
+        let bytes = self.snapshot_bytes();
+        let (sender, receiver) = sync_channel(1);
+        let handle = RuntimeAsyncProgressHandleV1 {
+            observer: RuntimeAsyncEngineHandleV1 {
+                context_generation: context.capture_context_generation_v1(),
+                capture_budget: None,
+                reply_budget: reply_budget::ReplyBudgetV1::new(1),
+                admission: drain::AdmissionV1::new(),
+                sender,
+                worker_thread: Arc::new(OnceLock::new()),
+                local_active: None,
+                quarantine_command_panics: true,
+                snapshot_budget: SnapshotBudgetV1::new(bytes.max(1)),
+                graph_slot: Arc::new(AtomicBool::new(false)),
+            },
+        };
+        let future = handle.enqueue_launch(self).unwrap();
+        assert_eq!(handle.observer.snapshot_bytes_in_use(), bytes);
+        let RuntimeAsyncEngineCommandV1::Operation(mut factory) = receiver.try_recv().unwrap()
+        else {
+            panic!("expected real launch operation factory");
+        };
+        let mut driver = factory.materialize();
+        assert!(
+            !driver.advance(context),
+            "first advance must accept the launch"
+        );
+        inspect(context, handle.observer.snapshot_bytes_in_use());
+        assert!(
+            driver.advance(context),
+            "inspection must settle the CPU launch"
+        );
+        drop(driver);
+        let result = owned::join_observer_v1(future).unwrap();
+        assert_eq!(handle.observer.snapshot_bytes_in_use(), 0);
+        assert_eq!(handle.observer.reply_cells_in_use(), 0);
+        result
+    }
+}
+
 impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     /// Consumes a frozen request; byte capacity is shared by all cloned handles.
     /// The payload is charged until submission/disposal, independently of future

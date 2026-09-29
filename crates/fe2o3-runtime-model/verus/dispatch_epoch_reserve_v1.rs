@@ -96,6 +96,7 @@ impl<C> DispatchGenerationOwnerV1<C> {
         ensures out.is_ok() == reserve_error(old(self).state(), queue, expected_roster).is_none(),
             match out {
                 Err(error) => final(self).state() == old(self).state()
+                    && *final(self) == *old(self)
                     && Some(error) == reserve_error(old(self).state(), queue, expected_roster),
                 Ok(id) => {
                     let before = old(self).state();

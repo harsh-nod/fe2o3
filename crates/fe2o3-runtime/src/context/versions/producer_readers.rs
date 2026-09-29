@@ -9,6 +9,12 @@ use fe2o3_runtime_model::{
     ContextWriterKindV1,
 };
 
+include!("producer_input_preflight_body.rs");
+
+#[cfg(test)]
+#[path = "producer_input_preflight_tests.rs"]
+mod preflight_tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::context) struct SubmissionProducerReaderMarkerV1 {
     first: FirstProducerReadV1,
@@ -68,20 +74,7 @@ pub(super) struct RetainedProducerReadV1 {
 
 impl RetainedProducerReadV1 {
     fn first_reference(&self) -> Option<FirstProducerReadV1> {
-        let (consumer, reference) = match self.inputs.first()?.request {
-            ProducerReadRequestV1::Active(_) => {
-                let first = *self.references.first()?;
-                (first.consumer, ProducerReadReferenceV1::Active(first))
-            }
-            ProducerReadRequestV1::Queued(_) => {
-                let first = *self.queued_references.first()?;
-                (first.consumer, ProducerReadReferenceV1::Queued(first))
-            }
-        };
-        Some(FirstProducerReadV1 {
-            consumer,
-            reference,
-        })
+        producer_input_first_reference_body!(completion_journal_rust_syntax, self)
     }
 
     fn complete_marker(&self) -> SubmissionProducerReaderMarkerV1 {
@@ -105,6 +98,13 @@ impl RetainedProducerReadV1 {
     pub(super) fn sources(&self) -> impl Iterator<Item = &ContextReadSourceV1> {
         self.inputs.iter().map(|input| &input.source)
     }
+}
+
+struct ProducerInputRootV1<'a> {
+    versions: &'a ContextVersionsV1,
+    root: &'a RetainedProducerReadV1,
+    consumer: ContextWriterKeyV1,
+    launch: bool,
 }
 
 pub(super) struct PreparedProducerReadsV1 {
@@ -745,67 +745,27 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         })
     }
 
+    fn producer_input_root_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<Option<ProducerInputRootV1<'_>>, ContextVersionJournalErrorV1> {
+        producer_input_preflight_body!(completion_journal_rust_syntax, self, id)
+    }
+
     pub(super) fn validate_producer_read_v1(
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Result<Option<ContextProducerReadStatusV1>, ContextVersionJournalErrorV1> {
         use ContextVersionJournalErrorV1 as E;
-        let record = self.submissions.get(&id);
-        let expected = record.and_then(|record| record.journal_producer_read);
-        let absent = if expected.is_some() {
-            Err(E::InvalidReference)
-        } else {
-            Ok(None)
+        let Some(ProducerInputRootV1 {
+            versions,
+            root,
+            consumer,
+            launch,
+        }) = self.producer_input_root_v1(id)?
+        else {
+            return Ok(None);
         };
-        let Some(versions) = &self.versions else {
-            return absent;
-        };
-        let Some(root) = versions.producer_readers.get(&id) else {
-            return absent;
-        };
-        let marker = root.marker.ok_or(E::InvalidReference)?;
-        let launch = root.domain == ProducerReadDomainV1::Launch;
-        let consumer = ContextWriterKeyV1 {
-            context_generation: id.context_generation,
-            local: id.local,
-            kind: ContextWriterKindV1::Submission,
-        };
-        if marker.count == 0
-            || marker.count != root.inputs.len()
-            || marker.count != root.references.len() + root.queued_references.len()
-            || root.references.len() != root.requests.len()
-            || root.queued_references.len() != root.queued_requests.len()
-            || Some(marker.first) != root.first_reference()
-            || marker.active
-                != root
-                    .references
-                    .first()
-                    .copied()
-                    .map(|first| (first, root.references.len()))
-            || marker.queued
-                != root
-                    .queued_references
-                    .first()
-                    .copied()
-                    .map(|first| (first, root.queued_references.len()))
-            || marker.first.consumer != consumer
-            || !launch && !root.queued_requests.is_empty()
-            || !launch && versions.submission_readers.contains_key(&id)
-            || record.is_some_and(|record| {
-                record.producer_launch != launch
-                    || !launch && (!record.directed_peer_copy || record.journal_read.is_some())
-                    || expected != Some(marker)
-                    || record.journal_writer
-                        != versions.submission_writers.get(&id).map(|root| root.writer)
-            })
-            || versions
-                .submission_writers
-                .get(&id)
-                .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
-            || !launch && !versions.submission_writers.contains_key(&id)
-        {
-            return Err(E::InvalidReference);
-        }
         let mut aggregate = ContextProducerReadStatusV1::Success;
         let mut active_index = 0usize;
         let mut queued_index = 0usize;

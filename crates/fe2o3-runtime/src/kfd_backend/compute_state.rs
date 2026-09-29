@@ -81,7 +81,7 @@ pub(super) struct ActiveSubmissionV1 {
     pub(super) allocations: HashSet<u64>,
     pub(super) writebacks: Vec<WritebackV1>,
     pub(super) resident_descriptors: Vec<ResidentDataDescriptorV1>,
-    pub(super) ordinary_recipe: Option<Arc<OwnedComputeLaunchV1>>,
+    pub(super) ordinary_recipe: Option<Arc<RetainedComputeLaunchV1>>,
     pub(super) dispatch_shape_sha256: [u8; 32],
     pub(super) published_at: Instant,
     pub(super) performance: KfdRuntimeLaunchPerformanceV1,
@@ -238,7 +238,7 @@ pub(super) enum ScriptedPersistentTransitionFailureV1 {
     CompletionCommitRosterMismatch,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(super) struct OwnedComputeLaunchV1 {
     pub(super) stream: u64,
     pub(super) kernel: u64,
@@ -249,6 +249,18 @@ pub(super) struct OwnedComputeLaunchV1 {
 }
 
 impl OwnedComputeLaunchV1 {
+    #[cfg(test)]
+    pub(super) fn unaccounted_copy_for_test(&self) -> Self {
+        Self {
+            stream: self.stream,
+            kernel: self.kernel,
+            explicit_kernarg: self.explicit_kernarg.clone(),
+            bindings: self.bindings.clone(),
+            geometry: self.geometry,
+            semantic_launch: self.semantic_launch,
+        }
+    }
+
     pub(super) fn borrowed(&self) -> BackendLaunchV1<'_> {
         BackendLaunchV1 {
             stream: self.stream,
@@ -266,7 +278,7 @@ impl OwnedComputeLaunchV1 {
 pub(super) struct PendingComputeSubmissionV1 {
     pub(super) id: u64,
     pub(super) module: u64,
-    pub(super) launch: Arc<OwnedComputeLaunchV1>,
+    pub(super) launch: Arc<RetainedComputeLaunchV1>,
     pub(super) retained_allocations: Box<[u64]>,
     pub(super) ordered_predecessor: Option<u64>,
     pub(super) explicit_success_dependencies: Box<[u64]>,

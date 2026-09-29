@@ -1174,6 +1174,8 @@ impl MemoryLifecycleStateV1 {
 
     /// Removes fully released journal records without making their identities
     /// reusable. Retired parent identities subsume all descendant history.
+    /// Validated checkpoints with no removals share journals with the source;
+    /// validation may still materialize lazy canonical views.
     pub fn checkpoint_released(&self) -> Result<Self, MemoryTransitionErrorV1> {
         self.validate_global_invariants()
             .map_err(MemoryTransitionErrorV1::SourceInvariant)?;
@@ -1211,6 +1213,15 @@ impl MemoryLifecycleStateV1 {
             })
             .map(|record| record.key)
             .collect();
+
+        // Validated watermark parents remain present when no journal loses records.
+        if compact_allocations.is_empty()
+            && compact_mappings.is_empty()
+            && compact_publications.is_empty()
+            && compact_reservations.is_empty()
+        {
+            return Ok(self.clone());
+        }
 
         let mut next = self.clone();
         next.publications
@@ -2521,6 +2532,10 @@ fn valid_allocation_spec(spec: MemoryAllocationSpecV1, reservation: VaReservatio
         && reservation.range.base.is_multiple_of(spec.alignment)
         && spec.alignment <= reservation.alignment
 }
+
+#[cfg(test)]
+#[path = "memory_lifecycle/checkpoint_tests.rs"]
+mod checkpoint_tests;
 
 #[cfg(test)]
 mod indexed_journal_tests {

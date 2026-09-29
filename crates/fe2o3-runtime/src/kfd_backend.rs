@@ -91,6 +91,8 @@ mod multi_admission;
 mod multi_allocation;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
+mod compute_launch_payload;
+use compute_launch_payload::RetainedComputeLaunchV1;
 mod compute_peer_gate;
 mod compute_quiescence_control;
 mod compute_settlement;
@@ -1357,6 +1359,7 @@ pub struct KfdRuntimeBackendV1 {
     modules: HashMap<u64, ModuleRecordV1>,
     kernels: HashMap<u64, KernelRecordV1>,
     host_image_account: Option<fe2o3_resource_accounting::ResourceCreditAccountV1>,
+    launch_payload_account: Option<fe2o3_resource_accounting::ResourceCreditAccountV1>,
     submissions: HashMap<u64, SubmissionRecordV1>,
     compute_completion_reservations: usize,
     sdma_completion_reservations: usize,
@@ -1872,6 +1875,7 @@ impl KfdRuntimeBackendV1 {
             modules: HashMap::new(),
             kernels: HashMap::new(),
             host_image_account: None,
+            launch_payload_account: None,
             submissions: HashMap::new(),
             compute_completion_reservations: 0,
             sdma_completion_reservations: 0,
@@ -5819,21 +5823,14 @@ impl KfdRuntimeBackendV1 {
             &peer_dma,
         )?;
 
-        let explicit_kernarg = try_copy_vec_v1(
-            launch.explicit_kernarg,
-            "KFD pending kernarg custody allocation failed",
-        )?
-        .into_boxed_slice();
-        let mut bindings = Vec::new();
-        bindings
-            .try_reserve_exact(launch.bindings.len())
-            .map_err(|_| Self::capacity("KFD pending binding custody allocation failed"))?;
-        bindings.extend_from_slice(launch.bindings);
+        let owned_launch =
+            RetainedComputeLaunchV1::copy_from(launch, self.launch_payload_account.as_ref())?;
+        let bindings = &*owned_launch.bindings;
         let mut retained_allocations = Vec::new();
         retained_allocations
             .try_reserve_exact(bindings.len())
             .map_err(|_| Self::capacity("KFD retained-allocation roster allocation failed"))?;
-        for binding in &bindings {
+        for binding in bindings {
             if !retained_allocations.contains(&binding.region.allocation) {
                 retained_allocations.push(binding.region.allocation);
             }
@@ -5962,14 +5959,7 @@ impl KfdRuntimeBackendV1 {
             PendingComputeSubmissionV1 {
                 id,
                 module,
-                launch: Arc::new(OwnedComputeLaunchV1 {
-                    stream: launch.stream,
-                    kernel: launch.kernel,
-                    explicit_kernarg,
-                    bindings: bindings.into_boxed_slice(),
-                    geometry: launch.geometry,
-                    semantic_launch: launch.semantic_launch,
-                }),
+                launch: owned_launch,
                 retained_allocations: retained_allocations.into_boxed_slice(),
                 ordered_predecessor,
                 explicit_success_dependencies,
@@ -17853,7 +17843,9 @@ mod tests {
         let predecessor = backend.next_id().unwrap();
         let mut pending = pending_compute_for_test_v1(predecessor, stream, allocation, vec![]);
         pending.module = module;
-        Arc::get_mut(&mut pending.launch).unwrap().kernel = kernel;
+        let mut recipe = pending.launch.unaccounted_copy_for_test();
+        recipe.kernel = kernel;
+        pending.launch = Arc::new(RetainedComputeLaunchV1::unaccounted_for_test(recipe));
         backend.pending_compute.insert(predecessor, pending);
         backend
             .pending_compute_streams
@@ -22109,13 +22101,13 @@ mod tests {
         };
         assert!(ordinary_compute_recipes_match_v1(&base, &base));
         let mut changed = Vec::new();
-        let mut recipe = base.clone();
+        let mut recipe = base.unaccounted_copy_for_test();
         recipe.stream = 9;
         changed.push(recipe);
-        let mut recipe = base.clone();
+        let mut recipe = base.unaccounted_copy_for_test();
         recipe.kernel = 9;
         changed.push(recipe);
-        let mut recipe = base.clone();
+        let mut recipe = base.unaccounted_copy_for_test();
         recipe.explicit_kernarg[1] = 9;
         changed.push(recipe);
         for binding in [
@@ -22152,7 +22144,7 @@ mod tests {
                 ..base.bindings[0]
             },
         ] {
-            let mut recipe = base.clone();
+            let mut recipe = base.unaccounted_copy_for_test();
             recipe.bindings[0] = binding;
             changed.push(recipe);
         }
@@ -22170,11 +22162,11 @@ mod tests {
                 ..base.geometry
             },
         ] {
-            let mut recipe = base.clone();
+            let mut recipe = base.unaccounted_copy_for_test();
             recipe.geometry = geometry;
             changed.push(recipe);
         }
-        let mut recipe = base.clone();
+        let mut recipe = base.unaccounted_copy_for_test();
         recipe.semantic_launch = KfdRuntimeSemanticLaunchV1::Atomic(atomic_contract_v1());
         changed.push(recipe);
         assert!(
@@ -22212,27 +22204,29 @@ mod tests {
         PendingComputeSubmissionV1 {
             id,
             module: 9,
-            launch: Arc::new(OwnedComputeLaunchV1 {
-                stream,
-                kernel: 10,
-                explicit_kernarg: Box::new([]),
-                bindings: vec![BackendBindingV1 {
-                    region: BackendMemoryRegionV1 {
-                        allocation,
-                        access: RuntimeAccessV1::ReadWrite,
-                        byte_offset: 0,
-                        byte_len: 8,
+            launch: Arc::new(RetainedComputeLaunchV1::unaccounted_for_test(
+                OwnedComputeLaunchV1 {
+                    stream,
+                    kernel: 10,
+                    explicit_kernarg: Box::new([]),
+                    bindings: vec![BackendBindingV1 {
+                        region: BackendMemoryRegionV1 {
+                            allocation,
+                            access: RuntimeAccessV1::ReadWrite,
+                            byte_offset: 0,
+                            byte_len: 8,
+                        },
+                        kernarg_byte_offset: 0,
+                    }]
+                    .into_boxed_slice(),
+                    geometry: crate::RuntimeLaunchGeometryV1 {
+                        grid: [1, 1, 1],
+                        workgroup: [1, 1, 1],
+                        dynamic_shared_bytes: 0,
                     },
-                    kernarg_byte_offset: 0,
-                }]
-                .into_boxed_slice(),
-                geometry: crate::RuntimeLaunchGeometryV1 {
-                    grid: [1, 1, 1],
-                    workgroup: [1, 1, 1],
-                    dynamic_shared_bytes: 0,
+                    semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
                 },
-                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
-            }),
+            )),
             retained_allocations: vec![allocation].into_boxed_slice(),
             ordered_predecessor: None,
             explicit_success_dependencies: dependencies.into_boxed_slice(),

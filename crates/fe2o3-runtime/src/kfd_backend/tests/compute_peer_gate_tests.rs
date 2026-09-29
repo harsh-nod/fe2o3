@@ -638,10 +638,11 @@ fn child_peer_gate_ordered_successor_guard_has_a_downstream_attempt_control() {
             .unwrap();
         let mut pending = pending_compute_for_test_v1(900, stream, allocation, vec![]);
         pending.module = module;
-        let launch = Arc::make_mut(&mut pending.launch);
+        let mut launch = pending.launch.unaccounted_copy_for_test();
         launch.kernel = kernel;
         launch.explicit_kernarg = [0_u8; 16].into();
         launch.bindings[0].region.access = RuntimeAccessV1::Read;
+        pending.launch = Arc::new(RetainedComputeLaunchV1::unaccounted_for_test(launch));
         pending.ordered_predecessor = Some(899);
         pending.peer_gate = Some(
             PeerComputeGateV1::waiting(OWNER, 900, true)

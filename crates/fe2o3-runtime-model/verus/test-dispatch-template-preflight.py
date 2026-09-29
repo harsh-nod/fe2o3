@@ -16,7 +16,7 @@ inputs = {path: (root / path).read_text() for path in r["FILES"]}
 base_path = root / r["V"] / "test-dispatch-template-prepare.py"
 base_raw = base_path.read_bytes()
 need(hashlib.sha256(base_raw).hexdigest() ==
-     "14b54e7cb32341642b650185ddc54635ff1ebee4e0a19a545d820e2111337a6f", "authenticated template join calibration")
+     "7925b5fce5fb44d4b4933576fc2d06d37e0bf936ab1459596e9d290d5a31221e", "authenticated template join calibration")
 base = types.ModuleType("preflight_template_join_calibration")
 base.__file__ = str(base_path)
 captured = io.StringIO()
@@ -28,7 +28,7 @@ code_only = functools.lru_cache(maxsize=8)(code_only)
 epoch_path = root / r["V"] / "test-dispatch-epoch-reserve.py"
 epoch_raw = epoch_path.read_bytes()
 need(hashlib.sha256(epoch_raw).hexdigest() ==
-     "297b7ae837119c637862283813ec35633e7e4808cc0c8cd961741d88e04ae948", "authenticated epoch source calibration")
+     "98da7cc0ea8b73af6a6e618e12b9b5bfb8a914a1bfcac83978a7c13689b6f21a", "authenticated epoch source calibration")
 epoch_guard = types.ModuleType("preflight_epoch_source_calibration")
 epoch_guard.__file__ = str(epoch_path)
 captured = io.StringIO()
@@ -188,9 +188,9 @@ for old, new in (("dispatch_preflight_reservation_body!(dispatch_rust_expr, self
                  ("dispatch_not_poisoned_body!(dispatch_rust_expr, self)", "Ok(())")):
     need(old in binding, "actual composed epoch wrapper site")
     rejects(lambda: epoch_guard.wiring(binding.replace(old, new)))
-preflight_call = "letgeneration=self.preflight_templates::<N>(queue)?;"
-moved = canonical_binding.replace(preflight_call, "letgeneration=0;") + "fnunrelated(){" + preflight_call + "}"
-need(moved.count(preflight_call) == 1, "decoy retains the global preflight call")
+preflight_call = base.BINDING_WRAPPERS[-1]
+moved = canonical_binding.replace(preflight_call, "unimplemented!()") + "fnunrelated(){" + preflight_call + "}"
+need(moved.count(preflight_call) == 1, "decoy retains the global composition call")
 rejects(lambda: wiring(moved, canonical_memory))
 
 

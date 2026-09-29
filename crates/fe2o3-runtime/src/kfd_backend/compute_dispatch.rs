@@ -2264,7 +2264,7 @@ impl KfdRuntimeBackendV1 {
         id: u64,
         dependency_depth: usize,
         ordered_predecessor: Option<u64>,
-        ordinary_recipe: Arc<OwnedComputeLaunchV1>,
+        ordinary_recipe: Arc<RetainedComputeLaunchV1>,
         prepared: PreparedLaunchV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         use super::materialized_publication::{
