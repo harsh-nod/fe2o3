@@ -49,6 +49,13 @@ use std::os::fd::OwnedFd;
 /// It must release the entire payload exactly once within the declared quotes,
 /// including any final Drop. Never reenter the same late holder or retain the
 /// cleanup controller. These requirements also apply to transitive owners.
+/// The complete work bound is `RETIRE_WORK + RETIRE_WORK_PER_BYTE * storage`,
+/// where `storage` is the original complete declared payload storage, including
+/// all transitive owners, not merely artifact bytes or current partial occupancy.
+/// This total must cover preparation, prepared-value cancellation and final
+/// release for every partial state within that declaration. The declaration and
+/// prepaid quote cannot grow after holder admission; no runtime size callback is
+/// used during retirement.
 /// Mutex/close latency is not a wall-time bound. This protocol authenticates no
 /// occurrence, lock, child or retirement request.
 ///
@@ -64,8 +71,12 @@ use std::os::fd::OwnedFd;
 /// }
 /// ```
 pub unsafe trait LateRetainedPayloadV2: Send + 'static {
-    /// Fixed work for one readiness attempt, cancellation, and successful release.
+    /// Fixed base work for one readiness attempt, cancellation and successful release.
     const RETIRE_WORK: usize;
+    /// Additional work per byte of complete declared payload storage. The default
+    /// preserves the original fixed bound; multiplication and total are checked
+    /// before admitting the holder. The base plus this term must cover all work.
+    const RETIRE_WORK_PER_BYTE: usize = 0;
     /// Full scratch for that attempt, including the independently owned barrier.
     const RETIRE_SCRATCH: usize;
     /// Owned readiness/exclusion; it cannot borrow the payload or cleanup slot.

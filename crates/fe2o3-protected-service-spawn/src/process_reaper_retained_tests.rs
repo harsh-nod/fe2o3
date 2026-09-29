@@ -14,6 +14,18 @@ const LIMIT: usize = 100_000_000
     + Service::STORAGE;
 const INPUT: usize = 256;
 
+thread_local! {
+    static PENDING_OBSERVER: std::cell::Cell<Option<fn(&ReapCellV1)>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+pub(super) fn observe_before_terminal_pending(cell: &ReapCellV1) {
+    if let Some(observe) = PENDING_OBSERVER.with(|observer| observer.take()) {
+        observe(cell);
+    }
+}
+
 struct Witness(Arc<AtomicUsize>);
 impl Drop for Witness {
     fn drop(&mut self) {
@@ -377,4 +389,90 @@ fn violated_destructor_contract_never_publishes_empty_or_holds_pool_locks() {
     assert!(!c.reaper.cells[0].child.is_poisoned());
     assert!(!c.reaper.cells[0].retained.is_poisoned());
     assert!(matches!(c.shutdown(), Err(Failure::Busy)));
+}
+
+struct LateWitness {
+    _drop: Witness,
+    ready: Arc<std::sync::atomic::AtomicBool>,
+    calls: Arc<AtomicUsize>,
+}
+
+// SAFETY: descriptor-free, bounded atomic-only fixture; complete partial custody
+// is retained on deferral and its independent preparation needs no storage.
+#[allow(unsafe_code)]
+unsafe impl crate::cleanup_bridge::LateRetainedPayloadV2 for LateWitness {
+    const RETIRE_WORK: usize = 64;
+    const RETIRE_SCRATCH: usize = 0;
+    type Prepared = ();
+    fn try_prepare_retirement(&self) -> Option<()> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.ready.load(Ordering::SeqCst).then_some(())
+    }
+    fn retire(self, _: ()) {
+        drop(self);
+    }
+}
+
+#[test]
+fn terminal_pending_publication_has_only_the_slot_backing_alias() {
+    fn observe(cell: &ReapCellV1) {
+        assert_eq!(cell.state.load(Ordering::Acquire), RETIRING);
+        assert!(cell.child.lock().unwrap().is_none());
+        assert_eq!(
+            cell.late
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .strong_count_for_test(),
+            1
+        );
+        assert!(cell.retained_storage.load(Ordering::Acquire) > 0);
+    }
+    for unfunded in [false, true] {
+        let mut c = pool(LIMIT, LIMIT);
+        let mut w = Work::new(LIMIT);
+        let mut b = Budget::new(&mut w, LIMIT);
+        let slot = c.reserve_launch(&mut b).unwrap().into_slot();
+        let cell = slot.cell;
+        let (holder, _) = c.reserve_late::<LateWitness>(&slot, INPUT, &mut b).unwrap();
+        let drops = dropped();
+        let calls = dropped();
+        let ready = Arc::new(std::sync::atomic::AtomicBool::new(unfunded));
+        holder.prepare_attachment().unwrap().commit(LateWitness {
+            _drop: Witness(drops.clone()),
+            ready: ready.clone(),
+            calls: calls.clone(),
+        });
+        drop(holder);
+        let before = c.report().unwrap();
+        if unfunded {
+            let mut mode = c.reaper.mode.lock().unwrap();
+            c.native(&mut mode)
+                .unwrap()
+                .charge(before.work_limit - before.work)
+                .unwrap();
+        }
+        PENDING_OBSERVER.with(|observer| assert!(observer.replace(Some(observe)).is_none()));
+        // No process/domain was created. Observe inside complete(), immediately
+        // before the release-store, not after its local temporaries have dropped.
+        slot.complete();
+        PENDING_OBSERVER.with(|observer| {
+            assert!(
+                observer.take().is_none(),
+                "publication hook was not reached"
+            )
+        });
+        assert_eq!(cell.state.load(Ordering::Acquire), TERMINAL_PENDING);
+        assert_eq!(c.report().unwrap().storage, before.storage);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), usize::from(!unfunded));
+        if !unfunded {
+            ready.store(true, Ordering::SeqCst);
+            c.pump(1).unwrap();
+            assert_eq!(drops.load(Ordering::SeqCst), 1);
+            assert_eq!(c.report().unwrap().storage, Service::STORAGE);
+        }
+        // Work exhaustion keeps the original fixture slot and its full charge.
+    }
 }

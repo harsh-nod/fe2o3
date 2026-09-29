@@ -117,6 +117,8 @@ impl DeferredReaperV1 {
                 // Publishing permits a concurrent pump to retire this slot's
                 // persistent charge. Retire our temporary backing alias first.
                 drop(late);
+                #[cfg(test)]
+                tests::observe_before_terminal_pending(cell);
                 retirement.complete = true;
                 cell.state.store(TERMINAL_PENDING, Ordering::Release);
                 return;

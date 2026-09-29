@@ -45,7 +45,8 @@ impl LateRetainedQuotaV2 {
     pub const fn retained_storage(self) -> usize {
         self.retained
     }
-    /// Fixed work for each readiness attempt, whether ready or deferred.
+    /// Fixed work for each readiness attempt over this complete declaration,
+    /// whether ready or deferred. The per-byte term is frozen in this quote.
     pub const fn retirement_work(self) -> usize {
         self.retirement_work
     }
@@ -85,6 +86,8 @@ impl<T: Payload> LateRetainedCustodyV2<T> {
 
     /// Checks the complete payload declaration and both storage overlaps before
     /// allocation. Actual transitive size and callbacks remain unsafe obligations.
+    /// Retirement work is ATTACH_WORK plus the payload's fixed base and checked
+    /// per-byte work over this entire immutable storage declaration.
     pub fn quota(payload_storage: usize) -> Result<LateRetainedQuotaV2, Resource> {
         if payload_storage < size_of::<T>() || T::RETIRE_SCRATCH < size_of::<T::Prepared>() {
             return Err(Resource::Accounting);
@@ -98,8 +101,12 @@ impl<T: Payload> LateRetainedCustodyV2<T> {
             .checked_sub(size_of::<T>())
             .and_then(|n| n.checked_add(payload_storage))
             .ok_or(Resource::Arithmetic)?;
+        let variable_retirement_work = payload_storage
+            .checked_mul(T::RETIRE_WORK_PER_BYTE)
+            .ok_or(Resource::Arithmetic)?;
         let retirement_work = Self::ATTACH_WORK
             .checked_add(T::RETIRE_WORK)
+            .and_then(|n| n.checked_add(variable_retirement_work))
             .ok_or(Resource::Arithmetic)?;
         let retirement_scratch = Self::retirement_scratch()?;
         let persistent = backing
@@ -298,6 +305,11 @@ pub(crate) struct LatePayload {
     pub(crate) work: usize,
 }
 impl LatePayload {
+    #[cfg(test)]
+    pub(crate) fn strong_count_for_test(&self) -> usize {
+        Arc::strong_count(&self.owner)
+    }
+
     pub(crate) fn pending_copy(&self) -> Self {
         Self {
             owner: self.owner.clone(),

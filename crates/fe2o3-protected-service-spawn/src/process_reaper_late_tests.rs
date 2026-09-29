@@ -252,3 +252,81 @@ fn exhausted_retirement_funding_preserves_actual_payload_without_polling() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
+
+struct LinearQuote<const BASE: usize, const PER_BYTE: usize>;
+
+// SAFETY: zero-sized fixture with no custody, allocation or native work. Its
+// callbacks have no payload work, independently of the generic quote values.
+unsafe impl<const BASE: usize, const PER_BYTE: usize> Payload for LinearQuote<BASE, PER_BYTE> {
+    const RETIRE_WORK: usize = BASE;
+    const RETIRE_WORK_PER_BYTE: usize = PER_BYTE;
+    const RETIRE_SCRATCH: usize = 0;
+    type Prepared = ();
+    fn try_prepare_retirement(&self) -> Option<()> {
+        Some(())
+    }
+    fn retire(self, _: ()) {}
+}
+
+#[test]
+fn linear_retirement_quote_uses_complete_declared_storage_exactly() {
+    const BASE: usize = 64 * 1088;
+    type Fixed = Holder<LinearQuote<BASE, 0>>;
+    type Linear = Holder<LinearQuote<BASE, 64>>;
+    // Synthetic complete declarations, not claims about an actual V5 owner.
+    for storage in [0, 1, 3241, 8192] {
+        let fixed = Fixed::quota(storage).unwrap();
+        let linear = Linear::quota(storage).unwrap();
+        assert_eq!(
+            linear.retirement_work(),
+            Linear::ATTACH_WORK + BASE + storage * 64
+        );
+        assert_eq!(
+            linear.retirement_work() - fixed.retirement_work(),
+            storage * 64
+        );
+        assert_eq!(linear.work() - fixed.work(), storage * 64);
+        assert_eq!(linear.request_work() - fixed.request_work(), storage * 64);
+        assert_eq!(linear.persistent_storage(), fixed.persistent_storage());
+        assert_eq!(linear.retained_storage(), fixed.retained_storage());
+        assert_eq!(linear.scratch(), fixed.scratch());
+    }
+    let small = Linear::quota(3241).unwrap();
+    let next = Linear::quota(3242).unwrap();
+    assert_eq!(next.retirement_work() - small.retirement_work(), 64);
+    assert_eq!(next.work() - small.work(), 128);
+}
+
+#[test]
+fn retirement_quote_refuses_product_base_and_total_overflow() {
+    type ProductOverflow = Holder<LinearQuote<64, { usize::MAX }>>;
+    type BaseOverflow = Holder<LinearQuote<{ usize::MAX }, 0>>;
+    const FIXED: usize = Holder::<LinearQuote<64, 0>>::ATTACH_WORK + 64;
+    type TotalOverflow = Holder<LinearQuote<64, { usize::MAX - FIXED + 1 }>>;
+    assert!(matches!(
+        ProductOverflow::quota(2),
+        Err(Resource::Arithmetic)
+    ));
+    assert!(matches!(BaseOverflow::quota(1), Err(Resource::Arithmetic)));
+    assert!(matches!(TotalOverflow::quota(1), Err(Resource::Arithmetic)));
+    assert_eq!(ProductOverflow::quota(0).unwrap().retirement_work(), FIXED);
+}
+
+#[test]
+fn existing_fixed_retirement_implementor_keeps_original_quotes() {
+    assert_eq!(Witness::RETIRE_WORK_PER_BYTE, 0);
+    let original = Holder::<Witness>::quota(INPUT).unwrap();
+    let larger = Holder::<Witness>::quota(INPUT + 17).unwrap();
+    let fixed = Holder::<Witness>::ATTACH_WORK + Witness::RETIRE_WORK;
+    assert_eq!(original.retirement_work(), fixed);
+    assert_eq!(larger.retirement_work(), fixed);
+    assert_eq!(original.work(), original.persistent_storage() * 64 + fixed);
+    assert_eq!(original.request_work(), original.work() + 8);
+    assert_eq!(larger.work() - original.work(), 17 * 64);
+    assert_eq!(
+        larger.persistent_storage() - original.persistent_storage(),
+        17
+    );
+    assert_eq!(larger.retained_storage() - original.retained_storage(), 17);
+    assert_eq!(larger.scratch() - original.scratch(), 17);
+}
