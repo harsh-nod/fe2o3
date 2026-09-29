@@ -24,6 +24,21 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [event issuer and pre-native output reservation](evidence/dev-event-issuance-preallocation-2026-09-28/README.md)
+remove the issuer's occurrence scratch Vec and move lane-output reservation ahead
+of acceptance issuance and recipe binding. Shared constructor, issuer, forwarder
+and packing bodies prove exact logical refusal/success behavior under an explicit
+fresh-ID invariant and two disclosed contents-only reservation contracts. The new
+root passes 46 overlapping obligations; nine final signed campaigns pass 221 stages
+and 149 executable negatives at 6234 unchanged source hashes. KFD passes 1431/0
+(320 construction tests excluded), runtime 1828/0 with 30 hardware ignores, and
+doctests 124/0. Static checks, archive restore and independent byte/process audits
+pass; all 308 recorded groups are absent. Scoped CPU tests observe two fresh-batch issuer
+allocations and zero post-native-success source-continuation allocations, not
+a latency or HIP/HSA speedup. Next is transactional bound-batch preparation and
+its packet/retention provenance; native authority, outer terminalization and
+all remaining milestone gates stay open.
+
 The [allocation-free event binder and publication prefix](evidence/dev-allocation-free-event-bind-2026-09-28/README.md)
 remove the binder's explicit post-publication scratch allocation while retaining
 O(N) work and exact validation order. Shared executable bodies prove unchanged
@@ -36,10 +51,10 @@ retain their two disclosed reservation contracts. Final KFD passes 1424/0 (320
 construction tests excluded), runtime 1828/0 with 30 hardware ignores, and
 doctests 124/0. Static checks, independent absence of all 159 recorded groups and
 archive restore pass. The initial diagnostic-rejected campaign is retained.
-CPU tests observe zero allocations in the binder only; later lane-event collection
-still allocates. Next are pre-native event-issuance provenance and pre-publication
-reservation of that output. Native authority, outer terminalization, GPU/performance
-and A1/A2 gates remain open; no HIP/HSA speedup is claimed.
+That earlier packet scoped zero allocation to the binder; the issuer/output work
+above now removes the later lane-event collection allocation from the post-native
+continuation. Native authority, outer terminalization, GPU/performance and A1/A2
+gates remain open; no HIP/HSA speedup is claimed.
 
 The [native source failure settlement](evidence/dev-native-source-failure-2026-09-28/README.md)
 shares the actual inline failure join and both native/resource cancellation
