@@ -223,18 +223,43 @@ observation requires an explicitly reviewed baseline revision with exact evidenc
 binding, not filling an arbitrary JSON field until a test accepts it.
 
 The source manifest's null accepted compiler commit/tree, pending statuses and
-no-fallback policy remain untouched. A reviewed rebaseline must reconcile input
-changes explicitly and preserve historical attribution and original47
-obligations; it must not silently relabel this snapshot as current execution.
+no-fallback policy remain untouched. This historical snapshot is immutable;
+future source additions, updated input digests or improved current statuses do
+not require rewriting it. Retargeting, dropping or reclassifying a named
+historical selection/association requires explicit reviewed supersession, not
+silent reuse of its old meaning. Original47 preservation remains owned by the
+existing source-contract policy. No old observation is relabelled current.
 
 ## Consistency And Acceptance
 
-`python3 -I -B scripts/tests/issue272_m0_contract.py` checks the pinned manifest,
-exact cohort/selection bindings and non-promotion rules using the existing
-manifest parser and original47 projection. Mutation tests reject omitted,
-duplicate, foreign or substituted rows, obligation changes, fake observations
-and changes to the protected source-contract baseline. The existing matrix
-test harness invokes it; no compiler, simulator or GPU execution is involved.
+`python3 -I -B scripts/tests/issue272_m0_contract.py` checks the historical
+baseline's own canonical content digest and its selection IDs, targets and
+source classifications/associations against a subset of the current manifest.
+The current fixture count, input digests, commands, statuses, gates and raw
+manifest SHA are not pinned by this CI check. Their existing validators and
+owners remain unchanged. Positive comparison tests allow new fixtures and
+changed current inputs/statuses without changing any historical observation;
+mutation tests reject altered historical records and lost/substituted selection
+meanings. Test-only future records are not source or execution qualification.
+The existing matrix harness invokes this check; no compiler, simulator or GPU
+execution is involved.
+
+Exact historical source correspondence is a separate, explicit offline audit:
+
+```sh
+python3 -I -B scripts/tests/issue272_m0_contract.py \
+  --pinned-manifest /absolute/path/to/91d4b0a26-tutorial-kernel-manifest-v1.json
+```
+
+That mode reuses the existing bounded strict JSON parser and original47
+projection. It checks the archived manifest's historical raw SHA, original47
+obligation digest and all50 pinned input/association/gate bindings. Primary
+verifies the recorded commit/tree against Git and supplies the exact historical
+file. The checker runs no Git or network command, and the default CI mode needs
+no history or archive, including in shallow/offline checkouts. A missing or
+mismatched archive fails the explicit audit rather than substituting current
+bytes or silently claiming correspondence. Commit/tree labels and content
+digests do not independently authenticate execution or reviewer identity.
 
 These checks establish consistency, not human approval, execution provenance or
 semantic correctness. Primary must review and record explicit acceptance of
