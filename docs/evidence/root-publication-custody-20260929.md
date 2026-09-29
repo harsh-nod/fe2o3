@@ -6,6 +6,10 @@ unqualified baseline. **M1-M7 remain incomplete; the complete protected
 production-to-safe-GPU-launch matrix remains 0/47.** Three later manifest
 selections are recorded separately, not silently substituted into that cohort.
 
+The subsequent [original-account resource-window checkpoint](root-resource-window-20260929.md)
+adds larger-root composition and a seventh native publication case. Its source
+and results are separate from the six-case checkpoint below.
+
 ## Implementation
 
 The original `NativeAttempt` now consumes and retains the actual publication

@@ -248,6 +248,17 @@ quotes use the original accounts and do not raise the artifact storage cap.
 The canonical maximum handoff does not fit that cap; a caller must select and
 fund an affordable bound, not assume every schema-valid extent is executable.
 
+Root publication now composes artifact-local storage windows on the same
+original owned budget. Every window starts at actual entry storage, protects
+that floor and retains the unchanged whole-request ceiling. The complete pair
+quote overlaps again inside each local operation; no Holder reservation is
+subtracted. Acquisition is one-shot and later subject/currentness operations
+require that exact pair and original account. Legacy V5 entrypoints still reject
+whole accounts above 256 MiB. The whole root quote is not the artifact-local
+limit. The [resource-window checkpoint](evidence/root-resource-window-20260929.md)
+records the seven publication and ten startup cases, their exact limits and
+the remaining production boundaries.
+
 The production dispatcher and authenticated RPC integration remain unfinished.
 The controlled native fixture exercises actual process descriptors and V5 locks
 over inert handoff content, not production rustc, protected proof or GPU execution.
