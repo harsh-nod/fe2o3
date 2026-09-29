@@ -106,8 +106,14 @@ fn changed_association(record: &Record, offset: usize, b: &mut Budget<'_>) -> Re
 fn snapshot(w: &Window<'_>) -> (u8, Option<[u8; RECORD_BYTES]>, Option<[u8; RECORD_BYTES]>) {
     match &w.state {
         State::Empty => (0, None, None),
-        State::Pending(request) => (1, Some(*request.canonical_bytes()), None),
-        State::Replied { request, reply } => (
+        State::Exchange {
+            request,
+            reply: None,
+        } => (1, Some(*request.canonical_bytes()), None),
+        State::Exchange {
+            request,
+            reply: Some(reply),
+        } => (
             2,
             Some(*request.canonical_bytes()),
             Some(*reply.canonical_bytes()),
@@ -145,6 +151,149 @@ fn complete(w: &mut Window<'_>, record: Record, b: &mut Budget<'_>) -> Result<()
 
 fn refuse<T>(result: Result<T>) {
     assert!(matches!(result, Err(Error::Refused(_))));
+}
+
+fn prepare_and_drop(w: &mut Window<'_>, record: Record, b: &mut Budget<'_>) -> Result<()> {
+    let before = snapshot(w);
+    let floor = b.storage();
+    let charge = record.retained_storage();
+    let result = w.prepare_complete(record, b).map(drop);
+    assert_eq!(snapshot(w), before);
+    assert_eq!(b.storage(), floor);
+    assert_eq!(w.retained_storage(), Window::STORAGE);
+    b.release_storage(charge).unwrap();
+    result
+}
+
+#[test]
+fn prepared_reply_drop_preserves_pending_and_commit_installs_exact_replay() {
+    for kind in KINDS {
+        let mut work = Work::new(LIMIT);
+        let mut b = Budget::new(&mut work, STORAGE_LIMIT);
+        b.reserve_storage(23).unwrap();
+        let mut w = window(&mut b);
+        let first = request(&w, 1, kind, b"opaque", &mut b);
+        let first_bytes = *first.canonical_bytes();
+        let response = reply(&first, &mut b);
+        let response_bytes = *response.canonical_bytes();
+        accept(&mut w, first, &mut b).unwrap();
+        assert!(b.charge_work(LIMIT + 1).is_err());
+        assert!(b.reserve_storage(STORAGE_LIMIT + 1).is_err());
+        let history = (b.failed_work(), b.failed_storage());
+        let prefix = b.work();
+        prepare_and_drop(&mut w, response, &mut b).unwrap();
+        assert_eq!(b.work(), prefix + Window::WORK);
+        assert_eq!(b.storage(), 23 + Window::STORAGE);
+        let duplicate = decode(&first_bytes, &mut b);
+        assert_eq!(
+            accept(&mut w, duplicate, &mut b).unwrap(),
+            Disposition::Pending
+        );
+
+        let response = decode(&response_bytes, &mut b);
+        let floor = b.storage();
+        let prefix = b.work();
+        let prepared = w.prepare_complete(response, &mut b).unwrap();
+        assert_eq!((b.storage(), b.work()), (floor, prefix + Window::WORK));
+        assert_eq!((b.failed_work(), b.failed_storage()), history);
+        let peak = b.peak_storage();
+        prepared.commit();
+        assert_eq!((b.storage(), b.work()), (floor, prefix + Window::WORK));
+        assert_eq!(b.peak_storage(), peak);
+        assert_eq!((b.failed_work(), b.failed_storage()), history);
+        b.release_storage(RECORD_STORAGE).unwrap();
+        let cached = snapshot(&w);
+        assert_eq!(cached, (2, Some(first_bytes), Some(response_bytes)));
+        for _ in 0..2 {
+            let duplicate = decode(&first_bytes, &mut b);
+            assert_eq!(
+                accept(&mut w, duplicate, &mut b).unwrap(),
+                Disposition::Replay
+            );
+            assert_eq!(snapshot(&w), cached);
+        }
+        let response = decode(&response_bytes, &mut b);
+        refuse(prepare_and_drop(&mut w, response, &mut b));
+        assert_eq!(b.storage(), 23 + Window::STORAGE);
+    }
+}
+
+#[test]
+fn prepared_reply_refuses_nonpending_direction_and_every_request_association() {
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, STORAGE_LIMIT);
+    let mut w = window(&mut b);
+    let first = request(&w, 1, Kind::Observe, b"one", &mut b);
+    let bytes = *first.canonical_bytes();
+    let valid = reply(&first, &mut b);
+    let premature = reply(&first, &mut b);
+    refuse(prepare_and_drop(&mut w, premature, &mut b));
+    accept(&mut w, first, &mut b).unwrap();
+    let wrong_direction = decode(&bytes, &mut b);
+    refuse(prepare_and_drop(&mut w, wrong_direction, &mut b));
+    for (seq, kind, payload) in [
+        (1, Kind::Observe, b"two"),
+        (1, Kind::Validate, b"one"),
+        (2, Kind::Observe, b"one"),
+    ] {
+        let wrong_request = request(&w, seq, kind, payload, &mut b);
+        let wrong_reply = reply(&wrong_request, &mut b);
+        refuse(prepare_and_drop(&mut w, wrong_reply, &mut b));
+        drop(wrong_request);
+        b.release_storage(RECORD_STORAGE).unwrap();
+    }
+    for offset in [24, 56, 88, 120, 160] {
+        let wrong = changed_association(&valid, offset, &mut b);
+        refuse(prepare_and_drop(&mut w, wrong, &mut b));
+    }
+    prepare_and_drop(&mut w, valid, &mut b).unwrap();
+    assert_eq!(snapshot(&w), (1, Some(bytes), None));
+}
+
+#[test]
+fn enclosing_scope_failure_or_unwind_drops_prepared_reply_without_mutation() {
+    for unwind in [false, true] {
+        let mut work = Work::new(LIMIT);
+        let mut b = Budget::new(&mut work, STORAGE_LIMIT);
+        let mut w = window(&mut b);
+        let first = request(&w, 1, Kind::Retire, &[], &mut b);
+        let response = reply(&first, &mut b);
+        accept(&mut w, first, &mut b).unwrap();
+        let before = snapshot(&w);
+        assert!(b.charge_work(LIMIT + 1).is_err());
+        assert!(b.reserve_storage(STORAGE_LIMIT + 1).is_err());
+        let history = (b.failed_work(), b.failed_storage());
+        let floor = b.storage();
+        let prefix = b.work();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
+            let prepared = b.with_prepaid_scope(floor, ENTRY, ENTRY, 53, |b| {
+                let prepared = w.prepare_complete(response, b)?;
+                if unwind {
+                    panic!("simulated caller unwind with an uncommitted inert reply");
+                }
+                // Fail the enclosing scope's final frame check after preparation.
+                b.release_storage(1)?;
+                Ok::<_, Error>(prepared)
+            })?;
+            prepared.commit();
+            Ok(())
+        }));
+        if unwind {
+            assert!(outcome.is_err());
+        } else {
+            assert!(matches!(
+                outcome,
+                Ok(Err(Error::Resource(Resource::Accounting)))
+            ));
+        }
+        assert_eq!(snapshot(&w), before);
+        assert_eq!(
+            (b.storage(), b.work()),
+            (floor, prefix + ENTRY + Window::WORK)
+        );
+        assert_eq!((b.failed_work(), b.failed_storage()), history);
+        b.release_storage(RECORD_STORAGE).unwrap();
+    }
 }
 
 #[test]
@@ -306,9 +455,9 @@ fn sequence_exhaustion_fault_injection_is_inert_and_preserves_final_replay() {
     let request = request(&w, u64::MAX - 1, Kind::Retire, &[], &mut b);
     let response = reply(&request, &mut b);
     // Test-only inert state placement, not retirement or recovery evidence.
-    w.state = State::Replied {
+    w.state = State::Exchange {
         request,
-        reply: response,
+        reply: Some(response),
     };
     b.release_storage(2 * RECORD_STORAGE).unwrap();
     let last = self::request(&w, u64::MAX, Kind::Observe, &[], &mut b);
@@ -370,7 +519,8 @@ fn constructor_returns_full_unreserved_charge_and_preserves_resource_history() {
 fn exact_quotes_and_one_short_nested_funding_preserve_state_floor_and_history() {
     assert_eq!(Window::WORK, WORK + CODEC_WORK);
     assert_eq!(Window::SCRATCH, FRAME + CODEC_FRAME);
-    for completing in [false, true] {
+    // Accept, complete, prepare/drop, and prepare/commit share the same quotes.
+    for operation in 0..4 {
         for (remaining_work, remaining_scratch, spent, success) in [
             (ENTRY - 1, Window::SCRATCH, 0, false),
             (WORK - 1, Window::SCRATCH, ENTRY, false),
@@ -387,7 +537,7 @@ fn exact_quotes_and_one_short_nested_funding_preserve_state_floor_and_history() 
             let first = request(&w, 1, Kind::Observe, &[], &mut b);
             let response = reply(&first, &mut b);
             accept(&mut w, first, &mut b).unwrap();
-            let input = if completing {
+            let input = if operation != 0 {
                 response
             } else {
                 complete(&mut w, response, &mut b).unwrap();
@@ -402,16 +552,24 @@ fn exact_quotes_and_one_short_nested_funding_preserve_state_floor_and_history() 
             let floor = b.storage();
             let prefix = b.work();
             let before = snapshot(&w);
-            let result = if completing {
-                w.complete(input, &mut b)
-            } else {
-                w.accept(input, &mut b).map(|disposition| {
+            let result = match operation {
+                0 => w.accept(input, &mut b).map(|disposition| {
                     assert_eq!(disposition, Disposition::Accepted);
-                })
+                }),
+                1 => w.complete(input, &mut b),
+                _ => w.prepare_complete(input, &mut b).map(|prepared| {
+                    if operation == 3 {
+                        prepared.commit();
+                    }
+                }),
             };
             if success {
                 result.unwrap();
-                assert_ne!(snapshot(&w), before);
+                if operation == 2 {
+                    assert_eq!(snapshot(&w), before);
+                } else {
+                    assert_ne!(snapshot(&w), before);
+                }
                 assert_eq!(b.peak_storage(), floor + Window::SCRATCH);
             } else {
                 match result {
@@ -464,6 +622,7 @@ fn unprepaid_binding_window_and_record_floors_refuse_before_mutation() {
     let mut w = window(&mut b);
     let first = request(&w, 1, Kind::Observe, &[], &mut b);
     let response = reply(&first, &mut b);
+    let response_bytes = *response.canonical_bytes();
     accept(&mut w, first, &mut b).unwrap();
     b.release_storage(1).unwrap();
     let before = snapshot(&w);
@@ -471,6 +630,17 @@ fn unprepaid_binding_window_and_record_floors_refuse_before_mutation() {
     let prefix = b.work();
     assert!(matches!(
         w.complete(response, &mut b),
+        Err(Error::Resource(Resource::Accounting))
+    ));
+    assert_eq!(snapshot(&w), before);
+    assert_eq!((b.storage(), b.work()), (floor, prefix + ENTRY));
+    b.release_storage(RECORD_STORAGE - 1).unwrap();
+    let response = decode(&response_bytes, &mut b);
+    b.release_storage(1).unwrap();
+    let floor = b.storage();
+    let prefix = b.work();
+    assert!(matches!(
+        w.prepare_complete(response, &mut b),
         Err(Error::Resource(Resource::Accounting))
     ));
     assert_eq!(snapshot(&w), before);
@@ -496,6 +666,7 @@ fn unprepaid_binding_window_and_record_floors_refuse_before_mutation() {
 fn accounting_refusal(w: &mut Window<'_>, b: &mut Budget<'_>, bytes: &[u8; RECORD_BYTES]) {
     let first = decode(bytes, b);
     let response = reply(&first, b);
+    let prepared_response = reply(&first, b);
     let floor = b.storage();
     let prefix = b.work();
     let before = snapshot(w);
@@ -507,13 +678,17 @@ fn accounting_refusal(w: &mut Window<'_>, b: &mut Budget<'_>, bytes: &[u8; RECOR
         complete(w, response, b),
         Err(Error::Resource(Resource::Accounting))
     ));
+    assert!(matches!(
+        prepare_and_drop(w, prepared_response, b),
+        Err(Error::Resource(Resource::Accounting))
+    ));
     for result in [w.pending(b), w.request(b), w.reply(b)] {
         assert!(matches!(result, Err(Error::Resource(Resource::Accounting))));
     }
     assert_eq!(snapshot(w), before);
     assert_eq!(
         (b.storage(), b.work()),
-        (floor - 2 * RECORD_STORAGE, prefix + 5 * WORK)
+        (floor - 3 * RECORD_STORAGE, prefix + 6 * WORK)
     );
 }
 

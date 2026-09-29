@@ -46,8 +46,33 @@ use RootControlRequestDispositionV3 as Disposition;
 
 enum State {
     Empty,
-    Pending(Record),
-    Replied { request: Record, reply: Record },
+    Exchange {
+        request: Record,
+        reply: Option<Record>,
+    },
+}
+
+/// Move-only, !Send/!Sync inert reply installation, not permission to execute a request.
+/// Keep the window and consumed reply storage prepaid until commit or drop;
+/// then release only the reply's separate input charge. Dropping this token
+/// leaves the pending request unchanged. No window or budget is taken at commit.
+#[must_use]
+pub(crate) struct PreparedRootControlReplyV3<'window> {
+    slot: &'window mut Option<Record>,
+    reply: Record,
+    _owner: PhantomData<Rc<()>>,
+}
+
+// The consumed reply's existing charge also covers the token's slot borrow.
+const _: () = assert!(
+    size_of::<PreparedRootControlReplyV3<'static>>() <= size_of::<(Record, ProtocolStorage)>()
+);
+
+impl PreparedRootControlReplyV3<'_> {
+    /// All validation, work and storage were paid by successful preparation.
+    pub(crate) fn commit(self) {
+        *self.slot = Some(self.reply);
+    }
 }
 
 /// Move-only, !Send/!Sync, single-exchange replay window. Keep the original Work
@@ -111,14 +136,20 @@ impl<'work> RootControlReplayWindowV3<'work> {
             }
             let next = match &self.state {
                 State::Empty => 1,
-                State::Pending(pending) => {
+                State::Exchange {
+                    request: pending,
+                    reply: None,
+                } => {
                     return if request.canonical_bytes() == pending.canonical_bytes() {
                         Ok(Disposition::Pending)
                     } else {
                         Err(Error::Refused("root control request already pending"))
                     };
                 }
-                State::Replied { request: prior, .. } => {
+                State::Exchange {
+                    request: prior,
+                    reply: Some(_),
+                } => {
                     if request.canonical_bytes() == prior.canonical_bytes() {
                         return Ok(Disposition::Replay);
                     }
@@ -131,27 +162,46 @@ impl<'work> RootControlReplayWindowV3<'work> {
             if request.sequence() != next {
                 return Err(Error::Refused("root control request sequence"));
             }
-            self.state = State::Pending(request);
+            self.state = State::Exchange {
+                request,
+                reply: None,
+            };
             Ok(Disposition::Accepted)
         })
     }
 
     pub(crate) fn complete(&mut self, reply: Record, b: &mut Budget<'_>) -> Result<()> {
+        // Preparation includes the outer scope's fallible accounting cleanup.
+        self.prepare_complete(reply, b)?.commit();
+        Ok(())
+    }
+
+    /// Validate and fund completion without changing the window. The returned
+    /// token exclusively borrows its empty reply slot, preventing intervening
+    /// window access or retargeting. Its input charge remains prepaid on return.
+    pub(crate) fn prepare_complete(
+        &mut self,
+        reply: Record,
+        b: &mut Budget<'_>,
+    ) -> Result<PreparedRootControlReplyV3<'_>> {
         let floor = Self::STORAGE + reply.retained_storage();
         b.with_prepaid_scope(floor, ENTRY, WORK, FRAME, |b| {
             self.check_account(b)?;
-            let State::Pending(request) = &self.state else {
+            let State::Exchange {
+                request,
+                reply: slot @ None,
+            } = &mut self.state
+            else {
                 return Err(Error::Refused("no pending root control request"));
             };
             if !reply.matches_reply(request, b)? {
                 return Err(Error::Refused("root control reply association"));
             }
-            // All fallible validation and funding precede this ownership move.
-            let State::Pending(request) = std::mem::replace(&mut self.state, State::Empty) else {
-                unreachable!("pending state checked above");
-            };
-            self.state = State::Replied { request, reply };
-            Ok(())
+            Ok(PreparedRootControlReplyV3 {
+                slot,
+                reply,
+                _owner: PhantomData,
+            })
         })
     }
 
@@ -159,7 +209,10 @@ impl<'work> RootControlReplayWindowV3<'work> {
         b.with_prepaid_scope(Self::STORAGE, ENTRY, WORK, FRAME, |b| {
             self.check_account(b)?;
             Ok(match &self.state {
-                State::Pending(request) => Some(request),
+                State::Exchange {
+                    request,
+                    reply: None,
+                } => Some(request),
                 _ => None,
             })
         })
@@ -170,7 +223,7 @@ impl<'work> RootControlReplayWindowV3<'work> {
             self.check_account(b)?;
             Ok(match &self.state {
                 State::Empty => None,
-                State::Pending(request) | State::Replied { request, .. } => Some(request),
+                State::Exchange { request, .. } => Some(request),
             })
         })
     }
@@ -179,8 +232,8 @@ impl<'work> RootControlReplayWindowV3<'work> {
         b.with_prepaid_scope(Self::STORAGE, ENTRY, WORK, FRAME, |b| {
             self.check_account(b)?;
             Ok(match &self.state {
-                State::Replied { reply, .. } => Some(reply),
-                _ => None,
+                State::Exchange { reply, .. } => reply.as_ref(),
+                State::Empty => None,
             })
         })
     }
