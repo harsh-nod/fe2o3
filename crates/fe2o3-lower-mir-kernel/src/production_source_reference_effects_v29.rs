@@ -753,10 +753,72 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             } => Some((*disjoint_slice, false, true)),
             _ => None,
         };
+        let shared_witness = match operation {
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+                grid_leader,
+                ..
+            } => Some(*grid_leader),
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+                block_witness,
+                ..
+            } => Some(*block_witness),
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+                tile_witness,
+                ..
+            } => Some(*tile_witness),
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+                stripe_witness,
+                ..
+            } => Some(*stripe_witness),
+            SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                witness,
+                kind:
+                    SemanticWriteOnlyDisjointWriteKindV1::GridExclusive
+                    | SemanticWriteOnlyDisjointWriteKindV1::Block { .. }
+                    | SemanticWriteOnlyDisjointWriteKindV1::Tiled2d { .. }
+                    | SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d { .. },
+                ..
+            } => Some(*witness),
+            _ => None,
+        };
         for (argument, &node) in arguments.iter().enumerate() {
             budget.charge_work(1)?;
             for loan in self.node_loans(node, budget)? {
                 self.check_loan_use(loan, budget)?;
+                if argument == 1
+                    && let Some(witness) = shared_witness
+                {
+                    // The admitted intrinsic reads its capability, not the
+                    // allocation payload governed by that capability.
+                    budget.charge_work(12)?;
+                    let record = &self.plan.loans[loan];
+                    let origin = &self.plan.origins[record.origin];
+                    let value = &self.plan.nodes[node];
+                    let source_type = self
+                        .plan
+                        .instances
+                        .owner()
+                        .source_semantic()
+                        .types()
+                        .get(record.source_type.index() as usize);
+                    if binding.abi().source_input_types().get(argument) != Some(&record.source_type)
+                        || value.ty != record.source_type
+                        || !matches!(value.kind, SourceReferenceNodeKindV29::Loan(actual) if actual == loan)
+                        || record.kind != SemanticBorrowKindV1::Shared
+                        || origin.ty != witness
+                        || !matches!(source_type.map(|ty| ty.shape()),
+                            Some(SemanticTypeShapeV1::Pointer(pointer))
+                                if pointer.kind() == SemanticPointerKindV1::Reference
+                                    && pointer.mutability() == SemanticMutabilityV1::Immutable
+                                    && pointer.pointee() == witness)
+                    {
+                        return Err(source_reference_error_v29(
+                            "source reference shared intrinsic witness differs",
+                        ));
+                    }
+                    self.effect(loan, SourceReferenceEffectV29::ReadReferent, budget)?;
+                    continue;
+                }
                 let Some((carrier, reads, writes)) = carrier else {
                     return Err(source_reference_error_v29(
                         "source reference intrinsic effect is not represented",

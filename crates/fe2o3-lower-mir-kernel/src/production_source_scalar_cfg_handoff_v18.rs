@@ -133,7 +133,7 @@ fn scalar_cfg_check_envelopes_v18() -> Result<usize, ArgumentResourceV1> {
         size_of::<(
             &ProductionSourceCorrespondenceV18<'_>,
             &ProductionOptimizedSourceCorrespondenceV18<'_>,
-            &Inventory<'_>,
+            &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
             usize,
             &mut ArgumentBudgetV1<'_>,
         )>(),
@@ -287,7 +287,7 @@ fn scalar_cfg_source_checks_v18(
 fn source_output_ranked_native_checks_v19(
     original: &ProductionSourceCorrespondenceV18<'_>,
     optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
-    output: &Inventory<'_>,
+    output: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
     scratch_floor: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionScalarCfgCheckErrorV18> {

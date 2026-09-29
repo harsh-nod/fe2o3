@@ -68,7 +68,7 @@ macro_rules! source_target_llvm_continuation_v29 {
                             Ok(Ok(value)) => match settled {
                                 Ok(()) => Ok(value),
                                 Err(error) => {
-                                    discard(value);
+                                    formal_context_v19::discard(value);
                                     Err(error)
                                 }
                             },

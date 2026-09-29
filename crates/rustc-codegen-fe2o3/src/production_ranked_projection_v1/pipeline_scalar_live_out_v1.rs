@@ -1,6 +1,7 @@
 //! Literal live-outs of an already authenticated source induction.
 use super::*;
 use fe2o3_mir_model::SsaBlockIdV1;
+use fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1;
 
 pub(in crate::production_ranked_projection_v1) enum Resolution {
     Origin(Origin),

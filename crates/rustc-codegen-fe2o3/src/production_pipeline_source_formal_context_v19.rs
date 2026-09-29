@@ -268,7 +268,7 @@ where
     }
 }
 
-fn discard<T>(value: T) {
+pub(super) fn discard<T>(value: T) {
     if let Err(mut payload) = catch_unwind(AssertUnwindSafe(|| drop(value))) {
         while let Err(next) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
             payload = next;

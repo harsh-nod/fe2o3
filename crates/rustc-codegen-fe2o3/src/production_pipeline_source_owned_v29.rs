@@ -257,7 +257,7 @@ macro_rules! source_handoff_policy_v29 {
     };
     (@impl $policy:ident, $handoff:ident,
         |$source:ident, $roots:ident, $context:ident, $budget:ident, $value:ident|
-        { $($prepare:tt)* }, [$($header:expr),*]) => {
+        { $($prepare:tt)* }, [$($header:expr),* $(,)?]) => {
         struct $policy;
         impl<R, F> SourceHandoffPolicyV29<R, F> for $policy
         where
@@ -305,7 +305,7 @@ macro_rules! source_handoff_policy_v29 {
                         match settled {
                             Ok(()) => Ok(value),
                             Err(error) => {
-                                discard(value);
+                                formal_context_v19::discard(value);
                                 Err(error.into())
                             }
                         }

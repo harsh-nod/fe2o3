@@ -97,6 +97,10 @@ type Result<T> = std::result::Result<T, Error>;
 mod narrowing_v3;
 pub use narrowing_v3::PresburgerAffineNarrowingDecisionV3;
 
+#[path = "pliron_presburger_owned_scratch_v4.rs"]
+mod owned_scratch_v4;
+pub use owned_scratch_v4::{PresburgerQueryScopeV4, with_presburger_queries_v4};
+
 /// A decision borrowed only while its charged search backing remains live.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresburgerQueryDecisionV2<'query> {

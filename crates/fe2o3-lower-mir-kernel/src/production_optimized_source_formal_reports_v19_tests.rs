@@ -59,6 +59,30 @@ fn launch_v19() -> Launch {
 
 #[test]
 fn paired_formal_reports_consume_live_original_and_real_integer_output_without_admission() {
+    fn assert_root(view: &fe2o3_kernel_ir::CanonicalFormalReportViewV19<'_, '_>, reports: usize) {
+        let has_memory = view
+            .original_function()
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .any(|operation| {
+                matches!(
+                    operation.kind,
+                    OperationKind::Load { .. } | OperationKind::Store { .. }
+                )
+            });
+        if reports == 0 {
+            assert!(has_memory);
+        }
+        assert_eq!(
+            view.original_function().id,
+            view.original_owner().module().kernels[reports].entry
+        );
+    }
+
     for factory in [
         integer_add_source_v18 as fn() -> _,
         integer_multiply_source_v18,
@@ -107,30 +131,8 @@ fn paired_formal_reports_consume_live_original_and_real_integer_output_without_a
                                 );
                                 // Only the primary source root invokes the memory-bearing
                                 // helper. The companion scalar root must still be visited.
-                                for view in [before, after] {
-                                    let has_memory = view
-                                        .original_function()
-                                        .body
-                                        .as_ref()
-                                        .unwrap()
-                                        .blocks
-                                        .iter()
-                                        .flat_map(|block| &block.operations)
-                                        .any(|operation| {
-                                            matches!(
-                                                operation.kind,
-                                                OperationKind::Load { .. }
-                                                    | OperationKind::Store { .. }
-                                            )
-                                        });
-                                    if reports == 0 {
-                                        assert!(has_memory);
-                                    }
-                                    assert_eq!(
-                                        view.original_function().id,
-                                        view.original_owner().module().kernels[reports].entry
-                                    );
-                                }
+                                assert_root(before, reports);
+                                assert_root(after, reports);
                                 reports += 1;
                                 Ok::<(), ProductionSourceOwnedViewErrorV18>(())
                             },

@@ -2,6 +2,9 @@ use super::*;
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::ProductionSemanticMirLimitsV1;
 
+#[path = "production_source_shared_intrinsic_witness_v29_tests.rs"]
+mod shared_intrinsic_witness_tests;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const INDEX: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);

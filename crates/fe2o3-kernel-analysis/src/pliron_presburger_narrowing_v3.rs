@@ -18,9 +18,23 @@ pub enum PresburgerAffineNarrowingDecisionV3<'query> {
     },
 }
 
-struct Bounds {
-    lower: Vec<i128>,
-    upper: Vec<i128>,
+pub(super) struct Bounds {
+    pub(super) lower: Vec<i128>,
+    pub(super) upper: Vec<i128>,
+}
+
+pub(super) trait NarrowingMeterV4 {
+    fn charge(&mut self, budget: &mut Budget<'_>, amount: usize) -> Result<()>;
+    fn reserve(&mut self, budget: &mut Budget<'_>, amount: usize) -> Result<()>;
+}
+
+impl NarrowingMeterV4 for PresburgerQueryScopeV2<'_> {
+    fn charge(&mut self, budget: &mut Budget<'_>, amount: usize) -> Result<()> {
+        PresburgerQueryScopeV2::charge(self, budget, amount)
+    }
+    fn reserve(&mut self, budget: &mut Budget<'_>, amount: usize) -> Result<()> {
+        PresburgerQueryScopeV2::reserve(self, budget, amount)
+    }
 }
 
 fn arithmetic<T>(value: Option<T>) -> Result<T> {
@@ -49,7 +63,7 @@ fn ceil_div(numerator: i128, denominator: i128) -> Result<i128> {
 
 fn copy_bounds(
     input: &[i128],
-    scope: &mut PresburgerQueryScopeV2<'_>,
+    scope: &mut impl NarrowingMeterV4,
     budget: &mut Budget<'_>,
 ) -> Result<Vec<i128>> {
     scope.charge(
@@ -92,7 +106,7 @@ fn inequality(
     sign: i128,
     bounds: &mut Bounds,
     changed: &mut bool,
-    scope: &mut PresburgerQueryScopeV2<'_>,
+    scope: &mut impl NarrowingMeterV4,
     budget: &mut Budget<'_>,
 ) -> Result<bool> {
     scope.charge(budget, 4)?;
@@ -141,9 +155,9 @@ fn inequality(
     Ok(false)
 }
 
-fn narrow(
+pub(super) fn narrow(
     set: &PresburgerSetV1,
-    scope: &mut PresburgerQueryScopeV2<'_>,
+    scope: &mut impl NarrowingMeterV4,
     budget: &mut Budget<'_>,
 ) -> Result<Option<Bounds>> {
     let rank = set.domain.rank();
