@@ -817,6 +817,10 @@ fn run_actual_sources<T: Serialize + serde::de::DeserializeOwned + std::fmt::Deb
                     .env("CARGO_PRIMARY_PACKAGE", "1")
                     .env(CRATE_BINDING_ID_ENV_V1, binding.to_hex())
                     .env(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, build.to_hex())
+                    .envs(
+                        env::var_os("FE2O3_DIAG_ALLOCATION_CONTRACT_V1791")
+                            .map(|value| ("FE2O3_DIAG_ALLOCATION_CONTRACT_V1791", value)),
+                    )
                     .output()
                     .unwrap();
                 assert_eq!(

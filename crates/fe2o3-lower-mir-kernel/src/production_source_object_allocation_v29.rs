@@ -252,7 +252,64 @@ impl ScopedSourceSlotV29 {
     }
 }
 
+#[track_caller]
 fn scoped_object_allocation_error_v29() -> ProductionSemanticKirErrorV1 {
+    let mode = std::env::var_os("FE2O3_DIAG_ALLOCATION_CONTRACT_V1791");
+    let backtrace = mode.as_deref() == Some(std::ffi::OsStr::new("backtrace"));
+    if mode.as_deref() == Some(std::ffi::OsStr::new("1")) || backtrace {
+        static OBSERVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !OBSERVED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let caller = std::panic::Location::caller();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use std::io::Write;
+                struct Bounded<'a> {
+                    output: &'a mut dyn Write,
+                    remaining: usize,
+                    truncated: bool,
+                }
+                impl Write for Bounded<'_> {
+                    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                        let take = bytes.len().min(self.remaining);
+                        self.output.write_all(&bytes[..take])?;
+                        self.remaining -= take;
+                        self.truncated |= take != bytes.len();
+                        Ok(bytes.len())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        self.output.flush()
+                    }
+                }
+                let stderr = std::io::stderr();
+                let mut output = stderr.lock();
+                let _ = writeln!(
+                    output,
+                    "ALLOCATION_CONTRACT_V1791 BEGIN file={} line={} column={}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                );
+                let mut bounded = Bounded {
+                    output: &mut output,
+                    remaining: 16384,
+                    truncated: false,
+                };
+                let result = if backtrace {
+                    write!(bounded, "{}", std::backtrace::Backtrace::force_capture())
+                } else {
+                    Ok(())
+                };
+                let truncated = bounded.truncated;
+                drop(bounded);
+                let _ = writeln!(
+                    output,
+                    "\nALLOCATION_CONTRACT_V1791 END backtrace={} truncated={} output_error={}",
+                    u8::from(backtrace),
+                    u8::from(truncated),
+                    u8::from(result.is_err())
+                );
+            }));
+        }
+    }
     unsupported(
         0,
         None,

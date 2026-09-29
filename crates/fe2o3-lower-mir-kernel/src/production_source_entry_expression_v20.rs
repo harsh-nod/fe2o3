@@ -139,7 +139,7 @@ impl<'a, 'source> OriginalEntryIndexV20<'a, 'source> {
             }
             private_array_heapsort_v1(
                 &mut definitions,
-                |row| row.key,
+                |row| row.key.map(|value| value as usize),
                 &mut SourceCorrespondenceWorkV18(budget),
                 || ArgumentResourceV1::Arithmetic.into(),
             )?;
