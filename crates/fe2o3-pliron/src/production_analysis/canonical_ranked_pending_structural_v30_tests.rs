@@ -109,10 +109,22 @@ fn pending_structural_native_runs_all_stages_with_exact_and_one_short_budgets() 
     );
     assert_eq!(short.failed_work, Some(measured.work));
     let short = measure_structural_pending_v30(&module, measured.work, measured.peak - 1);
+    // The exact peak belongs to canonical layout admission inside extraction.
     assert!(
-        matches!(short.result, Err(Failure::Resource(Resource::Storage(error))) if error.actual() == measured.peak && error.limit() == measured.peak - 1)
+        matches!(&short.result,
+            Err(Failure::StorageBridge(crate::KirBridgeErrorV18::Canonical(
+                fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV18::Layout(
+                    fe2o3_kernel_ir::StorageLayoutErrorV1::Resource(Resource::Storage(error))
+                )
+            ))) if error.actual() == measured.peak && error.limit() == measured.peak - 1),
+        "storage result {:?}, failed {:?}, measured peak {}",
+        short.result,
+        short.failed_storage,
+        measured.peak
     );
+    assert!(!short.entered);
     assert_eq!(short.failed_storage, Some(measured.peak));
+    assert_eq!(short.failed_work, None);
 }
 
 #[test]
