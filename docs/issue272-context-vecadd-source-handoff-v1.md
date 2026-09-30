@@ -288,3 +288,27 @@ the log SHA-256 is
 Before/after source and tool snapshots were identical in the dedicated worktree
 target. Provider/backend and actual-Rust parent tests remain separate gates.
 No protected proof, GPU execution or new milestone completion is claimed.
+
+The subsequent `r77-isolated-v40-backend-controls` built the actual rustc backend
+at the same candidate revision and passed all 53 selected provider and observer
+controls, including the composed canonical/vendor pins and the false-edge guard
+control. The pinned AMD LLVM `opt` was `22.0.0git`, SHA-256
+`13cb4c99d1810b4db40bca5db0759ca94c8efd3c437bb8f7fe1a94f5bda66203`.
+The log SHA-256 is
+`7868ca0f1471f456db254485d4a587da0298dd305271038b2ed08fa09fbf9f6a`.
+
+`r78-actual-context-nominal-pure-cse` then ran the real Rust Policy10
+context-plus-nominal vecadd parent. All sixteen source sessions failed at
+`FE2O3-CAP-AUTH001`, reporting that pre-optimization context-producer MIR was
+already unavailable. No intended positive continuation was observed. The test
+requested successive transactions in one rustc session; context capture must
+precede queries that consume that MIR and its authenticated records are
+move-only. The correction must isolate test transactions, not relax that guard
+or clone authenticated context evidence. Both target dependency trees and the
+parent scratch directory were removed by the harness after failure.
+
+The r78 log SHA-256 is
+`7f7b0faa9be8b166c4c032c0441dd437b88d685ea77d3bc873e4315ac15cf145`.
+Both runs retained the same source/tool snapshots, with no protected proof,
+compiled kernel artifacts or GPU execution. The actual-source gate remains
+failed; the 53 control passes do not substitute for it.
