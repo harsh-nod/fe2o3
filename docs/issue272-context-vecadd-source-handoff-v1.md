@@ -260,3 +260,31 @@ Allocation is provisional under the
 The live importer and checked source-owned continuation still need to consume
 this contract with their original source, ABI and execution custody intact.
 This schema prerequisite does not complete M1 or advance the 0/47 matrix.
+
+### Isolated Consumer Candidate Checks
+
+The separate source-consumer candidate at
+`13b5c31a8a142a9f44bd4e8ac2158a39ebf4889f` composes the exact V40 importer,
+Policy9/10 selections, context census, f32 correspondence and strict context
+reborrow changes on the reviewed #271 dependency snapshot. This is not yet
+integrated into the primary checkpoint or the complete public96 descendant set.
+
+The first lowerer run, r74, passed one of five tests and rejected the other four
+during fixture admission: the newly appended nominal types were not reachable
+from a root. The fixture now declares root-local temporaries of those types,
+preserving the original function identity, ABI, blocks and kernel export.
+Production type-closure validation is unchanged.
+
+`r76-isolated-context-and-f32` passed all 19 selected tests: five V40 census
+controls and fourteen f32/integer source-correspondence controls. The census
+checks cover ordinary/mixed roots, nominal roles, source/launch substitution,
+missing or altered context inputs, and exact/one-short resource accounting.
+They are inert census coverage, not authenticated Rust source execution.
+
+The source snapshot SHA-256 is
+`f871fb9d5406c87b67fb6995851bc0108c0e06b43fe721bacb18233f5417f950`;
+the log SHA-256 is
+`cb11d22b33c87256519205800b81a41e006dbc69c4e7ccc0a23f90be491c264f`.
+Before/after source and tool snapshots were identical in the dedicated worktree
+target. Provider/backend and actual-Rust parent tests remain separate gates.
+No protected proof, GPU execution or new milestone completion is claimed.
