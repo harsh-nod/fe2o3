@@ -274,6 +274,13 @@ pub(crate) fn observe_actual_capability_prefix_for_test_v1(
         inventory,
         budget,
     )?;
+    super::super::whole_root_before_argument_writers::observe_initial_graph_for_test_v1(
+        owner,
+        source,
+        actual_inputs,
+        inventory,
+        budget,
+    )?;
     owner.with_bf16_nominal_entry_resources_v1(inventory, budget, |budget| {
         let before = Custody::take(budget)?;
         let bytes = size_of::<(

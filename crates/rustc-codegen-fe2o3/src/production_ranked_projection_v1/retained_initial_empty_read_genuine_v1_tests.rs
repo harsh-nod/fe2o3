@@ -43,7 +43,7 @@ fn require_empty(
 /// Both pending and oracle are physically held by the enclosing run, outside
 /// with_checked_nominal_facts_observation_v1 and its error/panic postflight.
 #[allow(clippy::too_many_arguments)]
-pub(in super::super) fn observe_in_scope<'s>(
+pub(in super::super) fn observe_before_reentry_in_scope<'s>(
     pending: &mut PendingWholeRootBeforeArgumentWritersV1<'s>,
     oracle: &mut EmptyReadOracle,
     original_indices: &mut [Option<u32>],
@@ -193,6 +193,28 @@ pub(in super::super) fn observe_in_scope<'s>(
                 lookup_visits: pending.initial_reads.lookup_visits,
             })
         })?;
+    Ok(observation)
+}
+// The historical entry retains its original terminal negatives and outcome.
+#[allow(clippy::too_many_arguments)]
+pub(in super::super) fn observe_in_scope<'s>(
+    pending: &mut PendingWholeRootBeforeArgumentWritersV1<'s>,
+    oracle: &mut EmptyReadOracle,
+    original_indices: &mut [Option<u32>],
+    owner: &'s ProductionPreRankedKirOwnerV1,
+    function_id: SemanticFunctionIdV1,
+    facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_>,
+    owned: &mut usize,
+) -> BResult<EmptyReadObservation> {
+    let observation = observe_before_reentry_in_scope(
+        pending,
+        oracle,
+        original_indices,
+        owner,
+        function_id,
+        facts,
+        owned,
+    )?;
     // Old completion, foreign counter and repeated advance must all refuse.
     // Snapshot before and after proves those negative checks spend nothing.
     let held = facts.retained_whole_root_snapshot_v1(owner, function_id, owned, None)?;
@@ -228,7 +250,7 @@ pub(in super::super) fn observe_in_scope<'s>(
     Ok(observation)
 }
 pub(in super::super) fn frame() -> BResult<usize> {
-    const ROWS: usize = 6;
+    const ROWS: usize = 7;
     let rows = [
         size_of::<(
             EmptyReadOracle,
@@ -283,6 +305,18 @@ pub(in super::super) fn frame() -> BResult<usize> {
             Resource,
             QueryError,
             std::collections::TryReserveError,
+        )>(),
+        // Additional historical wrapper and nonterminal result-transfer carriers.
+        size_of::<(
+            &mut PendingWholeRootBeforeArgumentWritersV1<'static>,
+            &mut EmptyReadOracle,
+            &mut [Option<u32>],
+            &ProductionPreRankedKirOwnerV1,
+            SemanticFunctionIdV1,
+            &mut CanonicalSourceAssertionFactsV1<'static, 'static, 'static, 'static, 'static>,
+            &mut usize,
+            BResult<EmptyReadObservation>,
+            EmptyReadObservation,
         )>(),
         size_of::<(
             [usize; ROWS],
