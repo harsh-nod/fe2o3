@@ -12,6 +12,13 @@ remain inside samples. Comparator engines remain runtime-selected and unknown.
 The runner does not claim matching engines, performance acceptance, HIP/HSA
 parity, formal machine-code refinement, or exclusive GPU reservation.
 
+The [September 30 accepted campaign](evidence/dev-xgmi-retained-series-2026-09-30/README.md)
+completes all 18 trials on GPUs 1 and 2, with collected raw receipts, signed
+candidate history, independent replay and exact-root cleanup. KFD is slower in
+every measured cell: 9.7-27.1% versus HSA and 6.4-38.8% versus HIP. Those ratios
+compare means of two invocation p50s, not pooled medians or confidence bounds.
+No performance exit gate is closed by this evidence.
+
 ## Invocation
 
 Use a separately reviewed clean checkout on the target host, with the complete
@@ -141,6 +148,8 @@ process group. Raw stdout, stderr and receipt hashes are pinned as that invocati
 returns. A malformed successful producer stops subsequent workloads. Both settled
 and delayed postflights still run on failure, followed by independent closing
 admission, host, tool, source, ELF, raw-artifact and namespace checks.
+If failure occurs before native binaries exist, closing API admission is
+explicitly skipped and rejected, not reported as successful observation.
 
 The final census is restricted to the current recorder's exact attempted stage
 roster. It checks fresh closure receipts and pinned raw bytes; it never probes or

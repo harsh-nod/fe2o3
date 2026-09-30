@@ -14,6 +14,8 @@ on:
       - "crates/fe2o3-runtime/**"
       - "crates/fe2o3-resource-accounting/**"
       - "crates/fe2o3-kfd/**"
+      - "benchmarks/runtime_gfx942/**"
+      - "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/**"
   push:
     branches: [main]
     paths:
@@ -28,6 +30,8 @@ on:
       - "crates/fe2o3-runtime/**"
       - "crates/fe2o3-resource-accounting/**"
       - "crates/fe2o3-kfd/**"
+      - "benchmarks/runtime_gfx942/**"
+      - "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/**"
   workflow_dispatch:
 
 permissions:
@@ -83,3 +87,8 @@ jobs:
           Qualification.test_negative_requires_logical_failure
           Qualification.test_mutants_are_exact_distinct_body_edits
           Qualification.test_duplicate_mutation_target_and_symlink_reject
+
+      - name: Native series harness controls (no GPU or network)
+        run: >-
+          python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
+          -p 'test_xgmi_peer_series_*.py'

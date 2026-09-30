@@ -5,9 +5,9 @@
 Local qualification snapshot: 2026-09-30 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
 refreshed on this date: the issue remains Open, with 31 comments and its latest
-update at 17:41:21 UTC. Both repository branch refs were confirmed at
-`44c9266dfef479804cc222c3c9a528e42a788841`. GitHub and MI300X SSH access have
-recovered; this does not itself qualify a new hardware run.
+update at 17:41:21 UTC. Before the native campaign integration below, both
+repository branch refs were confirmed through `6f60ba44b`. GitHub and MI300X
+SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -28,6 +28,20 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [native retained XGMI comparison](evidence/dev-xgmi-retained-series-2026-09-30/README.md)
+is integrated through `1c589082e`. Signed candidate `d5cfd8779` completes all
+18 matched KFD/HSA/HIP trials on MI300X GPUs 1 and 2, at depths 1, 16 and 32
+with 1 MiB copies. All raw command, physical/API identity, source/tool/ELF,
+postflight and independent replay checks pass; all 253 native groups and six
+transport groups close. The marked remote directory is removed after readback,
+with absence independently checked. Public raw archives and the signed candidate
+bundle retain the result. KFD is slower in every measured cell: 9.7-27.1% versus
+HSA and 6.4-38.8% versus HIP, comparing means of two invocation p50 batch
+latencies. Scope entry (6.505-6.688 ms) and finish are outside timing; operational
+checks remain inside. This measures the native retained API, not Context,
+exclusive GPUs, matching comparator engines, a performance threshold or A7
+closure. Earlier rejected campaigns remain rejected.
 
 The [actual producer-input validator](runtime-producer-input-validation.md)
 is integrated at `624101b57`. Signed candidate `10013c06a` passes all 74 campaign
@@ -57,21 +71,23 @@ and source/tool/namespace continuity passes. No partial result is promoted to
 full-suite, native or performance acceptance; its exact ELF and rejected raw
 output are retained separately from the earlier failures.
 
-The [merged runtime CPU regression](evidence/dev-runtime-merged-2026-09-30/README.md)
-at `2699fe63f1` passes all 1,893 active library tests with all features enabled,
+The [latest merged runtime CPU regression](evidence/dev-runtime-producer-validation-2026-09-30/README.md)
+at `624101b57` passes all 1,901 active library tests with all features enabled,
 zero failures and zero filtered tests; 32 existing native tests remain ignored.
-The three previously failing telemetry cases pass in the unrestricted host
-environment without changing production checks or test expectations. Cargo
-recompiled the changed crates using the existing target cache. The full run
-completed in 93.63 seconds after a 5 minute 18 second build. Source/tool/namespace
+All 1,933 output test names are unique. Cargo recompiled the changed crates
+using the existing target cache. The full run completed in 89.49 seconds after
+a 4 minute 56 second build. Source/tool/namespace
 continuity and the owned process-group closure pass. These are development
 regression receipts, not an independently authenticated qualification campaign,
 an all-workspace result, native execution or performance acceptance. The older
-rejected restricted-environment runs below remain historical failures.
+[1,893-test success](evidence/dev-runtime-merged-2026-09-30/README.md) and rejected
+restricted-environment runs below remain separate histories. This run does not
+qualify the incomplete KFD suite.
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
-runs fifteen explicit commands covering the newer model, runtime, accounting and
-KFD source/classifier controls. Those commands pass locally; workflow YAML and
+runs sixteen explicit commands covering the newer model, runtime, accounting,
+KFD and native harness source/classifier controls, including 64 offline native
+series tests. Those commands pass locally; workflow YAML and
 command inventory checks also pass. The resource-domain command selects its six
 source-only controls, not its three subprocess lifecycle tests. This adds drift
 detection, not solver execution, Rust test execution, authenticated proof
