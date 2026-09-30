@@ -178,6 +178,72 @@ All three runs retained unchanged source/tool inventories. Log SHA-256:
 - r165: `e15631f1ecbfe19e244f9cdbfc06e893cc30d2009de80304c422be37846dc84c`
 - r167: `8444c28cb45dfd5b8cd89682b8cc8c7ee966110410ba45a1077905f03f376703`
 
-The frontend candidate incorporates this owner, but its combined execution
+At that checkpoint the frontend candidate incorporated this owner, but its combined execution
 tests, Pliron bridge and actual source-scope emission remain unfinished. No
 default production activation, protected proof, simulator or GPU credit follows.
+
+## Scoped Pliron Bridge
+
+Candidate `25f5d69168280a734e3359c205b668c662644699` carries the actual V23
+owner through the shared storage-profile import/extraction engine. V18 and V23
+remain distinct nominal owners with separate identities, epochs and ledgers.
+Extraction retains actual operands and scope-close payloads, then readmits the
+result as V23. No conversion to a V18 graph or new production route is added.
+
+| Run | Scope | Result |
+| --- | --- | --- |
+| r183 | Initial bridge candidate | Compilation failed; no tests executed |
+| r185 | Complete dialect/Pliron libraries | 2,446 passed, none failed or ignored |
+| r187 | Preserved execution dialect integration | Four passed, none failed or ignored |
+| r188 | V23 bridge compile-fail examples | Three passed |
+
+r183 exposed an ambiguous macro `core` import. Explicitly naming the existing
+bridge core resolved it. r185 covers 76 dialect and 2,370 Pliron tests, including
+all 12 new scoped bridge controls. The latter exercise actual operand extraction,
+scope-close/use-after-close rejection, owner identity and resource boundaries.
+Historical bridge behavior remains in the same full library run. DCO for the
+two bridge commits, whitespace and hygiene-delta checks passed.
+
+The final three runs retained unchanged source/tool inventories, source snapshot
+`2b16aeab01eec23ba6aaa79c3adfcaac3fb651c1ae4b35d61f998a9cbc69cce8`.
+Log SHA-256:
+
+- r183: `9cb07e7ca77654a9aac71f6fb89b5bb58a154b524d70ac323c65a1fe4fb3c286`
+- r185: `a34c9667b3b498effecd1d98f89053f890cd8deb5b6c328bbb58d41e3652b002`
+- r187: `1353bc0265b0ec3c99bb72192cda474df44f0a02164e013f6deacc7d5092afd9`
+- r188: `debbd98d98408db81797298807bd6fc762f37b83682445ef7a0fec8613009607`
+
+## Typed Scoped Inventory
+
+Candidate `6099f1a3dd3609be82f310df2c821b9bcc6f661d` adds
+`CanonicalKirInventoryV23` by instantiating the existing private inventory
+engine with the actual V23 owner. Its graph and operand records borrow that
+owner; no executable graph is copied. Equal canonical bytes do not substitute
+another owner's borrow. Existing V12/V18 constructors and schedules are unchanged.
+
+| Run | Scope | Result |
+| --- | --- | --- |
+| r189 | Eight new V23 inventory controls | Eight passed |
+| r190 | Complete kernel-analysis library | 687 passed, none failed or ignored |
+| r191 | V23 inventory documentation | Eight compile-fail and one compile-only example passed |
+
+The eight controls cover scoped operations and their exact uses/close roster,
+parallel edge occurrences, scalar definitions, equal-content foreign owners,
+legacy-profile work/storage agreement, exact and one-short resource limits,
+prior denials, owned storage windows, and retained-size query accounting.
+r190 includes r189's eight tests; they are not additional distinct passes.
+The compile-only example is not runtime execution.
+
+All runs retained unchanged source/tool inventories, source snapshot
+`d55bc997bff0c5dedc546d93caeabdfdb0db48adbecc25915909d7506fb4dbce`.
+Log SHA-256:
+
+- r189: `a44cf2599e995a181c731447fd2424d85f2af13a328ccb55b9d2f8beb717c3e9`
+- r190: `0b5d9152c2807ae38fdeb0350ca35373099b8a027ff380ee4079f174ce301467`
+- r191: `b4942d7c7d4642fb3f7cd130832ca2a1513a25eb891d26a942b2c122af0fd77f`
+
+These are frozen component candidates, not qualification of their subsequent
+composition with the production compiler. Actual source materialization,
+typed pending-owner custody, optimizer/verification consumption, protected
+proof and safe launch still need integrated acceptance. M1-M7 remain incomplete;
+strict production-to-required-proof-to-safe-GPU coverage remains **0/47**.

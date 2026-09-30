@@ -826,3 +826,42 @@ Log SHA-256:
 The compiler candidate remains under integration, not published as qualified
 production capability coverage. M1-M7 remain incomplete and the strict
 production-to-required-proof-to-safe-GPU count remains **0/47**.
+
+## Scalar and Selected-Source Regression
+
+r186 tested candidate `0ddde6515837a7f222a2f72325ef57d95ac4f8b1` with the
+original r168 selection plus seven scalar-forwarding controls: **130 passed,
+eight failed, none ignored**. Five prior failures now pass; this is not a
+passing combined regression or a kernel qualification.
+
+All seven new controls passed: genuine helper-phi normalization and strict
+expression comparison, agreeing/mixed authenticated boundaries, cyclic and
+foreign-function refusal, and exact/one-short resource/header accounting.
+The index controls independently count every paid partition lookup, including
+absent keys, and check both exact and one-short budgets without requiring a
+debug representation of the opaque ledger identity. The memory mutations
+observed their intended inner rejection before the then-generic outer refusal.
+
+The remaining aggregate-runtime negative expected its precise source-role
+diagnostic but received `actual source Policy12 chain refused`. Seven
+selected-final cases still stopped before their required callbacks at
+`selected final actual edge has no exact source occurrence`. Diagnostics locate
+the missing forwarding at function 0, block 8 successor 0 argument 0, into
+block 11 or 12 argument 0. Consequent refund/callback assertions are failures,
+not successful negative coverage.
+
+The earlier r184 attempt failed compilation on two opaque-ledger `assert_eq!`
+uses. Replacing only those assertions with equality predicates allowed r186
+to execute; no production accounting condition changed. Source/tool inventories
+were unchanged in both runs. r186 source snapshot:
+`7da6bd8b43033f1375bb1c746d09e22d9bfe49d54b648e74b64b9bdc17e9536f`.
+Log SHA-256:
+
+- r184: `7351d5a1837d69c163ec7a3b5bf269f02e2dcbda30ea3c71bc3dabc68a52b0d7`
+- r186: `dd36d165890b1b5e677d0cbe5ef01616a669386c0619738e922dc92c1b913956`
+
+Immutable #271 checkpoint `9533203467e356595b2f383ef9e739f9d65f40f0` now
+supplies repairs for both remaining groups and has been composed into the local
+integration candidate. Duplicate repair was parked. Its combined regression,
+including mandatory private-memory initialization, remains a separate gate.
+No protected proof, simulator or GPU ran in r186, and no milestone is closed.
