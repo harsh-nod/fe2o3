@@ -1,4 +1,5 @@
 include!("production_source_aggregate_vector_credit_v30_tests.rs");
+include!("production_source_aggregate_memory_chain_v31_tests.rs");
 
 fn aggregate_runtime_launches_v30(
     source: &ProductionSourceOwnedViewV18<'_>,
@@ -270,6 +271,25 @@ fn aggregate_runtime_completes_actual_private_stages_and_final_native_reports() 
                 );
                 assert!(completed.runtime_occurrences(budget)?.is_empty());
                 assert!(completed.runtime_premises(budget)?.is_empty());
+                let memory = completed.private_memory(budget)?;
+                assert_eq!(memory.endpoint_count(), actual.rounds().len() * 2 + 1);
+                assert!(memory.endpoint_belongs_to(0, source.canonical(budget)?));
+                assert!(memory.endpoint_belongs_to(memory.endpoint_count() - 1, actual.owner()));
+                assert_eq!(
+                    memory.promotion_count(),
+                    actual
+                        .rounds()
+                        .iter()
+                        .map(|round| round
+                            .aggregate()
+                            .witness()
+                            .memory_slots()
+                            .iter()
+                            .flatten()
+                            .count())
+                        .sum::<usize>()
+                );
+                assert!(!memory.grants_authority());
                 assert!(completed.source_roles_are_complete());
                 assert!(completed.final_native_completion_is_complete());
                 assert!(!completed.executed_source_refinement_is_complete());
@@ -713,6 +733,7 @@ fn aggregate_runtime_header_oracles_include_owned_arguments_and_result_envelopes
         premises: Vec<ProductionMixedSliceRuntimePremiseV26>,
         occurrences: Vec<ProductionMixedRuntimeOccurrenceV26>,
         histories: Vec<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>>,
+        memory: ProductionAggregateMemoryChainV31,
         launches: &'a [fe2o3_kernel_ir::ExplicitLaunchExtent],
         width: fe2o3_kernel_ir::FormalIndexWidth,
         retained: usize,
@@ -947,12 +968,14 @@ fn aggregate_completion_header_oracle_v30<Owner>(
     struct State {
         globals: slice_view_v1::AggregateGlobalTransportV30,
         roles: AggregateSourceRolesV30,
+        memory: ProductionAggregateMemoryChainV31,
     }
     assert_eq!(size_of::<State>(), size_of::<AggregateRuntimeStateV30>());
     type Rows = (
         Vec<ProductionMixedSliceRuntimePremiseV26>,
         Vec<ProductionMixedRuntimeOccurrenceV26>,
         Vec<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>>,
+        ProductionAggregateMemoryChainV31,
     );
     type Frame<'a> = (
         State,
@@ -978,6 +1001,7 @@ fn aggregate_completion_header_oracle_v30<Owner>(
         + mixed_source_completion_headers_v26().unwrap()
         + owner
         + roles
+        + aggregate_memory_header_oracle_v31()
         + size_of::<Result<&(), ProductionSourceNativeLifecycleErrorV18>>()
         + globals
         + size_of::<Rows>()
@@ -988,6 +1012,7 @@ fn aggregate_completion_header_oracle_v30<Owner>(
                     Vec<ProductionMixedSliceRuntimePremiseV26>,
                     Vec<ProductionMixedRuntimeOccurrenceV26>,
                     Vec<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>>,
+                    ProductionAggregateMemoryChainV31,
                     usize,
                 ),
                 ProductionAggregateSourceErrorV30,

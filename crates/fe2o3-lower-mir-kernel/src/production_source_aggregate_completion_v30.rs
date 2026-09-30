@@ -1,12 +1,14 @@
 struct AggregateRuntimeStateV30 {
     globals: slice_view_v1::AggregateGlobalTransportV30,
     roles: AggregateSourceRolesV30,
+    memory: ProductionAggregateMemoryChainV31,
 }
 impl AggregateStageStateV30 for AggregateRuntimeStateV30 {
     fn retained_storage(&self) -> Result<usize, ArgumentResourceV1> {
         argument_sum_v1(&[
             self.globals.retained_storage()?,
             self.roles.retained_storage()?,
+            self.memory.retained_storage()?,
         ])
     }
 }
@@ -20,6 +22,7 @@ pub struct ProductionConditionalAggregateOutputHandoffV30<'chain, 'view, 'source
     premises: Vec<ProductionMixedSliceRuntimePremiseV26>,
     occurrences: Vec<ProductionMixedRuntimeOccurrenceV26>,
     histories: Vec<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>>,
+    memory: ProductionAggregateMemoryChainV31,
     launches: &'chain [fe2o3_kernel_ir::ExplicitLaunchExtent],
     width: fe2o3_kernel_ir::FormalIndexWidth,
     retained: usize,
@@ -77,6 +80,22 @@ impl ProductionConditionalAggregateOutputHandoffV30<'_, '_, '_> {
     ) -> SourceOwnedResultV18<&[Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>]> {
         self.check(budget)?;
         Ok(&self.histories)
+    }
+    /// Borrows the shared original allocation/leaf bindings for every exact
+    /// checked stage. Concrete generated/executed refinement remains required.
+    pub fn private_memory(
+        &self,
+        budget: &ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<&ProductionAggregateMemoryChainV31> {
+        self.check(budget)?;
+        if !self.memory.finalized {
+            return self
+                .chain
+                .owned
+                .source
+                .missing("aggregate memory completion is absent");
+        }
+        Ok(&self.memory)
     }
     /// Returns original per-root launch conditions and the retained formal width.
     pub fn launch_context(
@@ -137,10 +156,11 @@ impl ProductionConditionalAggregateOutputHandoffV30<'_, '_, '_> {
             premises,
             occurrences,
             histories,
+            memory,
             retained,
             ..
         } = self;
-        drop((premises, occurrences, histories));
+        drop((premises, occurrences, histories, memory));
         let settled = custody.and_then(|()| {
             chain
                 .owned
@@ -211,7 +231,7 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
         self.owned.check(budget)?;
         let source = self.owned.source;
         let floor = budget.storage();
-        let (premises, occurrences, histories, retained) = scoped_source_attempt_v29(
+        let (premises, occurrences, histories, memory, retained) = scoped_source_attempt_v29(
             source.cleanup,
             budget,
             floor,
@@ -222,124 +242,135 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
                     budget.reserve_storage(header)?;
                     self.check_original_argument_abi_v30(abi, budget)?;
                     let chain = self.output(budget)?;
-                    let (premises, occurrences, histories) = with_aggregate_initial_source_v30(
-                        source,
-                        chain,
-                        budget,
-                        |original, optimized, budget| {
-                            let mut state = fold_aggregate_source_stages_v30(
-                                self,
-                                |stage, state: Option<AggregateRuntimeStateV30>, budget| {
-                                    if let Some(mut state) = state {
-                                        state.globals = state.globals.advance(stage, budget)?;
-                                        state.roles = state.roles.advance(stage, budget)?;
-                                        return Ok(state);
-                                    }
-                                    if stage.ordinal != 0 {
-                                        return source
-                                            .missing("aggregate native seed is not first stage")
-                                            .map_err(Into::into);
-                                    }
-                                    let (mut premises, mut occurrences) =
-                                        Globals::storage_vectors(stage.output, budget)?;
-                                    let mut roles = AggregateSourceRolesV30::seed_storage(
-                                        stage.output,
-                                        budget,
-                                    )?;
-                                    with_mixed_source_completion_v26(
-                                        original,
-                                        optimized,
-                                        launches,
-                                        width,
-                                        budget,
-                                        &mut |native, budget| {
-                                            roles.fill_initial(
-                                                native, original, optimized, budget,
-                                            )?;
-                                            Globals::fill_initial(
-                                                native.completed_globals_v30(
-                                                    original, optimized, budget,
-                                                )?,
-                                                original,
-                                                optimized,
-                                                &mut premises,
-                                                &mut occurrences,
-                                                budget,
-                                            )?;
-                                            Ok(())
-                                        },
-                                    )
-                                    .map_err(E::InitialCompletion)?;
-                                    let globals =
-                                        Globals::seed(stage, premises, occurrences, budget)?
-                                            .advance(stage, budget)?;
-                                    Ok(AggregateRuntimeStateV30 { globals, roles })
-                                },
-                                budget,
-                            )?;
-                            #[cfg(test)]
-                            match fault {
-                                Some(1) => {
-                                    state.roles.next_stage -= 1;
-                                }
-                                Some(2) => {
-                                    state.roles.owner = 0;
-                                }
-                                Some(3) => {
-                                    state.globals.omit_last_occurrence_v30();
-                                }
-                                Some(4) => {
-                                    state.globals.omit_first_definition_transport_v30(3);
-                                }
-                                Some(5) => {
-                                    state.globals.omit_first_definition_transport_v30(6);
-                                }
-                                None => (),
-                                _ => panic!("unknown aggregate native test fault"),
-                            }
-                            let (output, inventory_credit) =
-                                fe2o3_kernel_analysis::CanonicalKirInventoryV18::derive_v18(
-                                    chain.owner(),
-                                    budget,
-                                )
-                                .map_err(E::Inventory)?;
-                            budget.reserve_storage(inventory_credit.retained_storage())?;
-                            let (physical, physical_credit) =
-                                fe2o3_kernel_analysis::check_canonical_kir_private_memory_v18(
-                                    &output,
-                                    fe2o3_kernel_analysis::CanonicalKirPrivateMemoryLimitsV1 {
-                                        max_cells: output.definitions().len(),
+                    let (premises, occurrences, histories, memory) =
+                        with_aggregate_initial_source_v30(
+                            source,
+                            chain,
+                            budget,
+                            |original, optimized, budget| {
+                                let mut state = fold_aggregate_source_stages_v30(
+                                    self,
+                                    |stage, state: Option<AggregateRuntimeStateV30>, budget| {
+                                        if let Some(mut state) = state {
+                                            state.globals = state.globals.advance(stage, budget)?;
+                                            state.roles = state.roles.advance(stage, budget)?;
+                                            state.memory = state.memory.advance(stage, budget)?;
+                                            return Ok(state);
+                                        }
+                                        if stage.ordinal != 0 {
+                                            return source
+                                                .missing("aggregate native seed is not first stage")
+                                                .map_err(Into::into);
+                                        }
+                                        let (mut premises, mut occurrences) =
+                                            Globals::storage_vectors(stage.output, budget)?;
+                                        let mut roles = AggregateSourceRolesV30::seed_storage(
+                                            stage.output,
+                                            budget,
+                                        )?;
+                                        with_mixed_source_completion_v26(
+                                            original,
+                                            optimized,
+                                            launches,
+                                            width,
+                                            budget,
+                                            &mut |native, budget| {
+                                                roles.fill_initial(
+                                                    native, original, optimized, budget,
+                                                )?;
+                                                Globals::fill_initial(
+                                                    native.completed_globals_v30(
+                                                        original, optimized, budget,
+                                                    )?,
+                                                    original,
+                                                    optimized,
+                                                    &mut premises,
+                                                    &mut occurrences,
+                                                    budget,
+                                                )?;
+                                                Ok(())
+                                            },
+                                        )
+                                        .map_err(E::InitialCompletion)?;
+                                        let globals =
+                                            Globals::seed(stage, premises, occurrences, budget)?
+                                                .advance(stage, budget)?;
+                                        let memory =
+                                            ProductionAggregateMemoryChainV31::seed(stage, budget)?
+                                                .advance(stage, budget)?;
+                                        Ok(AggregateRuntimeStateV30 {
+                                            globals,
+                                            roles,
+                                            memory,
+                                        })
                                     },
                                     budget,
+                                )?;
+                                #[cfg(test)]
+                                match fault {
+                                    Some(1) => {
+                                        state.roles.next_stage -= 1;
+                                    }
+                                    Some(2) => {
+                                        state.roles.owner = 0;
+                                    }
+                                    Some(3) => {
+                                        state.globals.omit_last_occurrence_v30();
+                                    }
+                                    Some(4) => {
+                                        state.globals.omit_first_definition_transport_v30(3);
+                                    }
+                                    Some(5) => {
+                                        state.globals.omit_first_definition_transport_v30(6);
+                                    }
+                                    None => (),
+                                    _ => panic!("unknown aggregate native test fault"),
+                                }
+                                let (output, inventory_credit) =
+                                    fe2o3_kernel_analysis::CanonicalKirInventoryV18::derive_v18(
+                                        chain.owner(),
+                                        budget,
+                                    )
+                                    .map_err(E::Inventory)?;
+                                budget.reserve_storage(inventory_credit.retained_storage())?;
+                                let (physical, physical_credit) =
+                                    fe2o3_kernel_analysis::check_canonical_kir_private_memory_v18(
+                                        &output,
+                                        fe2o3_kernel_analysis::CanonicalKirPrivateMemoryLimitsV1 {
+                                            max_cells: output.definitions().len(),
+                                        },
+                                        budget,
+                                    )
+                                    .map_err(ProductionSourceOwnedViewErrorV18::PrivateMemory)?;
+                                budget.reserve_storage(physical_credit.retained_storage())?;
+                                let function_launches = state.globals.function_launches(
+                                    original, chain, &output, launches, budget,
+                                )?;
+                                let mut seen = source_reference_emission_vec_v29(
+                                    output.operations().len(),
+                                    budget,
                                 )
-                                .map_err(ProductionSourceOwnedViewErrorV18::PrivateMemory)?;
-                            budget.reserve_storage(physical_credit.retained_storage())?;
-                            let function_launches = state
-                                .globals
-                                .function_launches(original, chain, &output, launches, budget)?;
-                            let mut seen = source_reference_emission_vec_v29(
-                                output.operations().len(),
-                                budget,
-                            )
-                            .map_err(source_argument_error_v18)?;
-                            budget.charge_work(output.operations().len())?;
-                            seen.resize(output.operations().len(), false);
-                            let mut histories =
-                                source_reference_emission_vec_v29(output.functions().len(), budget)
-                                    .map_err(source_argument_error_v18)?;
-                            let layouts = source.limits(budget)?.storage_layout_limits();
-                            with_source_pending_native_v30(
-                                &output,
-                                layouts,
-                                budget,
-                                |message| {
-                                    ProductionSourceOwnedViewErrorV18::Binding(message).into()
-                                },
-                                |error| source.deny_aggregate_accounting_v30(error),
-                                |pending, budget| {
-                                    let mut selected = None;
-                                    let mut native_result = None;
-                                    let family =
+                                .map_err(source_argument_error_v18)?;
+                                budget.charge_work(output.operations().len())?;
+                                seen.resize(output.operations().len(), false);
+                                let mut histories = source_reference_emission_vec_v29(
+                                    output.functions().len(),
+                                    budget,
+                                )
+                                .map_err(source_argument_error_v18)?;
+                                let layouts = source.limits(budget)?.storage_layout_limits();
+                                with_source_pending_native_v30(
+                                    &output,
+                                    layouts,
+                                    budget,
+                                    |message| {
+                                        ProductionSourceOwnedViewErrorV18::Binding(message).into()
+                                    },
+                                    |error| source.deny_aggregate_accounting_v30(error),
+                                    |pending, budget| {
+                                        let mut selected = None;
+                                        let mut native_result = None;
+                                        let family =
                                         fe2o3_kernel_ir::with_canonical_guarded_global_reads_v18(
                                             chain.owner(),
                                             Default::default(),
@@ -378,11 +409,11 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
                                                 )
                                             },
                                         );
-                                    let called = selected.is_some();
-                                    if let Some(Err(error)) = selected {
-                                        return Err(error);
-                                    }
-                                    if family.map_err(|error| E::Native(
+                                        let called = selected.is_some();
+                                        if let Some(Err(error)) = selected {
+                                            return Err(error);
+                                        }
+                                        if family.map_err(|error| E::Native(
                                         ProductionSourceNativeLifecycleErrorV18::Pending(
                                             fe2o3_pliron::CanonicalRankedPolicyFailureV1::ConditionalGlobalsV26(error),
                                         ),
@@ -391,42 +422,45 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
                                             .missing("aggregate final conditional global family incomplete")
                                             .map_err(Into::into);
                                     }
-                                    native_result
-                                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                                            "aggregate final native callback absent",
-                                        ))?
-                                        .map_err(|error| {
-                                            E::Native(
-                                                ProductionSourceNativeLifecycleErrorV18::Native(
-                                                    error,
-                                                ),
-                                            )
-                                        })?;
-                                    if !called {
-                                        return source
-                                            .missing("aggregate final source conjunction absent")
-                                            .map_err(Into::into);
-                                    }
-                                    Ok(())
-                                },
-                            )?;
-                            self.owned.check(budget)?;
-                            let roles_credit = state.roles.retained_storage()?;
-                            let scratch = argument_sum_v1(&[
-                                aggregate_vector_credit_v30(&function_launches)?,
-                                aggregate_vector_credit_v30(&seen)?,
-                                roles_credit,
-                                inventory_credit.retained_storage(),
-                                physical_credit.retained_storage(),
-                            ])?;
-                            drop((state.roles, function_launches, seen));
-                            drop(physical);
-                            drop(output);
-                            budget.release_storage(scratch)?;
-                            let (premises, occurrences) = state.globals.into_runtime(budget)?;
-                            Ok((premises, occurrences, histories))
-                        },
-                    )?;
+                                        native_result
+                                            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                                                "aggregate final native callback absent",
+                                            ))?
+                                            .map_err(|error| {
+                                                E::Native(
+                                                    ProductionSourceNativeLifecycleErrorV18::Native(
+                                                        error,
+                                                    ),
+                                                )
+                                            })?;
+                                        if !called {
+                                            return source
+                                                .missing(
+                                                    "aggregate final source conjunction absent",
+                                                )
+                                                .map_err(Into::into);
+                                        }
+                                        Ok(())
+                                    },
+                                )?;
+                                self.owned.check(budget)?;
+                                state.memory.finish(source, chain, budget)?;
+                                let roles_credit = state.roles.retained_storage()?;
+                                let scratch = argument_sum_v1(&[
+                                    aggregate_vector_credit_v30(&function_launches)?,
+                                    aggregate_vector_credit_v30(&seen)?,
+                                    roles_credit,
+                                    inventory_credit.retained_storage(),
+                                    physical_credit.retained_storage(),
+                                ])?;
+                                drop((state.roles, function_launches, seen));
+                                drop(physical);
+                                drop(output);
+                                budget.release_storage(scratch)?;
+                                let (premises, occurrences) = state.globals.into_runtime(budget)?;
+                                Ok((premises, occurrences, histories, state.memory))
+                            },
+                        )?;
                     let owner = aggregate_completion_owner_headers_v30()?;
                     budget.reserve_storage(owner)?;
                     budget.release_storage(header)?;
@@ -435,11 +469,12 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
                         aggregate_vector_credit_v30(&premises)?,
                         aggregate_vector_credit_v30(&occurrences)?,
                         aggregate_vector_credit_v30(&histories)?,
+                        memory.retained_storage()?,
                     ])?;
                     if entry.checked_add(retained) != Some(budget.storage()) {
                         return Err(ArgumentResourceV1::Accounting.into());
                     }
-                    Ok((premises, occurrences, histories, retained))
+                    Ok((premises, occurrences, histories, memory, retained))
                 })();
                 source.retain_aggregate_result_v30(result)
             },
@@ -449,6 +484,7 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
             premises,
             occurrences,
             histories,
+            memory,
             launches,
             width,
             retained,
@@ -474,6 +510,7 @@ fn aggregate_completion_headers_v30() -> Result<usize, ArgumentResourceV1> {
         Vec<ProductionMixedSliceRuntimePremiseV26>,
         Vec<ProductionMixedRuntimeOccurrenceV26>,
         Vec<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>>,
+        ProductionAggregateMemoryChainV31,
     );
     type Frame<'a> = (
         AggregateRuntimeStateV30,
@@ -500,6 +537,7 @@ fn aggregate_completion_headers_v30() -> Result<usize, ArgumentResourceV1> {
         mixed_source_completion_headers_v26()?,
         aggregate_completion_owner_headers_v30()?,
         aggregate_role_headers_v30()?,
+        aggregate_memory_headers_v31()?,
         size_of::<
             Result<
                 &slice_view_v1::CompletedGlobalSourcesV26<'_, '_>,
@@ -515,6 +553,7 @@ fn aggregate_completion_headers_v30() -> Result<usize, ArgumentResourceV1> {
                     Vec<ProductionMixedSliceRuntimePremiseV26>,
                     Vec<ProductionMixedRuntimeOccurrenceV26>,
                     Vec<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>>,
+                    ProductionAggregateMemoryChainV31,
                     usize,
                 ),
                 ProductionAggregateSourceErrorV30,

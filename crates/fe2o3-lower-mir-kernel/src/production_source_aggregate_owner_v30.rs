@@ -2,6 +2,7 @@
 // The storage-only policy shares custody without fabricating scalar transitions.
 include!("production_source_aggregate_errors_v30.rs");
 include!("production_source_aggregate_stages_v30.rs");
+include!("production_source_aggregate_memory_chain_v31.rs");
 include!("production_source_pending_native_v30.rs");
 include!("production_source_aggregate_completion_v30.rs");
 
