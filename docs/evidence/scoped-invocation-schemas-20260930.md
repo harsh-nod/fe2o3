@@ -339,3 +339,58 @@ Log SHA-256:
 The typed structural, transition, analysis and source-owner optimizer consumers
 still need integration. No protected proof, simulator or GPU ran in r196;
 M1-M7 remain open and strict end-to-end coverage remains **0/47**.
+
+## Scoped Source and AMD Integration
+
+The integration candidate now retains invocation lifetimes across source CFG
+and helper boundaries, composes normal scope closure with terminal cleanup,
+and carries genuine source custody into pending scoped materialization. These
+changes remain candidates until their integrated acceptance tests pass.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r197 | `db0759255a0e84b52ca52e3f4ba8b5fbf3401154` | Selected source/lifetime tests | Compilation failed with E0716; no tests ran |
+| r198 | `ca5de3161e7dc9319b9ce8f405909e490ee6a089` | AMD library | Compilation failed on a missing test import; no tests ran |
+| r199 | `30db4d6d164ae2ead6bb8511bc8466a45500fb7b` | `rustc-codegen-fe2o3 --all-targets` check | Passed; no tests executed |
+| r200 | `237689b629e9c3664112de56ec714eb81415e571` | Complete AMD library | 253 passed, zero failed, three ignored |
+| r201 | `237689b629e9c3664112de56ec714eb81415e571` | Complete AMD documentation tests | 28 passed, zero failed or ignored |
+| r202 | `3291b9b2fdc0a228752ff3ea6e3986490efd9bbd` | Scoped AMD tests with explicit LLVM 22 verification | 11 passed, zero failed or ignored |
+
+r197's temporary occurrence-view lifetime was corrected without relaxing
+admission. r198's missing `MemoryAccess` fixture import was corrected before
+r200. These earlier failures remain failures, not intended-negative coverage.
+r199 includes immutable #271 candidate
+`c23b709a3b6c55a13d7e9fefc188fbe4e252bea2`, but predates the later AMD and
+terminal-cleanup composition. It is a compiler build check, not production
+source or launch acceptance.
+
+The AMD component passes the exact scoped owner to the existing shared emitter;
+it does not convert that owner into a historical profile. Context and invocation
+remain logical, zero-ABI capabilities. Index reads retain their selected SSA
+identity, checked pointer formation uses unsigned bounds, and unsupported
+operation families fail before emission. r200 includes ten new scoped controls;
+its three ignored tests are pre-existing explicit inert-fixture exports.
+
+r202 includes those ten controls and a new explicit LLVM verification test,
+so these counts are not disjoint. LLVM 22 accepted all four combinations of
+gfx942/gfx950 and workgroup size 64/128. Four malformed-LLVM controls returned
+the expected rejection status and diagnostic. The test used
+`/opt/rocm-7.2.0/llvm/bin/opt`, SHA-256
+`13cb4c99d1810b4db40bca5db0759ca94c8efd3c437bb8f7fe1a94f5bda66203`.
+This is LLVM structural validation, not machine-code generation or refinement.
+
+All six runs retained unchanged before/after source and tool inventories.
+Log SHA-256:
+
+- r197: `eaff9a73b1e1cf46f215b17f0cfbdff1dc5142d07d73d4d9dbe2e263d42ff200`
+- r198: `3c5affa0d2cf4213e5853ad0051db7539b88bd9d1325ad14e864e927560b1ad4`
+- r199: `58e552edd8b9415e4b3ac224ab9d7cb8ba58f64b8d8151f843eee4b1be0841e7`
+- r200: `0de1b6b7749b9f9887d43712a9848b1a38496afcb25eaff6ac05ee9647b3ec7d`
+- r201: `aab0fb69e6fdc0f22f744e11231a781f612fb51a490af3acd1618ce3c5f52ee2`
+- r202: `934435e2ed6a090b44e912749d7645ea8a1d86201fcf3a1211d64119bb8d027e`
+
+Simulator and typed optimizer integration remain separate unfinished work.
+No protected proof or GPU execution occurred in these runs. M0 remains complete,
+M1-M7 remain incomplete, and strict production-to-required-proof-to-safe-GPU
+coverage remains **0/47**. Publishing this evidence does not activate the
+integration candidate on public main.
