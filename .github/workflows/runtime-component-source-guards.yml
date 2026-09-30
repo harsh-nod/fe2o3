@@ -16,6 +16,7 @@ on:
       - "crates/fe2o3-kfd/**"
       - "benchmarks/runtime_gfx942/**"
       - "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/**"
+      - "docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/native.py"
   push:
     branches: [main]
     paths:
@@ -32,6 +33,7 @@ on:
       - "crates/fe2o3-kfd/**"
       - "benchmarks/runtime_gfx942/**"
       - "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/**"
+      - "docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/native.py"
   workflow_dispatch:
 
 permissions:
