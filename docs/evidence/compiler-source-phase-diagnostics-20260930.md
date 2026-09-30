@@ -431,6 +431,42 @@ r129 source snapshot SHA-256:
 Log SHA-256:
 `cb58f1474cbd83008f5ff05f831ba9afee6e4789d5f5e0b537ffefaa0752dab5`.
 
+## Reconciled Diagnostic and Accounting Controls
+
+Guarded lowerer run `r132` at
+`46d13316274202ca3ec7fba89c79a0df30e3cd45` executed the corrected accounting and
+diagnostic controls described above. It completed with status 101:
+**450 passed, 3 failed, none ignored**, from 453 selected tests. All four repaired
+tests now pass, together with the new independent scratch-refund and child-call
+diagnostic controls. The source and tool snapshots stayed unchanged.
+
+The accounting oracle now derives the retained header charge from the concrete
+source-operation roster and header types. It separately checks scratch refund;
+it does not replace the expected charge with the observed result. The mutation
+controls require the genuine original sites to be reached and rejected cursor
+state to remain unchanged. Child-call diagnostics retain specific source and
+resource failures while distinguishing structural argument shape from later
+correspondence checks.
+
+All three remaining native-helper receiver fixtures stop at
+`execution availability during defined child structural argument shape`, at
+function 0, block 1, terminator. The positive does not reach its native callback,
+and the two mutations do not reach their intended substitutions. These are
+failed integration tests, not accepted negative coverage. Generic transport of
+the original authenticated index value into a by-value helper argument is still
+required; accepting a same-shaped scalar without its provenance is not a fix.
+
+This successor did not rerun the actual-source matrix. Its latest result remains
+r131's 80 early failures at the global effect census. Neither result qualifies
+context-derived indexing, protected proof execution, simulation or hardware.
+The compiler candidate remains separate from public main; M1 and **0/47** do not
+advance.
+
+r132 source snapshot SHA-256:
+`2e6a876e7f7564d2e45317bb8f8ea67223c06a592a022c3cf249180ee76fae95`.
+Log SHA-256:
+`c0dc10e9fd48080b060852228cc1a78610e586082528661b1ef58f30fc68e888`.
+
 ## Runtime Observation
 
 A primary-session read-only SSH check reached MI350-2 on 2026-09-30 and confirmed

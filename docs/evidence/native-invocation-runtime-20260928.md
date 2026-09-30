@@ -195,3 +195,62 @@ path. That consuming integration, continuous code/source/output enforcement,
 original compiler completion and protected proof execution remain required.
 V4 intake remains refusal-only. For issue #272, M0 is now complete; M1-M7 remain
 incomplete and the strict production-to-safe-GPU-launch matrix remains **0/47**.
+
+## September 30 Original Root Request Integration
+
+Code commits `47f393561` and `d67ec80e5` integrate backing preparation with the
+real root-request intake. The original authenticated request is retained before
+fallible preparation, then consumed using the fixed-origin production approval
+and runtime constructors. The received sealed invocation, typed output, original
+budget and request rights are not reconstructed through a second authority path.
+Only backing growth and the new owner envelope are reserved in addition to the
+already retained request charge. Failure consumes the turn; cancellation and
+draining retain the original backing and rights until their owners retire.
+
+This supersedes the preceding checkpoint's missing root-intake connection, but
+does not activate compiler execution. The next turn still returns the existing
+V4 `RuntimeEnforcementUnavailable` refusal. Continuous code/source/output
+enforcement, actual compiler completion, proof RPC and safe GPU launch remain
+unfinished. No success acknowledgement or production safety check was weakened.
+
+The new ignored root-request process matrix obtains its owners from genuine
+fixed-origin V3 provisioning records, installed image measurements, approval and
+runtime inputs. It no longer depends on synthetic test keys or a hardcoded test
+profile. It covers consuming preparation/refusal, short or foreign accounting,
+moved same-ledger budgets, trailing requests, unwind and retained descriptor
+identity. These cases are implemented and compiled, not executed in this batch.
+Running them requires genuine provisioning in a disposable isolated environment
+with an external whole-cgroup custodian, bounded resources and deadline,
+descendant termination/reaping, and private-mount cleanup. Environment opt-ins
+alone do not establish that isolation. The unwind exit assertion is not evidence
+of descendant or mount cleanup.
+
+Guarded local validation used `d67ec80e5a5b84236a2af88bb36c9b96ffcc559c`, the
+pinned nightly, locked/offline dependencies, one Cargo job and serial tests:
+
+| Run | Result |
+| --- | --- |
+| r133 closure-capability library | 288 passed, 4 ignored |
+| r133 execution-coordinator library | 282 passed, 16 ignored |
+| r134 both crates' doctests | 222 passed, none ignored |
+| r135 both crates, all-target Clippy | Completed with warnings; not warning-clean |
+
+Nested subprocess results are not counted twice. The total library result is
+570 passed and 20 ignored. The genuine installed matrix remains ignored; no
+compiler, proof helper or GPU workload ran. All three runs retained the same
+9,504-file source snapshot and unchanged tools. Whitespace, DCO and the existing
+delta hygiene policy passed for both code commits.
+
+Source snapshot SHA-256:
+`15e4f54db07d5a4d5413a1167b22b27801c8e0ca020483754b60237cfad03852`.
+Log SHA-256 values:
+
+- r133: `446b814a8e4750641d64d0f27f71e0778e1ea769ce737c132d6fb06e94010d59`
+- r134: `aa4ad7f3d00ce663fd4462eabb6b80e71ea2dbf05836f7ea65b5d2cac1d356ca`
+- r135: `dd70cb8670f233f78090ea707e8d2f6c1bacfa3577d425d4b6afae84a8bc0347`
+
+A later bounded read-only SSH probe reached MI350-2's Conductor authorization
+step but timed out before returning filesystem or image results. The earlier
+host observations above are historical, not reconfirmed by that probe. No remote
+job, container or scratch directory was created. M1-M7 remain incomplete and
+the strict end-to-end count remains **0/47**.
