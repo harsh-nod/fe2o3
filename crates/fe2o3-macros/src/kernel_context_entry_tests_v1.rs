@@ -209,12 +209,79 @@ fn source_context_syntax_and_forwarding_patterns_are_explicit() {
 }
 
 #[test]
-fn context_aware_typed_profile_does_not_apply_legacy_vecadd_geometry() {
-    let input = parse_quote! {
-        pub fn f(ctx: KernelContext<'_>, a: &[f32], b: &[f32], output: DisjointSlice<f32>) {}
-    };
-    let options = parse_kernel_options(quote!(typed, launch(required = [64, 1, 1]))).unwrap();
-    validate_typed_profile_v1(&input, &options).unwrap();
+fn typed_profile_uses_the_same_generic_contract_with_or_without_context() {
+    for name in ["vecadd", "renamed"] {
+        for context in ["", "ctx: KernelContext<'_>,"] {
+            let input: ItemFn = syn::parse_str(&format!(
+                "pub fn {name}({context} a: &[f32], b: &[f32], output: DisjointSlice<f32>) {{}}"
+            ))
+            .unwrap();
+            for block in [64u32, 256] {
+                let options = parse_kernel_options(quote!(typed, launch(
+                    required = [#block, 1, 1], max = [#block, 1, 1], max_grid = [1, 1, 1]
+                )))
+                .unwrap();
+                validate_typed_profile_v1(&input, &options).unwrap();
+                let physical = physical_signature_v1(&input, &options).unwrap();
+                assert_eq!(physical.sig.inputs.len(), 3);
+                let model =
+                    crate::model_general_typed_signature_v1(&physical, &options, [0; 32]).unwrap();
+                assert_eq!(model.arguments.len(), 3);
+                assert_eq!(model.launch.max_grid().x(), 1);
+                let expansion = expand_kernel_with_imports(
+                    input.clone(),
+                    options,
+                    &quote!(
+                        use gpu_device as __fe2o3_kernel_device;
+                    ),
+                    Some(&quote!(gpu_device)),
+                    None,
+                    Some(derive_crate_binding_id_v1(
+                        "context-test",
+                        ["generic-launch"],
+                    )),
+                )
+                .unwrap();
+                let file: syn::File = syn::parse2(expansion).unwrap();
+                assert_eq!(
+                    functions(&file).len(),
+                    if context.is_empty() { 1 } else { 2 }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn typed_profile_preserves_generic_launch_rejections_with_or_without_context() {
+    for context in ["", "ctx: KernelContext<'_>,"] {
+        let input: ItemFn = syn::parse_str(&format!(
+            "pub fn vecadd({context} a: &[f32], b: &[f32], output: DisjointSlice<f32>) {{}}"
+        ))
+        .unwrap();
+        for launch in [
+            quote!(launch(required = [257, 1, 1])),
+            quote!(launch(required = [64, 1, 1], max = [128, 1, 1])),
+            quote!(launch(required = [64, 1, 1], max_grid = [1, 2, 1])),
+            quote!(launch(max = [64, 1, 1])),
+            quote!(launch(
+                required = [64, 1, 1],
+                max = [64, 1, 1],
+                min_workgroups_per_compute_unit = 2
+            )),
+        ] {
+            let options = parse_kernel_options(quote!(typed, #launch)).unwrap();
+            let physical = physical_signature_v1(&input, &options).unwrap();
+            let expected =
+                crate::model_general_typed_signature_v1(&physical, &options, [0; 32]).unwrap_err();
+            assert_eq!(
+                validate_typed_profile_v1(&input, &options)
+                    .unwrap_err()
+                    .to_string(),
+                expected.to_string()
+            );
+        }
+    }
 }
 
 #[test]

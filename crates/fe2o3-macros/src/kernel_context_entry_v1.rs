@@ -31,11 +31,7 @@ pub(super) fn validate_typed_profile_v1(
     options: &KernelOptions,
 ) -> syn::Result<()> {
     let physical = physical_signature_v1(input, options)?;
-    if physical.sig.inputs.len() == input.sig.inputs.len() {
-        crate::validate_typed_kernel_profile_v1(input, options)
-    } else {
-        crate::model_general_typed_signature_v1(&physical, options, [0; 32]).map(|_| ())
-    }
+    crate::model_general_typed_signature_v1(&physical, options, [0; 32]).map(|_| ())
 }
 
 pub(super) fn physical_signature_v1(

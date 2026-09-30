@@ -1767,6 +1767,7 @@ fn validate_typed_kernel_symbol_stem(ident: &syn::Ident) -> syn::Result<()> {
     }
 }
 
+#[cfg(test)]
 fn validate_typed_kernel_signature(input: &ItemFn) -> syn::Result<()> {
     let signature = &input.sig;
     let required_signature =
@@ -1835,6 +1836,7 @@ fn validate_typed_kernel_signature(input: &ItemFn) -> syn::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_typed_kernel_profile_v1(input: &ItemFn, options: &KernelOptions) -> syn::Result<()> {
     match validate_typed_kernel_signature(input) {
         Ok(()) => validate_fixed_wg256_launch_v1(options.launch.as_ref(), &input.sig),
@@ -1857,6 +1859,7 @@ fn validate_general_typed_signature_shape_v1(
     model_general_typed_signature_v1(input, &signature_options, [0; 32]).map(|_| ())
 }
 
+#[cfg(test)]
 fn validate_exact_vecadd_argument(
     argument: &FnArg,
     position: usize,
@@ -3504,6 +3507,7 @@ fn exact_general_typed_block_v1(
     Ok(required)
 }
 
+#[cfg(test)]
 fn validate_fixed_wg256_launch_v1(
     launch: Option<&ParsedLaunchBoundsV1>,
     span: impl quote::ToTokens,
