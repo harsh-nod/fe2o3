@@ -1,0 +1,208 @@
+{
+  "archive_bytes": 58741275,
+  "archive_files": 2773,
+  "archive_sha256": "3b798a2097a2145493bf8a779fb20476eed99b8eb07be5972fab91d1521e5e4f",
+  "archived_process_closure_records": 318,
+  "cleanup_pending": true,
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-binder-a2-restore-2cljn0lo/raw/audit-static.py",
+    "--repo",
+    "/home/harsh/.codex-tmp/fe2o3-template-roster-20260929-mlzIjrgb/src"
+  ],
+  "manifested_files": 2772,
+  "overall_qualification_complete": false,
+  "owned_restore": "/home/harsh/.codex-tmp/fe2o3-binder-a2-restore-2cljn0lo",
+  "packager_namespace": {
+    "boot_id": "181678f7-40b6-4ce2-b081-61a8c11261d2",
+    "packager_pid": 2,
+    "pid_namespace": "pid:[4026532428]"
+  },
+  "packager_owned_closures": [
+    {
+      "absent": true,
+      "process_group": 8,
+      "record": "/home/harsh/.codex-tmp/fe2o3-template-roster-20260929-mlzIjrgb/packaging-2/controls"
+    },
+    {
+      "absent": true,
+      "process_group": 9,
+      "record": "/home/harsh/.codex-tmp/fe2o3-template-roster-20260929-mlzIjrgb/packaging-2/prefix-controls"
+    },
+    {
+      "absent": true,
+      "process_group": 23,
+      "record": "/home/harsh/.codex-tmp/fe2o3-template-roster-20260929-mlzIjrgb/packaging-2/blocked-controls"
+    },
+    {
+      "absent": true,
+      "process_group": 24,
+      "record": "/home/harsh/.codex-tmp/fe2o3-template-roster-20260929-mlzIjrgb/packaging-2/audit"
+    },
+    {
+      "absent": true,
+      "process_group": 75,
+      "record": "/home/harsh/.codex-tmp/fe2o3-binder-a2-restore-2cljn0lo/replay"
+    }
+  ],
+  "process_scope": "recorded fresh/historical closures replayed; only packager children freshly observed in its PID namespace",
+  "qualification_process_records": 137,
+  "replay": {
+    "artifact_replay_passed": true,
+    "campaigns": {
+      "binder": {
+        "logical_negatives": 12,
+        "proof_files": 13,
+        "stages": 20,
+        "verified": 64
+      },
+      "producer-input": {
+        "logical_negatives": 22,
+        "proof_files": 2,
+        "stages": 30,
+        "verified": 15
+      },
+      "roster": {
+        "logical_negatives": 12,
+        "proof_files": 13,
+        "stages": 20,
+        "verified": 64
+      }
+    },
+    "commit": "3d4ee2d91b0713bb1dfe207d16eede331125a7ab",
+    "fresh_namespace_recorded_closures": 118,
+    "historical_recorded_closures": 18,
+    "independent_process_observations": [],
+    "kfd": {
+      "elf_sha256": "82316fcae7ec999acaa9b094eabc0f16bc8df42c0e69e4361babb73ada5e8b04",
+      "execution_packet": "signed-final-2",
+      "execution_reused": true,
+      "ignored": 0,
+      "passed": 1779
+    },
+    "model_ignored": 19,
+    "model_passed": 1088,
+    "outer_stages": 48,
+    "overall_qualification_complete": false,
+    "owned_process_records": 137,
+    "runtime_blocked": {
+      "artifact_replay_passed": true,
+      "artifacts": {
+        "signed-rest-1/exception.json": {
+          "bytes": 89,
+          "sha256": "ecc847a111cb86d3d8c07a496ff031cad8fc1ec26441ad4deb8d504370a0b767"
+        },
+        "signed-rest-1/process-namespace-before.json": {
+          "bytes": 190,
+          "sha256": "17cac019b7905acffbcc8bde1d3e9e75f973973304cf6998c380cf3202dac0f5"
+        },
+        "signed-rest-1/recorder.py": {
+          "bytes": 29296,
+          "sha256": "554c54840bf6c2602c671121af289a1e6380e439423921cc566b33bde0490ebd"
+        },
+        "signed-rest-1/results.json": {
+          "bytes": 16715,
+          "sha256": "cd65a094f8f5afdbab1eefde7d278b7c33d68567e0507144b8c835de081f7381"
+        },
+        "signed-rest-1/runtime-all-tests-result.json": {
+          "bytes": 456,
+          "sha256": "dfbd840fcddafa49a5aef6dffe6f40bcaa5eb1efc8b49cfb9b63e2d1acbd1b11"
+        },
+        "signed-rest-1/runtime-all-tests/record.json": {
+          "bytes": 490,
+          "sha256": "6996170024c851b5f9b2135f73dbc41b41776f51f45d75af5c131b214bf7f81d"
+        },
+        "signed-rest-1/runtime-all-tests/stderr.log": {
+          "bytes": 266,
+          "sha256": "8d03850f814f229c5782b64a6455cafb3af10896cd846160394dc4d0d580a676"
+        },
+        "signed-rest-1/runtime-all-tests/stdout.log": {
+          "bytes": 234934,
+          "sha256": "8509f3a1847f8bc6c963307483663a81f3651ba26a534a34260a70efd9cb0165"
+        },
+        "signed-rest-1/signed-inputs.json": {
+          "bytes": 1416902,
+          "sha256": "00e9bb1e946770bb4f41c9e25e68cb3a27b985b56fc46338a877265c5f21330c"
+        },
+        "signed-rest-1/source-after.json": {
+          "bytes": 917230,
+          "sha256": "c51fbea73e56d7644e13f38b3c1ea5fdf7670172ac0ea4cb7fee27d1df0bec0c"
+        },
+        "signed-rest-1/source-before.json": {
+          "bytes": 917230,
+          "sha256": "c51fbea73e56d7644e13f38b3c1ea5fdf7670172ac0ea4cb7fee27d1df0bec0c"
+        }
+      },
+      "attribution": "the failing socket inspection operation and the exact denial mechanism are not established",
+      "execution_packet": "signed-rest-1",
+      "failed_tests": [
+        "authorized_execution::tests::cooperative_debug_telemetry_emits_only_bounded_logical_records",
+        "authorized_execution::tests::failed_session_end_is_explicit_and_terminal",
+        "authorized_execution::tests::pre_native_telemetry_failure_is_returned_and_poisoned"
+      ],
+      "independent_process_observations": [],
+      "later_runtime_suites_executed": false,
+      "observed_failure": "InspectSocket EPERM during telemetry admission at authorized_execution.rs:1317:91",
+      "overall_qualification_complete": false,
+      "owned_process_records": 1,
+      "process_scope": "one historical recorded closure receipt; no new process observation or host-wide absence claim",
+      "recorded_prefix_stages": 19,
+      "runtime_library": {
+        "failed": 3,
+        "filtered": 0,
+        "ignored": 32,
+        "passed": 1851
+      },
+      "runtime_qualification": false,
+      "scope": "failure evidence only; no runtime, native, performance or parity acceptance",
+      "signed_inputs": 6407,
+      "source_commit": "3d4ee2d91b0713bb1dfe207d16eede331125a7ab",
+      "source_unchanged": true,
+      "status": 101
+    },
+    "runtime_qualification": false,
+    "scope": "artifact replay of available CPU/static/bounded host-proof gates; full runtime remains unqualified; no GPU/performance/parity qualification",
+    "signed_inputs": 6407,
+    "static_cpu_proof_gates_passed": true,
+    "supplementary_namespace_recorded_closures": 1,
+    "supplementary_runtime_integrations": {
+      "historical_runtime_failure_superseded": false,
+      "ignored": 3,
+      "passed": 11,
+      "runtime_qualification": false,
+      "targets": [
+        "closed_execution_conformance",
+        "gfx942_real_hsaco",
+        "kfd_opaque_checkpoint_live",
+        "kfd_worker_v5_qualification",
+        "r57_n3_hardware_source",
+        "r60_pipeline_hardware_source"
+      ]
+    }
+  },
+  "replay_process": {
+    "command": [
+      "/usr/bin/python3",
+      "-I",
+      "-B",
+      "/home/harsh/.codex-tmp/fe2o3-binder-a2-restore-2cljn0lo/raw/audit-static.py",
+      "--repo",
+      "/home/harsh/.codex-tmp/fe2o3-template-roster-20260929-mlzIjrgb/src"
+    ],
+    "finished_ns": 1790730161416915069,
+    "group_absent": true,
+    "process_group": 75,
+    "started_ns": 1790730143833386568,
+    "status": 0
+  },
+  "replay_record_hashes": {
+    "record.json": "bdf7c9c1b582b93bb97fb6cb8be69dd532df93553feb88e438e8451613b12c1d",
+    "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout.log": "08cdb6e51a3d3b0a155b4f65a265c1bd046585fb4072d0b79a92a588c11c3532"
+  },
+  "runtime_qualification": false,
+  "stderr": "",
+  "stdout": "{\n  \"artifact_replay_passed\": true,\n  \"campaigns\": {\n    \"binder\": {\n      \"logical_negatives\": 12,\n      \"proof_files\": 13,\n      \"stages\": 20,\n      \"verified\": 64\n    },\n    \"producer-input\": {\n      \"logical_negatives\": 22,\n      \"proof_files\": 2,\n      \"stages\": 30,\n      \"verified\": 15\n    },\n    \"roster\": {\n      \"logical_negatives\": 12,\n      \"proof_files\": 13,\n      \"stages\": 20,\n      \"verified\": 64\n    }\n  },\n  \"commit\": \"3d4ee2d91b0713bb1dfe207d16eede331125a7ab\",\n  \"fresh_namespace_recorded_closures\": 118,\n  \"historical_recorded_closures\": 18,\n  \"independent_process_observations\": [],\n  \"kfd\": {\n    \"elf_sha256\": \"82316fcae7ec999acaa9b094eabc0f16bc8df42c0e69e4361babb73ada5e8b04\",\n    \"execution_packet\": \"signed-final-2\",\n    \"execution_reused\": true,\n    \"ignored\": 0,\n    \"passed\": 1779\n  },\n  \"model_ignored\": 19,\n  \"model_passed\": 1088,\n  \"outer_stages\": 48,\n  \"overall_qualification_complete\": false,\n  \"owned_process_records\": 137,\n  \"runtime_blocked\": {\n    \"artifact_replay_passed\": true,\n    \"artifacts\": {\n      \"signed-rest-1/exception.json\": {\n        \"bytes\": 89,\n        \"sha256\": \"ecc847a111cb86d3d8c07a496ff031cad8fc1ec26441ad4deb8d504370a0b767\"\n      },\n      \"signed-rest-1/process-namespace-before.json\": {\n        \"bytes\": 190,\n        \"sha256\": \"17cac019b7905acffbcc8bde1d3e9e75f973973304cf6998c380cf3202dac0f5\"\n      },\n      \"signed-rest-1/recorder.py\": {\n        \"bytes\": 29296,\n        \"sha256\": \"554c54840bf6c2602c671121af289a1e6380e439423921cc566b33bde0490ebd\"\n      },\n      \"signed-rest-1/results.json\": {\n        \"bytes\": 16715,\n        \"sha256\": \"cd65a094f8f5afdbab1eefde7d278b7c33d68567e0507144b8c835de081f7381\"\n      },\n      \"signed-rest-1/runtime-all-tests-result.json\": {\n        \"bytes\": 456,\n        \"sha256\": \"dfbd840fcddafa49a5aef6dffe6f40bcaa5eb1efc8b49cfb9b63e2d1acbd1b11\"\n      },\n      \"signed-rest-1/runtime-all-tests/record.json\": {\n        \"bytes\": 490,\n        \"sha256\": \"6996170024c851b5f9b2135f73dbc41b41776f51f45d75af5c131b214bf7f81d\"\n      },\n      \"signed-rest-1/runtime-all-tests/stderr.log\": {\n        \"bytes\": 266,\n        \"sha256\": \"8d03850f814f229c5782b64a6455cafb3af10896cd846160394dc4d0d580a676\"\n      },\n      \"signed-rest-1/runtime-all-tests/stdout.log\": {\n        \"bytes\": 234934,\n        \"sha256\": \"8509f3a1847f8bc6c963307483663a81f3651ba26a534a34260a70efd9cb0165\"\n      },\n      \"signed-rest-1/signed-inputs.json\": {\n        \"bytes\": 1416902,\n        \"sha256\": \"00e9bb1e946770bb4f41c9e25e68cb3a27b985b56fc46338a877265c5f21330c\"\n      },\n      \"signed-rest-1/source-after.json\": {\n        \"bytes\": 917230,\n        \"sha256\": \"c51fbea73e56d7644e13f38b3c1ea5fdf7670172ac0ea4cb7fee27d1df0bec0c\"\n      },\n      \"signed-rest-1/source-before.json\": {\n        \"bytes\": 917230,\n        \"sha256\": \"c51fbea73e56d7644e13f38b3c1ea5fdf7670172ac0ea4cb7fee27d1df0bec0c\"\n      }\n    },\n    \"attribution\": \"the failing socket inspection operation and the exact denial mechanism are not established\",\n    \"execution_packet\": \"signed-rest-1\",\n    \"failed_tests\": [\n      \"authorized_execution::tests::cooperative_debug_telemetry_emits_only_bounded_logical_records\",\n      \"authorized_execution::tests::failed_session_end_is_explicit_and_terminal\",\n      \"authorized_execution::tests::pre_native_telemetry_failure_is_returned_and_poisoned\"\n    ],\n    \"independent_process_observations\": [],\n    \"later_runtime_suites_executed\": false,\n    \"observed_failure\": \"InspectSocket EPERM during telemetry admission at authorized_execution.rs:1317:91\",\n    \"overall_qualification_complete\": false,\n    \"owned_process_records\": 1,\n    \"process_scope\": \"one historical recorded closure receipt; no new process observation or host-wide absence claim\",\n    \"recorded_prefix_stages\": 19,\n    \"runtime_library\": {\n      \"failed\": 3,\n      \"filtered\": 0,\n      \"ignored\": 32,\n      \"passed\": 1851\n    },\n    \"runtime_qualification\": false,\n    \"scope\": \"failure evidence only; no runtime, native, performance or parity acceptance\",\n    \"signed_inputs\": 6407,\n    \"source_commit\": \"3d4ee2d91b0713bb1dfe207d16eede331125a7ab\",\n    \"source_unchanged\": true,\n    \"status\": 101\n  },\n  \"runtime_qualification\": false,\n  \"scope\": \"artifact replay of available CPU/static/bounded host-proof gates; full runtime remains unqualified; no GPU/performance/parity qualification\",\n  \"signed_inputs\": 6407,\n  \"static_cpu_proof_gates_passed\": true,\n  \"supplementary_namespace_recorded_closures\": 1,\n  \"supplementary_runtime_integrations\": {\n    \"historical_runtime_failure_superseded\": false,\n    \"ignored\": 3,\n    \"passed\": 11,\n    \"runtime_qualification\": false,\n    \"targets\": [\n      \"closed_execution_conformance\",\n      \"gfx942_real_hsaco\",\n      \"kfd_opaque_checkpoint_live\",\n      \"kfd_worker_v5_qualification\",\n      \"r57_n3_hardware_source\",\n      \"r60_pipeline_hardware_source\"\n    ]\n  }\n}\n"
+}

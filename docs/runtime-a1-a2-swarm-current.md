@@ -2,8 +2,10 @@
 
 ## Milestone Snapshot
 
-As of 2026-09-29 UTC, [#182](https://github.com/harsh-nod/fe2o3/issues/182)
-remains open. These are exit-criteria statuses, not API implementation counts.
+Local qualification snapshot: 2026-09-30 UTC.
+[#182](https://github.com/harsh-nod/fe2o3/issues/182) was open at the last
+direct issue read; the current network-restricted session cannot refresh it.
+These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
 | Milestone | Status | Remaining exit gates |
@@ -23,6 +25,26 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [binder, producer preflight and retained-payload packet](evidence/dev-binder-producer-payload-2026-09-30/README.md)
+passes the available CPU/static/bounded host-proof gates at 6,407 unchanged
+signed inputs. Actual complete binder/roster composition passes 64 overlapping
+obligations under four transcript and two conversion contracts; actual
+producer-input preflight passes 15 under its explicit key-model premise.
+Three signed campaigns pass all 46 logical negatives across 70 stages. The
+packet also adds payload credit ownership and checkpoint fast-path regressions.
+Complete KFD 1779/0 is explicitly reused after a byte-identical fresh rebuild;
+model 1088/0 with 19 manual benchmark ignores, 124 doctests, strict Clippy and
+supplementary integrations 11/0 with three hardware/fixture ignores pass.
+**Full runtime qualification remains rejected:** the library records 1851
+passes, three telemetry `InspectSocket`/`EPERM` failures and 32 ignores.
+The precise denied operation is unconfirmed; tests and production checks remain
+unchanged. The no-default production check also retains two dead-code warnings.
+Twenty-one audit controls and fresh archive replay pass, with historical closure
+receipts distinguished from same-recorder PID-namespace observations. No new
+native execution, performance improvement, aggregate-memory ceiling, protected
+authority or A0-A7 exit is claimed. The complete Context reconciliation fold,
+retained-pair facade and all broader acceptance gates remain open.
 
 The [dispatch preflight and repeated async-owner qualification](evidence/dev-preflight-repeat-owner-2026-09-29/README.md)
 source-refines actual retained-fact preflight checks with exact first refusal or
