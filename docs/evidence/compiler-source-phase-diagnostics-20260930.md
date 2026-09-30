@@ -698,3 +698,20 @@ Both r154 and r155 retained the same source and tool inventories. Log SHA-256:
 
 No protected proof, simulator or hardware launch occurred. M1 and the strict
 **0/47** count remain unchanged.
+
+## Interrupted Carrier Rerun
+
+Candidate `7a7bea756816169811c97512f08e32b7d83cb382` replaces the empty
+diamond fixture with actual source assignments on both predecessor arms. The
+SSA join carries one metadata receiver while the other retains its original
+argument, testing both the data-carried and length-carried cases. The source
+distinctness and exact-identity assertions remain mandatory.
+
+r161 was interrupted while compiling this candidate. Its execution handle
+reported terminal status 143; the log contains no test-result footer and the
+guarded runner did not produce a result report or final inventory. No tests or
+source-stability credit is inferred. The specific runner/test processes were
+confirmed absent before a fresh run was started at the same clean commit.
+
+r161 partial log SHA-256:
+`619f82734df427643e8bc73156cd9a373f4af2364d00ed8df0c165a2959e8fb2`.
