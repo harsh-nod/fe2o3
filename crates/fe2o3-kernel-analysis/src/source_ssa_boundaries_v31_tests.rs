@@ -15,7 +15,7 @@ fn block(events: Vec<SsaEventV1>, targets: &[u32]) -> SsaBlockInputV1 {
             .enumerate()
             .map(|(ordinal, target)| {
                 SsaEdgeInputV1::new(
-                    SsaEdgeRoleV1::new(ordinal as u16),
+                    SsaEdgeRoleV1::new(u16::try_from(ordinal + 1).unwrap()),
                     Block::new(*target),
                     vec![],
                 )
@@ -91,8 +91,8 @@ fn source_ssa_boundaries_apply_definitions_only_on_their_original_edge() {
             SsaBlockInputV1::new(
                 vec![],
                 vec![
-                    SsaEdgeInputV1::new(SsaEdgeRoleV1::new(0), Block::new(1), vec![variable]),
-                    SsaEdgeInputV1::new(SsaEdgeRoleV1::new(1), Block::new(1), vec![]),
+                    SsaEdgeInputV1::new(SsaEdgeRoleV1::new(1), Block::new(1), vec![variable]),
+                    SsaEdgeInputV1::new(SsaEdgeRoleV1::new(2), Block::new(1), vec![]),
                 ],
             ),
             block(vec![SsaEventV1::Use(variable)], &[]),
