@@ -52,6 +52,36 @@ persistent-compute preparation also reject early; HostVisible allocation still
 uses the native SDMA bootstrap. The original exact fixture authority continues
 to reject other modules/invocations and atomic/collective launches.
 
+## Shared Host Account
+
+The opt-in
+`open_gfx942_vecadd_repeat_scale_qualification_with_shared_host_account_v1(device_unique_id,
+account)` constructor accepts an existing `ResourceCreditAccountV1`. Runtime
+pipeline tables, native epoch host tables, per-allocation custody tables and
+retained kernarg/binding slices compete for that same account's byte and record
+limits. A domain child preserves its exact leaf and ancestor limits, including
+charges from other participants. No new account, domain or execution authority
+is created. The constructor still admits only the exact repeat-vecadd profile.
+
+Both runtime pipeline tables are reserved before opening KFD. Later table
+replacement peaks and every independently owned payload require their own
+credits. Payload Arc aliases retain one charge through final storage disposal;
+capacity refusal does not reclaim quarantined credit. Existing constructors
+keep their previous table-only or separately attached payload accounts.
+
+With this constructor, `scale_qualification_host_table_usage_v1()` and
+`scale_qualification_launch_payload_account_usage_v1()` observe the same account.
+Do not sum those two readings: they overlap, include other account participants,
+and are sampled independently. Zero usage is not a native quiescence witness.
+
+Signed component `838f1e8a1`, integrated at `43d97c8fa`, binds the exact tested
+source bytes. Its development checks pass 33 scale CPU tests and 11 payload CPU
+tests, with three unchanged native cases ignored, warning-free no-default
+compilation, strict Clippy and scoped formatting. Execution preceded signing;
+this is not a merged full-runtime, native, formal or performance qualification.
+The shared-account adapter's formal refinement and a total-memory bound remain
+open.
+
 ## Accounting Boundary
 
 The new debit covers requested slot-table and custody-roster payloads, not
@@ -67,8 +97,10 @@ also bounds simultaneous debits. Sharing the account handle does not share or
 duplicate any table's debit. `scale_qualification_host_table_usage_v1()` returns
 an inert snapshot of this ledger; it is not total process or GPU memory usage.
 Pipeline debits remain after native shutdown until backend/table destruction.
-Launch snapshots, kernargs, maps and provisional roster-index vectors are not
-covered by this payload accounting.
+The table-only constructors do not charge retained launch payloads. The optional
+payload account charges kernarg/binding slice extents, not other launch metadata,
+maps, provisional roster-index vectors, Arc headers or allocator overhead.
+Even the shared host account is not an aggregate process-memory ceiling.
 
 Qualification1024 now owns its epoch table before native preparation entry and
 transfers that same table into preparation. Initial and auxiliary binding reserve

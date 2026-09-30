@@ -3,8 +3,9 @@
 ## Milestone Snapshot
 
 Local qualification snapshot: 2026-09-30 UTC.
-[#182](https://github.com/harsh-nod/fe2o3/issues/182) was open at the last
-direct issue read; the current network-restricted session cannot refresh it.
+The browser-visible [#182](https://github.com/harsh-nod/fe2o3/issues/182) page
+still reports Open at this read. Its API/comments cannot be refreshed, and
+terminal GitHub/MI300X access remains blocked by DNS failures.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -66,13 +67,34 @@ The [ordered producer-input fold](runtime-producer-input-fold-v1.md) is integrat
 at `14e4253eb`. Its signed component campaign passes three full 13-obligation
 `--no-cheating` runs and all 22 logical negatives; broader candidate checks pass
 136 selected CPU tests, 53 doctests and scoped static gates. That candidate's
-no-default check retains its two explicit baseline warnings. The merged source
-guard incorporates only the separately reviewed custody delta and passes its
-lightweight calibration. The theorem covers the actual shared fold over ordered
+no-default check retains its two explicit baseline warnings. At `14e4253eb`, the
+merged source guard incorporates only the separately reviewed custody delta and
+passes its lightweight calibration. Later shared-account changes require a new
+reviewed source-guard binding; the executable fold proof is unchanged. The theorem
+covers the actual shared fold over ordered
 validation receipts, not the per-input validator, live credit ledger or native
 authority. No combined full-runtime, native or performance acceptance follows
 from these separate component results. Evidence remains local and publication
 is blocked by DNS failures; protected execution and all A0-A7 exits remain open.
+
+The opt-in [shared host account](runtime-scale-capacity-v1.md#shared-host-account)
+is integrated at `43d97c8fa`. Runtime/native host tables, custody tables and
+retained kernarg/binding slices now share one existing account and its ancestor
+limits. Exact candidate-byte development checks pass 33 scale CPU tests and
+11 payload CPU tests, with three existing native ignores, warning-free
+no-default compilation, strict Clippy and scoped formatting. CPU execution
+preceded signing. This is selected payload accounting, not a total-memory bound
+or a new native/formal/merged-runtime result.
+
+The [retained-credit record predicate](runtime-retained-credit-record-v1.md)
+is integrated at `5cf8266b6`. Its signed campaign passes three overlapping full
+seven-obligation `--no-cheating` runs and eleven actual-body logical negatives;
+both verifier-release checks and all twenty fresh same-namespace process-group
+closures pass. The earlier 72-test CPU accounting run remains a separate
+pre-signing result. The proof covers exact owner/phase/full-vector equality,
+not account locking, ancestry, freshness, token custody or Context authority.
+R75's source manifest is updated under nine lightweight controls, without a
+new R75 solver claim. Component evidence remains local.
 
 A fresh local Unix `SOCK_SEQPACKET` capability probe also returns `EPERM` for
 `SO_DOMAIN`, `SO_TYPE`, `getpeername`, `SO_PEERCRED` and setting/reading
