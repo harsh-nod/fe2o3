@@ -130,7 +130,8 @@ fn optimized_source_scalar_boundaries_v31(
                 Ok(())
             },
         )?;
-        let mut values = emission_vec_v1(leaves.boundaries.rows.len(), budget)
+        let function = cfg.function();
+        let mut values = emission_vec_v1(function.definitions.len(), budget)
             .map_err(source_emission_error_v18)?;
         let mut definitions = emission_vec_v1(leaves.boundaries.rows.len(), budget)
             .map_err(source_emission_error_v18)?;
@@ -208,6 +209,34 @@ fn optimized_source_scalar_boundaries_v31(
                 definition,
             });
         }
+        source_scalar_normalization_scratch_v18(
+            relation.source.cleanup,
+            budget,
+            source_boundary_forwarding_headers_v32()?,
+            |budget| {
+                let mut terminals =
+                    emission_vec_v1(values.len(), budget).map_err(source_emission_error_v18)?;
+                for row in &values {
+                    budget.charge_work(1)?;
+                    terminals.push((row.definition, row.original));
+                }
+                let forwarded = source_boundary_forwarding_v32(
+                    output,
+                    function.coordinate,
+                    &terminals,
+                    budget,
+                )?;
+                for row in &forwarded {
+                    budget.charge_work(2)?;
+                    if values.len() == values.capacity() {
+                        return Err(ArgumentResourceV1::Accounting.into());
+                    }
+                    values.push(*row);
+                }
+                drop((forwarded, terminals));
+                Ok(())
+            },
+        )?;
         private_array_heapsort_v1(
             &mut values,
             |row| [row.value.0 as usize],

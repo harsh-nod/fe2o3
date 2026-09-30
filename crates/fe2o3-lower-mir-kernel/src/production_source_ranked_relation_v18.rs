@@ -2071,6 +2071,12 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                     scalar: row.scalar,
                 }));
             }
+            if let Some(row) = self.boundary_find_v31([4, value.0 as usize, 0, 0], budget)? {
+                return Ok(Some(NormalizedScalarExpressionV1::Symbol {
+                    symbol: row.symbol,
+                    scalar: row.scalar,
+                }));
+            }
             let Some(row) = self.find([1, value.0 as usize, 0], budget)? else {
                 return Ok(None);
             };

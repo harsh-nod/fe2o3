@@ -223,7 +223,12 @@ fn source_scalar_boundaries_v31(
             let headers = argument_sum_v1(&[source_boundary_derive_headers_v31()?, std::mem::size_of_val(&run), std::mem::align_of_val(&run)])?;
             source_scalar_normalization_scratch_v18(relation.source.cleanup, budget, headers, run)?;
         }
-        let mut lookup = emission_vec_v1(argument_product_v1(rows.len(), 4)?, budget).map_err(source_emission_error_v18)?;
+        if rows.is_empty() { return Ok(SourceScalarBoundariesV31 { rows, lookup: Vec::new() }); }
+        let physical = relation.source.root(root, budget)?.1;
+        let function = relation.inventory.functions().get(physical).ok_or(
+            ProductionSourceOwnedViewErrorV18::Binding("source scalar forwarding function is absent"))?;
+        let lookup_count = argument_sum_v1(&[argument_product_v1(rows.len(), 4)?, function.definitions.len()])?;
+        let mut lookup = emission_vec_v1(lookup_count, budget).map_err(source_emission_error_v18)?;
         for (row, value) in rows.iter().enumerate() {
             budget.charge_work(4)?;
             for key in [
@@ -232,6 +237,22 @@ fn source_scalar_boundaries_v31(
                 [3, value.definition, 0, 0],
             ] { lookup.push(SourceScalarBoundaryLookupV31 { key, row }); }
         }
+        source_scalar_normalization_scratch_v18(relation.source.cleanup, budget,
+            source_boundary_forwarding_headers_v32()?, |budget| {
+                let mut terminals = emission_vec_v1(rows.len(), budget).map_err(source_emission_error_v18)?;
+                for (at, row) in rows.iter().enumerate() {
+                    budget.charge_work(1)?;
+                    terminals.push((row.definition, at));
+                }
+                let forwarded = source_boundary_forwarding_v32(relation.inventory, function.coordinate, &terminals, budget)?;
+                for row in &forwarded {
+                    budget.charge_work(2)?;
+                    if lookup.len() == lookup.capacity() { return Err(ArgumentResourceV1::Accounting.into()); }
+                    lookup.push(SourceScalarBoundaryLookupV31 { key: [4, row.value.0 as usize, 0, 0], row: row.original });
+                }
+                drop((forwarded, terminals));
+                Ok(())
+            })?;
         private_array_heapsort_v1(&mut lookup, |row| row.key, &mut SourceCorrespondenceWorkV18(budget), || ArgumentResourceV1::Arithmetic.into())?;
         for pair in lookup.windows(2) {
             budget.charge_work(1)?;
@@ -276,6 +297,7 @@ impl SourceScalarLeavesV18<'_, '_> {
                 1 => [1, row.value.0 as usize, 0, 0],
                 2 => [2, row.symbol as usize, 0, 0],
                 3 => [3, row.definition, 0, 0],
+                4 => [4, key[1], 0, 0],
                 _ => {
                     return self
                         .relation
@@ -300,10 +322,25 @@ impl SourceScalarLeavesV18<'_, '_> {
                     .source
                     .missing("source scalar boundary lookup changed its exact binding");
             }
+            if key[0] == 4 {
+                let physical = self.relation.source.root(self.root, budget)?.1;
+                let function = self.relation.inventory.functions().get(physical).ok_or(
+                    ProductionSourceOwnedViewErrorV18::Binding("source scalar forwarding function is absent"))?;
+                let value = ValueId(u32::try_from(key[1]).map_err(|_| ArgumentResourceV1::Arithmetic)?);
+                let actual = self.relation.inventory.definition_for_value(function.coordinate, value, budget)
+                    .map_err(source_pointer_inventory_error_v18)?.ok_or(
+                        ProductionSourceOwnedViewErrorV18::Binding("source scalar forwarded definition is absent"))?;
+                if kir_semantic_scalar_v1(actual.ty) != Some(row.scalar)
+                    || !matches!(actual.coordinate, fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::BlockArgument { block, .. } if block.function == function.coordinate) {
+                    return self.relation.source.missing("source scalar forwarded parameter differs");
+                }
+            }
             Ok(Some(row))
         })())
     }
 }
+
+include!("production_source_scalar_boundary_forwarding_v32.rs");
 
 impl ProductionSourceScalarLeavesV18<'_> {
     fn boundary_expression_v31(
