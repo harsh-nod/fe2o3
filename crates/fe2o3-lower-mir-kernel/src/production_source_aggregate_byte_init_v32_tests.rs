@@ -308,10 +308,126 @@ mod aggregate_byte_init_tests_v32 {
         }
     }
 
+    fn two_closed_allocation_roots() -> ProductionSemanticSsaOwnerV1 {
+        let base = private_entry_phi_owner_v20();
+        let source = base.source_semantic();
+        let mut types = source.types().to_vec();
+        let pair = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([240; 32]),
+            SemanticLayoutIdentityV1::from_sha256([240; 32]),
+            SemanticTypeLayoutV1::aggregate(
+                Some(8),
+                4,
+                SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![U32, U32]).unwrap()),
+        ));
+        let field = |index| {
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(2),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(index), U32).unwrap(),
+                ],
+                U32,
+            )
+            .unwrap()
+        };
+        let functions = source.functions()[..2]
+            .iter()
+            .enumerate()
+            .map(|(root, old)| {
+                let tag = 180 + 10 * root as u8;
+                function(
+                    tag,
+                    SemanticFunctionRoleV1::KernelRoot,
+                    old.abi().clone(),
+                    vec![
+                        local(tag + 1, UNIT, SemanticLocalRoleV1::Return),
+                        local(tag + 2, U32, SemanticLocalRoleV1::Argument(0)),
+                        local(tag + 3, pair, SemanticLocalRoleV1::Temporary),
+                        local(tag + 4, U32, SemanticLocalRoleV1::Temporary),
+                    ],
+                    vec![block(
+                        tag + 5,
+                        vec![
+                            assign(
+                                place(2, pair),
+                                SemanticRvalueKindV1::Aggregate(
+                                    SemanticAggregateRvalueV1::new(
+                                        SemanticAggregateKindV1::Tuple,
+                                        vec![SemanticOperandV1::Copy(place(1, U32)), literal(17)],
+                                    )
+                                    .unwrap(),
+                                ),
+                            ),
+                            // Explicit source memory keeps the original object retained
+                            // without introducing an escaping address or pointer alias.
+                            SemanticStatementV1::new(
+                                SemanticSourceProvenanceV1::unavailable(),
+                                SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                                    field(1),
+                                    literal(23),
+                                    SemanticVolatilityV1::NonVolatile,
+                                    None,
+                                )),
+                            ),
+                            assign(
+                                place(3, U32),
+                                SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                                    field(0),
+                                    SemanticVolatilityV1::NonVolatile,
+                                    None,
+                                )),
+                            ),
+                            assign(
+                                place(0, UNIT),
+                                SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(
+                                    SemanticConstantV1::new(
+                                        UNIT,
+                                        SemanticConstantValueV1::ZeroSized,
+                                    ),
+                                )),
+                            ),
+                        ],
+                        SemanticTerminatorKindV1::Return,
+                    )],
+                )
+                .with_kernel_entry(old.kernel_entry().unwrap().clone())
+            })
+            .collect();
+        let admitted = InertSemanticMirRequestV1::new_with_callables(
+            source.target(),
+            types,
+            vec![],
+            vec![],
+            vec![],
+            functions,
+            vec![
+                SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+                SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+            ],
+            source.roots().to_vec(),
+        )
+        .unwrap()
+        .admit_exact_v29(SemanticMirLimitsV1::default())
+        .unwrap();
+        ProductionSemanticSsaOwnerV1::try_new(
+            ProductionSemanticMirOwnerV1::try_new(
+                admitted,
+                ProductionSemanticMirLimitsV1::default(),
+            )
+            .unwrap(),
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn aggregate_byte_init_real_chain_uses_exact_function_local_domains() {
         with_aggregate_memory_chain_v31(
-            private_entry_phi_owner_v20,
+            two_closed_allocation_roots,
             |source, _, memory, budget| {
                 let floor = budget.storage();
                 let result = (|| {
