@@ -30,14 +30,16 @@ impl ProductionAggregateMemoryKeyV31 {
     pub const fn ty(self) -> AggregateMemoryLeafV31 {
         self.ty
     }
-    fn order(self) -> (u32, u32, u32, u32, u64) {
-        (
-            self.allocation.block.function.0,
-            self.allocation.block.block,
-            self.allocation.operation,
-            self.layout.0,
-            self.offset,
-        )
+    fn order(self) -> [usize; 6] {
+        // Preserve the complete byte-offset order on 32-bit hosts too.
+        [
+            self.allocation.block.function.0 as usize,
+            self.allocation.block.block as usize,
+            self.allocation.operation as usize,
+            self.layout.0 as usize,
+            (self.offset >> 32) as usize,
+            (self.offset & u64::from(u32::MAX)) as usize,
+        ]
     }
 }
 

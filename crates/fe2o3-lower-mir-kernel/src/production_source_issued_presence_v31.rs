@@ -241,7 +241,9 @@ impl SourceScalarLeavesV18<'_, '_> {
             .source_slots
             .pending_memory
             .as_ref()
-            .and_then(|pending| pending.issued.issuers.get(row.issuer))
+            .and_then(|pending| {
+                scoped_raw_admission_v29::retained_source_issuer_v31(pending, row.issuer)
+            })
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                 "issued presence original issuer absent",
             ))?;
@@ -448,7 +450,7 @@ impl OriginalEntryIndexV20<'_, '_> {
                 .leaves
                 .presence_definition_v31(instance, definition, budget)?
             {
-                let issuer = &self
+                let pending = self
                     .source
                     .source
                     .root_row(leaves.leaves.root)?
@@ -457,9 +459,12 @@ impl OriginalEntryIndexV20<'_, '_> {
                     .as_ref()
                     .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                         "issued discriminant issuer owner absent",
-                    ))?
-                    .issued
-                    .issuers[row.issuer];
+                    ))?;
+                let issuer =
+                    scoped_raw_admission_v29::retained_source_issuer_v31(pending, row.issuer)
+                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                            "issued discriminant original issuer absent",
+                        ))?;
                 let Some(SemanticTerminatorKindV1::Call(call)) = function
                     .blocks()
                     .get(issuer.block.index() as usize)

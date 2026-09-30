@@ -46,11 +46,10 @@ pub(super) fn optimized_issued_presences_v31(
         ))?;
     for (original, row) in source.presences.rows.iter().enumerate() {
         source.presence_row_v31(row, budget)?;
-        let issuer = pending.issued.issuers.get(row.issuer).ok_or(
-            ProductionSourceOwnedViewErrorV18::Binding(
+        let issuer = scoped_raw_admission_v29::retained_source_issuer_v31(pending, row.issuer)
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                 "optimized issued presence original issuer absent",
-            ),
-        )?;
+            ))?;
         let operation = match optimized.operation(row.operation, budget)? {
             ProductionOptimizedSourceOperationV18::Retained { output, .. } => output,
             ProductionOptimizedSourceOperationV18::RemovedUnreachable { .. } => continue,

@@ -128,7 +128,7 @@ fn issued_discriminant_source_and_output_share_exact_predicate_after_phi_names()
 
 #[test]
 fn issued_discriminant_rejects_copied_source_place_wrong_type_and_output_row() {
-    for fault in [7, 0, 1, 2, 3, 4, 5, 6, 7] {
+    for fault in [7, 0, 1, 2, 3, 4, 5, 6, 8, 7] {
         let reached = std::cell::Cell::new(false);
         let result = with_issued_source_v31(true, |original, optimized, budget| {
             original.with_optimized_scalar_leaf_namespace_v18(
@@ -223,7 +223,7 @@ fn issued_discriminant_rejects_copied_source_place_wrong_type_and_output_row() {
                                 )
                                 .map(|_| ());
                         }
-                        if fault < 5 {
+                        if fault < 5 || fault == 8 {
                             let mut changed = source;
                             match fault {
                                 2 => changed.instance += 1,
@@ -233,6 +233,7 @@ fn issued_discriminant_rejects_copied_source_place_wrong_type_and_output_row() {
                                         variable: BoundaryVariableV31::new(0),
                                     }
                                 }
+                                8 => changed.issuer = usize::MAX,
                                 _ => changed.value = ValueId(u32::MAX),
                             }
                             return leaves.original.leaves.presence_row_v31(&changed, budget);
@@ -277,6 +278,7 @@ fn issued_discriminant_rejects_copied_source_place_wrong_type_and_output_row() {
             2..=4 => "issued presence original issuer changed",
             5 => "optimized issued presence actual predicate changed",
             6 => "issued presence symbol type differs",
+            8 => "issued presence original issuer absent",
             _ => {
                 result.unwrap();
                 continue;

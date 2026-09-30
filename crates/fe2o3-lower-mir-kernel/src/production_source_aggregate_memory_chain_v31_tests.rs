@@ -1,3 +1,34 @@
+#[test]
+fn aggregate_memory_key_order_preserves_full_width_offsets_and_coordinates() {
+    let key = ProductionAggregateMemoryKeyV31 {
+        allocation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 {
+            block: fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1 {
+                function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(1),
+                block: 2,
+            },
+            operation: 3,
+        },
+        layout: fe2o3_kernel_ir::StorageLayoutIdV1(4),
+        offset: 0,
+        ty: AggregateMemoryLeafV31::Scalar(fe2o3_kernel_ir::ScalarType::U32),
+    };
+    let offsets = [0, 1, u64::from(u32::MAX), 1u64 << 32, u64::MAX];
+    let keys = offsets.map(|offset| ProductionAggregateMemoryKeyV31 { offset, ..key });
+    for pair in keys.windows(2) {
+        assert!(pair[0].order() < pair[1].order());
+    }
+    for field in 0..4 {
+        let mut next = key;
+        match field {
+            0 => next.allocation.block.function.0 += 1,
+            1 => next.allocation.block.block += 1,
+            2 => next.allocation.operation += 1,
+            _ => next.layout.0 += 1,
+        }
+        assert!(keys.last().unwrap().order() < next.order());
+    }
+}
+
 fn with_aggregate_memory_chain_v31(
     factory: fn() -> ProductionSemanticSsaOwnerV1,
     observe: impl FnOnce(

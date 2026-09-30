@@ -75,6 +75,15 @@ pub(super) fn checked_source_issuers_v31<'view>(
     original.retain_query(result)
 }
 
+// Read-only access after the enclosing source query. The scalar namespace
+// checks the complete issuer roster once, then rechecks each exact predicate.
+pub(super) fn retained_source_issuer_v31(
+    pending: &PendingSourceMemoryV29,
+    index: usize,
+) -> Option<&PendingSourceIssuedIssuerV29> {
+    pending.issued.issuers.get(index)
+}
+
 struct SourceIssuerQueryV31<'view, 'source, 'budget, 'work> {
     original: &'view ProductionSourceCorrespondenceV18<'source>,
     root: usize,
