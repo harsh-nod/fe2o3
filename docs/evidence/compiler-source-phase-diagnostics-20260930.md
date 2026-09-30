@@ -526,3 +526,40 @@ Log SHA-256 values:
 No protected proof, simulator or GPU run occurred in these checks. M0 remains
 complete; M1-M7 remain incomplete; strict production-to-safe-launch coverage
 remains **0/47**.
+
+## Scoped Invocation API Regression Result
+
+Device candidate `2a5483ab6cb3b8359f38ba03fa28022c55b8c679` passed the complete
+`fe2o3-device` test command in guarded run r143: **170 library/integration tests
+and 44 doctests passed, none failed or ignored**. Its API UI parent includes
+**200 passing compile-pass/compile-fail cases**; those children are not added
+again to the library/integration total. The host LLVM-shape test also passed and
+removed its private generated library/LLVM scratch outputs.
+
+This supersedes r140's UI failures, not its production-wiring limitation. The
+output-escape fixture now names the output lifetime explicitly and reaches
+E0515 at the returned borrow. r142 established that intended refusal, leaving
+only a one-character underline mismatch; the final snapshot correction was
+verified by r143. The other snapshots were individually reviewed against the
+pinned compiler's diagnostics. No blanket snapshot overwrite was used.
+
+The candidate adds a non-forgeable context-borrowed invocation and branded index,
+plus a sealed disjoint-index consumer that retains the index's scope in the
+returned output borrow. This does not prove GPU bounds or injectivity. Its new
+source terminals remain pending authenticated compiler import and canonical
+scope/lifecycle preservation; no host fallback or production launch is enabled.
+
+r143 source snapshot SHA-256:
+`bb094ac4c40cfab523edcb4d567ff8a8eda346a67becdaad0dfbfc815b32bcde`.
+Log SHA-256:
+`01dbd6490c6f2e686a494a2b0bc223d1b427e6f6eced024666b61c0ceac51161`.
+The source/tool guard, DCO and delta hygiene checks passed. The API changes are
+still an integration candidate, not public-main compiler qualification.
+
+Separately, compiler r141 stopped on three test-module visibility errors before
+execution. A test-only facade and public inert-site constructor corrected those
+errors without widening the production interface. The subsequent candidate also
+reconciles immutable #271 checkpoint
+`7bc097b0b3b32ae542d8549d3d04b824f6a424ed`; its regressions require a new run.
+The r141 build used a bounded 16 GiB host virtual-memory allowance. This changes
+only the local Rust build envelope, not any production work/storage/proof cap.
