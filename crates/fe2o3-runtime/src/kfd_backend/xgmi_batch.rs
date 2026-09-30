@@ -636,6 +636,88 @@ fn open_and_execute<const PROFILE: bool, const CURRENTNESS: bool>(
 }
 
 impl KfdNativeXgmiRuntimeBackendV1 {
+    pub(super) fn admit_retained_batch(
+        &mut self,
+        requested: &[u64],
+    ) -> Result<
+        (Admission, Vec<u64>, Vec<Gfx942XgmiSdmaCopyRequestV1>),
+        RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
+    > {
+        self.require_live()?;
+        if !self.events.is_empty()
+            || !self.submissions.is_empty()
+            || !self.directed_roots.is_empty()
+            || requested.len() != self.active.len()
+            || self
+                .active
+                .values()
+                .any(|r| r.ticket.is_some() || r.sequence.is_some() || !r.dependencies.is_empty())
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "retained XGMI requires only the complete unpublished ordinary roster",
+            ));
+        }
+        let selection = admit_with_sharing(
+            requested,
+            &self.active,
+            &self.ready_by_direction,
+            &self.in_flight_by_direction,
+            &self.submissions,
+            Vec::try_reserve_exact,
+            |left, right, allocation| xgmi_directed::shared_read(self, left, right, allocation),
+        )
+        .map_err(|error| match error {
+            AdmissionError::Corrupt => self.terminal_error("retained XGMI index corruption"),
+            AdmissionError::Capacity => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "retained XGMI ready-index storage",
+            ),
+            AdmissionError::Busy => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "retained XGMI requires the complete directional roster",
+            ),
+            AdmissionError::Invalid => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "invalid retained XGMI roster",
+            ),
+        })?;
+        let valid = self
+            .batch_custody_is_valid(requested, selection.admission)
+            .map_err(|_| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "retained XGMI dependency-index storage",
+                )
+            })?;
+        let admission = qualify_selection(selection, valid).map_err(|error| match error {
+            AdmissionError::Busy => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "retained XGMI requires disjoint mappings",
+            ),
+            _ => self.terminal_error("retained XGMI custody corruption"),
+        })?;
+        let mut ids = Vec::new();
+        let mut requests = Vec::new();
+        ids.try_reserve_exact(requested.len()).map_err(|_| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "retained XGMI roster storage",
+            )
+        })?;
+        requests.try_reserve_exact(requested.len()).map_err(|_| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "retained XGMI request storage",
+            )
+        })?;
+        ids.extend(self.ready_by_direction[admission.direction].iter().copied());
+        if self.in_flight_by_direction[admission.direction].capacity() < ids.len() {
+            return Err(self.terminal_error("retained XGMI lacks reserved in-flight slots"));
+        }
+        Ok((admission, ids, requests))
+    }
+
     pub(super) fn batch_custody_is_valid(
         &self,
         ids: &[u64],
@@ -754,7 +836,10 @@ impl KfdNativeXgmiRuntimeBackendV1 {
 
     pub(super) fn batch_quarantine(&mut self, direction: usize) {
         self.terminal = true;
-        let (sessions, queues) = self.native.parts_mut();
+        let (sessions, queues) = self
+            .native
+            .parts_mut()
+            .unwrap_or_else(|_| std::process::abort());
         if let Some(queue) = queues[direction].as_mut() {
             let (source, destination) = Self::session_pair(sessions, direction);
             queue.quarantine_batch_v1(source, destination);
@@ -789,7 +874,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
     }
 
-    fn restore_batch_requests(
+    pub(super) fn restore_batch_requests(
         &mut self,
         ids: &[u64],
         requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
@@ -804,7 +889,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
     }
 
-    fn commit_batch_status(&mut self, ids: &[u64], status: BackendPollV1) {
+    pub(super) fn commit_batch_status(&mut self, ids: &[u64], status: BackendPollV1) {
         for id in ids {
             let active = self
                 .active
@@ -814,16 +899,16 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
     }
 
-    fn install_batch_tickets(
+    pub(super) fn install_batch_tickets(
         &mut self,
         ids: &[u64],
-        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        tickets: &[Gfx942SdmaCopyTicketV1],
         admission: Admission,
     ) {
         if ids.len() != tickets.len() {
             std::process::abort();
         }
-        for (id, ticket) in ids.iter().copied().zip(tickets) {
+        for (id, ticket) in ids.iter().copied().zip(tickets.iter().copied()) {
             let active = self
                 .active
                 .get_mut(&id)
@@ -846,16 +931,45 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         &mut self,
         admission: Admission,
         ids: Vec<u64>,
-        mut requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
         tickets: Vec<Gfx942SdmaCopyTicketV1>,
         deadline: Instant,
         timer: &mut CallTimer<PROFILE>,
     ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let preparation_start = timer.start();
         let direction = admission.direction;
+        let requests = self.prepare_batch_requests(admission, &ids, requests)?;
+        timer.end(Phase::Preparation, preparation_start);
+        let result = {
+            let (sessions, queues) = self.native.parts_mut()?;
+            let sessions = Self::session_pair(sessions, direction);
+            let queue = queues[direction]
+                .as_mut()
+                .unwrap_or_else(|| std::process::abort());
+            open_and_execute::<PROFILE, CURRENTNESS>(
+                queue,
+                sessions,
+                admission.published,
+                requests,
+                tickets,
+                deadline,
+                timer,
+            )
+        };
+        self.settle_batch_attempt(admission, ids, result, timer)
+    }
+
+    pub(super) fn prepare_batch_requests(
+        &mut self,
+        admission: Admission,
+        ids: &[u64],
+        mut requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    ) -> Result<Vec<Gfx942XgmiSdmaCopyRequestV1>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
+    {
+        let direction = admission.direction;
         self.ensure_queue(direction)?;
         if !admission.published {
-            for id in &ids {
+            for id in ids {
                 if self.ready_by_direction[direction].pop_front() != Some(*id) {
                     std::process::abort();
                 }
@@ -874,7 +988,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                     Ok(source) => source,
                     Err(failure) => {
                         return self.fail_batch_preparation(
-                            &ids,
+                            ids,
                             &ids[..index],
                             requests,
                             direction,
@@ -899,7 +1013,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                             XgmiAllocationAuthorityV1::Mapped(source)
                         });
                         return self.fail_batch_preparation(
-                            &ids,
+                            ids,
                             &ids[..index],
                             requests,
                             direction,
@@ -916,23 +1030,17 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 ));
             }
         }
-        timer.end(Phase::Preparation, preparation_start);
-        let result = {
-            let (sessions, queues) = self.native.parts_mut();
-            let sessions = Self::session_pair(sessions, direction);
-            let queue = queues[direction]
-                .as_mut()
-                .unwrap_or_else(|| std::process::abort());
-            open_and_execute::<PROFILE, CURRENTNESS>(
-                queue,
-                sessions,
-                admission.published,
-                requests,
-                tickets,
-                deadline,
-                timer,
-            )
-        };
+        Ok(requests)
+    }
+
+    fn settle_batch_attempt<const PROFILE: bool>(
+        &mut self,
+        admission: Admission,
+        ids: Vec<u64>,
+        result: NativeAttempt,
+        timer: &mut CallTimer<PROFILE>,
+    ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let direction = admission.direction;
         let (operation, closing) = match result {
             Ok(result) => result,
             Err((error, requests)) => {
@@ -946,14 +1054,14 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         let settlement_start = timer.start();
         let outcome = match operation {
             Operation::PublicationIndeterminate { error, tickets } => {
-                self.install_batch_tickets(&ids, tickets, admission);
+                self.install_batch_tickets(&ids, &tickets, admission);
                 self.batch_quarantine(direction);
                 Err(self.terminal_error(format!(
                     "XGMI aggregate publication indeterminate: {error}; closing: {closing:?}"
                 )))
             }
             Operation::Retained { error, tickets } => {
-                self.install_batch_tickets(&ids, tickets, admission);
+                self.install_batch_tickets(&ids, &tickets, admission);
                 if matches!(error, Gfx942SdmaErrorV1::Timeout) && closing.is_ok() {
                     return Ok(RuntimePeerCopyBatchPollV1::Pending);
                 }
@@ -996,14 +1104,14 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         outcome
     }
 
-    fn fail_batch_preparation(
+    fn fail_batch_preparation<T>(
         &mut self,
         ids: &[u64],
         prepared: &[u64],
         requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
         direction: usize,
         failure: RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
-    ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    ) -> Result<T, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let terminal = matches!(failure, RuntimeBackendFailureV1::Terminal(_));
         if terminal {
             self.batch_quarantine(direction);

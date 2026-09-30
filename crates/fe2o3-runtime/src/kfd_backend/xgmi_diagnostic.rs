@@ -4,7 +4,7 @@ use super::{
     KfdNativeXgmiRuntimeBackendV1, KfdRuntimeBackendErrorKindV1, KfdRuntimeBackendErrorV1,
     RuntimeBackendFailureV1,
 };
-use fe2o3_kfd::{Gfx942NativeXgmiSdmaQueueV1, Gfx942XgmiCopyCallDiagnosticsV1};
+use fe2o3_kfd::Gfx942XgmiCopyCallDiagnosticsV1;
 
 const MAX_RECORDS: usize = 40_000;
 
@@ -202,7 +202,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             || self.xgmi_aggregate_diagnostic.is_some()
             || self.xgmi_segments_diagnostic.is_some()
             || self.next_handle != 1
-            || self.native.queues().iter().any(Option::is_some)
+            || self.native.queues()?.iter().any(Option::is_some)
             || !self.logical_resource_counts().permits_shutdown()
         {
             return Err(Self::rejected(
@@ -233,13 +233,11 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 .queue_creation_roots
                 .iter()
                 .any(|root| !root.is_vacant())
-            || self
-                .native
-                .queues()
-                .iter()
-                .flatten()
-                .any(Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1);
-        let quiescent = self.native.queues().iter().all(Option::is_none)
+            || self.native.is_terminal();
+        let quiescent = self
+            .native
+            .queues()
+            .is_ok_and(|queues| queues.iter().all(Option::is_none))
             && self.logical_resource_counts().permits_shutdown();
         take_records(
             &mut self.xgmi_diagnostic,

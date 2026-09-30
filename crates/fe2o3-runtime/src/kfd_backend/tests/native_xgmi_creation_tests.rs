@@ -154,7 +154,7 @@ fn native_xgmi_runtime_wires_persistent_roots_and_guards_teardown() {
         .unwrap();
     assert!(
         ensure.find("self.require_live()?").unwrap()
-            < ensure.find("self.native.queues()[direction]").unwrap()
+            < ensure.find("self.native.queues()?[direction]").unwrap()
     );
     assert!(ensure.contains("let (sessions, queues) = self.native.parts_mut()"));
     assert!(ensure.contains("&mut self.queue_creation_roots"));

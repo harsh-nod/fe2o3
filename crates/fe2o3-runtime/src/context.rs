@@ -31,6 +31,8 @@ mod generated_preparation;
 mod generated_shells;
 mod peer_batch;
 pub use peer_batch::*;
+mod native_retained_pair;
+pub use native_retained_pair::*;
 mod peer_custody;
 use peer_custody::{PreparedPeerSubmissionV1, ScalarPeerCopyRootV1};
 mod peer_directed;
@@ -966,6 +968,7 @@ pub struct RuntimeCleanupReportV1<E> {
     retained: RuntimeRetainedResourcesV1,
     terminal: bool,
     graph_reserved: bool,
+    native_pair_reserved: bool,
     allocation_credit_records: usize,
     allocation_journal_records: usize,
     writer_journal_records: usize,
@@ -991,6 +994,7 @@ impl<E> RuntimeCleanupReportV1<E> {
     pub const fn is_complete(&self) -> bool {
         !self.terminal
             && !self.graph_reserved
+            && !self.native_pair_reserved
             && self.retained.is_empty()
             && self.allocation_credit_records == 0
             && self.allocation_journal_records == 0
@@ -1002,6 +1006,11 @@ impl<E> RuntimeCleanupReportV1<E> {
 
     pub const fn is_graph_reserved(&self) -> bool {
         self.graph_reserved
+    }
+
+    /// An unfinished native retained-pair facade still owns the context gate.
+    pub const fn is_native_pair_reserved_v1(&self) -> bool {
+        self.native_pair_reserved
     }
 
     /// Remaining opt-in allocation credit records, including unidentified
@@ -1150,6 +1159,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     next_identity: u64,
     terminal: bool,
     graph_reservation: Option<ContextGraphReservationV1>,
+    native_pair_reservation: Option<u64>,
     graph_issue_closed: bool,
 }
 
@@ -1351,6 +1361,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             next_identity: 1,
             terminal: false,
             graph_reservation: None,
+            native_pair_reservation: None,
             graph_issue_closed: false,
             // Keep extraction last: earlier field initialization must still
             // retain the backend if it unwinds.
@@ -1386,6 +1397,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || self.allocation_admission.is_configured()
             || !self.scalar_peer_copies.is_empty()
             || !self.producer_launches.is_empty()
+            || self.native_pair_reservation.is_some()
     }
 
     pub(crate) fn quarantine_after_async_command_panic_v1(&mut self) {
@@ -1431,7 +1443,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// immediately and permanently seals the context.
     pub fn cleanup(&mut self) -> RuntimeCleanupReportV1<B::Error> {
         let mut failures = Vec::new();
-        if self.terminal || self.graph_reservation.is_some() || self.has_unpublished_holds_v1() {
+        if self.terminal
+            || self.graph_reservation.is_some()
+            || self.native_pair_reservation.is_some()
+            || self.has_unpublished_holds_v1()
+        {
             return self.cleanup_report(failures);
         }
 
@@ -1641,6 +1657,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             },
             terminal: self.terminal,
             graph_reserved: self.graph_reservation.is_some(),
+            native_pair_reserved: self.native_pair_reservation.is_some(),
             allocation_credit_records: self.allocation_admission.retained_records(),
             allocation_journal_records: self
                 .versions
@@ -1860,7 +1877,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeValidationErrorV1> {
         if self.terminal {
             Err(RuntimeValidationErrorV1::ContextTerminal)
-        } else if self.graph_reservation != access {
+        } else if self.graph_reservation != access || self.native_pair_reservation.is_some() {
             Err(RuntimeValidationErrorV1::ContextReserved)
         } else {
             Ok(())
@@ -3839,6 +3856,7 @@ mod tests {
     mod construction_custody_tests;
     mod copy_source_lease_tests;
     mod kernel_read_lease_tests;
+    mod native_retained_pair_tests;
     mod peer_batch_tests;
     mod peer_custody_tests;
     mod peer_directed_tests;

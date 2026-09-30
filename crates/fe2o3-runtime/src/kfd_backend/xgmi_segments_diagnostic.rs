@@ -332,7 +332,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             || self.xgmi_diagnostic.is_some()
             || self.xgmi_aggregate_diagnostic.is_some()
             || self.next_handle != 1
-            || self.native.queues().iter().any(Option::is_some)
+            || self.native.queues()?.iter().any(Option::is_some)
             || !self.logical_resource_counts().permits_shutdown()
         {
             return Err(Self::rejected(

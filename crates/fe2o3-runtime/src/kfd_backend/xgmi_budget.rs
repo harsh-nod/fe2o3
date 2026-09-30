@@ -37,15 +37,16 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     pub fn native_backing_usage_v1(
         &self,
     ) -> [Option<fe2o3_resource_accounting::ResourceCreditUsageV1>; 2] {
-        std::array::from_fn(|index| self.native.sessions()[index].native_backing_usage_v1())
+        self.native.backing_usage().map(|usage| usage.native)
     }
 
     /// Observes the original argument-ordered endpoints without native calls.
     pub fn backing_usage_v1(&self) -> [KfdNativeXgmiBackingUsageV1; 2] {
+        let usage = self.native.backing_usage();
         std::array::from_fn(|index| KfdNativeXgmiBackingUsageV1 {
             backend_device: self.descriptions[index].backend_device,
-            device: self.native.sessions()[index].device_backing_usage_v1(),
-            host_visible: self.native.sessions()[index].host_visible_backing_usage_v1(),
+            device: usage[index].device,
+            host_visible: usage[index].host_visible,
         })
     }
 }

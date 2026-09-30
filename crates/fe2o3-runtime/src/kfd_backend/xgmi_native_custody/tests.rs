@@ -38,6 +38,95 @@ fn populated(drops: &Rc<RefCell<Vec<&'static str>>>) -> NativeCustody<Probe, Box
 }
 
 #[test]
+fn native_custody_retained_round_trip_preserves_both_directions_and_drop_order() {
+    for direction in 0..2 {
+        let drops = Rc::new(RefCell::new(Vec::new()));
+        let full = populated(&drops);
+        let (queue, source, destination, opposite) = full.into_direction(direction);
+        assert_eq!(
+            source.name,
+            if direction == 0 {
+                "session-0"
+            } else {
+                "session-1"
+            }
+        );
+        assert_eq!(
+            destination.name,
+            if direction == 0 {
+                "session-1"
+            } else {
+                "session-0"
+            }
+        );
+        assert_eq!(
+            queue.name,
+            if direction == 0 { "queue-0" } else { "queue-1" }
+        );
+        assert!(drops.borrow().is_empty());
+        let full = NativeCustody::from_direction(queue, source, destination, opposite, direction);
+        assert_eq!(
+            full.sessions().each_ref().map(|s| s.name),
+            ["session-0", "session-1"]
+        );
+        assert_eq!(
+            full.queues().each_ref().map(|q| q.as_ref().unwrap().name),
+            ["queue-0", "queue-1"]
+        );
+        assert!(drops.borrow().is_empty());
+        drop(full);
+        assert_eq!(
+            *drops.borrow(),
+            ["session-0", "session-1", "queue-0", "queue-1"]
+        );
+    }
+}
+
+#[test]
+fn native_custody_empty_transition_refuses_access_as_terminal_not_busy() {
+    let mut native = NativeXgmiCustodyV1 { state: None };
+    assert!(!native.is_full());
+    assert!(native.is_terminal());
+    assert!(matches!(
+        native.full(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(matches!(
+        native.full_mut(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(matches!(
+        native.queues(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(matches!(
+        native.sessions_mut(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(matches!(
+        native.parts_mut(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+}
+
+#[test]
+fn native_custody_directional_accounting_permutation_is_involutive() {
+    let values = [Box::new(11), Box::new(22)];
+    let pointers = values.each_ref().map(|value| &**value as *const i32);
+    let reversed = endpoint_order(values, 1);
+    assert_eq!(reversed.each_ref().map(|value| **value), [22, 11]);
+    let restored = endpoint_order(reversed, 1);
+    assert_eq!(
+        restored.each_ref().map(|value| &**value as *const i32),
+        pointers
+    );
+    assert_eq!(
+        endpoint_order(restored, 0).each_ref().map(|value| **value),
+        [11, 22]
+    );
+}
+
+#[test]
 fn native_custody_preserves_argument_order_and_empty_queue_slots() {
     let mut storage = NativeCustody::<_, Box<i32>>::new([Box::new(11), Box::new(22)]);
     let addresses = storage

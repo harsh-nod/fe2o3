@@ -253,12 +253,13 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 "native XGMI allocation geometry",
             ));
         }
+        let sessions = self.native.sessions_mut()?;
         xgmi_budget::allocate_record(
             &mut self.terminal,
             &mut self.next_handle,
             &mut self.allocations,
             || {
-                self.native.sessions_mut()[index]
+                sessions[index]
                     .allocate_gfx942_xgmi_device_memory_classified_v1(byte_len, alignment)
                     .map(|lease| XgmiRuntimeAllocationV1 {
                         device: index,

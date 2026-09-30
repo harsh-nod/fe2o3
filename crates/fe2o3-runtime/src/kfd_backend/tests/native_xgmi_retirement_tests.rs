@@ -149,7 +149,19 @@ fn native_xgmi_retirement_runtime_wiring_borrows_slots_and_guards_terminal_roots
         .split("    fn require_live(")
         .next()
         .unwrap();
-    assert!(healthy.contains("Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1"));
+    assert!(healthy.contains("self.native.is_terminal()"));
+    let custody = include_str!("../xgmi_native_custody.rs");
+    let terminal = custody
+        .split("pub(super) fn is_terminal(")
+        .nth(1)
+        .unwrap()
+        .split("fn unavailable(")
+        .next()
+        .unwrap();
+    assert!(terminal.contains("Some(NativeXgmiStateV1::Full(full))"));
+    assert!(terminal.contains("Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1"));
+    assert!(terminal.contains("retained.owner.is_terminal()"));
+    assert!(terminal.contains("Some(NativeXgmiStateV1::Failed(_)) | None => true"));
     let shutdown = implementation
         .split("    pub fn shutdown_native_v1(")
         .nth(1)
@@ -169,7 +181,11 @@ fn native_xgmi_retirement_runtime_wiring_borrows_slots_and_guards_terminal_roots
             < shutdown.find("settle_xgmi_queue_retirement").unwrap()
     );
     assert!(
-        drop.find("has_terminal_retirement_v1").unwrap()
+        drop.find("self.native.is_terminal()").unwrap()
+            < drop.find("settle_xgmi_queue_retirement").unwrap()
+    );
+    assert!(
+        drop.find("!self.native.is_full()").unwrap()
             < drop.find("settle_xgmi_queue_retirement").unwrap()
     );
     assert!(
@@ -179,14 +195,17 @@ fn native_xgmi_retirement_runtime_wiring_borrows_slots_and_guards_terminal_roots
     assert!(
         drop.contains("if !matches!(result, Ok(Ok(()))) {\n                std::process::abort();")
     );
+    assert!(shutdown.contains("let (sessions, queues) = self.native.parts_mut()?;"));
+    assert!(drop.split_whitespace().collect::<String>().contains(
+        "let(sessions,queues)=self.native.parts_mut().unwrap_or_else(|_|std::process::abort());"
+    ));
     for body in [shutdown, drop] {
         assert!(body.contains("for direction in (0..2).rev()"));
-        assert!(body.contains("let (sessions, queues) = self.native.parts_mut()"));
         assert!(body.contains("Self::session_pair(sessions, direction)"));
         assert!(body.contains("&mut self.terminal"));
         assert!(body.contains("queue.destroy_and_release(source, destination)"));
         assert!(!body.contains(".take()"));
     }
     let diagnostic = include_str!("../xgmi_diagnostic.rs");
-    assert!(diagnostic.contains("Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1"));
+    assert!(diagnostic.contains("self.native.is_terminal()"));
 }

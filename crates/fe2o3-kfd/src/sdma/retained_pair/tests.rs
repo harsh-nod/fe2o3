@@ -111,6 +111,48 @@ fn retained_pair_fenced_timeout_and_pure_refusal_preserve_retryable_custody() {
 }
 
 #[test]
+fn retained_pair_nonlossy_ticket_projection_preserves_exact_variant_custody() {
+    let expected = ticket();
+    let tickets = vec![expected];
+    let ticket_storage = tickets.as_ptr();
+    let failure = Gfx942XgmiRetainedPairWaitFailureV1 {
+        inner: Gfx942XgmiBatchWaitFailureV1::Retained {
+            error: Gfx942SdmaErrorV1::Timeout, tickets,
+        },
+    };
+    let recovered = failure.try_into_retained_tickets().unwrap();
+    assert_eq!(recovered, vec![expected]);
+    assert_eq!(recovered.as_ptr(), ticket_storage);
+
+    let copy = completed();
+    let identities = (copy.source.lease().storage_identity(),
+        copy.destination.lease().storage_identity());
+    let completed = vec![copy];
+    let completed_storage = completed.as_ptr();
+    let message = String::from("original indeterminate fence");
+    let message_storage = message.as_ptr();
+    let failure = Gfx942XgmiRetainedPairWaitFailureV1 {
+        inner: Gfx942XgmiBatchWaitFailureV1::CompletedCurrentnessIndeterminate {
+            error: Gfx942SdmaErrorV1::Doorbell(message), completed,
+        },
+    };
+    let failure = failure.try_into_retained_tickets().unwrap_err();
+    match &failure.inner {
+        Gfx942XgmiBatchWaitFailureV1::CompletedCurrentnessIndeterminate {
+            error: Gfx942SdmaErrorV1::Doorbell(message), completed,
+        } => {
+            assert_eq!(message.as_ptr(), message_storage);
+            assert_eq!(message, "original indeterminate fence");
+            assert_eq!(completed.as_ptr(), completed_storage);
+            assert_eq!(completed.len(), 1);
+        }
+        _ => panic!("projection lost the original failure variant"),
+    }
+    let (source, destination) = failure.into_indeterminate_mappings().unwrap().next().unwrap();
+    assert_eq!((source.lease().storage_identity(), destination.lease().storage_identity()), identities);
+}
+
+#[test]
 fn retained_pair_terminal_ok_never_mints_success_and_preserves_exact_owned_results() {
     let mut script = Script { terminal: true, ..Script::default() };
     let result = run_operation(&mut script, |_| Ok::<(), Gfx942SdmaErrorV1>(()));

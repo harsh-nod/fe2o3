@@ -132,6 +132,15 @@ impl Gfx942XgmiRetainedPairWaitFailureV1 {
         self.inner.into_retained_tickets()
     }
 
+    /// Recovers exact pending tickets without discarding indeterminate mappings.
+    /// A mismatch returns this entire failure, including its original error.
+    pub fn try_into_retained_tickets(self) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Self> {
+        match self.inner {
+            Gfx942XgmiBatchWaitFailureV1::Retained { tickets, .. } => Ok(tickets),
+            inner => Err(Self { inner }),
+        }
+    }
+
     /// These mappings do not authorize reuse, release, or successful completion.
     /// The queue and both endpoint sessions have already been quarantined.
     pub fn into_indeterminate_mappings(

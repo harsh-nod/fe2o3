@@ -36,7 +36,7 @@ pub trait RuntimePeerCopyBatchBackendV1: RuntimeBackendV1 {
 }
 
 impl<B: RuntimePeerCopyBatchBackendV1> RuntimeContextV1<B> {
-    fn validate_peer_copy_batch_roots(
+    pub(super) fn validate_peer_copy_batch_roots(
         &mut self,
         submissions: &[&mut RuntimeSubmissionV1<RuntimePeerCopyV1>],
     ) -> Result<(), RuntimeValidationErrorV1> {
