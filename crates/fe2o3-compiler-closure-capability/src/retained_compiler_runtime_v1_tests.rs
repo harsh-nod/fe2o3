@@ -719,9 +719,11 @@ fn actual_code_acl_is_rejected_when_the_fixture_filesystem_supports_it() {
             4_u16
         };
         let mut acl = 2_u32.to_le_bytes().to_vec();
+        // UID + 1 may be unmapped. Naming the mapped owner with ACL_USER still
+        // requires an extended ACL, even though ACL_USER_OBJ names that owner too.
         for (tag, value, id) in [
             (1_u16, permissions, u32::MAX),
-            (2, 4, owners().0.wrapping_add(1)),
+            (2, 4, owners().0),
             (4, permissions, u32::MAX),
             (16, permissions, u32::MAX),
             (32, permissions, u32::MAX),
@@ -743,9 +745,18 @@ fn actual_code_acl_is_rejected_when_the_fixture_filesystem_supports_it() {
             }
             Err(e) => panic!("set fixture code ACL: {e}"),
         }
+        let mut actual = [0_u8; 44];
+        let length = rustix::fs::getxattr(&path, "system.posix_acl_access", &mut actual).unwrap();
+        assert_eq!(&actual[..length], acl.as_slice());
+        assert_eq!(
+            fs::metadata(&path).unwrap().mode() & 0o7777,
+            ROLES[index].protected_mode()
+        );
         assert!(matches!(
             failure(observe(LIMIT, LIMIT, |b| t.load(b)).0),
             RetainedCompilerRuntimeErrorV1::Mismatch("code file has a forbidden xattr")
         ));
+        rustix::fs::removexattr(&path, "system.posix_acl_access").unwrap();
+        assert!(observe(LIMIT, LIMIT, |b| t.load(b)).0.is_ok());
     }
 }

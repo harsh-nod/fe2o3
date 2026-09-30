@@ -1047,9 +1047,11 @@ fn current_directory_replacement_cannot_reuse_the_retained_child_inodes() {
 
 fn acl(directory: bool) -> Vec<u8> {
     let mode = if directory { 5_u16 } else { 4_u16 };
+    // Only our UID may be mapped in a single-ID user namespace. A named ACL_USER
+    // entry still makes this an extended ACL when it names the file owner.
     let entries = [
         (1_u16, if directory { 7 } else { 4 }, u32::MAX),
-        (2, 4, owners().0.wrapping_add(1)),
+        (2, 4, owners().0),
         (4, mode, u32::MAX),
         (16, mode, u32::MAX),
         (32, mode, u32::MAX),
@@ -1110,6 +1112,11 @@ fn actual_acl_and_capability_attributes_are_rejected_when_supported() {
                 }
                 Err(error) => panic!("set fixture attribute {attribute}: {error}"),
             }
+            if *attribute != "security.capability" {
+                let mut actual = [0_u8; 44];
+                let length = rustix::fs::getxattr(&path, *attribute, &mut actual).unwrap();
+                assert_eq!(&actual[..length], value.as_slice());
+            }
             let result = observe(LIMIT, LIMIT, |b| tree.load(fixture_immutable, b)).0;
             rustix::fs::removexattr(&path, *attribute).unwrap();
             chmod(&path, if is_directory { 0o755 } else { 0o444 });
@@ -1119,6 +1126,11 @@ fn actual_acl_and_capability_attributes_are_rejected_when_supported() {
                     "trusted profile object has a forbidden attribute"
                 ))
             ));
+            assert!(
+                observe(LIMIT, LIMIT, |b| tree.load(fixture_immutable, b))
+                    .0
+                    .is_ok()
+            );
         }
     }
 }
