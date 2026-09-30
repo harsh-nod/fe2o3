@@ -30,6 +30,7 @@ def refused(action, message):
 
 
 check.audit(sources)
+check.audit_dispatch_forwarding(sources)
 need(check.include_closure(sources) == set(check.FILES) and len(check.FILES) == 5,
      "five actual transitive executable inputs")
 for selected in sources:
@@ -42,13 +43,13 @@ candidate = dict(sources)
 candidate[check.SRC / "unbound_observer.rs"] = "// additional source\n"
 refused(lambda: check.audit(candidate), "extra accounting source accepted")
 for selected, before, after in (
-    (check.OWNER, "let Some(token) = &credits.token", "let Some(token) = &other.token"),
-    (check.OWNER, "if Arc::ptr_eq(account, actual)", "if true"),
-    (check.OWNER, "account.state.lock()", "account.lock()"),
-    (check.OWNER, "&state.records,", "&[],"),
-    (check.OWNER, "state.poisoned,", "false,"),
-    (check.OWNER, "token.slot,", "0,"),
-    (check.OWNER, "token.owner,", "0,"),
+    (check.DISPATCH, "let Some(token) = &$credits.token", "let Some(token) = &$other.token"),
+    (check.DISPATCH, "if Arc::ptr_eq(account, actual)", "if true"),
+    (check.DISPATCH, "account.state.lock()", "account.lock()"),
+    (check.DISPATCH, "&state.records,", "&[],"),
+    (check.DISPATCH, "state.poisoned,", "false,"),
+    (check.DISPATCH, "token.slot,", "0,"),
+    (check.DISPATCH, "token.owner,", "0,"),
     (check.OWNER, "    owner: u64,", "    owner: u32,"),
     (check.PROOF, "&&& !poisoned", "&&& true"),
     (check.PROOF, "&&& records[slot as int].is_some()", "&&& true"),
@@ -58,7 +59,19 @@ for selected, before, after in (
     need(before in sources[selected], "hostile source anchor")
     candidate = dict(sources)
     candidate[selected] = candidate[selected].replace(before, after)
+    if selected == check.DISPATCH:
+        refused(lambda: check.audit_dispatch_forwarding(candidate), "hostile macro forwarding accepted")
     refused(lambda: check.audit(candidate), "hostile source accepted")
+
+for before, after in (
+    ('include!("retained_dispatch_body.rs");', 'include!("other.rs");'),
+    ('resource_retained_credit_dispatch_body_v1!(', 'resource_retained_credit_dispatch_body_v1_other!('),
+):
+    need(sources[check.OWNER].count(before) == 1, "one native dispatch calibration anchor")
+    candidate = dict(sources)
+    candidate[check.OWNER] = candidate[check.OWNER].replace(before, after)
+    refused(lambda: check.audit_dispatch_forwarding(candidate), "foreign dispatch route accepted")
+    refused(lambda: check.audit(candidate), "foreign dispatch source accepted")
 
 cases = check.mutations(sources[check.BODY])
 need(len(cases) == check.MUTANT_COUNT == 10, "ten constructed actual-body controls")

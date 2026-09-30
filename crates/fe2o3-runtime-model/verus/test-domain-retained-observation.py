@@ -30,6 +30,7 @@ def refused(action, message):
 
 
 check.audit(sources)
+check.audit_dispatch_forwarding(sources)
 need(check.include_closure(sources) == set(check.FILES) and len(check.FILES) == 7,
      "seven actual transitive executable inputs")
 for selected in sources:
@@ -42,11 +43,11 @@ candidate = dict(sources)
 candidate[check.SRC / "domain/unbound_observer.rs"] = "// additional source\n"
 refused(lambda: check.audit(candidate), "extra accounting source accepted")
 for selected, before, after in (
-    (check.OWNER, "&state.nodes,", "&[],"),
-    (check.OWNER, "state.max_depth,", "4,"),
-    (check.OWNER, "&state.records,", "&[],"),
-    (check.OWNER, "state.poisoned,", "false,"),
-    (check.OWNER, "self.root.state.lock()", "self.root.lock()"),
+    (check.DISPATCH, "&state.nodes,", "&[],"),
+    (check.DISPATCH, "state.max_depth,", "4,"),
+    (check.DISPATCH, "&state.records,", "&[],"),
+    (check.DISPATCH, "state.poisoned,", "false,"),
+    (check.DISPATCH, "$this.root.state.lock()", "$this.root.lock()"),
     (check.OWNER, "    credit: Record,", "    credit: bool,"),
     (check.PROOF, "&&& accepted(nodes, profile, key)", "&&& true"),
     (check.PROOF, "&&& records[slot as int]->Some_0.leaf == key", "&&& true"),
@@ -57,7 +58,19 @@ for selected, before, after in (
     need(before in sources[selected], "hostile source anchor")
     candidate = dict(sources)
     candidate[selected] = candidate[selected].replace(before, after)
+    if selected == check.DISPATCH:
+        refused(lambda: check.audit_dispatch_forwarding(candidate), "hostile macro forwarding accepted")
     refused(lambda: check.audit(candidate), "hostile source accepted")
+
+for before, after in (
+    ('include!("domain/retained_dispatch_body.rs");', 'include!("other.rs");'),
+    ('domain_retained_credit_dispatch_body_v1!(', 'domain_retained_credit_dispatch_body_v1_other!('),
+):
+    need(sources[check.OWNER].count(before) == 1, "one native dispatch calibration anchor")
+    candidate = dict(sources)
+    candidate[check.OWNER] = candidate[check.OWNER].replace(before, after)
+    refused(lambda: check.audit_dispatch_forwarding(candidate), "foreign dispatch route accepted")
+    refused(lambda: check.audit(candidate), "foreign dispatch source accepted")
 
 cases = check.mutations(sources[check.BODY])
 need(len(cases) == check.MUTANT_COUNT == 15, "fifteen constructed actual-body controls")

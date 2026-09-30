@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 V = Path("crates/fe2o3-runtime-model/verus")
 SRC = Path("crates/fe2o3-resource-accounting/src")
 MODEL = Path("crates/fe2o3-runtime-model/src")
+DISPATCH = SRC / 'retained_dispatch_body.rs'
 OWNER = SRC / "lib.rs"
 BODY = SRC / "independent_retained_observation_body.rs"
 PROOF = V / "independent_retained_observation_v1.rs"
@@ -27,7 +28,7 @@ EXTRA = {VECTOR, PHASE, MODEL / "lib.rs",
          Path("crates/fe2o3-runtime-model/Cargo.toml"), Path("Cargo.toml"), Path("Cargo.lock")}
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "429e52a468b198db0b5d444a9b79f3bf8788e3a1204fd2da489b92337b023bc8"
+SOURCE_TREE_SHA = "e7b90e576e829c06cd2270c05f12fe68d1fc3a54e3320561932d9a83ae2d6b23"
 PROOF_SHA = "67bdf02f8ebf5d6fb51e1d29e9ed8e392698f676a33bf56038b96a5710aa1078"
 RECORD_PROOF_SHA = "a303f5ceeac20d3c9f1c53228562aa452e56b24d5b7052ed9982a3de8a039a5a"
 # Full no-cheating discovery measured eight obligations on this exact PROOF_SHA.
@@ -90,6 +91,29 @@ def include_closure(sources):
     return visited
 
 
+def audit_dispatch_forwarding(sources):
+    native = compact(sources[OWNER])
+    invocation = 'resource_retained_credit_dispatch_body_v1!(self,credits,expected)'
+    need(sources[OWNER].count('include!("retained_dispatch_body.rs");') == 1
+         and native.count(invocation) == 1 and "->bool{" + invocation + "}" in native,
+         "one exact native shared dispatch invocation and include")
+    dispatch = compact(sources[DISPATCH])
+    need(dispatch.startswith('macro_rules!resource_retained_credit_dispatch_body_v1{($this:ident,$credits:ident,$expected:ident)=>{{') and dispatch.endswith("}};}")
+         and dispatch.count("macro_rules!") == 1, "one ident-only dispatch macro")
+    forwarded = dispatch
+    for argument, value in (('this', 'self'), ('credits', 'credits'), ('expected', 'expected')):
+        forwarded = forwarded.replace("$" + argument, value)
+    need("$" not in forwarded, "only the exact bound macro arguments")
+    forwarding = ("letSome(token)=&credits.tokenelse{returnfalse;};"
+                  "match(&self.0,&token.account){"
+                  "(AccountHandle::Independent(account),TokenAccount::Independent(actual))"
+                  "ifArc::ptr_eq(account,actual)=>{"
+                  "letOk(state)=account.state.lock()else{returnfalse;};"
+                  "independent_retained_observation_v1(&state.records,state.poisoned,"
+                  "token.slot,token.owner,expected,)")
+    need(forwarded.count(forwarding) == 1, "exact borrowed token, identity, raw lock and actual-field forwarding")
+
+
 def audit(sources):
     implementation = {path: text for path, text in sources.items() if path not in (PROOF, RECORD_PROOF)}
     need(set(sources) == {path for path in sources if path.is_relative_to(SRC)} | EXTRA | {PROOF, RECORD_PROOF},
@@ -107,15 +131,7 @@ def audit(sources):
     invocation = "independent_retained_observation_body_v1!(records,poisoned,slot,owner,expected)"
     need(compact(sources[OWNER]).count(invocation) == compact(sources[PROOF]).count(invocation) == 1,
          "same hook-free concrete observer body")
-    native = compact(sources[OWNER])
-    forwarding = ("letSome(token)=&credits.tokenelse{returnfalse;};"
-                  "match(&self.0,&token.account){"
-                  "(AccountHandle::Independent(account),TokenAccount::Independent(actual))"
-                  "ifArc::ptr_eq(account,actual)=>{"
-                  "letOk(state)=account.state.lock()else{returnfalse;};"
-                  "independent_retained_observation_v1(&state.records,state.poisoned,"
-                  "token.slot,token.owner,expected,)")
-    need(native.count(forwarding) == 1, "exact borrowed token, identity, raw lock and actual-field forwarding")
+    audit_dispatch_forwarding(sources)
     need(not re.search(r"\b(?:assume|admit)\s*\(|verifier::external", sources[PROOF] + sources[RECORD_PROOF]),
          "no assumed observation or external proof body")
 

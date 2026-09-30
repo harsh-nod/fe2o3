@@ -15,6 +15,8 @@ pub(super) struct ContextAllocationAdmissionV1 {
     reject_disposal: Option<RuntimeAllocationIdV1>,
 }
 
+include!("allocation_admission/retained_lookup_body.rs");
+
 impl ContextAllocationAdmissionV1 {
     pub(super) fn is_configured(&self) -> bool {
         !self.accounts.is_empty()
@@ -172,13 +174,7 @@ impl ContextAllocationAdmissionV1 {
         device: RuntimeDeviceIdV1,
         byte_len: u64,
     ) -> bool {
-        match (self.accounts.get(&device), self.retained.get(&id)) {
-            (None, None) => true,
-            (Some(account), Some(credits)) => {
-                account.matches_retained_charge_v1(device, credits, request_charge(byte_len))
-            }
-            _ => false,
-        }
+        context_retained_credit_lookup_body_v1!(self, id, device, byte_len)
     }
 
     pub(super) fn prepare_registry(

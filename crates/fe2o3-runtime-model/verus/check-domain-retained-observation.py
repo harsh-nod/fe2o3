@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 V = Path("crates/fe2o3-runtime-model/verus")
 SRC = Path("crates/fe2o3-resource-accounting/src")
 MODEL = Path("crates/fe2o3-runtime-model/src")
+DISPATCH = SRC / 'domain/retained_dispatch_body.rs'
 OWNER = SRC / "domain.rs"
 BODY = SRC / "domain/retained_observation_body.rs"
 PROOF = V / "domain_retained_observation_v1.rs"
@@ -30,7 +31,7 @@ EXTRA = {VECTOR, PHASE, MODEL / "lib.rs", R75_REFERENCE,
          Path("crates/fe2o3-runtime-model/Cargo.toml"), Path("Cargo.toml"), Path("Cargo.lock")}
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "c6775aae5de2aafaa8266c062f5d546c04edcb83021aa6c38d668194314a64e0"
+SOURCE_TREE_SHA = "e8193e7728cfa55df7630a993d550e47eda40b751602df7e20daeb335c02feb4"
 PROOF_SHA = "5c36bade68fe9e35382e85d8cbd110adfb93e0279dc439cab8eb1043fca24f16"
 RECORD_PROOF_SHA = "a303f5ceeac20d3c9f1c53228562aa452e56b24d5b7052ed9982a3de8a039a5a"
 # Full no-cheating discovery measured 21 obligations on the exact PROOF_SHA.
@@ -92,6 +93,26 @@ def include_closure(sources):
     return visited
 
 
+def audit_dispatch_forwarding(sources):
+    native = compact(sources[OWNER])
+    invocation = 'domain_retained_credit_dispatch_body_v1!(self,root,slot,owner,expected)'
+    need(sources[OWNER].count('include!("domain/retained_dispatch_body.rs");') == 1
+         and native.count(invocation) == 1 and "->bool{" + invocation + "}" in native,
+         "one exact native shared dispatch invocation and include")
+    dispatch = compact(sources[DISPATCH])
+    need(dispatch.startswith('macro_rules!domain_retained_credit_dispatch_body_v1{($this:ident,$root:ident,$slot:ident,$owner:ident,$expected:ident)=>{{') and dispatch.endswith("}};}")
+         and dispatch.count("macro_rules!") == 1, "one ident-only dispatch macro")
+    forwarded = dispatch
+    for argument, value in (('this', 'self'), ('root', 'root'), ('slot', 'slot'), ('owner', 'owner'), ('expected', 'expected')):
+        forwarded = forwarded.replace("$" + argument, value)
+    need("$" not in forwarded, "only the exact bound macro arguments")
+    forwarding = ("if!Arc::ptr_eq(&self.root,root){returnfalse;}"
+                  "letOk(state)=self.root.state.lock()else{returnfalse;};"
+                  "domain_retained_observation_v1(&state.nodes,state.max_depth,&state.records,"
+                  "state.poisoned,self.key,slot,owner,expected,)")
+    need(forwarded.count(forwarding) == 1, "exact fresh raw-lock forwarding; no recovery or cached result")
+
+
 def audit(sources):
     implementation = {path: text for path, text in sources.items() if path not in (PROOF, RECORD_PROOF)}
     need(set(sources) == {path for path in sources if path.is_relative_to(SRC)} | EXTRA | {PROOF, RECORD_PROOF},
@@ -111,12 +132,8 @@ def audit(sources):
     invocation = "domain_retained_observation_body_v1!(nodes,profile,records,poisoned,key,slot,owner,expected)"
     need(compact(sources[OWNER]).count(invocation) == compact(sources[PROOF]).count(invocation) == 1,
          "same hook-free concrete observer body")
+    audit_dispatch_forwarding(sources)
     native = compact(sources[OWNER])
-    forwarding = ("if!Arc::ptr_eq(&self.root,root){returnfalse;}"
-                  "letOk(state)=self.root.state.lock()else{returnfalse;};"
-                  "domain_retained_observation_v1(&state.nodes,state.max_depth,&state.records,"
-                  "state.poisoned,self.key,slot,owner,expected,)")
-    need(native.count(forwarding) == 1, "exact fresh raw-lock forwarding; no recovery or cached result")
     need(native.count("resource_domain_node_body_v1!(nodes,key)") == 1,
          "actual R75 node lookup body")
     path_call = ("resource_domain_path_extract_body_v1!(resource_domain_arena_rust_expr,nodes,profile,leaf,"

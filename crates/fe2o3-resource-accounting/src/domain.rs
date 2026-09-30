@@ -497,6 +497,8 @@ impl State {
     }
 }
 
+include!("domain/retained_dispatch_body.rs");
+
 impl DomainAccount {
     pub(super) fn matches_retained_charge(
         &self,
@@ -505,22 +507,7 @@ impl DomainAccount {
         owner: u64,
         expected: ResourceVectorV1,
     ) -> bool {
-        if !Arc::ptr_eq(&self.root, root) {
-            return false;
-        }
-        let Ok(state) = self.root.state.lock() else {
-            return false;
-        };
-        domain_retained_observation_v1(
-            &state.nodes,
-            state.max_depth,
-            &state.records,
-            state.poisoned,
-            self.key,
-            slot,
-            owner,
-            expected,
-        )
+        domain_retained_credit_dispatch_body_v1!(self, root, slot, owner, expected)
     }
 
     pub(super) fn same_account(&self, other: &Self) -> bool {

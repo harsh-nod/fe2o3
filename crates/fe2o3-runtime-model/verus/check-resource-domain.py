@@ -25,7 +25,7 @@ ARENA = Path('crates/fe2o3-resource-accounting/src/domain/arena_bodies.rs')
 CLOSURE = Path('examples/row_softmax_v1/verify-verus-closure.sh')
 TOOLS = MODEL / 'verus/pins/VERUS_CLOSURE_MANIFEST'
 MANIFEST = MODEL / 'verus/pins/R75_DOMAIN_SOURCES_SHA256'
-MANIFEST_SHA = '7c414c3f1933a609af0641c2cc25bcc6e0dbf56c729c4a5fa823baf77cb8da3b'
+MANIFEST_SHA = 'e3438fa01b2adb535386202638e65a1b05d8a4aaabedcefe2752b906e5318f8f'
 TOOL_SHA = 'd97501a883931d1d173b1bf4b6cf4d973f16d105dbcb468e177b52b2331612d2'
 CLOSURE_SHA = 'c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c'
 TOOLS_SHA = 'f06883e4ce463bcb9a3c8f911064ac85054c7822dc331db1a79f75f9e8878b01'
@@ -40,9 +40,11 @@ SOURCES = PROOF_FILES | frozenset((MODEL / 'src/r67_resource_credits.rs',
     MODEL / 'src/lib.rs', MODEL / 'Cargo.toml',
     Path('crates/fe2o3-resource-accounting/src/domain.rs'),
     Path('crates/fe2o3-resource-accounting/src/domain/retained_observation_body.rs'),
+    Path('crates/fe2o3-resource-accounting/src/domain/retained_dispatch_body.rs'),
     Path('crates/fe2o3-resource-accounting/src/lib.rs'),
     Path('crates/fe2o3-resource-accounting/src/independent_retained_observation_body.rs'),
     Path('crates/fe2o3-resource-accounting/src/retained_charge_body.rs'),
+    Path('crates/fe2o3-resource-accounting/src/retained_dispatch_body.rs'),
     Path('crates/fe2o3-resource-accounting/Cargo.toml'),
     Path('Cargo.toml'), Path('Cargo.lock')))
 INTERRUPTS = frozenset((signal.SIGINT, signal.SIGTERM, signal.SIGHUP))

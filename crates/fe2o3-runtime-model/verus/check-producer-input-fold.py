@@ -25,8 +25,8 @@ PROOF = V / "context_producer_input_fold_v1.rs"
 FILES = [PROOF, BODY]
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "7d998bed4c2bf472dedf027dc916aedb8dd3e0c28ba34030209f5c25db9e83f2"
-SOURCE_FILES = 325
+SOURCE_TREE_SHA = "19ec915583c9bac2da4ffeba186fe13747b6747ad7065655fe49ac726ad88671"
+SOURCE_FILES = 327
 PROOF_SHA = "0588fd557956b177b7b7be56fda006f25a82e509e23c40920907fecb78830184"
 # Full unfiltered --no-cheating discovery V5 accepted this count, not the mutants.
 EXPECTED_VERIFIED = 13

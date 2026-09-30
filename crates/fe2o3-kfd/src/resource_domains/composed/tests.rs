@@ -30,6 +30,53 @@ fn request_profile_composed_zero_bytes_still_retains_one_record() {
     }
 }
 
+#[test]
+fn retained_dispatch_composed_queries_preserve_typed_identity_and_all_usage() {
+    let root = root();
+    let first = admission(&root);
+    let sibling = admission(&root);
+    let account = first.request_account_v1();
+    let cloned = account.clone();
+    for bytes in [0, 1, 8] {
+        let retained = account.reserve_v1(bytes).unwrap().retain();
+        let before = (
+            account.usage_v1(),
+            account.session_usage_v1(),
+            root.usage_v1(),
+        );
+        let sibling_before = (
+            sibling.request_account_v1().usage_v1(),
+            sibling.request_account_v1().session_usage_v1(),
+        );
+        for _ in 0..3 {
+            assert!(cloned.matches_retained_charge_v1(&retained, bytes));
+            assert!(!account.matches_retained_charge_v1(&retained, u64::MAX));
+            assert!(
+                !sibling
+                    .request_account_v1()
+                    .matches_retained_charge_v1(&retained, bytes)
+            );
+        }
+        assert_eq!(
+            (
+                account.usage_v1(),
+                account.session_usage_v1(),
+                root.usage_v1()
+            ),
+            before
+        );
+        assert_eq!(
+            (
+                sibling.request_account_v1().usage_v1(),
+                sibling.request_account_v1().session_usage_v1()
+            ),
+            sibling_before
+        );
+        retained.release_after_disposal().unwrap();
+        assert_eq!(account.usage_v1().used, ResourceVectorV1::ZERO);
+    }
+}
+
 fn identity(uid: u64) -> Identity {
     Identity {
         unique_id: uid,

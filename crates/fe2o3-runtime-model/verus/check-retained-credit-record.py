@@ -30,7 +30,7 @@ EXTRA = {VECTOR, PHASE, MODEL / "lib.rs",
          Path("Cargo.toml"), Path("Cargo.lock")}
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "429e52a468b198db0b5d444a9b79f3bf8788e3a1204fd2da489b92337b023bc8"
+SOURCE_TREE_SHA = "e7b90e576e829c06cd2270c05f12fe68d1fc3a54e3320561932d9a83ae2d6b23"
 PROOF_SHA = "a303f5ceeac20d3c9f1c53228562aa452e56b24d5b7052ed9982a3de8a039a5a"
 # Full no-cheating discovery measured seven obligations on the exact PROOF_SHA.
 EXPECTED_VERIFIED = 7

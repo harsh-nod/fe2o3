@@ -50,3 +50,57 @@ fn retained_charge_context_presence_exact_extent_and_device_brand() {
     admission.release_disposed(id).unwrap();
     assert_eq!(account.usage().used, RuntimeResourceVectorV1::ZERO);
 }
+
+#[test]
+fn retained_dispatch_context_lookup_matrix_preserves_ordinary_and_accounted_paths() {
+    use fe2o3_resource_accounting::ResourceCreditAccountV1;
+    for domain in [false, true] {
+        for bytes in [0, 1, u64::MAX] {
+            let device = RuntimeDeviceIdV1::new(7, 3);
+            let foreign_generation = RuntimeDeviceIdV1::new(8, 3);
+            let other_device = RuntimeDeviceIdV1::new(7, 4);
+            let id = RuntimeAllocationIdV1::new(7, 5);
+            let missing_id = RuntimeAllocationIdV1::new(8, 5);
+            let expected = request_charge(bytes);
+            let root = domain.then(|| {
+                ResourceCreditAccountV1::new_root(
+                    expected.with(RuntimeResourceKindV1::ControlResidentBytes, 1 << 20),
+                    4,
+                    4,
+                )
+                .unwrap()
+            });
+            let account = match &root {
+                Some(root) => {
+                    RuntimeResourceCreditAccountV1::in_domain(device, root, expected, 1).unwrap()
+                }
+                None => RuntimeResourceCreditAccountV1::new(device, expected, 1).unwrap(),
+            };
+            let mut admission = ContextAllocationAdmissionV1::default();
+            // Neither lookup present is ordinary-mode allowance, not a credit.
+            assert!(admission.has_expected_credit(id, device, bytes));
+            admission.attach(id, Some(account.reserve(expected).unwrap().retain()));
+            assert!(!admission.has_expected_credit(id, device, bytes));
+            admission.accounts.insert(device, account.clone());
+            assert!(!admission.has_expected_credit(missing_id, device, bytes));
+            for impostor in [foreign_generation, other_device] {
+                admission.accounts.insert(impostor, account.clone());
+                assert!(!admission.has_expected_credit(id, impostor, bytes));
+            }
+            let before = account.usage();
+            let root_before = root.as_ref().map(ResourceCreditAccountV1::usage);
+            for _ in 0..3 {
+                assert!(admission.has_expected_credit(id, device, bytes));
+                assert!(!admission.has_expected_credit(id, device, bytes.wrapping_add(1)));
+            }
+            assert_eq!(account.usage(), before);
+            assert_eq!(
+                root.as_ref().map(ResourceCreditAccountV1::usage),
+                root_before
+            );
+            admission.release_disposed(id).unwrap();
+            assert!(!admission.has_expected_credit(id, device, bytes));
+            assert_eq!(account.usage().used, RuntimeResourceVectorV1::ZERO);
+        }
+    }
+}

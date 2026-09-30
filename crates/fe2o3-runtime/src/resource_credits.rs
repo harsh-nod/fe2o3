@@ -113,6 +113,8 @@ enum RuntimeResourceCreditAccountInnerV1 {
     Composed(Box<crate::RuntimeAllocationDeviceAdmissionV1>),
 }
 
+include!("retained_credit_dispatch_body.rs");
+
 impl RuntimeResourceCreditAccountV1 {
     pub(crate) fn composed(
         device: RuntimeDeviceIdV1,
@@ -137,24 +139,7 @@ impl RuntimeResourceCreditAccountV1 {
         credits: &RuntimeRetainedResourceCreditsV1,
         expected: RuntimeResourceVectorV1,
     ) -> bool {
-        self.device == device
-            && match (&self.inner, credits) {
-                (
-                    RuntimeResourceCreditAccountInnerV1::General(account),
-                    RuntimeRetainedResourceCreditsV1::General(credits),
-                ) => account.matches_retained_charge_v1(credits, expected),
-                (
-                    RuntimeResourceCreditAccountInnerV1::Composed(admission),
-                    RuntimeRetainedResourceCreditsV1::Composed(credits),
-                ) => {
-                    let bytes = expected.get(RuntimeResourceKindV1::RequestedAllocationBytes);
-                    expected == request_charge(bytes)
-                        && admission
-                            .account()
-                            .matches_retained_charge_v1(credits, bytes)
-                }
-                _ => false,
-            }
+        runtime_retained_credit_dispatch_body_v1!(self, device, credits, expected)
     }
 
     pub(crate) fn in_domain(
@@ -334,6 +319,50 @@ mod tests {
         assert!(!second.matches_retained_charge_v1(device, &credit, charge(8)));
         assert!(!first.matches_retained_charge_v1(device, &credit, charge(7)));
         credit.release_after_disposal().unwrap();
+    }
+
+    #[test]
+    fn retained_dispatch_general_independent_and_domain_preserve_arbitrary_vectors() {
+        let device = crate::context::resource_credit_test_device_v1();
+        for domain in [false, true] {
+            for bytes in [0, 1, u64::MAX] {
+                let expected = charge(bytes).with(RuntimeResourceKindV1::ReplyCells, 2);
+                let root = domain.then(|| {
+                    ResourceCreditAccountV1::new_root(
+                        expected.with(RuntimeResourceKindV1::ControlResidentBytes, 1 << 20),
+                        4,
+                        4,
+                    )
+                    .unwrap()
+                });
+                let account = match &root {
+                    Some(root) => {
+                        RuntimeResourceCreditAccountV1::in_domain(device, root, expected, 1)
+                            .unwrap()
+                    }
+                    None => RuntimeResourceCreditAccountV1::new(device, expected, 1).unwrap(),
+                };
+                let retained = account.reserve(expected).unwrap().retain();
+                let before = account.usage();
+                let root_before = root.as_ref().map(ResourceCreditAccountV1::usage);
+                for _ in 0..3 {
+                    assert!(account.matches_retained_charge_v1(device, &retained, expected));
+                    assert!(!account.matches_retained_charge_v1(device, &retained, charge(bytes)));
+                    assert!(!account.matches_retained_charge_v1(
+                        device,
+                        &retained,
+                        expected.with(RuntimeResourceKindV1::ReplyCells, 3)
+                    ));
+                }
+                assert_eq!(account.usage(), before);
+                assert_eq!(
+                    root.as_ref().map(ResourceCreditAccountV1::usage),
+                    root_before
+                );
+                retained.release_after_disposal().unwrap();
+                assert_eq!(account.usage().used, RuntimeResourceVectorV1::ZERO);
+            }
+        }
     }
 
     #[test]

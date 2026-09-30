@@ -375,6 +375,8 @@ impl Drop for RequestInner {
 #[derive(Clone)]
 pub struct Gfx942RequestAccountV1(Arc<RequestInner>);
 
+include!("composed/retained_dispatch_body.rs");
+
 impl Gfx942RequestAccountV1 {
     /// Exact typed request-leaf identity, not merely a shared root or device.
     pub fn shares_account_with_v1(&self, other: &Self) -> bool {
@@ -438,11 +440,7 @@ impl Gfx942RequestAccountV1 {
 
     /// Borrowed accounting observation, not native allocation/disposal authority.
     pub fn matches_retained_charge_v1(&self, credit: &Gfx942RetainedRequestV1, bytes: u64) -> bool {
-        Arc::ptr_eq(&self.0, &credit.account.0)
-            && self
-                .0
-                .account
-                .matches_retained_charge_v1(&credit.inner, request_charge(bytes))
+        composed_retained_credit_dispatch_body_v1!(self, credit, bytes)
     }
 }
 
