@@ -141,6 +141,14 @@ pub(crate) struct StagedProtectedServiceExecV1 {
 }
 
 impl StagedProtectedServiceExecV1 {
+    pub(crate) fn requires_namespace_confinement(
+        &self,
+        mapping_gate: Option<(BorrowedFd<'_>, BorrowedFd<'_>)>,
+    ) -> bool {
+        // These are actual staging/mapping operations, not service-role claims.
+        self.compiler.is_some() || mapping_gate.is_some()
+    }
+
     pub(crate) fn new(
         executable: &File,
         bindings: &[ProtectedServiceDescriptorBindingV1<'_>],
@@ -609,10 +617,12 @@ unsafe fn child_exec(
         if staged.compiler.is_some() && !compiler_restrictions::install() {
             child_fail(staged.exec_status_writer.as_raw_fd(), 13);
         }
-        // Every child is confined after mappings/profile/channel setup, never
-        // the creator that still needs clone3 for later launches. Stack with,
-        // rather than replace, the compiler filter before any READY or exec.
-        if !namespace_restrictions::install() {
+        // Compiler stages and actually mapped children must be confined after
+        // mappings/profile/channel setup. Unmapped generic service stages keep
+        // their legacy creator behavior, including direct clone3. This branch
+        // does not authenticate a role or relax the caller's deployment duties.
+        if staged.requires_namespace_confinement(mapping_gate) && !namespace_restrictions::install()
+        {
             child_fail(staged.exec_status_writer.as_raw_fd(), 14);
         }
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;

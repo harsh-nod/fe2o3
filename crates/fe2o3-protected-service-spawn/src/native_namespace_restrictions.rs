@@ -1,4 +1,4 @@
-//! Inherited namespace confinement for every native child, never its creator.
+//! Inherited namespace confinement for compiler stages and actually mapped children.
 //!
 //! This does not authenticate deployment provenance or exclude inherited cgroup
 //! controls, migration or delegation. Those remain the caller's obligations.

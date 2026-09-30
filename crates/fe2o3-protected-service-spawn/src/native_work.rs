@@ -16,7 +16,8 @@ pub(crate) const COMPILER_RESTRICTION_WORK: usize =
     4 * OPERATION_WORK + crate::syscall::COMPILER_RESTRICTION_INSTRUCTIONS * 64 + CONTROL_WORK;
 
 // GET_NO_NEW_PRIVS, SET_SECCOMP, GET_SECCOMP and immutable filter validation.
-// Every child pays this on the original parent ledger before clone.
+// Worst-case allowance paid on the original parent ledger before every clone,
+// including unmapped service stages that do not install this filter.
 pub(crate) const NAMESPACE_RESTRICTION_WORK: usize =
     3 * OPERATION_WORK + crate::syscall::NAMESPACE_RESTRICTION_INSTRUCTIONS * 64 + CONTROL_WORK;
 
@@ -31,7 +32,7 @@ pub(crate) const COMPILER_CHANNEL_WORK: usize = 10 * OPERATION_WORK
 pub(crate) const MAPPING_GATE_WORK: usize =
     (crate::pre_exec::MAX_CHILD_GATE_ATTEMPTS_V2 + 2) * OPERATION_WORK + CONTROL_WORK;
 
-/// Covers every bounded attempt in `syscall::child_exec`, including its failure suffix.
+/// Worst-case allowance for `syscall::child_exec`, including its failure suffix.
 /// The caller must charge the returned work before clone; this function spends nothing.
 /// Unsupported descriptor counts or capability ceilings fail before arithmetic.
 pub(crate) fn child_work(descriptors: usize, cap_last_cap: u32) -> Result<usize, Resource> {
@@ -67,7 +68,7 @@ pub(crate) fn child_work(descriptors: usize, cap_last_cap: u32) -> Result<usize,
     })?;
     // With the current 64-attempt gate: (166 + descriptors + 3 * capabilities)
     // operations, each with syscall/scalar allowance, plus fixed control work
-    // and the unconditional child-only namespace filter.
+    // and the namespace filter's worst-case allowance, even when not installed.
     operations
         .checked_mul(OPERATION_WORK)
         .and_then(|work| work.checked_add(CONTROL_WORK))

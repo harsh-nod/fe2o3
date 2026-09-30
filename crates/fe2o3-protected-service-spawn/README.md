@@ -137,6 +137,66 @@ provenance, exclusion of external memory and backing-file writers, authenticated
 helper/compiler bootstrap, and production activation remain unfinished. No public
 safe FD/PID constructor can manufacture the concrete namespace owner.
 
+### Child Namespace Confinement
+
+The existing raw-child boundary requires namespace confinement when either the
+actual compiler-specific stage owns compiler arguments/cwd or the actual fresh
+user-namespace mapping gate is present. Installation follows mapping, profile and
+child-channel setup, precedes READY/exec, and stacks with the unchanged compiler
+memory filter. Failure reports stage byte `0xce` and follows existing terminal
+custody; it never continues with a weaker child profile. The filter denies
+`unshare`, `setns`, and namespace-bearing legacy `clone` with `EPERM`, and returns
+`ENOSYS` for `clone3` so qualified libc thread/fork fallback remains possible.
+
+There is no public role selector or exemption. An unmapped generic service stage
+keeps legacy creator behavior, including direct `clone3`; it is not a helper
+confinement path. In particular, the V2 coordinator stages its supervisor with
+`Stage::stage` and `spawn_retaining`, and that supervisor's native issuer path
+requires direct `clone3` with an atomic pidfd. The typed proof-helper launch stays
+on `spawn_retaining_in_fresh_user_namespace`, so it must install the filter.
+Compiler-specific constructors require it even without mapping. These structural
+facts do not authenticate images, roles, runtime approvals, administrator
+provenance, or an outside custodian. Child cgroup-control exclusion and original
+cleanup/deployment custody remain mandatory external obligations.
+
+All spawn queries conservatively retain the worst-case namespace allowance:
+`4544` work and `400` scratch bytes, even for unmapped services that skip
+installation. No original request or cleanup ledger is replaced or refunded
+because of branch selection. Fresh mapping work/scratch remain additional.
+
+The constructor matrix covers generic service, compiler and child-channel compiler
+staging with and without a real mapping-gate owner. It is inert selection evidence,
+not namespace or deployment qualification. The existing static `-pthread`
+`native_compiler_exec.c` diagnostic supplies separate ignored native controls:
+
+- `unmapped_service_preserves_nested_clone3_without_qualifying_a_helper` requires
+  a real nested direct `clone3`, atomic CLOEXEC pidfd, consuming wait and terminal
+  marker. A compiler confinement run separates repeated creator controls.
+- `mapped_service_and_compiler_confine_namespaces_and_preserve_thread_fork_exec`
+  uses actual fresh-user-namespace placement for the service, exact denial errno,
+  inherited thread/fork/exec controls, original-budget one-short refusals, retained
+  input cleanup and unchanged compiler memory rejection.
+- `namespace_filter_install_failure_is_terminal_without_ready_or_exec` injects
+  an inherited kernel installation denial into the real mapped path, requiring
+  `0xce`, no READY/exec output and eventual retained-input/domain retirement.
+
+These controls are not yet compiled or run for this repair. They require an
+isolated, serial root lane under an outside custodian, allowed clone3/ptrace,
+static fixture selected by `FE2O3_NATIVE_COMPILER_EXEC_FIXTURE`, and, for mapped
+cases, a writable cgroup v2 domain, user namespaces and root-ID mapping authority
+(including CAP_SETFCAP). The custodian must bound the entire test process and
+drain its domain after failure or timeout; in-process deadlines alone do not
+discharge that obligation. No original deployment keys/images are modified.
+
+Required V2 coordinator -> supervisor -> issuer integration coverage is **not
+implemented by these fixtures**. The owning coordinator/supervisor test lane must
+exercise actual admitted V2 inputs through `native_launch_adapter` into
+`process_native_body`/`process::spawn_child`, verify the real issuer's profile,
+exec/readiness and atomic-pidfd custody, then drain the original cleanup owners.
+A generic C creator cannot stand in for that chain. The repair does not qualify
+an installed compiler runtime, proof execution or libc fallback for its approved
+images; those require separate genuine deployment runs.
+
 The native external-anchor coordinator now calls these primitives after deriving
 full charges and validating staged Files, and owns gated readiness/exec/endpoint
 admission and managed lifetime. The native compiler coordinator now also composes

@@ -36,6 +36,9 @@ impl StagedProtectedServiceExecV2 {
     /// root, helper and peer IDs before allowing the child to drop privileges.
     /// PID and time namespaces stay unchanged. This does not relax dumpability.
     /// Namespace handles remain in child custody through aggregate cleanup.
+    /// The actual mapping gate requires inherited namespace confinement after
+    /// mapping/profile setup and before READY/exec, including for service stages.
+    /// There is no caller-selectable exception for an already mapped child.
     ///
     /// Fund `spawn_retaining_work` plus `FRESH_NAMESPACE_WORK`, and
     /// `spawn_retaining_scratch` plus `FRESH_NAMESPACE_SCRATCH`.

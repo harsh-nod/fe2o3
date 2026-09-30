@@ -43,7 +43,8 @@ fn compiler_channel_prepays_all_extra_syscalls_and_wire_construction() {
     );
 }
 
-// Independent syscall transcript, without the implementation's aggregated counts or weights.
+// Independent worst-case transcript, without implementation counts or weights.
+// Unmapped service stages still prepay the filter allowance they do not execute.
 fn transcript_work(descriptors: usize, cap_last_cap: u32) -> usize {
     let mut work = 256;
     let mut operation = || work += 1024 + 64;
@@ -116,7 +117,7 @@ fn transcript_work(descriptors: usize, cap_last_cap: u32) -> usize {
 }
 
 #[test]
-fn every_supported_pair_matches_independent_transcript_and_formula() {
+fn every_supported_pair_matches_independent_worst_case_transcript_and_formula() {
     assert_eq!(crate::MAX_PROTECTED_SERVICE_DESCRIPTOR_BINDINGS_V1, 32);
     assert_eq!(crate::pre_exec::MAX_CHILD_GATE_ATTEMPTS_V2, 64);
     for descriptors in 1..=32 {
@@ -131,7 +132,7 @@ fn every_supported_pair_matches_independent_transcript_and_formula() {
 }
 
 #[test]
-fn exact_minimum_and_maximum_include_exec_failure_suffix() {
+fn exact_worst_case_minimum_and_maximum_include_exec_failure_suffix() {
     assert_eq!(child_work(1, 0), Ok(189_760));
     assert_eq!(child_work(32, 63), Ok(429_120));
 }

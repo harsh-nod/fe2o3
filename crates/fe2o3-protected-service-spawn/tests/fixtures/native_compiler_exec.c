@@ -2,8 +2,11 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/sched.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
@@ -173,11 +176,45 @@ static int namespace_probe(int output) {
     return 7;
 }
 
+/* Unmapped generic service control, not an authenticated supervisor or helper.
+ * Exercise the direct syscall/pidfd dependency instead of libc fallback. */
+static int creator_probe(int output) {
+    if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) return 75;
+    const char entered[] = "creator probe\n";
+    if (write(output, entered, sizeof(entered) - 1) != sizeof(entered) - 1) return 76;
+    if (syscall(SYS_unshare, 0) != 0) return 77;
+    errno = 0;
+    if (syscall(SYS_setns, -1, 0) != -1 || errno != EBADF) return 78;
+    int pidfd = -1;
+    struct clone_args args = {0};
+    args.flags = CLONE_PIDFD | CLONE_CLEAR_SIGHAND;
+    args.pidfd = (uint64_t)(uintptr_t)&pidfd;
+    args.exit_signal = SIGCHLD;
+    long child = syscall(SYS_clone3, &args, sizeof(args));
+    if (child < 0) return 79;
+    if (!child) _exit(7);
+    int status;
+    pid_t waited;
+    do { waited = waitpid((pid_t)child, &status, 0); } while (waited < 0 && errno == EINTR);
+    if (waited != child || !WIFEXITED(status) || WEXITSTATUS(status) != 7) return 80;
+    if (pidfd < 0 || fcntl(pidfd, F_GETFD) != FD_CLOEXEC) return 81;
+    struct pollfd terminal = {.fd = pidfd, .events = POLLIN};
+    if (poll(&terminal, 1, 0) != 1 || !(terminal.revents & POLLIN) || close(pidfd)) return 82;
+    const char completed[] = "creator clone3 pidfd child complete\n";
+    if (write(output, completed, sizeof(completed) - 1) != sizeof(completed) - 1) return 83;
+    return 7;
+}
+
 int main(int argc, char **argv) {
     if (argc == 1 && !strcmp(argv[0], "namespace-child"))
         return namespace_checks() ? 74 : 7;
-    if (argc == 1 && !strcmp(argv[0], "fe2o3-protected-service"))
-        return namespace_probe(198);
+    if (argc == 1 && !strcmp(argv[0], "fe2o3-protected-service")) {
+        char selector;
+        if (read(199, &selector, 1) != 1 || close(199)) return 84;
+        if (selector == 'C') return creator_probe(198);
+        if (selector == 'N') return namespace_probe(198);
+        return 85;
+    }
     if (argc == 2 && !strcmp(argv[0], "compiler-restriction") &&
         !strcmp(argv[1], "namespace")) return namespace_probe(1);
     if (argc == 2 && !strcmp(argv[0], "compiler-restriction"))

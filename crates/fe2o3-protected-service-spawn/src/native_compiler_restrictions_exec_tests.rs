@@ -6,19 +6,22 @@ use super::*;
 use crate::native_spawn::{RootRetainedTaskTraceV2, RootTaskTraceEventV2};
 use std::{
     mem::size_of,
+    os::unix::fs::MetadataExt,
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
 struct Backing {
     _image: File,
     _cwd: File,
+    _selector: File,
     _terminal_witness: OwnedFd,
 }
 
 #[derive(Clone, Copy)]
 enum Mode<'a> {
     Execute(&'a str),
-    NamespaceService,
+    UnmappedCreator,
+    MappedService,
     NamespaceInstallDenied,
     NamespaceWorkShort,
     NamespaceStorageShort,
@@ -116,16 +119,26 @@ fn compiler_restrictions_survive_thread_fork_and_exec() {
 
 #[test]
 #[ignore = "requires isolated root/outside custodian, clone3, CAP_SYS_PTRACE and static -pthread native_compiler_exec.c"]
-fn every_native_child_confines_namespaces_and_preserves_thread_fork_exec() {
+fn unmapped_service_preserves_nested_clone3_without_qualifying_a_helper() {
+    let mut pool = pool();
+    run(&mut pool.0, Mode::UnmappedCreator);
+    run(&mut pool.0, Mode::Execute("namespace"));
+    // Neither the compiler's filter nor its retirement may affect the creator.
+    run(&mut pool.0, Mode::UnmappedCreator);
+}
+
+#[test]
+#[ignore = "requires isolated root/outside custodian, writable cgroup v2, userns/CAP_SETFCAP, clone3, CAP_SYS_PTRACE and static -pthread native_compiler_exec.c"]
+fn mapped_service_and_compiler_confine_namespaces_and_preserve_thread_fork_exec() {
     let mut pool = pool();
     run(&mut pool.0, Mode::NamespaceWorkShort);
     run(&mut pool.0, Mode::NamespaceStorageShort);
-    run(&mut pool.0, Mode::NamespaceService);
+    run(&mut pool.0, Mode::MappedService);
     run(&mut pool.0, Mode::Execute("namespace"));
     // Stacking the shared namespace floor must not relax compiler memory denial.
     run(&mut pool.0, Mode::Execute("anon-rx"));
     // A later creator clone still succeeds; the filter did not reach the parent.
-    run(&mut pool.0, Mode::NamespaceService);
+    run(&mut pool.0, Mode::MappedService);
 }
 
 #[test]
@@ -156,15 +169,17 @@ fn next_retained(
 
 fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     assert!(syscall::has_exact_root_identity());
-    let service = matches!(
+    let mapped = matches!(
         mode,
-        Mode::NamespaceService
+        Mode::MappedService
             | Mode::NamespaceInstallDenied
             | Mode::NamespaceWorkShort
             | Mode::NamespaceStorageShort
     );
-    let namespace = service || matches!(mode, Mode::Execute("namespace"));
-    if namespace {
+    let creator = matches!(mode, Mode::UnmappedCreator);
+    let service = mapped || creator;
+    let namespace = mapped || matches!(mode, Mode::Execute("namespace"));
+    if namespace || creator {
         // SAFETY: zero unshare flags and invalid setns/clone3 arguments neither
         // create tasks nor change namespaces. Refuse a host filter that could
         // supply the expected child errno before our filter ever installed.
@@ -196,6 +211,12 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     )
     .unwrap();
     let output = tempfile::tempfile().unwrap();
+    let selector = tempfile::tempfile().unwrap();
+    // Fixture behavior only: this byte is never consulted by staging or spawn.
+    assert_eq!(
+        rustix::io::pwrite(&selector, if creator { b"C" } else { b"N" }, 0).unwrap(),
+        1
+    );
     let (witness, writer) = pipe();
     rustix::fs::fcntl_setfl(&witness, rustix::fs::OFlags::NONBLOCK).unwrap();
     let (ready, ready_writer) = pipe();
@@ -210,7 +231,8 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     .unwrap();
     let name = match mode {
         Mode::Execute(name) => name,
-        Mode::NamespaceService
+        Mode::UnmappedCreator => "creator",
+        Mode::MappedService
         | Mode::NamespaceInstallDenied
         | Mode::NamespaceWorkShort
         | Mode::NamespaceStorageShort => "namespace",
@@ -227,13 +249,17 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     let mut work = Work::new(LIMIT);
     let mut b = Budget::new(&mut work, LIMIT);
     b.reserve_storage(source).unwrap();
+    let ledger = b.work_ledger_identity_v1();
     // SAFETY: this isolated root test owns these actual sources, exact bytes,
     // channels and cleanup controller. No protected compiler admission is made.
     let (stage, charge) = unsafe {
         if service {
             Stage::stage(
                 &image,
-                &[Binding::new(output.as_fd(), 198).unwrap()],
+                &[
+                    Binding::new(output.as_fd(), 198).unwrap(),
+                    Binding::new(selector.as_fd(), 199).unwrap(),
+                ],
                 ready_writer.as_fd(),
                 gate.as_fd(),
                 status_writer.as_fd(),
@@ -267,7 +293,12 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     let ceiling = observations::read_cap_last_cap().unwrap();
     let exact = stage
         .spawn_retaining_work::<Backing>(ceiling, source)
-        .unwrap();
+        .unwrap()
+        + if mapped {
+            Stage::FRESH_NAMESPACE_WORK
+        } else {
+            0
+        };
     if matches!(mode, Mode::WorkShort | Mode::NamespaceWorkShort) {
         b.charge_work(LIMIT - b.work() - (exact - 1)).unwrap();
     }
@@ -275,6 +306,7 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     let backing = Backing {
         _image: image,
         _cwd: cwd,
+        _selector: selector,
         _terminal_witness: writer,
     };
     let credentials = Credentials::new(65534, 65534).unwrap();
@@ -283,7 +315,22 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     // SAFETY: complete actual sources enter the original independently funded
     // slot before clone. Only this test thread consumes waits; its pool drains
     // all error/unwind paths before fixture inputs or the creator are retired.
-    let spawned = unsafe { stage.spawn_retaining(credentials, backing, source, pool, &mut b) };
+    // Mapped controls use the actual typed placement/map gate, not a generic
+    // service mislabeled as a helper. Admission of a proof helper is not tested.
+    let spawned = unsafe {
+        if mapped {
+            stage.spawn_retaining_in_fresh_user_namespace(
+                credentials,
+                Credentials::new(65533, 65533).unwrap(),
+                backing,
+                source,
+                pool,
+                &mut b,
+            )
+        } else {
+            stage.spawn_retaining(credentials, backing, source, pool, &mut b)
+        }
+    };
     drop(personality);
     if matches!(
         mode,
@@ -315,6 +362,7 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
         assert_eq!((b.failed_work(), b.failed_storage()), denied);
         assert_eq!(pool.report().unwrap().failed_work, baseline.failed_work);
         assert_eq!(pool.report().unwrap().work_limit, baseline.work_limit);
+        assert!(b.work_ledger_identity_v1() == ledger);
         drop(stage);
         drop(ready_writer);
         drop(status_writer);
@@ -377,6 +425,12 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
         }
         assert_eq!(rustix::io::read(&witness, &mut [0]), Err(Errno::AGAIN));
         observations::validate_process(credentials, child.pid()).unwrap();
+        if mapped {
+            let parent = std::fs::metadata("/proc/thread-self/ns/user").unwrap();
+            let actual =
+                std::fs::metadata(format!("/proc/{}/ns/user", child.pid().as_raw_pid())).unwrap();
+            assert_ne!((actual.dev(), actual.ino()), (parent.dev(), parent.ino()));
+        }
         b.reserve_storage(Child::ROOT_TRACE_GROWTH).unwrap();
         let mut trace = child.into_root_trace(&mut b).unwrap();
         if matches!(mode, Mode::Unwind) {
@@ -413,7 +467,10 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
                 ));
                 trace.resume(&mut b).unwrap();
             };
-            if matches!(name, "ordinary" | "fork" | "fork-exec" | "namespace") {
+            if matches!(
+                name,
+                "ordinary" | "fork" | "fork-exec" | "namespace" | "creator"
+            ) {
                 assert_eq!(terminal.exit_code(), Some(7), "{name}");
             } else {
                 assert_eq!(terminal.terminating_signal(), Some(libc::SIGSYS), "{name}");
@@ -422,7 +479,9 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
             assert_eq!(rustix::io::read(&witness, &mut [0]), Err(Errno::AGAIN));
             let _ = trace.cancel();
             drop(trace);
-            let expected: &[u8] = if namespace {
+            let expected: &[u8] = if creator {
+                b"creator probe\ncreator clone3 pidfd child complete\n"
+            } else if namespace {
                 b"namespace probe\nnamespace thread fork exec complete\n"
             } else {
                 b"restriction probe\n"
@@ -433,7 +492,7 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
                 marker.len()
             );
             assert_eq!(marker.as_slice(), expected);
-            if namespace {
+            if namespace || creator {
                 assert_eq!(output.metadata().unwrap().len(), expected.len() as u64);
             }
         }
@@ -459,7 +518,8 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     assert_eq!(pool.report().unwrap().storage, baseline.storage);
     assert_eq!(pool.report().unwrap().work_limit, baseline.work_limit);
     assert_eq!(pool.report().unwrap().failed_work, baseline.failed_work);
-    if namespace {
+    assert!(b.work_ledger_identity_v1() == ledger);
+    if namespace || creator {
         assert!(b.failed_work().is_none());
         assert!(b.failed_storage().is_none());
     }
@@ -473,7 +533,7 @@ fn compiler_filter_install_failure_is_terminal_without_ready_or_exec() {
 }
 
 #[test]
-#[ignore = "requires isolated root/outside custodian, clone3, seccomp and static -pthread native_compiler_exec.c"]
+#[ignore = "requires isolated root/outside custodian, writable cgroup v2, userns/CAP_SETFCAP, clone3, seccomp and static -pthread native_compiler_exec.c"]
 fn namespace_filter_install_failure_is_terminal_without_ready_or_exec() {
     const TEST: &str = "native_spawn::compiler_spawn::exec_tests::restrictions::namespace_filter_install_failure_is_terminal_without_ready_or_exec";
     isolated_refusal(TEST, Mode::NamespaceInstallDenied);
