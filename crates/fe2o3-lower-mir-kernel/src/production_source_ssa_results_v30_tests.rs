@@ -1,5 +1,9 @@
 use super::*;
 
+fn edge(role: SemanticEdgeRoleV1, target: u32) -> SemanticControlFlowEdgeV1 {
+    SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
+}
+
 fn probe(allowance: Option<(usize, usize)>, fault: u8) -> (SourceOwnedResultV18<()>, usize, usize) {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
