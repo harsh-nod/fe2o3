@@ -888,7 +888,9 @@ name = "fe2o3-compiler-execution-deployment"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "fe2o3-build-authority",
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-kernel-ir",
  "fe2o3-loop-device",
  "rustix",
  "sha2 0.11.0",

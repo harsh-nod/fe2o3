@@ -10,7 +10,9 @@ publish = false
 
 [dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-build-authority.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-kernel-ir.workspace = true
 fe2o3-loop-device.workspace = true
 rustix = { workspace = true, features = ["mount", "net", "process", "rand", "thread"] }
 sha2.workspace = true
@@ -38,6 +40,12 @@ bench = false
 [[bin]]
 name = "fe2o3-compiler-execution-deployment-install"
 path = "src/bin/install.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-compiler-runtime-deployment"
+path = "src/bin/compiler_runtime.rs"
 test = false
 bench = false
 

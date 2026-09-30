@@ -22,6 +22,8 @@ use sha2::{Digest, Sha256};
 mod boot;
 mod cgroup;
 mod client_transaction;
+mod compiler_runtime_bundle;
+mod compiler_runtime_install;
 mod fault;
 mod host;
 mod install;
@@ -40,6 +42,12 @@ pub use profile::{
 };
 
 pub use boot::execute_compiler_execution_systemd_machine_tool_v1;
+pub use compiler_runtime_bundle::{
+    VerifiedCompilerRuntimeDeploymentV1, verify_compiler_runtime_deployment_v1,
+};
+pub use compiler_runtime_install::{
+    InstalledCompilerRuntimeDeploymentV1, install_compiler_runtime_deployment_v1,
+};
 pub use cgroup::{
     CompilerExecutionQualificationCgroupCleanupV1, CompilerExecutionQualificationCgroupV1,
     create_compiler_execution_qualification_cgroup_v1,
@@ -1311,6 +1319,8 @@ pub enum DeploymentVerificationErrorKindV1 {
     InsufficientPrivilege,
     /// Atomic publication happened, but its durability result is ambiguous.
     PublicationAmbiguous,
+    /// Runtime installation stopped after staging began; the error names retained paths.
+    IncompleteRuntimeInstallation,
     /// Bounded descriptor-relative staging cleanup failed.
     CleanupFailed,
     /// A deterministic test interrupted one installation transaction boundary.
