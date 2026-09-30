@@ -10,10 +10,10 @@ const CONTROL_WORK: usize = 256;
 // Compiler mode additionally changes cwd after the common stdio close/remap.
 pub(crate) const COMPILER_CWD_WORK: usize = OPERATION_WORK;
 
-// GET_NO_NEW_PRIVS, SET_SECCOMP and GET_SECCOMP plus the fixed kernel filter
-// copy/verification and child control path. Charged only for compiler stages.
+// Read-only personality query, GET_NO_NEW_PRIVS, SET_SECCOMP and GET_SECCOMP,
+// plus fixed filter copy/verification and control. Compiler stages only.
 pub(crate) const COMPILER_RESTRICTION_WORK: usize =
-    3 * OPERATION_WORK + crate::syscall::COMPILER_RESTRICTION_INSTRUCTIONS * 64 + CONTROL_WORK;
+    4 * OPERATION_WORK + crate::syscall::COMPILER_RESTRICTION_INSTRUCTIONS * 64 + CONTROL_WORK;
 
 // SO_PEERCRED, getpid/getppid, socketpair, high-FD fcntl, three pre-gate
 // closes, sendmsg, and final high-FD close. The final dup3 is already included

@@ -1,5 +1,7 @@
 //! Actual scalar syscall restrictions, not approved compiler/runtime evidence.
 //! The static C diagnostic now also needs -pthread. Run isolated and serially.
+//! Inherited personality refusal precedes exec. Dynamic loading and personality
+//! established by static or dynamic exec are outside this diagnostic's claim.
 use super::*;
 use crate::native_spawn::{RootRetainedTaskTraceV2, RootTaskTraceEventV2};
 use std::{
@@ -19,6 +21,49 @@ enum Mode<'a> {
     WorkShort,
     Unwind,
     InstallDenied,
+    QueryDenied,
+    InheritedReadImpliesExec,
+}
+
+const READ_IMPLIES_EXEC: libc::c_long = 0x0040_0000;
+
+fn current_personality() -> libc::c_long {
+    // SAFETY: the query sentinel reads only the calling test thread's state.
+    unsafe { libc::syscall(libc::SYS_personality, u32::MAX as libc::c_ulong) }
+}
+
+struct CreatorPersonality(libc::c_ulong);
+impl CreatorPersonality {
+    fn set_read_implies_exec() -> Self {
+        let original = current_personality();
+        assert!(original >= 0, "requires an allowed personality query");
+        assert_eq!(
+            original & READ_IMPLIES_EXEC,
+            0,
+            "requires clean creator state"
+        );
+        // Arm restoration before any mutation or fallible readback. Setting the
+        // bit before re-executing this test harness would not test inheritance.
+        let restore = Self(original as libc::c_ulong);
+        let expected = original | READ_IMPLIES_EXEC;
+        // SAFETY: isolated test thread only; the live guard restores the exact
+        // original state after clone and on every error/unwind path.
+        let previous = unsafe { libc::syscall(libc::SYS_personality, expected as libc::c_ulong) };
+        assert_eq!(previous, original, "requires an allowed personality setter");
+        assert_eq!(current_personality(), expected);
+        restore
+    }
+}
+impl Drop for CreatorPersonality {
+    fn drop(&mut self) {
+        if current_personality() == self.0 as libc::c_long {
+            return;
+        }
+        // SAFETY: same isolated clone-originating thread and exact saved state.
+        let previous = unsafe { libc::syscall(libc::SYS_personality, self.0) };
+        assert!(previous >= 0, "creator personality restoration failed");
+        assert_eq!(current_personality(), self.0 as libc::c_long);
+    }
 }
 
 fn pool() -> Drain {
@@ -168,10 +213,13 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
         _terminal_witness: writer,
     };
     let credentials = Credentials::new(65534, 65534).unwrap();
+    let personality = matches!(mode, Mode::InheritedReadImpliesExec)
+        .then(CreatorPersonality::set_read_implies_exec);
     // SAFETY: complete actual sources enter the original independently funded
     // slot before clone. Only this test thread consumes waits; its pool drains
     // all error/unwind paths before fixture inputs or the creator are retired.
     let spawned = unsafe { stage.spawn_retaining(credentials, backing, source, pool, &mut b) };
+    drop(personality);
     if matches!(mode, Mode::WorkShort) {
         assert!(matches!(
             spawned,
@@ -198,7 +246,10 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     drop(stage);
     drop(gate);
     let deadline = Instant::now() + Duration::from_secs(10);
-    if matches!(mode, Mode::InstallDenied) {
+    if matches!(
+        mode,
+        Mode::InstallDenied | Mode::QueryDenied | Mode::InheritedReadImpliesExec
+    ) {
         while child.is_live(&mut b).unwrap() {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(1));
@@ -309,87 +360,143 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
 #[test]
 #[ignore = "requires isolated root, clone3, seccomp and static -pthread native_compiler_exec.c"]
 fn compiler_filter_install_failure_is_terminal_without_ready_or_exec() {
-    use std::os::unix::process::CommandExt;
-    const SENTINEL: &str = "FE2O3_COMPILER_FILTER_DENIED_CHILD";
     const TEST: &str = "native_spawn::compiler_spawn::exec_tests::restrictions::compiler_filter_install_failure_is_terminal_without_ready_or_exec";
+    isolated_refusal(TEST, Mode::InstallDenied);
+}
+
+#[test]
+#[ignore = "requires isolated root, clone3, seccomp and static -pthread native_compiler_exec.c"]
+fn compiler_personality_query_denial_is_terminal_without_ready_or_exec() {
+    const TEST: &str = "native_spawn::compiler_spawn::exec_tests::restrictions::compiler_personality_query_denial_is_terminal_without_ready_or_exec";
+    isolated_refusal(TEST, Mode::QueryDenied);
+}
+
+#[test]
+#[ignore = "requires isolated root, personality setter/query, clone3, CAP_SYS_PTRACE and static -pthread native_compiler_exec.c"]
+fn compiler_inherited_read_implies_exec_is_rejected_and_creator_restored() {
+    const TEST: &str = "native_spawn::compiler_spawn::exec_tests::restrictions::compiler_inherited_read_implies_exec_is_rejected_and_creator_restored";
+    isolated_refusal(TEST, Mode::InheritedReadImpliesExec);
+}
+
+fn isolated_refusal(test: &str, mode: Mode<'_>) {
+    const SENTINEL: &str = "FE2O3_COMPILER_RESTRICTION_REFUSAL_CHILD";
     if std::env::var_os(SENTINEL).is_some() {
         let mut pool = pool();
-        run(&mut pool.0, Mode::InstallDenied);
+        if matches!(mode, Mode::InstallDenied | Mode::QueryDenied) {
+            install_denial(mode);
+        }
+        if matches!(mode, Mode::InstallDenied) {
+            let observed = current_personality();
+            assert!(
+                observed >= 0,
+                "installation refusal requires an allowed query"
+            );
+            assert_eq!(observed & READ_IMPLIES_EXEC, 0);
+        }
+        if matches!(mode, Mode::QueryDenied) {
+            let observed = current_personality();
+            let error = std::io::Error::last_os_error();
+            assert_eq!(observed, -1);
+            assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+        }
+        run(&mut pool.0, mode);
+        if matches!(mode, Mode::InheritedReadImpliesExec) {
+            let original = current_personality();
+            let unwind = catch_unwind(|| {
+                let _restore = CreatorPersonality::set_read_implies_exec();
+                panic!("creator personality unwind");
+            });
+            let panic = unwind.err().expect("expected the explicit creator unwind");
+            assert_eq!(
+                panic.downcast_ref::<&str>(),
+                Some(&"creator personality unwind")
+            );
+            assert_eq!(current_personality(), original);
+            // Separate funded request on the same original pool, not a retry or
+            // account reset. The creator no longer passes a poisoned personality.
+            run(&mut pool.0, Mode::Execute("ordinary"));
+        }
         return;
     }
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
         .args([
             "--exact",
-            TEST,
+            test,
             "--ignored",
             "--nocapture",
             "--test-threads=1",
         ])
         .env(SENTINEL, "1");
-    // SAFETY: isolated exec child only. Fixed stack BPF rejects SET_SECCOMP with
-    // EPERM, causing the actual compiler install syscall (not a test hook) to
-    // fail. Parent test process and other service roles remain unchanged.
-    unsafe {
-        command.pre_exec(|| {
-            let filter = [
-                libc::sock_filter {
-                    code: 0x20,
-                    jt: 0,
-                    jf: 0,
-                    k: 0,
-                },
-                libc::sock_filter {
-                    code: 0x15,
-                    jt: 0,
-                    jf: 3,
-                    k: 157,
-                },
-                libc::sock_filter {
-                    code: 0x20,
-                    jt: 0,
-                    jf: 0,
-                    k: 16,
-                },
-                libc::sock_filter {
-                    code: 0x15,
-                    jt: 0,
-                    jf: 1,
-                    k: 22,
-                },
-                libc::sock_filter {
-                    code: 0x06,
-                    jt: 0,
-                    jf: 0,
-                    k: 0x0005_0001,
-                },
-                libc::sock_filter {
-                    code: 0x06,
-                    jt: 0,
-                    jf: 0,
-                    k: 0x7fff_0000,
-                },
-            ];
-            let program = libc::sock_fprog {
-                len: filter.len() as u16,
-                filter: filter.as_ptr().cast_mut(),
-            };
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-                || libc::prctl(libc::PR_SET_SECCOMP, 2, &raw const program, 0, 0) != 0
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
     let output = command.output().unwrap();
     assert!(
         output.status.success(),
-        "isolated install failure test: {}",
+        "isolated restriction refusal test: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("1 passed"),
         "exact child test did not execute"
     );
+}
+
+fn install_denial(mode: Mode<'_>) {
+    let (nr, argument) = match mode {
+        Mode::InstallDenied => (157, 22),     // prctl(PR_SET_SECCOMP)
+        Mode::QueryDenied => (135, u32::MAX), // personality query sentinel
+        _ => panic!("invalid denial fixture mode"),
+    };
+    // SAFETY: this is the isolated clone-originating test thread after harness
+    // startup. The kernel copies fixed stack BPF synchronously. Its EPERM denial
+    // is inherited by the actual compiler child, not injected through a test hook.
+    // The surrounding exact-test subprocess owns this irreversible restriction.
+    unsafe {
+        let filter = [
+            libc::sock_filter {
+                code: 0x20,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            },
+            libc::sock_filter {
+                code: 0x15,
+                jt: 0,
+                jf: 3,
+                k: nr,
+            },
+            libc::sock_filter {
+                code: 0x20,
+                jt: 0,
+                jf: 0,
+                k: 16,
+            },
+            libc::sock_filter {
+                code: 0x15,
+                jt: 0,
+                jf: 1,
+                k: argument,
+            },
+            libc::sock_filter {
+                code: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x0005_0001,
+            },
+            libc::sock_filter {
+                code: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x7fff_0000,
+            },
+        ];
+        let program = libc::sock_fprog {
+            len: filter.len() as u16,
+            filter: filter.as_ptr().cast_mut(),
+        };
+        assert_eq!(libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), 0);
+        assert_eq!(
+            libc::prctl(libc::PR_SET_SECCOMP, 2, &raw const program, 0, 0),
+            0
+        );
+    }
 }

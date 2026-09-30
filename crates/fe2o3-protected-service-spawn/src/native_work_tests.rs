@@ -3,8 +3,8 @@ use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 
 #[test]
 fn compiler_restriction_work_prepays_fixed_filter_and_all_install_calls() {
-    assert_eq!(super::COMPILER_RESTRICTION_WORK, 3 * 1088 + 57 * 64 + 256);
-    assert_eq!(super::COMPILER_RESTRICTION_WORK, 7168);
+    assert_eq!(super::COMPILER_RESTRICTION_WORK, 4 * 1088 + 57 * 64 + 256);
+    assert_eq!(super::COMPILER_RESTRICTION_WORK, 8256);
 }
 
 #[test]
