@@ -9,6 +9,7 @@ enum DescriptorFault {
     Missing,
     Volatility,
     OrderedSourceAudit,
+    SliceReborrowSourceAudit,
     ExternalHelperAlignment,
     ExternalHelperResultType,
     ExternalHelperVolatility,
@@ -77,6 +78,9 @@ fn descriptor_postflight_observer(
     if DESCRIPTOR_FAULT.get() == DescriptorFault::OrderedSourceAudit {
         audit_ordered_descriptor_sources_v29(references.plan, instances, budget);
     }
+    if DESCRIPTOR_FAULT.get() == DescriptorFault::SliceReborrowSourceAudit {
+        audit_slice_reborrow_source_events_v29(references, instances, budget);
+    }
     for claim in &references.descriptors {
         assert!(matches!(
             claim.get().unwrap().producer,
@@ -113,6 +117,7 @@ fn descriptor_slot_observer(
             | DescriptorFault::SourceAudit
             | DescriptorFault::Missing
             | DescriptorFault::OrderedSourceAudit
+            | DescriptorFault::SliceReborrowSourceAudit
     ) {
         return Ok(());
     }

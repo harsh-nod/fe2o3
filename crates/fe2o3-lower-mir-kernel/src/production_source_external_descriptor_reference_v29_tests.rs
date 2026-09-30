@@ -181,25 +181,98 @@ fn descriptor_helper_owner() -> ProductionSemanticSsaOwnerV1 {
 
 thread_local! {
     static EXTERNAL_DESCRIPTOR_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static EXTERNAL_DESCRIPTOR_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static EXTERNAL_DESCRIPTOR_CHECKS: std::cell::Cell<[usize; 3]> = const { std::cell::Cell::new([0; 3]) };
 }
 
 fn inspect_descriptor_helper(
-    _: &ExecutionInstancesV29<'_>,
+    instances: &ExecutionInstancesV29<'_>,
     emitted: &[Option<LoweredFunctionResultV1>],
     _: &mut OwnedScopedSourceSlotsV29,
     references: Option<&SourceReferenceEmissionV29<'_, '_>>,
     _: Option<&ExecutionIdentityPlanV1<'_, '_>>,
     _: usize,
-    _: &mut ArgumentBudgetV1<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let references = references.unwrap();
+    let observation = SOURCE_EMISSION_OBSERVATION_V29
+        .get()
+        .expect("source-owned emission phase");
+    assert_eq!(
+        observation.owner,
+        std::ptr::from_ref(instances.owner()) as usize
+    );
+    assert_eq!(observation.slot, std::ptr::from_ref(budget) as usize);
+    assert!(observation.ledger == budget.work_ledger_identity_v1());
+    let phase = match observation.phase {
+        SourceEmissionPhaseV29::Admission => 0,
+        SourceEmissionPhaseV29::ConstructionReplay => 1,
+        SourceEmissionPhaseV29::ConsumerReplay => 2,
+    };
+    assert_eq!(
+        EXTERNAL_DESCRIPTOR_CHECKS.get(),
+        match phase {
+            0 => [0, 0, 0],
+            1 => [1, 0, 0],
+            2 => [1, 1, 0],
+            _ => unreachable!(),
+        }
+    );
     assert_eq!(references.plan.external_borrows.len(), 2);
     assert!(references.external_borrows.iter().all(std::cell::Cell::get));
     assert!(references.plan.external_borrows.iter().all(|row| matches!(
         row.origin,
         SourceExternalReferenceOriginV29::Descriptor { descriptor: 0, .. }
     )));
+    assert!(references.plan.descriptor_root.is_none());
+    assert_eq!(references.plan.descriptors.len(), 1);
+    let row = references.plan.descriptors[0];
+    let source = row.check(instances, budget)?;
+    let representation = references.plan.descriptor_value_space(
+        row.instance,
+        row.holder_occurrence,
+        source,
+        row.projection - 1,
+        row.pointer_type,
+        budget,
+    )?;
+    assert_eq!(representation, AddressSpace::Generic);
+    let claim = references.descriptors[0].get().unwrap();
+    let SourceReferenceSelectorProducerV29::Address {
+        base,
+        offset,
+        pointer,
+        block,
+        operation,
+    } = claim.producer
+    else {
+        panic!("original descriptor address producer");
+    };
+    let original = emitted[row.instance.index()].as_ref().unwrap();
+    let producer = &original
+        .function
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|candidate| candidate.id == block)
+        .unwrap()
+        .operations[operation];
+    assert!(
+        matches!(producer.kind, OperationKind::GetElementPointer { base: actual_base, offset: actual_offset }
+        if actual_base == base && actual_offset == offset)
+    );
+    assert_eq!(producer.results.len(), 1);
+    assert_eq!(producer.results[0].id, pointer);
+    assert_eq!(
+        source_issued_pointer_shape_v26(&producer.results[0].ty),
+        Some((ScalarType::U32, representation, AccessMode::ReadOnly))
+    );
+    assert_eq!(
+        source_issued_global_pointer_origin_v26(&original.function, pointer, budget)?,
+        None,
+        "a source-authenticated Generic descriptor is not a Global issuer"
+    );
     let mut loads = 0;
     let mut geps = 0;
     for operation in emitted.iter().flatten().flat_map(|function| {
@@ -230,7 +303,9 @@ fn inspect_descriptor_helper(
         *offset = *base;
         references.descriptors[0].set(Some(claim));
     }
-    EXTERNAL_DESCRIPTOR_CHECKS.set(EXTERNAL_DESCRIPTOR_CHECKS.get() + 1);
+    let mut checked = EXTERNAL_DESCRIPTOR_CHECKS.get();
+    checked[phase] += 1;
+    EXTERNAL_DESCRIPTOR_CHECKS.set(checked);
     Ok(())
 }
 
@@ -248,7 +323,7 @@ fn original_readonly_descriptor_reference_helper_checks_source_archive_and_actua
         Restore(SCOPED_SLOT_CUSTODY_OBSERVER_V29.replace(Some(inspect_descriptor_helper)));
     for fault in [false, true, false] {
         EXTERNAL_DESCRIPTOR_FAULT.set(fault);
-        EXTERNAL_DESCRIPTOR_CHECKS.set(0);
+        EXTERNAL_DESCRIPTOR_CHECKS.set([0; 3]);
         let result = run_descriptor_owner_module(
             descriptor_helper_owner(),
             DescriptorCase::READ,
@@ -257,7 +332,10 @@ fn original_readonly_descriptor_reference_helper_checks_source_archive_and_actua
             MODULE_LIMIT,
         )
         .0;
-        assert_eq!(EXTERNAL_DESCRIPTOR_CHECKS.get(), 1);
+        assert_eq!(
+            EXTERNAL_DESCRIPTOR_CHECKS.get(),
+            if fault { [1, 0, 0] } else { [1, 1, 1] }
+        );
         if fault {
             assert!(
                 matches!(

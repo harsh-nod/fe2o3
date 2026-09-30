@@ -400,3 +400,4 @@ fn runtime_descriptor_source_fixtures_have_exact_reachable_rosters_and_original_
 }
 
 include!("production_descriptor_failure_tail_v1766_tests.rs");
+include!("production_source_slice_reborrow_events_v29_tests.rs");

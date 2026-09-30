@@ -14891,6 +14891,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         }
         let expected = lower_parameter_type(self.types, &[], result_type)?;
         // A reborrow preserves the whole slice value, including its length and access.
+        self.use_source_place_v29(block, statement, place)?;
         let binding = self.resolve_place(block, statement, place, operations)?;
         if !matches!(
             &binding,

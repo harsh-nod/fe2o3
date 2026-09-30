@@ -360,11 +360,12 @@ fn distinct_issued_reference_join_remains_an_explicit_original_origin_refusal() 
 }
 
 thread_local! {
-    static EXTERNAL_RECEIPT_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static EXTERNAL_RECEIPT_CHECKS: std::cell::Cell<[usize; 3]> = const { std::cell::Cell::new([0; 3]) };
+    static EXTERNAL_POISON_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn check_external_receipts(
-    _: &ExecutionInstancesV29<'_>,
+    instances: &ExecutionInstancesV29<'_>,
     _: &[Option<LoweredFunctionResultV1>],
     _: &mut OwnedScopedSourceSlotsV29,
     references: Option<&SourceReferenceEmissionV29<'_, '_>>,
@@ -374,6 +375,26 @@ fn check_external_receipts(
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let references = references.unwrap();
     let plan = references.plan;
+    let observation = SOURCE_EMISSION_OBSERVATION_V29
+        .get()
+        .expect("source-owned emission phase");
+    assert_eq!(
+        observation.owner,
+        std::ptr::from_ref(instances.owner()) as usize
+    );
+    assert_eq!(observation.slot, std::ptr::from_ref(budget) as usize);
+    assert!(observation.ledger == budget.work_ledger_identity_v1());
+    let phase = match observation.phase {
+        SourceEmissionPhaseV29::Admission => 0,
+        SourceEmissionPhaseV29::ConstructionReplay => 1,
+        SourceEmissionPhaseV29::ConsumerReplay => {
+            panic!("materialization does not request consumer replay")
+        }
+    };
+    assert_eq!(
+        EXTERNAL_RECEIPT_CHECKS.get(),
+        if phase == 0 { [0, 0, 0] } else { [1, 0, 0] }
+    );
     assert_eq!(plan.external_borrows.len(), 4);
     assert!(references.external_borrows.iter().all(std::cell::Cell::get));
     let mut rows = emission_vec_v1::<SourceExternalReferenceBorrowV29>(
@@ -437,8 +458,7 @@ fn check_external_receipts(
                         function: 0,
                         block: None,
                         statement: None,
-                        detail:
-                            "external reference borrow differs from its original checked origin",
+                        detail: "external reference borrow differs from its original checked origin",
                     })
                 ),
                 "external receipt fault {fault}: {refused:?}"
@@ -480,7 +500,9 @@ fn check_external_receipts(
             Some(index)
         );
     }
-    EXTERNAL_RECEIPT_CHECKS.set(EXTERNAL_RECEIPT_CHECKS.get() + 1);
+    let mut checked = EXTERNAL_RECEIPT_CHECKS.get();
+    checked[phase] += 1;
+    EXTERNAL_RECEIPT_CHECKS.set(checked);
     Ok(())
 }
 
@@ -493,9 +515,9 @@ fn external_helper_receipts_reject_missing_forged_duplicate_and_foreign_source_r
         }
     }
     let _restore = Restore(SCOPED_SLOT_CUSTODY_OBSERVER_V29.replace(Some(check_external_receipts)));
-    EXTERNAL_RECEIPT_CHECKS.set(0);
+    EXTERNAL_RECEIPT_CHECKS.set([0; 3]);
     run_original_owner_counts(0, (2, 2, 4), helper_owner(true, true, true));
-    assert_eq!(EXTERNAL_RECEIPT_CHECKS.get(), 1);
+    assert_eq!(EXTERNAL_RECEIPT_CHECKS.get(), [1, 1, 0]);
 }
 
 #[test]
@@ -610,7 +632,7 @@ fn foreign_external_receipt_query(
     ));
     assert_eq!((budget.work(), budget.storage()), before);
     foreign.release_storage(before.1)?;
-    EXTERNAL_RECEIPT_CHECKS.set(EXTERNAL_RECEIPT_CHECKS.get() + 1);
+    EXTERNAL_POISON_CHECKS.set(EXTERNAL_POISON_CHECKS.get() + 1);
     Err(refused.unwrap_err())
 }
 
@@ -624,12 +646,12 @@ fn external_helper_receipt_query_rejects_fully_funded_foreign_ledger_and_poison_
     }
     let _restore =
         Restore(SCOPED_SLOT_CUSTODY_OBSERVER_V29.replace(Some(foreign_external_receipt_query)));
-    EXTERNAL_RECEIPT_CHECKS.set(0);
+    EXTERNAL_POISON_CHECKS.set(0);
     run_original_owner_case(
         0,
         (0, 0, 0),
         helper_owner(true, true, false),
         Some(EarlyIssuedSourceRefusal::Accounting),
     );
-    assert_eq!(EXTERNAL_RECEIPT_CHECKS.get(), 1);
+    assert_eq!(EXTERNAL_POISON_CHECKS.get(), 1);
 }

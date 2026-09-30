@@ -435,12 +435,21 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
             .descriptors
             .get(descriptor)
             .ok_or_else(source_descriptor_error_v29)?;
-        original_descriptor.check(self.instances, budget)?;
+        let original_place = original_descriptor.check(self.instances, budget)?;
         if original_descriptor.instance != producer_instance
             || original_descriptor.element != place.ty()
         {
             return Err(source_descriptor_error_v29());
         }
+        source_reference_owned_prepay_v29::<AddressSpace>(references.plan, budget)?;
+        let representation = references.plan.descriptor_value_space(
+            producer_instance,
+            original_descriptor.holder_occurrence,
+            original_place,
+            original_descriptor.projection - 1,
+            original_descriptor.pointer_type,
+            budget,
+        )?;
         let claim = references
             .descriptors
             .get(descriptor)
@@ -456,6 +465,14 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
         else {
             return Err(source_descriptor_error_v29());
         };
+        check_source_descriptor_type_v29(
+            source.types(),
+            original_descriptor.pointer_type,
+            original_descriptor.element,
+            representation,
+            self.actual.value(claim.slice, budget)?.ty,
+            budget,
+        )?;
         let producer =
             self.source_index
                 .emitted
@@ -477,7 +494,7 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
             || *actual_offset != offset
             || result.id != pointer
             || source_issued_pointer_shape_v26(&result.ty)
-                != Some((element, AddressSpace::Global, AccessMode::ReadOnly))
+                != Some((element, representation, AccessMode::ReadOnly))
         {
             return Err(source_descriptor_error_v29());
         }
@@ -512,8 +529,9 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
                 budget,
             )?
             || !matches!(source_issued_pointer_shape_v26(self.actual.value(access.pointer, budget)?.ty),
-                Some((actual_element, AddressSpace::Global | AddressSpace::Generic, AccessMode::ReadOnly))
-                    if actual_element == element)
+                Some((actual_element, space, AccessMode::ReadOnly))
+                    if actual_element == element && (space == representation
+                        || (representation == AddressSpace::Global && space == AddressSpace::Generic)))
         {
             return Err(source_descriptor_error_v29());
         }
@@ -530,15 +548,46 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
             .get(&instance.index())
             .ok_or_else(source_descriptor_error_v29)?;
         check_source_issued_payload_v29(original, row, actual_operation, &self.actual, budget)?;
-        check_source_issued_pointer_transports_v26(
-            &self.source_index.pending.function,
-            &self.actual,
-            &[SourceIssuedPointerTransportV26 {
-                pointer: access.pointer,
-                issuer: pointer,
-            }],
-            budget,
-        )?;
+        match representation {
+            AddressSpace::Global => check_source_issued_pointer_transports_v26(
+                &self.source_index.pending.function,
+                &self.actual,
+                &[SourceIssuedPointerTransportV26 {
+                    pointer: access.pointer,
+                    issuer: pointer,
+                }],
+                budget,
+            )?,
+            AddressSpace::Generic => {
+                // A Generic descriptor remains Generic. This checks exact
+                // same-representation transport, not a Global issuer claim.
+                source_reference_owned_prepay_v29::<Option<ValueId>>(references.plan, budget)?;
+                source_reference_owned_prepay_v29::<[(&mut Option<ValueId>, &ValueId); 2]>(
+                    references.plan,
+                    budget,
+                )?;
+                let mut origin = None;
+                fe2o3_kernel_ir::with_function_control_flow_v1(
+                    &self.source_index.pending.function,
+                    Default::default(),
+                    budget,
+                    |view| {
+                        origin = view.unique_value_origin(access.pointer)?;
+                        Ok(())
+                    },
+                )
+                .map_err(|error| match error {
+                    fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1::Resource(error) => {
+                        ProductionSemanticKirErrorV1::from(error)
+                    }
+                    _ => source_descriptor_error_v29(),
+                })?;
+                if origin != Some(pointer) {
+                    return Err(source_descriptor_error_v29());
+                }
+            }
+            _ => return Err(source_descriptor_error_v29()),
+        }
         Ok(true)
     }
 }
