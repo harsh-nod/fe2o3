@@ -212,8 +212,8 @@ fn comparison_loop() -> ProductionSemanticSsaOwnerV1 {
     let mut locals = old.locals().to_vec();
     locals.push(local(210, boolean, SemanticLocalRoleV1::Temporary));
     let mut blocks = old.blocks().to_vec();
-    blocks[1] = block(
-        211,
+    let replacement = block(
+        191,
         vec![assign(
             place(3, boolean),
             SemanticRvalueKindV1::Binary {
@@ -240,6 +240,8 @@ fn comparison_loop() -> ProductionSemanticSsaOwnerV1 {
             .unwrap(),
         },
     );
+    assert_eq!(replacement.identity(), blocks[1].identity());
+    blocks[1] = replacement;
     let mut functions = source.functions().to_vec();
     functions[0] = rebuild_root(old, locals, blocks);
     let admitted = InertSemanticMirRequestV1::new_with_callables(
@@ -717,6 +719,13 @@ fn source_scalar_boundaries_reject_missing_optimized_parameter_and_control_trans
 #[test]
 fn source_scalar_boundaries_unwind_disposes_the_complete_original_and_output_scopes() {
     let entered = std::cell::Cell::new(false);
+    let dropped = std::cell::Cell::new(0);
+    struct Tracked<'a>(&'a std::cell::Cell<usize>);
+    impl Drop for Tracked<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         with_policy11(entry_loop, |original, optimized, budget| {
             original.with_optimized_scalar_leaf_namespace_v18(
@@ -725,13 +734,20 @@ fn source_scalar_boundaries_unwind_disposes_the_complete_original_and_output_sco
                 &SourceScalarNamespaceV18::PrivateSourceWritesV22,
                 budget,
                 |_, _| {
+                    let _owned = Tracked(&dropped);
                     entered.set(true);
                     panic!("selected source scalar boundary unwind")
                 },
             )
         })
     }));
-    assert!(entered.get() && caught.is_err());
+    assert!(entered.get());
+    assert_eq!(dropped.get(), 1);
+    let result = match caught {
+        Ok(result) => result,
+        Err(_) => panic!("bounded optimizer adoption must retain its typed panic refusal"),
+    };
+    assert_binding(result, "actual source optimizer adoption rejected");
 }
 
 #[test]
