@@ -353,3 +353,40 @@ the log SHA-256 is
 This result predates primary-worktree revalidation and the actual-source rerun.
 The logical `_ctx` fixture still covers issuance/ABI only, not context-derived
 indexing or complete typed global-memory capabilities.
+
+Primary-worktree revalidation `r83-primary-generic-macro-admission` also passed
+all 76 macro tests at `d7de27f0bdcff84413680d3b70da5bfc7375d079`, with unchanged
+source/tool snapshots. Log SHA-256:
+`53c0b9277d77d609142be9d2b053505a8d3fc74afebc45e4be87f509132df929`.
+
+### Fresh-Session Source Tests
+
+Candidate `4cc0a29a78aa3a019ff94b4d1713ea65b5ec5742` splits positive, foreign V29,
+equal-content foreign V40, incomplete ABI and consumer-refusal checks into
+separate fresh compiler children. Each captures genuine context producers once.
+Foreign owners are constructed only from public inert data, never cloned
+authenticated captures. Negatives require the intended consumer and exact outer
+error; they cannot turn an earlier pipeline failure into a pass. Existing
+graph-observation checks were extracted without behavioral changes.
+
+`r82-fresh-mode-backend-controls` passed all 54 selected provider and harness
+controls. Source snapshot SHA-256:
+`22d45974bd926a1cd837e0f029535c3aff0812ffd0bb0cfb0987ee6f59ba5287`.
+Log SHA-256:
+`5545f4dc5484f5043387ad0a5b30f773483f67f905849d584754c34cb4c6740d`.
+
+The actual Policy10 context-plus-nominal parent, `r84`, then ran all 80 fresh
+sessions: five modes, two targets, four optimization pairs and two repeats.
+Every session failed before its consumer with `WireVersionCannotRepresent {
+requested: V29, required: V35 }`. Function/declaration commitments and the scope
+census still fixed V29 despite the importer's explicit V40 selection. This
+failure is not successful negative coverage. The source/tool snapshots remained
+unchanged and the harness removed its temporary dependency trees and scratch.
+Log SHA-256:
+`a406a56cdf75318cd400b7a1b45860eb6a74dada7f035dca9b3d5c9f89e03776`.
+
+The narrow schema-preservation correction is coordinated in
+[#271](https://github.com/harsh-nod/fe2o3/issues/271#issuecomment-5903143076).
+It must bind the selected schema before capture and require exact agreement at
+sealing, not erase nominal types or relax old-schema membership. Actual source
+continuation, proof, simulator and hardware acceptance remain outstanding.

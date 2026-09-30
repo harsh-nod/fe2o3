@@ -188,6 +188,31 @@ This is compilation, not installation, root execution or deployment approval.
 The nine M0 consistency tests and source-hygiene delta against `edd71e676`
 also passed after the ACL correction.
 
+### Genuine Runtime Composition Fixtures
+
+Commit `8bb7eacbd` adds five explicit installed-runtime integration tests for
+approved runtime inventory to compiler invocation backing. They call the real
+fixed-origin policy/runtime admission APIs, require complete shared-library FD
+retention and inherited-account charging, and check wrong-source/closure/account
+rejection, one-short funding, error and unwind cleanup. The descriptor is inert
+matching process data, not authenticated cargo capture. Terminal cleanup here
+means owner destruction, not native process/pool retirement or safe GPU launch.
+
+`r85-native-backing-composition-build` compiled the tests at that commit and
+passed six existing backing controls. The five protected-runtime tests were
+ignored, not executed or passed. Selecting them explicitly without installed
+immutable inputs fails rather than silently skipping. Source/tool snapshots
+were unchanged; log SHA-256:
+`5cf81891c2665d6fdbdbb74551ba106d0481d23a012ab0ed00ceab4c09d02191`.
+
+Review subsequently corrected two fixture assumptions in `71e5e4e5a`:
+bind-mount aliases can share an inode despite the hardlink prohibition, so
+diagnostic FD counts preserve per-entry multiplicity; and wrong-backend
+rejection uses the genuinely distinct executable rustc source, not an arbitrary
+shared library that could alias the backend. Two pure census controls were
+added. Their rerun is separate from r85. Neither correction changes production
+admission, installed input files, or `RuntimeEnforcementUnavailable`.
+
 | Run | Log SHA-256 |
 | --- | --- |
 | r64 | `101bf3ca27d2092f8ee49dd626d1781e90c1355d7ce5bc89162721d0bede27b7` |
