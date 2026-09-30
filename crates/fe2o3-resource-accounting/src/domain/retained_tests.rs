@@ -1,6 +1,245 @@
 use super::retirement_tests::{bytes, chain, domain, snapshot};
 use super::*;
 
+fn observer_fields(depth: usize) -> (Vec<Option<Node>>, Vec<Option<DomainRecord>>, Key) {
+    let keys: Vec<_> = (0..depth)
+        .map(|slot| {
+            if slot == 0 {
+                ROOT
+            } else {
+                Key {
+                    slot,
+                    generation: slot as u64 + 10,
+                }
+            }
+        })
+        .collect();
+    let nodes = keys
+        .iter()
+        .enumerate()
+        .map(|(slot, key)| {
+            Some(Node {
+                key: *key,
+                parent: slot.checked_sub(1).map(|parent| keys[parent]),
+                capacity: ResourceVectorV1::ZERO,
+                used: ResourceVectorV1::ZERO,
+                record_limit: 0,
+                counts: [0; 3],
+                handles: 0,
+                children: 0,
+            })
+        })
+        .collect();
+    let leaf = *keys.last().unwrap();
+    let record = DomainRecord {
+        leaf,
+        credit: Record {
+            owner: 17,
+            charge: bytes(8),
+            phase: Phase::Retained,
+        },
+    };
+    let wrong = DomainRecord {
+        credit: Record {
+            owner: 18,
+            ..record.credit
+        },
+        ..record
+    };
+    (nodes, vec![Some(wrong), Some(record), None], leaf)
+}
+
+fn observer_snapshot(nodes: &[Option<Node>], records: &[Option<DomainRecord>]) -> String {
+    let nodes: Vec<_> = nodes
+        .iter()
+        .map(|node| {
+            node.as_ref().map(|node| {
+                (
+                    node.key,
+                    node.parent,
+                    node.capacity,
+                    node.used,
+                    node.record_limit,
+                    node.counts,
+                    node.handles,
+                    node.children,
+                )
+            })
+        })
+        .collect();
+    let records: Vec<_> = records
+        .iter()
+        .map(|record| {
+            record.as_ref().map(|record| {
+                (
+                    record.leaf,
+                    record.credit.owner,
+                    record.credit.charge,
+                    record.credit.phase,
+                )
+            })
+        })
+        .collect();
+    format!("{nodes:?}/{records:?}")
+}
+
+#[test]
+fn domain_retained_observation_scalar_matrix_is_exact_and_immutable() {
+    for depth in 1..=4 {
+        let (nodes, records, leaf) = observer_fields(depth);
+        let before = observer_snapshot(&nodes, &records);
+        let wrong = Key {
+            generation: leaf.generation + 1,
+            ..leaf
+        };
+        for profile in [0, 2, 3, 4, 5, usize::MAX] {
+            for slot in [1, 2, records.len(), usize::MAX] {
+                for owner in [0, 17, u64::MAX] {
+                    for key in [leaf, wrong] {
+                        for poisoned in [false, true] {
+                            for expected in [bytes(8), bytes(9)] {
+                                let accepts = !poisoned
+                                    && [3, 4].contains(&profile)
+                                    && depth <= profile
+                                    && slot == 1
+                                    && owner == 17
+                                    && key == leaf
+                                    && expected == bytes(8);
+                                assert_eq!(
+                                    domain_retained_observation_v1(
+                                        &nodes, profile, &records, poisoned, key, slot, owner,
+                                        expected,
+                                    ),
+                                    accepts
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(observer_snapshot(&nodes, &records), before);
+    }
+}
+
+#[test]
+fn domain_retained_observation_rejects_actual_ancestry_corruption_without_writes() {
+    for mode in 0..10 {
+        let (mut nodes, records, leaf) = observer_fields(4);
+        match mode {
+            0 => nodes[leaf.slot].as_mut().unwrap().key.generation += 1,
+            1 => nodes[leaf.slot].as_mut().unwrap().key.slot = usize::MAX,
+            2 => nodes[leaf.slot] = None,
+            3 => nodes[0].as_mut().unwrap().key.generation += 1,
+            4 => nodes[1] = None,
+            5 => nodes[2].as_mut().unwrap().parent = Some(leaf),
+            6 => nodes[2].as_mut().unwrap().parent = None,
+            7 => nodes[0].as_mut().unwrap().parent = Some(leaf),
+            8 => {
+                nodes[2]
+                    .as_mut()
+                    .unwrap()
+                    .parent
+                    .as_mut()
+                    .unwrap()
+                    .generation += 1
+            }
+            9 => nodes[2].as_mut().unwrap().parent.as_mut().unwrap().slot = usize::MAX,
+            _ => unreachable!(),
+        }
+        let before = observer_snapshot(&nodes, &records);
+        assert!(
+            !domain_retained_observation_v1(&nodes, 4, &records, false, leaf, 1, 17, bytes(8),),
+            "mode={mode}"
+        );
+        assert_eq!(observer_snapshot(&nodes, &records), before);
+    }
+}
+
+#[test]
+fn domain_retained_observation_checks_actual_leaf_phase_owner_and_every_coordinate() {
+    let (nodes, mut records, leaf) = observer_fields(4);
+    let original = records[1].unwrap();
+    for mode in 0..7 {
+        records[1] = Some(original);
+        match mode {
+            0 => records[1] = None,
+            1 => records[1].as_mut().unwrap().leaf.generation += 1,
+            2 => records[1].as_mut().unwrap().leaf.slot = 0,
+            3 => records[1].as_mut().unwrap().credit.owner = 0,
+            4..=6 => {
+                records[1].as_mut().unwrap().credit.phase =
+                    [Phase::Reserved, Phase::Quarantined, Phase::Vacant][mode - 4]
+            }
+            _ => unreachable!(),
+        }
+        let before = observer_snapshot(&nodes, &records);
+        assert!(
+            !domain_retained_observation_v1(&nodes, 4, &records, false, leaf, 1, 17, bytes(8),),
+            "mode={mode}"
+        );
+        assert_eq!(observer_snapshot(&nodes, &records), before);
+    }
+    for kind in crate::retained_tests::KINDS {
+        records[1] = Some(original);
+        let changed = bytes(8).with(kind, bytes(8).get(kind) + 1);
+        let before = observer_snapshot(&nodes, &records);
+        assert!(!domain_retained_observation_v1(
+            &nodes, 4, &records, false, leaf, 1, 17, changed,
+        ));
+        assert_eq!(observer_snapshot(&nodes, &records), before);
+        records[1].as_mut().unwrap().credit.charge = changed;
+        let before = observer_snapshot(&nodes, &records);
+        assert!(!domain_retained_observation_v1(
+            &nodes,
+            4,
+            &records,
+            false,
+            leaf,
+            1,
+            17,
+            bytes(8),
+        ));
+        assert_eq!(observer_snapshot(&nodes, &records), before);
+    }
+    records[1] = Some(DomainRecord {
+        credit: Record {
+            charge: ResourceVectorV1::ZERO,
+            ..original.credit
+        },
+        ..original
+    });
+    let before = observer_snapshot(&nodes, &records);
+    assert!(domain_retained_observation_v1(
+        &nodes,
+        4,
+        &records,
+        false,
+        leaf,
+        1,
+        17,
+        ResourceVectorV1::ZERO,
+    ));
+    assert_eq!(observer_snapshot(&nodes, &records), before);
+}
+
+#[test]
+fn domain_retained_observation_uses_each_calls_current_locked_fields() {
+    let chain = chain(4);
+    let leaf = chain.last().unwrap();
+    let root = &domain(leaf).root;
+    let credit = leaf.reserve(bytes(8)).unwrap().retain();
+    let before = snapshot(root);
+    assert!(leaf.matches_retained_charge_v1(&credit, bytes(8)));
+    root.state.lock().unwrap().poisoned = true;
+    assert!(!leaf.matches_retained_charge_v1(&credit, bytes(8)));
+    assert!(root.state.lock().unwrap().quarantine_anchor.is_none());
+    root.state.lock().unwrap().poisoned = false;
+    assert!(leaf.matches_retained_charge_v1(&credit, bytes(8)));
+    assert_eq!(snapshot(root), before);
+    credit.release_after_disposal().unwrap();
+}
+
 #[test]
 fn retained_charge_domain_requires_exact_leaf_root_and_all_coordinates() {
     for depth in [3, 4] {

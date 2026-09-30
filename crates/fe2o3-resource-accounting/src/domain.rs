@@ -11,6 +11,7 @@ macro_rules! resource_domain_arena_declarations_v1 {
 }
 include!("domain/arena_declarations.rs");
 include!("domain/arena_bodies.rs");
+include!("domain/retained_observation_body.rs");
 const _: () = assert!(MAX_RESOURCE_DOMAIN_DEPTH_V1 == 3);
 const _: () = assert!(MAX_RESOURCE_CLASS_DOMAIN_DEPTH_V1 == R75_RESOURCE_DOMAIN_LEVELS_V1);
 
@@ -67,6 +68,23 @@ fn domain_facts_v1(
 struct DomainRecord {
     leaf: Key,
     credit: Record,
+}
+
+// Explicit locked-field projections keep this observation separate from ownership.
+#[allow(clippy::too_many_arguments)]
+fn domain_retained_observation_v1(
+    nodes: &[Option<Node>],
+    profile: usize,
+    records: &[Option<DomainRecord>],
+    poisoned: bool,
+    key: Key,
+    slot: usize,
+    owner: u64,
+    expected: ResourceVectorV1,
+) -> bool {
+    domain_retained_observation_body_v1!(
+        nodes, profile, records, poisoned, key, slot, owner, expected
+    )
 }
 
 struct ReapPlan {
@@ -493,16 +511,16 @@ impl DomainAccount {
         let Ok(state) = self.root.state.lock() else {
             return false;
         };
-        !state.poisoned
-            && state.path(self.key).is_ok()
-            && state
-                .records
-                .get(slot)
-                .and_then(Option::as_ref)
-                .is_some_and(|record| {
-                    record.leaf == self.key
-                        && record.credit.matches_retained_charge(owner, expected)
-                })
+        domain_retained_observation_v1(
+            &state.nodes,
+            state.max_depth,
+            &state.records,
+            state.poisoned,
+            self.key,
+            slot,
+            owner,
+            expected,
+        )
     }
 
     pub(super) fn same_account(&self, other: &Self) -> bool {
