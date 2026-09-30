@@ -50,7 +50,8 @@ fn audit_completed_descriptor_metadata_v30(
     check_source_external_origin_metadata_v30(plan, origin, budget)?;
     let row = plan.descriptors[descriptor];
     let source = row.check(plan.instances, budget)?;
-    let occurrence = &plan.instances.occurrences(instance).unwrap().events()[row.holder_occurrence];
+    let occurrences = plan.instances.occurrences(instance).unwrap();
+    let occurrence = &occurrences.events()[row.holder_occurrence];
     let key =
         source_reference_selector_site_v29(instance, occurrence.site(), source, row.projection - 1);
     let original = *plan
