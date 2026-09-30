@@ -101,8 +101,14 @@ fn selected_aggregate_fixture_requires_exact_raw_pointer_backend_layout() {
         semantic.functions().to_vec(),
         semantic.callables().to_vec(),
         vec![ROOT],
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default());
+    assert!(
+        matches!(result, Err(SemanticMirErrorV1::InvalidTypeLayout)),
+        "malformed raw-pointer layout must fail semantic admission: {:?}",
+        result.err()
     );
-    assert!(matches!(result, Err(SemanticMirErrorV1::InvalidTypeLayout)));
 }
 
 fn selected_aggregate_arguments_v30(
