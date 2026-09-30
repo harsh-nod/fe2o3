@@ -55,6 +55,13 @@ bodies, expected counts and mutation policies. No new older-proof run is claimed
 
 ## Evidence Boundaries
 
+The [compact evidence packet](evidence/dev-kfd-snapshot-fixtures-2026-09-30/README.md)
+retains all attempt histories, exact source inventories and a minimal Git bundle
+for the detached signed candidate. Its 470-member archive is byte-checked on
+readback. The bundle requires baseline `5cf8266b6`; neither a complete checkout
+nor the retained test executables are included. Publication to both remotes is
+still blocked by DNS resolution, so public availability is not asserted.
+
 The local records are retained under
 `/home/harsh/.codex-tmp/fe2o3-kfd-snapshot-qualification-20260930-audit`.
 `first-pair-attempt-1` contains the ordered matrix comparison;

@@ -1,0 +1,29 @@
+{
+  "accepted": true,
+  "archive_bytes": 28436548,
+  "archive_created": true,
+  "archive_sha256": "acd34407d58507c02445114d1f670adf33a7226e3313d917ec2c6956260033e5",
+  "candidate": "1cac2b791822d2c86869ddb5e0e625b83ddf3ad7",
+  "checksums_sha256": "b6b8bfce693b740e86c3d6585a5d7fad91ae0e774b67b464955f8cb906cd0ea8",
+  "compiler_solver_tests_executed": false,
+  "complete_source_checkout_included": false,
+  "content_bytes": 104781371,
+  "cpu_elf_bytes_included": false,
+  "finished_ns": 1790757475458673027,
+  "full_suite_qualified": false,
+  "historical_processes_probed": false,
+  "inventory_sha256": "48b5224a4157119e3bb18d03306ca9523f97d72894cb166702f41c98178a9542",
+  "members": 470,
+  "python_sha256": "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f",
+  "readme_sha256": "89eb55743113db29f64ab3396ca0dc2ff4768dbc8ed789dfe66160c454b505fc",
+  "requires_heavy_slot_grant": true,
+  "secret_scan_passed": true,
+  "source_receipts_artifact_only": true,
+  "started_ns": 1790757462987109611,
+  "utility_sha256": "c5d43e2d98ef391a5bd2f32d63b8a8647ab12bf684f55d3117bb57284dd95277",
+  "verification": {
+    "all_member_bytes_rehashed": true,
+    "all_member_bytes_secret_scanned": true,
+    "members": 470
+  }
+}

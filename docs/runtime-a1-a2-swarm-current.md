@@ -37,6 +37,10 @@ rejected. Final formatting/comment bytes receive a fresh build, unchanged
 1820-test listing, six passing focused tests and strict static checks; all eight
 fresh process groups close. Exact candidate-byte reuse binds these pre-signing
 checks, not a new full-suite run. Older KFD proof bodies and counts are unchanged.
+The [compact packet](evidence/dev-kfd-snapshot-fixtures-2026-09-30/README.md)
+includes the rejected histories and detached candidate bundle. Archive readback
+checks all 470 members; it omits the full checkout and test executables, and is
+not a standalone rebuild package or a new execution result.
 
 The [independent-account post-lock observer](runtime-independent-retained-observation-v1.md)
 is integrated at `f8994fdb8`. Its signed campaign passes three overlapping full
