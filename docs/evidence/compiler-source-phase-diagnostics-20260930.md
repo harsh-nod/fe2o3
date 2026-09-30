@@ -715,3 +715,77 @@ confirmed absent before a fresh run was started at the same clean commit.
 
 r161 partial log SHA-256:
 `619f82734df427643e8bc73156cd9a373f4af2364d00ed8df0c165a2959e8fb2`.
+
+## Actual Slice Carrier Origins
+
+r162 completed at the unchanged `7a7bea756` candidate: **96 passed, eight
+failed, none ignored**. Four aggregate-runtime tests failed source-expression,
+expected-boundary or retained-storage assertions. Four carrier tests stopped
+at source descriptor correspondence: the checker keyed bounds guards by an
+identical emitted slice value, excluding distinct SSA carriers of the same slice.
+
+The primary repair keeps the original source occurrence, index and type checks.
+Guard candidates share the original index; distinct slice carriers must have
+the same nonempty origin through every actual CFG edge. The existing metered
+origin engine is reused within the existing CFG scope, not a second graph.
+Identical carriers retain their direct comparison. The guard's success edge
+must still dominate the access.
+
+r164 tested that production change: **four passed, one failed, none ignored**.
+Both data-carried and length-carried positives, all twelve carrier/root
+substitutions, the foreign-source owner control and the frame-storage refusal
+passed. The mixed-predecessor test reached both edges, changed one, entered
+source replay and rejected before the native join. Its assertion expected the
+wrong outer error wrapper. The actual refusal is optimizer adoption/origin,
+source function1/block1/statement0, with `slice access has conflicting or
+ungrounded SSA origins`.
+
+Candidate `9d26c273b` requires that exact wrapper and location and prepays the
+new query-result scratch. Candidate `37291e386af06e4ad9315eae0cfc96782cd7dc41`
+then integrates immutable #271 checkpoint
+`8c0843ea6e2b1b1b1eab53dc6f6eaba87ab50acc`. The newer aggregate memory-chain
+and cleanup implementation is retained together with our extra missing-carrier
+negative. These follow-ups require fresh execution; r164 does not test them.
+
+Both completed runs retained unchanged source/tool inventories. Log SHA-256:
+
+- r162: `43557a07f4051d480ce02f7725586116473bdd623896c072c7dd2f737b8ccb4d`
+- r164: `77093e40b3b01b871df6b7c417af6b1980990aa2b4a6022dd8862bab1ff50bcb`
+
+These remain local compiler candidates, not protected proof, simulator or GPU
+results. M1-M7 and **0/47** remain unchanged.
+
+## Combined Owner Build
+
+r166 attempted the expanded lowerer regression selection at `37291e386`.
+Compilation failed with eleven errors: the selected-memory consumer could not
+access its internal descriptor scope/entry check, three presence consumers
+accessed a private pending-memory field, and the new memory-chain sort supplied
+a tuple to an array-key sorter. No tests ran. Its source/tool inventory remained
+unchanged; log SHA-256:
+`a6c29a3176c364cbc59eb8c6d97875d42e1e4ca1045a445fe62bb8e5c48e46b2`.
+
+This supersedes any inference that merging the newer owner checkpoint alone
+fixed the r162 failures. The build correction and complete regression rerun
+remain necessary before the genuine Rust and protected execution gates.
+
+r168 tested the build correction now committed as `bbe2aa745`. It reuses the
+checked original-issuer query, keeps descriptor-scope access internal, and
+uses a metered array sort key retaining both halves of the 64-bit byte offset.
+An independent ordering control checks the full coordinate and offset order,
+including the 32-bit boundary and maximum values. Query scratch is prepaid and
+its independent frame mirrors are updated.
+
+The expanded selection compiled and ran **131 tests: 118 passed, 13 failed,
+none ignored**. All slice-carrier controls pass, including the exact mixed-root
+refusal. Three aggregate-runtime tests still fail before their required final
+consumer; one aggregate-memory mutation has a diagnostic mismatch. Nine new
+selected-final controls fail lookup-work bounds or source-edge correspondence,
+with several intended negative consumers consequently not reached. The prior
+aggregate retained-storage positive now passes. No failed negative receives
+credit for a different earlier refusal.
+
+Source/tool inventories remained unchanged. Log SHA-256:
+`a772c60576ae53ce9ded8ffc371a10b91d4fc19c58b944c3796bfa0b2909dd6c`.
+The candidate is buildable, but its regression suite and actual Rust production
+path are not qualified. Protected proof, simulator and hardware remain unrun.

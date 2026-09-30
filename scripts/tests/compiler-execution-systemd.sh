@@ -145,7 +145,94 @@ require_line "${SERVICE}" 'KillMode=mixed'
 require_line "${SERVICE}" 'Restart=on-failure'
 require_line "${SERVICE}" 'RestartSec=1'
 require_line "${SERVICE}" 'RestrictAddressFamilies=AF_UNIX'
-require_line "${SERVICE}" 'CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE'
+# Source contract only: no effective drop-in, kernel, LSM or service admission.
+# Reject duplicate/reset directives as well as missing exact assignments.
+paired_sandbox_contract() {
+  awk '
+    BEGIN {
+      expected["User"] = "root"
+      expected["Group"] = "root"
+      expected["CapabilityBoundingSet"] = "CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"
+      expected["AmbientCapabilities"] = ""
+      expected["NoNewPrivileges"] = "no"
+      expected["PrivateDevices"] = "yes"
+      expected["PrivateTmp"] = "yes"
+      expected["PrivateUsers"] = "no"
+      expected["ProtectClock"] = "yes"
+      expected["ProtectControlGroups"] = "yes"
+      expected["ProtectHome"] = "yes"
+      expected["ProtectHostname"] = "yes"
+      expected["ProtectKernelLogs"] = "yes"
+      expected["ProtectKernelModules"] = "yes"
+      expected["ProtectKernelTunables"] = "yes"
+      expected["ProtectSystem"] = "strict"
+      expected["Slice"] = "system.slice"
+      expected["Delegate"] = ""
+      expected["ReadWritePaths"] = "/var/lib/fe2o3/compiler-execution /var/lib/fe2o3/external-anchor /sys/fs/cgroup/system.slice/%n"
+      expected["RestrictAddressFamilies"] = "AF_UNIX"
+      expected["RestrictNamespaces"] = "no"
+      expected["SystemCallFilter"] = "~unshare:EPERM setns:EPERM"
+      expected["RestrictRealtime"] = "yes"
+      expected["RestrictSUIDSGID"] = "yes"
+      expected["LockPersonality"] = "yes"
+      expected["SystemCallArchitectures"] = "native"
+      expected["UMask"] = "0077"
+      expected["LimitCORE"] = "0"
+      expected["TasksMax"] = "256"
+      expected["KillMode"] = "mixed"
+      expected["TimeoutStartSec"] = "300"
+      expected["TimeoutStopSec"] = "30"
+    }
+    /^[[:space:]]*[#;]/ { next }
+    /^[[:space:]]*\[/ { section = $0; next }
+    /^[[:space:]]*[A-Za-z]+[[:space:]]*=/ {
+      equal = index($0, "=")
+      key = substr($0, 1, equal - 1)
+      gsub(/[[:space:]]/, "", key)
+      value = substr($0, equal + 1)
+      if (key in expected) {
+        seen[key]++
+        if (section != "[Service]" || value != expected[key]) bad = 1
+      }
+      if (key ~ /^(DelegateSubgroup|BindPaths|BindReadOnlyPaths|RootDirectory|RootImage|TemporaryFileSystem|MountImages|ExtensionImages|ExtensionDirectories)$/) bad = 1
+    }
+    END {
+      for (key in expected) if (seen[key] != 1) bad = 1
+      exit bad
+    }
+  '
+}
+
+paired_sandbox_contract < "${SERVICE}" || fail 'paired creator/subtree sandbox changed'
+for replacement in \
+  'ReadWritePaths=/sys/fs/cgroup' \
+  'ReadWritePaths=/sys/fs/cgroup/system.slice' \
+  'ReadWritePaths=/sys/fs/cgroup/system.slice/other.service' \
+  'RestrictNamespaces=yes' \
+  'RestrictNamespaces=user' \
+  'Delegate=yes' \
+  'SystemCallFilter=' \
+  'SystemCallFilter=~unshare:EPERM setns:EPERM clone3:ENOSYS' \
+  'CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE' \
+  'CapabilityBoundingSet=CAP_SYS_ADMIN'; do
+  key="${replacement%%=*}"
+  if awk -v key="${key}" -v replacement="${replacement}" \
+      'index($0, key "=") == 1 { print replacement; next } { print }' "${SERVICE}" |
+      paired_sandbox_contract; then
+    fail "sandbox oracle accepted ${replacement}"
+  fi
+done
+if awk '{ print } /^ReadWritePaths=/ { print "ReadWritePaths=/sys/fs/cgroup" }' "${SERVICE}" |
+    paired_sandbox_contract; then
+  fail 'sandbox oracle accepted an additional broad writable subtree'
+fi
+readonly SPAWN_SYSCALL="${REPO_ROOT}/crates/fe2o3-protected-service-spawn/src/syscall.rs"
+grep -Fq -- 'self.compiler.is_some() || mapping_gate.is_some()' "${SPAWN_SYSCALL}" ||
+  fail 'mandatory compiler/mapped-helper namespace confinement selection changed'
+grep -Fq -- 'staged.requires_namespace_confinement(mapping_gate)' "${SPAWN_SYSCALL}" ||
+  fail 'child namespace confinement call is missing'
+grep -Fq -- '!namespace_restrictions::install()' "${SPAWN_SYSCALL}" ||
+  fail 'child namespace installation no longer refuses on failure'
 grep -Fq -- 'native V3 indirect launch requires the original-root FD12 route' \
   "${REPO_ROOT}/crates/fe2o3-compiler-execution-coordinator/src/native_launch_adapter.rs" ||
   fail 'missing original-root launch guard was silently removed'

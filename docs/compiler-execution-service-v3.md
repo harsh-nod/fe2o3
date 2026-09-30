@@ -59,11 +59,133 @@ retained state roots; changing record families does not create a second lock.
 Existing V1 configuration is not overwritten, renamed or inferred as V3.
 Missing native files or V1 bytes in a native record slot refuse.
 
-The bounded capability set adds only `CAP_DAC_READ_SEARCH` (lifecycle `..`
-traversal through service-owned mode-0700 roots) and `CAP_SYS_PTRACE` (actual
+The bounded capability set includes `CAP_DAC_READ_SEARCH` (lifecycle `..`
+traversal through service-owned mode-0700 roots), `CAP_SYS_PTRACE` (actual
 namespace observation of the distinct-UID, nondumpable anchor after profile
-readiness). These do not replace any process/namespace observation. The native
-process fixtures do not qualify this exact systemd unit or its host LSM policy.
+readiness), and `CAP_SETFCAP` (the existing fresh-helper identity map includes
+parent UID 0). The latter is required by the kernel's
+[UID-0 mapping rule](https://man7.org/linux/man-pages/man7/user_namespaces.7.html).
+These do not replace process/namespace observation or change the final child's
+capability drop. The native process fixtures do not qualify this exact systemd
+unit or its host LSM policy.
+
+### Creator And Child Boundaries
+
+The paired unit permits creator `clone3` with `RestrictNamespaces=no`, while
+denying `unshare` and `setns` with `EPERM`. This is not a workload exemption:
+the existing protected-spawn boundary must install namespace confinement for
+every compiler stage and every actual mapping-gated helper before exec. Generic
+unmapped creator services retain their existing child-creation behavior; they
+are not proof helpers. The compiler memory restrictions remain additional.
+Systemd v255's
+[namespace filter implementation](https://github.com/systemd/systemd/blob/v255/src/shared/seccomp-util.c)
+unconditionally denies `clone3` whenever any namespace restriction is selected,
+so a narrower `RestrictNamespaces=user` would still prevent the creator route.
+Borrowed runtime inputs and these root creator privileges are not final-child
+authority, runtime approval, or a reason to release the execution gate.
+
+`ProtectControlGroups=yes` stays enabled. The unit fixes `Slice=system.slice`
+and adds only `/sys/fs/cgroup/system.slice/%n` to `ReadWritePaths`. The two
+existing state-root exceptions are unchanged. Empty `Delegate=` enables
+subtree ownership without requesting controllers, as specified by
+[systemd v255 resource control](https://github.com/systemd/systemd/blob/v255/man/systemd.resource-control.xml).
+The service does not enable domain controllers on its populated parent. Its
+manager owns the unit cgroup and the outside whole-service termination duty;
+only the privileged creator controls fresh child domains. No final child may
+receive these control FDs, mutate the subtree, migrate, or delegate it.
+
+The writable exception is a submount, not a writable hierarchy. Systemd's
+[path-access contract](https://github.com/systemd/systemd/blob/v255/man/systemd.exec.xml)
+allows a writable descendant of a read-only path; the v255
+[mount implementation](https://github.com/systemd/systemd/blob/v255/src/core/namespace.c)
+excludes separately configured descendants from the parent's read-only remount.
+The host backing superblock must already be writable. Host mount propagation
+and privileged writers must remain excluded by the existing deployment contract.
+No runtime string or source unit check proves that external administration.
+
+`NativeCgroupDomainV1::prepare` derives its path from actual proc membership,
+not `%n` or a supplied FD. Prefix traversal retains `NO_XDEV`; only its final
+canonical component may cross the paired mount. Admission requires the same
+cgroup2 filesystem, protected root ownership, and a complete protected
+`cgroup.type` record equal to `domain\n` before checking this creator's direct
+PID membership. A `domain threaded` PID list aggregates its subtree and cannot
+establish that direct membership. `threaded`, `domain invalid`, malformed and
+missing type records refuse before admission or mkdir. Prefix/final identities
+and proc membership must also remain unchanged.
+Actual `/` membership is unsupported: the hierarchy root has no `cgroup.type`,
+and no domain-type observation is manufactured for it. A non-root path resolving
+to a hierarchy-root mount also refuses at the missing type record. Root-path
+parser fixtures still recognize valid proc syntax; they are not domain admission.
+All generated-domain and control-file opens still use `NO_XDEV`. The added
+worst-case preparation quote is 100352 logical work and
+`4096 + 4 * size_of::<Stat>()` scratch; both flow through existing fresh-domain
+and fresh-namespace quotes on the original account. Retained storage and cleanup
+are unchanged. Refusal before mkdir closes only temporary FDs.
+The existing quote also covers the parent-type check: six extra syscalls
+(open, filesystem/descriptor/named metadata, two bounded reads) and one close.
+Combined with the mount-admission delta, this is twelve syscalls and three
+temporary closes plus bounded byte processing, within the existing
+`32 * 1088 + 16 * 4096` allowance. The type and PID-read buffers are sequential;
+the six-buffer/twelve-stat scratch envelope is unchanged. These are conservative
+logical bounds, not measured syscall-time or exact operation-census claims.
+
+Authored source checks reject a broad/wrong-subtree writable path, duplicate
+assignments, a missing capability, and creator/filter regressions. Parser and
+metadata controls are not mount evidence. The ignored
+`native_cgroup::tests::mounts::actual_membership_mount_boundary` uses an exact,
+timed subprocess with a private mount namespace: it checks actual preparation
+through a writable final submount under a read-only root, rejects a prefix
+mount, an ordinary-domain ancestor without direct PID membership, a hierarchy-root
+alias and wrong filesystem, and verifies that type/procs control-file submounts
+are still refused. It creates/writes no cgroup and tests no
+compiler, mapping, spawn, delegation or service startup. Its setup needs isolated
+root, `CAP_SYS_ADMIN`, a writable unified hierarchy, ordinary-domain membership
+and a non-root ordinary-domain ancestor, no intervening mounts, stable privileged
+state and an outside custodian. It must run outside the unit's denied-unshare context;
+the service does not gain `CAP_SYS_ADMIN` for this test.
+
+The separate ignored
+`native_cgroup::tests::mounts::actual_threaded_domain_membership_is_refused`
+performs only reads in an operator-provisioned isolated topology. Its process
+must have actual threaded-leaf membership with a protected non-root threaded-domain
+ancestor, exposed at the resolved final membership submount. Prefix traversal
+must remain mount-free. The test independently checks matching ancestor/final
+inodes, actual `domain threaded\n` bytes and this process's presence in the kernel
+PID list, then requires the exact ordinary-domain refusal from `prepare()` and
+unchanged proc membership. Missing setup fails rather than skipping or earning
+negative credit. Its timed child creates no mounts or cgroups, migrates no process,
+and writes no control files; the operator retains the outside cleanup obligation.
+
+Existing generic fresh-domain process fixtures, including
+`root_exit_does_not_retire_live_descendant_domain` and
+`fresh_user_namespace_preserves_profile_and_aggregate_cleanup`, now require the
+root-credential test process to live in a non-root ordinary domain. Running them
+at actual `/` is intentionally unsupported, not permission to bypass the check.
+The provisioned root-request fixture already requires a non-root `domain\n`
+parent. None of these fixtures has been rerun for this parent-type correction.
+
+The source contract and its mutation checks passed on September 30. The complete
+coordinator/spawn library rerun passed 562 tests, with 35 native tests ignored;
+see [the admission checkpoint](evidence/native-invocation-runtime-20260928.md#ordinary-domain-admission).
+The ignored mount tests remain unrun. An effective-unit/drop-in
+inspection and a genuine paired service run are still required: creator
+clone3 and UID-0 map, root/sibling write denial versus owned-subtree creation,
+mapped-helper/compiler namespace denials and legal thread/fork controls, and
+outside-manager timeout/crash cleanup of the entire service. The older standalone
+creator diagnostic expects `unshare(0)` to succeed and is not the unit baseline.
+The V2 coordinator/supervisor/issuer chain also needs its own regression run;
+a generic-stage fixture does not establish that chain. All existing approval,
+proof and runtime-enforcement gates remain closed.
+
+A separate paired blocker remains unchanged: v255 `LockPersonality=yes` denies
+any `personality` argument other than the selected personality, including the
+read-only `0xffffffff` query. The compiler child's
+`native_compiler_restrictions::install` requires that actual query to exclude
+inherited `READ_IMPLIES_EXEC` and correctly refuses on error. Therefore this
+unit still cannot qualify that compiler pre-exec path. Do not clear the bit,
+invent a successful observation, or drop the existing unit restriction to
+obtain a positive. An invariant-preserving paired resolution and reached
+query-denial/positive controls are required separately.
 
 ## Versioned Offline Installation
 

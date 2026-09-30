@@ -146,3 +146,38 @@ Source/tool inventories remained unchanged in both runs. Log SHA-256:
 
 Canonical-owner/Pliron integration and authentic source-scope emission still
 remain necessary. These library results do not advance M1 or **0/47**.
+
+## Canonical Scoped Owner
+
+Candidate `82d9bb10b846dfb94fb07bc765d386be897832ba` adds a distinct move-only
+V23 canonical owner, identity, receipt and scoped borrow. Admission, resource
+accounting, copying and storage queries share a private closed-profile engine
+with V18. The V23 owner retains its actual checked graph and uses its own codec
+and hash domain; it is never converted to a V18 owner. Existing V18 bytes,
+domains, work schedules and unsupported-profile rejection remain separate.
+
+| Run | Scope | Result |
+| --- | --- | --- |
+| r163 | Kernel-IR library | 1,389 passed, one failed |
+| r165 | Complete Kernel-IR package, including doc tests | 1,974 passed, two failed, one ignored |
+| r167 | Corrected semantic-operation integration target | 23 passed, none failed or ignored |
+
+r163 exposed a test helper missing the nested decode/encode work-limit error;
+the corrected control still requires that exact refusal. All 1,390 library
+tests and 73 doc tests passed in r165, including 18 new owner/resource tests and
+five new compile-fail examples. Its only failures were two stale assertions
+that schema version 4 was unknown. They now require version 4's exact
+noncanonical-payload refusal and independently reject unknown version 5.
+r167 executed that complete 23-test target at the committed candidate. The
+full package was not rerun after the two assertion corrections. The ignored
+test exercises the maximum V1 block-count boundary.
+
+All three runs retained unchanged source/tool inventories. Log SHA-256:
+
+- r163: `5b82a4ac35b5b96550d4fb44191b1c48e9a9c41ec2eb1d94fb5686205962a484`
+- r165: `e15631f1ecbfe19e244f9cdbfc06e893cc30d2009de80304c422be37846dc84c`
+- r167: `8444c28cb45dfd5b8cd89682b8cc8c7ee966110410ba45a1077905f03f376703`
+
+The frontend candidate incorporates this owner, but its combined execution
+tests, Pliron bridge and actual source-scope emission remain unfinished. No
+default production activation, protected proof, simulator or GPU credit follows.

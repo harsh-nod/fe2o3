@@ -9,6 +9,12 @@
 //! Once cleanup starts, no further clone may target this domain. Empty/removal is
 //! domain completion only, never a substitute for exact child terminal waits.
 //! Logical work/storage bounds do not bound syscall latency or kernel memory.
+//! Only initial actual-membership admission permits a final-component mount
+//! boundary (the paired unit's writable subtree). All preceding components and
+//! subsequent domain/control opens retain NO_XDEV. This does not admit a unit,
+//! prove delegation or replace the administrator's external-writer exclusion.
+//! The resolved parent must be a non-root ordinary domain before its PID list
+//! can establish direct membership; a threaded domain lists its whole subtree.
 
 use crate::native_spawn::{ProtectedServiceSpawnErrorV2 as Error, Result, io};
 use crate::process_cleanup::CleanupPollV1;
@@ -91,10 +97,12 @@ impl NativeCgroupDomainV1 {
     /// Full fixed owner plus four logical descriptor-retention charges; no heap.
     pub(crate) const STORAGE: usize = size_of::<Self>() + 4 * size_of::<usize>();
     /// Prepay before preparation, including bounded parses and close-only rollback.
-    pub(crate) const PREPARE_WORK: usize = 64 * OPERATION_WORK + 32 * READ_LIMIT;
+    /// Includes the parent-type open, three metadata calls, two bounded reads
+    /// and close; its buffer does not overlap the subsequent PID-read buffer.
+    pub(crate) const PREPARE_WORK: usize = 96 * OPERATION_WORK + 48 * READ_LIMIT;
     /// Preparation frames, fixed read/path buffers and temporary descriptors.
     pub(crate) const PREPARE_SCRATCH: usize =
-        5 * READ_LIMIT + 4 * size_of::<Self>() + 8 * size_of::<Stat>() + 1024;
+        6 * READ_LIMIT + 4 * size_of::<Self>() + 12 * size_of::<Stat>() + 1024;
     /// Prepay before create, even when it fails or leaves uncertain custody.
     pub(crate) const CREATE_WORK: usize = 64 * OPERATION_WORK + 16 * READ_LIMIT;
     /// Fixed create/validation frames; the returned owner is charged separately.
@@ -118,8 +126,6 @@ impl NativeCgroupDomainV1 {
         let mut bytes = [0; READ_LIMIT];
         let count = read_record(&membership, &mut bytes)?;
         let path = membership_path(&bytes[..count])?;
-        let mut relative = [0; READ_LIMIT];
-        let relative = relative_path(path, &mut relative)?;
         let root = fs::openat2(
             fs::CWD,
             c"/sys/fs/cgroup",
@@ -128,18 +134,7 @@ impl NativeCgroupDomainV1 {
             ResolveFlags::NO_SYMLINKS,
         )
         .map_err(|e| io("open actual cgroup-v2 mount", e))?;
-        validate_fs(&root, CGROUP2_MAGIC)?;
-        validate_root_stat(
-            &fs::fstat(&root).map_err(|e| io("stat cgroup mount", e))?,
-            true,
-        )?;
-        let parent = open_relative(&root, relative, READ_FLAGS | OFlags::DIRECTORY)?;
-        validate_fs(&parent, CGROUP2_MAGIC)?;
-        let parent_stat = fs::fstat(&parent).map_err(|e| io("stat current cgroup", e))?;
-        validate_root_stat(&parent_stat, true)?;
-        // A namespaced/bind-mounted view must still resolve the caller's actual
-        // current cgroup, not another directory with a similar pathname.
-        require_membership(&parent, origin)?;
+        let (parent, parent_stat) = open_membership_directory(&root, path, origin)?;
         let mut current = [0; READ_LIMIT];
         let current_count = read_record(&membership, &mut current)?;
         if membership_path(&current[..current_count])? != path {
@@ -389,6 +384,105 @@ fn open_proc(path: &CStr) -> Result<OwnedFd> {
 fn open_relative(parent: &OwnedFd, name: &CStr, flags: OFlags) -> Result<OwnedFd> {
     fs::openat2(parent, name, flags, Mode::empty(), RESOLVE)
         .map_err(|e| io("open bounded cgroup component", e))
+}
+
+// The input is the bounded, canonical path read from actual proc membership,
+// never a configured unit name or a caller-provided delegation descriptor.
+fn open_membership_directory(
+    root: &OwnedFd,
+    path: &[u8],
+    origin: rustix::process::Pid,
+) -> Result<(OwnedFd, Stat)> {
+    validate_fs(root, CGROUP2_MAGIC)?;
+    let root_stat = fs::fstat(root).map_err(|e| io("stat cgroup mount", e))?;
+    validate_root_stat(&root_stat, true)?;
+    let (prefix, leaf) = membership_components(path)?;
+    let mut relative = [0; READ_LIMIT];
+    let prefix = relative_path(prefix, &mut relative)?;
+    let mut component = [0; 256];
+    component[..leaf.len()].copy_from_slice(leaf);
+    let leaf = CStr::from_bytes_with_nul(&component[..=leaf.len()])
+        .map_err(|_| Error::State("invalid final cgroup component"))?;
+    let directory = open_relative(root, prefix, READ_FLAGS | OFlags::DIRECTORY)?;
+    let directory_stat = fs::fstat(&directory).map_err(|e| io("stat cgroup prefix", e))?;
+    validate_membership_stat(&root_stat, &directory_stat)?;
+
+    // Exactly one lexical component can cross a mount. It must still denote
+    // this process's actual direct cgroup on the same cgroup2 filesystem.
+    let parent = fs::openat2(
+        &directory,
+        leaf,
+        READ_FLAGS | OFlags::DIRECTORY,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+    )
+    .map_err(|e| io("open actual membership cgroup", e))?;
+    validate_fs(&parent, CGROUP2_MAGIC)?;
+    let parent_stat = fs::fstat(&parent).map_err(|e| io("stat current cgroup", e))?;
+    validate_membership_stat(&root_stat, &parent_stat)?;
+    require_domain_parent(&parent)?;
+    require_membership(&parent, origin)?;
+
+    // Recheck both names before retaining the final descriptor. As elsewhere,
+    // this detects observations, not adversarial concurrent privileged writers.
+    let current_prefix = open_relative(root, prefix, READ_FLAGS | OFlags::DIRECTORY)?;
+    let current_prefix_stat =
+        fs::fstat(&current_prefix).map_err(|e| io("restat cgroup prefix", e))?;
+    let named = fs::statat(&current_prefix, leaf, AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|e| io("restat membership cgroup", e))?;
+    let actual = fs::fstat(&parent).map_err(|e| io("restat current cgroup", e))?;
+    validate_membership_stat(&root_stat, &current_prefix_stat)?;
+    validate_membership_stat(&root_stat, &named)?;
+    validate_membership_stat(&root_stat, &actual)?;
+    if !same_directory(
+        Identity::of(&directory_stat),
+        &directory_stat,
+        &current_prefix_stat,
+    ) || !same_directory(Identity::of(&parent_stat), &actual, &named)
+    {
+        return Err(Error::State("actual membership cgroup identity changed"));
+    }
+    Ok((parent, actual))
+}
+
+fn validate_membership_stat(root: &Stat, actual: &Stat) -> Result<()> {
+    validate_root_stat(actual, true)?;
+    if actual.st_dev != root.st_dev {
+        return Err(Error::State("membership cgroup changed filesystem"));
+    }
+    Ok(())
+}
+
+fn membership_components(path: &[u8]) -> Result<(&[u8], &[u8])> {
+    validate_absolute_path(path)?;
+    if path == b"/" {
+        return Err(Error::State(
+            "hierarchy-root cgroup membership is unsupported",
+        ));
+    }
+    let last = path
+        .iter()
+        .rposition(|byte| *byte == b'/')
+        .expect("absolute path");
+    Ok((
+        if last == 0 { b"/" } else { &path[..last] },
+        &path[last + 1..],
+    ))
+}
+
+fn require_domain_parent(parent: &OwnedFd) -> Result<()> {
+    let kind = open_relative(parent, c"cgroup.type", READ_FLAGS)?;
+    validate_control(&kind, parent, c"cgroup.type")?;
+    let mut bytes = [0; READ_LIMIT];
+    let count = read_record(&kind, &mut bytes)?;
+    validate_parent_type(&bytes[..count])
+}
+
+fn validate_parent_type(bytes: &[u8]) -> Result<()> {
+    if bytes != b"domain\n" {
+        return Err(Error::State("membership cgroup is not an ordinary domain"));
+    }
+    Ok(())
 }
 
 fn validate_fs(fd: &OwnedFd, expected: fs::FsWord) -> Result<()> {
