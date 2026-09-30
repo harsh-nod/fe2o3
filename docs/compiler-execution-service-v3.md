@@ -123,6 +123,10 @@ record rejection with no resource denial, V1/V3 manifest goldens, cross-family
 and mixed inventory refusal, immutable source custody, install/reacquire/tamper,
 all shared publication fault points, unwind, parent replacement and isolated
 crash recovery. No builds, tests or privileged startup were run by this author.
+Subsequent primary integration builds, fixture corrections, the strict V4
+child-entry fix and partially completed tests are recorded in
+[the candidate evidence](evidence/native-intake-restrictions-20260930.md).
+Socket-dependent and native-exec validation remain incomplete.
 
 ## Authenticated Intake Candidate
 

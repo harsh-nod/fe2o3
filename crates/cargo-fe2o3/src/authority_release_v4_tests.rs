@@ -1,4 +1,20 @@
 #[test]
+fn each_release_family_requires_its_exact_child_entry() {
+    for family in [ReleaseFamily::LegacyV3, ReleaseFamily::NativeV4] {
+        let mut record = contract();
+        record.family = family;
+        for entry in [INTERNAL_CHILD_ARG, INTERNAL_CHILD_ARG_V4] {
+            record.argv[1] = entry.as_bytes().to_vec();
+            assert_eq!(record.encode().is_ok(), entry == family.child_arg());
+            assert_eq!(
+                validate_fields(family, &record.argv, &record.environment).is_ok(),
+                entry == family.child_arg()
+            );
+        }
+    }
+}
+
+#[test]
 fn native_release_v4_preserves_roster_and_refuses_cross_family_readers() {
     let legacy = contract();
     let old_bytes = legacy.encode().unwrap();

@@ -371,7 +371,7 @@ struct ChildObservation {
 
 impl ReleaseContract {
     fn encode(&self) -> Result<Vec<u8>, String> {
-        validate_fields(&self.argv, &self.environment)?;
+        validate_fields(self.family, &self.argv, &self.environment)?;
         self.compiler.validate_child_image(self.child)?;
         let mut body = Vec::new();
         body.extend_from_slice(&self.attempt);
@@ -493,7 +493,7 @@ impl ReleaseContract {
             environment.push((decoder.field()?, decoder.field()?));
         }
         decoder.finish()?;
-        validate_fields(&argv, &environment)?;
+        validate_fields(family, &argv, &environment)?;
         Ok((
             Self {
                 family,
@@ -1681,12 +1681,16 @@ fn require_nonzero(value: [u8; 32], label: &str) -> Result<(), String> {
     }
 }
 
-fn validate_fields(argv: &[Vec<u8>], environment: &[(Vec<u8>, Vec<u8>)]) -> Result<(), String> {
+fn validate_fields(
+    family: ReleaseFamily,
+    argv: &[Vec<u8>],
+    environment: &[(Vec<u8>, Vec<u8>)],
+) -> Result<(), String> {
     if argv.len() < 3 || argv.len() > MAX_ARGUMENTS {
         return Err("release contract argv has an invalid count".to_owned());
     }
     if argv[0] != fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0
-        || argv[1] != INTERNAL_CHILD_ARG.as_bytes()
+        || argv[1] != family.child_arg().as_bytes()
     {
         return Err("release contract argv prefix differs".to_owned());
     }

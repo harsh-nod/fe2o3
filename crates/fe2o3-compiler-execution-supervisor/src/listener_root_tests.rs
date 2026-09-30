@@ -65,7 +65,7 @@ fn post_accept_revalidation_closes_the_actual_new_endpoint() {
     assert!(owner.finish_root_accept(Some(accepted)).is_err());
     let mut bytes = [0; 1];
     let result = rustix::net::recv(&client, &mut bytes, rustix::net::RecvFlags::DONTWAIT).unwrap();
-    assert_eq!(result, 0);
+    assert_eq!(result, (0, 0));
 }
 
 #[test]

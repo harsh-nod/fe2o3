@@ -66,7 +66,7 @@ fn invocation() -> Invocation {
                 "--crate-name",
                 "intake",
                 "kernel.rs",
-                "-Zcodegen-backend=/proc/self/fd/198",
+                "-Zcodegen-backend=/proc/./self/fd/198",
             ]
             .map(str::to_owned)
             .into(),

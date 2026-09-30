@@ -244,7 +244,7 @@ fn genuine_old_public_records_refuse_native_decoders_without_upgrade() {
     );
     assert_eq!(b.storage(), floor);
     assert_eq!(b.failed_storage(), None);
-    assert_eq!(b.work_budget_v1().failed_work(), None);
+    assert_eq!(b.failed_work(), None);
     CompilerExecutionIssuerPolicyV3::decode(current.policy().canonical_bytes(), &mut b).unwrap();
     assert!(b.work() > Bundle::WORK);
 }
