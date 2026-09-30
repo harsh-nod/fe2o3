@@ -133,18 +133,69 @@ fn selected_module(parallel: bool, recurrence: bool) -> Module {
             },
         ),
     ];
-    join.terminator = Some(if recurrence {
-        Terminator::ConditionalBranch {
-            condition: ValueId(201),
-            then_target: BlockId(25),
-            then_arguments: vec![ValueId(300)],
+    let mut latch = None;
+    if recurrence {
+        for (id, value) in [(400, 0), (401, 1), (402, 2)] {
+            body.blocks[0].operations.push(Operation::effect_free(
+                ValueDef::new(ValueId(id), Type::Scalar(ScalarType::U32)),
+                OperationKind::Constant(fe2o3_kernel_ir::Constant::U32(value)),
+            ));
+        }
+        let add_seed = |terminator: &mut Option<Terminator>| match terminator.as_mut().unwrap() {
+            Terminator::Branch { arguments, .. } => arguments.push(ValueId(400)),
+            Terminator::ConditionalBranch {
+                then_arguments,
+                else_arguments,
+                ..
+            } => {
+                then_arguments.push(ValueId(400));
+                else_arguments.push(ValueId(400));
+            }
+            _ => panic!("selected injection branch"),
+        };
+        add_seed(&mut body.blocks[1].terminator);
+        add_seed(&mut inject_b.terminator);
+        join.parameters
+            .push(ValueDef::new(ValueId(403), Type::Scalar(ScalarType::U32)));
+        join.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(404), Type::BOOL),
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs: ValueId(403),
+                rhs: ValueId(402),
+            },
+        ));
+        join.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(404),
+            then_target: BlockId(27),
+            then_arguments: vec![],
             else_target: BlockId(22),
             else_arguments: vec![],
-        }
+        });
+        let mut backedge = BasicBlock::new(BlockId(27));
+        backedge.operations.push(Operation::new(
+            vec![
+                ValueDef::new(ValueId(405), Type::Scalar(ScalarType::U32)),
+                ValueDef::new(ValueId(406), Type::BOOL),
+            ],
+            OperationKind::Binary {
+                op: fe2o3_kernel_ir::BinaryOp::Checked(fe2o3_kernel_ir::CheckedBinaryOperator::Add),
+                lhs: ValueId(403),
+                rhs: ValueId(401),
+            },
+        ));
+        backedge.terminator = Some(Terminator::Branch {
+            target: BlockId(25),
+            arguments: vec![ValueId(300), ValueId(405)],
+        });
+        latch = Some(backedge);
     } else {
-        Terminator::Return { values: vec![] }
-    });
+        join.terminator = Some(Terminator::Return { values: vec![] });
+    }
     body.blocks.extend([guard_a, guard_b, inject_b, join]);
+    if let Some(latch) = latch {
+        body.blocks.push(latch);
+    }
     module
 }
 
@@ -607,4 +658,49 @@ fn selected_native_v30_ordinary_callback_refusal_keeps_normal_refund() {
         result,
         Err(Failure::Callback("selected ordinary callback refusal"))
     ));
+}
+
+#[test]
+fn selected_native_v30_keeps_real_unranked_cycle_progress_refusal() {
+    let mut module = selected_module(true, true);
+    let header = module.functions[1]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks
+        .iter_mut()
+        .find(|block| block.id == BlockId(25))
+        .unwrap();
+    let Some(Terminator::ConditionalBranch { condition, .. }) = &mut header.terminator else {
+        panic!("selected recurrent header");
+    };
+    *condition = ValueId(201);
+    let reached = Cell::new(false);
+    let result = with_selected_case(&module, |pending, physical, domains, budget| {
+        pending
+            .with_selected_memory_observations_v30(physical, domains, budget, |_, _| {
+                reached.set(true);
+                Ok(())
+            })
+            .map_err(|error| error.failure)
+    });
+    let Err(Failure::Analysis {
+        function: 1,
+        cause: crate::ProductionPlironPreloweringErrorV2::Semantic(cause),
+    }) = result
+    else {
+        panic!("expected selected progress refusal: {result:?}");
+    };
+    assert!(!reached.get());
+    assert!(
+        cause
+            .report()
+            .progress()
+            .findings()
+            .iter()
+            .any(|finding| matches!(
+                finding,
+                crate::PlironProgressFindingV1::ProgressIncomplete { .. }
+            ))
+    );
 }

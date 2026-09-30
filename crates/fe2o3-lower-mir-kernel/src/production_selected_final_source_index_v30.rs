@@ -622,7 +622,8 @@ mod tests {
                     .is_empty()
             );
             let log = (usize::BITS - (2 * count).leading_zeros()) as usize + 1;
-            assert!(budget.work() <= 16 * (count + 2) * log);
+            // Each range query pays its two independent partition searches.
+            assert_eq!(budget.work(), 2 * 16 * (count + 2) * log);
             assert_eq!((budget.storage(), budget.peak_storage()), (floor, floor));
         }
     }
@@ -674,7 +675,8 @@ mod tests {
                 assert!(!index.matches(1, row.role, row.output, &mut budget).unwrap());
             }
             let log = (usize::BITS - count.leading_zeros()) as usize + 1;
-            assert!(budget.work() <= 32 * count * log);
+            // Two membership searches and the two leaf-range boundaries.
+            assert_eq!(budget.work(), 4 * 16 * count * log);
             assert_eq!((budget.storage(), budget.peak_storage()), (floor, floor));
         }
     }

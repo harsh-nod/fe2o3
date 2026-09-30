@@ -557,11 +557,20 @@ fn selected_slice_domains_reject_lossy_index_width_and_an_unproved_incoming_poin
         } else {
             body.blocks[0].operations.extend([
                 op(
+                    19,
+                    Type::Scalar(ScalarType::U64),
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        value: ValueId(4),
+                        to: Type::Scalar(ScalarType::U64),
+                    },
+                ),
+                op(
                     17,
                     scalar(),
                     OperationKind::Cast {
                         kind: CastKind::Truncate,
-                        value: ValueId(4),
+                        value: ValueId(19),
                         to: scalar(),
                     },
                 ),
