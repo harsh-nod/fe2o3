@@ -188,7 +188,7 @@ fn typed_initialization_reset_revokes_both_unique_and_multiple_writers() {
 fn typed_initialization_multiple_functions_keep_independent_domains() {
     let mut input = distinct_writers();
     let mut second = input.functions[0].clone();
-    second.name = "second".into();
+    second.id = "second".into();
     input.functions.push(second);
     with_inventory(&input, |inventory, floor| {
         exercise(inventory, floor, WORK, STORAGE, 2, &[None; 10])
