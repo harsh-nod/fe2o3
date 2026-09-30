@@ -42,12 +42,22 @@ an all-workspace result, native execution or performance acceptance. The older
 rejected restricted-environment runs below remain historical failures.
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
-runs thirteen explicit commands covering the newer model, runtime, accounting and
+runs fourteen explicit commands covering the newer model, runtime, accounting and
 KFD source/classifier controls. Those commands pass locally; workflow YAML and
 command inventory checks also pass. The resource-domain command selects its six
 source-only controls, not its three subprocess lifecycle tests. This adds drift
 detection, not solver execution, Rust test execution, authenticated proof
 acceptance or a hosted CI result.
+
+The [portable retained-credit campaign](evidence/dev-retained-dispatch-portable-2026-09-30/README.md)
+is integrated at `0c38a20c6`. Signed candidate `b27f19993` passes all 33 public
+campaign stages from a clean relocated checkout: three full 41/0 positives,
+25 family-bound logical negatives and 33 fresh process-group closures. All
+6,314 selected files match signed Git blobs, and closing source/tool/raw/tree
+and namespace checks pass. The public runner has no private recorder dependency;
+its 15 synthetic/source controls are now in CI. The packet includes raw results
+and a bundle of the exact signed candidate. This is component qualification
+under its measured host-tool profile, not CPU/native/parity or milestone closure.
 
 The [distributed construction decisions](runtime-distributed-publication-construction-v1.md)
 are integrated at `ee7152ff2`. Signed candidate `537255681` passes three full

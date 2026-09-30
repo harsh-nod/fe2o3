@@ -7,6 +7,9 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - "examples/row_softmax_v1/verify-verus-closure.sh"
+      - "docs/evidence/dev-completion-reconciliation-proof-2026-09-25/run.py"
+      - "docs/evidence/dev-completion-leaf-outcomes-2026-09-25/run.py"
       - "crates/fe2o3-runtime-model/**"
       - "crates/fe2o3-runtime/**"
       - "crates/fe2o3-resource-accounting/**"
@@ -18,6 +21,9 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - "examples/row_softmax_v1/verify-verus-closure.sh"
+      - "docs/evidence/dev-completion-reconciliation-proof-2026-09-25/run.py"
+      - "docs/evidence/dev-completion-leaf-outcomes-2026-09-25/run.py"
       - "crates/fe2o3-runtime-model/**"
       - "crates/fe2o3-runtime/**"
       - "crates/fe2o3-resource-accounting/**"
@@ -57,6 +63,7 @@ jobs:
           python3 -I -B crates/fe2o3-runtime-model/verus/test-independent-retained-observation.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-domain-retained-observation.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-credit-dispatch.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-run-retained-credit-dispatch.py
 
       - name: Runtime and KFD shared-body source guards
         run: |

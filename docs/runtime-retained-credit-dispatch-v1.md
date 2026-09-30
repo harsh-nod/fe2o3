@@ -133,9 +133,16 @@ freshness, conservation, native execution, A0-A7 and HIP/HSA parity remain open.
 
 The repository-contained runner is a new host-tool profile, not a reuse of
 S2's host-tool qualification. Its source/synthetic controls exercise the
-orchestration without running a compiler or solver. A clean relocated, signed
-checkout must complete a fresh campaign before portable qualification can be
-claimed; that execution is pending.
+orchestration without running a compiler or solver. Signed candidate
+`b27f19993e50a8e99faddeee5cd6dfb79a6c8629`, integrated at `0c38a20c6`,
+completed a fresh public campaign from a clean relocated checkout with no
+private recorder imports: all 33 stages passed, including three full 41/0
+positives and all 25 family-bound logical negatives. All 33 fresh groups closed,
+with source, tools, raw records, namespace and generated trees unchanged.
+The [published packet](evidence/dev-retained-dispatch-portable-2026-09-30/README.md)
+includes the exact signed candidate bundle and raw results. This is a new
+measured-host profile, not reuse of the historical S2 execution. The merged
+tree preserves all fourteen proof inputs but has no separate solver rerun.
 
 Source-only calibration remains available:
 
