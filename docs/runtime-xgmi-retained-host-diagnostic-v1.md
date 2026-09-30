@@ -98,3 +98,53 @@ are preserved and must not be presented as accepting this candidate.
 Campaign-wide source inventories also change, including the portable retained
 credit campaign and native-series transport. Historical receipts remain bound
 to their original source commits.
+
+## Portable Native Campaign
+
+The separate `xgmi_retained_host_diagnostic_campaign.py`,
+`xgmi_retained_host_diagnostic_native.py`, and
+`xgmi_retained_host_diagnostic_transport.py` entrypoints live beside the ordinary
+series helpers in `benchmarks/runtime_gfx942`. The pure planner keeps the exact
+18 ordinary specifications as a subsequence of 24 trials and requires distinct
+receipts across the ordinary and profiled outputs. The native and transport
+entrypoints require integration into a signed source closure; a copied external
+entrypoint does not authorize execution.
+
+The runner reuses the existing owned recorder, physical observer, API query
+collectors, fixed two-second query settling, both postflight observations and
+fresh-only census. The separate transport reuses selected-object packaging,
+bootstrap receive, raw collection, archive validation, marker-bound cleanup,
+the shared build lock and the pidfd/liveness-pipe resource monitor. It requires
+both source snapshots to equal the signed selected-object inventory. Uncertain
+terminal state or failed readback retains the exact owned remote directory.
+A completely read-back rejected run remains rejected and may use the reviewed
+cleanup. No existing acceptance threshold is relaxed.
+
+The ordinary and profiled KFD examples are built together with
+`--features live-validation,hardware-diagnostic`; Cargo records must contain
+exactly `default`, `hardware-diagnostic`, and `live-validation`. HIP/HSA retain
+the existing ROCm build flags. All four fresh ELF hashes and independently
+collected loaded dependency identities for both KFD executables are joined at
+local replay before cleanup. The diagnostic producer has no query-only mode:
+the ordinary KFD query observes pair topology and admission, while the strict
+diagnostic parser joins reported physical UIDs, GPU IDs and directional engines
+to those inputs. This is not a query from the profiled executable.
+
+Threshold-zero physical/API admission observations remain required before each
+workload. Both settled and delayed postflights run after malformed successful
+output before stopping. GPU availability is a nonexclusive point observation,
+not a reservation. Existing 1200-second KFD build, 180-second workload,
+5400-second resource monitor and 7200-second SSH bounds are unchanged.
+
+The synthetic controls execute no GPU workloads or external child processes:
+
+```sh
+python3 -I -B benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_campaign.py
+python3 -I -B benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_native.py
+python3 -I -B benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_transport.py
+```
+
+Before any remote launch, review the signed source closure, additional ELF and
+dependency inventory, exact 24-stage joins, malformed-output stop behavior and
+archive/cleanup extension. The helper integration and synthetic controls do not
+constitute native qualification, a performance result or a formal refinement.
