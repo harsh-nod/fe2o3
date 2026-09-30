@@ -46,8 +46,9 @@ of four independent image transfers. Original and transferred image bytes remain
 separately charged; origin, account and file checks bracket duplication. The
 existing four-source Stage map and FD197 check are unchanged. Independent static
 review found no blocking defect, including in the private-module extraction.
-This patch still needs isolated library/doctest validation and a genuine
-approved-runtime-to-backing composition run. Retained library files are not
+All eleven new inventory library tests passed in the isolated r71 run below;
+doctest validation and a genuine approved-runtime-to-backing composition run
+remain outstanding. Retained library files are not
 evidence that the loader resolves its paths to those files.
 
 The compiler-only native stage installs a fixed 57-instruction syscall filter
@@ -127,6 +128,35 @@ The guarded runner now assigns a separate target directory to each canonical
 worktree and records that directory in its report. Cargo's download cache remains
 shared. Optional `FE2O3_OPT` is hashed along with the compiler tools. No native,
 protected-proof or hardware result is inferred from these local checks.
+
+### Isolated Integration Rebuild
+
+`r71-isolated-native-inventory` rebuilt the selected packages in the dedicated
+primary-worktree target at `a6e3913f2a02c867764e2d3763f886bdc61b38eb`.
+The source/tool snapshots stayed unchanged. The combined command failed;
+these results replace the covered provisional shared-cache observations, not
+the unexecuted broker, native-exec or protected-production tests.
+
+| Suite | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| Compiler closure capability | 280 | 2 | 4 |
+| Compiler execution coordinator | 249 | 27 | 6 |
+| Compiler execution protocol | 119 | 0 | 0 |
+| Unsafe source inventory | 5 | 0 | 1 |
+
+The capability failures occur while installing the test ACL, with `EINVAL`,
+before production rejection is exercised. The coordinator failures report
+`EPERM` on socket setup or inspection. Neither is counted as passing. All eleven
+new complete-inventory transfer tests passed, including the added outer-scope
+accounting-failure cleanup control. The inventory suite also confirms the
+reviewed seventeen-entry unsafe baseline repair.
+
+The source snapshot SHA-256 is
+`1cdeafff6284319f287ef7d71ba1e1915b5b2eadb7d689c7cfafbe0ffa648e55`;
+the log SHA-256 is
+`8fb316645bb421f13097ca805c44333f0a163231fc2ae13ade8de1cf00c247a9`.
+No proof process or GPU execution occurred. M1 and the 0/47 strict-production
+matrix are unchanged.
 
 | Run | Log SHA-256 |
 | --- | --- |
