@@ -1,6 +1,20 @@
 // A real Policy12 output retains every checked stage beside its original source.
 // The storage-only policy shares custody without fabricating scalar transitions.
 include!("production_source_aggregate_errors_v30.rs");
+include!("production_source_aggregate_stages_v30.rs");
+include!("production_source_pending_native_v30.rs");
+include!("production_source_aggregate_completion_v30.rs");
+
+impl From<fe2o3_kernel_analysis::CanonicalRankedViewErrorV1> for ProductionAggregateSourceErrorV30 {
+    fn from(error: fe2o3_kernel_analysis::CanonicalRankedViewErrorV1) -> Self {
+        Self::Ranked(error)
+    }
+}
+impl From<fe2o3_pliron::CanonicalRankedPolicyFailureV1> for ProductionAggregateSourceErrorV30 {
+    fn from(error: fe2o3_pliron::CanonicalRankedPolicyFailureV1) -> Self {
+        Self::Native(ProductionSourceNativeLifecycleErrorV18::Pending(error))
+    }
+}
 
 struct AggregateSourceStorageV30;
 impl SourceOutputStoragePolicyV30 for AggregateSourceStorageV30 {
@@ -25,6 +39,12 @@ pub enum ProductionAggregateSourceErrorV30 {
     Inventory(fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1),
     /// The actual first scalar transition did not satisfy its checked relation.
     Transition(fe2o3_kernel_analysis::CanonicalKirTransitionErrorV1),
+    /// The real first-stage source/native conjunction failed before transport.
+    InitialCompletion(ProductionMixedSourceCheckErrorV26),
+    /// Fresh final native execution or final source-role replay failed.
+    Native(ProductionSourceNativeLifecycleErrorV18),
+    /// Final ranked metadata did not describe the exact final canonical owner.
+    Ranked(fe2o3_kernel_analysis::CanonicalRankedViewErrorV1),
 }
 impl From<ProductionSourceOwnedViewErrorV18> for ProductionAggregateSourceErrorV30 {
     fn from(error: ProductionSourceOwnedViewErrorV18) -> Self {
@@ -43,6 +63,9 @@ impl fmt::Display for ProductionAggregateSourceErrorV30 {
             Self::Optimization(e) => e.fmt(out),
             Self::Inventory(e) => e.fmt(out),
             Self::Transition(e) => e.fmt(out),
+            Self::InitialCompletion(e) => e.fmt(out),
+            Self::Native(e) => e.fmt(out),
+            Self::Ranked(e) => e.fmt(out),
         }
     }
 }
@@ -53,6 +76,9 @@ impl std::error::Error for ProductionAggregateSourceErrorV30 {
             Self::Optimization(e) => Some(e),
             Self::Inventory(e) => Some(e),
             Self::Transition(e) => Some(e),
+            Self::InitialCompletion(e) => Some(e),
+            Self::Native(e) => Some(e),
+            Self::Ranked(e) => Some(e),
         }
     }
 }
@@ -215,17 +241,26 @@ fn aggregate_source_headers_v30() -> Result<usize, ArgumentResourceV1> {
 }
 
 impl ProductionSourceOwnedViewV18<'_> {
+    fn retain_aggregate_source_result_v30<T>(
+        &self,
+        result: SourceOwnedResultV18<T>,
+    ) -> SourceOwnedResultV18<T> {
+        if let Err(error) = &result {
+            if aggregate_source_owned_resource_v30(error) == Some(ArgumentResourceV1::Accounting)
+                || matches!(error, ProductionSourceOwnedViewErrorV18::Source(_))
+            {
+                self.cleanup.deny_refund();
+            }
+        }
+        self.retain_query(result)
+    }
+
     fn deny_aggregate_accounting_v30(&self, error: &ProductionAggregateSourceErrorV30) {
         // Original construction errors predate this source-owned interface.
         // Preserve them exactly, but never infer refund permission from their
         // opaque diagnostic children. Normal query errors are typed separately.
         if aggregate_source_resource_v30(error) == Some(ArgumentResourceV1::Accounting)
-            || matches!(
-                error,
-                ProductionAggregateSourceErrorV30::Source(
-                    ProductionSourceOwnedViewErrorV18::Source(_)
-                )
-            )
+            || aggregate_opaque_source_v30(error)
         {
             self.cleanup.deny_refund();
         }

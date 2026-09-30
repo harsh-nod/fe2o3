@@ -55,7 +55,7 @@ fn execution_rvalue_key_v30(
 
 fn execution_rvalue_entry_storage_v30(count: usize) -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
-        execution_cfg_map_entry_storage_v29::<(u32, u32), Box<ExecutionRvalueBindingV30>>(count)?,
+        execution_archive_map_growth_v30::<(u32, u32), Box<ExecutionRvalueBindingV30>>(count)?,
         std::mem::size_of::<ExecutionRvalueBindingV30>(),
         // Captures are sequential. One retained frame covers every append to
         // this map; per-entry rows and binding payloads remain separately paid.

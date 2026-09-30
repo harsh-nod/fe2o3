@@ -292,13 +292,131 @@ fn assignment_payload_requires_the_exact_archived_value_type_and_actual_store() 
 }
 
 #[test]
+fn archive_map_credit_is_linear_and_prepaid_for_each_complete_insert() {
+    fn check<K, V>() {
+        let node = 32 * std::mem::size_of::<(K, V, usize)>();
+        let mut paid = 0;
+        assert_eq!(execution_archive_map_storage_v30::<K, V>(0).unwrap(), 0);
+        for count in 0..4096 {
+            let growth = execution_archive_map_growth_v30::<K, V>(count).unwrap();
+            paid += growth;
+            let expected = instance_correspondence_tests::archive_map_nodes_v30(count + 1) * node;
+            assert_eq!(paid, expected);
+            assert_eq!(
+                execution_archive_map_storage_v30::<K, V>(count + 1).unwrap(),
+                expected
+            );
+            assert!(growth >= node && growth <= 3 * node);
+            assert!(paid <= (2 * (count + 1) + 2) * node);
+        }
+        assert!(matches!(
+            execution_archive_map_growth_v30::<K, V>(usize::MAX),
+            Err(ArgumentResourceV1::Arithmetic)
+        ));
+        assert!(matches!(
+            execution_archive_map_storage_v30::<K, V>(usize::MAX / 2),
+            Err(ArgumentResourceV1::Arithmetic)
+        ));
+    }
+    check::<SsaValueV1, Box<SemanticValueBindingV1>>();
+    check::<(u32, u32), Box<ExecutionRvalueBindingV30>>();
+}
+
+#[test]
+fn archive_map_node_allowance_covers_pinned_slot_edge_header_and_alignment_bounds() {
+    fn check<K, V>() {
+        let alignment = std::mem::align_of::<K>()
+            .max(std::mem::align_of::<V>())
+            .max(std::mem::align_of::<usize>());
+        // Pinned alloc nodes contain 11 keys, 11 values, a parent pointer,
+        // two u16 fields, and (for internal nodes) 12 child pointers. Four
+        // full alignment units bound padding around their field groups.
+        let internal = 11 * (std::mem::size_of::<K>() + std::mem::size_of::<V>())
+            + 13 * std::mem::size_of::<usize>()
+            + 2 * std::mem::size_of::<u16>()
+            + 4 * alignment;
+        let node = 32 * std::mem::size_of::<(K, V, usize)>();
+        assert!(node >= internal);
+    }
+    #[repr(align(256))]
+    struct Aligned;
+    check::<(), ()>();
+    check::<u8, u16>();
+    check::<Aligned, [u8; 257]>();
+    check::<SsaValueV1, Box<SemanticValueBindingV1>>();
+    check::<(u32, u32), Box<ExecutionRvalueBindingV30>>();
+}
+
+#[test]
+fn ssa_archive_linear_credit_preserves_prefix_at_exact_and_one_short_storage() {
+    use std::mem::size_of;
+    for count in [1usize, 2, 16, 128] {
+        let expected = instance_correspondence_tests::archive_map_nodes_v30(count)
+            * 32
+            * size_of::<(SsaValueV1, Box<SemanticValueBindingV1>, usize)>()
+            + count * size_of::<SemanticValueBindingV1>();
+        for short in [0usize, 1] {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 17 + expected - short);
+            budget.reserve_storage(17).unwrap();
+            let mut bindings = SemanticSsaBindingsV1::default();
+            let mut credit = None;
+            for index in 0..count {
+                let key =
+                    SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(index as u32));
+                let result = archive_owned_binding_v29(
+                    &mut bindings,
+                    &mut credit,
+                    key,
+                    &SemanticValueBindingV1::Unit,
+                    &mut budget,
+                );
+                if short == 1 && index + 1 == count {
+                    assert!(matches!(
+                        result,
+                        Err(
+                            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                                ArgumentResourceV1::Storage(_)
+                            )
+                        )
+                    ));
+                    assert_eq!(bindings.len(), index);
+                    assert!(bindings.get(&key).is_none());
+                } else {
+                    result.unwrap();
+                    assert_eq!(bindings.len(), index + 1);
+                    let retained = instance_correspondence_tests::archive_map_nodes_v30(index + 1)
+                        * 32
+                        * size_of::<(SsaValueV1, Box<SemanticValueBindingV1>, usize)>()
+                        + (index + 1) * size_of::<SemanticValueBindingV1>();
+                    assert_eq!(credit.unwrap().bytes, retained);
+                    assert_eq!(budget.storage(), 17 + retained);
+                }
+            }
+            for index in 0..bindings.len() {
+                assert!(matches!(
+                    bindings.get(&SsaValueV1::Definition(
+                        fe2o3_mir_model::SsaDefinitionIdV1::new(index as u32)
+                    )),
+                    Some(SemanticValueBindingV1::Unit)
+                ));
+            }
+            let retained = credit.map_or(0, |credit| credit.bytes);
+            drop(bindings);
+            budget.release_storage(retained).unwrap();
+            assert_eq!(budget.storage(), 17);
+        }
+    }
+}
+
+#[test]
 fn rvalue_archive_entry_storage_covers_split_path_and_boxed_whole_binding() {
     for count in [0usize, 1, 2, 31, 1024] {
-        let levels = count.checked_ilog2().unwrap_or(0) as usize + 2;
-        let expected = levels
-            * 32
-            * std::mem::size_of::<((u32, u32), Box<ExecutionRvalueBindingV30>, usize)>()
-            + std::mem::size_of::<ExecutionRvalueBindingV30>();
+        let nodes = instance_correspondence_tests::archive_map_nodes_v30(count + 1)
+            - instance_correspondence_tests::archive_map_nodes_v30(count);
+        let expected =
+            nodes * 32 * std::mem::size_of::<((u32, u32), Box<ExecutionRvalueBindingV30>, usize)>()
+                + std::mem::size_of::<ExecutionRvalueBindingV30>();
         assert_eq!(
             execution_rvalue_entry_storage_v30(count).unwrap(),
             expected
@@ -322,13 +440,11 @@ fn rvalue_archive_sequential_captures_share_one_exact_retained_frame() {
     use std::mem::size_of;
 
     for count in [1usize, 2, 8, 64] {
-        let mut expected = instance_correspondence_tests::rvalue_archive_frame_storage_v30();
-        for previous in 0..count {
-            let levels = previous.checked_ilog2().unwrap_or(0) as usize + 2;
-            expected +=
-                levels * 32 * size_of::<((u32, u32), Box<ExecutionRvalueBindingV30>, usize)>()
-                    + size_of::<ExecutionRvalueBindingV30>();
-        }
+        let expected = instance_correspondence_tests::rvalue_archive_frame_storage_v30()
+            + instance_correspondence_tests::archive_map_nodes_v30(count)
+                * 32
+                * size_of::<((u32, u32), Box<ExecutionRvalueBindingV30>, usize)>()
+            + count * size_of::<ExecutionRvalueBindingV30>();
         for short in [0usize, 1] {
             let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
             let mut budget = ArgumentBudgetV1::new(&mut work, 17 + expected - short);

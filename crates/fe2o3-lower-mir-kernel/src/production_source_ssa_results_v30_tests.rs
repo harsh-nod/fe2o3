@@ -217,6 +217,11 @@ fn retained_source_ssa_query_rejects_a_funded_foreign_ledger_before_charging() {
 fn prepared_control(cycle: bool, budget: &mut ArgumentBudgetV1<'_>) -> ProductionPreparedSourceV18 {
     let owner = module_fixture_owner(ModuleFixture::Ordinary);
     let source = owner.source_semantic();
+    assert_eq!(source.types().len(), 3);
+    assert!(matches!(
+        source.types()[2].shape(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool)
+    ));
     let functions: Vec<_> = source
         .functions()
         .iter()
@@ -292,7 +297,8 @@ fn prepared_control(cycle: bool, budget: &mut ArgumentBudgetV1<'_>) -> Productio
         .collect();
     let semantic = InertSemanticMirRequestV1::new_with_callables(
         source.target(),
-        source.types().to_vec(),
+        // The replaced constant Assert was the only use of the trailing Bool.
+        source.types()[..2].to_vec(),
         source.allocations().to_vec(),
         source.statics().to_vec(),
         source.vtables().to_vec(),

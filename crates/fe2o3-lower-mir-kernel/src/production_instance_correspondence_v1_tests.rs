@@ -117,6 +117,19 @@ pub(super) fn rvalue_archive_frame_storage_v30() -> usize {
         + h::<()>()
 }
 
+pub(super) fn archive_map_nodes_v30(count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    let mut remaining = count;
+    let mut levels = 1;
+    while remaining != 0 {
+        remaining /= 2;
+        levels += 1;
+    }
+    count + levels
+}
+
 pub(super) fn scalar_archive_storage_v1(
     output: &LoweredFunctionResultV1,
     instances: &ProductionCallInstancePlanV1<'_>,
@@ -140,19 +153,13 @@ pub(super) fn scalar_archive_storage_v1(
     // These cursors have no nominal identity plan and therefore no seed slots.
     assert!(archive.retained_seeds.is_empty());
 
-    // Scalar fixtures have no deep payload. Independently count the pinned map
-    // split allowance, one boxed binding per actual row, and the archive header.
+    // Scalar fixtures have no deep payload. Count the complete retained map,
+    // reusable split allowance, one boxed binding per row, and archive header.
     let node = 32usize
         .checked_mul(size_of::<(SsaValueV1, Box<SemanticValueBindingV1>, usize)>())
         .unwrap();
-    let map = (0..archive.bindings.len())
-        .try_fold(0usize, |bytes, previous| {
-            let levels = previous.checked_ilog2().unwrap_or(0) as usize + 2;
-            bytes
-                .checked_add(levels.checked_mul(node).unwrap())
-                .and_then(|bytes| bytes.checked_add(size_of::<SemanticValueBindingV1>()))
-        })
-        .unwrap();
+    let map = archive_map_nodes_v30(archive.bindings.len()) * node
+        + archive.bindings.len() * size_of::<SemanticValueBindingV1>();
     assert!(archive.rvalues.values().all(|row| matches!(
         row.binding,
         SemanticValueBindingV1::Unit
@@ -162,10 +169,8 @@ pub(super) fn scalar_archive_storage_v1(
             }
     )));
     let rvalue_node = 32 * size_of::<((u32, u32), Box<ExecutionRvalueBindingV30>, usize)>();
-    let rvalues = (0..archive.rvalues.len()).fold(0usize, |bytes, previous| {
-        let levels = previous.checked_ilog2().unwrap_or(0) as usize + 2;
-        bytes + levels * rvalue_node + size_of::<ExecutionRvalueBindingV30>()
-    });
+    let rvalues = archive_map_nodes_v30(archive.rvalues.len()) * rvalue_node
+        + archive.rvalues.len() * size_of::<ExecutionRvalueBindingV30>();
     let frame = if archive.rvalues.is_empty() {
         0
     } else {

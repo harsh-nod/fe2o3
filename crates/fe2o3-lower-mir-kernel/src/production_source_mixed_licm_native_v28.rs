@@ -4,8 +4,7 @@ use fe2o3_kernel_analysis::{
     CanonicalKirPrivateMemoryErrorV1 as PhysicalError,
     CanonicalKirPrivateMemoryLimitsV1 as PhysicalLimits, CanonicalRankedMetadataV18 as Metadata,
     CanonicalRankedViewErrorV1 as RankedError, CheckedCanonicalKirLicmV18 as Pair,
-    CheckedCanonicalKirPrivateMemoryV18 as Physical, build_canonical_ranked_candidate_v18,
-    check_canonical_kir_private_memory_v18, with_checked_canonical_ranked_view_v18,
+    CheckedCanonicalKirPrivateMemoryV18 as Physical, check_canonical_kir_private_memory_v18,
 };
 use fe2o3_kernel_ir::{
     CanonicalKirDefinitionCoordinateV1 as Definition,
@@ -17,7 +16,6 @@ use fe2o3_pliron::{
     CanonicalRankedPolicyFailureV1 as NativeError, CanonicalRankedPolicyHistoryV1 as History,
     CanonicalRankedSourceRequirementV18 as Requirement,
     PendingCanonicalMixedMemoryPoliciesV26 as Native,
-    with_pending_canonical_ranked_source_roles_v18,
 };
 
 /// Refusal while joining fresh final-native checks to a source-bound LICM tail.
@@ -453,45 +451,7 @@ fn with_pending(
         &mut ArgumentBudgetV1<'_>,
     ) -> Result<()>,
 ) -> Result<()> {
-    let metadata = Metadata::new(inventory.owner(), &[]);
-    let metadata_storage = metadata.storage_extent(budget)?;
-    budget.reserve_storage(metadata_storage)?;
-    let (candidate, receipt) = build_canonical_ranked_candidate_v18(inventory, &metadata, budget)?;
-    budget.reserve_storage(receipt.retained_storage())?;
-    let mut selected = None;
-    let result = with_checked_canonical_ranked_view_v18(
-        inventory,
-        &metadata,
-        &candidate,
-        budget,
-        |checked, budget| {
-            Ok::<_, RankedError>(with_pending_canonical_ranked_source_roles_v18(
-                checked,
-                layouts,
-                budget,
-                |pending, budget| {
-                    selected = Some(consume(pending, budget));
-                    Ok(())
-                },
-            ))
-        },
-    );
-    drop(candidate);
-    drop(metadata);
-    let released = budget.release_storage(argument_sum_v1(&[
-        metadata_storage,
-        receipt.retained_storage(),
-    ])?);
-    let called = selected.is_some();
-    if let Some(Err(error)) = selected {
-        return Err(error);
-    }
-    result??;
-    released?;
-    if !called {
-        return Err(mismatch("LICM pending source-role callback absent"));
-    }
-    Ok(())
+    with_source_pending_native_v30(inventory, layouts, budget, mismatch, |_| {}, consume)
 }
 
 #[allow(clippy::too_many_arguments)]

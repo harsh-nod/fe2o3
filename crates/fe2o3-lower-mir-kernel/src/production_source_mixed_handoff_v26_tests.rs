@@ -8,6 +8,7 @@ include!("production_source_mixed_pure_cse_v26_tests.rs");
 include!("production_source_mixed_licm_v28_tests.rs");
 include!("production_source_mixed_fixedpoint_v29_tests.rs");
 include!("production_source_aggregate_owner_v30_tests.rs");
+include!("production_source_aggregate_runtime_v30_tests.rs");
 
 thread_local! {
     static MIXED_FIXTURE_SOURCE_TRAPS_V26: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

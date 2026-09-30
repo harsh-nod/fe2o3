@@ -1,5 +1,6 @@
 // Closed source-global evidence, shared only with the composing compiler.
 // Runtime premises are retained data, never a caller-authored proof producer.
+include!("production_source_aggregate_global_transport_v30.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CompletedGlobalOperationV26 {
     Read,

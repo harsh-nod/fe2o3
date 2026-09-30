@@ -815,9 +815,31 @@ fn reserve_execution_cfg_archive_v29(
 
 fn execution_cfg_archive_entry_storage_v29(count: usize) -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
-        execution_cfg_map_entry_storage_v29::<SsaValueV1, Box<SemanticValueBindingV1>>(count)?,
+        execution_archive_map_growth_v30::<SsaValueV1, Box<SemanticValueBindingV1>>(count)?,
         std::mem::size_of::<SemanticValueBindingV1>(),
     ])
+}
+
+fn execution_archive_map_storage_v30<K, V>(count: usize) -> Result<usize, ArgumentResourceV1> {
+    if count == 0 {
+        return Ok(0);
+    }
+    // Each stable BTree node contains a key. Keep one node per key plus a
+    // reusable height/root split allowance, not a new retained path per insert.
+    // The pinned alloc implementation has 11 key/value slots and 12 edges;
+    // 32 padded (key, value, pointer) slots also cover headers and alignment.
+    let split = count.ilog2() as usize + 2;
+    let nodes = argument_sum_v1(&[count, split])?;
+    let node = argument_product_v1(32, std::mem::size_of::<(K, V, usize)>())?;
+    argument_product_v1(nodes, node)
+}
+
+fn execution_archive_map_growth_v30<K, V>(count: usize) -> Result<usize, ArgumentResourceV1> {
+    let next = argument_sum_v1(&[count, 1])?;
+    let before = execution_archive_map_storage_v30::<K, V>(count)?;
+    execution_archive_map_storage_v30::<K, V>(next)?
+        .checked_sub(before)
+        .ok_or(ArgumentResourceV1::Accounting)
 }
 
 fn reserve_execution_cfg_map_entry_v29<K, V>(

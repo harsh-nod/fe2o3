@@ -1,4 +1,113 @@
 // Resource selection is a closed typed match, independent of diagnostic chains.
+fn aggregate_ranked_resource_v30(
+    error: &fe2o3_kernel_analysis::CanonicalRankedViewErrorV1,
+) -> Option<ArgumentResourceV1> {
+    use fe2o3_kernel_analysis::CanonicalRankedViewErrorV1 as E;
+    match error {
+        E::Resource(error) => Some(*error),
+        E::ForeignInventory
+        | E::ForeignMetadata
+        | E::MetadataOrder { .. }
+        | E::MetadataSubject { .. }
+        | E::MetadataFact { .. }
+        | E::MissingRow { .. }
+        | E::MismatchedRow { .. }
+        | E::ExtraRows { .. }
+        | E::InvalidRow { .. }
+        | E::InvalidCoordinate(_)
+        | E::UnsupportedStorageOperation { .. }
+        | E::UnsupportedOperation { .. }
+        | E::InconsistentInventory
+        | E::Panicked => None,
+    }
+}
+
+fn aggregate_native_failure_resource_v30(
+    error: &fe2o3_pliron::CanonicalRankedPolicyFailureV1,
+) -> Option<ArgumentResourceV1> {
+    use fe2o3_kernel_ir::CanonicalGuardedGlobalReadErrorV1 as G;
+    use fe2o3_pliron::{
+        CanonicalRankedPolicyFailureV1 as E, KirBridgeErrorV12 as B12, KirBridgeErrorV18 as B18,
+    };
+    match error {
+        E::Resource(error)
+        | E::Bridge(B12::Resource(error))
+        | E::StorageBridge(B18::Resource(error)) => Some(*error),
+        E::View(error) => aggregate_ranked_resource_v30(error),
+        E::Bridge(B12::Canonical(error)) => aggregate_admission12_resource_v30(error),
+        E::StorageBridge(B18::Canonical(error)) => aggregate_admission_resource_v30(error),
+        E::StorageBridge(B18::Allocation) => Some(ArgumentResourceV1::Allocation),
+        E::ConditionalGlobalsV26(G::Resource(error)) => {
+            Some(optimized_source_formal_resource_v18(*error))
+        }
+        E::InvocationAccounting => Some(ArgumentResourceV1::Accounting),
+        E::Bridge(B12::Bridge(_) | B12::SessionSetup)
+        | E::StorageBridge(B18::Bridge(_) | B18::SessionSetup)
+        | E::ConditionalGlobalsV26(
+            G::ControlFlow(_) | G::FunctionLimit { .. } | G::Coordinate(_) | G::Panicked,
+        )
+        | E::SourceRequirementV18 { .. }
+        | E::UnsupportedGraph { .. }
+        | E::NativeSchema
+        | E::PrivateRequirement { .. }
+        | E::ExactGraph
+        | E::Mutation
+        | E::Analysis { .. }
+        | E::AnalysisLimit { .. }
+        | E::InvalidQuery { .. }
+        | E::Callback(_)
+        | E::Panicked => None,
+    }
+}
+
+fn aggregate_native_resource_v30(
+    error: &ProductionSourceNativeLifecycleErrorV18,
+) -> Option<ArgumentResourceV1> {
+    use ProductionSourceNativeLifecycleErrorV18 as E;
+    match error {
+        E::Source(error) | E::SourceAfterNative { source: error, .. } => {
+            aggregate_source_owned_resource_v30(error)
+        }
+        E::Pending(error) | E::PendingAfterNative { failure: error, .. } => {
+            aggregate_native_failure_resource_v30(error)
+        }
+        E::Native(error) => aggregate_native_failure_resource_v30(error.failure()),
+        E::Unresolved(_) => None,
+    }
+}
+
+fn aggregate_opaque_source_v30(error: &ProductionAggregateSourceErrorV30) -> bool {
+    use ProductionAggregateSourceErrorV30 as E;
+    use ProductionMixedSourceCheckErrorV26 as M;
+    use ProductionSourceNativeLifecycleErrorV18 as N;
+    use ProductionSourceOwnedViewErrorV18 as S;
+    match error {
+        E::Source(S::Source(_))
+        | E::InitialCompletion(M::Source(S::Source(_)))
+        | E::InitialCompletion(M::Native(
+            N::Source(S::Source(_))
+            | N::SourceAfterNative {
+                source: S::Source(_),
+                ..
+            },
+        ))
+        | E::Native(
+            N::Source(S::Source(_))
+            | N::SourceAfterNative {
+                source: S::Source(_),
+                ..
+            },
+        ) => true,
+        E::Source(_)
+        | E::Optimization(_)
+        | E::Inventory(_)
+        | E::Transition(_)
+        | E::InitialCompletion(_)
+        | E::Native(_)
+        | E::Ranked(_) => false,
+    }
+}
+
 fn aggregate_inventory_resource_v30(
     error: &fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1,
 ) -> Option<ArgumentResourceV1> {
@@ -199,6 +308,30 @@ fn aggregate_source_resource_v30(
     error: &ProductionAggregateSourceErrorV30,
 ) -> Option<ArgumentResourceV1> {
     use ProductionAggregateSourceErrorV30 as E;
+    match error {
+        E::Source(error) => aggregate_source_owned_resource_v30(error),
+        E::Optimization(error) => aggregate_optimizer_resource_v30(error),
+        E::Inventory(error) => aggregate_inventory_resource_v30(error),
+        E::Transition(error) => aggregate_transition_resource_v30(error),
+        E::InitialCompletion(error) => match error {
+            ProductionMixedSourceCheckErrorV26::Source(error) => {
+                aggregate_source_owned_resource_v30(error)
+            }
+            ProductionMixedSourceCheckErrorV26::Ranked(error) => {
+                aggregate_ranked_resource_v30(error)
+            }
+            ProductionMixedSourceCheckErrorV26::Native(error) => {
+                aggregate_native_resource_v30(error)
+            }
+        },
+        E::Ranked(error) => aggregate_ranked_resource_v30(error),
+        E::Native(error) => aggregate_native_resource_v30(error),
+    }
+}
+
+fn aggregate_source_owned_resource_v30(
+    error: &ProductionSourceOwnedViewErrorV18,
+) -> Option<ArgumentResourceV1> {
     use ProductionPendingScopedSourceErrorV29 as Pending;
     use ProductionSourceOwnedViewErrorV18 as S;
     use fe2o3_kernel_analysis::{
@@ -207,48 +340,36 @@ fn aggregate_source_resource_v30(
     };
     use fe2o3_pliron::CanonicalAnalysisScopeErrorV1 as A;
     match error {
-        E::Optimization(error) => aggregate_optimizer_resource_v30(error),
-        E::Inventory(error)
-        | E::Source(S::Analysis(A::Inventory(error)))
-        | E::Source(S::PrivateMemory(P::Inventory(error))) => {
+        S::Analysis(A::Inventory(error)) | S::PrivateMemory(P::Inventory(error)) => {
             aggregate_inventory_resource_v30(error)
         }
-        E::Transition(error) => aggregate_transition_resource_v30(error),
-        E::Source(S::Source(Pending::Canonical(error))) => aggregate_admission_resource_v30(error),
-        E::Source(S::Source(Pending::Occurrences(
+        S::Source(Pending::Canonical(error)) => aggregate_admission_resource_v30(error),
+        S::Source(Pending::Occurrences(
             fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1::Resource(error),
-        )))
-        | E::Source(S::Source(Pending::Source(
+        ))
+        | S::Source(Pending::Source(
             ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error),
-        ))) => Some(*error),
-        E::Source(
-            S::Resource(error)
-            | S::Analysis(
-                A::Resource(error)
-                | A::Sparse(Q::Resource(error))
-                | A::MemorySsa(M::Resource(error)),
+        )) => Some(*error),
+        S::Resource(error)
+        | S::Analysis(
+            A::Resource(error) | A::Sparse(Q::Resource(error)) | A::MemorySsa(M::Resource(error)),
+        )
+        | S::PrivateMemory(P::Resource(error)) => Some(*error),
+        S::Source(Pending::Source(_) | Pending::Occurrences(_))
+        | S::Binding(_)
+        | S::Analysis(
+            A::Sparse(
+                Q::InputLimit { .. } | Q::InconsistentInventory | Q::InvalidUseCoordinate { .. },
             )
-            | S::PrivateMemory(P::Resource(error)),
-        ) => Some(*error),
-        E::Source(
-            S::Source(Pending::Source(_) | Pending::Occurrences(_))
-            | S::Binding(_)
-            | S::Analysis(
-                A::Sparse(
-                    Q::InputLimit { .. }
-                    | Q::InconsistentInventory
-                    | Q::InvalidUseCoordinate { .. },
-                )
-                | A::MemorySsa(
-                    M::InputLimit { .. }
-                    | M::InconsistentInventory
-                    | M::InvalidBlock(_)
-                    | M::InvalidOperation(_)
-                    | M::InvalidNode(_)
-                    | M::NotPhi(_),
-                ),
-            )
-            | S::PrivateMemory(P::Unsupported { .. } | P::Panicked),
-        ) => None,
+            | A::MemorySsa(
+                M::InputLimit { .. }
+                | M::InconsistentInventory
+                | M::InvalidBlock(_)
+                | M::InvalidOperation(_)
+                | M::InvalidNode(_)
+                | M::NotPhi(_),
+            ),
+        )
+        | S::PrivateMemory(P::Unsupported { .. } | P::Panicked) => None,
     }
 }
