@@ -327,3 +327,168 @@ fn checked_phi_forwarding_exact_and_one_short_resources_restore_floor() {
         ));
     });
 }
+
+fn forwarding_field_header_oracle_v32() -> usize {
+    type State = origin_worklist_v1::OriginStateV1<usize>;
+    type Error = origin_worklist_v1::OriginWorkErrorV1;
+    // Worklist fields, not the production Work or production Frame alias.
+    type WorkFields = (
+        Vec<State>,
+        Vec<usize>,
+        Vec<(usize, usize)>,
+        Vec<usize>,
+        Vec<bool>,
+        [usize; 5],
+        fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        usize,
+    );
+    type OutputFields = (ValueId, usize, usize);
+    type Frame<'a> = (
+        WorkFields,
+        Result<WorkFields, Error>,
+        Vec<State>,
+        Result<Vec<State>, Error>,
+        Vec<Option<usize>>,
+        Vec<(usize, usize)>,
+        Vec<OutputFields>,
+        Result<Vec<Option<usize>>, ProductionSemanticKirErrorV1>,
+        Result<Vec<(usize, usize)>, ProductionSemanticKirErrorV1>,
+        Result<Vec<OutputFields>, ProductionSemanticKirErrorV1>,
+        SourceOwnedResultV18<Vec<OutputFields>>,
+        [Result<(), Error>; 3],
+        [State; 3],
+        [usize; 20],
+        &'a (),
+        &'a (),
+        &'a (),
+        &'a (),
+        &'a [(usize, usize)],
+        &'a mut (),
+        std::ops::Range<usize>,
+        SourceOwnedResultV18<()>,
+    );
+    assert_eq!(
+        size_of::<WorkFields>(),
+        size_of::<origin_worklist_v1::OriginWorkV1<usize>>()
+    );
+    assert_eq!(
+        std::mem::align_of::<WorkFields>(),
+        std::mem::align_of::<origin_worklist_v1::OriginWorkV1<usize>>()
+    );
+    assert_eq!(
+        size_of::<Result<WorkFields, Error>>(),
+        size_of::<Result<origin_worklist_v1::OriginWorkV1<usize>, Error>>()
+    );
+    assert_eq!(
+        size_of::<OutputFields>(),
+        size_of::<OptimizedSourceScalarBoundaryV31>()
+    );
+    assert_eq!(
+        std::mem::align_of::<OutputFields>(),
+        std::mem::align_of::<OptimizedSourceScalarBoundaryV31>()
+    );
+    size_of::<Frame<'_>>() + std::mem::align_of::<Frame<'_>>()
+}
+
+#[test]
+fn checked_phi_forwarding_headers_match_independent_field_envelopes() {
+    assert_eq!(
+        source_boundary_forwarding_headers_v32().unwrap(),
+        forwarding_field_header_oracle_v32()
+    );
+}
+
+fn linear_forwarding_graph_v32() -> Module {
+    let mut blocks = vec![
+        scalar_block(0, None),
+        scalar_block(1, Some(10)),
+        scalar_block(2, Some(11)),
+    ];
+    blocks[0].terminator = edge(1, 98);
+    blocks[1].terminator = edge(2, 10);
+    let mut module = Module::new("checked-phi-independent-resource-oracle");
+    for name in ["other-owner", "subject"] {
+        module.functions.push(Function::internal_helper(
+            name,
+            Signature::new(vec![Type::Scalar(ScalarType::U32)], vec![]),
+            vec![ValueId(98)],
+            blocks.clone(),
+        ));
+    }
+    module
+}
+
+fn linear_forwarding_probe_v32(
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
+    terminal: usize,
+    work_limit: usize,
+    storage_limit: usize,
+) -> (SourceOwnedResultV18<()>, usize, usize) {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+    let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+    budget.reserve_storage(23).unwrap();
+    let result = (|| {
+        budget.reserve_storage(source_boundary_forwarding_headers_v32()?)?;
+        let values = source_boundary_forwarding_v32(
+            inventory,
+            fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(1),
+            &[(terminal, 41)],
+            &mut budget,
+        )?;
+        assert_eq!(values.len(), 1);
+        assert_eq!((values[0].value, values[0].original), (ValueId(11), 41));
+        drop(values);
+        Ok(())
+    })();
+    let measured = (budget.work(), budget.peak_storage());
+    budget.release_storage(budget.storage() - 23).unwrap();
+    assert_eq!(budget.storage(), 23);
+    (result, measured.0, measured.1)
+}
+
+#[test]
+fn checked_phi_forwarding_has_independent_exact_work_and_scratch_counts() {
+    type State = origin_worklist_v1::OriginStateV1<usize>;
+    // Three definitions: one unknown function argument, one exact opaque phi,
+    // and one forwarded parameter. Two edge rows leave one active solver link.
+    let nodes = 3;
+    let edges = 2;
+    let links = 1;
+    let forwarding_work = 3
+        + (3 + nodes)
+        + 3
+        + 4 * edges
+        + (5 + 4 * nodes)
+        + 3 * nodes
+        + (2 * edges + links)
+        + (2 * nodes + 3 + 3 + links)
+        + 3
+        + 2 * nodes;
+    assert_eq!(forwarding_work, 73);
+    let seeds = nodes * size_of::<Option<usize>>();
+    let solver = nodes * (size_of::<State>() + 2 * size_of::<usize>() + size_of::<bool>())
+        + links * size_of::<(usize, usize)>();
+    let output = nodes * size_of::<(ValueId, usize, usize)>();
+    let storage = 23 + forwarding_field_header_oracle_v32() + seeds + solver + output;
+    with_inventory(&linear_forwarding_graph_v32(), |inventory, budget| {
+        assert_eq!(inventory.functions()[1].definitions.len(), nodes);
+        assert_eq!(inventory.functions()[1].edge_arguments.len(), edges);
+        let phi = terminal(inventory, 1, 10, budget);
+        let (result, spent, peak) =
+            linear_forwarding_probe_v32(inventory, phi, forwarding_work, storage);
+        result.unwrap();
+        assert_eq!((spent, peak), (forwarding_work, storage));
+        assert!(matches!(
+            linear_forwarding_probe_v32(inventory, phi, forwarding_work - 1, storage).0,
+            Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Work { .. }
+            ))
+        ));
+        assert!(matches!(
+            linear_forwarding_probe_v32(inventory, phi, forwarding_work, storage - 1).0,
+            Err(ProductionSourceOwnedViewErrorV18::Resource(
+                ArgumentResourceV1::Storage { .. }
+            ))
+        ));
+    });
+}
