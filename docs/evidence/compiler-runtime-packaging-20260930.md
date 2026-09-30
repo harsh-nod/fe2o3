@@ -142,3 +142,94 @@ Log SHA-256:
 `55d4ece9b0eab43e8cc6a2a7d98449a4b90ffb010c425c227983b785e05e704e`.
 The next integration work must reconcile original SSA availability and CFG
 transport without weakening their exact-owner/source checks.
+
+## Borrow Diagnostic Follow-Up
+
+The separate source candidate now contains commit `10add0374`, which attaches
+the retained function/block/statement and the failing borrow phase to otherwise
+context-free availability/CFG errors. Existing precise errors and resource
+failures pass through unchanged; admission, occurrence claims and accounting
+are unchanged. This source candidate is not merged into the deployment branch.
+
+r103 failed compilation on two test-only ID constructors and ran no tests.
+After using the actual `from_index` constructors, r104 passed all 303 selected
+`source_reference_` tests. Its source snapshot was
+`bc7ccc0331673c28c8d9ef74a36e85e25e74f76794fc1f72196f3f27d950b931`;
+log SHA-256 was
+`af7fa31a3084bbe58110fcb0ee56697edc9c8ba6122d5cfe0106416b05eff51d`.
+The final candidate additionally corrects the occurrence-claim message to cover
+both duplicate and out-of-order claims, without changing that check.
+
+r105 rebuilt the backend and completed all 80 actual-source sessions on that
+final candidate. All still failed before their intended consumer:
+
+- MIR0: 40 context-free execution-availability refusals remain. None was
+  localized by the borrow-site instrumentation, so the first failing predicate
+  is still unconfirmed.
+- MIR2: all 40 now identify `source reference promoted borrow archive differs
+  from source SSA`, with actual function/block/statement coordinates. This is
+  the archive check before referent resolution or payload flattening, not
+  evidence that index-witness payload conversion itself was reached.
+
+The source/tool inventories were stable. r105 source snapshot:
+`935db37683fbf18cb85ba8289b6d598d07965ddbce342d4fbc69665c9ae28b88`.
+Log SHA-256:
+`23d6d51c201312128e13a8f6c309cd0bae88a6516172ce800bfcd6bf1d5b653a`.
+The parent terminated with status101; its private source scratch was verified
+absent. These failures are not negative-boundary successes or proof/GPU credit.
+
+M1 also still needs genuine context-derived invocation/index and global-view
+association. The current SDK supplies context issuance and workgroup scope,
+but not those APIs; the current fixture still uses independent thread indexing.
+An API rename or an extra unused context parameter cannot close that gap.
+
+## Measured Package Assembly
+
+Code revision `3ef979edf` adds bounded release assembly to the same deployment
+crate and command. It consumes a canonical recipe containing independently
+reviewed compiler/proof pins and exact per-file roles, lengths and hashes. It
+retains and measures source files, binds the actual root-owned offline V3
+profile, writes a new private bundle, and checks it with the existing verifier.
+It rechecks retained and named inputs and outputs before returning inert hashes.
+The result is explicitly `UNAPPROVED`; it grants no compiler execution authority.
+
+The implementation uses the caller's original resource account, rejects changed
+or displaced inputs/outputs and does not overwrite or reuse partial packages.
+It neither invents compiler pins nor discovers ELF dependencies. Independent
+review strengthened mutation tests to require the intended checkpoint and exact
+error category, including same-inode writes, record replacement and directory
+displacement after verification.
+
+| Run | Scope | Result |
+| --- | --- | --- |
+| r109 | Integrated assembler at `3ef979edf`, all binary targets | 130 library and 7 command tests passed; 2 native tests ignored |
+| r110 | Integrated assembler doctests | 17 passed |
+| r111 | Public package API on MI350-2 | 1 native test passed; owned scratch/container cleaned and verified absent |
+
+r109 and r110 source/tool inventories were stable, with source snapshot
+`f8af633a79a6b7744ebe339f07666d4cca6deb01ccc021a6060192569c115817`.
+r109 log SHA-256:
+`d0309a0604e2ad08813b1e87391476bcae3d7a935500db894109ba65445928e4`.
+r110 log SHA-256:
+`62f76fc1ab1c972097907d002d4331d3d2648eddb0c71eb8d5847a7d4a1b9720`.
+The deployment-bundle shell source-contract test passed after integration.
+The full musl static build/ELF inspection remains unexecuted.
+
+r111 used the same isolated native image as r101. It exercised public assembly
+and verification with a genuinely root-owned profile, then rejected a changed
+profile owner without creating another package. The fixture's profile and code
+contents are synthetic, not an independently approved compiler release. Binary
+SHA-256:
+`a74f8fcb121f4b3e73ed1867a924a76124422464469bb1e439da7679358801ba`.
+The runner now selects a closed `install` or `package` mode; its SHA-256 was
+`066d01f030e5f881d3e8d28ef904c858e837690f02bfa9590472f5bee6b13021`.
+Native stdout SHA-256:
+`7c1dce9be36e200ca34d9fdb2080f269a5994f23ff036bd66ca1068111b12252`.
+Final native status SHA-256:
+`129446e2c03cf9c08597596fc1cd95c97a441e4d1769a13c98d5fb40b20e361b`.
+The container exited with status 0; scratch and container removal were verified.
+No protected runtime installation, proof execution or GPU run was performed.
+
+The next runtime requirements remain a real reviewed compiler/proof closure and
+V3 service profile, installed-runtime composition tests, and completion of the
+production execution enforcement and finalizer/launch chain. M1 is not complete.
