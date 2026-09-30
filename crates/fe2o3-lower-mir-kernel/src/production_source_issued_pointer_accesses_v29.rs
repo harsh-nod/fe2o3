@@ -90,6 +90,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             std::mem::size_of::<PendingSourceIssuedIssuerV29>(),
             std::mem::size_of::<(SourceIssuedRootTransportV29, PendingSourceIssuedIssuerV29)>(),
             std::mem::size_of::<Result<(SourceIssuedRootTransportV29, PendingSourceIssuedIssuerV29), ProductionSemanticKirErrorV1>>(),
+            std::mem::size_of::<usize>(),
             execution_rvalue_headers_v30()?,
         ])?)?;
         budget.charge_work(5)?;
@@ -103,7 +104,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             return Err(source_issued_error_v29());
         }
         let accepted = if self
-            .descriptor_reference_access_v29(references, instance, row, place, budget)?
+            .descriptor_reference_access_v29(references, instance, anchor, row, place, budget)?
         {
             true
         } else if let Some(SourceIssuedResolvedAccessV26 {
@@ -196,7 +197,14 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
                 .originals
                 .get(&instance.index())
                 .ok_or_else(source_issued_error_v29)?;
-            check_source_issued_payload_v29(original, row, operation, &self.actual, budget)?;
+            check_source_issued_payload_v29(
+                original,
+                anchor,
+                row,
+                operation,
+                &self.actual,
+                budget,
+            )?;
             let (block, _) = self
                 .source_index
                 .emitted
@@ -400,6 +408,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
 
 fn check_source_issued_payload_v29(
     original: &SourceIssuedOriginalV29<'_, '_, '_>,
+    anchor: usize,
     row: &ScopedMemoryAnchorV29,
     operation: &Operation,
     actual: &SourceIssuedActualV29<'_>,
@@ -452,6 +461,16 @@ fn check_source_issued_payload_v29(
         .declaration();
     match (source, scoped_source_operand_v29(function, site, role)) {
         (
+            ScopedMemoryOperandSourceV29::Memory { .. },
+            Some(SemanticOperandV1::Copy(_) | SemanticOperandV1::Move(_)),
+        ) => {
+            #[cfg(test)]
+            if let Some(observer) = SOURCE_ISSUED_MEMORY_PAYLOAD_OBSERVER_V30.get() {
+                observer(original, anchor, row, operation, actual, budget)?;
+            }
+            check_source_issued_memory_payload_v30(original, anchor, row, operation, actual, budget)
+        }
+        (
             ScopedMemoryOperandSourceV29::Place(
                 occurrence @ ScopedMemoryOccurrenceV29::Promoted { .. },
             ),
@@ -494,4 +513,187 @@ fn check_source_issued_payload_v29(
         }
         _ => Err(source_issued_error_v29()),
     }
+}
+
+fn source_issued_memory_payload_headers_v30() -> Result<usize, ArgumentResourceV1> {
+    fn h<T>() -> Result<usize, ArgumentResourceV1> {
+        argument_sum_v1(&[
+            std::mem::size_of::<T>(),
+            argument_product_v1(
+                2,
+                std::mem::size_of::<Result<T, ProductionSemanticKirErrorV1>>(),
+            )?,
+        ])
+    }
+    argument_sum_v1(&[
+        h::<ScopedMemoryPayloadV29>()?,
+        h::<SourceAddressValueAccessV29>()?,
+        h::<SourceIssuedActualValueV29<'_>>()?,
+        h::<Option<SourceAddressValueAccessV29>>()?,
+        h::<&ScopedMemoryAnchorsV29>()?,
+        h::<&ScopedMemoryAnchorV29>()?,
+        h::<&Operation>()?,
+        h::<Type>()?,
+        h::<ScopedMemoryOccurrenceV29>()?,
+        h::<ExecutionSiteV29>()?,
+        h::<ExecutionOperandV29>()?,
+        h::<SemanticTypeIdV1>()?,
+        h::<ValueId>()?,
+        h::<()>()?,
+        h::<Result<(), ProductionSemanticKirErrorV1>>()?,
+        argument_product_v1(12, std::mem::size_of::<&()>())?,
+        argument_product_v1(8, std::mem::size_of::<usize>())?,
+    ])
+}
+
+fn check_source_issued_memory_payload_v30(
+    original: &SourceIssuedOriginalV29<'_, '_, '_>,
+    anchor: usize,
+    row: &ScopedMemoryAnchorV29,
+    operation: &Operation,
+    actual: &SourceIssuedActualV29<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    original.semantic.check(budget)?;
+    let header = source_issued_memory_payload_headers_v30()?;
+    budget.reserve_storage(header)?;
+    let result = (|| {
+        budget.charge_work(8)?;
+        let anchors = original
+            .source_index
+            .sidecar(original.instance, budget)?
+            .scoped_memory_anchors
+            .as_ref()
+            .ok_or_else(source_issued_error_v29)?;
+        if !anchors
+            .rows
+            .get(anchor)
+            .is_some_and(|retained| std::ptr::eq(retained, row))
+            || !std::ptr::eq(
+                original.source_index.emitted.operation(
+                    original.instance,
+                    row.block,
+                    row.position,
+                    budget,
+                )?,
+                operation,
+            )
+        {
+            return Err(source_issued_error_v29());
+        }
+        let ScopedMemoryAnchorKindV29::Access {
+            payload:
+                Some(ScopedMemoryPayloadV29::Store {
+                    value,
+                    source:
+                        ScopedMemoryStoreSourceV29::Operand {
+                            site,
+                            role,
+                            ty,
+                            source: ScopedMemoryOperandSourceV29::Memory { occurrence, access },
+                        },
+                }),
+            ..
+        } = row.kind
+        else {
+            return Err(source_issued_error_v29());
+        };
+        #[cfg(test)]
+        let (value, role, occurrence, access) =
+            match SOURCE_ISSUED_MEMORY_PAYLOAD_QUERY_FAULT_V30.get() {
+                0 => (value, role, occurrence, access),
+                1 => (value, role, occurrence, usize::MAX),
+                2 => (value, role, occurrence, anchor),
+                3 => (
+                    value,
+                    role,
+                    ScopedMemoryOccurrenceV29::Retained { event: usize::MAX },
+                    access,
+                ),
+                4 => (ValueId(u32::MAX), role, occurrence, access),
+                5 => (
+                    value,
+                    ExecutionOperandV29::StoreDestination,
+                    occurrence,
+                    access,
+                ),
+                _ => unreachable!(),
+            };
+        let function = original
+            .instances
+            .instance(original.instance)
+            .ok_or_else(source_issued_error_v29)?
+            .declaration();
+        check_scoped_payload_memory_v29(
+            function, anchors, anchor, row, value, site, role, ty, occurrence, access, budget,
+        )?;
+        budget.charge_work(5)?;
+        let prior = anchors
+            .rows
+            .get(access)
+            .ok_or_else(source_issued_error_v29)?;
+        let read_operation = original.source_index.emitted.operation(
+            original.instance,
+            prior.block,
+            prior.position,
+            budget,
+        )?;
+        let read =
+            source_address_value_access_v29(read_operation)?.ok_or_else(source_issued_error_v29)?;
+        let actual_value = actual.value(value, budget)?;
+        let types = original.instances.owner().source_semantic().types();
+        if !matches!(
+            types
+                .get(ty.index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(_))
+        ) {
+            return Err(source_issued_error_v29());
+        }
+        if read.writing
+            || read.value != value
+            || !matches!(operation.kind, OperationKind::Store { value: stored, .. } if stored == value)
+            || !actual_value
+                .operation
+                .is_some_and(|producer| std::ptr::eq(producer, read_operation))
+            || *actual_value.ty != lower_scalar_type(types, ty)?
+        {
+            return Err(source_issued_error_v29());
+        }
+        Ok(())
+    })();
+    // No callback or retained allocation occurs here. Settle only the known
+    // helper envelope, preserving the first semantic/resource refusal.
+    settle_source_issued_memory_payload_v30(original, result, header, budget)
+}
+
+fn settle_source_issued_memory_payload_v30(
+    original: &SourceIssuedOriginalV29<'_, '_, '_>,
+    result: Result<(), ProductionSemanticKirErrorV1>,
+    header: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let selected = original.semantic.retain(result);
+    let released = original
+        .semantic
+        .retain(budget.release_storage(header).map_err(Into::into));
+    // Retain cleanup poison independently, but do not replace the already
+    // selected compiler/resource refusal by a later settlement error.
+    selected.and(released)
+}
+
+#[cfg(test)]
+type SourceIssuedMemoryPayloadObserverV30 = fn(
+    &SourceIssuedOriginalV29<'_, '_, '_>,
+    usize,
+    &ScopedMemoryAnchorV29,
+    &Operation,
+    &SourceIssuedActualV29<'_>,
+    &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1>;
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_ISSUED_MEMORY_PAYLOAD_OBSERVER_V30: std::cell::Cell<Option<SourceIssuedMemoryPayloadObserverV30>> = const { std::cell::Cell::new(None) };
+    static SOURCE_ISSUED_MEMORY_PAYLOAD_QUERY_FAULT_V30: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }

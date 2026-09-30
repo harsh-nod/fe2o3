@@ -575,6 +575,7 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
         &mut self,
         references: &SourceReferenceEmissionV29<'_, '_>,
         instance: ProductionCallInstanceIdV1,
+        anchor: usize,
         row: &ScopedMemoryAnchorV29,
         place: &SemanticPlaceV1,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -582,6 +583,7 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
         self.check(budget)?;
         references.plan.check_owner(self.instances, budget)?;
         source_reference_owned_prepay_v29::<bool>(references.plan, budget)?;
+        source_reference_owned_prepay_v29::<usize>(references.plan, budget)?;
         budget.charge_work(14)?;
         let frame = row.source.ok_or_else(source_external_reference_error_v29)?;
         let Some(ScopedMemoryRoleV29::Operand(role)) = frame.role else {
@@ -749,7 +751,14 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
             .originals
             .get(&instance.index())
             .ok_or_else(source_descriptor_error_v29)?;
-        check_source_issued_payload_v29(original, row, actual_operation, &self.actual, budget)?;
+        check_source_issued_payload_v29(
+            original,
+            anchor,
+            row,
+            actual_operation,
+            &self.actual,
+            budget,
+        )?;
         match representation {
             AddressSpace::Global => check_source_issued_pointer_transports_v26(
                 &self.source_index.pending.function,

@@ -905,6 +905,7 @@ impl SourceIssuedAccessesV29<'_, '_, '_> {
             self.originals
                 .get(&instance.index())
                 .ok_or_else(source_reference_selection_memory_error_v30)?,
+            anchor,
             row,
             operation,
             &self.actual,
