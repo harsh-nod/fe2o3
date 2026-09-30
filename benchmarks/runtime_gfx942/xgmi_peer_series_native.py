@@ -20,7 +20,8 @@ HOT = "docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/native.py"
 HOT_SHA256 = "820ad87e74a1f9915c2eb7d2d7c7c6c1c451da4cecf29fcc381229324d98473b"
 SOURCE_ROOTS = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "crates",
                 "examples", "benchmarks/runtime_gfx942", HOT,
-                "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py")
+                "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py",
+                "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/.gitattributes")
 CONTROLS = {"copy_bytes": 1048576, "warmups": 2, "samples": 10}
 
 

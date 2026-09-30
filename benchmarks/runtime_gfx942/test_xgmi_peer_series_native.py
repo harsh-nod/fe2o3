@@ -122,6 +122,12 @@ class ObservationTests(unittest.TestCase):
 
 
 class SourceQueryTests(unittest.TestCase):
+    def test_selected_helper_checkout_attributes_are_explicit_signed_source(self):
+        path = "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/.gitattributes"
+        self.assertIn(path, native.SOURCE_ROOTS)
+        self.assertEqual(hashlib.sha256((native.ROOT / path).read_bytes()).hexdigest(),
+                         "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da")
+
     def test_native_kfd_build_explicitly_enables_required_live_validation_feature(self):
         name, command, seconds = native.build_specs(Path("/private/binaries"))[0]
         self.assertEqual(name, "build-kfd")
