@@ -333,6 +333,7 @@ pub struct ProductionSourceIndexReadV35<'a, 'source> {
 }
 
 impl ProductionSourceIndexReadV35<'_, '_> {
+    /// Returns the reader result's definition in this owner's original inventory.
     pub fn original_definition(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -344,6 +345,7 @@ impl ProductionSourceIndexReadV35<'_, '_> {
         })())
     }
 
+    /// Returns the source index computation; evaluation still needs checked launch coordinates.
     pub fn expression(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -365,6 +367,8 @@ impl ProductionSourceIndexReadV35<'_, '_> {
 }
 
 impl ProductionSourceCorrespondenceV18<'_> {
+    /// Replays the retained index-reader binding for an exact source call site.
+    /// Non-reader sites return `None`; missing or inconsistent reader evidence is an error.
     pub fn index_reader_computation_v35(
         &self,
         root: usize,
