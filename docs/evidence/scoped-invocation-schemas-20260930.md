@@ -412,3 +412,56 @@ Log SHA-256:
 `e2e27cd3a57ffc551312f3e00d74416420f4ec667418d026868733b368249d5e`.
 No simulator, protected proof or GPU execution occurred. Milestone and strict
 end-to-end coverage counts are unchanged.
+
+## Scoped Consumer Validation
+
+These runs validate candidate components, not a production publication or
+safe-launch transaction. Before/after source and tool inventories were stable
+for every run below. All runs used the pinned nightly, locked offline inputs,
+one build job and serial tests; GPU access was disabled.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r204 | `e69e3a541338162fcb8c83652cecc668dce21760` | Complete Pliron library | 2393 passed, two failed, zero ignored |
+| r205 | `aee04ee3f04e4cba110106a8a3226a92c8be0e74` | Simulator all-targets check | Test compilation failed; no tests ran |
+| r206 | `eb1a969dd82abd03ca4f4bdf2acf1eb643032b30` | Simulator all-targets check | Passed; no tests executed |
+| r207 | `187d6effa1cd09ef85bcd2694e49107f6b6677b6` | Selected lowerer and SSA borrow tests | Lowerer: 65 passed, 21 failed; Pliron: 33 passed, zero failed; zero ignored |
+| r208 | `eb1a969dd82abd03ca4f4bdf2acf1eb643032b30` | Complete simulator library | 145 passed, zero failed or ignored |
+| r209 | `dbcc523fcc6f9de5701e06aca4ec29216de566ad` | Selected structural tests | 55 passed, zero failed or ignored; 2342 filtered out |
+
+r204 exposed two incorrect test expectations: a short-storage rejection has a
+nested canonical resource error, and an invalid geometry mutation is rejected
+by the mutation verifier before structural extraction. The corrected tests
+assert those actual boundaries, retain successful checked extraction, and check
+exact resource limits and restored account floors. r209 includes all twelve
+new structural controls but is not a rerun of the complete library.
+
+r205 used the nonexistent test constant `F32`; changing it to `F32Bits` allowed
+r206 and r208 to run. r208 includes four scoped simulator unit tests, but does
+not execute the separate canonical V23 integration tests. No ordinary Rust
+source-to-simulator result is established by this library pass.
+
+r207 includes exact receiver classification for the four scoped invocation
+intrinsics. It preserves the distinction between a borrowed receiver and a
+by-value consumed index, and passes all three new classifier controls. The
+earlier source-dependency formation failure no longer stops the selected tests.
+Eighteen lowerer failures now stop at `embedded pointer kernel arguments have
+no owned region binding`; three frontier assertions disagree about the exact
+statement gap where a scope ends. The affected emission and replay negatives
+have not reached their intended boundaries and earn no negative coverage.
+The revised selection contains 86 lowerer tests, not r203's 83; counts are not
+an unchanged-suite comparison. No live-rustc compiler-driver test ran in r207.
+
+Log SHA-256:
+
+- r204: `9746bbcab0d1aa0e09cb0bc9dcb72c7dd29206c030365ef948bf9f1f872a6dc1`
+- r205: `14128061fc60d7cc5559e9d6cfecb4addf6bd2edba26e841255e5af1c9faf5be`
+- r206: `571b653c1ed49e3bff5aab56a9150e0498b8113dd364a930915c2051cc64a7a2`
+- r207: `1ab8fd552eb2a018d85ec6674ae283375d046b08f13fd7966f04b6fb50c355b8`
+- r208: `46b9378e37d9f8ff1ca0a8c17dbbcb02b29bfa20fa33146111d8b0162115c734`
+- r209: `9fcc9680b59c61ae347d0f23fade6a0bb69f2d42df20eec38abb35095a0288a6`
+
+The compiler candidate remains separate from public main. Typed optimizer
+integration, actual-source presence/control flow, protected proof and GPU
+validation remain unfinished. M0 is complete, M1-M7 are incomplete, and strict
+production-to-required-proof-to-safe-GPU coverage remains **0/47**.
