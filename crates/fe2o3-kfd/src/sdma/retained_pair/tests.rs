@@ -111,6 +111,57 @@ fn retained_pair_fenced_timeout_and_pure_refusal_preserve_retryable_custody() {
 }
 
 #[test]
+fn retained_diagnostic_errors_terminal_success_and_panics_never_publish_observations() {
+    for scenario in ["error", "terminal-success", "panic", "success"] {
+        let mut script = Script::default();
+        let mut published = 0;
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            run_diagnostic_operation(
+                &mut script,
+                17_u32,
+                |script, measurement| {
+                    assert_eq!(*measurement, 17);
+                    match scenario {
+                        "error" => Err(Gfx942SdmaErrorV1::Timeout),
+                        "terminal-success" => {
+                            script.terminal = true;
+                            Ok(())
+                        }
+                        "panic" => std::panic::panic_any(53_u32),
+                        _ => Ok(()),
+                    }
+                },
+                |measurement| {
+                    published += 1;
+                    measurement
+                },
+            )
+        }));
+        match scenario {
+            "success" => {
+                assert_eq!(outcome.unwrap().unwrap(), ((), 17));
+                assert_eq!(published, 1);
+            }
+            "error" => {
+                assert!(matches!(outcome.unwrap(), Err(Gfx942SdmaErrorV1::Timeout)));
+                assert_eq!(published, 0);
+            }
+            "terminal-success" => {
+                assert!(outcome.unwrap().is_err());
+                assert_eq!(published, 0);
+                assert!(script.terminal);
+            }
+            "panic" => {
+                assert_eq!(outcome.unwrap_err().downcast_ref::<u32>(), Some(&53));
+                assert_eq!(published, 0);
+                assert!(script.terminal);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
 fn retained_pair_nonlossy_ticket_projection_preserves_exact_variant_custody() {
     let expected = ticket();
     let tickets = vec![expected];

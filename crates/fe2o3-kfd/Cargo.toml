@@ -49,6 +49,10 @@ name = "kfd-compute-aql-queue-policy"
 name = "kfd-sdma-xgmi-peer-benchmark"
 required-features = ["live-validation"]
 
+[[example]]
+name = "kfd-xgmi-retained-host-diagnostic"
+required-features = ["hardware-diagnostic"]
+
 [dependencies]
 arrayvec = "0.7.8"
 fe2o3-amdhsa-loader.workspace = true

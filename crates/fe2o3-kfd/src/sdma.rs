@@ -52,6 +52,7 @@ use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
 mod xgmi_creation;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;
 mod retained_pair;
+mod retained_pair_diagnostic;
 mod xgmi_diagnostic;
 mod xgmi_retirement;
 pub use retained_pair::{
@@ -62,6 +63,12 @@ pub use retained_pair::{
     Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairCompletedCopyV1,
     Gfx942XgmiRetainedPairEnvironmentAssumptionV1, Gfx942XgmiRetainedPairWaitFailureV1,
 };
+#[cfg(feature = "hardware-diagnostic")]
+pub use retained_pair_diagnostic::{
+    Gfx942XgmiRetainedWaitCountersV1, Gfx942XgmiRetainedWaitCpuV1,
+    Gfx942XgmiRetainedWaitDiagnosticsV1,
+};
+use retained_pair_diagnostic::{Phase as XgmiWaitPhase, WaitTimer as XgmiWaitTimer};
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::Gfx942XgmiCopyCallDiagnosticsV1;
 use xgmi_diagnostic::{CallTimer as XgmiCallTimer, Phase as XgmiCallPhase};
@@ -3603,6 +3610,22 @@ impl Gfx942SdmaQueueOwnerV1 {
         tickets: &[Gfx942SdmaCopyTicketV1],
         deadline: XgmiBatchDeadlineV1,
     ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942SdmaErrorV1> {
+        self.wait_many_xgmi_with_timer(
+            memory,
+            tickets,
+            deadline,
+            &mut XgmiWaitTimer::<false>::new(),
+        )
+    }
+
+    fn wait_many_xgmi_with_timer<const DIAGNOSTIC: bool>(
+        &mut self,
+        memory: &mut impl SdmaSingleMemoryV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+        deadline: XgmiBatchDeadlineV1,
+        timer: &mut XgmiWaitTimer<DIAGNOSTIC>,
+    ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942SdmaErrorV1> {
+        let validation_started = timer.start();
         self.require_live()?;
         if tickets.is_empty() || tickets.len() > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
             return Err(Gfx942SdmaErrorV1::Contract("XGMI SDMA wait batch size"));
@@ -3623,7 +3646,10 @@ impl Gfx942SdmaQueueOwnerV1 {
         let deadline = deadline.resolve()?;
         let mut wait = MonotonicWaitV1::until(deadline);
         let mut ready = vec![false; slots.len()];
+        timer.end(XgmiWaitPhase::Validation, validation_started);
+        timer.begin_scan();
         loop {
+            timer.scan_round();
             let mut all_ready = true;
             for (index, slot) in slots.iter().copied().enumerate() {
                 if ready[index] {
@@ -3641,6 +3667,7 @@ impl Gfx942SdmaQueueOwnerV1 {
                     .as_ref()
                     .expect("validated XGMI SDMA batch record")
                     .completion_value;
+                timer.observation(observed == i64::from(expected));
                 if observed == i64::from(expected) {
                     ready[index] = true;
                 } else if observed == 0 {
@@ -3658,8 +3685,10 @@ impl Gfx942SdmaQueueOwnerV1 {
             if wait.expired() {
                 return Err(Gfx942SdmaErrorV1::Timeout);
             }
-            wait.pause();
+            timer.pause(&mut wait);
         }
+        timer.finish_scan();
+        let retirement_started = timer.start();
         let mut completed = Vec::new();
         completed
             .try_reserve_exact(slots.len())
@@ -3674,6 +3703,7 @@ impl Gfx942SdmaQueueOwnerV1 {
                 copy_bytes: record.copy_bytes,
             });
         }
+        timer.end(XgmiWaitPhase::Retirement, retirement_started);
         Ok(completed)
     }
 
@@ -4880,30 +4910,57 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         deadline: XgmiBatchDeadlineV1,
         currentness: XgmiRouteCurrentnessV1,
     ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
+        self.wait_batch_with_timer(
+            source_session,
+            destination_session,
+            tickets,
+            deadline,
+            currentness,
+            &mut XgmiWaitTimer::<false>::new(),
+        )
+    }
+
+    fn wait_batch_with_timer<const DIAGNOSTIC: bool>(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        deadline: XgmiBatchDeadlineV1,
+        currentness: XgmiRouteCurrentnessV1,
+        timer: &mut XgmiWaitTimer<DIAGNOSTIC>,
+    ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
         if let Err(error) = self.require_live_queue_state_v1() {
             return Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets });
         }
-        if let Err(error) = Self::validate_route_currentness(
-            source_session,
-            destination_session,
-            self.route,
-            currentness,
-        ) {
+        if let Err(error) = timer.measure(XgmiWaitPhase::Opening, || {
+            Self::validate_route_currentness(
+                source_session,
+                destination_session,
+                self.route,
+                currentness,
+            )
+        }) {
             self.poison_for_abandoned_batch();
             return Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets });
         }
         let result = match self.owner.as_mut() {
             Some(owner) => {
-                owner.wait_many_xgmi_for_in_current_scope(source_session, &tickets, deadline)
+                if DIAGNOSTIC {
+                    owner.wait_many_xgmi_with_timer(source_session, &tickets, deadline, timer)
+                } else {
+                    owner.wait_many_xgmi_for_in_current_scope(source_session, &tickets, deadline)
+                }
             }
             None => Err(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner")),
         };
-        let post = Self::validate_route_currentness(
-            source_session,
-            destination_session,
-            self.route,
-            currentness,
-        );
+        let post = timer.measure(XgmiWaitPhase::Closing, || {
+            Self::validate_route_currentness(
+                source_session,
+                destination_session,
+                self.route,
+                currentness,
+            )
+        });
         if post.is_err() {
             self.poison_for_abandoned_batch();
         }

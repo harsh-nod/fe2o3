@@ -259,3 +259,92 @@ fn completion_observation_panic_preserves_every_mapping_and_payload() {
     );
     assert_eq!(retained_identities(&owner), identities);
 }
+
+fn diagnostic_semantics<const PROFILE: bool>(relative: bool) {
+    for scenario in ["ready", "pending", "unexpected", "duplicate", "panic"] {
+        let (mut memory, mut owner, tickets, identities) = fixture();
+        write_completion(&mut memory, &mut owner, 0, i64::from(tickets[0].generation));
+        if scenario == "ready" {
+            write_completion(&mut memory, &mut owner, 1, i64::from(tickets[1].generation));
+        } else if scenario == "unexpected" {
+            write_completion(
+                &mut memory,
+                &mut owner,
+                1,
+                i64::from(tickets[1].generation) + 1,
+            );
+        } else if scenario == "panic" {
+            memory
+                .sdma_mapping_panic_v1(owner.completions.as_ref().unwrap(), "observe_i64_acquire");
+        }
+        let roster = if scenario == "duplicate" {
+            vec![tickets[0]; 2]
+        } else {
+            tickets
+        };
+        let mut timer = XgmiWaitTimer::<PROFILE>::new();
+        let started = Instant::now();
+        let deadline = if relative {
+            XgmiBatchDeadlineV1::Relative(Duration::ZERO)
+        } else {
+            XgmiBatchDeadlineV1::Absolute(started)
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.wait_many_xgmi_with_timer(&mut memory, &roster, deadline, &mut timer)
+        }));
+        match (scenario, result) {
+            ("ready", Ok(Ok(completed))) => {
+                assert_eq!(completed_identities(completed), identities);
+                assert!(owner.xgmi_records.iter().all(Option::is_none));
+                let diagnostic = timer.finish(started);
+                if PROFILE {
+                    let counters = diagnostic.counters.unwrap();
+                    assert_eq!(counters.scan_rounds, 1);
+                    assert_eq!(counters.completion_observations, 2);
+                    assert_eq!(
+                        counters.spin_pauses + counters.yield_pauses + counters.sleep_pauses,
+                        0
+                    );
+                    let first = diagnostic.first_observed_completion_ns.unwrap();
+                    let all = diagnostic.all_observed_completion_ns.unwrap();
+                    assert!(first <= all);
+                    assert!(diagnostic.validation_ns.is_some());
+                    assert!(diagnostic.retirement_ns.is_some());
+                } else {
+                    assert_eq!(diagnostic.counters, None);
+                    assert_eq!(diagnostic.scan_ns, None);
+                }
+                continue;
+            }
+            ("pending", Ok(Err(Gfx942SdmaErrorV1::Timeout))) => {}
+            (
+                "unexpected",
+                Ok(Err(Gfx942SdmaErrorV1::Contract("unexpected XGMI SDMA batch completion value"))),
+            ) => {
+                assert!(owner.is_poisoned());
+            }
+            (
+                "duplicate",
+                Ok(Err(Gfx942SdmaErrorV1::Contract("duplicate XGMI SDMA wait ticket"))),
+            ) => {
+                assert!(!owner.is_poisoned());
+            }
+            ("panic", Err(payload)) => {
+                assert_eq!(
+                    payload.downcast_ref::<(&'static str, &'static str)>(),
+                    Some(&("N1 mapped panic", "observe_i64_acquire"))
+                );
+            }
+            _ => panic!("ordinary/profiled scenario diverged: {scenario}"),
+        }
+        assert_eq!(retained_identities(&owner), identities);
+    }
+}
+
+#[test]
+fn ordinary_and_profiled_batch_wait_preserve_custody_deadlines_and_panics() {
+    for relative in [false, true] {
+        diagnostic_semantics::<false>(relative);
+        diagnostic_semantics::<true>(relative);
+    }
+}

@@ -864,10 +864,7 @@ fn public_operation_families_guard_before_effectful_route_validation() {
             "pub fn observe_progress",
             "Self::validate_route_currentness",
         ),
-        (
-            "fn wait_batch_for_with_currentness",
-            "Self::validate_route_currentness",
-        ),
+        ("fn wait_batch_with_timer", "timer.measure"),
         (
             "fn wait_for_with_currentness",
             "Self::validate_route_currentness",
@@ -882,6 +879,21 @@ fn public_operation_families_guard_before_effectful_route_validation() {
             .unwrap_or_else(|| panic!("{method}: missing route effect"));
         assert!(guard < effect, "{method}");
     }
+    let wait_wrapper = method_body("fn wait_batch_for_with_currentness")
+        .split_once(" {\n")
+        .expect("ordinary batch wait wrapper body")
+        .1
+        .split_whitespace()
+        .collect::<String>();
+    // Exact delegation excludes effects before the guarded inner method.
+    assert_eq!(
+        wait_wrapper,
+        concat!(
+            "self.wait_batch_with_timer(",
+            "source_session,destination_session,tickets,deadline,currentness,",
+            "&mutXgmiWaitTimer::<false>::new(),)"
+        )
+    );
     for (method, mode) in [
         ("pub fn begin_batch<'a>", "Disabled"),
         (

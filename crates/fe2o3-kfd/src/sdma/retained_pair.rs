@@ -233,6 +233,20 @@ fn run_operation<C: Custody, R: TerminalOutcome>(
     retained_pair_operation_body!(context, operation)
 }
 
+#[cfg(any(feature = "hardware-diagnostic", test))]
+fn run_diagnostic_operation<C: Custody, M, T, E, D>(
+    context: &mut C,
+    mut measurement: M,
+    operation: impl FnOnce(&mut C, &mut M) -> Result<T, E>,
+    observe: impl FnOnce(M) -> D,
+) -> Result<(T, D), E>
+where
+    Result<T, E>: TerminalOutcome,
+{
+    let completed = run_operation(context, |context| operation(context, &mut measurement))?;
+    Ok((completed, observe(measurement)))
+}
+
 struct Scope<C: Custody> {
     context: C,
     finished: bool,
@@ -486,6 +500,34 @@ impl Gfx942NativeXgmiSdmaRetainedPairV1<'_> {
         })
     }
 
+    /// Host-only observations of the same retained submission, including all checks.
+    /// No diagnostic result escapes failed or terminal custody.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn submit_batch_diagnostic_v1(
+        &mut self,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    ) -> Result<
+        (Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiCopyCallDiagnosticsV1),
+        Gfx942XgmiBatchSubmissionFailureV1,
+    > {
+        let started = Instant::now();
+        let timer = XgmiCallTimer::<true>::new();
+        run_diagnostic_operation(
+            &mut self.scope.context,
+            timer,
+            |pair, timer| {
+                pair.queue.submit_batch_with_timer(
+                    pair.source,
+                    pair.destination,
+                    requests,
+                    XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
+                    timer,
+                )
+            },
+            |timer| timer.finish(started),
+        )
+    }
+
     /// Uses the original deadline; timeout retains the exact queue-owned roster.
     pub fn wait_batch_until(
         &mut self,
@@ -501,6 +543,44 @@ impl Gfx942NativeXgmiSdmaRetainedPairV1<'_> {
         timeout: Duration,
     ) -> Result<Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairWaitFailureV1> {
         self.wait(tickets, XgmiBatchDeadlineV1::Relative(timeout))
+    }
+
+    /// The same relative deadline, adaptive wait, and paired closing checks.
+    /// Counters and times are success-only host diagnostics, not device duration.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn wait_batch_for_diagnostic_v1(
+        &mut self,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        timeout: Duration,
+    ) -> Result<
+        (
+            Gfx942XgmiRetainedPairCompletedBatchV1,
+            Gfx942XgmiRetainedWaitDiagnosticsV1,
+        ),
+        Gfx942XgmiRetainedPairWaitFailureV1,
+    > {
+        let started = Instant::now();
+        let timer = XgmiWaitTimer::<true>::new();
+        let (completed, diagnostic) = run_diagnostic_operation(
+            &mut self.scope.context,
+            timer,
+            |pair, timer| {
+                pair.queue.wait_batch_with_timer(
+                    pair.source,
+                    pair.destination,
+                    tickets,
+                    XgmiBatchDeadlineV1::Relative(timeout),
+                    XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
+                    timer,
+                )
+            },
+            |timer| timer.finish(started),
+        )
+        .map_err(|inner| Gfx942XgmiRetainedPairWaitFailureV1 { inner })?;
+        Ok((
+            Gfx942XgmiRetainedPairCompletedBatchV1 { inner: completed },
+            diagnostic,
+        ))
     }
 
     fn wait(
