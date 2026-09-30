@@ -320,3 +320,33 @@ written and no container, mount, installation or proof/GPU job was created.
 Log: `native-retained-volume-pin-audit-20260930T104047Z-2176959.log` in the local
 evidence directory. SHA-256:
 `18fa62c6d07a851ccd2dccf9a73709b950f876f473730cd47672a9d204336817`.
+
+## Native Custody Library Rerun
+
+r157 at `5ef50c9e7c3730250fbd6303a3181c1310a3737b` ran both complete
+coordinator and protected-service-spawn library suites, with one Cargo job,
+serial tests, locked/offline dependencies and disabled GPU visibility:
+
+| Library | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| Compiler execution coordinator | 287 | 0 | 17 |
+| Protected service spawn | 271 | 0 | 16 |
+
+The 33 ignored tests include the genuine original-root request, native compiler
+execution, mapped-child confinement and cgroup cleanup matrices. They remain
+unexecuted, not qualified by the 558 passing library tests. The systemd source
+contract check also passed; it does not execute the service unit.
+
+This candidate retains the original request through helper-backed preparation
+and a compiler child behind a closed exec gate. The added channel fault hook is
+test-only and observes the authenticated child channel before trace seizure.
+Namespace confinement is mandatory for compiler children and mapped helpers;
+unmapped service creators retain their separate role. The compiler gate stays
+closed and the production response remains `RuntimeEnforcementUnavailable`.
+
+Source and tool inventories remained unchanged. Log SHA-256:
+`7eb8bbd02cfc3d6590050309822ed5a22ec9fbdcca3395ec590f628fd648b075`.
+The public integration applies the four new signed commits on top of their
+already-published signed prerequisites. Its code tree exactly matches this
+tested candidate; only evidence documents differ. Provisioned deployment,
+protected proof execution and GPU validation remain outstanding.

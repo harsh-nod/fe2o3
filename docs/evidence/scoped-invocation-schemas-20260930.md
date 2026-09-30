@@ -97,3 +97,12 @@ The source and tool inventories remained unchanged. The follow-up commit
 
 r156 log SHA-256:
 `8cda82b276742502a57a7bccff013ba1881b0497150483462b3d0ef6f88b4a4c`.
+
+r158 repeated the all-target compiler check at
+`246388fd527b9b43a431cd3e8c0824d72b4b8b85` and **passed** with unchanged
+source/tool inventories. This confirms compilation of the frontend and test
+targets, not execution of the compiler tests or activation of scoped production
+lowering. The genuine source fixtures and lifecycle integration remain due.
+
+r158 log SHA-256:
+`062cabdb6fa4220fd30bc97cfa14c6530953542d180a095bb8c28bdd492259df`.
