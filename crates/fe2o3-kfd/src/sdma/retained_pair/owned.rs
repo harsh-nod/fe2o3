@@ -12,13 +12,21 @@ pub type Gfx942XgmiOwnedRetainedPairPartsV1 = (
     SharedGttMemorySessionV1,
 );
 
-struct Parts {
-    queue: Gfx942NativeXgmiSdmaQueueV1,
-    source: SharedGttMemorySessionV1,
-    destination: SharedGttMemorySessionV1,
+macro_rules! retained_pair_owned_declarations_v1 {
+    ($($items:tt)*) => { $($items)* };
 }
 
-impl Parts {
+include!("owned/declarations.rs");
+include!("owned/bodies.rs");
+
+type NativeParts =
+    Parts<Gfx942NativeXgmiSdmaQueueV1, SharedGttMemorySessionV1, SharedGttMemorySessionV1>;
+
+fn empty_owned_context<T>() -> T {
+    std::process::abort()
+}
+
+impl NativeParts {
     fn borrow(&mut self) -> Pair<'_> {
         Pair {
             queue: &mut self.queue,
@@ -26,13 +34,15 @@ impl Parts {
             destination: &mut self.destination,
         }
     }
+}
 
-    fn into_parts(self) -> Gfx942XgmiOwnedRetainedPairPartsV1 {
-        (self.queue, self.source, self.destination)
+impl<Q, S, D> Parts<Q, S, D> {
+    fn into_parts(self) -> (Q, S, D) {
+        retained_pair_owned_parts_body!(self)
     }
 }
 
-impl Custody for Parts {
+impl Custody for NativeParts {
     fn terminal(&self) -> bool {
         retained_pair_terminal_body!(self)
     }
@@ -44,79 +54,44 @@ impl Custody for Parts {
 }
 
 // The private generic holder lets CPU tests exercise the actual move/drop path.
-// Only Parts is used by the public API; no provider or raw-owner accessor exists.
-struct Owned<C: Custody> {
-    context: Option<C>,
-}
-
-struct Failure<C: Custody> {
-    owner: Owned<C>,
-    error: Gfx942SdmaErrorV1,
-    entry_refusal: bool,
-}
-
+// Only NativeParts is used by the public API; no provider or raw-owner accessor exists.
 impl<C: Custody> Owned<C> {
     fn new(context: C) -> Self {
-        Self {
-            context: Some(context),
-        }
+        retained_pair_owned_new_body!(context)
     }
 
     fn context(&self) -> &C {
-        self.context
-            .as_ref()
-            .unwrap_or_else(|| std::process::abort())
+        retained_pair_owned_context_body!(self)
     }
 
     fn context_mut(&mut self) -> &mut C {
-        self.context
-            .as_mut()
-            .unwrap_or_else(|| std::process::abort())
+        retained_pair_owned_context_mut_body!(self)
     }
 
     fn take(&mut self) -> C {
-        self.context.take().unwrap_or_else(|| std::process::abort())
+        retained_pair_owned_take_body!(self)
     }
 
     fn admit(
         mut self,
         admit: impl FnOnce(&mut C) -> Result<(), Gfx942SdmaErrorV1>,
-    ) -> Result<Self, Failure<C>> {
-        match run_operation(self.context_mut(), admit) {
-            Ok(()) => Ok(self),
-            Err(error) => Err(Failure {
-                owner: self,
-                error,
-                entry_refusal: true,
-            }),
-        }
+    ) -> Result<Self, Failure<C, Gfx942SdmaErrorV1>> {
+        let result = run_operation(self.context_mut(), admit);
+        retained_pair_owned_admit_post_body!(self, result)
     }
 
     fn finish(
         mut self,
         close: impl FnOnce(&mut C) -> Result<(), Gfx942SdmaErrorV1>,
-    ) -> Result<C, Failure<C>> {
-        match run_operation(self.context_mut(), close) {
-            Ok(()) => Ok(self.take()),
-            Err(error) => {
-                self.context_mut().quarantine();
-                Err(Failure {
-                    owner: self,
-                    error,
-                    entry_refusal: false,
-                })
-            }
-        }
+    ) -> Result<C, Failure<C, Gfx942SdmaErrorV1>> {
+        let result = run_operation(self.context_mut(), close);
+        retained_pair_owned_finish_post_body!(self, result)
     }
 }
 
-impl<C: Custody> Failure<C> {
-    fn recover_unadmitted(mut self) -> Result<(Gfx942SdmaErrorV1, C), Self> {
-        if !self.entry_refusal || self.owner.context().terminal() {
-            return Err(self);
-        }
-        let context = self.owner.take();
-        Ok((self.error, context))
+impl<C: Custody, E> Failure<C, E> {
+    fn recover_unadmitted(mut self) -> Result<(E, C), Self> {
+        retained_pair_owned_recover_body!(self)
     }
 }
 
@@ -175,7 +150,7 @@ impl<C: Custody> Drop for Owned<C> {
 /// ```
 #[must_use = "finish and recover the exact native owners; occupied Drop aborts"]
 pub struct Gfx942NativeXgmiSdmaOwnedRetainedPairV1 {
-    owner: Owned<Parts>,
+    owner: Owned<NativeParts>,
 }
 
 /// Retains the original error and every queue/session owner.
@@ -185,7 +160,7 @@ pub struct Gfx942NativeXgmiSdmaOwnedRetainedPairV1 {
 /// error while it owns those parts aborts, including during unwinding.
 #[must_use = "retain terminal custody or explicitly recover nonterminal entry owners"]
 pub struct Gfx942XgmiOwnedRetainedPairFailureV1 {
-    failure: Failure<Parts>,
+    failure: Failure<NativeParts, Gfx942SdmaErrorV1>,
 }
 
 impl Gfx942XgmiOwnedRetainedPairFailureV1 {

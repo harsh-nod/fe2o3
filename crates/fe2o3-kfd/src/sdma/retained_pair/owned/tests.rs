@@ -1,5 +1,5 @@
 use super::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 struct Script {
@@ -60,8 +60,113 @@ fn error_pointer(error: &Gfx942SdmaErrorV1) -> *const u8 {
 
 // Only CPU fixtures are extracted here to release test allocations. Production
 // offers no corresponding extraction of a failed or terminal native owner.
-fn dispose_fixture_failure(mut failure: Failure<Script>) {
+fn dispose_fixture_failure(mut failure: Failure<Script, Gfx942SdmaErrorV1>) {
     drop(failure.owner.take());
+}
+
+#[test]
+fn owned_retained_pair_generic_parts_keep_exact_direction_and_owners() {
+    let parts = Parts {
+        queue: Box::new(11u64),
+        source: Box::new(23u64),
+        destination: Box::new(37u64),
+    };
+    let addresses = [
+        parts.queue.as_ref() as *const u64,
+        parts.source.as_ref() as *const u64,
+        parts.destination.as_ref() as *const u64,
+    ];
+    let (queue, source, destination) = parts.into_parts();
+    assert_eq!([*queue, *source, *destination], [11, 23, 37]);
+    assert_eq!(
+        [
+            queue.as_ref() as *const u64,
+            source.as_ref() as *const u64,
+            destination.as_ref() as *const u64,
+        ],
+        addresses
+    );
+}
+
+struct ChangingObservation {
+    script: Script,
+    terminal: Rc<Cell<bool>>,
+    observations: Rc<Cell<usize>>,
+}
+
+impl Custody for ChangingObservation {
+    fn terminal(&self) -> bool {
+        self.observations.set(self.observations.get() + 1);
+        self.terminal.get()
+    }
+
+    fn quarantine(&mut self) {
+        self.terminal.set(true);
+        self.script.quarantine();
+    }
+}
+
+#[test]
+fn owned_retained_pair_recovery_observes_later_external_terminalization() {
+    let terminal = Rc::new(Cell::new(false));
+    let observations = Rc::new(Cell::new(0));
+    let script = Script::new(trace());
+    let identities = script.identities();
+    let failure = Owned::new(ChangingObservation {
+        script,
+        terminal: terminal.clone(),
+        observations: observations.clone(),
+    })
+    .admit(|_| Err(Gfx942SdmaErrorV1::QueueFull))
+    .err()
+    .unwrap();
+    assert_eq!(observations.get(), 1);
+    terminal.set(true);
+    let mut failure = failure.recover_unadmitted().err().unwrap();
+    assert_eq!(observations.get(), 2);
+    assert_eq!(failure.owner.context().script.identities(), identities);
+    drop(failure.owner.take());
+}
+
+#[test]
+fn owned_retained_pair_finish_failure_recovery_skips_terminal_observation() {
+    let terminal = Rc::new(Cell::new(false));
+    let observations = Rc::new(Cell::new(0));
+    let script = Script::new(trace());
+    let identities = script.identities();
+    let failure = Owned::new(ChangingObservation {
+        script,
+        terminal: terminal.clone(),
+        observations: observations.clone(),
+    })
+    .finish(|_| Err(Gfx942SdmaErrorV1::Pending))
+    .err()
+    .unwrap();
+    assert_eq!(observations.get(), 1);
+    // Even a later false observation cannot turn failed close into entry refusal.
+    terminal.set(false);
+    let mut failure = failure.recover_unadmitted().err().unwrap();
+    assert_eq!(observations.get(), 1);
+    assert_eq!(failure.owner.context().script.identities(), identities);
+    drop(failure.owner.take());
+}
+
+#[test]
+fn owned_retained_pair_recovery_moves_opaque_error_without_replacement() {
+    let script = Script::new(trace());
+    let identities = script.identities();
+    let error = Box::new(String::from("opaque original failure"));
+    let error_address = error.as_ref() as *const String;
+    let failure = Failure {
+        owner: Owned::new(script),
+        error,
+        entry_refusal: true,
+    };
+    let (error, script) = failure
+        .recover_unadmitted()
+        .unwrap_or_else(|_| panic!("nonterminal entry refusal"));
+    assert_eq!(error.as_ref() as *const String, error_address);
+    assert_eq!(script.identities(), identities);
 }
 
 #[test]
