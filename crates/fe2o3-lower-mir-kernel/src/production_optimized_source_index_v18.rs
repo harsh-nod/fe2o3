@@ -19,6 +19,8 @@ pub(super) struct SourceIndex {
     pub(super) gaps: Vec<Option<ProductionOptimizedSourceGapIntervalV18>>,
     pub(super) attachments: Vec<AttachmentTarget>,
     sites: Vec<SourceSite>,
+    pub(super) selected: Vec<selection::SelectedTransportRowV30>,
+    pub(super) selected_roots: Vec<std::ops::Range<usize>>,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +99,8 @@ impl SourceIndex {
             gaps: resources::owned_vector(gap_count, credit, budget)?,
             attachments: resources::owned_vector(original.attachments.len(), credit, budget)?,
             sites: Vec::new(),
+            selected: Vec::new(),
+            selected_roots: Vec::new(),
         };
         budget.charge_work(input.operations().len())?;
         result.operations.resize(input.operations().len(), None);
@@ -127,6 +131,8 @@ impl SourceIndex {
             result.attachments.push(target);
         }
         result.build_sites(original, credit, budget)?;
+        (result.selected, result.selected_roots) =
+            selection::build(original, checked, control, &result, credit, budget)?;
         Ok(result)
     }
 

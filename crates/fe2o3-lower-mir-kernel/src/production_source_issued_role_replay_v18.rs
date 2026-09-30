@@ -56,6 +56,111 @@ pub(super) fn checked_issued_source_rows_v18<'a>(
     })())
 }
 
+// A separate original-owner query for the ordered conditional relation. This
+// does not pass through or weaken the singleton final-consumer gate above.
+struct SelectedSourceRowsFrameV30<'view, 'source, 'budget, 'work> {
+    original: &'view ProductionSourceCorrespondenceV18<'source>,
+    root: usize,
+    budget: &'budget mut ArgumentBudgetV1<'work>,
+}
+
+impl<'view> SelectedSourceRowsFrameV30<'view, '_, '_, '_> {
+    fn read(self) -> SourceOwnedResultV18<&'view [PendingSourceSelectedAccessV30]> {
+        let Self {
+            original,
+            root,
+            budget,
+        } = self;
+        let owner = original.source.root_row(root)?;
+        let Some(pending) = owner.source_slots.pending_memory.as_ref() else {
+            return Ok(&[][..]);
+        };
+        budget.charge_work(1)?;
+        if pending.issued.selected.is_empty() {
+            return Ok(&[][..]);
+        }
+        check_immutable_issued_roles_v18(original, root, &pending.issued, budget)?;
+        Ok(pending.issued.selected.as_slice())
+    }
+}
+
+pub(super) fn selected_source_rows_headers_v30() -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        std::mem::size_of::<SelectedSourceRowsFrameV30<'_, '_, '_, '_>>(),
+        argument_product_v1(
+            2,
+            std::mem::size_of::<SourceOwnedResultV18<SelectedSourceRowsFrameV30<'_, '_, '_, '_>>>(),
+        )?,
+        argument_product_v1(
+            2,
+            std::mem::size_of::<SourceOwnedResultV18<&[PendingSourceSelectedAccessV30]>>(),
+        )?,
+    ])
+}
+
+pub(super) fn checked_selected_source_rows_v30<'a>(
+    original: &'a ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<&'a [PendingSourceSelectedAccessV30]> {
+    original.query(budget)?;
+    original.retain_query(
+        SelectedSourceRowsFrameV30 {
+            original,
+            root,
+            budget,
+        }
+        .read(),
+    )
+}
+
+#[cfg(test)]
+pub(super) fn selected_source_rows_frame_oracle_v30() -> usize {
+    type Fields<'a> = (
+        &'a ProductionSourceCorrespondenceV18<'a>,
+        usize,
+        &'a mut ArgumentBudgetV1<'a>,
+    );
+    assert_eq!(
+        std::mem::size_of::<SelectedSourceRowsFrameV30<'_, '_, '_, '_>>(),
+        std::mem::size_of::<Fields<'_>>()
+    );
+    let expected = std::mem::size_of::<Fields<'_>>()
+        + 2 * std::mem::size_of::<SourceOwnedResultV18<Fields<'_>>>()
+        + 2 * std::mem::size_of::<SourceOwnedResultV18<&[PendingSourceSelectedAccessV30]>>();
+    assert_eq!(selected_source_rows_headers_v30().unwrap(), expected);
+    expected
+}
+
+#[cfg(test)]
+pub(super) fn selected_row_count_oracle_v30(pending: &PendingSourceMemoryV29) -> usize {
+    pending
+        .issued
+        .selected
+        .iter()
+        .map(|row| {
+            3 + 2 * row.selection.nodes.len()
+                + row.selection.edges.len()
+                + row
+                    .selection
+                    .nodes
+                    .iter()
+                    .filter(|node| node.invocation.is_some())
+                    .count()
+                + row
+                    .leaves
+                    .iter()
+                    .map(|leaf| match leaf.origin {
+                        PendingSourceSelectedLeafOriginV30::Issued(_) => 8,
+                        PendingSourceSelectedLeafOriginV30::Descriptor(_) => 6,
+                    })
+                    .sum::<usize>()
+                + 3 * row.guards.len()
+                + row.obligations.len()
+        })
+        .sum()
+}
+
 fn check_issued_original_definition_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
     root: usize,

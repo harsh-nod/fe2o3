@@ -39,6 +39,7 @@ pub(super) fn headers<T, E, F>(_: &F) -> Result<usize, ArgumentResourceV1> {
         size_of::<std::panic::AssertUnwindSafe<Result<T, E>>>(),
         3 * size_of::<usize>(),
         source_reference_cleanup_headers_v29()?,
+        selection::headers()?,
     ])
 }
 

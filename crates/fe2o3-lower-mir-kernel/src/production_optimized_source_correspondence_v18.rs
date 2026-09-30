@@ -24,6 +24,8 @@ mod index;
 mod memory;
 #[path = "production_optimized_source_resources_v18.rs"]
 mod resources;
+#[path = "production_optimized_source_selection_v30.rs"]
+pub(super) mod selection;
 pub use attachments::{
     ProductionOptimizedSourceGapV18, ProductionOptimizedSourceOperationV18,
     ProductionOptimizedSourceSpanV18, ProductionOptimizedSourceTerminatorV18,

@@ -44,7 +44,7 @@ fn optimized_correspondence_header_oracle_v18<T, E, F>(_: &F) -> usize {
     );
     type Entry<'a, F> = (
         fe2o3_kernel_analysis::CheckedCanonicalKirControlIndexV18<'a, 'a, 'a>,
-        [Vec<usize>; 5],
+        [Vec<usize>; 7],
         F,
     );
     type EntryResult<'a, F> = SourceOwnedResultV18<Entry<'a, F>>;
@@ -76,12 +76,13 @@ fn optimized_correspondence_header_oracle_v18<T, E, F>(_: &F) -> usize {
         + size_of::<Invoke<'_, '_, F>>()
         + size_of::<AssertUnwindSafe<Invoke<'_, '_, F>>>()
         + size_of::<ProductionOptimizedSourceCorrespondenceV18<'_>>()
-        + 5 * size_of::<Vec<usize>>()
+        + 7 * size_of::<Vec<usize>>()
         + size_of::<std::thread::Result<Result<T, E>>>()
         + size_of::<Result<T, E>>()
         + size_of::<AssertUnwindSafe<Result<T, E>>>()
         + 3 * size_of::<usize>()
         + cleanup
+        + optimized_source_v18::selection::header_oracle_v30()
         + source_owned_finish_header_oracle_v26::<T, E>()
 }
 
@@ -124,6 +125,8 @@ fn optimized_source_retained_oracle_v18<F>(
             * size_of::<Option<ProductionOptimizedSourceGapIntervalV18>>()
         + original.attachments.len() * size_of::<OptimizedAttachmentOracleV18>()
         + sites * 7 * size_of::<usize>()
+        + optimized_source_v18::selection::retained_rows_oracle_v30(original)
+        + original.source.owner.inner.pending.roots.len() * size_of::<std::ops::Range<usize>>()
 }
 
 #[test]

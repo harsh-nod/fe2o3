@@ -338,6 +338,7 @@ fn install_optimized_issued_roles_inner_v18(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
     use fe2o3_kernel_ir::CanonicalKirUseCoordinateV1 as Usage;
+    optimized.replay_selected_transport_v30(root, budget)?;
     let Some(rows) =
         scoped_raw_admission_v29::checked_issued_source_rows_v18(original, root, budget)?
     else {
