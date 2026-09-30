@@ -63,6 +63,27 @@ impl ProductionMixedMemoryCheckedNativePoliciesV26<'_, '_> {
             .check_source_subject(original, optimized, budget)?;
         Ok(())
     }
+    // Internal stage transport borrows the completed source evidence only after
+    // replaying the same owner and current-account checks as every public query.
+    pub(super) fn source_obligations_v30(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&[CanonicalRankedSourceObligationV18], NativeError> {
+        self.check_source_subject_v26(original, optimized, budget)?;
+        Ok(self.obligations)
+    }
+
+    pub(super) fn completed_globals_v30(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&CompletedGlobalSourcesV26<'_, '_>, NativeError> {
+        self.check_source_subject_v26(original, optimized, budget)?;
+        Ok(self.globals)
+    }
     /// Returns the complete output function roster, including external declarations.
     pub fn function_count(&self, budget: &mut ArgumentBudgetV1<'_>) -> Result<usize, NativeError> {
         self.check(budget)?;

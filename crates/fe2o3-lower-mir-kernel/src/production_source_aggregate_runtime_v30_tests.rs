@@ -896,7 +896,14 @@ fn aggregate_role_header_oracle_v30() -> usize {
             fe2o3_pliron::CanonicalRankedPolicyFailureV1,
         >,
     );
-    size_of::<Frame<'_>>() + align_of::<Frame<'_>>()
+    size_of::<Frame<'_>>()
+        + align_of::<Frame<'_>>()
+        + size_of::<
+            Result<
+                &[fe2o3_pliron::CanonicalRankedSourceObligationV18],
+                ProductionSourceNativeLifecycleErrorV18,
+            >,
+        >()
 }
 
 fn aggregate_completion_header_oracle_v30<Owner>(
@@ -940,6 +947,7 @@ fn aggregate_completion_header_oracle_v30<Owner>(
         + mixed_source_completion_headers_v26().unwrap()
         + owner
         + roles
+        + size_of::<Result<&(), ProductionSourceNativeLifecycleErrorV18>>()
         + globals
         + size_of::<Rows>()
         + size_of::<Result<Rows, ProductionAggregateSourceErrorV30>>()

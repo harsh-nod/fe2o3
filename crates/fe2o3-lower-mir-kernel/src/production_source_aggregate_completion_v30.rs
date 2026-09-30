@@ -257,7 +257,9 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
                                                 native, original, optimized, budget,
                                             )?;
                                             Globals::fill_initial(
-                                                native.globals,
+                                                native.completed_globals_v30(
+                                                    original, optimized, budget,
+                                                )?,
                                                 original,
                                                 optimized,
                                                 &mut premises,
@@ -508,6 +510,12 @@ fn aggregate_completion_headers_v30() -> Result<usize, ArgumentResourceV1> {
         mixed_source_completion_headers_v26()?,
         aggregate_completion_owner_headers_v30()?,
         aggregate_role_headers_v30()?,
+        size_of::<
+            Result<
+                &slice_view_v1::CompletedGlobalSourcesV26<'_, '_>,
+                ProductionSourceNativeLifecycleErrorV18,
+            >,
+        >(),
         slice_view_v1::aggregate_global_headers_v30()?,
         size_of::<Rows>(),
         size_of::<Result<Rows, ProductionAggregateSourceErrorV30>>(),

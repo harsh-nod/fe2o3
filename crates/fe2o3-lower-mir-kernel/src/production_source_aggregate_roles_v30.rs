@@ -52,7 +52,16 @@ fn aggregate_role_headers_v30() -> Result<usize, ArgumentResourceV1> {
             fe2o3_pliron::CanonicalRankedPolicyFailureV1,
         >,
     );
-    argument_sum_v1(&[size_of::<Frame<'_>>(), std::mem::align_of::<Frame<'_>>()])
+    argument_sum_v1(&[
+        size_of::<Frame<'_>>(),
+        std::mem::align_of::<Frame<'_>>(),
+        size_of::<
+            Result<
+                &[fe2o3_pliron::CanonicalRankedSourceObligationV18],
+                ProductionSourceNativeLifecycleErrorV18,
+            >,
+        >(),
+    ])
 }
 
 impl AggregateStageStateV30 for AggregateSourceRolesV30 {
@@ -102,7 +111,7 @@ impl AggregateSourceRolesV30 {
                 .missing("aggregate source role seed owner or reuse")
                 .map_err(Into::into);
         }
-        for role in native.obligations {
+        for role in native.source_obligations_v30(original, optimized, budget)? {
             budget
                 .charge_work(3)
                 .map_err(ProductionSourceOwnedViewErrorV18::from)?;
