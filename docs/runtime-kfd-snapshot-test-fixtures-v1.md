@@ -59,8 +59,11 @@ The [compact evidence packet](evidence/dev-kfd-snapshot-fixtures-2026-09-30/READ
 retains all attempt histories, exact source inventories and a minimal Git bundle
 for the detached signed candidate. Its 470-member archive is byte-checked on
 readback. The bundle requires baseline `5cf8266b6`; neither a complete checkout
-nor the retained test executables are included. Publication to both remotes is
-still blocked by DNS resolution, so public availability is not asserted.
+nor the retained test executables are included. Publication has recovered:
+on 2026-09-30, both remotes' `codex/r65-runtime-drain-versions` refs were confirmed
+at `44c9266dfef479804cc222c3c9a528e42a788841`, which contains the packet and its
+required baseline history. This is topic-branch publication, not a main merge
+or an additional qualification result.
 
 The local records are retained under
 `/home/harsh/.codex-tmp/fe2o3-kfd-snapshot-qualification-20260930-audit`.

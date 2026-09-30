@@ -26,9 +26,11 @@ cherry-pick. `packaging/candidate.bundle` therefore supplies its exact signed
 commit and four changed source blobs, plus the connecting trees. The bundle is
 not a full clone: it requires existing base commit
 `5cf8266b6620591790e154fdf75110300a583539` and that commit's source history.
-The base's public availability is not asserted here; the attempted pushes were
-still blocked when this packet was prepared. Once the matching branch history
-is available in a checkout, the recovery commands are:
+The initial pushes were blocked when this packet was prepared. On 2026-09-30,
+both remotes' `codex/r65-runtime-drain-versions` refs were confirmed at
+`44c9266dfef479804cc222c3c9a528e42a788841`; the base is an ancestor of that commit.
+This publishes the required branch history, not a main merge or a new test run.
+With that history available in a checkout, the recovery commands are:
 
 ```sh
 git bundle verify /path/to/packet/packaging/candidate.bundle
