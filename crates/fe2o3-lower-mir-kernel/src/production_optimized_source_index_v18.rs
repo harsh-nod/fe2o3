@@ -454,6 +454,8 @@ mod block_site_tests {
                     end: index + 1,
                 })
                 .collect(),
+            selected: vec![],
+            selected_roots: vec![],
         }
     }
 
