@@ -177,7 +177,7 @@ fn role_matches(
 }
 
 fn leaf_matches(
-    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    facts: &SelectedFinalFactsV30<'_>,
     index: &ProjectionIndexV30<'_>,
     access: usize,
     leaf: usize,
@@ -189,13 +189,13 @@ fn leaf_matches(
     let ActualStep::Formation { operation } = pointer.step else {
         return resources::binding("selected final choice is not an actual address formation");
     };
-    let actual = source_operation_row_v18(optimized.checked.output(), operation, budget)?.operation;
+    let actual = source_operation_row_v18(facts.output, operation, budget)?.operation;
     let OperationKind::GetElementPointer { base, offset } = actual.kind else {
         return resources::binding("selected final choice changed address formation");
     };
     let function = operation.block.function;
-    let data = definition(optimized.checked.output(), function, base, budget)?;
-    let address_index = definition(optimized.checked.output(), function, offset, budget)?;
+    let data = definition(facts.output, function, base, budget)?;
+    let address_index = definition(facts.output, function, offset, budget)?;
     let Definition::Result {
         operation: data_operation,
         result: 0,
@@ -203,12 +203,11 @@ fn leaf_matches(
     else {
         return resources::binding("selected final data is not an exact result");
     };
-    let data_actual =
-        source_operation_row_v18(optimized.checked.output(), data_operation, budget)?.operation;
+    let data_actual = source_operation_row_v18(facts.output, data_operation, budget)?.operation;
     let OperationKind::SliceData { slice } = data_actual.kind else {
         return resources::binding("selected final data changed slice producer");
     };
-    let receiver = definition(optimized.checked.output(), function, slice, budget)?;
+    let receiver = definition(facts.output, function, slice, budget)?;
     budget.charge_work(10)?;
     if !matches!(actual.results.as_slice(), [result] if result.id == pointer.value)
         || choice.domain.pointer() != pointer.value
@@ -218,18 +217,8 @@ fn leaf_matches(
     }
     let matches = match original.origin {
         PendingSourceSelectedLeafOriginV30::Issued(source) => {
-            let root = definition(
-                optimized.checked.output(),
-                function,
-                choice.domain.slice(),
-                budget,
-            )?;
-            let length = definition(
-                optimized.checked.output(),
-                function,
-                choice.length_origin,
-                budget,
-            )?;
+            let root = definition(facts.output, function, choice.domain.slice(), budget)?;
+            let length = definition(facts.output, function, choice.length_origin, budget)?;
             role_matches(index, access, leaf, 0, root, budget)?
                 && role_matches(index, access, leaf, 1, receiver, budget)?
                 && role_matches(index, access, leaf, 2, address_index, budget)?
@@ -250,7 +239,7 @@ fn leaf_matches(
 }
 
 fn injection_matches(
-    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    facts: &SelectedFinalFactsV30<'_>,
     access: usize,
     obligation: PendingSourceSelectedObligationV30,
     choice: &ActualChoice,
@@ -297,7 +286,7 @@ fn injection_matches(
                     let Some(target) = projection.relation.output_target else {
                         return Ok(false);
                     };
-                    let target = forwarding::definition_node(optimized, nodes, target, budget)?;
+                    let target = forwarding::definition_node(facts, nodes, target, budget)?;
                     if !projection.relation.control.executable || !walk.contains(target, budget)? {
                         return Ok(false);
                     }
@@ -314,7 +303,7 @@ fn injection_matches(
             let Some(destination) = destination else {
                 return Ok(false);
             };
-            let destination = forwarding::definition_node(optimized, nodes, destination, budget)?;
+            let destination = forwarding::definition_node(facts, nodes, destination, budget)?;
             if !walk.contains(destination, budget)? {
                 return Ok(false);
             }
@@ -333,7 +322,7 @@ fn injection_matches(
 }
 
 fn choices(
-    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    facts: &SelectedFinalFactsV30<'_>,
     index: &ProjectionIndexV30<'_>,
     access: usize,
     actual: &[ActualChoice],
@@ -361,18 +350,13 @@ fn choices(
             Definition::Result { operation, .. } => operation.block.function,
         };
         let guard_edge = Edge {
-            source: block(optimized.checked.output(), function, source, budget)?,
+            source: block(facts.output, function, source, budget)?,
             successor: u32::try_from(ordinal).map_err(|_| ArgumentResourceV1::Arithmetic)?,
         };
-        if edge(optimized.checked.output(), guard_edge, budget)?.target_id != target {
+        if edge(facts.output, guard_edge, budget)?.target_id != target {
             return resources::binding("selected final checked guard edge changed target");
         }
-        let predicate = definition(
-            optimized.checked.output(),
-            function,
-            choice.domain.predicate(),
-            budget,
-        )?;
+        let predicate = definition(facts.output, function, choice.domain.predicate(), budget)?;
         let first_choice = output.choices.len();
         for candidate in candidates {
             let (leaf, component) = index.candidate_leaf(candidate, budget)?;
@@ -382,7 +366,7 @@ fn choices(
                 PendingSourceSelectedLeafOriginV30::Descriptor(_) => 4,
             };
             if component != pointer_component
-                || !leaf_matches(optimized, index, access, leaf, choice, pointer, budget)?
+                || !leaf_matches(facts, index, access, leaf, choice, pointer, budget)?
             {
                 continue;
             }
@@ -392,7 +376,7 @@ fn choices(
                 let (obligation, _) = index.obligation(access, ordinal, budget)?;
                 let path = output.forwarding.len();
                 if injection_matches(
-                    optimized,
+                    facts,
                     access,
                     obligation,
                     choice,
@@ -501,11 +485,28 @@ pub(super) fn build(
     sources: &[PendingSourceSelectedAccessV30],
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<SelectedFinalRowsV30> {
-    let nodes = formal(optimized.original, domains.pointer_nodes(function, budget))?;
-    let incoming = formal(optimized.original, domains.incoming_edges(function, budget))?;
+    build_from_facts(
+        &SelectedFinalFactsV30::scalar(optimized),
+        domains,
+        function,
+        index,
+        sources,
+        budget,
+    )
+}
+
+pub(super) fn build_from_facts(
+    facts: &SelectedFinalFactsV30<'_>,
+    domains: &Domains<'_, '_>,
+    function: FunctionCoordinate,
+    index: &ProjectionIndexV30<'_>,
+    sources: &[PendingSourceSelectedAccessV30],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<SelectedFinalRowsV30> {
+    let nodes = formal(facts.original, domains.pointer_nodes(function, budget))?;
+    let incoming = formal(facts.original, domains.incoming_edges(function, budget))?;
     let mut walk = WalkV30::new(nodes.len(), budget)?;
-    let mut forwarding =
-        forwarding::ForwardingV30::build(optimized, index, nodes, incoming, budget)?;
+    let mut forwarding = forwarding::ForwardingV30::build(facts, index, nodes, incoming, budget)?;
     let mut rows = SelectedFinalRowsV30 {
         accesses: resources::vector(sources.len(), budget)?,
         choices: Vec::new(),
@@ -526,25 +527,17 @@ pub(super) fn build(
                 if output.block.function != function {
                     return resources::binding("selected final access changed exact root");
                 }
-                let actual = formal(optimized.original, domains.access_at(output, budget))?.ok_or(
+                let actual = formal(facts.original, domains.access_at(output, budget))?.ok_or(
                     ProductionSourceOwnedViewErrorV18::Binding(
                         "selected final source access is outside the checked memory census",
                     ),
                 )?;
-                let actual_choices =
-                    formal(optimized.original, domains.choices_at(output, budget))?.ok_or(
-                        ProductionSourceOwnedViewErrorV18::Binding(
-                            "selected final source access has no checked choices",
-                        ),
-                    )?;
-                let pointer = definition(
-                    optimized.checked.output(),
-                    function,
-                    actual.pointer(),
-                    budget,
-                )?;
-                let value =
-                    definition(optimized.checked.output(), function, actual.value(), budget)?;
+                let actual_choices = formal(facts.original, domains.choices_at(output, budget))?
+                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                        "selected final source access has no checked choices",
+                    ))?;
+                let pointer = definition(facts.output, function, actual.pointer(), budget)?;
+                let value = definition(facts.output, function, actual.value(), budget)?;
                 budget.charge_work(7)?;
                 if projection.pointer != Some(pointer)
                     || projection.value != Some(value)
@@ -567,7 +560,7 @@ pub(super) fn build(
                     budget,
                 )?;
                 choices(
-                    optimized,
+                    facts,
                     index,
                     ordinal,
                     actual_choices,
@@ -620,6 +613,9 @@ pub(super) fn headers() -> Result<usize, ArgumentResourceV1> {
         ])
     }
     argument_sum_v1(&[
+        h::<SelectedFinalFactsV30<'_>>()?,
+        h::<SelectedFinalDefinitionsV30<'_>>()?,
+        h::<&SelectedFinalFactsV30<'_>>()?,
         h::<WalkV30>()?,
         argument_product_v1(2, h::<Vec<usize>>()?)?,
         h::<SelectedFinalRowsV30>()?,

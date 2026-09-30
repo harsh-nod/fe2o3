@@ -118,6 +118,22 @@ impl<'a> ProjectionIndexV30<'a> {
         sources: &[PendingSourceSelectedAccessV30],
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<Self> {
+        Self::build_from_facts(
+            &SelectedFinalFactsV30::scalar(optimized),
+            root,
+            rows,
+            sources,
+            budget,
+        )
+    }
+
+    pub(super) fn build_from_facts(
+        facts: &SelectedFinalFactsV30<'_>,
+        root: usize,
+        rows: &'a [SelectedTransportRowV30],
+        sources: &[PendingSourceSelectedAccessV30],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Self> {
         // Count actual retained projections, never graph-limit products.
         let mut counts = [0usize; 7];
         for row in rows {
@@ -210,19 +226,11 @@ impl<'a> ProjectionIndexV30<'a> {
                 SelectedTransportRowV30::Definition { role, relation } => {
                     let first = relation.outputs.start as usize;
                     let end = argument_sum_v1(&[first, relation.outputs.len as usize])?;
-                    let outputs = optimized
-                        .checked
-                        .rows()
-                        .definition_outputs
-                        .get(first..end)
-                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                            "selected final definition range",
-                        ))?;
-                    for output in outputs {
+                    for at in facts.definition_range(first..end)? {
                         budget.charge_work(3)?;
                         index.definitions.push(DefinitionProjectionV30 {
                             access,
-                            output: output.output,
+                            output: facts.definition_output(at)?,
                             role,
                         });
                     }
@@ -577,6 +585,11 @@ impl<'a> ProjectionIndexV30<'a> {
             ])
         }
         argument_sum_v1(&[
+            h::<SelectedFinalFactsV30<'_>>()?,
+            h::<SelectedFinalDefinitionsV30<'_>>()?,
+            h::<&SelectedFinalFactsV30<'_>>()?,
+            h::<Range<usize>>()?,
+            h::<Option<Definition>>()?,
             h::<Self>()?,
             h::<AccessIndexV30>()?,
             h::<Vec<AccessIndexV30>>()?,
@@ -759,7 +772,12 @@ mod tests {
             size_of::<GuardProjectionV30>(),
             size_of::<(usize, Edge, usize, usize, OutputUse)>()
         );
-        let expected = h::<Fields<'_>>()
+        let expected = h::<SelectedFinalFactsV30<'_>>()
+            + h::<SelectedFinalDefinitionsV30<'_>>()
+            + h::<&SelectedFinalFactsV30<'_>>()
+            + h::<Range<usize>>()
+            + h::<Option<Definition>>()
+            + h::<Fields<'_>>()
             + h::<AccessIndexV30>()
             + h::<Vec<AccessIndexV30>>()
             + h::<DefinitionProjectionV30>()

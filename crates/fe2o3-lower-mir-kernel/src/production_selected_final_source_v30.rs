@@ -21,6 +21,55 @@ mod forwarding;
 #[path = "production_selected_final_source_index_v30.rs"]
 mod index;
 
+#[path = "production_selected_aggregate_transport_v30.rs"]
+mod aggregate;
+
+// Both constructors are internal to authenticated source consumers. Aggregate
+// descendants have no invented Retained/Substituted scalar-transition label.
+enum SelectedFinalDefinitionsV30<'a> {
+    Scalar(&'a [fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]),
+    Aggregate(&'a [Definition]),
+}
+
+struct SelectedFinalFactsV30<'a> {
+    original: &'a ProductionSourceCorrespondenceV18<'a>,
+    output: &'a Inventory<'a>,
+    definitions: SelectedFinalDefinitionsV30<'a>,
+}
+
+impl<'a> SelectedFinalFactsV30<'a> {
+    fn scalar(optimized: &'a ProductionOptimizedSourceCorrespondenceV18<'a>) -> Self {
+        Self {
+            original: optimized.original,
+            output: optimized.checked.output(),
+            definitions: SelectedFinalDefinitionsV30::Scalar(
+                optimized.checked.rows().definition_outputs,
+            ),
+        }
+    }
+
+    fn definition_output(&self, at: usize) -> SourceOwnedResultV18<Definition> {
+        let output = match self.definitions {
+            SelectedFinalDefinitionsV30::Scalar(rows) => rows.get(at).map(|row| row.output),
+            SelectedFinalDefinitionsV30::Aggregate(rows) => rows.get(at).copied(),
+        };
+        output.ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "selected final definition range",
+        ))
+    }
+
+    fn definition_range(&self, range: Range<usize>) -> SourceOwnedResultV18<Range<usize>> {
+        let len = match self.definitions {
+            SelectedFinalDefinitionsV30::Scalar(rows) => rows.len(),
+            SelectedFinalDefinitionsV30::Aggregate(rows) => rows.len(),
+        };
+        if range.start > range.end || range.end > len {
+            return resources::binding("selected final definition range");
+        }
+        Ok(range)
+    }
+}
+
 // These are locators in the retained original graph, not substitute authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum SourceEdgeV30 {
@@ -85,6 +134,30 @@ struct SelectedFinalRowsV30 {
     edges: Vec<SelectedFinalEdgeJoinV30>,
     obligations: Vec<SelectedFinalObligationJoinV30>,
     forwarding: Vec<SelectedFinalForwardingStepV30>,
+}
+
+impl SelectedFinalRowsV30 {
+    fn retained_storage(&self) -> Result<usize, ArgumentResourceV1> {
+        argument_sum_v1(&[
+            argument_product_v1(
+                self.accesses.capacity(),
+                size_of::<SelectedFinalAccessV30>(),
+            )?,
+            argument_product_v1(
+                self.choices.capacity(),
+                size_of::<SelectedFinalChoiceJoinV30>(),
+            )?,
+            argument_product_v1(self.edges.capacity(), size_of::<SelectedFinalEdgeJoinV30>())?,
+            argument_product_v1(
+                self.obligations.capacity(),
+                size_of::<SelectedFinalObligationJoinV30>(),
+            )?,
+            argument_product_v1(
+                self.forwarding.capacity(),
+                size_of::<SelectedFinalForwardingStepV30>(),
+            )?,
+        ])
+    }
 }
 
 /// Private scoped intake for the selected final relation. Both original and

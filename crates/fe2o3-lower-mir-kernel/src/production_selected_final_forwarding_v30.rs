@@ -29,12 +29,12 @@ fn work_error(error: OriginWorkErrorV1) -> ProductionSourceOwnedViewErrorV18 {
 }
 
 pub(super) fn definition_node(
-    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+    facts: &SelectedFinalFactsV30<'_>,
     nodes: &[ActualNode],
     definition: Definition,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<usize> {
-    let row = optimized_source_definition_row_v18(optimized.checked.output(), definition, budget)?;
+    let row = optimized_source_definition_row_v18(facts.output, definition, budget)?;
     let value = row.value.ok_or(ProductionSourceOwnedViewErrorV18::Binding(
         "selected final forwarding definition has no value",
     ))?;
@@ -55,7 +55,7 @@ pub(super) fn definition_node(
 
 impl ForwardingV30 {
     pub(super) fn build(
-        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        facts: &SelectedFinalFactsV30<'_>,
         index: &index::ProjectionIndexV30<'_>,
         nodes: &[ActualNode],
         incoming: &[ActualIncoming],
@@ -93,15 +93,9 @@ impl ForwardingV30 {
             }
             let first = relation.outputs.start as usize;
             let end = argument_sum_v1(&[first, relation.outputs.len as usize])?;
-            let outputs = optimized
-                .checked
-                .rows()
-                .definition_outputs
-                .get(first..end)
-                .ok_or(ArgumentResourceV1::Accounting)?;
-            for output in outputs {
+            for at in facts.definition_range(first..end)? {
                 budget.charge_work(2)?;
-                let at = definition_node(optimized, nodes, output.output, budget)?;
+                let at = definition_node(facts, nodes, facts.definition_output(at)?, budget)?;
                 if matches!(nodes[at].step, ActualStep::Parameter { .. }) {
                     anchors[at] = true;
                 }
