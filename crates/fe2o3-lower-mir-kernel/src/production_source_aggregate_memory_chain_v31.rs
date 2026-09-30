@@ -63,7 +63,9 @@ struct AggregateMemoryEventBindingV31 {
 pub enum ProductionAggregateMemoryEventV31 {
     /// The actual operation still requires an independent concrete model.
     Unmodeled,
-    /// Begin a new dynamic lifetime and reset the original allocation's state.
+    /// Begin a fresh dynamic instance at this original allocation site. The
+    /// closed-use checker resets its current-instance initialized bytes; this
+    /// does not end, reuse or equate any older dynamic allocation generation.
     Allocate {
         /// Exact original Alloca occurrence whose dynamic lifetime begins.
         original: AggregateOperationV30,
@@ -664,6 +666,7 @@ impl ProductionAggregateMemoryChainV31 {
                     )
                 })?;
         }
+        aggregate_memory_check_chain_v32(self, source, chain, budget)?;
         self.finalized = true;
         Ok(())
     }
@@ -743,9 +746,20 @@ impl ProductionAggregateMemoryChainV31 {
         endpoint: usize,
         operation: usize,
     ) -> Option<(AggregateOperationV30, ProductionAggregateMemoryEventV31)> {
+        if !self.finalized {
+            return None;
+        }
+        self.bound_event_v32(endpoint, operation)
+    }
+
+    fn bound_event_v32(
+        &self,
+        endpoint: usize,
+        operation: usize,
+    ) -> Option<(AggregateOperationV30, ProductionAggregateMemoryEventV31)> {
         use fe2o3_kernel_analysis::CanonicalKirAggregateMemoryEventV31 as Event;
         let range = &self.endpoints.get(endpoint)?.events;
-        if !self.finalized || operation >= range.len() {
+        if operation >= range.len() {
             return None;
         }
         let row = self.events.get(range.start.checked_add(operation)?)?;
@@ -758,11 +772,11 @@ impl ProductionAggregateMemoryChainV31 {
                 original: row.allocation?,
             },
             Event::Read { leaf, output } => ProductionAggregateMemoryEventV31::Read {
-                leaf: self.endpoint_leaf(endpoint, leaf)?.0,
+                leaf: self.bound_leaf_v32(endpoint, leaf)?.0,
                 output,
             },
             Event::Write { leaf, value } => ProductionAggregateMemoryEventV31::Write {
-                leaf: self.endpoint_leaf(endpoint, leaf)?.0,
+                leaf: self.bound_leaf_v32(endpoint, leaf)?.0,
                 value,
             },
         };
@@ -783,8 +797,15 @@ impl ProductionAggregateMemoryChainV31 {
     }
     /// Binds one endpoint-local census leaf to the shared original slot.
     pub fn endpoint_leaf(&self, endpoint: usize, leaf: usize) -> Option<(usize, u32)> {
+        if !self.finalized {
+            return None;
+        }
+        self.bound_leaf_v32(endpoint, leaf)
+    }
+
+    fn bound_leaf_v32(&self, endpoint: usize, leaf: usize) -> Option<(usize, u32)> {
         let range = &self.endpoints.get(endpoint)?.leaves;
-        if !self.finalized || leaf >= range.len() {
+        if leaf >= range.len() {
             return None;
         }
         let row = self.leaves.get(range.start.checked_add(leaf)?)?;
@@ -801,4 +822,14 @@ impl ProductionAggregateMemoryChainV31 {
     pub const fn grants_authority(&self) -> bool {
         false
     }
+
+    /// Every reachable closed typed-private access at every exact endpoint has
+    /// passed byte initialization and allocation-reset checks. Nonclosed uses
+    /// remain explicit obligations in `endpoint_allocation_closed_uses`; this
+    /// does not establish byte values, original MIR lifetimes or refinement.
+    pub const fn closed_private_accesses_are_initialized(&self) -> bool {
+        self.finalized
+    }
 }
+
+include!("production_source_aggregate_byte_init_v32.rs");
