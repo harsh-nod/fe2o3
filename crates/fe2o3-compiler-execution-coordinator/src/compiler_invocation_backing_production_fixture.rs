@@ -53,26 +53,82 @@ impl Inputs {
 }
 
 // Diagnostic FD counts, not another inventory representation or source owner.
+#[derive(Clone, Copy)]
+struct InodeCount {
+    identity: (u64, u64),
+    baseline: usize,
+    multiplicity: usize,
+}
+
+struct Census {
+    inodes: [Option<InodeCount>; MAX_ENTRIES],
+    entries: usize,
+}
+impl Census {
+    fn new() -> Self {
+        Self {
+            inodes: [None; MAX_ENTRIES],
+            entries: 0,
+        }
+    }
+
+    fn record(&mut self, id: (u64, u64), references: impl FnOnce((u64, u64)) -> usize) {
+        assert!(
+            self.entries < MAX_ENTRIES,
+            "fixture manifest census exceeds its bound"
+        );
+        // Aliased paths still own one descriptor per entry; take the baseline
+        // only once per inode and preserve the complete entry multiplicity.
+        if let Some(count) = self.inodes.iter_mut().flatten().find(|c| c.identity == id) {
+            let multiplicity = count.multiplicity.checked_add(1).unwrap();
+            assert!(
+                multiplicity <= count.baseline,
+                "missing original runtime descriptors"
+            );
+            count.multiplicity = multiplicity;
+        } else {
+            let baseline = references(id);
+            assert!(
+                baseline > 0,
+                "admitted runtime must retain every code descriptor"
+            );
+            let slot = self.inodes.iter_mut().find(|slot| slot.is_none()).unwrap();
+            *slot = Some(InodeCount {
+                identity: id,
+                baseline,
+                multiplicity: 1,
+            });
+        }
+        self.entries = self.entries.checked_add(1).unwrap();
+    }
+
+    fn check(&self, live: bool, references: impl Fn((u64, u64)) -> usize) {
+        for count in self.inodes.iter().flatten() {
+            let expected = if live {
+                count.baseline.checked_add(count.multiplicity)
+            } else {
+                count.baseline.checked_sub(count.multiplicity)
+            }
+            .unwrap();
+            assert_eq!(references(count.identity), expected);
+        }
+    }
+}
+
 pub(super) struct Witness {
-    counts: [Option<((u64, u64), usize)>; MAX_ENTRIES],
+    counts: Census,
     output: File,
     _directory: tempfile::TempDir,
 }
 impl Witness {
     pub(super) fn assert_live(&self) {
-        self.check(1); // The original runtime plus its complete transfer set.
+        self.counts.check(true, references); // Original runtime plus complete transfers.
         assert_eq!(references(identity(&self.output.metadata().unwrap())), 2);
     }
 
     pub(super) fn assert_dropped(&self) {
-        self.check(-1); // Neither the original runtime nor its transfers survive.
+        self.counts.check(false, references); // Neither originals nor transfers survive.
         assert_eq!(references(identity(&self.output.metadata().unwrap())), 1);
-    }
-
-    fn check(&self, delta: isize) {
-        for (id, count) in self.counts.iter().flatten() {
-            assert_eq!(references(*id), count.checked_add_signed(delta).unwrap());
-        }
     }
 }
 
@@ -102,16 +158,10 @@ pub(super) fn admit(b: &mut Budget<'_>, wrong_closure: bool) -> (Inputs, Witness
     b.reserve_storage(charge.additional_storage()).unwrap();
     assert_eq!(b.storage(), floor + runtime.required_retained_storage());
 
-    let mut counts = [None; MAX_ENTRIES];
-    for (slot, entry) in counts.iter_mut().zip(runtime.manifest().entries()) {
+    let mut counts = Census::new();
+    for entry in runtime.manifest().entries() {
         let metadata = fs::metadata(std::path::Path::new(ROOT).join(entry.path)).unwrap();
-        let id = identity(&metadata);
-        let count = references(id);
-        assert!(
-            count > 0,
-            "admitted runtime must retain every code descriptor"
-        );
-        *slot = Some((id, count));
+        counts.record(identity(&metadata), references);
     }
     let descriptor = descriptor(&runtime, wrong_closure);
     let descriptor_storage = descriptor.retained_storage_bytes().unwrap();
@@ -195,4 +245,69 @@ fn descriptor(runtime: &Runtime, wrong_closure: bool) -> Descriptor {
         closure,
     )
     .unwrap()
+}
+
+#[test]
+fn fd_census_preserves_shared_inode_multiplicity_and_terminal_baseline() {
+    account(|_| {
+        let mut counts = Census::new();
+        let shared = (1, 2);
+        let distinct = (1, 3);
+        let mut baseline_reads = 0;
+        for id in [shared, distinct, shared] {
+            counts.record(id, |id| {
+                baseline_reads += 1;
+                if id == shared { 5 } else { 3 }
+            });
+        }
+        assert_eq!(baseline_reads, 2);
+        assert_eq!(counts.entries, 3);
+        assert_eq!(counts.inodes.iter().flatten().count(), 2);
+        counts.check(true, |id| if id == shared { 7 } else { 4 });
+        counts.check(false, |id| if id == shared { 3 } else { 2 });
+        // The former +/-1 assumption must fail for the shared inode in both states.
+        assert!(
+            catch_unwind(|| counts.check(true, |id| if id == shared { 6 } else { 4 })).is_err()
+        );
+        assert!(
+            catch_unwind(|| counts.check(false, |id| if id == shared { 4 } else { 2 })).is_err()
+        );
+    });
+}
+
+#[test]
+fn fd_census_enforces_manifest_entry_bound_even_for_shared_inodes() {
+    account(|_| {
+        assert!(2 * size_of::<Census>() < HARNESS);
+        for shared in [false, true] {
+            let mut counts = Census::new();
+            let multiplicity = if shared { MAX_ENTRIES } else { 1 };
+            for index in 0..MAX_ENTRIES {
+                let inode = if shared {
+                    0
+                } else {
+                    u64::try_from(index).unwrap()
+                };
+                counts.record((1, inode), |_| multiplicity);
+            }
+            assert_eq!(counts.entries, MAX_ENTRIES);
+            counts.check(true, |_| 2 * multiplicity);
+            counts.check(false, |_| 0);
+            let mut queried = false;
+            let refused = catch_unwind(AssertUnwindSafe(|| {
+                counts.record((2, 0), |_| {
+                    queried = true;
+                    1
+                });
+            }));
+            assert!(refused.is_err());
+            assert!(
+                !queried,
+                "bound must reject before another descriptor census"
+            );
+            assert_eq!(counts.entries, MAX_ENTRIES);
+            counts.check(true, |_| 2 * multiplicity);
+            counts.check(false, |_| 0);
+        }
+    });
 }

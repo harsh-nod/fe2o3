@@ -91,19 +91,22 @@ fn approved_runtime_backing_rejects_source_and_account_substitution() {
             foreign.release_storage(owner.retained_storage()).unwrap();
         });
         assert_eq!(history(b), original_history);
+        // Admitted rustc requires executable mode; the backend requires mode 0444.
+        // A shared-library role alone would not exclude a backend inode alias.
+        let rustc = owner.rustc_source();
+        assert!(matches!(
+            owner
+                .runtime()
+                .validate_codegen_backend_load_transfer(rustc, b),
+            Err(RuntimeError::Mismatch(_))
+        ));
+        // Mutate only this owned duplicate's descriptor flags, not its shared
+        // open-file description or the immutable installed inode.
         let (_, library) = owner
             .inventory_sources()
             .entries()
             .find(|(entry, _)| entry.role == Role::SharedLibrary)
             .unwrap();
-        assert!(matches!(
-            owner
-                .runtime()
-                .validate_codegen_backend_load_transfer(library, b),
-            Err(RuntimeError::Mismatch(_))
-        ));
-        // Mutate only this owned duplicate's descriptor flags, not its shared
-        // open-file description or the immutable installed inode.
         let flags = rustix::io::fcntl_getfd(library).unwrap();
         rustix::io::fcntl_setfd(library, rustix::io::FdFlags::empty()).unwrap();
         let refused = owner.revalidate(b);
