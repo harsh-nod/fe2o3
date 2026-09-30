@@ -432,7 +432,7 @@ fn source_scalar_boundaries_keep_repeated_value_ids_in_distinct_roots_separate()
                         .leaves
                         .check_boundary_actual_v31(Some(leaves), budget)?;
                     reached.set(reached.get() + 1);
-                    Ok(())
+                    Ok::<_, ProductionSourceOwnedViewErrorV18>(())
                 },
             )?;
         }
@@ -915,7 +915,10 @@ fn source_scalar_boundaries_fixed_headers_match_independent_field_envelopes() {
         SourceOwnedResultV18<Option<&'a Row>>,
         ProductionOptimizedSourceCfgRootV18<'a, 'a>,
         SourceOwnedResultV18<ProductionOptimizedSourceCfgRootV18<'a, 'a>>,
-        OptimizedAliasCfgMeterV18<'a, 'a, 'a, 'a>,
+        (
+            &'a ProductionSourceOwnedViewV18<'a>,
+            &'a mut ArgumentBudgetV1<'a>,
+        ),
         Option<fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1>,
         &'a Row,
         &'a [fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1],
@@ -929,6 +932,18 @@ fn source_scalar_boundaries_fixed_headers_match_independent_field_envelopes() {
     assert_eq!(
         size_of::<OutputRow>(),
         size_of::<OptimizedSourceScalarBoundaryV31>()
+    );
+    type CfgMeterFields<'a> = (
+        &'a ProductionSourceOwnedViewV18<'a>,
+        &'a mut ArgumentBudgetV1<'a>,
+    );
+    assert_eq!(
+        size_of::<OptimizedScalarCfgMeterV31<'_, '_, '_, '_>>(),
+        size_of::<CfgMeterFields<'_>>()
+    );
+    assert_eq!(
+        std::mem::align_of::<OptimizedScalarCfgMeterV31<'_, '_, '_, '_>>(),
+        std::mem::align_of::<CfgMeterFields<'_>>()
     );
     assert_eq!(
         optimized_source_boundary_headers_v31().unwrap(),

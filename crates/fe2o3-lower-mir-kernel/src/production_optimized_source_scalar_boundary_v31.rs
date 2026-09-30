@@ -11,6 +11,26 @@ struct OptimizedSourceScalarBoundariesV31 {
     terminals: Vec<Option<fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1>>,
 }
 
+struct OptimizedScalarCfgMeterV31<'a, 'g, 'b, 'w> {
+    source: &'a ProductionSourceOwnedViewV18<'g>,
+    budget: &'b mut ArgumentBudgetV1<'w>,
+}
+impl fe2o3_mir_model::SemanticAssertionMeterV1 for OptimizedScalarCfgMeterV31<'_, '_, '_, '_> {
+    type Error = ProductionSourceOwnedViewErrorV18;
+    fn charge_work(&mut self, work: usize) -> SourceOwnedResultV18<()> {
+        self.source.check_query_v18(self.budget)?;
+        self.budget
+            .charge_work(work)
+            .map_err(|error| self.source.retain_query_resource_error_v18(error))
+    }
+    fn reserve_storage(&mut self, bytes: usize) -> SourceOwnedResultV18<()> {
+        self.source.check_query_v18(self.budget)?;
+        self.budget
+            .reserve_storage(bytes)
+            .map_err(|error| self.source.retain_query_resource_error_v18(error))
+    }
+}
+
 fn optimized_source_boundary_headers_v31() -> Result<usize, ArgumentResourceV1> {
     type Frame<'a> = (
         OptimizedSourceScalarBoundariesV31,
@@ -28,7 +48,7 @@ fn optimized_source_boundary_headers_v31() -> Result<usize, ArgumentResourceV1> 
         SourceOwnedResultV18<Option<&'a SourceScalarBoundaryV31>>,
         ProductionOptimizedSourceCfgRootV18<'a, 'a>,
         SourceOwnedResultV18<ProductionOptimizedSourceCfgRootV18<'a, 'a>>,
-        OptimizedAliasCfgMeterV18<'a, 'a, 'a, 'a>,
+        OptimizedScalarCfgMeterV31<'a, 'a, 'a, 'a>,
         Option<fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1>,
         &'a SourceScalarBoundaryV31,
         &'a [fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1],
@@ -68,7 +88,7 @@ fn optimized_source_scalar_boundaries_v31(
         budget.charge_work(input.blocks.len())?;
         entries.resize(input.blocks.len(), None);
         cfg.visit(
-            &mut OptimizedAliasCfgMeterV18 {
+            &mut OptimizedScalarCfgMeterV31 {
                 source: relation.source,
                 budget,
             },
