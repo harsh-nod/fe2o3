@@ -27,6 +27,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [distributed publication description contract](runtime-distributed-publication-contract-v1.md)
+is integrated at `1cb78d01c`. Its signed candidate passes the full model executable:
+1,104 tests pass, nineteen existing manual benchmarks remain ignored, and no test
+fails or is filtered. Three full 23-function proof runs and sixteen actual-body
+logical negatives pass, including relocated verification; all thirty fresh
+process groups close. The count includes nineteen derived Clone implementations,
+not 23 independent lifecycle properties. Integration preserves the proof closure
+and passes six source/classifier control suites plus nine R75 controls, but has
+no new combined-main CPU/solver result. This is an authority-free consistency
+record, not authenticated receipts, codec refinement or two-host execution.
+A0 and all other milestone exits remain open; evidence is still local.
+
 The [retained-batch routing controller](runtime-retained-pair-routing-v1.md)
 is integrated at `e5b15e142`. Its signed campaign passes three full four-obligation
 runs and all eleven actual-body logical negatives; 21 fresh process groups

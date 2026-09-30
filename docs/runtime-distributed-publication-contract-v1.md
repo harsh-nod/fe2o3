@@ -1,13 +1,15 @@
 # Distributed Publication Description Contract V1
 
-This is a production-neutral A0 draft for issue #182. It is not an A4 session,
+This is a qualified, production-neutral A0 component for issue #182. It is not an A4 session,
 transport, receipt authentication or distributed execution implementation. No
 runtime, Worker, Context or KFD path consumes these model values. The shared
 declaration implementation passed nine focused CPU tests on a fresh 1,123-test
-model executable, with no warnings. Full positive discovery and the two later
-unfiltered positive runs each verified 23 functions with zero errors. This is
-component development evidence, not a completed signed mutation campaign or a
-full-model test result.
+model executable, with no warnings. Signed candidate `b6b9fed3a` subsequently
+passed the full retained executable: 1,104 passed, 19 existing manual benchmarks
+ignored, no failures or filtered tests. Its signed proof campaign passed three
+full 23-function runs and all sixteen actual-body logical negatives. Integration
+at `1cb78d01c` preserves the qualified executable proof closure; this is not a
+new combined-main CPU or solver result.
 
 ## Ownership
 
@@ -88,7 +90,7 @@ and bounded traces retaining terminal and unknown descriptions.
 `classifier_body.rs` contains the unchanged executable classifier, commit and
 observation-event bodies used by this model. `declarations.rs` now shares the
 complete record, receipt, binding and all 15 coordinate declarations with the
-draft `distributed_publication_contract_v1.rs` proof. The record remains neither
+`distributed_publication_contract_v1.rs` proof. The record remains neither
 Copy nor Clone. This source extraction changes no constructor or wire code.
 
 The explicit proof representation maps each typed descriptive identity to its
@@ -117,7 +119,7 @@ fresh CPU rebuild; no earlier pre-extraction executable was reused to qualify it
 Canonical codec and constructor refinement remain separate obligations; neither
 is inherited from the classifier theorem or from the CPU canonicality tests.
 
-Sixteen source-constructed negative mutations cover weakened binding
+Sixteen actual-body negative mutations cover weakened binding
 or sequence checks, conflicting duplicates, initial Completed claims, terminal
 reopening, interruption bypass, lost record updates, mutation before refusal,
 and timeout/loss/drop distinctions. Three representative actual-body mutations
@@ -125,8 +127,28 @@ were observed under their exact classifier/record/observation selectors. Each
 reported zero verified functions and one postcondition error, with the reviewed
 root-module selection note and no compiler warning or VIR error. These captures
 remain observation-only; their packets are not retroactively qualified by
-pinning the note. The final signed three-positive/16-negative campaign, relocated
-closure check and complete retained model executable run remain pending.
+pinning the note. The separate final signed campaign accepts all sixteen logical
+negatives and three full positive runs, including a relocated closure. All thirty
+fresh process groups close: twenty-four checker stages and six wrapper stages
+covering signature, full listing, ignored-only listing, unfiltered CPU execution
+and opening/closing verifier-release checks. The ignored listing executes no
+manual benchmark. Source and retained executable bytes remain unchanged.
+
+The signed candidate's whole-model source guard covers 297 files. Integration
+contains the independently qualified requested-charge body as well, so its
+guard covers 298 files. Reviewed outer source hashes and the R75 manifest are
+updated without altering any older executable proof closure. Six four-group
+source/classifier control suites and all nine R75 controls pass on integration;
+these are not new logical-mutation or solver campaigns. The signed candidate's
+1,123-test roster is not a test result for this combined tree.
+
+Raw evidence remains local under
+`/home/harsh/.codex-tmp/fe2o3-distributed-publication-records-20260930-prefix/signed-campaign-attempt-1`.
+The result SHA-256 is
+`bd785b557e03c24c4137a8a3e63c4619f5bf84dc6b838121f69920f3016cd76b`;
+the retained executable SHA-256 is
+`56738bb22b1f37ddfed0301957a9592772dc7d51b46440f74e76460ba4634da8`.
+These paths are evidence locations, not a published standalone rebuild package.
 
 Authentication/key management, session-to-participant binding, complete artifact
 and plan preimages, epoch issuance, durable journals, truthful publication and
@@ -135,5 +157,5 @@ clock behavior, leases, transport, process failure and two-host execution remain
 outside this module. There is deliberately no `authenticated` flag, trusted
 adapter, new backend trait or shared-memory fiction. A future production adapter
 must establish each relevant boundary separately before these descriptions can
-affect an execution decision. This draft closes no A0/A4 milestone or HIP/HSA
+affect an execution decision. This component closes no A0/A4 milestone or HIP/HSA
 parity claim.
