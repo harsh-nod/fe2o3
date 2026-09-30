@@ -16,6 +16,9 @@ include!("distributed_publication_contract/declarations.rs");
 mod classifier_body;
 #[macro_use]
 mod construction_body;
+mod codec_primitives;
+#[cfg(test)]
+mod codec_tests;
 #[cfg(test)]
 mod tests;
 
@@ -234,16 +237,17 @@ impl<'a> Writer<'a> {
         Self { bytes, offset: 0 }
     }
     fn put(&mut self, value: &[u8]) {
-        self.bytes[self.offset..self.offset + value.len()].copy_from_slice(value);
-        self.offset += value.len();
+        codec_primitives::put(self.bytes, &mut self.offset, value);
     }
     fn header(&mut self, domain: &[u8]) {
         self.put(domain);
-        self.put(&DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1.to_le_bytes());
+        self.put(&codec_primitives::u16_le(
+            DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1,
+        ));
         self.put(&[0; 2]);
     }
     fn u64(&mut self, value: u64) {
-        self.put(&value.to_le_bytes());
+        self.put(&codec_primitives::u64_le(value));
     }
     fn digest(&mut self, value: IdentityDigestV1) {
         self.put(value.as_bytes());
@@ -259,27 +263,18 @@ impl<'a> Reader<'a> {
         Self { bytes, offset: 0 }
     }
     fn take(&mut self, count: usize) -> Result<&'a [u8], DistributedPublicationContractErrorV1> {
-        let end = self
-            .offset
-            .checked_add(count)
-            .ok_or(DistributedPublicationContractErrorV1::WrongLength)?;
-        let value = self
-            .bytes
-            .get(self.offset..end)
-            .ok_or(DistributedPublicationContractErrorV1::WrongLength)?;
-        self.offset = end;
-        Ok(value)
+        codec_primitives::take(self.bytes, &mut self.offset, count)
     }
     fn fixed<const N: usize>(&mut self) -> Result<[u8; N], DistributedPublicationContractErrorV1> {
-        self.take(N)?
-            .try_into()
-            .map_err(|_| DistributedPublicationContractErrorV1::WrongLength)
+        codec_primitives::fixed(self.bytes, &mut self.offset)
     }
     fn header(&mut self, domain: &[u8]) -> Result<(), DistributedPublicationContractErrorV1> {
         if self.take(domain.len())? != domain {
             return Err(DistributedPublicationContractErrorV1::WrongDomain);
         }
-        if u16::from_le_bytes(self.fixed()?) != DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1 {
+        if codec_primitives::u16_from_le(self.fixed()?)
+            != DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1
+        {
             return Err(DistributedPublicationContractErrorV1::WrongSchema);
         }
         if self.fixed::<2>()? != [0; 2] {
@@ -288,16 +283,12 @@ impl<'a> Reader<'a> {
         Ok(())
     }
     fn u64(&mut self) -> Result<u64, DistributedPublicationContractErrorV1> {
-        Ok(u64::from_le_bytes(self.fixed()?))
+        Ok(codec_primitives::u64_from_le(self.fixed()?))
     }
     fn digest(&mut self) -> Result<IdentityDigestV1, DistributedPublicationContractErrorV1> {
         Ok(IdentityDigestV1::from_untrusted_bytes(self.fixed()?))
     }
     fn finish(&self) -> Result<(), DistributedPublicationContractErrorV1> {
-        if self.offset == self.bytes.len() {
-            Ok(())
-        } else {
-            Err(DistributedPublicationContractErrorV1::WrongLength)
-        }
+        codec_primitives::finish(self.bytes, self.offset)
     }
 }
