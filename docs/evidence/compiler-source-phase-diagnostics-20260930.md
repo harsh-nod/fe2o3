@@ -324,6 +324,26 @@ r123 log SHA-256:
 r124 log SHA-256:
 `da450f6abd928f18925e086c29f32fcb57772be260d8a295aa5a89af6d013c7c`.
 
+## Corrected Fixture Rerun
+
+r125 ran 416 selected lowerer tests on `564bc006c`: **413 passed, 3 failed**,
+none ignored. It completed with status101 and stable source/tool inventories.
+The shared-index origin controls, original elided-definition positive, and
+equal-shaped alternate-loan control now pass. All previously passing selected
+controls remain passing.
+
+The three native-helper receiver tests pass source block ordering but stop
+before their intended native correspondence boundary. All report
+`execution availability during defined call suspension` at source function 0,
+block 1, terminator. The positive reaches no native callback; the two mutation
+controls likewise fail before mutation. No narrower claim about the failing
+predicate follows from this diagnostic, and none is accepted as a negative pass.
+
+r125 source snapshot:
+`c179e5b9fb60ff6b883f12541958aee01c2be30f768abe9b1cf4f4d038c490df`.
+Log SHA-256:
+`3f0a116305bfede9b985ecc08f61d7c12c5efca9d9df88b4595d068c22e9c75d`.
+
 ## Runtime Observation
 
 A primary-session read-only SSH check reached MI350-2 on 2026-09-30 and confirmed
