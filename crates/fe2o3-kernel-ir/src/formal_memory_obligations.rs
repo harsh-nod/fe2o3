@@ -61,6 +61,13 @@ pub use guarded_access_v1::{
     CanonicalGuardedStoreInjectivityV24, CheckedCanonicalGuardedGlobalStoresV24,
     with_canonical_guarded_global_stores_v24,
 };
+pub use guarded_access_v1::{
+    CanonicalSelectedPointerIncomingV30, CanonicalSelectedPointerNodeV30,
+    CanonicalSelectedPointerStepV30, CanonicalSelectedSliceAccessV30,
+    CanonicalSelectedSliceChoiceV30, CanonicalSelectedSliceDomainV30,
+    CanonicalSelectedSliceInjectionV30, CanonicalSelectedSliceParameterV30,
+    CheckedCanonicalSelectedSliceDomainsV30, with_canonical_selected_slice_domains_v30,
+};
 pub use ordered_composition_v1::*;
 pub use physical_entry_v20::{
     PhysicalEntryKernargAbiRequirementV20, PhysicalEntryKernargReadV20,

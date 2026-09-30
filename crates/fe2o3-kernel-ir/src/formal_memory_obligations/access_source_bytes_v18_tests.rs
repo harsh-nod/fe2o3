@@ -475,7 +475,7 @@ fn paid_accesses_preserve_legacy_write_only_guard_accounting() {
         guarded.ledger.charge(origins.len()).unwrap();
         guarded.runtime_reads.origins.extend_from_slice(origins);
         guarded
-            .collect_runtime_access_guards_v24::<STORES>(source)
+            .collect_runtime_access_guards_profile_v30::<STORES, false>(source)
             .unwrap();
         guarded.collect_recipes().unwrap();
         // Retire the real borrowed reference facts before refunding their scope.

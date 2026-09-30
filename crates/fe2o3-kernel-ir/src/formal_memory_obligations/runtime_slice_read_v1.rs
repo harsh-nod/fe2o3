@@ -149,10 +149,13 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
             .sort(&mut self.runtime_reads.origins, 1, |a, b| {
                 a.value.cmp(&b.value)
             })?;
-        self.collect_runtime_access_guards_v24::<false>(function)
+        self.collect_runtime_access_guards_profile_v30::<false, false>(function)
     }
 
-    pub(super) fn collect_runtime_access_guards_v24<const STORES: bool>(
+    pub(super) fn collect_runtime_access_guards_profile_v30<
+        const STORES: bool,
+        const GENERIC_ROOTS: bool,
+    >(
         &mut self,
         function: &'module Function,
     ) -> Result<(), ResourceError> {
@@ -196,7 +199,9 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
             let OperationKind::SliceLength { slice } = length_op.kind else {
                 continue;
             };
-            let Some((parameter, _)) = self.runtime_slice_parameter_v24::<STORES>(slice)? else {
+            let Some((parameter, _)) =
+                self.runtime_slice_parameter_profile_v30::<STORES, GENERIC_ROOTS>(slice)?
+            else {
                 continue;
             };
             self.runtime_reads.guards.push(ReadGuard {
@@ -505,7 +510,7 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         })
     }
 
-    fn runtime_slice_parameter_v24<const STORES: bool>(
+    fn runtime_slice_parameter_profile_v30<const STORES: bool, const GENERIC_ROOTS: bool>(
         &mut self,
         value: ValueId,
     ) -> Result<Option<(ParameterRow<'module>, &'module crate::SliceType)>, ResourceError> {
@@ -544,7 +549,8 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
             return Ok(None);
         };
         self.ledger.charge(8)?;
-        if formal.address_space != AddressSpace::Global
+        if !(formal.address_space == AddressSpace::Global
+            || GENERIC_ROOTS && formal.address_space == AddressSpace::Generic)
             || formal.element.as_scalar().is_none()
             || actual.element != formal.element
             || actual.access != formal.access
@@ -590,13 +596,16 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         predicate: Option<ValueId>,
     ) -> Result<Option<FormalRuntimeSliceReadDomainV1>, ResourceError> {
         Ok(self
-            .runtime_slice_access_conditions_v24::<false>(
+            .runtime_slice_access_conditions_profile_v30::<false, false>(
                 location, pointer, kind, access, predicate,
             )?
             .map(|conditions| conditions.domain))
     }
 
-    pub(super) fn runtime_slice_access_conditions_v24<const STORE: bool>(
+    pub(super) fn runtime_slice_access_conditions_profile_v30<
+        const STORE: bool,
+        const GENERIC_ROOTS: bool,
+    >(
         &mut self,
         location: FunctionOperationLocation,
         pointer: ValueId,
@@ -728,7 +737,8 @@ impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
         let Type::Pointer(data_type) = &data_result.ty else {
             return Ok(None);
         };
-        let Some((parameter, slice_type)) = self.runtime_slice_parameter_v24::<STORE>(slice)?
+        let Some((parameter, slice_type)) =
+            self.runtime_slice_parameter_profile_v30::<STORE, GENERIC_ROOTS>(slice)?
         else {
             return Ok(None);
         };

@@ -15,6 +15,10 @@ use std::cell::{Cell, RefCell};
 mod conditional_slice_domains_v26;
 pub use conditional_slice_domains_v26::*;
 
+#[path = "canonical_selected_slice_domains_v30.rs"]
+mod selected_slice_domains_v30;
+pub use selected_slice_domains_v30::*;
+
 #[path = "canonical_guarded_reads_queries_v1.rs"]
 mod queries;
 pub use queries::*;
@@ -534,7 +538,7 @@ fn build_function<'g, const STORE: bool>(
                 collect_actual_origins(&mut analysis, function, flow.indexed_v15())?;
                 analysis.collect_parameters_and_carried_truths(function, entry)?;
                 result.predicates = analysis.expanded_predicates()?;
-                analysis.collect_runtime_access_guards_v24::<STORE>(function)?;
+                analysis.collect_runtime_access_guards_profile_v30::<STORE, false>(function)?;
                 collect_effects::<STORE, _>(&mut result, coordinate, body, Some(&mut analysis))?;
                 result.controls = std::mem::take(&mut analysis.control);
             }
@@ -883,7 +887,7 @@ fn collect_effects<'g, const STORE: bool, M: GuardMeter>(
                         ) =>
                 {
                     (
-                        analysis.runtime_slice_access_conditions_v24::<false>(
+                        analysis.runtime_slice_access_conditions_profile_v30::<false, false>(
                             FunctionOperationLocation::new(block.id, ordinal),
                             pointer,
                             FormalMemoryAccessKind::Read,
@@ -903,7 +907,7 @@ fn collect_effects<'g, const STORE: bool, M: GuardMeter>(
                     ) =>
                 {
                     (
-                        analysis.runtime_slice_access_conditions_v24::<true>(
+                        analysis.runtime_slice_access_conditions_profile_v30::<true, false>(
                             FunctionOperationLocation::new(block.id, ordinal),
                             pointer,
                             FormalMemoryAccessKind::Write,

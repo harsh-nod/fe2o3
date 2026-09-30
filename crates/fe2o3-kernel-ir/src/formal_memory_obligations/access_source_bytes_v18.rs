@@ -66,7 +66,7 @@ impl<'borrow, 'affine, 'owner, 'work> ActualOwnerPointersV18<'borrow, 'affine, '
                         .reserve(&mut guarded.runtime_reads.origins, origins.len())?;
                     guarded.ledger.charge(origins.len())?;
                     guarded.runtime_reads.origins.extend_from_slice(origins);
-                    guarded.collect_runtime_access_guards_v24::<false>(source)?;
+                    guarded.collect_runtime_access_guards_profile_v30::<false, false>(source)?;
                     guarded.collect_recipes()?;
                     Ok(Some(guarded.replace_meter(())))
                 }
