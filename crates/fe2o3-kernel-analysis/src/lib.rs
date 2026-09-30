@@ -268,3 +268,5 @@ pub use canonical_ranked_view_v1::*;
 
 mod canonical_kir_aggregate_ssa_v18;
 pub use canonical_kir_aggregate_ssa_v18::*;
+mod source_ssa_boundaries_v31;
+pub use source_ssa_boundaries_v31::*;
