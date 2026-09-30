@@ -1,3 +1,84 @@
+#[test]
+fn aggregate_source_binding_keeps_first_exact_refusal_through_later_queries() {
+    let result =
+        with_aggregate_source_owner_v30(private_entry_root_owner_v20, |source, _, budget| {
+            let first = source.retain_aggregate_result_v30::<()>(Err(
+                ProductionSourceOwnedViewErrorV18::Binding("first aggregate source binding").into(),
+            ));
+            let later = source.retain_aggregate_result_v30::<()>(Err(
+                ProductionSourceOwnedViewErrorV18::Binding("later aggregate source binding").into(),
+            ));
+            assert!(matches!(
+                later,
+                Err(ProductionAggregateSourceErrorV30::Source(
+                    ProductionSourceOwnedViewErrorV18::Binding("later aggregate source binding")
+                ))
+            ));
+            let before = (budget.work(), budget.storage());
+            assert!(matches!(
+                source.check_query_v18(budget),
+                Err(ProductionSourceOwnedViewErrorV18::Binding(
+                    "first aggregate source binding"
+                ))
+            ));
+            assert_eq!((budget.work(), budget.storage()), before);
+            assert!(!source.cleanup.is_denied());
+            first
+        });
+    assert!(matches!(
+        result,
+        Err(ProductionAggregateSourceErrorV30::Source(
+            ProductionSourceOwnedViewErrorV18::Binding("first aggregate source binding")
+        ))
+    ));
+}
+
+#[test]
+fn aggregate_initial_source_nested_binding_keeps_exact_error_and_settles_credit() {
+    let result =
+        with_aggregate_source_owner_v30(private_entry_root_owner_v20, |source, abi, budget| {
+            let floor = budget.storage();
+            let handoff = source.aggregate_output_v30(abi, budget)?;
+            let retained = budget.storage();
+            let result = with_aggregate_initial_source_v30(
+                source,
+                handoff.output(budget)?,
+                budget,
+                |_, _, budget| {
+                    budget.reserve_storage(11)?;
+                    Err::<(), _>(
+                        ProductionSourceOwnedViewErrorV18::Binding(
+                            "exact nested aggregate binding",
+                        )
+                        .into(),
+                    )
+                },
+            );
+            assert!(matches!(
+                &result,
+                Err(ProductionAggregateSourceErrorV30::Source(
+                    ProductionSourceOwnedViewErrorV18::Binding("exact nested aggregate binding")
+                ))
+            ));
+            assert_eq!(budget.storage(), retained);
+            assert!(!source.cleanup.is_denied());
+            assert!(matches!(
+                handoff.discard(budget),
+                Err(ProductionSourceOwnedViewErrorV18::Binding(
+                    "exact nested aggregate binding"
+                ))
+            ));
+            assert_eq!(budget.storage(), floor);
+            result
+        });
+    assert!(matches!(
+        result,
+        Err(ProductionAggregateSourceErrorV30::Source(
+            ProductionSourceOwnedViewErrorV18::Binding("exact nested aggregate binding")
+        ))
+    ));
+}
+
 fn with_aggregate_source_owner_v30(
     factory: fn() -> ProductionSemanticSsaOwnerV1,
     run: impl FnOnce(

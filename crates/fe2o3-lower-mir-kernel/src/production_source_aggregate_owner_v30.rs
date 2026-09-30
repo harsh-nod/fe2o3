@@ -275,10 +275,16 @@ impl ProductionSourceOwnedViewV18<'_> {
     ) -> Result<T, ProductionAggregateSourceErrorV30> {
         if let Err(error) = &result {
             let resource = aggregate_source_resource_v30(error);
-            let refusal = resource.map_or(
-                SourceOwnedQueryFailureV18::Binding("actual source Policy12 chain refused"),
-                SourceOwnedQueryFailureV18::Resource,
-            );
+            let refusal = match (resource, error) {
+                (Some(resource), _) => SourceOwnedQueryFailureV18::Resource(resource),
+                (
+                    None,
+                    ProductionAggregateSourceErrorV30::Source(
+                        ProductionSourceOwnedViewErrorV18::Binding(message),
+                    ),
+                ) => SourceOwnedQueryFailureV18::Binding(message),
+                _ => SourceOwnedQueryFailureV18::Binding("actual source Policy12 chain refused"),
+            };
             self.deny_aggregate_accounting_v30(error);
             let _ = self.guard.reject::<()>(refusal);
         }
