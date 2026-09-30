@@ -106,3 +106,43 @@ lowering. The genuine source fixtures and lifecycle integration remain due.
 
 r158 log SHA-256:
 `062cabdb6fa4220fd30bc97cfa14c6530953542d180a095bb8c28bdd492259df`.
+
+## Same-Graph Lifecycle Verification
+
+The scoped lifecycle candidate extends the existing metered execution-state
+table with exact context/invocation/index ancestry and the checked pointer's
+original presence result. Coordinate reads leave the witness live; checked
+mutable access consumes it and transfers the dependency to the pointer.
+Scope closure requires the exact sorted live-descendant roster. CFG joins and
+backedges require equal states. Unsupported pointer aliases, retained calls
+and CFG-argument transport refuse instead of losing that ancestry.
+
+The explicit `verify_scoped_storage_module_ref_with_budget_v23` entry uses
+the existing function pass and original graph. It grants no canonical V23
+owner, source correspondence, proof or launch authority. Historical V18
+admission continues to reject the new profile.
+
+| Run | Candidate | Kernel-IR Library Result |
+| --- | --- | --- |
+| r159 | `3a4b8fc1b7c23f7da7c4280e637d13f8da66e2d6` | 1,371 passed, one failed, none ignored |
+| r160 | `719ac186c54308aabb7db8201e55abaab0728b79` | 1,372 passed, none failed or ignored |
+
+The sole r159 failure expected historical canonical admission to reject during
+verification. It actually rejects earlier while encoding the unsupported
+scoped role. The corrected assertion requires exactly version 18's
+`UnsupportedInVersion` encode error; the separate storage-verifier rejection
+assertion remains unchanged. No production acceptance condition was relaxed.
+
+All 24 new scoped controls pass in r160. These include independent legacy work
+schedule assertions, not only limits measured from the new implementation:
+39 units for a minimal context-only lifecycle and nine for ordinary role
+operand rejection. Scoped-only discovery is folded into the existing scan;
+legacy role uses do not incur pointer-ancestry work charges.
+
+Source/tool inventories remained unchanged in both runs. Log SHA-256:
+
+- r159: `9f0b4f11d0047453962392bd006c78bd0242a74b660d8462e1d8e99ebce564d9`
+- r160: `5a79fb7f1632630d7a068e5c161211e4bf3d317354c6d913aa2009214d1a2b4b`
+
+Canonical-owner/Pliron integration and authentic source-scope emission still
+remain necessary. These library results do not advance M1 or **0/47**.
