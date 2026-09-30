@@ -48,6 +48,30 @@ static bool target_matches(const char *target) {
          std::strstr(target, ":xnack-") != nullptr;
 }
 
+static int inspect_peer_pair() {
+  int count = 0;
+  HIP_CHECK(hipGetDeviceCount(&count));
+  if (count != 2)
+    return 2;
+  std::printf("schema=xgmi-peer-query-v1 backend=hip visible_count=%d\n", count);
+  for (int device = 0; device < count; ++device) {
+    hipUUID uuid{};
+    hipDeviceProp_t properties{};
+    char bdf[32] = {};
+    HIP_CHECK(hipDeviceGetUuid(&uuid, device));
+    HIP_CHECK(hipGetDeviceProperties(&properties, device));
+    HIP_CHECK(hipDeviceGetPCIBusId(bdf, sizeof(bdf), device));
+    for (char digit : uuid.bytes)
+      if (!((digit >= '0' && digit <= '9') || (digit >= 'a' && digit <= 'f')))
+        return 2;
+    if (!target_matches(properties.gcnArchName))
+      return 2;
+    std::printf("visible_index=%d unique_id=%.16s pci_bdf=%s target=%s\n",
+                device, uuid.bytes, bdf, properties.gcnArchName);
+  }
+  return 0;
+}
+
 static double gbps(size_t bytes, uint64_t nanoseconds) {
   return static_cast<double>(bytes) / static_cast<double>(nanoseconds);
 }
@@ -286,6 +310,8 @@ static void run_ordered_hip(const int devices[2], const uint64_t ids[2],
 }
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::strcmp(argv[1], "--inspect-peer-pair") == 0)
+    return inspect_peer_pair();
   if (argc != 9 && argc != 10 && argc != 11) {
     std::fprintf(stderr,
                  "usage: xgmi-peer-hip <device-0> <device-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1> [--persistent-hot | --persistent-series | --ordered-segments <count>]\n");

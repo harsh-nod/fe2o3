@@ -46,6 +46,51 @@ static hsa_status_t collect_agent(hsa_agent_t agent, void *data) {
   return HSA_STATUS_SUCCESS;
 }
 
+static int inspect_peer_pair() {
+  HSA_CHECK(hsa_init());
+  Agents agents;
+  HSA_CHECK(hsa_iterate_agents(collect_agent, &agents));
+  bool xnack = true;
+  HSA_CHECK(hsa_system_get_info(
+      static_cast<hsa_system_info_t>(HSA_AMD_SYSTEM_INFO_XNACK_ENABLED), &xnack));
+  int result = 0;
+  if (agents.gpus.size() != 2 || xnack) {
+    result = 2;
+  } else {
+    std::printf("schema=xgmi-peer-query-v1 backend=hsa visible_count=%zu\n",
+                agents.gpus.size());
+    for (size_t index = 0; index < agents.gpus.size(); ++index) {
+      char uuid[21] = {};
+      char name[64] = {};
+      uint32_t bdf = 0, domain = 0;
+      const hsa_agent_t agent = agents.gpus[index];
+      HSA_CHECK(hsa_agent_get_info(agent,
+          static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_UUID), uuid));
+      HSA_CHECK(hsa_agent_get_info(agent, HSA_AGENT_INFO_NAME, name));
+      HSA_CHECK(hsa_agent_get_info(agent,
+          static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_BDFID), &bdf));
+      HSA_CHECK(hsa_agent_get_info(agent,
+          static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DOMAIN), &domain));
+      if (std::strlen(uuid) != 20 || std::strncmp(uuid, "GPU-", 4) != 0 ||
+          std::strcmp(name, "gfx942") != 0 || bdf > 0xffff || domain > 0xffff) {
+        result = 2;
+        break;
+      }
+      for (size_t digit = 4; digit < 20; ++digit)
+        if (!((uuid[digit] >= '0' && uuid[digit] <= '9') ||
+              (uuid[digit] >= 'a' && uuid[digit] <= 'f')))
+          result = 2;
+      if (result != 0)
+        break;
+      std::printf("visible_index=%zu unique_id=%s pci_bdf=%04x:%02x:%02x.%x "
+                  "target=%s:xnack-\n", index, uuid + 4, domain,
+                  bdf >> 8, (bdf >> 3) & 0x1f, bdf & 7, name);
+    }
+  }
+  HSA_CHECK(hsa_shut_down());
+  return result;
+}
+
 struct PoolSelection {
   bool want_gpu;
   bool found = false;
@@ -389,6 +434,8 @@ static void run_ordered_hsa(const hsa_agent_t gpus[2], hsa_agent_t cpu,
 }
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::strcmp(argv[1], "--inspect-peer-pair") == 0)
+    return inspect_peer_pair();
   if (argc != 9 && argc != 10 && argc != 11) {
     std::fprintf(stderr,
                  "usage: xgmi-peer-hsa <gpu-0> <gpu-1> <bytes> <depth> <warmups> <samples> <expected-unique-id-0> <expected-unique-id-1> [--persistent-hot | --persistent-series | --ordered-segments <count>]\n");

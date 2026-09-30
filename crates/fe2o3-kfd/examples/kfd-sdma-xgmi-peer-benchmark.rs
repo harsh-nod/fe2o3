@@ -65,6 +65,53 @@ fn gpu_id(
     Ok(u32::try_from(raw)?)
 }
 
+fn inspect_peer_pair(unique_ids: [u64; 2]) -> Result<(), Box<dyn std::error::Error>> {
+    if unique_ids[0] == unique_ids[1] {
+        return Err("query requires two distinct devices".into());
+    }
+    let mut left = admit_device(unique_ids[0])?;
+    let mut right = admit_device(unique_ids[1])?;
+    left.check_observable_currentness()?;
+    right.check_observable_currentness()?;
+    let snapshot = left.topology_snapshot();
+    let topology = snapshot.topology();
+    let gpu_ids = [gpu_id(&left, unique_ids[0])?, gpu_id(&left, unique_ids[1])?];
+    let forward = topology.admit_gfx942_xgmi_route(gpu_ids[0], gpu_ids[1])?;
+    let reverse = topology.admit_gfx942_xgmi_route(gpu_ids[1], gpu_ids[0])?;
+    println!("schema=xgmi-peer-query-v1 backend=kfd visible_count=2");
+    println!(
+        "boot_id={} generation={}",
+        snapshot.boot_id(),
+        topology.provenance().generation(),
+    );
+    for (index, unique_id) in unique_ids.into_iter().enumerate() {
+        let (gpu, render) = topology
+            .gpu_nodes()
+            .iter()
+            .zip(snapshot.render_nodes())
+            .find(|(gpu, _)| gpu.unique_id() == unique_id)
+            .ok_or("query endpoint disappeared")?;
+        println!(
+            "visible_index={index} unique_id={:016x} pci_bdf={} target={}:xnack- kfd_gpu_id={}",
+            gpu.unique_id(),
+            render.pci_address(),
+            gpu.target().name(),
+            gpu.gpu_id(),
+        );
+    }
+    for route in [forward, reverse] {
+        println!(
+            "source_gpu_id={} destination_gpu_id={} engine_id={}",
+            route.source_gpu_id(),
+            route.destination_gpu_id(),
+            route.recommended_engine_id(),
+        );
+    }
+    left.check_observable_currentness()?;
+    right.check_observable_currentness()?;
+    Ok(())
+}
+
 fn map_with_cleanup(
     owner: &mut SharedGttMemorySessionV1,
     peer: &mut SharedGttMemorySessionV1,
@@ -271,6 +318,12 @@ fn validate_and_release_pair(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().map(String::as_str) == Some("--inspect-peer-pair") {
+        if args.len() != 3 {
+            return Err("query requires exactly two unique IDs".into());
+        }
+        return inspect_peer_pair([parse_unique_id(&args[1])?, parse_unique_id(&args[2])?]);
+    }
     if args.len() != 6 && args.len() != 7 {
         return Err("usage: kfd-sdma-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--retained-pair-series-reviewed-mi300x]".into());
     }
