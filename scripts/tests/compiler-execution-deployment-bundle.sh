@@ -83,6 +83,7 @@ for binary in \
   fe2o3-compiler-execution-manifest \
   fe2o3-compiler-execution-deployment-verify \
   fe2o3-compiler-execution-deployment-install \
+  fe2o3-compiler-runtime-deployment \
   fe2o3-compiler-execution-qualification; do
   grep -Fq -- "${binary}" "${verifier_builder}" || fail "missing static image ${binary}"
 done

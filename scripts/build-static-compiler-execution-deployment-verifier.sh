@@ -8,6 +8,7 @@ readonly target="x86_64-unknown-linux-musl"
 readonly manifest="${target_dir}/${target}/release/fe2o3-compiler-execution-manifest"
 readonly verifier="${target_dir}/${target}/release/fe2o3-compiler-execution-deployment-verify"
 readonly installer="${target_dir}/${target}/release/fe2o3-compiler-execution-deployment-install"
+readonly runtime_deployment="${target_dir}/${target}/release/fe2o3-compiler-runtime-deployment"
 readonly qualification="${target_dir}/${target}/release/fe2o3-compiler-execution-qualification"
 
 cd -- "${repo_root}"
@@ -18,6 +19,7 @@ for binary in \
   fe2o3-compiler-execution-manifest \
   fe2o3-compiler-execution-deployment-verify \
   fe2o3-compiler-execution-deployment-install \
+  fe2o3-compiler-runtime-deployment \
   fe2o3-compiler-execution-qualification; do
   CARGO_TARGET_DIR="${target_dir}" cargo rustc \
     --locked \
@@ -55,6 +57,8 @@ verifier_usage="$(/usr/bin/env -i "${verifier}" 2>&1)"
 verifier_status=$?
 installer_usage="$(/usr/bin/env -i "${installer}" 2>&1)"
 installer_status=$?
+runtime_usage="$(/usr/bin/env -i "${runtime_deployment}" 2>&1)"
+runtime_status=$?
 qualification_usage="$(/usr/bin/env -i "${qualification}" 2>&1)"
 qualification_status=$?
 set -e
@@ -71,6 +75,12 @@ fi
 if [[ ${installer_status} -ne 2 \
   || "${installer_usage}" != 'usage: fe2o3-compiler-execution-deployment-install BUNDLE_ROOT EXPECTED_MANIFEST_SHA256 EXPECTED_GIT_COMMIT INSTALL_PARENT' ]]; then
   printf 'static deployment installer argument gate changed\n' >&2
+  exit 1
+fi
+
+if [[ ${runtime_status} -ne 1 \
+  || "${runtime_usage}" != 'compiler runtime deployment: usage: fe2o3-compiler-runtime-deployment verify|install BUNDLE POLICY_SHA256 MANIFEST_SHA256 [OFFLINE_ROOT]' ]]; then
+  printf 'static compiler runtime deployment argument gate changed\n' >&2
   exit 1
 fi
 
@@ -152,4 +162,5 @@ fi
 printf 'manifest_generator=%s\n' "${manifest}"
 printf 'deployment_verifier=%s\n' "${verifier}"
 printf 'deployment_installer=%s\n' "${installer}"
+printf 'compiler_runtime_deployment=%s\n' "${runtime_deployment}"
 printf 'qualification_harness=%s\n' "${qualification}"

@@ -57,3 +57,30 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn pins_require_exact_lowercase_hex() {
+        assert_eq!(pin(OsStr::new(&"ab".repeat(32))).unwrap(), [0xab; 32]);
+        for value in [
+            "",
+            &"0".repeat(63),
+            &"0".repeat(65),
+            &"AB".repeat(32),
+            &"g0".repeat(32),
+        ] {
+            assert!(pin(OsStr::new(value)).is_err());
+        }
+    }
+
+    #[test]
+    fn pins_refuse_non_ascii_without_slicing_utf8() {
+        assert!(pin(OsStr::from_bytes(&[0xff; 64])).is_err());
+        let multibyte = [0xc3, 0xa9].repeat(32);
+        assert!(pin(OsStr::from_bytes(&multibyte)).is_err());
+    }
+}

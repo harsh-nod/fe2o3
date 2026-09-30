@@ -46,7 +46,6 @@ bench = false
 [[bin]]
 name = "fe2o3-compiler-runtime-deployment"
 path = "src/bin/compiler_runtime.rs"
-test = false
 bench = false
 
 [[bin]]

@@ -50,6 +50,11 @@ authority. Removing or changing the bundle afterward does not change its copies.
 
 ## Install
 
+The existing `scripts/build-static-compiler-execution-deployment-verifier.sh`
+builds this command alongside the service deployment tools and applies the same
+static ELF, loader-independence and argument-gate checks. It does not add the
+command to the service inventory or invoke installation during provisioning.
+
 Use a dedicated, offline root. It must be root-owned mode0700, not the running
 host root, and already contain protected `opt/fe2o3`, `etc/fe2o3`, and a genuinely
 provisioned `etc/fe2o3/compiler-execution/client-profile-v3`. The installer does
