@@ -434,7 +434,15 @@ fn authenticate_source_signature<'tcx>(
     if trusted_device_items::classify(tcx, context_adt.did())
         != Some(TrustedDeviceItem::KernelContext)
     {
-        return Err(error("logical context provider is not authentic"));
+        return Err(error(
+            match trusted_device_items::rejected_provider(tcx, context_adt.did()) {
+                Some(rejected) => format!(
+                    "logical context provider is not authentic: {}",
+                    rejected.reason
+                ),
+                None => "logical context provider is not authentic".to_owned(),
+            },
+        ));
     }
     if arguments.len() != 4
         || !matches!(arguments[0].kind(), GenericArgKind::Lifetime(_))

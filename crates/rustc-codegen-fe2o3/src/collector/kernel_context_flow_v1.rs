@@ -1,9 +1,14 @@
 //! Validate only the generated entry protocol, never recognize user kernel bodies.
 
 use super::*;
+use rustc_hir::Mutability;
 use rustc_middle::mir::{
-    BasicBlock, Const, ConstValue, Local, Location, START_BLOCK, StatementKind,
+    BasicBlock, BorrowKind, Const, ConstValue, Local, Location, MutBorrowKind, Place,
+    ProjectionElem, START_BLOCK, StatementKind,
 };
+use rustc_middle::ty::{EarlyBinder, TypingEnv};
+
+const REBORROW_ERROR: &str = "entry protocol reborrow must preserve a physical reference argument";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct CallOccurrenceV1 {
@@ -46,7 +51,7 @@ pub(super) fn authenticate_source<'tcx>(
     let signature = source_signature_v1(tcx, root).map_err(error)?;
     check_parameter_count(signature.inputs().len(), body.arg_count)?;
     let physical_types = signature.inputs().to_vec();
-    let original = authenticate(tcx, root, helper, context, body, None)?;
+    let original = authenticate(tcx, root, helper, context, body, &physical_types, None)?;
     Ok(SourceFlowV1 {
         root,
         helper,
@@ -68,6 +73,7 @@ pub(super) fn authenticate_optimized<'tcx>(
         source.helper,
         source.context,
         body,
+        &source.physical_types,
         Some(source),
     )?;
     if optimized.issuer != source.original.issuer {
@@ -164,6 +170,13 @@ impl Values {
         Ok(())
     }
 
+    fn reborrow_argument(&self, local: usize) -> Result<usize, CollectError> {
+        match self.origins.get(local).copied().flatten() {
+            Some(Origin::Argument(ordinal)) if self.phase != Phase::Called => Ok(ordinal),
+            _ => Err(error(REBORROW_ERROR)),
+        }
+    }
+
     fn issue(&mut self, local: usize) -> Result<(), CollectError> {
         if self.phase != Phase::BeforeIssue || local == 0 {
             return Err(error(
@@ -210,12 +223,74 @@ fn operand(values: &mut Values, operand: &Operand<'_>) -> Result<Origin, Collect
     }
 }
 
+fn reference_borrow_preserves_mutability(borrow: BorrowKind, mutable: Mutability) -> bool {
+    matches!(
+        (borrow, mutable),
+        (BorrowKind::Shared, Mutability::Not)
+            | (
+                BorrowKind::Mut {
+                    kind: MutBorrowKind::Default | MutBorrowKind::TwoPhaseBorrow,
+                },
+                Mutability::Mut,
+            )
+    )
+}
+
+fn reborrow_origin<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    root: Instance<'tcx>,
+    body: &Body<'tcx>,
+    physical_types: &[Ty<'tcx>],
+    values: &Values,
+    destination: Place<'tcx>,
+    borrowed: Place<'tcx>,
+    kind: BorrowKind,
+) -> Result<Origin, CollectError> {
+    // Only &*arg / &mut *arg transport the complete original reference. Neither
+    // pointee projections nor a borrow of the issued context establish identity.
+    if !matches!(&borrowed.projection[..], [ProjectionElem::Deref]) {
+        return Err(error(REBORROW_ERROR));
+    }
+    let destination = destination
+        .as_local()
+        .ok_or_else(|| error(REBORROW_ERROR))?;
+    let ordinal = values.reborrow_argument(borrowed.local.index())?;
+    let expected = *physical_types
+        .get(ordinal)
+        .ok_or_else(|| error(REBORROW_ERROR))?;
+    let TyKind::Ref(_, _, mutable) = *expected.kind() else {
+        return Err(error(REBORROW_ERROR));
+    };
+    if !reference_borrow_preserves_mutability(kind, mutable) {
+        return Err(error(REBORROW_ERROR));
+    }
+    for local in [borrowed.local, destination] {
+        let raw = body
+            .local_decls
+            .get(local)
+            .ok_or_else(|| error(REBORROW_ERROR))?
+            .ty;
+        let normalized = root
+            .try_instantiate_mir_and_normalize_erasing_regions(
+                tcx,
+                TypingEnv::fully_monomorphized(),
+                EarlyBinder::bind(raw),
+            )
+            .map_err(|_| error(REBORROW_ERROR))?;
+        if normalized != expected {
+            return Err(error(REBORROW_ERROR));
+        }
+    }
+    Ok(Origin::Argument(ordinal))
+}
+
 fn authenticate<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: Instance<'tcx>,
     helper: Instance<'tcx>,
     context: Ty<'tcx>,
     body: &Body<'tcx>,
+    physical_types: &[Ty<'tcx>],
     source: Option<&SourceFlowV1<'tcx>>,
 ) -> Result<AuthenticatedFlowV1<'tcx>, CollectError> {
     let step_limit = fe2o3_rustc_front::MAX_PARAMETERS_PER_FUNCTION_V1.saturating_mul(16) + 64;
@@ -263,6 +338,16 @@ fn authenticate<'tcx>(
                     let (place, rvalue) = &**assignment;
                     let origin = match rvalue {
                         Rvalue::Use(value) => operand(&mut values, value)?,
+                        Rvalue::Ref(_, kind, borrowed) => reborrow_origin(
+                            tcx,
+                            root,
+                            body,
+                            physical_types,
+                            &values,
+                            *place,
+                            *borrowed,
+                            *kind,
+                        )?,
                         Rvalue::Aggregate(kind, fields)
                             if matches!(**kind, AggregateKind::Tuple) && fields.is_empty() =>
                         {
@@ -428,6 +513,79 @@ fn authenticate<'tcx>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reborrows_preserve_live_argument_origins_and_helper_order() {
+        let mut values = Values::new(8, 2).unwrap();
+        assert_eq!(values.reborrow_argument(1).unwrap(), 0);
+        let moved = values.read(2, true).unwrap();
+        values.assign(3, moved).unwrap();
+        assert!(values.reborrow_argument(2).is_err());
+        assert_eq!(values.reborrow_argument(3).unwrap(), 1);
+        values.issue(4).unwrap();
+        values
+            .assign(5, Origin::Argument(values.reborrow_argument(1).unwrap()))
+            .unwrap();
+        values
+            .assign(6, Origin::Argument(values.reborrow_argument(3).unwrap()))
+            .unwrap();
+        assert!(
+            values
+                .call(
+                    &[Origin::Context, Origin::Argument(1), Origin::Argument(0)],
+                    7
+                )
+                .is_err()
+        );
+        let operands = [
+            values.read(4, true).unwrap(),
+            values.read(5, true).unwrap(),
+            values.read(6, true).unwrap(),
+        ];
+        values.call(&operands, 7).unwrap();
+        assert_eq!(values.phase, Phase::Called);
+        assert!(values.reborrow_argument(1).is_err());
+    }
+
+    #[test]
+    fn reborrows_cannot_substitute_context_result_unit_or_uninitialized_storage() {
+        let mut values = Values::new(7, 1).unwrap();
+        values.issue(2).unwrap();
+        values.assign(3, Origin::Result).unwrap();
+        values.assign(4, Origin::Unit).unwrap();
+        for local in [0, 2, 3, 4, 5, 6, 7, usize::MAX] {
+            assert!(values.reborrow_argument(local).is_err());
+        }
+        assert_eq!(values.origins[2], Some(Origin::Context));
+        assert_eq!(values.reborrow_argument(1).unwrap(), 0);
+    }
+
+    #[test]
+    fn reference_reborrow_kinds_cannot_change_mutability_or_admit_special_loans() {
+        use rustc_middle::mir::FakeBorrowKind;
+        for mutable in [Mutability::Not, Mutability::Mut] {
+            assert_eq!(
+                reference_borrow_preserves_mutability(BorrowKind::Shared, mutable),
+                mutable == Mutability::Not
+            );
+            for kind in [MutBorrowKind::Default, MutBorrowKind::TwoPhaseBorrow] {
+                assert_eq!(
+                    reference_borrow_preserves_mutability(BorrowKind::Mut { kind }, mutable),
+                    mutable == Mutability::Mut
+                );
+            }
+            assert!(!reference_borrow_preserves_mutability(
+                BorrowKind::Mut {
+                    kind: MutBorrowKind::ClosureCapture
+                },
+                mutable
+            ));
+            assert!(!reference_borrow_preserves_mutability(
+                BorrowKind::Fake(FakeBorrowKind::Shallow),
+                mutable
+            ));
+        }
+    }
 
     #[test]
     fn retained_call_occurrence_equality_checks_every_coordinate() {

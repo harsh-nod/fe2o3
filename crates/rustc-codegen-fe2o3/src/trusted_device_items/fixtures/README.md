@@ -196,3 +196,29 @@ leaf in both canonical and vendor images. Complete source bytes, sorted paths,
 length framing, actual source definition, FnABI and occurrence checks remain
 mandatory. These are reviewed input pins, not evidence of source qualification,
 native compilation, GPU execution or a completed memory-validation milestone.
+
+## 2026-09-29 context documentation refresh
+
+The device delta from `4fb8ae500e38ad22475861aae7c3b3ef238068f6` changes only
+comments in `src/context.rs`, correcting the distinction between MIR admission
+and checked executable lowering. The source roster remains 34 regular leaves;
+the canonical and historical Cargo-vendor manifests are unchanged. Executable
+code, diagnostic items, ABI and capability semantics are unchanged.
+
+The current canonical closure is
+`889c8127d1a1bf34f77e96ada69e9be58ee19b4910f474e4dd54c070d9692251`;
+the Cargo-vendor closure is
+`15222ea9dcb71f03e079f46308b866040e177d15c4e31677c72e14fe1370eff1`.
+These replace, rather than supplement, the two preceding accepted images.
+The raw-byte, sorted-relative-path, length-framed algorithm is unchanged and
+continues to include comments. Materialization mutation controls also change,
+remove and rename `context.rs` in both package representations.
+
+The first context-vecadd source run exposed the omitted pin refresh: all 32
+source sessions stopped at provider authentication. The existing canonical
+pin regression independently reproduced that mismatch. This refresh does not
+relax authentication or grant proof, artifact or GPU qualification. Fresh
+matching runs subsequently passed all 54 provider controls and, after the
+separate identity-reference forwarding repair, all 32 context-vecadd source
+checks. See `docs/issue272-context-vecadd-source-handoff-v1.md` for the exact
+scope, failures, results and remaining checked-materialization refusal.

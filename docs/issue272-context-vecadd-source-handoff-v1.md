@@ -1,12 +1,12 @@
 # Context Vecadd Source Handoff V1
 
 Source-only increment based on `f2dd128e35d5345cf4b7f6fb3f71480ee483c961`,
-2026-09-29. No builds, source-compilation tests, simulation or hardware runs were
-performed for this patch. M1 remains incomplete; this fixture does not migrate
+2026-09-29. Authoring performed no builds or execution; the primary's subsequent
+validation is recorded below. M1 remains incomplete; this fixture does not migrate
 or qualify the manifest vecadd. M0 acceptance and the 0/47 strict-production
 GPU baseline are unchanged.
 
-## Fixture And Authored Checks
+## Fixture And Checks
 
 `crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/context_vecadd.rs`
 is ordinary `#[kernel]` Rust with a logical `KernelContext<'_>` and explicit
@@ -24,7 +24,8 @@ or complete M1 memory-capability normalization. Existing typed slices and
 `DisjointSlice` roles are observed, not promoted into new context-bound memory
 authority.
 
-Authored tests, all execution-dependent and ignored by default:
+The following tests are execution-dependent and ignored by default. Their
+completed guarded runs are recorded below:
 
 - `context_vecadd_normal_exports_require_checked_materialization` uses the
   normal simulation V5 exporter and LLVM extractor for gfx942 and gfx950. Each
@@ -52,23 +53,99 @@ Authored tests, all execution-dependent and ignored by default:
 
 Each library parent requests both target profiles, optimization/MIR-optimization
 `(0,0), (0,2), (3,0), (3,2)` and duplicate fresh-process observations: 16 source
-sessions per parent, 32 total. These are authored expectations, not results.
+sessions per parent, 32 total. All 32 passed in `r46-context-vecadd-source`.
 The harness also requires the per-invocation compiler output directory to stay
 empty. Recording branches and assertion attachments does not prove dominance,
 assertion truth, exact source pointer provenance or source-to-graph value
 equivalence. Counts alone do not identify which input bound an assertion covers.
 The fixed observation bounds deliberately reject excessive inventories.
 
-Primary-owned execution commands when the serialized build lane permits:
+Primary-owned execution commands, run serially with the pinned toolchain:
 
 ```sh
 cargo test -p rustc-codegen-fe2o3 --lib actual_context_vecadd_ -- --ignored --nocapture
 cargo test -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 context_vecadd_normal_exports_require_checked_materialization -- --ignored --nocapture
+cargo test -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 kernel_context_source_protocol_rejects_without_export_authority -- --ignored --nocapture
 ```
 
 Rebuild the authentic device dependencies when running these commands: the
 provider's documentation-only correction changes its source closure fingerprint.
 Do not reuse provider receipts from the unmodified source tree.
+
+## Primary Validation
+
+The first guarded run, `r39-context-vecadd-source`, built the compiler library
+but failed both parent tests. All 32 actual source sessions stopped at
+`FE2O3-CAP-AUTH001`: the logical context provider was not authentic. Neither
+requested observation was reached. Source and tool hashes stayed unchanged;
+no protected proof or GPU execution occurred.
+
+The documentation change in `fe2o3-device/src/context.rs` had not refreshed the
+two exact reviewed package hashes. The existing
+`safe_execution_source_closure_matches_the_reviewed_pin` regression reproduced
+the mismatch in guarded run `r40-provider-pin-repro`. Independent raw-byte
+hashing also reproduced both previous pins from the unmodified base and the
+two new canonical/vendor hashes from the changed source.
+
+The correction refreshes only those two accepted identities, retains comment
+bytes in authentication, adds context-source mutation controls and preserves
+the underlying provider refusal reason in the context diagnostic. All 54 provider
+tests then passed in `r41-provider-pin-controls`. The next actual-source run,
+`r42-context-vecadd-source`, passed provider authentication but all 32 sessions
+stopped at the generated wrapper's identity-reference reborrows. Neither failure
+was accepted as satisfying a downstream test.
+
+The flow checker now admits only whole-reference `&*arg` / `&mut *arg` transport
+of a live original physical argument before the helper call. The destination
+and base MIR types must normalize in the actual root instance to the original
+physical reference type, including mutability. Projected fields, raw pointers,
+mutability changes, special loans, dead locals and context/result/unit origins
+remain rejected. Original argument ordinals and helper order are preserved.
+This does not change the separate execution-capability borrow rules.
+
+The first build of that repair, `r43-context-entry-reborrow-controls`, exposed an
+unsupported pinned-rustc API and ran no tests. The repair uses the root instance's
+fallible MIR instantiation/normalization API. `r44` was interrupted and has no
+terminal report or test credit. Its process was confirmed absent before `r45`
+started. Completed validation on 2026-09-29/30 UTC:
+
+| Run | Result | Scope |
+| --- | --- | --- |
+| r45-context-entry-reborrow-controls | 8 passed | Pure origin, borrow-kind and existing flow controls. |
+| r46-context-vecadd-source | 2 parent tests, 32 source sessions passed | Actual unchanged shared body, both targets, four optimization pairs, duplicate fresh processes. |
+| r47-context-flow-provider | 62 passed | 54 provider tests plus all 8 flow controls; not 62 additional unique tests beyond those groups. |
+| r48-context-driver-build | Build passed | Normal exporter/extractor and integration driver; no tests executed. |
+| r49-context-source-exports | Partial; command timed out with status 124 | Normal vecadd test passed all four gfx942/gfx950 simulation/LLVM refusal requests; the following source-protocol test did not finish. |
+| r50-context-source-protocol | Passed independently | All 30 protocol cases and 14 additional LLVM requests; exact diagnostic stages and absent output files checked. |
+
+The protocol suite retains all 21 previous cases and adds nine reference
+transport/substitution cases. Its valid handwritten declarations intentionally
+reach the missing typed-binding refusal; they are not successful exports. Both
+real vecadd parents reach their required observers and terminal refusals. The
+normal vecadd export test reaches the checked-materialization refusal, not an
+earlier authentication failure. No run executes a proof or GPU.
+
+Runs r46-r50 share the unchanged Git-visible source snapshot
+`b4dcbbccb85c6e9e4a8a97c430a46dd3585cb9520e69ae4edfddca3ad16c1b9a`.
+The runner also verifies unchanged compiler/tool hashes before and after each
+run. Tests use locked/offline nightly `2026-04-03`, one Cargo job, serial tests,
+disabled GPU visibility, a 12 GiB process-memory ceiling and a 1,200-second
+deadline. The timed-out r49 protocol scratch was removed only after its
+processes were confirmed absent. r46/r50 removed their own private scratch.
+
+Local reports and logs are in the sibling
+`fe2o3-issue272-production-next-evidence-20260921` directory. Key log SHA-256:
+
+| Run | Log SHA-256 |
+| --- | --- |
+| r46 | `9b8b2efa320234bc5b318b37c437cf8200fca51804881515ca4434edd85fd8a8` |
+| r47 | `a4f6cea2068ad9bd3317e4d9cfb65d51359ba393a57d854ef6c54ebf8294cfe6` |
+| r49 | `8ce017f55c76b3e76bbb2159f4dc4e982aae3bdaf89134c2af50b40c6ce7ded6` |
+| r50 | `1c197ce03224e3c0032c414057026dc8178148e692af75cb6bf45b7f0be76058` |
+
+These results establish source admission and diagnostic observations, not an
+executable context-bearing production continuation. M1 remains incomplete and
+the strict protected production-to-safe-GPU matrix remains 0/47.
 
 ## Current Source Entrypoints
 
@@ -99,14 +176,36 @@ the base revision, not evidence that this fixture has executed them.
 
 ## V18 Dependency And Ownership
 
-Latest #271 coordination read on 2026-09-29:
+Earlier #271 coordination on 2026-09-29:
 [owner handoff 5894692188](https://github.com/harsh-nod/fe2o3/issues/271#issuecomment-5894692188).
 It reports an unpublished optimized execution recipe census at
 `012ccbf23b304ebf924f48e9f1bdd7fa73e678d6` handling ContextIssue, WorkgroupDerive
 and ScopeEnd under retained original/optimized source owners. This is an owner
-report, not independently inspected or qualified code in this patch. Obtain the
-owner's reviewed dependency/integration revision before implementing another
-execution recipe producer. Do not import that WIP wholesale.
+report, not independently inspected or qualified code in this patch.
+
+The subsequent owner candidate
+`a566403b7125cbef41a4a2230cdd74dece3c796f` on
+`wip/issue271-v1798-mixed-production` was fetched and its relevant boundaries
+independently inspected, not merged or executed here. It contains execution
+recipe support, so another independent recipe producer is not required. Two
+concrete consumer gaps remain in that candidate:
+
+- `with_original_source_conditional_mixed_pure_cse_v26` selects the nominal
+  pointer-sized V35 import profile, while context-bearing import selects exact
+  MIR V29. The V35 validator rejects schemas newer than V15; non-V35 schemas
+  reject nominal pointer-sized types. The owner must provide a compatible,
+  preselected contract in the existing source-owned custody policy, without
+  retrying a weaker profile or relabeling a schema.
+- `store_source_expression_v23` in
+  `production_source_private_expression_v22.rs` accepts only fixed-width integer
+  stores. The original-to-optimized expression correspondence must support the
+  actual f32 loads/add/store, including operand origins and floating-point
+  semantics. Removing the scalar guard alone would not establish that relation.
+
+Reuse the owner's source-owned pipeline and target-lowering consumers. Obtain
+its reviewed integration revision and tests before integration; do not import
+the WIP wholesale. Compilation of a candidate or diagnostic observation does
+not establish its finalization, proof, simulator or GPU readiness.
 
 The same handoff identifies #275's source-owned V18 scalar-candidate observer as
 diagnostic only. Its tile-operation replacement correspondence and GridLeader

@@ -180,7 +180,7 @@ fn canonical_and_cargo_vendor_materializations_preserve_actual_identities() {
 #[test]
 fn reviewed_materializations_reject_manifest_and_source_mutations() {
     for vendored in [false, true] {
-        for mutation in 0..15 {
+        for mutation in 0..18 {
             let fixture = reviewed_materialization_fixture(vendored);
             admit_reviewed_materialization(&fixture).unwrap();
             match mutation {
@@ -241,6 +241,18 @@ fn reviewed_materializations_reject_manifest_and_source_mutations() {
                     fixture
                         .source_root()
                         .join("physical_global_copy_renamed.rs"),
+                )
+                .unwrap(),
+                15 => {
+                    let path = fixture.source_root().join("context.rs");
+                    let mut bytes = fs::read(&path).unwrap();
+                    bytes.extend_from_slice(b"\n// unreviewed documentation change\n");
+                    fs::write(path, bytes).unwrap();
+                }
+                16 => fs::remove_file(fixture.source_root().join("context.rs")).unwrap(),
+                17 => fs::rename(
+                    fixture.source_root().join("context.rs"),
+                    fixture.source_root().join("context_renamed.rs"),
                 )
                 .unwrap(),
                 _ => unreachable!(),
