@@ -21438,7 +21438,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         let local = self.require_local(block, statement, place.local().index())?;
-        let mut binding = self.locals[local].clone().ok_or(
+        let original = self.locals[local].as_ref().ok_or(
             ProductionSemanticKirErrorV1::MissingLocalDefinition {
                 function: 0,
                 block: block.index(),
@@ -21446,6 +21446,13 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 local: place.local().index(),
             },
         )?;
+        let mut binding = match self.emission_work.as_deref_mut() {
+            Some(budget) => emission_clone_binding_v1(original, budget)?,
+            #[cfg(test)]
+            None => original.clone(),
+            #[cfg(not(test))]
+            None => return Err(ArgumentResourceV1::Accounting.into()),
+        };
         let mut current_type = self.function.locals()[local].ty();
         for (projection_ordinal, projection) in place.projections().iter().enumerate() {
             match projection.kind() {

@@ -31,6 +31,7 @@ struct SemanticSourceReferenceBindingV29 {
 struct SourceReferenceEmissionV29<'a, 'source> {
     plan: &'a SourceReferencePlanV29<'a, 'source>,
     claimed: Vec<std::cell::Cell<bool>>,
+    external_borrows: Vec<std::cell::Cell<bool>>,
     grid_leaders: Vec<std::cell::Cell<Option<SourceGridLeaderBorrowV29>>>,
     index_witnesses: Vec<std::cell::Cell<Option<SourceIndexWitnessBorrowV29>>>,
     sites: Vec<((usize, u32, usize), usize)>,
@@ -176,6 +177,10 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
         let mut claimed = source_reference_owned_vec_v29(plan, plan.loans.len(), budget)?;
         budget.source_reference_charge_v29(plan, plan.loans.len())?;
         claimed.resize_with(plan.loans.len(), || std::cell::Cell::new(false));
+        let mut external_borrows =
+            source_reference_owned_vec_v29(plan, plan.external_borrows.len(), budget)?;
+        budget.source_reference_charge_v29(plan, plan.external_borrows.len())?;
+        external_borrows.resize_with(plan.external_borrows.len(), || std::cell::Cell::new(false));
         let mut grid_leaders = source_reference_owned_vec_v29(plan, plan.loans.len(), budget)?;
         budget.source_reference_charge_v29(plan, plan.loans.len())?;
         grid_leaders.resize_with(plan.loans.len(), || std::cell::Cell::new(None));
@@ -239,6 +244,7 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
             claimed,
             grid_leaders,
             index_witnesses,
+            external_borrows,
             sites,
             block_sites,
             cell_accesses,
@@ -397,6 +403,10 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         budget.source_reference_charge_v29(self.plan, self.claimed.len())?;
+        budget.source_reference_charge_v29(self.plan, self.external_borrows.len())?;
+        if self.external_borrows.iter().any(|claimed| !claimed.get()) {
+            return Err(source_external_reference_error_v29());
+        }
         if self.claimed.iter().any(|claimed| !claimed.get()) {
             return Err(source_reference_error_v29(
                 "source reference borrow was not emitted",
@@ -864,6 +874,15 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         let SemanticRvalueKindV1::Borrow { kind, place } = value else {
             return Ok(None);
         };
+        if let Some(binding) = self.try_lower_source_external_reference_v29(
+            block,
+            statement,
+            result_type,
+            value,
+            operations,
+        )? {
+            return Ok(Some(binding));
+        }
         let Some((references, instance)) = self.execution.as_ref().and_then(|cursor| {
             cursor
                 .references

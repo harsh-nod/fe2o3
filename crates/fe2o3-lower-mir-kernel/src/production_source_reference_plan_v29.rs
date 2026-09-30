@@ -1,5 +1,6 @@
 // Source-reference identity and representation planning, never allocation authority.
 include!("production_source_reference_boundaries_v29.rs");
+include!("production_source_external_reference_v29.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceReferenceSiteV29 {
@@ -150,6 +151,7 @@ struct SourceReferencePlanV29<'a, 'source> {
     origins: Vec<SourceReferenceOriginV29>,
     projections: Vec<SemanticProjectionV1>,
     loans: Vec<SourceReferenceLoanV29>,
+    external_borrows: Vec<SourceExternalReferenceBorrowV29>,
     nodes: Vec<SourceReferenceNodeV29>,
     selected_storage: Vec<Option<fe2o3_kernel_ir::StorageLayoutIdV1>>,
     representation_demands: Vec<SourceReferenceRepresentationDemandV29>,
@@ -683,6 +685,7 @@ impl<'a, 'root, 'source> SourceReferenceBuilderV29<'a, 'root, 'source> {
                 origins: Vec::new(),
                 projections: Vec::new(),
                 loans: Vec::new(),
+                external_borrows: Vec::new(),
                 nodes: Vec::new(),
                 children: Vec::new(),
                 enum_alternatives: Vec::new(),

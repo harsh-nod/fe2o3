@@ -1404,6 +1404,7 @@ impl SourceReferenceEmissionV29<'_, '_> {
 
     fn check_descriptor_access(
         &self,
+        descriptor_ordinal: usize,
         row: SourceReferenceDescriptorV29,
         used: SourceReferenceDescriptorUseV29,
         lowered: &LoweredFunctionResultV1,
@@ -1499,6 +1500,17 @@ impl SourceReferenceEmissionV29<'_, '_> {
             event.operand(),
             ExecutionOperandV29::Destination | ExecutionOperandV29::StoreDestination
         );
+        let anchors = lowered
+            .scoped_memory_anchors
+            .as_ref()
+            .ok_or_else(source_descriptor_error_v29)?;
+        if anchors.subject.instance != row.instance
+            || anchors.subject.ledger != budget.work_ledger_identity_v1()
+            || anchors.subject.source
+                != ExecutionCallSourceV29::from_instances(self.plan.instances, budget)?
+        {
+            return Err(source_descriptor_error_v29());
+        }
         let volatile = match (
             scoped_source_statement_v29(source, event.site()),
             event.operand(),
@@ -1509,6 +1521,50 @@ impl SourceReferenceEmissionV29<'_, '_> {
             ) => match assignment.value().kind() {
                 SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => {
                     load.volatility() == SemanticVolatilityV1::Volatile
+                }
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Shared,
+                    place,
+                } => {
+                    source_reference_owned_prepay_v29::<SourceReferenceSiteV29>(self.plan, budget)?;
+                    let ExecutionSiteV29::Statement {
+                        block: source_block,
+                        statement,
+                    } = event.site()
+                    else {
+                        return Err(source_descriptor_error_v29());
+                    };
+                    let site = SourceReferenceSiteV29 {
+                        instance: row.instance,
+                        block: SemanticBlockIdV1::from_index(source_block.get()),
+                        statement: Some(statement as usize),
+                    };
+                    let receipt = source_external_reference_borrow_record_v29(
+                        self.plan,
+                        site,
+                        place,
+                        assignment.value().result_type(),
+                        SemanticBorrowKindV1::Shared,
+                        budget,
+                    )?
+                    .ok_or_else(source_descriptor_error_v29)?;
+                    if place as *const SemanticPlaceV1 as usize != row.source
+                        || self.plan.external_borrows[receipt].origin
+                            != (SourceExternalReferenceOriginV29::Descriptor {
+                                instance: row.instance,
+                                descriptor: descriptor_ordinal,
+                            })
+                        || !self
+                            .external_borrows
+                            .get(receipt)
+                            .is_some_and(std::cell::Cell::get)
+                    {
+                        return Err(source_descriptor_error_v29());
+                    }
+                    // This occurrence forms the checked address, not a load.
+                    // The caller still checks that its original bounds success
+                    // edge dominates this GEP; C2 checks each eventual access.
+                    return Ok(block);
                 }
                 _ => return Err(source_descriptor_error_v29()),
             },
@@ -1522,17 +1578,6 @@ impl SourceReferenceEmissionV29<'_, '_> {
             ) if store.atomic().is_none() => store.volatility() == SemanticVolatilityV1::Volatile,
             _ => return Err(source_descriptor_error_v29()),
         };
-        let anchors = lowered
-            .scoped_memory_anchors
-            .as_ref()
-            .ok_or_else(source_descriptor_error_v29)?;
-        if anchors.subject.instance != row.instance
-            || anchors.subject.ledger != budget.work_ledger_identity_v1()
-            || anchors.subject.source
-                != ExecutionCallSourceV29::from_instances(self.plan.instances, budget)?
-        {
-            return Err(source_descriptor_error_v29());
-        }
         let body = lowered
             .function
             .body
@@ -1688,7 +1733,8 @@ impl SourceReferenceEmissionV29<'_, '_> {
                 .get(row.instance.index())
                 .and_then(Option::as_ref)
                 .ok_or_else(source_descriptor_error_v29)?;
-            let access = self.check_descriptor_access(*row, used, lowered, definitions, budget)?;
+            let access =
+                self.check_descriptor_access(ordinal, *row, used, lowered, definitions, budget)?;
             charge_execution_cfg_lookup_v29(guards.len(), budget)?;
             let candidates = guards
                 .get(&(row.instance.index(), row.index_value, used.slice))

@@ -9,6 +9,9 @@ enum DescriptorFault {
     Missing,
     Volatility,
     OrderedSourceAudit,
+    ExternalHelperAlignment,
+    ExternalHelperResultType,
+    ExternalHelperVolatility,
 }
 thread_local! {
     static DESCRIPTOR_FAULT: std::cell::Cell<DescriptorFault> = const { std::cell::Cell::new(DescriptorFault::None) };
@@ -113,6 +116,44 @@ fn descriptor_slot_observer(
     ) {
         return Ok(());
     }
+    if matches!(
+        fault,
+        DescriptorFault::ExternalHelperAlignment
+            | DescriptorFault::ExternalHelperResultType
+            | DescriptorFault::ExternalHelperVolatility
+    ) {
+        let mut changed = 0;
+        for operation in emitted
+            .iter_mut()
+            .flatten()
+            .filter_map(|lowered| lowered.function.body.as_mut())
+            .flat_map(|body| &mut body.blocks)
+            .flat_map(|block| &mut block.operations)
+        {
+            let OperationKind::Load { access, .. } = &mut operation.kind else {
+                continue;
+            };
+            if access.address_space != AddressSpace::Generic {
+                continue;
+            }
+            assert_eq!(operation.results.len(), 1);
+            assert_eq!(operation.results[0].ty, Type::Scalar(ScalarType::U32));
+            assert_eq!(access.alignment, 4);
+            assert!(!access.volatile);
+            match fault {
+                DescriptorFault::ExternalHelperAlignment => access.alignment = 8,
+                DescriptorFault::ExternalHelperResultType => {
+                    operation.results[0].ty = Type::Scalar(ScalarType::U64)
+                }
+                DescriptorFault::ExternalHelperVolatility => access.volatile = true,
+                _ => unreachable!(),
+            }
+            changed += 1;
+        }
+        assert_eq!(changed, 1, "actual external-reference helper load reached");
+        DESCRIPTOR_TAMPERED.set(DESCRIPTOR_TAMPERED.get() + changed);
+        return Ok(());
+    }
     for lowered in emitted.iter_mut().flatten() {
         let body = lowered.function.body.as_mut().unwrap();
         let descriptor_pointers: BTreeSet<ValueId> = body
@@ -179,12 +220,27 @@ fn run_descriptor_module(
     work_limit: usize,
     storage_limit: usize,
 ) -> (Result<(), ScopedModuleErrorV29>, usize, usize) {
+    run_descriptor_owner_module(
+        descriptor_source_owner(case),
+        case,
+        fault,
+        work_limit,
+        storage_limit,
+    )
+}
+
+fn run_descriptor_owner_module(
+    owner: ProductionSemanticSsaOwnerV1,
+    case: DescriptorCase,
+    fault: DescriptorFault,
+    work_limit: usize,
+    storage_limit: usize,
+) -> (Result<(), ScopedModuleErrorV29>, usize, usize) {
     let _observers = DescriptorObservers::install(fault);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
     let result = (|| {
-        let owner = descriptor_source_owner(case);
         let (input, launch) = with_module_fixture_view(
             &owner,
             ModuleFixture::Ordinary,

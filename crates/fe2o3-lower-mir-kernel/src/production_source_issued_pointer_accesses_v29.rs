@@ -99,12 +99,15 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
         {
             return Err(source_issued_error_v29());
         }
-        let resolved = self.resolve_access_v26(instance, frame.site, role, place, budget)?;
-        let accepted = if let Some(SourceIssuedResolvedAccessV26 {
+        let accepted = if self
+            .descriptor_reference_access_v29(references, instance, row, place, budget)?
+        {
+            true
+        } else if let Some(SourceIssuedResolvedAccessV26 {
             issuer_instance,
             recipe,
             pointer,
-        }) = resolved
+        }) = self.resolve_access_v26(instance, frame.site, role, place, budget)?
         {
             if recipe.form != SourceIssuedFormV29::Pointer {
                 return Err(source_issued_error_v29());

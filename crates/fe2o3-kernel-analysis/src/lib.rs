@@ -265,3 +265,6 @@ mod tests {
 
 mod canonical_ranked_view_v1;
 pub use canonical_ranked_view_v1::*;
+
+mod canonical_kir_aggregate_ssa_v18;
+pub use canonical_kir_aggregate_ssa_v18::*;

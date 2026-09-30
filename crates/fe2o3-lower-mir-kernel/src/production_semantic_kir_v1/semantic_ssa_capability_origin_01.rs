@@ -377,18 +377,25 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
             for (statement_index, statement) in block.statements().iter().enumerate() {
                 resolver.charge_work(1)?;
                 let preserve_shared = if let Some((cursor, budget)) = source.as_mut() {
+                    let references = cursor
+                        .references
+                        .ok_or_else(source_index_witness_error_v29)?;
+                    let site = SourceReferenceSiteV29 {
+                        instance: cursor.instance,
+                        block: SemanticBlockIdV1::from_index(
+                            u32::try_from(block_index)
+                                .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                        ),
+                        statement: Some(statement_index),
+                    };
                     source_shared_index_borrow_preserves_origin_v29(
-                        cursor
-                            .references
-                            .ok_or_else(source_index_witness_error_v29)?,
-                        SourceReferenceSiteV29 {
-                            instance: cursor.instance,
-                            block: SemanticBlockIdV1::from_index(
-                                u32::try_from(block_index)
-                                    .map_err(|_| ArgumentResourceV1::Arithmetic)?,
-                            ),
-                            statement: Some(statement_index),
-                        },
+                        references,
+                        site,
+                        statement.kind(),
+                        *budget,
+                    )? || source_external_borrow_preserves_holder_v29(
+                        references,
+                        site,
                         statement.kind(),
                         *budget,
                     )?
@@ -457,6 +464,10 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
                         kind: SemanticBorrowKindV1::Shared,
                         place,
                     } if preserve_shared && place.projections().is_empty() => {}
+                    SemanticRvalueKindV1::Borrow { place, .. }
+                        if preserve_shared
+                            && matches!(place.projections(), [projection]
+                            if projection.kind() == SemanticProjectionKindV1::Dereference) => {}
                     SemanticRvalueKindV1::Borrow { place, .. }
                     | SemanticRvalueKindV1::AddressOf { place, .. } => {
                         self.invalidate_local(place.local().index())?;

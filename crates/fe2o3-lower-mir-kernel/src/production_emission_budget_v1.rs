@@ -72,6 +72,19 @@ trait SemanticEmissionBudgetV1 {
         Err(ArgumentResourceV1::Accounting.into())
     }
 
+    fn source_external_reference_borrow_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        site: SourceReferenceSiteV29,
+        source: &SemanticPlaceV1,
+        ty: SemanticTypeIdV1,
+        kind: SemanticBorrowKindV1,
+    ) -> Result<Option<usize>, ProductionSemanticKirErrorV1> {
+        let _ = (site, source, ty, kind);
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+    }
+
     fn source_reference_charge_v29(
         &mut self,
         plan: &SourceReferencePlanV29<'_, '_>,
@@ -194,6 +207,18 @@ trait SemanticEmissionBudgetV1 {
 }
 
 impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
+    fn source_external_reference_borrow_v29(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        site: SourceReferenceSiteV29,
+        source: &SemanticPlaceV1,
+        ty: SemanticTypeIdV1,
+        kind: SemanticBorrowKindV1,
+    ) -> Result<Option<usize>, ProductionSemanticKirErrorV1> {
+        source_external_reference_borrow_record_v29(plan, site, source, ty, kind, self)
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
     fn source_object_original_leaf_type_v29(
         &mut self,
         plan: &SourceReferencePlanV29<'_, '_>,

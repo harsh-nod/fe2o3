@@ -14,6 +14,35 @@ struct SourceIssuedPointerTransportV26 {
     issuer: ValueId,
 }
 
+fn check_source_reference_parameter_transport_v29(
+    source_index: &SourceAddressSourceIndexV29<'_>,
+    instance: ProductionCallInstanceIdV1,
+    local: SemanticLocalIdV1,
+    source_argument: u32,
+    ty: SemanticTypeIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    source_reference_emission_prepay_v29::<()>(budget)?;
+    let child = source_index.sidecar(instance, budget)?;
+    let inputs = match (&child.invocation_entry, &child.direct_call_inputs) {
+        (Some(entry), None) => &entry.inputs,
+        (None, Some(inputs)) => inputs,
+        _ => return Err(source_issued_error_v29()),
+    };
+    budget.charge_work(inputs.len())?;
+    let mut matching = inputs.iter().filter(|row| row.local == local.index());
+    let row = matching.next().ok_or_else(source_issued_error_v29)?;
+    if matching.next().is_some()
+        || row.ty != ty
+        || row.source_argument != source_argument
+        || row.tuple_field.is_some()
+        || row.parameter_count != 1
+    {
+        return Err(source_issued_error_v29());
+    }
+    Ok(())
+}
+
 impl SourceIssuedSemanticV29<'_, '_, '_> {
     fn entry_dependency_v26(
         &self,
@@ -44,18 +73,21 @@ impl SourceIssuedSemanticV29<'_, '_, '_> {
                         value,
                         budget,
                     )?;
-                    let SemanticRvalueKindV1::Use(
-                        SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place),
-                    ) = rvalue
+                    let Some((place, role, reborrow)) = source_reference_pointer_alias_v29(
+                        self.instances.owner().source_semantic().types(),
+                        function,
+                        site,
+                        rvalue,
+                        budget,
+                    )?
                     else {
                         return Ok(None);
                     };
                     budget.charge_work(3)?;
-                    if !place.projections().is_empty() {
+                    if !reborrow && !place.projections().is_empty() {
                         return Ok(None);
                     }
-                    value =
-                        self.use_value(site, ExecutionOperandV29::RvalueOperand(0), place, budget)?;
+                    value = self.use_value(site, role, place, budget)?;
                 }
                 Some(SourceIssuedDefinitionV29::Edge(_)) => return Ok(None),
                 None => {
@@ -202,23 +234,14 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             {
                 return Err(source_issued_error_v29());
             }
-            let child = self.source_index.sidecar(instance, budget)?;
-            let inputs = match (&child.invocation_entry, &child.direct_call_inputs) {
-                (Some(entry), None) => &entry.inputs,
-                (None, Some(inputs)) => inputs,
-                _ => return Err(source_issued_error_v29()),
-            };
-            budget.charge_work(inputs.len())?;
-            let mut matching = inputs.iter().filter(|row| row.local == local.index());
-            let row = matching.next().ok_or_else(source_issued_error_v29)?;
-            if matching.next().is_some()
-                || row.ty != selector.ty
-                || row.source_argument != selector.source_argument
-                || row.tuple_field.is_some()
-                || row.parameter_count != 1
-            {
-                return Err(source_issued_error_v29());
-            }
+            check_source_reference_parameter_transport_v29(
+                self.source_index,
+                instance,
+                local,
+                selector.source_argument,
+                selector.ty,
+                budget,
+            )?;
             instance = occurrence.caller;
             value = self.original_v26(instance, budget)?.use_value(
                 ExecutionSiteV29::Terminator {

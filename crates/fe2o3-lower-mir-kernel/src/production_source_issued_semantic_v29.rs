@@ -555,16 +555,19 @@ impl<'scope, 'owner, 'source> SourceIssuedSemanticV29<'scope, 'owner, 'source> {
                 .ok_or_else(source_issued_error_v29)?;
             let (site, rvalue) =
                 source_descriptor_assignment_v29(function, &occurrences, statement, value, budget)?;
-            let SemanticRvalueKindV1::Use(
-                SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place),
-            ) = rvalue
+            let Some((place, role, _)) = source_reference_pointer_alias_v29(
+                self.instances.owner().source_semantic().types(),
+                function,
+                site,
+                rvalue,
+                budget,
+            )?
             else {
                 resolved = None;
                 self.complete(value, None, budget)?;
                 break;
             };
-            let dependency =
-                self.use_value(site, ExecutionOperandV29::RvalueOperand(0), place, budget)?;
+            let dependency = self.use_value(site, role, place, budget)?;
             budget.charge_work(2)?;
             if self.links.len() == self.links.capacity() {
                 return Err(ArgumentResourceV1::Accounting.into());
@@ -597,18 +600,26 @@ impl<'scope, 'owner, 'source> SourceIssuedSemanticV29<'scope, 'owner, 'source> {
                     link.value,
                     budget,
                 )?;
-                let SemanticRvalueKindV1::Use(
-                    SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place),
-                ) = rvalue
-                else {
-                    return Err(source_issued_error_v29());
-                };
+                let (place, _, reborrow) = source_reference_pointer_alias_v29(
+                    source.types(),
+                    function,
+                    site,
+                    rvalue,
+                    budget,
+                )?
+                .ok_or_else(source_issued_error_v29)?;
                 let local_type = function
                     .locals()
                     .get(place.local().index() as usize)
                     .ok_or_else(source_issued_error_v29)?
                     .ty();
-                if place.projections().is_empty() {
+                if reborrow {
+                    if recipe.form != SourceIssuedFormV29::Pointer
+                        || local_type != recipe.pointer_type
+                    {
+                        return Err(source_issued_error_v29());
+                    }
+                } else if place.projections().is_empty() {
                     let expected = match recipe.form {
                         SourceIssuedFormV29::Option => recipe.option_type,
                         SourceIssuedFormV29::Pointer => recipe.pointer_type,

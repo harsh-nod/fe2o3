@@ -5,6 +5,9 @@ use fe2o3_pliron::ProductionSemanticMirLimitsV1;
 #[path = "production_source_shared_intrinsic_witness_v29_tests.rs"]
 mod shared_intrinsic_witness_tests;
 
+#[path = "production_source_external_reference_v29_tests.rs"]
+mod external_reference_tests;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const INDEX: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
@@ -934,6 +937,29 @@ fn run_original_with_access(fault: u8, used: bool) {
 }
 
 fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemanticSsaOwnerV1) {
+    run_original_owner_counts(fault, (usize::from(used), usize::from(read), 0), owner);
+}
+
+fn run_original_owner_counts(
+    fault: u8,
+    expected: (usize, usize, usize),
+    owner: ProductionSemanticSsaOwnerV1,
+) {
+    run_original_owner_case(fault, expected, owner, None);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum EarlyIssuedSourceRefusal {
+    Unsupported(&'static str),
+    Accounting,
+}
+
+fn run_original_owner_case(
+    fault: u8,
+    expected: (usize, usize, usize),
+    owner: ProductionSemanticSsaOwnerV1,
+    early_source_refusal: Option<EarlyIssuedSourceRefusal>,
+) {
     use fe2o3_kernel_descriptor::{
         DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, LogicalArgumentV1, ScalarTypeV1,
         SourceTypeDescriptorV1, SourceTypeDescriptorV3, SourceTypeRecordV1, ValidName,
@@ -1004,7 +1030,7 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
         explicit_argument_bytes: 32,
         kernarg_alignment_bytes: 8,
     }];
-    let classes = [ProductionScopeCallableCandidateV29::Ordinary; 3];
+    let classes = vec![ProductionScopeCallableCandidateV29::Ordinary; semantic.callables().len()];
     let input = ProductionExecutionSourceInputV29 {
         semantic_sha256: &hash,
         roots: &[],
@@ -1026,6 +1052,43 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
         ProductionSemanticKirLimitsV1::default(),
         &mut budget,
     );
+    if let Some(expected) = early_source_refusal {
+        assert!(
+            !ISSUED_SOURCE_VISITED.get(),
+            "C1 refusal must precede completed source emission"
+        );
+        let exact = match (expected, result.as_ref()) {
+            (
+                EarlyIssuedSourceRefusal::Unsupported(expected),
+                Err(ProductionPendingScopedSourceErrorV29::Source(
+                    ProductionSemanticKirErrorV1::Unsupported {
+                        function: 0,
+                        block: None,
+                        statement: None,
+                        detail,
+                    },
+                )),
+            ) => *detail == expected,
+            (
+                EarlyIssuedSourceRefusal::Accounting,
+                Err(ProductionPendingScopedSourceErrorV29::Source(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Accounting,
+                    ),
+                )),
+            ) => true,
+            _ => false,
+        };
+        assert!(
+            exact,
+            "expected source refusal {expected:?}: {:?}",
+            result.as_ref().err()
+        );
+        assert_eq!(budget.storage(), 37 + occurrence_storage);
+        budget.release_storage(occurrence_storage).unwrap();
+        assert_eq!(budget.storage(), 37);
+        return;
+    }
     assert!(
         ISSUED_SOURCE_VISITED.get(),
         "original emitter/archive proof must reach the final-source observer; fault {fault}, refusal: {:?}",
@@ -1070,6 +1133,7 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
     let mut stores = 0;
     let mut loads = 0;
     let mut gep = 0;
+    let mut generic = 0;
     for function in &pending.pending_module().functions {
         let Some(body) = &function.body else {
             continue;
@@ -1078,12 +1142,20 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
             for operation in &block.operations {
                 match operation.kind {
                     OperationKind::Store { access, .. } => {
-                        assert_eq!(access.address_space, AddressSpace::Global);
+                        assert!(matches!(
+                            access.address_space,
+                            AddressSpace::Global | AddressSpace::Generic
+                        ));
+                        generic += usize::from(access.address_space == AddressSpace::Generic);
                         assert_eq!(access.volatile, ordered_write);
                         stores += 1;
                     }
                     OperationKind::Load { access, .. } => {
-                        assert_eq!(access.address_space, AddressSpace::Global);
+                        assert!(matches!(
+                            access.address_space,
+                            AddressSpace::Global | AddressSpace::Generic
+                        ));
+                        generic += usize::from(access.address_space == AddressSpace::Generic);
                         assert_eq!(access.volatile, ordered_read);
                         loads += 1;
                     }
@@ -1093,8 +1165,8 @@ fn run_original_owner(fault: u8, used: bool, read: bool, owner: ProductionSemant
             }
         }
     }
-    assert_eq!((stores, gep), (usize::from(used), 1));
-    assert_eq!(loads, usize::from(read));
+    assert_eq!((stores, loads, generic), expected);
+    assert_eq!(gep, 1);
     let retained = pending.adopted_storage();
     assert_eq!(budget.storage(), 37 + occurrence_storage + retained);
     drop(pending);

@@ -397,6 +397,9 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         if execution_cfg_nominal_kind_v29(types, ty)?.is_some() {
             return self.plain(ty, budget);
         }
+        if let Some(node) = self.external_reference_borrow_v29(site, kind, source, ty, budget)? {
+            return Ok(node);
+        }
         let local = self.local(site.instance, source.local())?;
         let node = local
             .node

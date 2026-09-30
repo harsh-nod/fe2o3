@@ -19,6 +19,10 @@ mod module_tests {
     include!("production_source_static_object_admission_v29_tests.rs");
     include!("production_source_reference_descriptor_source_v29_tests.rs");
     include!("production_source_reference_descriptor_emission_v29_tests.rs");
+    mod external_descriptor_reference_tests {
+        use super::*;
+        include!("production_source_external_descriptor_reference_v29_tests.rs");
+    }
     include!("production_source_reference_descriptor_hostile_v29_tests.rs");
     include!("production_source_reference_descriptor_resources_v29_tests.rs");
     include!("production_source_reference_selector_emission_v29_tests.rs");
