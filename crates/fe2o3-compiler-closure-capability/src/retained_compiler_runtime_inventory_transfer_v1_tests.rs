@@ -1,4 +1,5 @@
 //! Synthetic private inventory mechanics, never a fabricated approved runtime.
+use super::super::inventory::{INVENTORY_SCRATCH, INVENTORY_WORK, inventory_transfer_storage};
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
