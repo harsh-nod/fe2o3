@@ -323,7 +323,11 @@ impl Receiver {
                         self.last = Some(input);
                         if last {
                             self.invocation.as_ref().unwrap().revalidate_native(b)?;
-                            self.revalidate_output(b)?;
+                            Self::revalidate_output(
+                                self.output.as_ref(),
+                                self.invocation.as_ref(),
+                                b,
+                            )?;
                             self.ack = Some(
                                 Record::enforcement_unavailable(self.last.as_ref().unwrap(), b)
                                     .map_err(record)?
@@ -335,7 +339,7 @@ impl Receiver {
                         }
                     }
                     Phase::Ack => {
-                        self.revalidate_output(b)?;
+                        Self::revalidate_output(self.output.as_ref(), self.invocation.as_ref(), b)?;
                         if io::receive_authenticated_packet::<N>(connection.as_fd(), sender)
                             .map_err(transport)?
                             .is_some()
@@ -366,15 +370,13 @@ impl Receiver {
         result
     }
 
-    fn revalidate_output(&self, b: &mut Budget<'_>) -> Result<()> {
-        let output = self
-            .output
-            .as_ref()
-            .ok_or_else(|| rejected("missing original output directory"))?;
-        let invocation = self
-            .invocation
-            .as_ref()
-            .ok_or_else(|| rejected("missing original invocation"))?;
+    fn revalidate_output(
+        output: Option<&Output>,
+        invocation: Option<&Invocation>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        let output = output.ok_or_else(|| rejected("missing original output directory"))?;
+        let invocation = invocation.ok_or_else(|| rejected("missing original invocation"))?;
         output
             .revalidate(invocation.descriptor().artifact_output_directory(), b)
             .map_err(output_error)
