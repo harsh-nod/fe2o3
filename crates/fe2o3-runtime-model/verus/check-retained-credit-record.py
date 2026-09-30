@@ -24,12 +24,13 @@ PHASE = MODEL / "r67_resource_credits.rs"
 PROOF = V / "retained_credit_record_v1.rs"
 FILES = [PROOF, VECTOR, BODY]
 EXTRA = {VECTOR, PHASE, MODEL / "lib.rs",
+         MODEL / "request_charge_body.rs",
          Path("crates/fe2o3-resource-accounting/Cargo.toml"),
          Path("crates/fe2o3-runtime-model/Cargo.toml"),
          Path("Cargo.toml"), Path("Cargo.lock")}
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "6f04bc6fef76ebd7b52dedc8d158eab9bba6d4f92d7fbfc3ece5c9fb5bf7fbe1"
+SOURCE_TREE_SHA = "336ce2f3dbeb2b78c005a1e997c265a9da995ce6d0e6c9c416a406bf665353a9"
 PROOF_SHA = "a303f5ceeac20d3c9f1c53228562aa452e56b24d5b7052ed9982a3de8a039a5a"
 # Full no-cheating discovery measured seven obligations on the exact PROOF_SHA.
 EXPECTED_VERIFIED = 7

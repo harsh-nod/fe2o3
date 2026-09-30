@@ -8,6 +8,7 @@ macro_rules! resource_vector_declarations_v1 {
 }
 include!("resource_vector_declarations.rs");
 include!("resource_vector_bodies.rs");
+include!("request_charge_body.rs");
 
 macro_rules! resource_vector_rust_expr {
     ($body:expr) => {
@@ -55,6 +56,12 @@ impl R67ResourceVectorV1 {
     pub const fn counts(&self) -> &[u64; R67_RESOURCE_DIMENSIONS_V1] {
         &self.counts
     }
+}
+
+/// One requested allocation, including a zero-byte request. This vector does
+/// not measure native backing, alignment, residency or allocation authority.
+pub const fn r67_requested_allocation_charge_v1(bytes: u64) -> R67ResourceVectorV1 {
+    resource_request_charge_body_v1!(bytes)
 }
 
 #[allow(clippy::question_mark)] // Explicit matches are shared with Verus.
@@ -125,6 +132,34 @@ pub const fn r67_credit_transition_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_profile_has_exact_coordinates_at_all_boundary_sizes() {
+        const EMPTY: R67ResourceVectorV1 = r67_requested_allocation_charge_v1(0);
+        assert_eq!(EMPTY.get(R67ResourceKindV1::AllocationRecords), 1);
+        assert_eq!(R67ResourceKindV1::RequestedAllocationBytes as usize, 1);
+        assert_eq!(R67ResourceKindV1::AllocationRecords as usize, 18);
+        for bytes in [0, 1, u64::MAX / 2, u64::MAX - 1, u64::MAX] {
+            let charge = r67_requested_allocation_charge_v1(bytes);
+            let oracle = R67ResourceVectorV1::ZERO
+                .with(R67ResourceKindV1::RequestedAllocationBytes, bytes)
+                .with(R67ResourceKindV1::AllocationRecords, 1);
+            assert_eq!(charge, oracle);
+            for index in 0..R67_RESOURCE_DIMENSIONS_V1 {
+                let expected = if index == R67ResourceKindV1::RequestedAllocationBytes as usize {
+                    bytes
+                } else if index == R67ResourceKindV1::AllocationRecords as usize {
+                    1
+                } else {
+                    0
+                };
+                assert_eq!(charge.counts()[index], expected);
+                let mut contaminated = charge;
+                contaminated.counts[index] = expected.wrapping_add(1);
+                assert_ne!(contaminated, r67_requested_allocation_charge_v1(bytes));
+            }
+        }
+    }
 
     #[test]
     fn vector_admission_and_release_check_every_dimension_before_returning() {

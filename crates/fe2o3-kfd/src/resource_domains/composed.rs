@@ -447,9 +447,7 @@ impl Gfx942RequestAccountV1 {
 }
 
 fn request_charge(bytes: u64) -> ResourceVectorV1 {
-    ResourceVectorV1::ZERO
-        .with(ResourceKindV1::RequestedAllocationBytes, bytes)
-        .with(ResourceKindV1::AllocationRecords, 1)
+    fe2o3_runtime_model::r67_requested_allocation_charge_v1(bytes)
 }
 
 /// Owns an atomic request roster without allocating another token array.

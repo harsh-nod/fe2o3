@@ -86,9 +86,7 @@ impl ExactSizeIterator for RuntimeResourceReservationsV1 {}
 impl std::iter::FusedIterator for RuntimeResourceReservationsV1 {}
 
 pub(crate) fn request_charge(bytes: u64) -> RuntimeResourceVectorV1 {
-    RuntimeResourceVectorV1::ZERO
-        .with(RuntimeResourceKindV1::RequestedAllocationBytes, bytes)
-        .with(RuntimeResourceKindV1::AllocationRecords, 1)
+    fe2o3_runtime_model::r67_requested_allocation_charge_v1(bytes)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -280,6 +278,45 @@ mod tests {
         RuntimeResourceVectorV1::ZERO
             .with(K::RequestedAllocationBytes, bytes)
             .with(K::AllocationRecords, 1)
+    }
+
+    #[test]
+    fn request_profile_wrapper_and_live_record_reject_every_contaminated_coordinate() {
+        let kinds = [
+            K::LogicalPayloadBytes,
+            K::RequestedAllocationBytes,
+            K::ResidentHostAllocationBytes,
+            K::ResidentDeviceAllocationBytes,
+            K::ExecutableHostImageBytes,
+            K::ExecutableDeviceBytes,
+            K::ControlResidentBytes,
+            K::QueueResidentBytes,
+            K::SignalResidentBytes,
+            K::KernargResidentBytes,
+            K::QueueSlots,
+            K::SignalSlots,
+            K::KernargSlots,
+            K::OperationSlots,
+            K::ReplyBytes,
+            K::ReplyCells,
+            K::TerminalRecordBytes,
+            K::QuarantineBookkeepingBytes,
+            K::AllocationRecords,
+        ];
+        let device = crate::context::resource_credit_test_device_v1();
+        for bytes in [0, 1, u64::MAX] {
+            assert_eq!(request_charge(bytes), charge(bytes));
+            let account = RuntimeResourceCreditAccountV1::new(device, charge(bytes), 1).unwrap();
+            let retained = account.reserve(request_charge(bytes)).unwrap().retain();
+            assert!(account.matches_retained_charge_v1(device, &retained, charge(bytes)));
+            for kind in kinds {
+                let contaminated =
+                    charge(bytes).with(kind, charge(bytes).get(kind).wrapping_add(1));
+                assert!(!account.matches_retained_charge_v1(device, &retained, contaminated));
+            }
+            retained.release_after_disposal().unwrap();
+            assert_eq!(account.usage().used, RuntimeResourceVectorV1::ZERO);
+        }
     }
 
     #[test]

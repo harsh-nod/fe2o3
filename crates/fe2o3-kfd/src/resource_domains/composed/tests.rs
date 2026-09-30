@@ -2,6 +2,34 @@ use super::*;
 use ResourceKindV1 as K;
 use fe2o3_runtime_model::{DeviceGenerationV1, PhysicalDeviceIdV1};
 
+#[test]
+fn request_profile_composed_wrapper_matches_exact_boundary_vectors() {
+    for bytes in [0, 1, u64::MAX] {
+        let expected = ResourceVectorV1::ZERO
+            .with(K::RequestedAllocationBytes, bytes)
+            .with(K::AllocationRecords, 1);
+        assert_eq!(request_charge(bytes), expected);
+        assert_eq!(request_charge(bytes).counts(), expected.counts());
+    }
+}
+
+#[test]
+fn request_profile_composed_zero_bytes_still_retains_one_record() {
+    let root = root();
+    let admission = admission(&root);
+    let account = admission.request_account_v1();
+    for bytes in [0, 1, 8] {
+        let retained = account.reserve_v1(bytes).unwrap().retain();
+        assert_eq!(account.usage_v1().used, request_charge(bytes));
+        assert_eq!(account.usage_v1().retained_records, 1);
+        assert!(account.matches_retained_charge_v1(&retained, bytes));
+        assert!(!account.matches_retained_charge_v1(&retained, bytes + 1));
+        retained.release_after_disposal().unwrap();
+        assert_eq!(account.usage_v1().used, ResourceVectorV1::ZERO);
+        assert_eq!(account.usage_v1().retained_records, 0);
+    }
+}
+
 fn identity(uid: u64) -> Identity {
     Identity {
         unique_id: uid,
