@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "canonical_kir_aggregate_layout_worklist_v36.rs"]
+mod layout_worklist;
+
 #[derive(Clone, Copy)]
 pub(super) struct Allocation {
     pub operation: usize,
@@ -59,50 +62,7 @@ fn root_type(ty: &Type, layout: StorageLayoutIdV1) -> bool {
         && p.access == AccessMode::ReadWrite && *p.pointee == Type::StorageObject(layout))
 }
 fn safe_layouts(i: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<Option<bool>>> {
-    let layouts = &i.owner().module().storage_layouts;
-    let mut safe = filled(layouts.len(), None, meter)?;
-    for _ in 0..=layouts.len() {
-        let mut changed = false;
-        for (id, row) in layouts.iter().enumerate() {
-            meter.work(2)?;
-            if safe[id].is_some() {
-                continue;
-            }
-            let decision = match &row.kind {
-                LayoutKind::Scalar(_) | LayoutKind::Vector(_) => Some(true),
-                LayoutKind::Record(fields) => {
-                    let mut known = true;
-                    let mut all = true;
-                    for field in fields.iter() {
-                        meter.work(1)?;
-                        match safe[field.layout.0 as usize] {
-                            Some(value) => all &= value,
-                            None => known = false,
-                        }
-                    }
-                    if !all {
-                        Some(false)
-                    } else if known {
-                        Some(true)
-                    } else {
-                        None
-                    }
-                }
-                LayoutKind::Array { element, .. } => safe[element.0 as usize],
-                // Relocation validity, tags and overlapping byte views are not
-                // scalar value semantics. Never infer them from layout size.
-                _ => Some(false),
-            };
-            if let Some(decision) = decision {
-                safe[id] = Some(decision);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    Ok(safe)
+    layout_worklist::derive(&i.owner().module().storage_layouts, meter)
 }
 fn project(
     i: &Inventory<'_>,
