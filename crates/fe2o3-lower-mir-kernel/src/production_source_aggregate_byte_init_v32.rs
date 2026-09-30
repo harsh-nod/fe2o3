@@ -745,6 +745,3 @@ fn aggregate_memory_check_chain_v32(
         result
     })
 }
-
-#[cfg(test)]
-include!("production_source_aggregate_byte_init_v32_tests.rs");

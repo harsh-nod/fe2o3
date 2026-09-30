@@ -504,3 +504,5 @@ fn aggregate_memory_chain_header_and_capacity_oracle_are_exact() {
     })
     .unwrap();
 }
+
+include!("production_source_aggregate_byte_init_v32_tests.rs");
