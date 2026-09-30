@@ -26,6 +26,20 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [queued producer-query packet](evidence/dev-queued-query-2026-09-30/README.md)
+qualifies the actual outer/child read-only query bodies and a missing-read-count
+refusal fix. Model 1095/0 with 19 unchanged manual benchmark ignores, 29 doctests,
+strict Clippy and scoped static checks pass. Signed child/outer campaigns reject
+all 36 logical mutants; six full runs each pass 161 overlapping obligations.
+All 6416 selected source inputs are bound to the signed candidate, with exact
+pre-signing CPU-byte reuse disclosed. Archive membership and content checks pass;
+generated CPU binaries are omitted. The retained-pair source is also integrated
+locally after its separate 81-case CPU/static and 29-negative conditional
+post-catch campaigns; its broader evidence packet remains local. These are
+component qualifications, not a new combined full-runtime or native result.
+Owned-storage extraction and the Context fold are separate development slices;
+the retained runtime facade, protected execution and all A0-A7 exits remain open.
+
 The [binder, producer preflight and retained-payload packet](evidence/dev-binder-producer-payload-2026-09-30/README.md)
 passes the available CPU/static/bounded host-proof gates at 6,407 unchanged
 signed inputs. Actual complete binder/roster composition passes 64 overlapping

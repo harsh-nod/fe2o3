@@ -1,0 +1,25 @@
+{
+  "accepted": true,
+  "archive_bytes": 31414090,
+  "archive_path": "/home/harsh/.codex-tmp/fe2o3-a2-queued-query-20260929-6kEq7vyS/a2-query-source-logs-200729aa.tar.gz",
+  "archive_sha256": "68fec5a52f5e6164223eab701d90af1050bb152039cfc94762a978b81daa4bd1",
+  "archive_verification": {
+    "all_members_rehashed": true,
+    "content_bytes": 146724138,
+    "member_count": 8943
+  },
+  "checksums_sha256": "e139dacb3d81c7c063040cfe8398004b2896a1fff138bb3f5db923f26b1c4c1a",
+  "compiler_solver_or_tests_executed": false,
+  "cpu_elf_bytes_included": false,
+  "finished_ns": 1790736104049391021,
+  "historical_groups_probed": false,
+  "inventory_sha256": "b70c315cb947a698fd25f09b684555fad424775d84f8ef44bb4dd64380e26431",
+  "post_source_hashes_match": true,
+  "pre_source_hashes_match": true,
+  "python_sha256": "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f",
+  "retained_partial_if_present": "/home/harsh/.codex-tmp/fe2o3-a2-queued-query-20260929-6kEq7vyS/a2-query-source-logs-200729aa.tar.gz.partial",
+  "source_candidate": "200729aa9da3fc6366d8c9d0093c371b482e5d63",
+  "source_receipts_replayed_only": true,
+  "started_ns": 1790736094207541952,
+  "utility_sha256": "b65226de4cf21c92daf7ea7e96087ec1fa884bf31a9863269721983ad3a76724"
+}
