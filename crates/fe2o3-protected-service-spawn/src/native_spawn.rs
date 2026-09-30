@@ -187,6 +187,7 @@ impl StagedProtectedServiceExecV2 {
         + 4 * RootOwnedProtectedServiceChildV2::STORAGE
         + observations::CAPABILITY_CEILING_SCRATCH
         + syscall::COMPILER_CHANNEL_SCRATCH
+        + syscall::COMPILER_RESTRICTION_SCRATCH
         + 8192;
 
     /// Checked conservative full result charge including every duplicated image.

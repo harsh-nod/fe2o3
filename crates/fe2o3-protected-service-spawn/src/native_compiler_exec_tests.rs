@@ -1,4 +1,7 @@
 //! Explicit isolated-root diagnostic through the production clone/exec mechanics.
+#[path = "native_compiler_restrictions_exec_tests.rs"]
+mod restrictions;
+
 use super::*;
 use crate::{
     PROTECTED_SERVICE_GATE_RELEASE_V1 as GO, PROTECTED_SERVICE_PROFILE_READY_V1 as READY,

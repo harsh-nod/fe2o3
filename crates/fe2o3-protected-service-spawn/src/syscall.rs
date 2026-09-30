@@ -46,6 +46,12 @@ const FAILURE_BASE: u8 = 0xc0;
 mod compiler_channel;
 pub(crate) use compiler_channel::SCRATCH as COMPILER_CHANNEL_SCRATCH;
 
+#[path = "native_compiler_restrictions.rs"]
+mod compiler_restrictions;
+pub(crate) use compiler_restrictions::{
+    INSTRUCTIONS as COMPILER_RESTRICTION_INSTRUCTIONS, SCRATCH as COMPILER_RESTRICTION_SCRATCH,
+};
+
 pub(crate) fn has_exact_root_identity() -> bool {
     let mut uids = [u32::MAX; 3];
     let mut gids = [u32::MAX; 3];
@@ -235,7 +241,7 @@ impl StagedProtectedServiceExecV1 {
 
     pub(crate) fn additional_child_work(&self) -> usize {
         let cwd = if self.compiler.is_some() {
-            crate::native_work::COMPILER_CWD_WORK
+            crate::native_work::COMPILER_CWD_WORK + crate::native_work::COMPILER_RESTRICTION_WORK
         } else {
             0
         };
@@ -591,6 +597,12 @@ unsafe fn child_exec(
         } else {
             -1
         };
+        // Only the closed compiler stage opts in. Install after child-channel
+        // setup, before any READY or user instruction. Installation failure uses
+        // the existing owned status/terminal cleanup path, never a weak fallback.
+        if staged.compiler.is_some() && !compiler_restrictions::install() {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 13);
+        }
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
         if libc::syscall(
             libc::SYS_write,

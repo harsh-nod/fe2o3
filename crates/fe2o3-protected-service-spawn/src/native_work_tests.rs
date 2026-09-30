@@ -2,6 +2,12 @@ use super::child_work;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 
 #[test]
+fn compiler_restriction_work_prepays_fixed_filter_and_all_install_calls() {
+    assert_eq!(super::COMPILER_RESTRICTION_WORK, 3 * 1088 + 57 * 64 + 256);
+    assert_eq!(super::COMPILER_RESTRICTION_WORK, 7168);
+}
+
+#[test]
 fn mapping_gate_prepays_read_retries_and_both_closes() {
     assert_eq!(super::MAPPING_GATE_WORK, (64 + 2) * 1088 + 256);
 }

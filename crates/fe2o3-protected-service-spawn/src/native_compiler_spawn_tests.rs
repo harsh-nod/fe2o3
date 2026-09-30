@@ -140,6 +140,7 @@ fn channel_staging_pins_exact_high_cloexec_transfer_and_charges_full_quota() {
         stage.spawn_work(63).unwrap(),
         Stage::spawn_work_for(3, 63).unwrap()
             + native_work::COMPILER_CWD_WORK
+            + native_work::COMPILER_RESTRICTION_WORK
             + native_work::COMPILER_CHANNEL_WORK
     );
     assert_eq!(
@@ -147,6 +148,7 @@ fn channel_staging_pins_exact_high_cloexec_transfer_and_charges_full_quota() {
         Stage::SPAWN_WORK
             + native_work::child_work(3, 63).unwrap()
             + native_work::COMPILER_CWD_WORK
+            + native_work::COMPILER_RESTRICTION_WORK
             + native_work::COMPILER_CHANNEL_WORK
             + crate::ProtectedServiceCleanupServiceV2::retained_launch_work::<()>(0).unwrap()
     );
@@ -220,6 +222,7 @@ fn channel_slot_collisions_and_total_descriptor_limit_refuse_during_staging() {
         stage.spawn_work(63).unwrap(),
         Stage::spawn_work_for(1, 63).unwrap()
             + native_work::COMPILER_CWD_WORK
+            + native_work::COMPILER_RESTRICTION_WORK
             + native_work::COMPILER_CHANNEL_WORK
     );
     assert_eq!(b.storage(), SOURCE);
@@ -310,7 +313,9 @@ fn compiler_stage_retains_exact_cwd_streams_strings_and_additional_child_work() 
     }
     assert_eq!(
         stage.spawn_work(63).unwrap(),
-        Stage::spawn_work_for(3, 63).unwrap() + native_work::COMPILER_CWD_WORK
+        Stage::spawn_work_for(3, 63).unwrap()
+            + native_work::COMPILER_CWD_WORK
+            + native_work::COMPILER_RESTRICTION_WORK
     );
     let expected_cwd = rustix::fs::fstat(&fixture.cwd).unwrap().st_ino;
     assert!(fixture.directory.path().is_dir());

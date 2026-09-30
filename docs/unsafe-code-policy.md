@@ -585,6 +585,23 @@ additionally requires observed aggregate emptiness and successful removal of
 the exact retained cgroup. `WNOWAIT` and `ECHILD` are not terminal
 evidence. See [cleanup custody](compiler-execution-cleanup-custody.md).
 
+The compiler-only pre-exec restriction module adds one unsafe function/block:
+three direct `prctl` calls consume a fixed immutable 57-instruction filter and
+live native `sock_fprog` header, synchronously copied by the kernel. There is no
+allocation, lock, callback or borrowed pointer escaping the child call. The
+original parent pays 7,168 additional compiler-only work before slot reservation
+and clone; the fixed spawn frame includes 728 bytes of filter/ABI scratch. The
+closed compiler stage installs it after profile/channel setup but before READY
+and exec; error uses the existing status-13 failure and original cleanup owner.
+Ordinary service stages do not install it. These are explicit argument-bit
+restrictions, not complete W^X, inherited/exec personality, immutable backing,
+descendant, source/output or runtime-enforcement admission. Existing guards stay.
+Three additional ignored diagnostic blocks stage/clone actual retained inert
+inputs and install an outer test-only filter in a separate exec child. That
+outer filter makes the real installation syscall fail; it never weakens the
+production filter or manufactures process authority. No native test was run by
+this patch's author, and the C diagnostic requires static `-pthread` linkage.
+
 The optional native fresh-domain spawn extends that same clone path with
 `CLONE_INTO_CGROUP`. It reserves rollback custody before mkdir and transfers the
 actual domain, atomic pidfd, spawn lease and original cleanup slot before any

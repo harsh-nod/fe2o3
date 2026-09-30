@@ -46,6 +46,13 @@ impl Stage {
     /// streams as well as absent streams. Non-standard bindings keep their exact
     /// destinations. Returned storage is FULL and unreserved; all original owners
     /// and their full reservations remain live independently.
+    /// Before profile-ready/exec the child installs a fixed inherited memory
+    /// restriction filter. It denies explicit writable/anonymous EXEC mappings
+    /// and adding/restoring EXEC with mprotect, plus selected direct memory-writer
+    /// primitives. File-backed RX, source/output paths, descendants and external
+    /// writers and inherited/exec-established personality are not authenticated:
+    /// this is NOT complete W^X enforcement or a runtime guard.
+    /// Non-compiler service stages do not install this filter.
     ///
     /// # Safety
     /// All `stage`/`spawn` obligations apply. `source_storage` must cover every
