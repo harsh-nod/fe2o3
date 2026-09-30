@@ -390,3 +390,15 @@ The narrow schema-preservation correction is coordinated in
 It must bind the selected schema before capture and require exact agreement at
 sealing, not erase nominal types or relax old-schema membership. Actual source
 continuation, proof, simulator and hardware acceptance remain outstanding.
+
+The correction is integrated in the separate source candidate at
+`d83cca77dc6f90cc6b740837e0ccb7a707025fe4`. Its exact schema is retained from
+capture through function/declaration commitments and scope census; the frozen
+V29 encoding and default admission remain unchanged. Independent review found
+no blocking issue. `r86-context-schema-custody-controls` passed all 68 selected
+backend tests, including cross-schema sealing, body mutation, nominal declaration
+preservation, and exact census-schema binding. Source/tool snapshots were stable;
+log SHA-256:
+`0683ad8914b3e4d659a2ccf637122849a46b9fc2d7ca06e9e3263c42e9e2ac76`.
+This does not replace the failed r84 actual-source matrix or qualify the primary
+worktree's different dependency set. The actual-source rerun is a separate gate.
