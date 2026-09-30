@@ -42,12 +42,23 @@ an all-workspace result, native execution or performance acceptance. The older
 rejected restricted-environment runs below remain historical failures.
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
-runs twelve explicit commands covering the newer model, runtime, accounting and
+runs thirteen explicit commands covering the newer model, runtime, accounting and
 KFD source/classifier controls. Those commands pass locally; workflow YAML and
 command inventory checks also pass. The resource-domain command selects its six
 source-only controls, not its three subprocess lifecycle tests. This adds drift
 detection, not solver execution, Rust test execution, authenticated proof
 acceptance or a hosted CI result.
+
+The [distributed construction decisions](runtime-distributed-publication-construction-v1.md)
+are integrated at `ee7152ff2`. Signed candidate `537255681` passes three full
+37-obligation runs, including relocation, and all 30 actual-body logical
+negatives. The exact retained model ELF again passes 1,109 tests with 19 existing
+manual ignores, zero failures and zero filtering; it is executed afresh, not
+recompiled. All 44 fresh groups close. Shared production/proof bodies cover
+full-coordinate zero checks, receipt-field preservation and fixed-trailer tag
+and reserved-byte precedence. Reader/Writer, whole-wire round-trip, authentication,
+distributed authority and native execution remain outside the proof. No A0-A7
+exit is closed, and the full signed campaign evidence remains local.
 
 The [serialized retained-credit dispatch](runtime-retained-credit-dispatch-v1.md)
 is integrated through `637d6124c` and `aa74e2b37`. Signed child `cdebb1707`

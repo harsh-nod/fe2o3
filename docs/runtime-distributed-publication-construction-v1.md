@@ -60,10 +60,16 @@ library check, scoped native formatting, and whitespace checks passed. This
 static packet did not execute a fresh test binary or solver. The original and
 independently retained V3 test binaries stayed byte-identical throughout.
 
-The signed-candidate campaign is still pending. Its inventory constructs 30
-actual shared-body mutations: 18 binding, 4 receipt and 8 trailer cases.
-Construction of mutations and the three diagnostic observations are not
-qualification of all 30 cases. Refreshing the earlier Q/A0 outer source guards
+Signed candidate `537255681ba9e8aff2e4c63664c17817ee3284e7`, integrated at
+`ee7152ff2`, completes a fresh campaign with three full 37/0 proof runs,
+including relocated verification, and all 30 actual shared-body logical
+negatives: 18 binding, 4 receipt and 8 trailer cases. The unfiltered model
+executable again passes 1,109 tests with 19 existing manual ignores and no
+failures or filtering. This execution reuses the exact pre-signing V3 ELF
+above, without recompilation. All 44 fresh process groups close; source,
+tools, namespace and the 8,735 preserved historical files stay unchanged.
+The three earlier diagnostic observations are not retroactively reclassified.
+Refreshing the earlier Q/A0 outer source guards
 only binds their unchanged proof closures to the new model source tree; it
 does not rerun or broaden their proofs.
 
@@ -83,6 +89,7 @@ under `/home/harsh/.codex-tmp/fe2o3-distributed-construction-records-20260930-pr
 | `cpu-discovery-attempt-3` | `667c76ae88c5e62b39be5f6cfa2c110f97366fae4e62dd87e5cc0064085768f7` | Fresh full CPU run and full 37/0 proof |
 | `selection-capture-attempt-2` | `697437c3e62d76b9f746d747fffcf51e5f1fc650b9061d2a5d69cbcd105f4ef6` | Two 37/0 positives and three unqualified selector observations |
 | `model-static-attempt-1` | `2b51bac784bdacfe4fc9b7edce8dca1fbd8e7299724586ea7ac7c07d2e7bd761` | Model-only compiler and static checks |
+| `signed-campaign-attempt-1` | `005ec28e3d74f07c6f3737b3c81e06c469854847238edd20dedc613a7986b015` | Signed-source model execution, three full proofs and all 30 logical negatives |
 
 Earlier frontend failures involving array-fill syntax and slice-pattern
 destructuring, and the later logical failure involving reserved-byte array
