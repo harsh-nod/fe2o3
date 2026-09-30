@@ -1,5 +1,5 @@
-//! Bounded negative/preflight mechanics only. No approved runtime or backing owner
-//! is manufactured; positive fixed-origin custody remains an integration obligation.
+//! Bounded negative/preflight mechanics. The separate ignored production tests
+//! require genuine installed approval; no synthetic successful admission exists.
 use super::*;
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
@@ -178,3 +178,6 @@ fn every_retention_addition_refuses_arithmetic_overflow() {
     }
     assert!(staged_floor(usize::MAX, 1).is_err());
 }
+
+#[path = "compiler_invocation_backing_production_tests.rs"]
+mod production;
