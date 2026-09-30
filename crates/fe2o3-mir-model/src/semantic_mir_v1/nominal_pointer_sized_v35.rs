@@ -31,7 +31,7 @@ pub(super) fn validate_request_schema(
                 required,
             });
         }
-    } else if contains_nominal(request) {
+    } else if !wire_version.has_nominal_integers() && contains_nominal(request) {
         return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
             requested: wire_version,
             required: SemanticMirWireVersionV1::V35,
@@ -44,7 +44,7 @@ pub(super) fn check_type_version(
     ty: &SemanticTypeDeclV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
-    if kind(ty.rust_type_kind).is_some() && wire_version != SemanticMirWireVersionV1::V35 {
+    if kind(ty.rust_type_kind).is_some() && !wire_version.has_nominal_integers() {
         return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
             requested: wire_version,
             required: SemanticMirWireVersionV1::V35,

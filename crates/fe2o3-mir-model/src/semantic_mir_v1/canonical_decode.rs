@@ -487,6 +487,19 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Exact provisional shared ordinary/RustCall, execution-role and nominal
+    /// grammar. Inert decoding is not source, capability or artifact authority.
+    pub fn decode_exact_v40_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V40),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -930,15 +943,15 @@ impl<'a> CanonicalDecoderV1<'a> {
             first_pointee: self.optional_pointee_info()?,
             second_pointee: self.optional_pointee_info()?,
         };
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V35 {
+        let maximum_tag = if self.wire_version.has_nominal_integers() {
             19
-        } else if self.wire_version == SemanticMirWireVersionV1::V29 {
+        } else if self.wire_version.has_execution_roles() {
             17
         } else {
             13
         };
         let shape_tag = self.tagged("type shape", maximum_tag)?;
-        if self.wire_version == SemanticMirWireVersionV1::V35 && matches!(shape_tag, 14..=17) {
+        if !self.wire_version.has_execution_roles() && matches!(shape_tag, 14..=17) {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "type shape",
                 offset: self.offset - 1,
@@ -1405,9 +1418,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         let locals = self.records("locals", Some(SemanticMirResourceV1::Locals), |decoder| {
             let identity = SemanticLocalIdentityV1(decoder.identity()?);
             let ty = SemanticTypeIdV1(decoder.u32()?);
-            let maximum_role = if decoder.wire_version >= SemanticMirWireVersionV1::V28
-                && decoder.wire_version != SemanticMirWireVersionV1::V35
-            {
+            let maximum_role = if decoder.wire_version.has_rust_call_locals() {
                 3
             } else {
                 2
@@ -1839,7 +1850,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             88
         } else if self.wire_version == SemanticMirWireVersionV1::V30 {
             87
-        } else if self.wire_version == SemanticMirWireVersionV1::V29 {
+        } else if self.wire_version.has_execution_roles() {
             86
         } else if self.wire_version >= SemanticMirWireVersionV1::V15 {
             68
@@ -1868,7 +1879,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         let tag = self.tagged("compiler intrinsic", maximum_tag)?;
         // Historical capability drafts and synthetic scope exit are not callable grammar.
         if matches!(tag, 69..=80 | 83)
-            || (matches!(tag, 81..=86) && self.wire_version != SemanticMirWireVersionV1::V29)
+            || (matches!(tag, 81..=86) && !self.wire_version.has_execution_roles())
             || (tag == 87
                 && !matches!(
                     self.wire_version,
@@ -3042,6 +3053,8 @@ mod tests {
 
     mod capability_v29_tests;
     mod complete_body_v36_tests;
+    #[path = "../../context_nominal_v40_tests.rs"]
+    mod context_nominal_v40_tests;
     mod frozen_v15;
     mod gfx942_inline_v30_tests;
     mod gfx942_ordered_program_v32_tests;

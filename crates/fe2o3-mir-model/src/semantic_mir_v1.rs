@@ -120,6 +120,10 @@ pub const INERT_SEMANTIC_MIR_VERSION_V37: u16 = 37;
 pub const INERT_SEMANTIC_MIR_VERSION_V38: u16 = 38;
 /// Exact frame-bearing physical LDS source grammar.
 pub const INERT_SEMANTIC_MIR_VERSION_V39: u16 = 39;
+/// Provisional private #271/#272 allocation, pending schema-owner coordination.
+/// Exact ordinary/RustCall, execution-role and nominal integer composition.
+/// This inert schema is not selected by default and grants no authority.
+pub const INERT_SEMANTIC_MIR_VERSION_V40: u16 = 40;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -154,6 +158,7 @@ pub enum SemanticMirWireVersionV1 {
     V37,
     V38,
     V39,
+    V40,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -185,6 +190,7 @@ impl SemanticMirWireVersionV1 {
             Self::V37 => INERT_SEMANTIC_MIR_VERSION_V37,
             Self::V38 => INERT_SEMANTIC_MIR_VERSION_V38,
             Self::V39 => INERT_SEMANTIC_MIR_VERSION_V39,
+            Self::V40 => INERT_SEMANTIC_MIR_VERSION_V40,
         }
     }
 
@@ -216,6 +222,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V37 => Some(Self::V37),
             INERT_SEMANTIC_MIR_VERSION_V38 => Some(Self::V38),
             INERT_SEMANTIC_MIR_VERSION_V39 => Some(Self::V39),
+            INERT_SEMANTIC_MIR_VERSION_V40 => Some(Self::V40),
             _ => None,
         }
     }
@@ -6631,6 +6638,17 @@ impl InertSemanticMirRequestV1 {
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V38, limits)
     }
+
+    /// Explicit-only ordinary/RustCall, execution-role and nominal composition.
+    /// Reuses the existing type, ABI and ownership validators; decoded records
+    /// do not authenticate source, issue capabilities or grant execution custody.
+    /// Other sibling terminal families remain excluded. V40 is provisional.
+    pub fn admit_exact_v40(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V40, limits)
+    }
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6676,25 +6694,29 @@ impl InertSemanticMirRequestV1 {
         wire_schema_membership_v1::validate_request_schema(&self, wire_version)?;
         nominal_pointer_sized_v35::validate_request_schema(&self, wire_version)?;
         validate_request(&self, limits)?;
-        let mut required = minimum_wire_version(&self);
-        if required == SemanticMirWireVersionV1::V34
-            && matches!(
-                wire_version,
-                SemanticMirWireVersionV1::V31 | SemanticMirWireVersionV1::V32
-            )
-        {
-            // The exact membership checks above already admitted their legacy
-            // scalar form. Its ordinary grammar is V28, not an ordinal V34 floor.
-            required = SemanticMirWireVersionV1::V28;
-        }
-        if wire_version == SemanticMirWireVersionV1::V8 && uses_workgroup_pipeline(&self) {
-            required = required.max(SemanticMirWireVersionV1::V9);
-        }
-        if wire_version < required {
-            return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
-                requested: wire_version,
-                required,
-            });
+        // V40 uses the closed composition membership above, never an ordinal
+        // maximum of incompatible sibling schemas. Legacy selection is frozen.
+        if wire_version != SemanticMirWireVersionV1::V40 {
+            let mut required = minimum_wire_version(&self);
+            if required == SemanticMirWireVersionV1::V34
+                && matches!(
+                    wire_version,
+                    SemanticMirWireVersionV1::V31 | SemanticMirWireVersionV1::V32
+                )
+            {
+                // The exact membership checks above already admitted their legacy
+                // scalar form. Its ordinary grammar is V28, not an ordinal V34 floor.
+                required = SemanticMirWireVersionV1::V28;
+            }
+            if wire_version == SemanticMirWireVersionV1::V8 && uses_workgroup_pipeline(&self) {
+                required = required.max(SemanticMirWireVersionV1::V9);
+            }
+            if wire_version < required {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required,
+                });
+            }
         }
         let canonical = encode_request(&self, wire_version, limits)?;
         let semantic_sha256 = InertSemanticMirSha256V1(Sha256::digest(&canonical).into());
@@ -17707,7 +17729,7 @@ fn encode_type(
 ) -> Result<(), SemanticMirErrorV1> {
     nominal_pointer_sized_v35::check_type_version(ty, wire_version)?;
     if let SemanticRustTypeKindV1::Execution(role) = ty.rust_type_kind {
-        if wire_version != SemanticMirWireVersionV1::V29 {
+        if !wire_version.has_execution_roles() {
             return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                 requested: wire_version,
                 required: SemanticMirWireVersionV1::V29,
@@ -18346,9 +18368,7 @@ fn encode_function(
             }
             SemanticLocalRoleV1::Temporary => writer.u8(2)?,
             SemanticLocalRoleV1::RustCallTupleField { argument, field } => {
-                if wire_version < SemanticMirWireVersionV1::V28
-                    || wire_version == SemanticMirWireVersionV1::V35
-                {
+                if !wire_version.has_rust_call_locals() {
                     return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
                         requested: wire_version,
                         required: SemanticMirWireVersionV1::V28,
@@ -18511,7 +18531,7 @@ fn encode_compiler_intrinsic_operation(
     if matches!(
         operation,
         SemanticCompilerIntrinsicOperationV1::Execution(_)
-    ) && wire_version != SemanticMirWireVersionV1::V29
+    ) && !wire_version.has_execution_roles()
     {
         return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
             requested: wire_version,
@@ -18533,6 +18553,7 @@ fn encode_compiler_intrinsic_operation(
             | SemanticMirWireVersionV1::V37
             | SemanticMirWireVersionV1::V38
             | SemanticMirWireVersionV1::V39
+            | SemanticMirWireVersionV1::V40
     ) {
         SemanticMirWireVersionV1::V15
     } else {

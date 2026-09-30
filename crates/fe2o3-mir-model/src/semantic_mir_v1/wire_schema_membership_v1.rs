@@ -4,6 +4,32 @@
 use super::*;
 
 impl SemanticMirWireVersionV1 {
+    pub(super) const fn has_execution_roles(self) -> bool {
+        matches!(self, Self::V29 | Self::V40)
+    }
+
+    pub(super) const fn has_nominal_integers(self) -> bool {
+        matches!(self, Self::V35 | Self::V40)
+    }
+
+    pub(super) const fn has_rust_call_locals(self) -> bool {
+        matches!(
+            self,
+            Self::V28
+                | Self::V29
+                | Self::V30
+                | Self::V31
+                | Self::V32
+                | Self::V33
+                | Self::V34
+                | Self::V36
+                | Self::V37
+                | Self::V38
+                | Self::V39
+                | Self::V40
+        )
+    }
+
     /// Exact membership, not a numeric version threshold: 31/32 are frozen
     /// diagnostic siblings and 34 is the noncolliding standalone grammar.
     pub(super) const fn scalar_authoring_intrinsic_tag(self) -> Option<u8> {
@@ -39,7 +65,7 @@ pub(super) fn validate_request_schema(
             required: SemanticMirWireVersionV1::V37,
         });
     }
-    if wire_version != SemanticMirWireVersionV1::V29
+    if !wire_version.has_execution_roles()
         && saturating_integer_v30::contains_inert_execution(request)
     {
         return Err(SemanticMirErrorV1::WireVersionCannotRepresent {

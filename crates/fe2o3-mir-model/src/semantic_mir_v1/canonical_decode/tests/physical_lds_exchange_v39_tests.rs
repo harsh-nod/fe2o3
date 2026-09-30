@@ -85,7 +85,7 @@ fn physical_lds_exchange_v39_exact_allocations_and_twenty_descriptor_frames() {
         SemanticMirWireVersionV1::from_u16(39),
         Some(SemanticMirWireVersionV1::V39)
     );
-    assert_eq!(SemanticMirWireVersionV1::from_u16(40), None);
+    assert_eq!(SemanticMirWireVersionV1::from_u16(41), None);
     assert_eq!(
         encode(SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalLdsExchangeBegin(frame())),
         [99, 0, 0, 0, 0, 0, 0, 2, 0, 0, 4, 0, 0, 0, 1]
