@@ -1510,8 +1510,7 @@ impl Capture {
     ) -> bool {
         self.apply(|s| {
             if s.current.is_some()
-                || s.completed >= self.0.policy.passes().len()
-                || self.0.policy.passes()[s.completed] != pass
+                || self.0.policy.pass_at(s.completed) != Some(pass)
                 || s.epoch.is_some_and(|last| last != epoch.sequence())
             {
                 return Err(E::Passes);
@@ -1532,6 +1531,31 @@ impl Capture {
             s.epoch = Some(epoch.sequence());
             Ok(())
         })
+    }
+    pub(crate) fn admit_fixedpoint_round(&self, paid_work: usize) -> Result<()> {
+        if self.apply(|state| {
+            if self.0.policy != FixedPolicy::MixedFixedpoint11
+                || state.current.is_some()
+                || !self.0.policy.complete_pass_count(state.completed)
+                || state.completed == self.0.policy.max_passes()
+                || state
+                    .admission_v18
+                    .ok_or(E::Coverage)?
+                    .additional_pass_work(state.limits, self.0.policy.passes().len())?
+                    != paid_work
+            {
+                return Err(E::Passes);
+            }
+            state.work_limit = state
+                .work_limit
+                .checked_add(paid_work)
+                .ok_or(E::Arithmetic)?;
+            Ok(())
+        }) {
+            Ok(())
+        } else {
+            Err(self.failure().unwrap_or(E::Lifecycle))
+        }
     }
     pub(crate) fn with_roster_meter<T>(
         &self,
@@ -1752,6 +1776,24 @@ impl Capture {
         )
     }
 
+    pub(crate) fn finish_mixed_fixedpoint_v18(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapMixedFixedpointV18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::MixedFixedpoint11,
+            budget,
+        )
+    }
+
     fn finish_admitted_v18<I>(
         &self,
         ctx: &Context,
@@ -1805,16 +1847,15 @@ impl Capture {
         let mut state = self.0.state.try_lock().map_err(|_| E::Lifecycle)?;
         let result = (|| {
             if self.0.policy != policy
-                || state.completed != policy.passes().len()
+                || !policy.complete_pass_count(state.completed)
+                || state.completed != map.neutral_pass_count_v1()
                 || state.current.is_some()
                 || output.functions.len() != state.functions.len()
             {
                 return Err(E::Passes);
             }
-            state.census(
-                ctx,
-                u8::try_from(policy.passes().len() + 2).map_err(|_| E::Arithmetic)?,
-            )?;
+            let final_pass = u8::try_from(state.completed + 2).map_err(|_| E::Arithmetic)?;
+            state.census(ctx, final_pass)?;
             assemble_occurrence_rows(
                 &mut state,
                 ctx,

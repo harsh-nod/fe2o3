@@ -122,13 +122,16 @@ mod mixed_source_contract_v26 {
     }
     contract_prefix_owner!(ProductionConditionalMixedOutputHandoffV26<'_, '_>);
     contract_prefix_owner!(ProductionConditionalMixedPureCseOutputHandoffV26<'_, '_>);
-    impl ContractOwner for ProductionConditionalMixedLicmOutputHandoffV28<'_, '_, '_, '_> {
+    contract_prefix_owner!(ProductionConditionalMixedFixedpointOutputHandoffV29<'_, '_>);
+    impl<'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>> ContractOwner
+        for ProductionConditionalMixedLicmOutputHandoffV28<'_, '_, 'view, 'source, P>
+    {
         type Occurrence = ProductionMixedLicmRuntimeOccurrenceV28;
         fn parts(
             &self,
             budget: &ArgumentBudgetV1<'_>,
         ) -> SourceOwnedResultV18<ContractParts<'_, '_, Self::Occurrence>> {
-            let source = self.relocation(budget)?.prefix(budget)?.owned.source;
+            let source = self.relocation(budget)?.prefix(budget)?.source_owned_v29();
             let (launches, width) = self.launch_context(budget)?;
             Ok(ContractParts {
                 source,
@@ -709,8 +712,9 @@ mod mixed_source_contract_v26 {
         ))
     }
     macro_rules! mixed_source_contract_emitter_v26 {
-        ($handoff:ty) => {
-            impl $handoff {
+        ($handoff:ty) => { mixed_source_contract_emitter_v26!(@impl [] $handoff); };
+        (@impl [$($generics:tt)*] $handoff:ty) => {
+            impl $($generics)* $handoff {
                 /// Emits a complete descriptor-bound runtime contract from the
                 /// genuine retained final graph. Bytes remain inert and cannot
                 /// replace the owner, refinement proof or runtime discharge.
@@ -740,6 +744,10 @@ mod mixed_source_contract_v26 {
     mixed_source_contract_emitter_v26!(ProductionConditionalMixedOutputHandoffV26<'_, '_>);
     mixed_source_contract_emitter_v26!(ProductionConditionalMixedPureCseOutputHandoffV26<'_, '_>);
     mixed_source_contract_emitter_v26!(
-        ProductionConditionalMixedLicmOutputHandoffV28<'_, '_, '_, '_>
+        ProductionConditionalMixedFixedpointOutputHandoffV29<'_, '_>
+    );
+    mixed_source_contract_emitter_v26!(@impl
+        [<'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>]
+        ProductionConditionalMixedLicmOutputHandoffV28<'_, '_, 'view, 'source, P>
     );
 }

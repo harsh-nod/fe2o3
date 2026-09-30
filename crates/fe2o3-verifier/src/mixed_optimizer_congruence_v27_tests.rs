@@ -166,12 +166,24 @@ fn mixed_cfg_v27_uses_actual_local_and_dominance_cse_for_closed_total_grammar() 
                     assert!(text.contains("cfg_related_v26(n, o, op)"));
                     assert!(!text.contains("assume("));
                     assert!(!text.contains("external_body"));
-                    if kind < 6 {
+                    if kind < 6 && kind != 1 {
                         assert!(text.contains("op(2, 0,"));
                         assert!(!text.contains("op(0, 0,"));
                         assert!(!text.contains("op(1, 0,"));
                     }
-                    if dominance && kind < 6 {
+                    if kind == 1 {
+                        assert!(text.contains("select_value_v28(base[0],base[1],base[2],)"));
+                        assert!(!text.contains("op(2, 0,"));
+                        assert!(!text.contains("op(0, 0,"));
+                        if dominance {
+                            assert!(
+                                text.contains(
+                                    "base[3] == select_value_v28(base[0],base[1],base[2])"
+                                )
+                            );
+                        }
+                    }
+                    if dominance && kind < 6 && kind != 1 {
                         let block = text.split("proof fn block_simulation_1").nth(1).unwrap();
                         assert!(
                             block
@@ -207,10 +219,11 @@ fn mixed_cfg_v27_different_total_attributes_and_actual_arguments_remain_distinct
                     assert!(text.contains("op(2, 0,"));
                     assert!(text.contains("op(3, 0,"));
                 }
-                // Equal Select shape remains one shared operator, but exact actual
-                // arguments differ, so the real optimizer retains both operations.
+                // Select is concrete; changing its branch order changes its equation.
                 if kind == 1 {
-                    assert!(text.contains("op(2, 0,"));
+                    assert!(text.contains("select_value_v28(base[0],base[1],base[2],)"));
+                    assert!(text.contains("select_value_v28(base[0],base[2],base[1],)"));
+                    assert!(!text.contains("op(2, 0,"));
                     assert!(!text.contains("op(3, 0,"));
                 }
             },

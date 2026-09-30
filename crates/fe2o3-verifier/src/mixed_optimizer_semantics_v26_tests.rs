@@ -10,6 +10,9 @@ use fe2o3_pliron::optimize_neutral_kernel_ir_integer_worklist_v18;
 
 include!("mixed_optimizer_congruence_v27_tests.rs");
 
+#[path = "mixed_optimizer_select_semantics_v28_tests.rs"]
+mod select_tests;
+
 const LIMIT: usize = 100_000_000;
 const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
     rows: 64,

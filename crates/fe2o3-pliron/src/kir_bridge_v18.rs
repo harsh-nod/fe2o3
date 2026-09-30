@@ -140,7 +140,7 @@ type ExportResult = Result<
 mod optimization;
 pub(crate) use optimization::{
     ExecutedV18Parts, optimize_integer_v18_graph, optimize_integer_worklist_v18_graph,
-    optimize_mixed_pure_cse_v18_graph, optimize_v18_graph,
+    optimize_mixed_fixedpoint_v18_graph, optimize_mixed_pure_cse_v18_graph, optimize_v18_graph,
 };
 #[path = "kir_bridge_private_memory_v18.rs"]
 mod private_policy;

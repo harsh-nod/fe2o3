@@ -300,6 +300,7 @@ fn generate_profile(
             out,
             "open spec fn signed(x: int, m: int) -> int {{ if x < m / 2 {{ x }} else {{ x - m }} }}\n"
         );
+        select_prelude(input, output, out)?;
         for width in [8, 16, 32, 64] {
             let max = (1u128 << width) - 1;
             emit!(
@@ -351,7 +352,7 @@ fn generate_profile(
                 true,
                 out,
             )?;
-            external_bit_laws(input, &plan, target, out)?;
+            external_scalar_laws(input, &plan, target, out)?;
             emit!(out, " let n = ");
             observations(
                 input,
@@ -528,6 +529,79 @@ fn total(kind: &OperationKind) -> bool {
     )
 }
 
+fn opaque_total(kind: &OperationKind) -> bool {
+    total(kind) && !matches!(kind, OperationKind::Select { .. })
+}
+
+const SELECT_PRELUDE: &str = "// Select uses the exact boolean branch and preserves the chosen value's representation.\nopen spec fn select_value_v28(condition: int, when_true: int, when_false: int) -> int { if condition == 1int { when_true } else { when_false } }\nproof fn select_same_value_v28(condition: int, value: int)\n ensures select_value_v28(condition, value, value) == value,\n{}\n";
+
+fn select_prelude(
+    input: &Inventory<'_>,
+    output: &Inventory<'_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    for inv in [input, output] {
+        for row in inv.operations() {
+            out.budget.charge_work(1)?;
+            if matches!(row.operation.kind, OperationKind::Select { .. }) {
+                emit!(out, "{SELECT_PRELUDE}");
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn select_types(
+    condition: &Type,
+    when_true: &Type,
+    when_false: &Type,
+    result: &Type,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    out.budget.charge_work(4)?;
+    if !matches!(condition, Type::Scalar(ScalarType::Bool))
+        || congruence_v27::compare_type(when_true, result, out)? != std::cmp::Ordering::Equal
+        || congruence_v27::compare_type(when_false, result, out)? != std::cmp::Ordering::Equal
+    {
+        return Err(Error::Statement(
+            "concrete Select condition and branch types",
+        ));
+    }
+    Ok(())
+}
+
+fn select_operands(
+    inv: &Inventory<'_>,
+    operation: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<[usize; 3]> {
+    out.budget.charge_work(4)?;
+    let row = inv
+        .operations()
+        .get(operation)
+        .ok_or(Error::Statement("concrete Select coordinate"))?;
+    if !matches!(row.operation.kind, OperationKind::Select { .. })
+        || row.operands.len() != 3
+        || row.results.len() != 1
+    {
+        return Err(Error::Statement("concrete Select arity"));
+    }
+    let operands = [
+        inv.uses()[row.operands.start].definition,
+        inv.uses()[row.operands.start + 1].definition,
+        inv.uses()[row.operands.start + 2].definition,
+    ];
+    select_types(
+        inv.definitions()[operands[0]].ty,
+        inv.definitions()[operands[1]].ty,
+        inv.definitions()[operands[2]].ty,
+        inv.definitions()[row.results.start].ty,
+        out,
+    )?;
+    Ok(operands)
+}
+
 fn concrete(inv: &Inventory<'_>, operation: usize) -> Option<(BinaryOp, u32, bool)> {
     let row = &inv.operations()[operation];
     let OperationKind::Binary { op, .. } = row.operation.kind else {
@@ -604,6 +678,28 @@ fn body_in(
                 row.results.start,
                 bits(constant)
             );
+            continue;
+        }
+        if matches!(row.operation.kind, OperationKind::Select { .. }) {
+            let operands = select_operands(inv, ordinal, out)?;
+            emit!(
+                out,
+                " let {label}{}: int = select_value_v28(",
+                row.results.start
+            );
+            for definition in operands {
+                value_in(inv, plan, block, side, environment, definition, out)?;
+                emit!(out, ",");
+            }
+            emit!(out, ");\n");
+            if proof {
+                emit!(out, " select_same_value_v28(");
+                for definition in &operands[..2] {
+                    value_in(inv, plan, block, side, environment, *definition, out)?;
+                    emit!(out, ",");
+                }
+                emit!(out, ");\n");
+            }
             continue;
         }
         if let Some((operator, width, signed)) = concrete(inv, ordinal) {
@@ -761,6 +857,10 @@ fn total_interpretation(plan: &Plan, origin: usize, effectful: bool) -> Result<u
 
 fn has_original_equation(input: &Inventory<'_>, plan: &Plan, operation: usize) -> bool {
     concrete(input, operation).is_some()
+        || matches!(
+            input.operations()[operation].operation.kind,
+            OperationKind::Select { .. }
+        )
         || (plan.total_classes.is_some() && total(&input.operations()[operation].operation.kind))
 }
 
@@ -772,7 +872,21 @@ fn external_total_value(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     let row = &input.operations()[ordinal];
-    if !total(&row.operation.kind) || plan.total_classes.is_none() || result >= row.results.len() {
+    if matches!(row.operation.kind, OperationKind::Select { .. }) {
+        if result != 0 {
+            return Err(Error::Statement("concrete Select result ordinal"));
+        }
+        let [condition, when_true, when_false] = select_operands(input, ordinal, out)?;
+        emit!(
+            out,
+            "select_value_v28(base[{condition}],base[{when_true}],base[{when_false}])"
+        );
+        return Ok(());
+    }
+    if !opaque_total(&row.operation.kind)
+        || plan.total_classes.is_none()
+        || result >= row.results.len()
+    {
         return Err(Error::Statement("original total equation scope"));
     }
     let class = total_interpretation(plan, ordinal, false)?;
@@ -911,7 +1025,9 @@ fn external_equations(
             continue;
         }
         let Some((operator, width, signed)) = concrete(input, ordinal) else {
-            if plan.total_classes.is_some() && total(&row.operation.kind) {
+            if matches!(row.operation.kind, OperationKind::Select { .. })
+                || (plan.total_classes.is_some() && opaque_total(&row.operation.kind))
+            {
                 for usage in row.operands.clone() {
                     out.budget.charge_work(2)?;
                     enqueue(plan, input.uses()[usage].definition, epoch, &mut tail)?;
@@ -987,7 +1103,7 @@ fn external_arithmetic(
     Ok(())
 }
 
-fn external_bit_laws(
+fn external_scalar_laws(
     input: &Inventory<'_>,
     plan: &Plan,
     epoch: usize,
@@ -996,6 +1112,17 @@ fn external_bit_laws(
     for (ordinal, seen) in plan.seen_operations.iter().enumerate() {
         out.budget.charge_work(1)?;
         if *seen != epoch {
+            continue;
+        }
+        if matches!(
+            input.operations()[ordinal].operation.kind,
+            OperationKind::Select { .. }
+        ) {
+            let [condition, when_true, _] = select_operands(input, ordinal, out)?;
+            emit!(
+                out,
+                " select_same_value_v28(base[{condition}],base[{when_true}]);\n"
+            );
             continue;
         }
         let Some((operator, width, _)) = concrete(input, ordinal) else {

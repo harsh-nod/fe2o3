@@ -1073,3 +1073,6 @@ mod cell_custody_tests;
 mod cell_emission_tests;
 #[path = "production_source_reference_cells_v29_tests.rs"]
 pub(super) mod cells_tests;
+
+#[path = "production_source_index_witness_v29_tests.rs"]
+mod index_witness_tests;

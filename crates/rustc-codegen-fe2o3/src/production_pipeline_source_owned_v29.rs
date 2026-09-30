@@ -55,6 +55,7 @@ pub(crate) enum Error {
     MixedLicmCompletion(fe2o3_lower_mir_kernel::ProductionMixedLicmCompletionErrorV28),
     MixedDescriptor(crate::compiler_descriptor::nominal_v3::NominalDescriptorErrorV3),
     MixedRelocationExpressions(fe2o3_verifier::MixedOptimizerRelocationErrorV28),
+    MixedPublication(mixed_worker_v28::publication::MixedPublicationErrorV28),
     TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
     MixedWorkerInput(target_result::mixed_v26::worker_input_v26::MixedWorkerInputErrorV26),
     MixedPureCseWorkerInput(
@@ -88,6 +89,7 @@ impl std::error::Error for Error {
             Self::MixedLicmCompletion(error) => Some(error),
             Self::MixedDescriptor(error) => Some(error),
             Self::MixedRelocationExpressions(error) => Some(error),
+            Self::MixedPublication(error) => Some(error),
             Self::TargetLlvm(error) => Some(error),
             Self::MixedWorkerInput(error) => Some(error),
             Self::MixedPureCseWorkerInput(error) => Some(error),
@@ -402,6 +404,8 @@ mod mixed_pure_cse_v26;
 #[path = "production_pipeline_source_mixed_cfg_v27.rs"]
 mod mixed_cfg_v27;
 
+#[path = "production_pipeline_source_mixed_fixedpoint_licm_v29.rs"]
+pub(crate) mod mixed_fixedpoint_licm_v29;
 #[path = "production_pipeline_source_mixed_licm_v28.rs"]
 mod mixed_licm_v28;
 
@@ -534,7 +538,25 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         storage_limit: usize,
         consume: F,
     ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error> {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        self.with_source_owned_custody_policy_on_account_v29::<P, R, F>(
+            import_profile,
+            &mut budget,
+            consume,
+        )
+    }
+
+    // Both local observations and protected clients use this same source visit.
+    // Root-phase charges remain with the caller's enclosing transaction.
+    fn with_source_owned_custody_policy_on_account_v29<P: SourceHandoffPolicyV29<R, F>, R, F>(
+        self,
+        import_profile: ImportProfile,
+        mut budget: &mut Budget<'_>,
+        consume: F,
+    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error> {
         let mut consume = formal_context_v19::PendingConsumerV19::new(consume);
+        budget.check_prior_denials_v1()?;
         let ssa = self
             .import_semantic_mir_with_profile_v29(import_profile)?
             .construct_semantic_middle_end()?
@@ -568,8 +590,6 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                     root.logical_name(), root.kernel_binding_bytes(), launch))
             }).collect()
         })?;
-        let mut work = Work::new(work_limit);
-        let mut budget = Budget::new(&mut work, storage_limit);
         let headers = P::entry_headers()?;
         budget.charge_work(headers)?;
         budget.reserve_storage(headers)?;

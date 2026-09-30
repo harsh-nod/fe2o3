@@ -131,6 +131,7 @@ struct CheckedOutputCallbacks {
     probe_missing_proof: bool,
     progress: progress::CallbackProgress,
     endpoint_directory: Option<PathBuf>,
+    source_census: Option<SourceCensusRecorder>,
 }
 
 impl Callbacks for CheckedOutputCallbacks {
@@ -140,9 +141,10 @@ impl Callbacks for CheckedOutputCallbacks {
             let transaction = self
                 .progress
                 .run(SourceStage::SourceCollection, || {
-                    transaction_in_active_session_v1(
+                    transaction_with_census_in_active_session_v1(
                         tcx,
                         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+                        self.source_census.as_ref(),
                     )
                 })
                 .map_err(|e| SourceFailure::new(SourceStage::SourceCollection, e))?;
@@ -345,17 +347,27 @@ fn checked_output_source_child() {
         loop_capture_source::run_child(&args);
         return;
     }
+    let census_outputs = [
+        PathBuf::from(env::var_os(CHILD_ARGS).expect("child input path")),
+        PathBuf::from(env::var_os(CHILD_RESULT).expect("child result path")),
+    ];
     let mut callbacks = CheckedOutputCallbacks {
         probe_missing_proof: env::var_os(CHILD_PROOF_PROBE).is_some(),
         progress: progress::CallbackProgress::from_environment(),
         endpoint_directory: snapshots::child_directory(),
+        source_census: SourceCensusRecorder::from_environment(
+            &args,
+            &[census_outputs[0].as_path(), census_outputs[1].as_path()],
+            crate::collector::source_census_v1::ExtractionMode::FixedCheckedOutput { policy: 4 },
+        )
+        .expect("requested source census must be initialized"),
         ..CheckedOutputCallbacks::default()
     };
     callbacks.progress.begin(SourceStage::Rustc);
     let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         rustc_driver::run_compiler(&args, &mut callbacks);
     }));
-    let result = if completed.is_err() {
+    let mut result = if completed.is_err() {
         Err(callbacks.progress.panic_failure())
     } else {
         callbacks.result.unwrap_or_else(|| {
@@ -365,6 +377,11 @@ fn checked_output_source_child() {
             ))
         })
     };
+    if let Some(recorder) = callbacks.source_census.take()
+        && let Err(error) = recorder.finish(result.is_ok())
+    {
+        result = Err(SourceFailure::new(SourceStage::Observation, error));
+    }
     callbacks.progress.finish(if completed.is_err() {
         progress::Outcome::Panicked
     } else if result.is_ok() {

@@ -42,6 +42,22 @@ pub(crate) const POLICY10_PASSES: [PassKind; 4] = [
     PassKind::DeadCodeElimination,
 ];
 
+pub(crate) const POLICY11_PASSES: [PassKind; 5] = [
+    PassKind::SelectSameValueCanonicalization,
+    PassKind::IntegerNeutralWorklistCanonicalization,
+    PassKind::LocalPureCommonSubexpressionElimination,
+    PassKind::DominancePureCommonSubexpressionElimination,
+    PassKind::DeadCodeElimination,
+];
+pub(crate) const POLICY11_MAX_ROUNDS: usize = 32;
+
+#[derive(Clone, Copy)]
+pub(crate) struct FixedpointRoundResourcesV18 {
+    pub(crate) work: usize,
+    pub(crate) occurrence_work: usize,
+    pub(crate) presentation_limit: usize,
+}
+
 /// This selector is private to the common execution/capture implementation.
 /// External report contents never construct it or choose a roster.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +67,7 @@ pub(crate) enum FixedPolicy {
     Integer6,
     IntegerWorklist9,
     MixedPureCse10,
+    MixedFixedpoint11,
 }
 
 impl FixedPolicy {
@@ -61,6 +78,7 @@ impl FixedPolicy {
             Self::Integer6 => &crate::fixed_integer_continuation_v1::INTEGER_CONTINUATION_PASSES,
             Self::IntegerWorklist9 => &POLICY9_PASSES,
             Self::MixedPureCse10 => &POLICY10_PASSES,
+            Self::MixedFixedpoint11 => &POLICY11_PASSES,
         }
     }
 
@@ -73,7 +91,25 @@ impl FixedPolicy {
                 b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-9/INTEGER-WORKLIST-V1\0"
             }
             Self::MixedPureCse10 => b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-10/MIXED-PURE-CSE-V1\0",
+            Self::MixedFixedpoint11 => {
+                b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-11/MIXED-FIXEDPOINT-V1\0"
+            }
         }
+    }
+
+    pub(crate) const fn max_passes(self) -> usize {
+        match self {
+            Self::MixedFixedpoint11 => POLICY11_PASSES.len() * POLICY11_MAX_ROUNDS,
+            _ => self.passes().len(),
+        }
+    }
+
+    pub(crate) fn pass_at(self, index: usize) -> Option<PassKind> {
+        (index < self.max_passes()).then(|| self.passes()[index % self.passes().len()])
+    }
+
+    pub(crate) fn complete_pass_count(self, count: usize) -> bool {
+        count != 0 && count <= self.max_passes() && count % self.passes().len() == 0
     }
 }
 
@@ -110,6 +146,30 @@ impl<'budget, 'work> CseLedger<'budget, 'work> {
 
     pub(crate) fn failure(&self) -> Option<Resource> {
         self.first_failure
+    }
+
+    // The enclosing candidate transaction owns this retained reservation and
+    // drops all captures/reports before restoring its floor, including failure.
+    pub(crate) fn admit_fixedpoint_round(
+        &mut self,
+        work: usize,
+        retained: usize,
+    ) -> Result<(), Resource> {
+        if let Some(error) = self.failure() {
+            return Err(error);
+        }
+        self.budget
+            .charge_work(work)
+            .map_err(|error| self.remember(error))?;
+        self.budget
+            .reserve_storage(retained)
+            .map_err(|error| self.remember(error))
+    }
+
+    pub(crate) fn release_fixedpoint_scratch(&mut self, bytes: usize) -> Result<(), Resource> {
+        self.budget
+            .release_storage(bytes)
+            .map_err(|error| self.remember(error))
     }
 
     pub(crate) fn record_integer_error(
@@ -464,8 +524,8 @@ pub(crate) fn pass_tag(pass: PassKind) -> u8 {
     }
 }
 
-struct RecordWriter<'a, const N: usize> {
-    bytes: &'a mut [u8; N],
+struct RecordWriter<'a> {
+    bytes: &'a mut [u8],
     cursor: usize,
 }
 
@@ -473,7 +533,7 @@ struct RecordWriter<'a, const N: usize> {
 #[path = "fixed_policy_v3_tests.rs"]
 mod tests;
 
-impl<const N: usize> RecordWriter<'_, N> {
+impl RecordWriter<'_> {
     fn raw(&mut self, value: &[u8]) {
         self.bytes[self.cursor..self.cursor + value.len()].copy_from_slice(value);
         self.cursor += value.len();
@@ -490,8 +550,8 @@ impl<const N: usize> RecordWriter<'_, N> {
     }
 }
 
-fn write_execution_tail<const N: usize>(
-    writer: &mut RecordWriter<'_, N>,
+fn write_execution_tail(
+    writer: &mut RecordWriter<'_>,
     report: &PlironOptimizationReportV1,
     map_digest: &[u8; 32],
     execution: ExecutionProfileV1,
@@ -499,8 +559,8 @@ fn write_execution_tail<const N: usize>(
     write_execution_tail_for_pass_count(writer, report, map_digest, execution, POLICY3_PASSES.len())
 }
 
-fn write_execution_tail_for_pass_count<const N: usize>(
-    writer: &mut RecordWriter<'_, N>,
+fn write_execution_tail_for_pass_count(
+    writer: &mut RecordWriter<'_>,
     report: &PlironOptimizationReportV1,
     map_digest: &[u8; 32],
     execution: ExecutionProfileV1,
@@ -552,9 +612,11 @@ fn write_execution_tail_for_pass_count<const N: usize>(
 
 #[path = "fixed_policy_v18.rs"]
 mod storage_v18;
+pub(crate) use storage_v18::validate_fixedpoint_report;
 pub use storage_v18::{
     INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18, INTEGER_WORKLIST_EXECUTION_RECORD_BYTES_V18,
     IntegerContinuationExecutionWitnessV18, IntegerWorklistExecutionWitnessV18,
-    MIXED_PURE_CSE_EXECUTION_RECORD_BYTES_V18, MixedPureCseExecutionWitnessV18,
-    POLICY3_EXECUTION_RECORD_BYTES_V18, Policy3ExecutionWitnessV18,
+    MIXED_PURE_CSE_EXECUTION_RECORD_BYTES_V18, MixedFixedpointExecutionWitnessV18,
+    MixedPureCseExecutionWitnessV18, POLICY3_EXECUTION_RECORD_BYTES_V18,
+    Policy3ExecutionWitnessV18,
 };

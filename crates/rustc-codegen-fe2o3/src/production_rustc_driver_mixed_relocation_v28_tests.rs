@@ -36,10 +36,15 @@ const NESTED: &str = r#"
     }
 "#;
 fn program(body: &str) -> String {
+    let control_flow = match body {
+        LOOP => "control_flow(loop_bounds(4294967295))",
+        NESTED => "control_flow(loop_bounds(4294967295, 4294967295))",
+        _ => panic!("unregistered source-owned relocation fixture"),
+    };
     let kernel = |name: &str| {
         format!(
             r#"
-#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [3, 1, 1]))]
+#[kernel(typed, {control_flow}, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [3, 1, 1]))]
 pub fn {name}(input: &[u32], mut output: DisjointSlice<u32>, seed: u32, trips: u32) {{
     let index = thread::index_1d();
     let i = index.get();
@@ -56,6 +61,31 @@ pub fn {name}(input: &[u32], mut output: DisjointSlice<u32>, seed: u32, trips: u
         kernel("relocation_first"),
         kernel("relocation_second")
     )
+}
+
+#[test]
+fn mixed_relocation_actual_source_contracts_preserve_dynamic_loop_bounds_and_nesting() {
+    for (body, contract) in [
+        (LOOP, "control_flow(loop_bounds(4294967295))"),
+        (NESTED, "control_flow(loop_bounds(4294967295, 4294967295))"),
+    ] {
+        let source = program(body);
+        assert_eq!(source.matches("#[kernel(").count(), 2);
+        assert_eq!(source.matches(body).count(), 2);
+        assert_eq!(source.matches(contract).count(), 2);
+        assert_eq!(source.matches("seed: u32, trips: u32").count(), 2);
+        assert!(!source.contains("unsafe"));
+        assert!(!source.contains("integer_switches"));
+    }
+    let simple = program(LOOP);
+    assert_eq!(simple.matches("while iteration < trips").count(), 2);
+    assert_eq!(simple.matches("iteration += 1").count(), 2);
+    let nested = program(NESTED);
+    assert_eq!(nested.matches("while outer < trips").count(), 2);
+    assert_eq!(nested.matches("while inner < seed").count(), 2);
+    assert_eq!(nested.matches("let mut inner = 0u32").count(), 2);
+    assert_eq!(nested.matches("inner += 1").count(), 2);
+    assert_eq!(nested.matches("outer += 1").count(), 2);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

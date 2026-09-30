@@ -1093,10 +1093,23 @@ fn inspect_no_normal(
         source,
         ProductionSemanticKirLimitsV1::default(),
         budget,
-        |_, layouts, budget| {
-            source_storage_v29::with_source_storage_root_v29(
+        |demands, layouts, budget| {
+            let roots = source.owner.source_semantic().roots();
+            budget.charge_work(roots.len())?;
+            let ordinal = roots
+                .iter()
+                .position(|root| *root == slots.source.root)
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            let demands = demands.root_lens(source.owner, ordinal, budget)?;
+            let descriptor = source
+                .kernel_argument_abi
+                .map(|profile| profile.descriptor_root(source.owner, ordinal, budget))
+                .transpose()?;
+            source_storage_v29::with_source_storage_descriptor_demands_root_v29(
                 layouts,
                 instances,
+                descriptor,
+                demands,
                 budget,
                 |references, _, budget| {
                     let floor = budget.storage();

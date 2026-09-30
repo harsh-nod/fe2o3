@@ -1,5 +1,5 @@
 //! Source-bound conditional Worker inputs, before signed/refinement admission.
-use super::super::{Budget, Resource, TargetOutputHandoffV29};
+use super::super::{Budget, MixedTargetOutputHandoffV29, Resource, TargetOutputHandoffV29};
 use super::{ConditionalMixedTargetLlvmV26, SourceError};
 use fe2o3_kernel_descriptor::{
     CodeObjectVersion, DescriptorWireErrorV3, DeviceDescriptorTableV3, DeviceTargetV1,
@@ -64,14 +64,22 @@ pub(crate) enum MixedWorkerInputOpenGateV26 {
 /// proof or artifact authority. All contract bytes are freshly emitted from the
 /// genuine retained handoff; a caller cannot install serialized row claims.
 #[must_use = "discard the prepared inputs before their borrowed target owner"]
-pub(crate) struct PreparedMixedWorkerInputV26<'native, 'handoff, 'view, 'source, 'table, 'wire> {
-    native: &'native ConditionalMixedTargetLlvmV26<'handoff, 'view, 'source>,
+pub(crate) struct PreparedMixedWorkerInputV26<
+    'native,
+    'handoff,
+    'view,
+    'source,
+    'table,
+    'wire,
+    H: MixedTargetOutputHandoffV29 = super::MixedHandoff<'view, 'source>,
+> {
+    native: &'native ConditionalMixedTargetLlvmV26<'handoff, 'view, 'source, H>,
     table: &'table DeviceDescriptorTableV3<'wire>,
     contracts: Vec<Vec<u8>>,
     retained: usize,
     required: usize,
 }
-impl PreparedMixedWorkerInputV26<'_, '_, '_, '_, '_, '_> {
+impl<H: MixedTargetOutputHandoffV29> PreparedMixedWorkerInputV26<'_, '_, '_, '_, '_, '_, H> {
     fn custody(&self, budget: &Budget<'_>) -> std::result::Result<(), SourceError> {
         self.native
             .handoff
@@ -193,10 +201,10 @@ fn descriptor_ordinal(
     ))
 }
 
-fn headers() -> std::result::Result<usize, Resource> {
-    type Owner<'a> = PreparedMixedWorkerInputV26<'a, 'a, 'a, 'a, 'a, 'a>;
-    type Frame<'a> = (
-        &'a ConditionalMixedTargetLlvmV26<'a, 'a, 'a>,
+fn headers_for<H: MixedTargetOutputHandoffV29>() -> std::result::Result<usize, Resource> {
+    type Owner<'a, H> = PreparedMixedWorkerInputV26<'a, 'a, 'a, 'a, 'a, 'a, H>;
+    type Frame<'a, H> = (
+        &'a ConditionalMixedTargetLlvmV26<'a, 'a, 'a, H>,
         &'a DeviceDescriptorTableV3<'a>,
         Abi<'a>,
         &'a mut Budget<'a>,
@@ -213,12 +221,12 @@ fn headers() -> std::result::Result<usize, Resource> {
         std::slice::Iter<'a, fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiRootV18<'a>>,
     );
     sum(&[
-        size_of::<Owner<'_>>(),
-        align_of::<Owner<'_>>(),
-        size_of::<Frame<'_>>(),
-        align_of::<Frame<'_>>(),
-        size_of::<AssertUnwindSafe<Frame<'_>>>(),
-        size_of::<Result<Owner<'_>>>(),
+        size_of::<Owner<'_, H>>(),
+        align_of::<Owner<'_, H>>(),
+        size_of::<Frame<'_, H>>(),
+        align_of::<Frame<'_, H>>(),
+        size_of::<AssertUnwindSafe<Frame<'_, H>>>(),
+        size_of::<Result<Owner<'_, H>>>(),
     ])
 }
 
@@ -228,18 +236,26 @@ fn headers() -> std::result::Result<usize, Resource> {
 /// The target owner must already be retained on this same source ledger.
 /// Descriptor decoding and target lowering keep their existing bounded domains;
 /// this wrapper prepays its frames, borrowed wire and all vector capacities.
-pub(crate) fn prepare_mixed_worker_input_v26<'native, 'handoff, 'view, 'source, 'table, 'wire>(
-    native: &'native ConditionalMixedTargetLlvmV26<'handoff, 'view, 'source>,
+pub(crate) fn prepare_mixed_worker_input_v26<
+    'native,
+    'handoff,
+    'view,
+    'source,
+    'table,
+    'wire,
+    H: MixedTargetOutputHandoffV29,
+>(
+    native: &'native ConditionalMixedTargetLlvmV26<'handoff, 'view, 'source, H>,
     abi: Abi<'_>,
     table: &'table DeviceDescriptorTableV3<'wire>,
     budget: &mut Budget<'_>,
-) -> Result<PreparedMixedWorkerInputV26<'native, 'handoff, 'view, 'source, 'table, 'wire>> {
+) -> Result<PreparedMixedWorkerInputV26<'native, 'handoff, 'view, 'source, 'table, 'wire, H>> {
     native.check(budget)?;
     let floor = budget.storage();
     let accepted = Cell::new(0usize);
     let caught = catch_unwind(AssertUnwindSafe(|| -> Result<Vec<Vec<u8>>> {
         reserve(
-            sum(&[headers()?, table.canonical_bytes().len()])?,
+            sum(&[headers_for::<H>()?, table.canonical_bytes().len()])?,
             &accepted,
             budget,
         )?;
@@ -332,6 +348,11 @@ pub(crate) fn prepare_mixed_worker_input_v26<'native, 'handoff, 'view, 'source, 
             resume_unwind(payload)
         }
     }
+}
+
+#[cfg(test)]
+fn headers() -> std::result::Result<usize, Resource> {
+    headers_for::<super::MixedHandoff<'_, '_>>()
 }
 
 #[cfg(test)]

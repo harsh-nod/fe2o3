@@ -143,7 +143,7 @@ impl ProductionMixedLicmRuntimeOccurrenceV28 {
     pub const fn original_instance(&self) -> usize {
         self.prefix.original_instance()
     }
-    /// Memory-access coordinate before the Policy10 prefix and LICM tail.
+    /// Memory-access coordinate before the checked prefix and LICM tail.
     pub const fn original_operation(&self) -> Operation {
         self.prefix.original_operation()
     }
@@ -196,8 +196,9 @@ impl ProductionMixedLicmRuntimeOccurrenceV28 {
 /// Complete conditional source/native conjunction for the actual LICM output.
 /// Concrete runtime bindings and executed refinement remain separate gates.
 #[must_use = "discard this native owner's exact credit before its borrowed relocation"]
-pub struct ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source> {
-    relocation: &'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source>,
+pub struct ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source> = ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>> {
+    relocation: &'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>,
     occurrences: Vec<ProductionMixedLicmRuntimeOccurrenceV28>,
     histories: Vec<Option<History>>,
     retained: usize,
@@ -205,11 +206,25 @@ pub struct ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'vie
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
 }
-impl<'native, 'prefix, 'view, 'source>
-    ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source>
+/// Final native completion retaining the exact Policy11 prefix and LICM owner.
+pub type ProductionConditionalMixedFixedpointLicmOutputHandoffV29<
+    'native,
+    'prefix,
+    'view,
+    'source,
+> = ProductionConditionalMixedLicmOutputHandoffV28<
+    'native,
+    'prefix,
+    'view,
+    'source,
+    ProductionConditionalMixedFixedpointOutputHandoffV29<'view, 'source>,
+>;
+
+impl<'native, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
+    ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>
 {
     fn custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
-        let source = self.relocation.prefix.owned.source;
+        let source = self.relocation.prefix.source_owned_v29();
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()
             || budget.storage() < self.required
@@ -227,7 +242,7 @@ impl<'native, 'prefix, 'view, 'source>
     pub fn relocation(
         &self,
         budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source>>
+    ) -> SourceOwnedResultV18<&'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>>
     {
         self.check(budget)?;
         Ok(self.relocation)
@@ -307,7 +322,7 @@ impl<'native, 'prefix, 'view, 'source>
         required: usize,
         budget: &ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<()> {
-        let source = self.relocation.prefix.owned.source;
+        let source = self.relocation.prefix.source_owned_v29();
         if budget.storage() < required.max(self.required) {
             source.cleanup.deny_refund();
             return source.retain_query(Err(ArgumentResourceV1::Accounting.into()));
@@ -330,8 +345,7 @@ impl<'native, 'prefix, 'view, 'source>
         let settled = custody.and_then(|()| {
             relocation
                 .prefix
-                .owned
-                .source
+                .source_owned_v29()
                 .retain_query(budget.release_storage(retained).map_err(Into::into))
         });
         selected?;
@@ -481,8 +495,8 @@ fn with_pending(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn join_final(
-    relocated: &ProductionMixedLicmRelocationV28<'_, '_, '_>,
+fn join_final<'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>(
+    relocated: &ProductionMixedLicmRelocationV28<'_, 'view, 'source, P>,
     output: &Inventory<'_>,
     native: &Native<'_, '_>,
     globals: &Globals<'_, '_>,
@@ -649,14 +663,16 @@ fn join_final(
     Ok(())
 }
 
-impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, 'source> {
+impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
+    ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>
+{
     /// Replays actual relocation/private memory, then joins fresh final-native
     /// checks with the complete original source roles and runtime premise roster.
     /// The result remains conditional and borrows this exact relocation owner.
     pub fn complete_native_v28<'native>(
         &'native self,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source>>
+    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
     {
         self.complete_native_inner_v28(
             budget,
@@ -670,7 +686,7 @@ impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, '
         &'native self,
         fault: u8,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source>>
+    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
     {
         self.complete_native_inner_v28(budget, Some(fault))
     }
@@ -679,15 +695,16 @@ impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, '
         &'native self,
         budget: &mut ArgumentBudgetV1<'_>,
         #[cfg(test)] fault: Option<u8>,
-    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source>>
+    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
     {
         self.check(budget)?;
-        let source = self.prefix.owned.source;
+        let source = self.prefix.source_owned_v29();
         let floor = budget.storage();
         let (occurrences, histories, retained) =
             scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| -> Result<_> {
                 let entry = budget.storage();
-                type Handoff<'a> = ProductionConditionalMixedLicmOutputHandoffV28<'a, 'a, 'a, 'a>;
+                type Handoff<'a, 'v, 's, P> =
+                    ProductionConditionalMixedLicmOutputHandoffV28<'a, 'a, 'v, 's, P>;
                 type Vectors = (
                     Vec<Option<Requirement>>,
                     Vec<Option<usize>>,
@@ -695,9 +712,12 @@ impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, '
                     Vec<bool>,
                     Vec<fe2o3_kernel_ir::ExplicitLaunchExtent>,
                 );
-                let owner_header =
-                    argument_sum_v1(&[size_of::<Handoff<'_>>(), align_of::<Handoff<'_>>()])?;
+                let owner_header = argument_sum_v1(&[
+                    size_of::<Handoff<'_, 'view, 'source, P>>(),
+                    align_of::<Handoff<'_, 'view, 'source, P>>(),
+                ])?;
                 let scratch_header = argument_sum_v1(&[
+                    ProductionCheckedMixedPrefixViewV29::inspection_storage_v29()?,
                     2 * size_of::<Inventory<'_>>(),
                     2 * size_of::<Physical<'_, '_>>(),
                     size_of::<Pair<'_>>(),
@@ -711,7 +731,7 @@ impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, '
                 ])?;
                 budget.reserve_storage(argument_sum_v1(&[owner_header, scratch_header])?)?;
                 self.replay(budget)?;
-                let prefix = self.prefix.output(budget)?.owner();
+                let prefix = self.prefix.checked_prefix_v29(budget)?.owner();
                 let layouts = source.limits(budget)?.storage_layout_limits();
                 let (pair, ps) = self.tail.replay_against(prefix, budget)?;
                 budget.reserve_storage(ps.retained_storage())?;

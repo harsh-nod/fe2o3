@@ -1,7 +1,10 @@
 //! Final LICM target text and descriptor-bound Worker inputs.
-//! The shared target/contract engines retain the actual H28 owner, never H10.
+//! Shared target/contract engines retain the actual final-native owner, not a prefix.
 use super::*;
-use fe2o3_lower_mir_kernel::ProductionConditionalMixedLicmOutputHandoffV28 as LicmHandoff;
+use fe2o3_lower_mir_kernel::{
+    ProductionConditionalMixedLicmOutputHandoffV28 as LicmHandoff,
+    ProductionMixedPrefixOwnerV29 as PrefixOwner,
+};
 
 // Reborrow every retained prefix at the final continuation's lexical lifetime.
 // This only shortens borrows: no graph, policy or proof owner is converted.
@@ -14,11 +17,19 @@ pub(crate) mod worker_input_v26;
 /// The caller must still bind every original ABI field and occurrence through
 /// `emit_mixed_contract_v26` to the genuine generated V3 descriptor before a
 /// versioned Worker-input admission. No V8/V12 proof holder is constructed here.
-pub(crate) type ConditionalMixedTargetLlvmV26<'handoff, 'view, 'source> =
-    TargetLlvmV29<'handoff, 'view, 'source, MixedHandoff<'view, 'source>>;
+pub(crate) type ConditionalMixedTargetLlvmV26<
+    'handoff,
+    'view,
+    'source,
+    H = MixedHandoff<'view, 'source>,
+> = TargetLlvmV29<'handoff, 'view, 'source, H>;
+mixed_target_contract_v29!([<'v, 's, P: PrefixOwner<'v, 's>>] LicmHandoff<'_, '_, 'v, 's, P>);
 
-impl target_handoff_sealed::Sealed for LicmHandoff<'_, '_, '_, '_> {}
-impl TargetOutputHandoffV29 for LicmHandoff<'_, '_, '_, '_> {
+impl<'v, 's, P: PrefixOwner<'v, 's>> target_handoff_sealed::Sealed
+    for LicmHandoff<'_, '_, 'v, 's, P>
+{
+}
+impl<'v, 's, P: PrefixOwner<'v, 's>> TargetOutputHandoffV29 for LicmHandoff<'_, '_, 'v, 's, P> {
     fn check_original(
         &self,
         source: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
@@ -41,9 +52,12 @@ impl TargetOutputHandoffV29 for LicmHandoff<'_, '_, '_, '_> {
 
     fn formal(&self, owner: &CanonicalOwner, budget: &mut Budget<'_>) -> Result<(), Error> {
         let output = self.output(budget)?;
-        let prefix = self.relocation(budget)?.prefix(budget)?.output(budget)?;
-        // Original N must be the retained source input to genuine Policy10;
-        // final O must be the exact freshly completed LICM owner. H10's output
+        let prefix = self
+            .relocation(budget)?
+            .prefix(budget)?
+            .checked_prefix_v29(budget)?;
+        // Original N must be the retained source input to the checked prefix;
+        // final O must be the exact freshly completed LICM owner. The prefix output
         // is deliberately not accepted as a substitute final endpoint.
         budget.charge_work(1)?;
         if !std::ptr::eq(owner, output) {
@@ -80,19 +94,34 @@ impl TargetOutputHandoffV29 for LicmHandoff<'_, '_, '_, '_> {
     fn formal_headers() -> Result<usize, Resource> {
         // No temporary formal analyzer or replacement proof object is built.
         Ok(size_of::<Result<(), Error>>()
-            + size_of::<(&CanonicalOwner, &CanonicalOwner, &[ExplicitLaunchExtent])>())
+            + size_of::<(&CanonicalOwner, &CanonicalOwner, &[ExplicitLaunchExtent])>()
+            + fe2o3_lower_mir_kernel::ProductionCheckedMixedPrefixViewV29::inspection_storage_v29(
+            )?)
     }
 }
 
 /// Lower the exact adopted V18 module while borrowing its full conditional
 /// premise owner. This produces inert text only, not Worker/default activation,
 /// descriptor authority, runtime premise discharge, or LLVM refinement proof.
-pub(crate) fn check_and_lower_mixed_target_llvm_v26<'handoff, 'view, 'source>(
+pub(crate) fn check_and_lower_mixed_target_llvm_v26<
+    'handoff,
+    'view,
+    'source,
+    P: PrefixOwner<'view, 'source>,
+>(
     source: &'view Source<'source>,
-    handoff: &'handoff MixedHandoff<'view, 'source>,
+    handoff: &'handoff LicmHandoff<'view, 'view, 'view, 'source, P>,
     target: TargetProfile,
     budget: &mut Budget<'_>,
-) -> Result<ConditionalMixedTargetLlvmV26<'handoff, 'view, 'source>, Error> {
+) -> Result<
+    ConditionalMixedTargetLlvmV26<
+        'handoff,
+        'view,
+        'source,
+        LicmHandoff<'view, 'view, 'view, 'source, P>,
+    >,
+    Error,
+> {
     check_and_lower_target_llvm(source, handoff, target, budget)
 }
 
@@ -124,6 +153,7 @@ pub(crate) mod tests {
                 + size_of::<std::thread::Result<Outcome>>()
                 + size_of::<Result<(), Error>>()
                 + size_of::<(&CanonicalOwner, &CanonicalOwner, &[ExplicitLaunchExtent])>()
+                + fe2o3_lower_mir_kernel::ProductionCheckedMixedPrefixViewV29::inspection_storage_v29().unwrap()
                 + size_of::<Result<String, fe2o3_amdgcn_model::LoweringErrors>>()
                 + size_of::<Result<(), Error>>()
                 + size_of::<fe2o3_kernel_ir::FormalMemoryObligations>()

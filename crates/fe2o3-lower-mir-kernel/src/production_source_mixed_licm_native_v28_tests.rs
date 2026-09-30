@@ -6,6 +6,11 @@ fn mixed_licm_native_resource_v28(
     }
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(&error);
     while let Some(cause) = current {
+        if let Some(fe2o3_kernel_ir::CanonicalGuardedGlobalReadErrorV1::Resource(resource)) =
+            cause.downcast_ref::<fe2o3_kernel_ir::CanonicalGuardedGlobalReadErrorV1>()
+        {
+            return optimized_source_formal_resource_v18(*resource);
+        }
         if let Some(resource) = cause.downcast_ref::<ArgumentResourceV1>() {
             return *resource;
         }
@@ -15,6 +20,28 @@ fn mixed_licm_native_resource_v28(
         current = cause.source();
     }
     panic!("typed final native resource refusal required: {error:?}");
+}
+
+#[test]
+fn genuine_mixed_licm_final_native_resource_matcher_retains_guarded_work_and_storage() {
+    use fe2o3_kernel_ir::{CanonicalGuardedGlobalReadErrorV1, FormalGuardedMemoryResourceErrorV1};
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(17);
+    let work = work.charge_work(18).unwrap_err();
+    for resource in [
+        FormalGuardedMemoryResourceErrorV1::Work(work),
+        FormalGuardedMemoryResourceErrorV1::Storage {
+            actual: 24,
+            limit: 23,
+        },
+    ] {
+        let expected = optimized_source_formal_resource_v18(resource);
+        let nested = ProductionMixedLicmCompletionErrorV28::Native(
+            fe2o3_pliron::CanonicalRankedPolicyFailureV1::ConditionalGlobalsV26(
+                CanonicalGuardedGlobalReadErrorV1::Resource(resource),
+            ),
+        );
+        assert_eq!(mixed_licm_native_resource_v28(nested), expected);
+    }
 }
 
 #[test]

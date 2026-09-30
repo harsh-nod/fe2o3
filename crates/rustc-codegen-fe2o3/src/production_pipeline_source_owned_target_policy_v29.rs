@@ -37,6 +37,41 @@ pub(crate) trait TargetOutputHandoffV29: target_handoff_sealed::Sealed {
     fn formal_headers() -> Result<usize, Resource>;
 }
 
+// Closed mixed handoffs add the original ABI and fresh contract operations.
+// Worker preparation remains generic over the exact retained handoff type.
+pub(crate) trait MixedTargetOutputHandoffV29: TargetOutputHandoffV29 {
+    fn check_original_argument_abi_v26(
+        &self,
+        abi: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), SourceError>;
+    fn emit_mixed_contract_v26(
+        &self,
+        root: usize,
+        abi: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18<'_>,
+        table: &fe2o3_kernel_descriptor::DeviceDescriptorTableV3<'_>,
+        ordinal: usize,
+        output: &mut [u8],
+        budget: &mut Budget<'_>,
+    ) -> Result<usize, SourceError>;
+}
+
+macro_rules! mixed_target_contract_v29 {
+    ([$($generics:tt)*] $handoff:ty) => {
+        impl $($generics)* MixedTargetOutputHandoffV29 for $handoff {
+            fn check_original_argument_abi_v26(&self,
+                abi: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18<'_>,
+                budget: &mut Budget<'_>) -> Result<(), SourceError>
+            { self.check_original_argument_abi_v26(abi, budget) }
+            fn emit_mixed_contract_v26(&self, root: usize,
+                abi: fe2o3_lower_mir_kernel::ProductionKernelArgumentAbiInputV18<'_>,
+                table: &fe2o3_kernel_descriptor::DeviceDescriptorTableV3<'_>,
+                ordinal: usize, output: &mut [u8], budget: &mut Budget<'_>) -> Result<usize, SourceError>
+            { self.emit_mixed_contract_v26(root, abi, table, ordinal, output, budget) }
+        }
+    };
+}
+
 macro_rules! target_output_policy_v29 {
     ($handoff:ident, $scope:ident, $formal_error:ty, $variant:ident, $residual:literal) => {
         impl TargetFormalScopeV29 for $scope<'_> {

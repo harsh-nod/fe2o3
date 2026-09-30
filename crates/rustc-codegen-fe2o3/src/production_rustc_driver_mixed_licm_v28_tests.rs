@@ -24,10 +24,15 @@ const LOOP: &str = r#"
 "#;
 
 fn program(body: &str) -> String {
+    let control_flow = match body {
+        STRAIGHT => "",
+        LOOP => ", control_flow(loop_bounds(4294967295))",
+        _ => panic!("unregistered source-owned motion fixture"),
+    };
     let kernel = |name: &str| {
         format!(
             r#"
-#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [3, 1, 1]))]
+#[kernel(typed{control_flow}, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [3, 1, 1]))]
 pub fn {name}(input: &[u32], mut output: DisjointSlice<u32>, _unused: &[u32], seed: u32, trips: u32) {{
     let index = thread::index_1d();
     let i = index.get();
@@ -366,6 +371,17 @@ fn mixed_licm_actual_source_matrix_has_two_roots_and_dynamic_zero_trip_control()
         assert!(!source.contains("unsafe"));
         assert_eq!(source.matches("trips: u32").count(), 2);
         assert_eq!(source.matches("_unused: &[u32]").count(), 2);
+        assert_eq!(
+            source
+                .matches("control_flow(loop_bounds(4294967295))")
+                .count(),
+            if body == LOOP { 2 } else { 0 }
+        );
+        assert_eq!(
+            source.matches("while iteration < trips").count(),
+            if body == LOOP { 2 } else { 0 }
+        );
+        assert!(!source.contains("integer_switches"));
     }
     assert!(LOOP.contains("while iteration < trips"));
     assert!(CHILD.ends_with("::mixed_licm_tests::mixed_licm_child"));

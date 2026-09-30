@@ -9,8 +9,13 @@ pub(crate) mod worker_input_v26;
 /// The caller must still bind every original ABI field and occurrence through
 /// `emit_mixed_contract_v26` to the genuine generated V3 descriptor before a
 /// versioned Worker-input admission. No V8/V12 proof holder is constructed here.
-pub(crate) type ConditionalMixedTargetLlvmV26<'handoff, 'view, 'source> =
-    TargetLlvmV29<'handoff, 'view, 'source, MixedHandoff<'view, 'source>>;
+pub(crate) type ConditionalMixedTargetLlvmV26<
+    'handoff,
+    'view,
+    'source,
+    H = MixedHandoff<'view, 'source>,
+> = TargetLlvmV29<'handoff, 'view, 'source, H>;
+mixed_target_contract_v29!([] MixedHandoff<'_, '_>);
 
 impl target_handoff_sealed::Sealed for MixedHandoff<'_, '_> {}
 impl TargetOutputHandoffV29 for MixedHandoff<'_, '_> {

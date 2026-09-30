@@ -616,3 +616,4 @@ source_optimizer_policy_v18!(
 
 include!("production_source_integer_worklist_v18.rs");
 include!("production_source_mixed_pure_cse_v18.rs");
+include!("production_source_mixed_fixedpoint_v18.rs");

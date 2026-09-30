@@ -308,6 +308,53 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
         max_analysis_work: usize,
         max_analysis_storage: usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::new_with_source_v29(
+            types,
+            callables,
+            function,
+            option_dominance,
+            certified_locals,
+            max_analysis_work,
+            max_analysis_storage,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_source_v29<'work>(
+        types: &'a [SemanticTypeDeclV1],
+        callables: &'a [SemanticCallableDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        option_dominance: &'a SemanticOptionDominanceV1,
+        certified_locals: &'a BTreeSet<u32>,
+        max_analysis_work: usize,
+        max_analysis_storage: usize,
+        mut source: Option<(
+            &ExecutionAvailabilityV29<'_>,
+            &mut (dyn SemanticEmissionBudgetV1 + 'work),
+        )>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        if let Some((cursor, budget)) = source.as_mut() {
+            cursor.check_ledger(*budget)?;
+            let references = cursor
+                .references
+                .ok_or_else(source_index_witness_error_v29)?;
+            references.check(*budget)?;
+            budget.source_reference_charge_v29(references.plan, 4)?;
+            let original = references.plan.instances.owner().source_semantic();
+            let instance = references
+                .plan
+                .instances
+                .instance(cursor.instance)
+                .ok_or_else(source_index_witness_error_v29)?;
+            if !std::ptr::eq(function, cursor.function)
+                || !std::ptr::eq(instance.declaration(), function)
+                || !std::ptr::eq(original.types(), types)
+                || !std::ptr::eq(original.callables(), callables)
+            {
+                return Err(source_index_witness_error_v29());
+            }
+        }
         let mut resolver = Self {
             types,
             callables,
@@ -325,11 +372,31 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
             peak_storage: 0,
             scoped_storage: None,
         };
-        for block in function.blocks() {
+        for (block_index, block) in function.blocks().iter().enumerate() {
             resolver.charge_work(1)?;
-            for statement in block.statements() {
+            for (statement_index, statement) in block.statements().iter().enumerate() {
                 resolver.charge_work(1)?;
-                resolver.index_statement(statement.kind())?;
+                let preserve_shared = if let Some((cursor, budget)) = source.as_mut() {
+                    source_shared_index_borrow_preserves_origin_v29(
+                        cursor
+                            .references
+                            .ok_or_else(source_index_witness_error_v29)?,
+                        SourceReferenceSiteV29 {
+                            instance: cursor.instance,
+                            block: SemanticBlockIdV1::from_index(
+                                u32::try_from(block_index)
+                                    .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                            ),
+                            statement: Some(statement_index),
+                        },
+                        statement.kind(),
+                        *budget,
+                    )?
+                } else {
+                    false
+                };
+                resolver
+                    .index_statement_with_shared_origin_v29(statement.kind(), preserve_shared)?;
             }
             resolver.charge_work(1)?;
             resolver.index_terminator(block.terminator().kind())?;
@@ -366,6 +433,14 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
         &mut self,
         statement: &'a SemanticStatementKindV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.index_statement_with_shared_origin_v29(statement, false)
+    }
+
+    fn index_statement_with_shared_origin_v29(
+        &mut self,
+        statement: &'a SemanticStatementKindV1,
+        preserve_shared: bool,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         match statement {
             SemanticStatementKindV1::Assign(assignment) => {
                 let local = assignment.destination().local().index();
@@ -378,6 +453,10 @@ impl<'a> SemanticCapabilityOriginResolverV1<'a> {
                     self.invalidate_local(local)?;
                 }
                 match assignment.value().kind() {
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Shared,
+                        place,
+                    } if preserve_shared && place.projections().is_empty() => {}
                     SemanticRvalueKindV1::Borrow { place, .. }
                     | SemanticRvalueKindV1::AddressOf { place, .. } => {
                         self.invalidate_local(place.local().index())?;

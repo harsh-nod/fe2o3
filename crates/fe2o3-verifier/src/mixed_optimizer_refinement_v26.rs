@@ -35,7 +35,10 @@ mod relocation_plan_v28;
 pub use relocation_plan_v28::{
     MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,
     MixedOptimizerRelocationSubjectV28, PreparedMixedComposedRelocationCfgRefinementV28,
-    PreparedMixedRelocationCfgRefinementV28, PreparedMixedRelocationExpressionsV28,
+    PreparedMixedFixedpointComposedRelocationCfgRefinementV29,
+    PreparedMixedFixedpointRelocationCfgRefinementV29,
+    PreparedMixedFixedpointRelocationExpressionsV29, PreparedMixedRelocationCfgRefinementV28,
+    PreparedMixedRelocationExpressionsV28, prepare_mixed_fixedpoint_relocation_expressions_v29,
     prepare_mixed_relocation_expressions_v28,
 };
 #[path = "mixed_optimizer_semantics_v26.rs"]

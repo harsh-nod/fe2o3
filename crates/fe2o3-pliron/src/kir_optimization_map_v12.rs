@@ -134,9 +134,10 @@ impl CaptureLimitsV12 {
         match policy {
             FixedPolicy::Historical2 => Ok(historical),
             FixedPolicy::Checked3 => historical.for_policy3_nodes(historical.nodes),
-            FixedPolicy::Integer6 | FixedPolicy::IntegerWorklist9 | FixedPolicy::MixedPureCse10 => {
-                historical.for_policy3_nodes(historical.nodes)
-            }
+            FixedPolicy::Integer6
+            | FixedPolicy::IntegerWorklist9
+            | FixedPolicy::MixedPureCse10
+            | FixedPolicy::MixedFixedpoint11 => historical.for_policy3_nodes(historical.nodes),
         }
     }
     pub(crate) fn for_policy3_nodes(self, bound: usize) -> Result<Self> {
@@ -270,7 +271,8 @@ use replay_work::ReplayCensusV12;
 mod storage_v18;
 pub use storage_v18::{
     KirOptimizationMapIntegerContinuationV18, KirOptimizationMapIntegerWorklistV18,
-    KirOptimizationMapMixedPureCseV18, KirOptimizationMapPolicy3V18,
+    KirOptimizationMapMixedFixedpointV18, KirOptimizationMapMixedPureCseV18,
+    KirOptimizationMapPolicy3V18,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -367,6 +369,9 @@ impl KirOptimizationMapV12 {
 }
 
 impl<I> MapData<I> {
+    pub(crate) fn neutral_pass_count_v1(&self) -> usize {
+        self.passes.len()
+    }
     pub const fn input_identity(&self) -> &I {
         &self.input
     }
@@ -564,7 +569,8 @@ impl<I> MapData<I> {
             FixedPolicy::Checked3
             | FixedPolicy::Integer6
             | FixedPolicy::IntegerWorklist9
-            | FixedPolicy::MixedPureCse10 => validate_lifecycle_for_policy(
+            | FixedPolicy::MixedPureCse10
+            | FixedPolicy::MixedFixedpoint11 => validate_lifecycle_for_policy(
                 &self.nodes,
                 &self.events,
                 &self.terminal,
@@ -814,13 +820,23 @@ fn validate_lifecycle_for_policy(
     passes: &[PassSpan],
     policy: FixedPolicy,
 ) -> Result<()> {
-    if passes.len() != policy.passes().len() || passes[0].input_epoch == 0 {
+    if !policy.complete_pass_count(passes.len()) || passes[0].input_epoch == 0 {
         return Err(KirOptimizationMapErrorV12::Passes);
+    }
+    if policy == FixedPolicy::MixedFixedpoint11 {
+        let rounds = passes.chunks_exact(policy.passes().len());
+        let count = rounds.len();
+        for (index, round) in rounds.enumerate() {
+            let changed = round.iter().any(|row| row.input_epoch != row.output_epoch);
+            if changed == (index + 1 == count) {
+                return Err(KirOptimizationMapErrorV12::Passes);
+            }
+        }
     }
     let mut end = 0;
     let mut epoch = passes[0].input_epoch;
     for (index, span) in passes.iter().enumerate() {
-        if span.pass != policy.passes()[index]
+        if Some(span.pass) != policy.pass_at(index)
             || span.input_epoch != epoch
             || span.output_epoch < span.input_epoch
             || span.output_epoch - span.input_epoch > 1
@@ -1385,6 +1401,58 @@ struct CaptureStateV12 {
     failure: Option<KirOptimizationMapErrorV12>,
 }
 impl CaptureV12 {
+    pub(crate) fn admit_fixedpoint_round(
+        &self,
+        ledger: &mut crate::fixed_policy_v3::CseLedger<'_, '_>,
+    ) -> Result<()> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| KirOptimizationMapErrorV12::Lifecycle)?;
+        if let Some(error) = &state.failure {
+            return Err(error.clone());
+        }
+        let result = (|| {
+            if state.policy != FixedPolicy::MixedFixedpoint11
+                || state.current.is_some()
+                || !state.policy.complete_pass_count(state.passes.len())
+                || state.passes.len() == state.policy.max_passes()
+            {
+                return Err(KirOptimizationMapErrorV12::Passes);
+            }
+            let count = state.policy.passes().len();
+            let required = state
+                .passes
+                .len()
+                .checked_add(count)
+                .ok_or(KirOptimizationMapErrorV12::Arithmetic)?;
+            let storage = required
+                .checked_mul(2)
+                .and_then(|n| n.checked_mul(size_of::<PassSpan>()))
+                .ok_or(KirOptimizationMapErrorV12::Arithmetic)?;
+            ledger.admit_fixedpoint_round(0, storage)?;
+            state.passes.try_reserve_exact(count).map_err(|_| {
+                ledger.record_core_error(
+                    dialect_gpu::dominance_cse_v1::DominanceCseErrorV1::Allocation,
+                );
+                KirOptimizationMapErrorV12::Allocation
+            })?;
+            let excess = state
+                .passes
+                .capacity()
+                .checked_sub(required)
+                .and_then(|n| n.checked_mul(2))
+                .and_then(|n| n.checked_mul(size_of::<PassSpan>()))
+                .ok_or(KirOptimizationMapErrorV12::Arithmetic)?;
+            ledger.admit_fixedpoint_round(0, excess)?;
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            state.failure = Some(error.clone());
+        }
+        result
+    }
+
     pub(crate) fn new(limits: CaptureLimitsV12, roster: &LiveRosterV12) -> Result<Self> {
         Self::new_for_policy(limits, roster, FixedPolicy::Historical2)
     }
@@ -1475,8 +1543,7 @@ impl CaptureV12 {
         let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if state.failure.is_some()
             || state.current.is_some()
-            || state.passes.len() >= state.policy.passes().len()
-            || state.policy.passes()[state.passes.len()] != pass
+            || state.policy.pass_at(state.passes.len()) != Some(pass)
         {
             state.failure = Some(KirOptimizationMapErrorV12::Passes);
             return false;

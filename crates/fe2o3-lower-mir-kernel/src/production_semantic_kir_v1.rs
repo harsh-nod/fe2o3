@@ -11756,8 +11756,8 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
             .record(state.source, plan, &lowering, emission_budget)?;
         lowering.emission_work = Some(emission_budget);
     }
-    let direct_call_inputs =
-        lowering.with_emission_budget_v1(|this, budget| this.take_direct_call_inputs_v26(budget))?;
+    let direct_call_inputs = lowering
+        .with_emission_budget_v1(|this, budget| this.take_direct_call_inputs_v26(budget))?;
     let execution_observation =
         lowering.with_emission_budget_v1(|this, budget| this.take_execution_archive_v29(budget))?;
     drop(lowering.emission_work.take());
@@ -17640,7 +17640,10 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => {
                 self.require_call_argument_count(block, call, 1)?;
-                self.lower_operand(block, None, &call.arguments()[0], operations)?
+                match self.lower_source_index_reader_v29(block, call, operations)? {
+                    Some(value) => value,
+                    None => self.lower_operand(block, None, &call.arguments()[0], operations)?,
+                }
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
                 index_space, ..
@@ -17714,7 +17717,15 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 *elements_per_lane,
             )?,
             SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { index_space, .. } => {
-                self.lower_intrinsic_disjoint_index_get_v1(block, call, index_space, operations)?
+                match self.lower_source_index_reader_v29(block, call, operations)? {
+                    Some(value) => value,
+                    None => self.lower_intrinsic_disjoint_index_get_v1(
+                        block,
+                        call,
+                        index_space,
+                        operations,
+                    )?,
+                }
             }
             SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
                 index_space,

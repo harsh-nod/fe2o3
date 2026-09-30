@@ -262,6 +262,10 @@ pub enum PlironOptimizationErrorV1 {
         required: usize,
         limit: usize,
     },
+    FixedpointRoundLimitExceeded {
+        completed: usize,
+        limit: usize,
+    },
     SessionGraphCapacityExceeded,
     GraphAccountingMismatch,
     GraphInspectionRejected {
@@ -288,6 +292,10 @@ impl fmt::Display for PlironOptimizationErrorV1 {
             Self::WorkLimitExceeded { required, limit } => write!(
                 formatter,
                 "optimization requires {required} work units but the limit is {limit}"
+            ),
+            Self::FixedpointRoundLimitExceeded { completed, limit } => write!(
+                formatter,
+                "fixed policy did not reach an unchanged round after {completed} of {limit} rounds"
             ),
             Self::SessionGraphCapacityExceeded => {
                 formatter.write_str("optimization may exceed the session graph hard cap")
@@ -404,6 +412,10 @@ impl PlironOptimizationReportV1 {
         &self.passes
     }
 
+    pub(crate) fn pass_capacity(&self) -> usize {
+        self.passes.capacity()
+    }
+
     pub const fn final_graph_identity(&self) -> OperationGraphReplayIdentityV1 {
         self.final_graph_identity
     }
@@ -420,7 +432,7 @@ impl PlironSession {
         root: &OperationHandle,
         plan: &PlironOptimizationPlanV1,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
-        self.execute_optimization_impl_v1(root, plan, None, None, None)
+        self.execute_optimization_impl_v1(root, plan, None, None, None, None)
     }
 
     pub(crate) fn execute_optimization_with_capture_v12(
@@ -429,7 +441,7 @@ impl PlironSession {
         plan: &PlironOptimizationPlanV1,
         capture: &crate::kir_optimization_map_v12::CaptureV12,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
-        self.execute_optimization_impl_v1(root, plan, Some(capture), None, None)
+        self.execute_optimization_impl_v1(root, plan, Some(capture), None, None, None)
     }
 
     pub(crate) fn execute_optimization_with_occurrences_v1(
@@ -439,7 +451,7 @@ impl PlironSession {
         capture: &crate::kir_optimization_map_v12::CaptureV12,
         occurrences: &crate::kir_occurrence_capture_v1::Capture,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
-        self.execute_optimization_impl_v1(root, plan, Some(capture), Some(occurrences), None)
+        self.execute_optimization_impl_v1(root, plan, Some(capture), Some(occurrences), None, None)
     }
 
     pub(crate) fn execute_fixed_policy3_v1(
@@ -459,6 +471,7 @@ impl PlironSession {
             Some(capture),
             Some(occurrences),
             Some(ledger),
+            None,
         )
     }
 
@@ -469,6 +482,7 @@ impl PlironSession {
         capture: Option<&crate::kir_optimization_map_v12::CaptureV12>,
         occurrences: Option<&crate::kir_occurrence_capture_v1::Capture>,
         mut cse: Option<&mut crate::fixed_policy_v3::CseLedger<'_, '_>>,
+        fixedpoint: Option<crate::fixed_policy_v3::FixedpointRoundResourcesV18>,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
         let pointer = self.with_operation(root, |pointer, _| pointer)?;
         if cse.is_none() {
@@ -508,9 +522,14 @@ impl PlironSession {
             .and_then(|work| work.checked_add(plan.limits.max_graph_work))
             .filter(|work| *work <= HARD_MAX_SESSION_OPERATION_TREE_ITEMS)
             .ok_or(PlironOptimizationErrorV1::SessionGraphCapacityExceeded)?;
+        let pass_count = if fixedpoint.is_some() {
+            crate::fixed_policy_v3::FixedPolicy::MixedFixedpoint11.max_passes()
+        } else {
+            plan.passes.len()
+        };
         let preflight_work = optimization_work_preflight(
             charged_root_work,
-            plan.passes.len(),
+            pass_count,
             plan.limits.max_graph_work,
             registered_handle_count,
         )?;
@@ -535,11 +554,102 @@ impl PlironSession {
         let mut work_units = initial_graph_work
             .checked_mul(2)
             .ok_or(PlironOptimizationErrorV1::GraphAccountingMismatch)?;
-        let mut reports = Vec::with_capacity(plan.passes.len());
+        let mut reports = if fixedpoint.is_some() {
+            let ledger = cse.as_deref_mut().ok_or_else(|| {
+                self.poisoned = true;
+                PlironOptimizationErrorV1::GraphAccountingMismatch
+            })?;
+            let mut rows = Vec::new();
+            rows.try_reserve_exact(plan.passes.len()).map_err(|_| {
+                self.poisoned = true;
+                ledger.record_core_error(
+                    dialect_gpu::dominance_cse_v1::DominanceCseErrorV1::Allocation,
+                );
+                PlironOptimizationErrorV1::GraphAccountingMismatch
+            })?;
+            let excess = rows
+                .capacity()
+                .checked_sub(plan.passes.len())
+                .and_then(|n| n.checked_mul(std::mem::size_of::<PlironOptimizationPassReportV1>()))
+                .ok_or_else(|| {
+                    self.poisoned = true;
+                    PlironOptimizationErrorV1::GraphAccountingMismatch
+                })?;
+            ledger.admit_fixedpoint_round(0, excess).map_err(|_| {
+                self.poisoned = true;
+                PlironOptimizationErrorV1::GraphAccountingMismatch
+            })?;
+            rows
+        } else {
+            Vec::with_capacity(plan.passes.len())
+        };
 
-        for pass in plan.passes.iter().copied() {
+        let mut round_changed = false;
+        let mut round_presentation = None;
+        for ordinal in 0..pass_count {
+            if ordinal != 0 && ordinal % plan.passes.len() == 0 {
+                let admission = (|| {
+                    let failure = || PlironOptimizationErrorV1::GraphAccountingMismatch;
+                    let envelope = fixedpoint.ok_or_else(failure)?;
+                    let ledger = cse.as_deref_mut().ok_or_else(failure)?;
+                    let required = reports
+                        .len()
+                        .checked_add(plan.passes.len())
+                        .ok_or_else(failure)?;
+                    // Account for a replacement allocation and the retained
+                    // report copy before growing this actual round's rows.
+                    let row_bytes = std::mem::size_of::<PlironOptimizationPassReportV1>();
+                    let rows = required
+                        .checked_mul(2)
+                        .and_then(|n| n.checked_mul(row_bytes))
+                        .ok_or_else(failure)?;
+                    ledger
+                        .admit_fixedpoint_round(envelope.work, rows)
+                        .map_err(|_| failure())?;
+                    capture
+                        .ok_or_else(failure)?
+                        .admit_fixedpoint_round(ledger)
+                        .map_err(|_| failure())?;
+                    occurrences
+                        .ok_or_else(failure)?
+                        .admit_fixedpoint_round(envelope.occurrence_work)
+                        .map_err(|_| failure())?;
+                    reports.try_reserve_exact(plan.passes.len()).map_err(|_| {
+                        ledger.record_core_error(
+                            dialect_gpu::dominance_cse_v1::DominanceCseErrorV1::Allocation,
+                        );
+                        failure()
+                    })?;
+                    let excess = reports
+                        .capacity()
+                        .checked_sub(required)
+                        .and_then(|n| n.checked_mul(2))
+                        .and_then(|n| n.checked_mul(row_bytes))
+                        .ok_or_else(failure)?;
+                    ledger
+                        .admit_fixedpoint_round(0, excess)
+                        .map_err(|_| failure())?;
+                    Ok::<(), PlironOptimizationErrorV1>(())
+                })();
+                if let Err(error) = admission {
+                    self.poisoned = true;
+                    return Err(error);
+                }
+                round_changed = false;
+            }
+            let pass = plan.passes[ordinal % plan.passes.len()];
             let input_graph_work = current_graph_work;
             let input_snapshot = self.operation_graph_snapshot_v1(root)?;
+            if let Some(envelope) = fixedpoint.filter(|_| ordinal % plan.passes.len() == 0) {
+                let ledger = cse.as_deref_mut().ok_or_else(|| {
+                    self.poisoned = true;
+                    PlironOptimizationErrorV1::GraphAccountingMismatch
+                })?;
+                round_presentation = Some((
+                    input_snapshot,
+                    self.fixedpoint_presentation_v18(pointer, envelope.presentation_limit, ledger)?,
+                ));
+            }
             if capture.is_some_and(|capture| !capture.begin_pass(pass, input_snapshot.epoch())) {
                 self.poisoned = true;
                 return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
@@ -577,6 +687,16 @@ impl PlironSession {
 
             let (output_graph_work, operations) =
                 self.inspect_optimization_graph(pointer, Some(pass))?;
+            // This closed roster only erases/aliases, except a checked integer
+            // operation may become one operand-free false constant. Tree work
+            // omits operands/results, so that replacement can have equal work.
+            if fixedpoint.is_some()
+                && ((changed && output_graph_work > input_graph_work)
+                    || (!changed && output_graph_work != input_graph_work))
+            {
+                self.poisoned = true;
+                return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
+            }
             enforce_graph_limit_after_mutation(
                 self,
                 output_graph_work,
@@ -627,6 +747,58 @@ impl PlironSession {
             });
             current_graph_work = output_graph_work;
             final_operations = operations;
+            round_changed |= changed;
+            if fixedpoint.is_some() && (ordinal + 1) % plan.passes.len() == 0 {
+                let (round_snapshot, before) = round_presentation.take().ok_or_else(|| {
+                    self.poisoned = true;
+                    PlironOptimizationErrorV1::GraphAccountingMismatch
+                })?;
+                let ledger = cse.as_deref_mut().ok_or_else(|| {
+                    self.poisoned = true;
+                    PlironOptimizationErrorV1::GraphAccountingMismatch
+                })?;
+                if !round_changed {
+                    let after = self.fixedpoint_presentation_v18(
+                        pointer,
+                        fixedpoint.expect("fixed policy round").presentation_limit,
+                        ledger,
+                    )?;
+                    // Local same-context equality supplements the per-pass
+                    // mutation checks. These bytes are never durable authority.
+                    if round_snapshot != output_snapshot || before != after {
+                        self.poisoned = true;
+                        return Err(PlironOptimizationErrorV1::GraphAccountingMismatch);
+                    }
+                    let bytes =
+                        before
+                            .capacity()
+                            .checked_add(after.capacity())
+                            .ok_or_else(|| {
+                                self.poisoned = true;
+                                PlironOptimizationErrorV1::GraphAccountingMismatch
+                            })?;
+                    drop(after);
+                    drop(before);
+                    ledger.release_fixedpoint_scratch(bytes).map_err(|_| {
+                        self.poisoned = true;
+                        PlironOptimizationErrorV1::GraphAccountingMismatch
+                    })?;
+                    break;
+                }
+                let bytes = before.capacity();
+                drop(before);
+                ledger.release_fixedpoint_scratch(bytes).map_err(|_| {
+                    self.poisoned = true;
+                    PlironOptimizationErrorV1::GraphAccountingMismatch
+                })?;
+                if ordinal + 1 == pass_count {
+                    self.poisoned = true;
+                    return Err(PlironOptimizationErrorV1::FixedpointRoundLimitExceeded {
+                        completed: pass_count / plan.passes.len(),
+                        limit: crate::fixed_policy_v3::POLICY11_MAX_ROUNDS,
+                    });
+                }
+            }
         }
 
         let reconciliation_work = current_graph_work
@@ -1024,3 +1196,7 @@ mod graph_custody_tests_v1;
 
 include!("optimization_integer_continuation_v1.rs");
 include!("optimization_commutative_owner_v1.rs");
+
+#[cfg(test)]
+#[path = "optimization_mixed_fixedpoint_v18_tests.rs"]
+mod mixed_fixedpoint_v18_tests;

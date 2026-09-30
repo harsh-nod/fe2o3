@@ -2,9 +2,12 @@
 //! test-created descriptor table stitched onto a final-native callback.
 
 use super::*;
-use crate::production_pipeline::source_owned_v29::target_result::mixed_licm_v28::worker_input_v26::PreparedMixedWorkerInputV26 as Worker;
+use crate::production_pipeline::source_owned_v29::mixed_worker_v28::Worker;
 use fe2o3_kernel_descriptor::mixed_conditional_v26::decode_mixed_contract_v26;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+#[path = "production_rustc_driver_mixed_publication_v28_tests.rs"]
+mod publication_tests;
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::mixed_worker_child";
 
@@ -55,12 +58,17 @@ impl Callbacks for WorkerCallbacks {
                 )
             };
             let expected = transaction()?
-                .with_original_source_mixed_licm_v28(|source, relocation, _, _, budget| {
-                    Ok((
-                        *source.canonical(budget)?.identity().digest(),
-                        *relocation.tail(budget)?.output().identity().digest(),
-                    ))
-                })
+                .with_original_source_mixed_fixedpoint_licm_v29(
+                    |source, relocation, _, _, budget| {
+                        let prefix = relocation.prefix(budget)?.output(budget)?;
+                        assert_eq!(prefix.execution().policy_version(), 11);
+                        assert!((1..=32).contains(&prefix.execution().rounds()));
+                        Ok((
+                            *source.canonical(budget)?.identity().digest(),
+                            *relocation.tail(budget)?.output().identity().digest(),
+                        ))
+                    },
+                )
                 .map_err(|error| format!("independent final graph observation: {error:?}"))?
                 .into_observation();
             let mut callbacks = [0; 6];
@@ -74,7 +82,10 @@ impl Callbacks for WorkerCallbacks {
                     assert!(llvm_bytes > 0);
                     let table = worker.descriptor(budget)?;
                     assert_eq!(table.kernel_count(), 2);
-                    assert_eq!(table.producer_version(), "source-owned-mixed-licm-v28");
+                    assert_eq!(
+                        table.producer_version(),
+                        "source-owned-mixed-fixedpoint-licm-v29"
+                    );
                     let target_name = table.device_target().to_string();
                     let target = if target_name.starts_with("gfx942") {
                         942

@@ -16,6 +16,11 @@ pub use mixed_pure_cse::{
     MIXED_PURE_CSE_EXECUTION_RECORD_BYTES_V18, MixedPureCseExecutionWitnessV18,
 };
 
+#[path = "fixed_mixed_fixedpoint_v18.rs"]
+mod mixed_fixedpoint;
+pub use mixed_fixedpoint::MixedFixedpointExecutionWitnessV18;
+pub(crate) use mixed_fixedpoint::validate_fixedpoint_report;
+
 /// Existing policy-3 frame plus the exact 40-byte storage-table identity.
 /// The final control word names graph schema 18, not V12's reserved zero.
 pub const POLICY3_EXECUTION_RECORD_BYTES_V18: usize = POLICY3_EXECUTION_RECORD_BYTES_V1 + 40;

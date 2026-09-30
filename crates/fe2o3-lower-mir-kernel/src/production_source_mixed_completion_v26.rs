@@ -392,12 +392,26 @@ mixed_source_completion_v26!(
     MixedPureCseSourceOptimizerV18
 );
 
+mixed_source_handoff_v26!(
+    ProductionConditionalMixedFixedpointOutputHandoffV29,
+    MixedFixedpointSourceOptimizerV18,
+    CheckedNeutralKernelIrOwnerMixedFixedpointV18
+);
+mixed_source_completion_v26!(
+    conditional_mixed_fixedpoint_output_v29,
+    ProductionConditionalMixedFixedpointOutputHandoffV29,
+    MixedFixedpointSourceOptimizerV18
+);
+
+include!("production_source_mixed_prefix_v29.rs");
 include!("production_source_mixed_contract_v26.rs");
 
 #[path = "production_source_mixed_licm_v28.rs"]
 mod mixed_licm_v28;
 pub use mixed_licm_v28::{
-    ProductionConditionalMixedLicmOutputHandoffV28, ProductionMixedLicmCompletionErrorV28,
-    ProductionMixedLicmDefinitionProjectionV28, ProductionMixedLicmRelocationErrorV28,
-    ProductionMixedLicmRelocationV28, ProductionMixedLicmRuntimeOccurrenceV28,
+    ProductionConditionalMixedFixedpointLicmOutputHandoffV29,
+    ProductionConditionalMixedLicmOutputHandoffV28, ProductionMixedFixedpointLicmRelocationV29,
+    ProductionMixedLicmCompletionErrorV28, ProductionMixedLicmDefinitionProjectionV28,
+    ProductionMixedLicmRelocationErrorV28, ProductionMixedLicmRelocationV28,
+    ProductionMixedLicmRuntimeOccurrenceV28,
 };

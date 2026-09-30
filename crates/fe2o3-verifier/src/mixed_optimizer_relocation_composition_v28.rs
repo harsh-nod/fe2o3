@@ -12,7 +12,10 @@ fn keys(
     ordinal: usize,
 ) -> Result<Option<(usize, usize)>> {
     let row = &prefix.operations()[ordinal];
-    if matches!(row.operation.kind, OperationKind::Constant(_)) {
+    if matches!(
+        row.operation.kind,
+        OperationKind::Constant(_) | OperationKind::Select { .. }
+    ) {
         return Ok(None);
     }
     let before = original.output_operations[ordinal];
@@ -81,7 +84,10 @@ fn replay_bridge(
         let mut seen = allocate(expected, out)?;
         for (ordinal, row) in prefix.operations().iter().enumerate() {
             out.budget.charge_work(6)?;
-            if matches!(row.operation.kind, OperationKind::Constant(_)) {
+            if matches!(
+                row.operation.kind,
+                OperationKind::Constant(_) | OperationKind::Select { .. }
+            ) {
                 continue;
             }
             let original_operation = original.output_operations[ordinal];

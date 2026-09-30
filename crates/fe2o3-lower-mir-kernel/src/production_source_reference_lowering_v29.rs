@@ -32,6 +32,7 @@ struct SourceReferenceEmissionV29<'a, 'source> {
     plan: &'a SourceReferencePlanV29<'a, 'source>,
     claimed: Vec<std::cell::Cell<bool>>,
     grid_leaders: Vec<std::cell::Cell<Option<SourceGridLeaderBorrowV29>>>,
+    index_witnesses: Vec<std::cell::Cell<Option<SourceIndexWitnessBorrowV29>>>,
     sites: Vec<((usize, u32, usize), usize)>,
     block_sites: Vec<((usize, u32, usize), usize)>,
     cell_accesses: Vec<std::cell::Cell<Option<SourceReferenceCellUseV29>>>,
@@ -178,6 +179,9 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
         let mut grid_leaders = source_reference_owned_vec_v29(plan, plan.loans.len(), budget)?;
         budget.source_reference_charge_v29(plan, plan.loans.len())?;
         grid_leaders.resize_with(plan.loans.len(), || std::cell::Cell::new(None));
+        let mut index_witnesses = source_reference_owned_vec_v29(plan, plan.loans.len(), budget)?;
+        budget.source_reference_charge_v29(plan, plan.loans.len())?;
+        index_witnesses.resize_with(plan.loans.len(), || std::cell::Cell::new(None));
         let mut sites = source_reference_owned_vec_v29(plan, plan.loans.len(), budget)?;
         for (index, loan) in plan.loans.iter().enumerate() {
             budget.source_reference_charge_v29(plan, 4)?;
@@ -234,6 +238,7 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
             plan,
             claimed,
             grid_leaders,
+            index_witnesses,
             sites,
             block_sites,
             cell_accesses,
@@ -645,6 +650,13 @@ fn source_reference_payload_types_v29(
     let source = plan.instances.owner().source_semantic();
     match representation {
         SourceReferenceRepresentationV29::StableReferent => {
+            if source_index_witness_type_v29(source.callables(), origin.ty, budget)
+                .inspect_err(|error| source_reference_record_failure_v29(plan, error))?
+            {
+                let mut types = source_reference_owned_vec_v29(plan, 1, budget)?;
+                types.push(Type::INDEX);
+                return Ok(types);
+            }
             source_execution_cfg_types_v29(source.types(), origin.ty, budget)
                 .inspect_err(|error| source_reference_record_failure_v29(plan, error))
         }
@@ -920,6 +932,10 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             Ok(Some(index))
         })?;
         let Some(loan) = loan else { return Ok(None) };
+        #[cfg(test)]
+        if let Some(observer) = SOURCE_INDEX_BORROW_OBSERVER_V29.get() {
+            observer(self, block, statement, loan);
+        }
         self.with_emission_budget_v1(|this, budget| {
             source_reference_owned_prepay_v29::<Option<SemanticValueBindingV1>>(
                 references.plan,
@@ -1010,7 +1026,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             };
             (None, binding)
         };
-        self.with_emission_budget_v1(|_, budget| {
+        self.with_emission_budget_v1(|this, budget| {
             references.check(budget)?;
             budget.source_reference_reserve_v29(
                 references.plan,
@@ -1019,9 +1035,25 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             let mut values = source_reference_owned_vec_v29(references.plan, 0, budget)?;
             // The captured live zero-sized capability has no scalar payload.
             // Its original loan receipt, not an ordinary SSA value, carries it.
-            if grid_leader.is_none() {
-                execution_cfg_values_v29(&referent, &mut values, &mut 0, budget)?;
-            }
+            let index_witness = if grid_leader.is_none() {
+                let proof = source_reference_index_witness_values_v29(
+                    this.execution
+                        .as_ref()
+                        .ok_or_else(execution_cfg_error_v29)?,
+                    &this.control_flow_ssa.cfg_carriers,
+                    place,
+                    loan,
+                    &referent,
+                    &mut values,
+                    budget,
+                )?;
+                if proof.is_none() {
+                    execution_cfg_values_v29(&referent, &mut values, &mut 0, budget)?;
+                }
+                proof
+            } else {
+                None
+            };
             let binding = SemanticSourceReferenceBindingV29 {
                 owner: references.plan as *const SourceReferencePlanV29<'_, '_> as usize,
                 source: references.plan.source,
@@ -1034,6 +1066,17 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             source_reference_validate_binding_v29(references.plan, &binding, budget)?;
             if references.claim(site, budget)? != loan {
                 return Err(ArgumentResourceV1::Accounting.into());
+            }
+            if let Some(proof) = index_witness {
+                budget.source_reference_charge_v29(references.plan, 3)?;
+                let held = references
+                    .index_witnesses
+                    .get(loan)
+                    .ok_or_else(source_index_witness_error_v29)?;
+                if held.get().is_some() {
+                    return Err(source_index_witness_error_v29());
+                }
+                held.set(Some(proof));
             }
             if let Some(proof) = grid_leader {
                 budget.source_reference_charge_v29(references.plan, 3)?;
@@ -1122,6 +1165,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
 fn allocation_receiver_error_v29() -> ProductionSemanticKirErrorV1 {
     source_reference_error_v29("allocation receiver differs from its original checked carrier")
 }
+
+include!("production_source_index_witness_v29.rs");
 
 fn allocation_receiver_contract_v29(
     function: &SemanticFunctionDeclV1,

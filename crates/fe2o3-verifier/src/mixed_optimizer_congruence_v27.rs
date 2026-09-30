@@ -18,7 +18,11 @@ fn type_tag(ty: &Type) -> u8 {
 
 // Pointer/slice nesting is linear. Do not use derived recursive Type::cmp at
 // this resource boundary, including when the first unequal node is very deep.
-fn compare_type(mut a: &Type, mut b: &Type, out: &mut Writer<'_, '_>) -> Result<Ordering> {
+pub(super) fn compare_type(
+    mut a: &Type,
+    mut b: &Type,
+    out: &mut Writer<'_, '_>,
+) -> Result<Ordering> {
     loop {
         out.budget.charge_work(3)?;
         let tag = type_tag(a).cmp(&type_tag(b));
@@ -52,7 +56,7 @@ fn compare_type(mut a: &Type, mut b: &Type, out: &mut Writer<'_, '_>) -> Result<
 }
 
 fn operation_tag(kind: &OperationKind) -> Result<u8> {
-    if !total(kind) {
+    if !opaque_total(kind) {
         return Err(Error::Statement(
             "ordered operation has no total congruence key",
         ));
@@ -63,7 +67,6 @@ fn operation_tag(kind: &OperationKind) -> Result<u8> {
         OperationKind::Binary { .. } => 2,
         OperationKind::Compare { .. } => 3,
         OperationKind::Cast { .. } => 4,
-        OperationKind::Select { .. } => 5,
         OperationKind::SliceLength { .. } => 6,
         OperationKind::SliceData { .. } => 7,
         _ => return Err(Error::Statement("closed total operator key")),
@@ -103,8 +106,7 @@ fn compare_kind(
                 kind
             }
         }
-        (OperationKind::Select { .. }, OperationKind::Select { .. })
-        | (OperationKind::SliceLength { .. }, OperationKind::SliceLength { .. })
+        (OperationKind::SliceLength { .. }, OperationKind::SliceLength { .. })
         | (OperationKind::SliceData { .. }, OperationKind::SliceData { .. }) => Ordering::Equal,
         _ => return Err(Error::Statement("total operator attribute tag")),
     })
@@ -168,7 +170,7 @@ pub(super) fn build(
         let mut end = 0;
         for (ordinal, row) in input.operations().iter().enumerate() {
             out.budget.charge_work(2)?;
-            if total(&row.operation.kind) {
+            if opaque_total(&row.operation.kind) {
                 order[end] = ordinal;
                 end += 1;
             }
@@ -223,7 +225,7 @@ pub(super) fn build(
         }
         for (ordinal, row) in output.operations().iter().enumerate() {
             out.budget.charge_work(2)?;
-            if total(&row.operation.kind)
+            if opaque_total(&row.operation.kind)
                 && !matches!(row.operation.kind, OperationKind::Constant(_))
             {
                 let origin = output_origins[ordinal];

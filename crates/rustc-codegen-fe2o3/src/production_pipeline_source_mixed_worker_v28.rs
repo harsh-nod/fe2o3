@@ -1,25 +1,73 @@
-//! Fixed Rust -> Policy10 -> LICM -> native/composed CFG -> V3 -> Worker input.
+//! Fixed Rust -> Policy11 fixed point -> LICM -> native/composed CFG -> V3 -> Worker input.
 //! Prepared inputs remain inert: this module cannot publish, finalize or launch.
 
 use super::*;
-use crate::compiler_descriptor::source_owned_v29::mixed_v28::{
-    self as descriptor, MixedDescriptorWireV28,
-};
+use crate::compiler_descriptor::source_owned_v29::mixed_v28::{self as descriptor};
 use fe2o3_kernel_descriptor::DeviceDescriptorTableV3;
 use fe2o3_lower_mir_kernel::{
-    ProductionConditionalMixedLicmOutputHandoffV28 as Native,
-    ProductionMixedLicmRelocationV28 as Relocation,
+    ProductionConditionalMixedFixedpointLicmOutputHandoffV29 as Native,
+    ProductionConditionalMixedFixedpointOutputHandoffV29 as Prefix,
+    ProductionMixedFixedpointLicmRelocationV29 as Relocation,
 };
 use fe2o3_verifier::{
-    PreparedMixedComposedRelocationCfgRefinementV28 as Composed,
-    PreparedMixedRelocationExpressionsV28 as Expressions,
+    PreparedMixedFixedpointComposedRelocationCfgRefinementV29 as Composed,
+    PreparedMixedFixedpointRelocationExpressionsV29 as Expressions,
 };
 use target_result::mixed_licm_v28::{
-    ConditionalMixedTargetLlvmV26 as Target, check_and_lower_mixed_target_llvm_v26,
-    worker_input_v26::{PreparedMixedWorkerInputV26 as Worker, prepare_mixed_worker_input_v26},
+    ConditionalMixedTargetLlvmV26 as TargetOwner, check_and_lower_mixed_target_llvm_v26,
+    worker_input_v26::{
+        PreparedMixedWorkerInputV26 as WorkerOwner, prepare_mixed_worker_input_v26,
+    },
 };
 
-struct MixedWorker;
+type Target<'h, 'v, 's> = TargetOwner<'h, 'v, 's, Native<'v, 'v, 'v, 's>>;
+pub(crate) type Worker<'n, 'h, 'v, 's, 't, 'wire> =
+    WorkerOwner<'n, 'h, 'v, 's, 't, 'wire, Native<'v, 'v, 'v, 's>>;
+type MixedDescriptorWireV28<'h, 'v, 's> =
+    descriptor::MixedDescriptorWireV28<'h, 'v, 's, Prefix<'v, 's>>;
+
+#[path = "production_pipeline_source_mixed_publication_v28.rs"]
+pub(crate) mod publication;
+
+struct MixedWorker<P>(std::marker::PhantomData<P>);
+struct WorkerInput;
+
+// Constructed only after the fixed pipeline has retained all five owners.
+struct FinalInputs<'a, 'bindings, 'v, 's> {
+    source: &'v Source<'s>,
+    native: &'a Native<'v, 'v, 'v, 's>,
+    composed: &'a Composed<'a, 'v, 'v, 'v, 's>,
+    worker: &'a Worker<'a, 'a, 'v, 's, 'a, 'a>,
+    context: &'a SourceBindingContextV29<'bindings>,
+}
+
+trait FinalConsumer<R, F> {
+    fn headers() -> Result<usize, Resource>;
+    fn consume(
+        inputs: FinalInputs<'_, '_, '_, '_>,
+        budget: &mut Budget<'_>,
+        consume: F,
+    ) -> Result<R, Error>;
+}
+
+impl<R, F> FinalConsumer<R, F> for WorkerInput
+where
+    F: for<'n, 'h, 'v, 's, 't, 'wire, 'w> FnOnce(
+        &Worker<'n, 'h, 'v, 's, 't, 'wire>,
+        &mut Budget<'w>,
+    ) -> Result<R, Error>,
+{
+    fn headers() -> Result<usize, Resource> {
+        Ok(0)
+    }
+    fn consume(
+        inputs: FinalInputs<'_, '_, '_, '_>,
+        budget: &mut Budget<'_>,
+        consume: F,
+    ) -> Result<R, Error> {
+        consume(inputs.worker, budget)
+    }
+}
 type AdapterCapture<'a, 'bindings, F> = (&'a SourceBindingContextV29<'bindings>, F);
 type Pending<F> = formal_context_v19::PendingConsumerV19<F>;
 type NativeCapture<'a, 'bindings, 'v, 's, 'abi, 'w, F> = (
@@ -49,17 +97,19 @@ type TargetCapture<'a, 'bindings, 'v, 's, 'abi, 'w, F> = (
     &'a mut Budget<'w>,
     &'a mut Pending<F>,
 );
-type DescriptorCapture<'a, 'v, 's, 'abi, 'w, F> = (
+type DescriptorCapture<'a, 'bindings, 'v, 's, 'abi, 'w, F> = (
+    &'v Source<'s>,
+    &'a Native<'v, 'v, 'v, 's>,
     &'a Composed<'a, 'v, 'v, 'v, 's>,
     &'a Target<'a, 'v, 's>,
     &'a MixedDescriptorWireV28<'a, 'v, 's>,
     &'a [AbiRoot<'abi>],
+    &'a SourceBindingContextV29<'bindings>,
     &'a mut Budget<'w>,
     &'a mut Pending<F>,
 );
-type WorkerCapture<'a, 'v, 's, 'w, F> = (
-    &'a Composed<'a, 'v, 'v, 'v, 's>,
-    &'a Worker<'a, 'a, 'v, 's, 'a, 'a>,
+type WorkerCapture<'a, 'bindings, 'v, 's, 'w, F> = (
+    FinalInputs<'a, 'bindings, 'v, 's>,
     &'a mut Budget<'w>,
     &'a mut Pending<F>,
 );
@@ -71,16 +121,19 @@ fn frame_headers<T>() -> Result<usize, Resource> {
         .ok_or(Resource::Arithmetic)
 }
 
-fn headers<R, F>() -> Result<usize, Resource> {
+fn headers<R, F, P: FinalConsumer<R, F>>() -> Result<usize, Resource> {
     [
-        mixed_licm_v28::headers::<R, AdapterCapture<'_, '_, F>>()?,
+        P::headers()?,
+        mixed_fixedpoint_licm_v29::headers::<R, AdapterCapture<'_, '_, F>>()?,
         size_of::<Pending<F>>(),
         align_of::<Pending<F>>(),
+        size_of::<FinalInputs<'_, '_, '_, '_>>(),
+        align_of::<FinalInputs<'_, '_, '_, '_>>(),
         frame_headers::<NativeCapture<'_, '_, '_, '_, '_, '_, F>>()?,
         frame_headers::<ComposedCapture<'_, '_, '_, '_, '_, '_, F>>()?,
         frame_headers::<TargetCapture<'_, '_, '_, '_, '_, '_, F>>()?,
-        frame_headers::<DescriptorCapture<'_, '_, '_, '_, '_, F>>()?,
-        frame_headers::<WorkerCapture<'_, '_, '_, '_, F>>()?,
+        frame_headers::<DescriptorCapture<'_, '_, '_, '_, '_, '_, F>>()?,
+        frame_headers::<WorkerCapture<'_, '_, '_, '_, '_, F>>()?,
         5 * size_of::<std::thread::Result<Result<R, Error>>>(),
         5 * size_of::<Result<(), Error>>(),
         size_of::<
@@ -137,20 +190,40 @@ fn check_capture<T, F>(callback: &F) {
     assert_eq!(std::mem::align_of_val(callback), align_of::<T>());
 }
 
-fn consume_final<R, F>(
+#[cfg(test)]
+fn check_fixedpoint_chain(inputs: &FinalInputs<'_, '_, '_, '_>, budget: &mut Budget<'_>) {
+    use sha2::Digest as _;
+    let relocation = inputs.native.relocation(budget).unwrap();
+    let prefix = relocation.prefix(budget).unwrap().output(budget).unwrap();
+    let subject = inputs.composed.subject(budget).unwrap();
+    let expressions = subject.expressions();
+    assert_eq!(prefix.execution().policy_version(), 11);
+    assert!((1..=32).contains(&prefix.execution().rounds()));
+    assert_eq!(expressions.prefix_policy_version(), 11);
+    let digest: [u8; 32] = sha2::Sha256::digest(prefix.execution().canonical_bytes()).into();
+    assert_eq!(expressions.prefix_execution_identity(), digest);
+    assert_eq!(
+        expressions.input(),
+        *inputs.source.canonical(budget).unwrap().identity()
+    );
+    assert_eq!(expressions.prefix(), *prefix.owner().identity());
+    assert_eq!(
+        expressions.output(),
+        *inputs.native.output(budget).unwrap().identity()
+    );
+    assert!(subject.models_original_to_final_composition());
+    assert!(!inputs.composed.authenticates_executed_proof());
+    assert!(!inputs.worker.grants_worker_or_artifact_authority());
+}
+
+fn consume_final<R, F, P: FinalConsumer<R, F>>(
     source: &Source<'_>,
     relocation: &Relocation<'_, '_, '_>,
     roots: &[AbiRoot<'_>],
     context: &SourceBindingContextV29<'_>,
     budget: &mut Budget<'_>,
     consume: F,
-) -> Result<R, Error>
-where
-    F: for<'n, 'h, 'v, 's, 't, 'wire, 'w> FnOnce(
-        &Worker<'n, 'h, 'v, 's, 't, 'wire>,
-        &mut Budget<'w>,
-    ) -> Result<R, Error>,
-{
+) -> Result<R, Error> {
     let mut pending = Pending::new(consume);
     let native = relocation
         .complete_native_v28(budget)
@@ -164,9 +237,10 @@ where
             ProductionKernelArgumentAbiInputV18 { roots },
             budget,
         )?;
-        let expressions =
-            fe2o3_verifier::prepare_mixed_relocation_expressions_v28(source, native, budget)
-                .map_err(Error::MixedRelocationExpressions)?;
+        let expressions = fe2o3_verifier::prepare_mixed_fixedpoint_relocation_expressions_v29(
+            source, native, budget,
+        )
+        .map_err(Error::MixedRelocationExpressions)?;
         let composed = expressions
             .prepare_composed_cfg_refinement(budget)
             .map_err(Error::MixedRelocationExpressions)?;
@@ -213,10 +287,19 @@ where
                         .default_pointer_width_bits(),
                     budget,
                 )?;
-                let capture: DescriptorCapture<'_, '_, '_, '_, '_, F> =
-                    (composed, target, &wire, roots, &mut *budget, pending);
+                let capture: DescriptorCapture<'_, '_, '_, '_, '_, '_, F> = (
+                    source,
+                    native,
+                    composed,
+                    target,
+                    &wire,
+                    roots,
+                    context,
+                    &mut *budget,
+                    pending,
+                );
                 let with_descriptor = move || -> Result<R, Error> {
-                    let (composed, target, wire, roots, budget, pending) =
+                    let (source, native, composed, target, wire, roots, context, budget, pending) =
                         std::convert::identity(capture);
                     let table = wire.table(budget)?;
                     let worker = prepare_mixed_worker_input_v26(
@@ -225,26 +308,36 @@ where
                         &table,
                         budget,
                     )?;
-                    let capture: WorkerCapture<'_, '_, '_, '_, F> =
-                        (composed, &worker, &mut *budget, pending);
+                    let inputs = FinalInputs {
+                        source,
+                        native,
+                        composed,
+                        worker: &worker,
+                        context,
+                    };
+                    let capture: WorkerCapture<'_, '_, '_, '_, '_, F> =
+                        (inputs, &mut *budget, pending);
                     let invoke = move || {
-                        let (composed, worker, budget, pending) = std::convert::identity(capture);
+                        let (inputs, budget, pending) = std::convert::identity(capture);
                         // The nominal original/prefix/final request stays owned
                         // through this callback. Replay checks owners and custody;
                         // generated obligations are not executed proof evidence.
-                        composed
+                        inputs
+                            .composed
                             .replay(budget)
                             .map_err(Error::MixedRelocationExpressions)?;
-                        pending.take()(worker, budget)
+                        #[cfg(test)]
+                        check_fixedpoint_chain(&inputs, budget);
+                        P::consume(inputs, budget, pending.take())
                     };
                     #[cfg(test)]
-                    check_capture::<WorkerCapture<'_, '_, '_, '_, F>, _>(&invoke);
+                    check_capture::<WorkerCapture<'_, '_, '_, '_, '_, F>, _>(&invoke);
                     let selected = catch_unwind(AssertUnwindSafe(invoke));
                     let released = worker.discard(budget);
                     settled(selected, released)
                 };
                 #[cfg(test)]
-                check_capture::<DescriptorCapture<'_, '_, '_, '_, '_, F>, _>(&with_descriptor);
+                check_capture::<DescriptorCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_descriptor);
                 let selected = catch_unwind(AssertUnwindSafe(with_descriptor));
                 let released = wire.discard(budget);
                 settled(selected, released)
@@ -270,15 +363,9 @@ where
     settled(selected, released)
 }
 
-impl<R, F> SourceHandoffPolicyV29<R, F> for MixedWorker
-where
-    F: for<'n, 'h, 'v, 's, 't, 'wire, 'w> FnOnce(
-        &Worker<'n, 'h, 'v, 's, 't, 'wire>,
-        &mut Budget<'w>,
-    ) -> Result<R, Error>,
-{
+impl<R, F, P: FinalConsumer<R, F>> SourceHandoffPolicyV29<R, F> for MixedWorker<P> {
     fn entry_headers() -> Result<usize, Resource> {
-        headers::<R, F>()
+        headers::<R, F, P>()
     }
 
     fn consume<'view, 'source, 'abi, 'work>(
@@ -298,11 +385,11 @@ where
             if target != context.bindings.rustc_target.profile() {
                 return Err(Error::Unsupported("original mixed target binding changed"));
             }
-            consume_final(source, relocation, roots, context, budget, consume)
+            consume_final::<R, F, P>(source, relocation, roots, context, budget, consume)
         };
         #[cfg(test)]
         check_capture::<AdapterCapture<'_, '_, F>, _>(&adapter);
-        <mixed_licm_v28::MixedLicm as SourceHandoffPolicyV29<R, _>>::consume(
+        <mixed_fixedpoint_licm_v29::MixedLicm as SourceHandoffPolicyV29<R, _>>::consume(
             source, roots, context, budget, adapter,
         )
     }
@@ -324,7 +411,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &mut Budget<'w>,
         ) -> Result<R, Error>,
     {
-        self.with_source_owned_custody_policy_v29::<MixedWorker, R, F>(
+        self.with_source_owned_custody_policy_v29::<MixedWorker<WorkerInput>, R, F>(
             ImportProfile::NominalV35,
             WORK_LIMIT,
             STORAGE_LIMIT,
@@ -345,7 +432,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             &mut Budget<'w>,
         ) -> Result<R, Error>,
     {
-        self.with_source_owned_custody_policy_v29::<MixedWorker, R, F>(
+        self.with_source_owned_custody_policy_v29::<MixedWorker<WorkerInput>, R, F>(
             ImportProfile::NominalV35,
             work,
             storage,
@@ -384,8 +471,19 @@ mod tests {
             &'a mut (),
             &'a mut (),
         );
-        type DescriptorFields<'a> = (&'a (), &'a (), &'a (), &'a [()], &'a mut (), &'a mut ());
-        type WorkerFields<'a> = (&'a (), &'a (), &'a mut (), &'a mut ());
+        type DescriptorFields<'a> = (
+            &'a (),
+            &'a (),
+            &'a (),
+            &'a (),
+            &'a (),
+            &'a [()],
+            &'a (),
+            &'a mut (),
+            &'a mut (),
+        );
+        type InputFields<'a> = (&'a (), &'a (), &'a (), &'a (), &'a ());
+        type WorkerFields<'a> = (InputFields<'a>, &'a mut (), &'a mut ());
         let frames = [
             (
                 size_of::<NativeFields<'_>>(),
@@ -412,9 +510,11 @@ mod tests {
             .into_iter()
             .map(|(size, align)| 2 * size + align)
             .sum::<usize>();
-        let expected = mixed_licm_v28::headers::<usize, (&(), Consumer)>().unwrap()
+        let expected = mixed_fixedpoint_licm_v29::headers::<usize, (&(), Consumer)>().unwrap()
             + size_of::<Pending<Consumer>>()
             + align_of::<Pending<Consumer>>()
+            + size_of::<InputFields<'_>>()
+            + align_of::<InputFields<'_>>()
             + captures
             + 5 * size_of::<std::thread::Result<Result<usize, Error>>>()
             + 5 * size_of::<Result<(), Error>>()
@@ -446,7 +546,7 @@ mod tests {
                     target_result::mixed_licm_v28::worker_input_v26::MixedWorkerInputErrorV26,
                 >,
             >();
-        assert_eq!(headers::<usize, Consumer>().unwrap(), expected);
+        assert_eq!(headers::<usize, Consumer, WorkerInput>().unwrap(), expected);
     }
 
     #[test]

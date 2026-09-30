@@ -1,5 +1,5 @@
-//! Source-owned Policy10 plus actual V18 LICM relocation, before final native
-//! completion. This owner cannot be used as a Policy10 mixed output handoff.
+//! Source-owned checked prefix plus actual V18 LICM relocation, before final
+//! native completion. This owner is not a prefix-only mixed output handoff.
 
 use super::*;
 use fe2o3_kernel_analysis::{
@@ -16,11 +16,12 @@ pub use coordinates::ProductionMixedLicmDefinitionProjectionV28;
 #[path = "production_source_mixed_licm_native_v28.rs"]
 mod native;
 pub use native::{
+    ProductionConditionalMixedFixedpointLicmOutputHandoffV29,
     ProductionConditionalMixedLicmOutputHandoffV28, ProductionMixedLicmCompletionErrorV28,
     ProductionMixedLicmRuntimeOccurrenceV28,
 };
 
-/// Refusal while retaining or replaying a source-bound Policy10-to-LICM tail.
+/// Refusal while retaining or replaying a source-bound checked-prefix LICM tail.
 #[derive(Debug)]
 pub enum ProductionMixedLicmRelocationErrorV28 {
     /// Original source association or its retained resource custody was refused.
@@ -87,13 +88,15 @@ impl std::error::Error for Error {
     }
 }
 
-/// Retains the genuine source-bound Policy10 prefix and actual freshly admitted
+/// Retains the genuine source-bound nominal prefix and actual freshly admitted
 /// LICM output together. Relocation and MemorySSA are checked on exact owners.
 /// Final native/source completion, target emission and Worker admission remain
-/// separate gates; no Policy10 witness is reinterpreted as a motion witness.
+/// separate gates; no prefix witness is reinterpreted as a motion witness.
 #[must_use = "retain the source prefix and discard this owner's exact credit explicitly"]
-pub struct ProductionMixedLicmRelocationV28<'prefix, 'view, 'source> {
-    prefix: &'prefix ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>,
+pub struct ProductionMixedLicmRelocationV28<'prefix, 'view, 'source,
+    P: ProductionMixedPrefixOwnerV29<'view, 'source> = ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>> {
+    prefix: &'prefix P,
+    source_lifetime: std::marker::PhantomData<&'view ProductionSourceOwnedViewV18<'source>>,
     tail: Tail,
     projection: coordinates::Projection,
     retained: usize,
@@ -102,15 +105,19 @@ pub struct ProductionMixedLicmRelocationV28<'prefix, 'view, 'source> {
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
 }
 
-fn headers() -> Result<(usize, usize)> {
-    let owner = size_of::<ProductionMixedLicmRelocationV28<'_, '_, '_>>()
+fn headers<'view, 'source: 'view, P: ProductionMixedPrefixOwnerV29<'view, 'source>>()
+-> Result<(usize, usize)> {
+    let owner = size_of::<ProductionMixedLicmRelocationV28<'_, 'view, 'source, P>>()
         .checked_sub(size_of::<Tail>())
         .and_then(|bytes| bytes.checked_sub(size_of::<coordinates::Projection>()))
         .and_then(|bytes| {
-            bytes.checked_add(align_of::<ProductionMixedLicmRelocationV28<'_, '_, '_>>())
+            bytes.checked_add(align_of::<
+                ProductionMixedLicmRelocationV28<'_, 'view, 'source, P>,
+            >())
         })
         .ok_or(ArgumentResourceV1::Arithmetic)?;
     let scratch = argument_sum_v1(&[
+        ProductionCheckedMixedPrefixViewV29::inspection_storage_v29()?,
         2 * size_of::<Inventory<'_>>(),
         2 * size_of::<Memory<'_, '_>>(),
         size_of::<fe2o3_kernel_analysis::CheckedCanonicalKirLicmV18<'_>>(),
@@ -121,22 +128,51 @@ fn headers() -> Result<(usize, usize)> {
     Ok((owner, scratch))
 }
 
+/// Policy11's nominal source prefix and actual LICM continuation.
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::{ProductionMixedLicmRelocationV28, ProductionMixedFixedpointLicmRelocationV29};
+/// fn relabel<'p, 'v, 's>(old: ProductionMixedLicmRelocationV28<'p, 'v, 's>)
+///     -> ProductionMixedFixedpointLicmRelocationV29<'p, 'v, 's> { old }
+/// ```
+pub type ProductionMixedFixedpointLicmRelocationV29<'prefix, 'view, 'source> =
+    ProductionMixedLicmRelocationV28<
+        'prefix,
+        'view,
+        'source,
+        ProductionConditionalMixedFixedpointOutputHandoffV29<'view, 'source>,
+    >;
+
 impl<'view, 'source> ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source> {
-    /// Runs actual LICM on this output and retains the source prefix borrow.
-    /// Caller-selected graphs, origin rows and layout-limit widening are absent.
+    /// Runs actual LICM on the historical Policy10 output.
     pub fn prepare_mixed_licm_v28<'prefix>(
         &'prefix self,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<ProductionMixedLicmRelocationV28<'prefix, 'view, 'source>> {
-        self.owned.check(budget)?;
-        let source = self.owned.source;
+        ProductionMixedLicmRelocationV28::prepare(self, budget)
+    }
+}
+impl<'view, 'source> ProductionConditionalMixedFixedpointOutputHandoffV29<'view, 'source> {
+    /// Runs actual LICM on the retained fixed-point Policy11 output.
+    pub fn prepare_mixed_fixedpoint_licm_v29<'prefix>(
+        &'prefix self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ProductionMixedFixedpointLicmRelocationV29<'prefix, 'view, 'source>> {
+        ProductionMixedLicmRelocationV28::prepare(self, budget)
+    }
+}
+impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
+    ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>
+{
+    fn prepare(prefix: &'prefix P, budget: &mut ArgumentBudgetV1<'_>) -> Result<Self> {
+        prefix.check_prefix_v29(budget)?;
+        let source = prefix.source_owned_v29();
         let floor = budget.storage();
         let (tail, projection, retained) =
             scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| -> Result<_> {
                 let entry = budget.storage();
-                let (owner_header, scratch_header) = headers()?;
+                let (owner_header, scratch_header) = headers::<P>()?;
                 budget.reserve_storage(argument_sum_v1(&[owner_header, scratch_header])?)?;
-                let input = self.output(budget)?.owner();
+                let input = prefix.checked_prefix_v29(budget)?.owner();
                 let layouts = source.limits(budget)?.storage_layout_limits();
                 let tail = fe2o3_kernel_opt::prepare_owned_licm_v18(input, layouts, budget)?;
                 budget.reserve_storage(tail.retained_storage())?;
@@ -177,7 +213,7 @@ impl<'view, 'source> ProductionConditionalMixedPureCseOutputHandoffV26<'view, 's
                     ims.retained_storage(),
                     oms.retained_storage(),
                 ])?)?;
-                self.owned.check(budget)?;
+                prefix.check_prefix_v29(budget)?;
                 let retained =
                     argument_sum_v1(&[owner_header, tail.retained_storage(), map_storage])?;
                 if entry.checked_add(retained) != Some(budget.storage()) {
@@ -187,7 +223,8 @@ impl<'view, 'source> ProductionConditionalMixedPureCseOutputHandoffV26<'view, 's
                 Ok((tail, projection, retained))
             })?;
         Ok(ProductionMixedLicmRelocationV28 {
-            prefix: self,
+            prefix,
+            source_lifetime: std::marker::PhantomData,
             tail,
             projection,
             retained,
@@ -198,9 +235,11 @@ impl<'view, 'source> ProductionConditionalMixedPureCseOutputHandoffV26<'view, 's
     }
 }
 
-impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, 'source> {
+impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
+    ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>
+{
     fn custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
-        let source = self.prefix.owned.source;
+        let source = self.prefix.source_owned_v29();
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()
             || budget.storage() < self.required
@@ -208,20 +247,16 @@ impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, '
             source.cleanup.deny_refund();
             return source.retain_query(Err(ArgumentResourceV1::Accounting.into()));
         }
-        self.prefix.owned.custody(budget)
+        self.prefix.prefix_custody_v29(budget)
     }
 
     fn check(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         let custody = self.custody(budget);
-        self.prefix.owned.check(budget).and(custody)
+        self.prefix.check_prefix_v29(budget).and(custody)
     }
 
-    /// Borrows the genuine retained Policy10 handoff under its original custody.
-    pub fn prefix(
-        &self,
-        budget: &ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<&ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>>
-    {
+    /// Borrows the exact nominal prefix handoff under its original custody.
+    pub fn prefix(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<&P> {
         self.check(budget)?;
         Ok(self.prefix)
     }
@@ -265,13 +300,13 @@ impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, '
 
     fn replay_inner(&self, budget: &mut ArgumentBudgetV1<'_>, test_refusals: bool) -> Result<()> {
         self.check(budget)?;
-        let source = self.prefix.owned.source;
+        let source = self.prefix.source_owned_v29();
         let floor = budget.storage();
         scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| {
             let entry = budget.storage();
-            let scratch_header = headers()?.1;
+            let scratch_header = headers::<P>()?.1;
             budget.reserve_storage(scratch_header)?;
-            let input = self.prefix.output(budget)?.owner();
+            let input = self.prefix.checked_prefix_v29(budget)?.owner();
             let (pair, ps) = self.tail.replay_against(input, budget)?;
             budget.reserve_storage(ps.retained_storage())?;
             let (before, bs) = Inventory::derive_v18(input, budget)?;
@@ -350,8 +385,7 @@ impl<'prefix, 'view, 'source> ProductionMixedLicmRelocationV28<'prefix, 'view, '
         drop(tail);
         let settled = custody.and_then(|()| {
             prefix
-                .owned
-                .source
+                .source_owned_v29()
                 .retain_query(budget.release_storage(retained).map_err(Into::into))
         });
         result?;

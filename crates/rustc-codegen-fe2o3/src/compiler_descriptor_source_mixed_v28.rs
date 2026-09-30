@@ -11,15 +11,22 @@ use fe2o3_kernel_descriptor::{
 };
 use fe2o3_lower_mir_kernel::{
     ProductionConditionalMixedLicmOutputHandoffV28,
-    ProductionSourceOwnedViewErrorV18 as SourceError, ProductionSourceOwnedViewV18 as Source,
+    ProductionConditionalMixedPureCseOutputHandoffV26 as Policy10,
+    ProductionMixedPrefixOwnerV29 as PrefixOwner, ProductionSourceOwnedViewErrorV18 as SourceError,
+    ProductionSourceOwnedViewV18 as Source,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-type Native<'v, 's> = ProductionConditionalMixedLicmOutputHandoffV28<'v, 'v, 'v, 's>;
+type Native<'v, 's, P> = ProductionConditionalMixedLicmOutputHandoffV28<'v, 'v, 'v, 's, P>;
 
 #[must_use = "discard descriptor backing before the borrowed final-native owner"]
-pub(crate) struct MixedDescriptorWireV28<'handoff, 'view, 'source> {
-    native: &'handoff Native<'view, 'source>,
+pub(crate) struct MixedDescriptorWireV28<
+    'handoff,
+    'view,
+    'source,
+    P: PrefixOwner<'view, 'source> = Policy10<'view, 'source>,
+> {
+    native: &'handoff Native<'view, 'source, P>,
     source: &'view Source<'source>,
     wire: Vec<u8>,
     retained: usize,
@@ -32,30 +39,30 @@ fn sum(parts: &[usize]) -> Result<usize, Resource> {
     })
 }
 
-fn owner_headers() -> Result<usize, Resource> {
+fn owner_headers<T>() -> Result<usize, Resource> {
     sum(&[
-        size_of::<MixedDescriptorWireV28<'_, '_, '_>>(),
-        align_of::<MixedDescriptorWireV28<'_, '_, '_>>(),
+        size_of::<T>(),
+        align_of::<T>(),
         size_of::<DeviceDescriptorTableV3<'_>>(),
         align_of::<DeviceDescriptorTableV3<'_>>(),
         DESCRIPTOR_QUERY_STORAGE_V3,
     ])
 }
 
-type Capture<'a, 'handoff, 'view, 'source, 'work> = (
+type Capture<'a, 'handoff, 'view, 'source, 'work, P> = (
     &'a [TypedDescriptorRootV1],
     &'view Source<'source>,
-    &'handoff Native<'view, 'source>,
+    &'handoff Native<'view, 'source, P>,
     Target,
     u16,
     &'a mut Budget<'work>,
 );
 
-fn construction_headers() -> Result<usize, Resource> {
+fn construction_headers<C>() -> Result<usize, Resource> {
     sum(&[
-        size_of::<Capture<'_, '_, '_, '_, '_>>(),
-        align_of::<Capture<'_, '_, '_, '_, '_>>(),
-        size_of::<AssertUnwindSafe<Capture<'_, '_, '_, '_, '_>>>(),
+        size_of::<C>(),
+        align_of::<C>(),
+        size_of::<AssertUnwindSafe<C>>(),
         size_of::<std::thread::Result<Result<Vec<u8>, Error>>>(),
         size_of::<Result<(), SourceError>>(),
         size_of::<Result<DeviceDescriptorTableV3<'_>, Error>>(),
@@ -63,7 +70,7 @@ fn construction_headers() -> Result<usize, Resource> {
     ])
 }
 
-impl MixedDescriptorWireV28<'_, '_, '_> {
+impl<'view, 'source, P: PrefixOwner<'view, 'source>> MixedDescriptorWireV28<'_, 'view, 'source, P> {
     fn check(&self, budget: &Budget<'_>) -> Result<(), SourceError> {
         self.native
             .observe_retained_storage_v28(self.required, budget)
@@ -98,23 +105,26 @@ impl MixedDescriptorWireV28<'_, '_, '_> {
 /// Encode only from retained rustc bindings, original semantic Rust and exact
 /// final-native canonical bytes. Every source root, including unused arguments,
 /// is projected through the existing nominal V3 type/layout replay.
-pub(crate) fn produce<'handoff, 'view, 'source>(
+pub(crate) fn produce<'handoff, 'view, 'source, P: PrefixOwner<'view, 'source>>(
     roots: &[TypedDescriptorRootV1],
     source: &'view Source<'source>,
-    native: &'handoff Native<'view, 'source>,
+    native: &'handoff Native<'view, 'source, P>,
     target: Target,
     pointer_width: u16,
     budget: &mut Budget<'_>,
-) -> Result<MixedDescriptorWireV28<'handoff, 'view, 'source>, Error> {
+) -> Result<MixedDescriptorWireV28<'handoff, 'view, 'source, P>, Error> {
     native.check_original_source(source.source_ssa(budget)?, budget)?;
     let floor = budget.storage();
-    let retained_headers = owner_headers()?;
+    let retained_headers = owner_headers::<MixedDescriptorWireV28<'handoff, 'view, 'source, P>>()?;
     budget
-        .reserve_storage(sum(&[retained_headers, construction_headers()?])?)
+        .reserve_storage(sum(&[
+            retained_headers,
+            construction_headers::<Capture<'_, 'handoff, 'view, 'source, '_, P>>()?,
+        ])?)
         .map_err(|error| source.retain_query_resource_error_v18(error))?;
     // No caller runs within construction: after this closure unwinds, all row
     // backing is dead and the successful wire is the only escaping allocation.
-    let capture: Capture<'_, '_, '_, '_, '_> =
+    let capture: Capture<'_, '_, 'view, 'source, '_, P> =
         (roots, source, native, target, pointer_width, &mut *budget);
     let construct = move || -> Result<Vec<u8>, Error> {
         let (roots, source, native, target, width, budget) = std::convert::identity(capture);
@@ -138,8 +148,24 @@ pub(crate) fn produce<'handoff, 'view, 'source>(
             output.canonical_bytes(),
             target,
             width,
-            b"FE2O3/SOURCE-OWNED-MIXED-LICM-EXECUTABLE-ABI/V28\0",
-            "source-owned-mixed-licm-v28",
+            match P::POLICY_VERSION {
+                10 => b"FE2O3/SOURCE-OWNED-MIXED-LICM-EXECUTABLE-ABI/V28\0",
+                11 => b"FE2O3/SOURCE-OWNED-MIXED-FIXEDPOINT-LICM-EXECUTABLE-ABI/V29\0",
+                _ => {
+                    return Err(Error::MixedDescriptor(DescriptorError::Mismatch(
+                        "closed prefix policy",
+                    )));
+                }
+            },
+            match P::POLICY_VERSION {
+                10 => "source-owned-mixed-licm-v28",
+                11 => "source-owned-mixed-fixedpoint-licm-v29",
+                _ => {
+                    return Err(Error::MixedDescriptor(DescriptorError::Mismatch(
+                        "closed prefix policy",
+                    )));
+                }
+            },
             budget,
             |input, budget| -> Result<Vec<u8>, DescriptorError> {
                 let length =
@@ -162,11 +188,11 @@ pub(crate) fn produce<'handoff, 'view, 'source>(
     {
         assert_eq!(
             std::mem::size_of_val(&construct),
-            size_of::<Capture<'_, '_, '_, '_, '_>>()
+            size_of::<Capture<'_, '_, 'view, 'source, '_, P>>()
         );
         assert_eq!(
             std::mem::align_of_val(&construct),
-            align_of::<Capture<'_, '_, '_, '_, '_>>()
+            align_of::<Capture<'_, '_, 'view, 'source, '_, P>>()
         );
     }
     let selected = catch_unwind(AssertUnwindSafe(construct));
@@ -219,7 +245,7 @@ mod tests {
     #[test]
     fn descriptor_owner_retains_wire_decode_and_nominal_error_domains() {
         assert_eq!(
-            owner_headers().unwrap(),
+            owner_headers::<MixedDescriptorWireV28<'_, '_, '_>>().unwrap(),
             size_of::<MixedDescriptorWireV28<'_, '_, '_>>()
                 + align_of::<MixedDescriptorWireV28<'_, '_, '_>>()
                 + size_of::<DeviceDescriptorTableV3<'_>>()

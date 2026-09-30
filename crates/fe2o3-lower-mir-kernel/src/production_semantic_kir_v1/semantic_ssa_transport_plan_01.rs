@@ -512,7 +512,19 @@ impl SemanticControlFlowSsaPlanV1 {
                 transported.insert(variable.get());
             }
         }
-        let mut capability_origins = SemanticCapabilityOriginResolverV1::new(
+        let source_borrows = match (execution, emission_work.as_deref_mut()) {
+            (Some(cursor), Some(budget)) if cursor.references.is_some() => {
+                budget.reserve_storage(std::mem::size_of::<
+                    Option<(
+                        &ExecutionAvailabilityV29<'_>,
+                        &mut dyn SemanticEmissionBudgetV1,
+                    )>,
+                >())?;
+                Some((cursor, budget))
+            }
+            _ => None,
+        };
+        let mut capability_origins = SemanticCapabilityOriginResolverV1::new_with_source_v29(
             types,
             callables,
             function,
@@ -520,6 +532,7 @@ impl SemanticControlFlowSsaPlanV1 {
             &shared_promoted,
             max_analysis_work,
             max_analysis_storage,
+            source_borrows,
         )?;
         let capability_storage = if let Some(cursor) = execution {
             let budget = emission_work
@@ -560,10 +573,14 @@ impl SemanticControlFlowSsaPlanV1 {
             // requires the exact Plain source node in cfg_carriers.at().
             for local in 0..function.locals().len() {
                 budget.charge_work(2)?;
-                if cursor.cfg.nominal_locals[local] != 0 || !cursor.cfg.reference_locals[local] {
+                charge_execution_cfg_lookup_v29(shared_promoted.len(), budget)?;
+                let local_index =
+                    u32::try_from(local).map_err(|_| ArgumentResourceV1::Arithmetic)?;
+                if cursor.cfg.nominal_locals[local] != 0 || !shared_promoted.contains(&local_index)
+                {
                     continue;
                 }
-                let local = u32::try_from(local).map_err(|_| ArgumentResourceV1::Arithmetic)?;
+                let local = local_index;
                 let Some((transport_type, binding)) = original_compiler_carrier_v29(
                     SemanticLocalIdV1::from_index(local),
                     &compiler_issued_bindings,
@@ -573,6 +590,14 @@ impl SemanticControlFlowSsaPlanV1 {
                 else {
                     continue;
                 };
+                // A shared borrow of an original scalar witness also checks
+                // its complete SSA holder, although the holder has no pointer.
+                // Other non-reference capabilities retain their existing path.
+                if !cursor.cfg.reference_locals[local as usize]
+                    && !matches!(binding, SemanticPromotedBindingV1::IndexWitness { .. })
+                {
+                    continue;
+                }
                 let representation = if cursor.references.is_some() {
                     ExecutionCfgRepresentationV29::OriginalSource
                 } else {

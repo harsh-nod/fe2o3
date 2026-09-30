@@ -339,6 +339,36 @@ pub(crate) fn integer_execution_resources_v18(
     Ok((profile, capture))
 }
 
+pub(crate) fn mixed_fixedpoint_execution_resources_v18(
+    canonical_bytes: usize,
+    registered_node_bound: usize,
+    admission: crate::kir_occurrence_capture_v1::ObserverAdmissionV18,
+) -> Result<
+    (
+        PlironOptimizationResourcesV12,
+        crate::kir_optimization_map_v12::CaptureLimitsV12,
+    ),
+    PlironOptimizationErrorV12,
+> {
+    let (mut profile, capture) =
+        policy3_execution_resources_v18(canonical_bytes, registered_node_bound, admission)?;
+    profile.set_report_passes(crate::fixed_policy_v3::POLICY11_PASSES.len())?;
+    Ok((profile, capture))
+}
+
+impl PlironOptimizationResourcesV12 {
+    pub(crate) fn set_report_passes(
+        &mut self,
+        count: usize,
+    ) -> Result<(), PlironOptimizationErrorV12> {
+        self.report = count
+            .checked_mul(size_of::<PlironOptimizationPassReportV1>())
+            .and_then(|rows| rows.checked_add(size_of::<PlironOptimizationReportV1>()))
+            .ok_or(PlironOptimizationErrorV12::Accounting)?;
+        Ok(())
+    }
+}
+
 impl KirPlironGraphV12<'_> {
     /// Runs the fixed production policy once on this exact V12 candidate.
     ///
@@ -521,6 +551,7 @@ impl KirPlironGraphV12<'_> {
                 &capture,
                 occurrences,
                 policy,
+                None,
                 budget,
             )?;
             if let Some(error) = capture.failure() {
@@ -554,6 +585,7 @@ pub(crate) fn execute_captured_fixed_policy_v1(
     capture: &crate::kir_optimization_map_v12::CaptureV12,
     occurrences: Option<&crate::kir_occurrence_capture_v1::Capture>,
     policy: crate::fixed_policy_v3::FixedPolicy,
+    fixedpoint: Option<crate::fixed_policy_v3::FixedpointRoundResourcesV18>,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<
     (
@@ -563,6 +595,9 @@ pub(crate) fn execute_captured_fixed_policy_v1(
     PlironOptimizationErrorV12,
 > {
     use crate::fixed_policy_v3::FixedPolicy;
+    if (policy == FixedPolicy::MixedFixedpoint11) != fixedpoint.is_some() {
+        return Err(PlironOptimizationErrorV12::Accounting);
+    }
     Ok(if policy != FixedPolicy::Historical2 {
         let mut ledger = crate::fixed_policy_v3::CseLedger::new(budget);
         let occurrences = occurrences.ok_or(PlironOptimizationErrorV12::Accounting)?;
@@ -590,6 +625,14 @@ pub(crate) fn execute_captured_fixed_policy_v1(
                 capture,
                 occurrences,
                 &mut ledger,
+            ),
+            FixedPolicy::MixedFixedpoint11 => session.execute_fixed_mixed_fixedpoint_v18(
+                root,
+                plan,
+                capture,
+                occurrences,
+                &mut ledger,
+                fixedpoint.ok_or(PlironOptimizationErrorV12::Accounting)?,
             ),
             FixedPolicy::Historical2 => unreachable!(),
         };

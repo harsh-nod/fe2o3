@@ -11,10 +11,15 @@ use super::{Budget, FlowError, InventoryError, Pair, RelocationExpressionPlanV28
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV18 as Identity;
 use fe2o3_kernel_opt::OwnedLicmErrorV1 as MotionError;
 use fe2o3_lower_mir_kernel::{
+    ProductionCheckedMixedPrefixViewV29 as PrefixView,
+    ProductionConditionalMixedFixedpointOutputHandoffV29 as Policy11,
     ProductionConditionalMixedLicmOutputHandoffV28 as Handoff,
+    ProductionConditionalMixedPureCseOutputHandoffV26 as Policy10,
     ProductionMixedLicmRelocationErrorV28 as RelocationError,
     ProductionMixedLicmRelocationV28 as Relocation,
-    ProductionSourceOwnedViewErrorV18 as SourceError, ProductionSourceOwnedViewV18 as Source,
+    ProductionMixedPrefixExecutionViewV29 as ExecutionView,
+    ProductionMixedPrefixOwnerV29 as PrefixOwner, ProductionSourceOwnedViewErrorV18 as SourceError,
+    ProductionSourceOwnedViewV18 as Source,
 };
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -26,7 +31,8 @@ use std::{
 mod cfg;
 pub use cfg::{
     MixedOptimizerRelocationCfgSubjectV28, PreparedMixedComposedRelocationCfgRefinementV28,
-    PreparedMixedRelocationCfgRefinementV28,
+    PreparedMixedFixedpointComposedRelocationCfgRefinementV29,
+    PreparedMixedFixedpointRelocationCfgRefinementV29, PreparedMixedRelocationCfgRefinementV28,
 };
 
 /// Failure to retain, replay, or generate a source-bound relocation request.
@@ -116,6 +122,7 @@ pub struct MixedOptimizerRelocationSubjectV28 {
     prefix: Identity,
     output: Identity,
     prefix_execution: [u8; 32],
+    prefix_policy: u16,
     operations: usize,
     moved_operations: usize,
     moved_results: usize,
@@ -132,11 +139,11 @@ impl MixedOptimizerRelocationSubjectV28 {
     pub const fn source_ssa_identity(self) -> [u8; 32] {
         self.source_ssa
     }
-    /// Identity of the original canonical graph before Policy10.
+    /// Identity of the original canonical graph before the checked prefix.
     pub const fn input(self) -> Identity {
         self.input
     }
-    /// Identity of the Policy10 output consumed by LICM.
+    /// Identity of the checked prefix output consumed by LICM.
     pub const fn prefix(self) -> Identity {
         self.prefix
     }
@@ -146,7 +153,7 @@ impl MixedOptimizerRelocationSubjectV28 {
     }
     /// Fixed optimizer policy used by the checked prefix.
     pub const fn prefix_policy_version(self) -> u16 {
-        10
+        self.prefix_policy
     }
     /// Identity of the compiler-owned prefix execution witness.
     pub const fn prefix_execution_identity(self) -> [u8; 32] {
@@ -178,18 +185,52 @@ impl MixedOptimizerRelocationSubjectV28 {
     }
 }
 
-/// Source, nominal Policy10 prefix, actual LICM lineage, final native completion
+/// Source, nominal checked prefix, actual LICM lineage, final native completion
 /// and expression availability remain one borrowed chain. No caller-authored
 /// rows, policy roster, owner hashes or execution receipts can construct it.
 #[must_use = "discard this checked plan before its borrowed final-native owner"]
-pub struct PreparedMixedRelocationExpressionsV28<'handoff, 'native, 'prefix, 'view, 'source> {
+pub struct PreparedMixedRelocationExpressionsV28<
+    'handoff,
+    'native,
+    'prefix,
+    'view,
+    'source,
+    P: PrefixOwner<'view, 'source> = Policy10<'view, 'source>,
+> {
     source: &'handoff Source<'source>,
-    handoff: &'handoff Handoff<'native, 'prefix, 'view, 'source>,
+    handoff: &'handoff Handoff<'native, 'prefix, 'view, 'source, P>,
     pair: Pair<'handoff>,
     plan: RelocationExpressionPlanV28<'handoff>,
     subject: MixedOptimizerRelocationSubjectV28,
     retained: usize,
     required: usize,
+}
+
+/// Actual Policy11 prefix retained through expression relocation checks.
+/// ```compile_fail
+/// use fe2o3_verifier::{PreparedMixedRelocationExpressionsV28, PreparedMixedFixedpointRelocationExpressionsV29};
+/// fn relabel<'h, 'n, 'p, 'v, 's>(old: PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's>)
+///     -> PreparedMixedFixedpointRelocationExpressionsV29<'h, 'n, 'p, 'v, 's> { old }
+/// ```
+pub type PreparedMixedFixedpointRelocationExpressionsV29<'h, 'n, 'p, 'v, 's> =
+    PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's, Policy11<'v, 's>>;
+
+/// Prepares the historical nominal Policy10 expression request.
+pub fn prepare_mixed_relocation_expressions_v28<'h, 'n, 'p, 'v, 's>(
+    source: &'h Source<'s>,
+    handoff: &'h Handoff<'n, 'p, 'v, 's>,
+    budget: &mut Budget<'_>,
+) -> Result<PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's>> {
+    prepare_prefix_relocation_expressions_v29(source, handoff, budget)
+}
+
+/// Prepares an actual Policy11 request retaining the complete round witness.
+pub fn prepare_mixed_fixedpoint_relocation_expressions_v29<'h, 'n, 'p, 'v, 's>(
+    source: &'h Source<'s>,
+    handoff: &'h Handoff<'n, 'p, 'v, 's, Policy11<'v, 's>>,
+    budget: &mut Budget<'_>,
+) -> Result<PreparedMixedFixedpointRelocationExpressionsV29<'h, 'n, 'p, 'v, 's>> {
+    prepare_prefix_relocation_expressions_v29(source, handoff, budget)
 }
 
 type Built<'a> = (
@@ -198,10 +239,10 @@ type Built<'a> = (
     MixedOptimizerRelocationSubjectV28,
     usize,
 );
-type ConstructorCapture<'a, 'h, 'n, 'p, 'v, 's, 'w> = (
+type ConstructorCapture<'a, 'h, 'n, 'p, 'v, 's, 'w, P> = (
     &'h Source<'s>,
-    &'h Handoff<'n, 'p, 'v, 's>,
-    &'n Relocation<'p, 'v, 's>,
+    &'h Handoff<'n, 'p, 'v, 's, P>,
+    &'n Relocation<'p, 'v, 's, P>,
     &'a mut Budget<'w>,
     usize,
 );
@@ -210,8 +251,8 @@ type ConstructorCapture<'a, 'h, 'n, 'p, 'v, 's, 'w> = (
 type ConstructorLocals<'a> = (
     usize,
     &'a super::Owner,
-    &'a fe2o3_pliron::CheckedNeutralKernelIrOwnerMixedPureCseV18,
-    &'a fe2o3_pliron::MixedPureCseExecutionWitnessV18,
+    PrefixView<'a>,
+    ExecutionView<'a>,
     fe2o3_kernel_analysis::CanonicalKirLicmStorageV1,
     &'a fe2o3_pliron::ProductionSemanticSsaOwnerV1,
     MixedOptimizerRelocationSubjectV28,
@@ -222,22 +263,23 @@ type ConstructorLocals<'a> = (
     Option<usize>,
 );
 
-fn headers() -> Result<usize> {
-    type Prepared =
-        PreparedMixedRelocationExpressionsV28<'static, 'static, 'static, 'static, 'static>;
+fn headers<'v, 's: 'v, P: PrefixOwner<'v, 's>>() -> Result<usize> {
+    type Prepared<'a, 'v, 's, P> = PreparedMixedRelocationExpressionsV28<'a, 'a, 'a, 'v, 's, P>;
     // Pair and plan headers are paid by their own exact retained receipts.
     // Keep this small constructor envelope live with the request so the plan's
     // original floor never changes after its checked construction.
-    let owner = size_of::<Prepared>()
+    let owner = size_of::<Prepared<'_, 'v, 's, P>>()
         .checked_sub(size_of::<Pair<'_>>())
         .and_then(|bytes| bytes.checked_sub(size_of::<RelocationExpressionPlanV28<'_>>()))
         .ok_or(Resource::Arithmetic)?;
     [
         owner,
-        align_of::<Prepared>(),
-        size_of::<ConstructorCapture<'_, '_, '_, '_, '_, '_, '_>>(),
-        align_of::<ConstructorCapture<'_, '_, '_, '_, '_, '_, '_>>(),
-        size_of::<std::panic::AssertUnwindSafe<ConstructorCapture<'_, '_, '_, '_, '_, '_, '_>>>(),
+        align_of::<Prepared<'_, 'v, 's, P>>(),
+        size_of::<ConstructorCapture<'_, '_, '_, '_, 'v, 's, '_, P>>(),
+        align_of::<ConstructorCapture<'_, '_, '_, '_, 'v, 's, '_, P>>(),
+        size_of::<std::panic::AssertUnwindSafe<ConstructorCapture<'_, '_, '_, '_, 'v, 's, '_, P>>>(
+        ),
+        PrefixView::inspection_storage_v29()?,
         size_of::<ConstructorLocals<'_>>(),
         align_of::<ConstructorLocals<'_>>(),
         size_of::<Result<Built<'_>>>(),
@@ -257,7 +299,7 @@ fn headers() -> Result<usize> {
     })
 }
 
-impl PreparedMixedRelocationExpressionsV28<'_, '_, '_, '_, '_> {
+impl<'v, 's, P: PrefixOwner<'v, 's>> PreparedMixedRelocationExpressionsV28<'_, '_, '_, 'v, 's, P> {
     fn custody(&self, budget: &Budget<'_>) -> Result<()> {
         let plan = self.plan.custody(budget).map_err(Error::from);
         let owner = self
@@ -303,7 +345,10 @@ impl PreparedMixedRelocationExpressionsV28<'_, '_, '_, '_, '_> {
         relocation.replay(budget)?;
         if !std::ptr::eq(
             self.pair.input(),
-            relocation.prefix(budget)?.output(budget)?.owner(),
+            relocation
+                .prefix(budget)?
+                .checked_prefix_v29(budget)?
+                .owner(),
         ) || !std::ptr::eq(self.pair.output(), self.handoff.output(budget)?)
         {
             return Err(Error::Binding("exact final-native LICM endpoints"));
@@ -346,26 +391,26 @@ impl PreparedMixedRelocationExpressionsV28<'_, '_, '_, '_, '_> {
     }
 }
 
-/// Replay the exact original-source/Policy10/LICM/native chain and retain its
+/// Replay the exact original-source/checked-prefix/LICM/native chain and retain its
 /// checked expression plan, charging the supplied custody ledger.
-pub fn prepare_mixed_relocation_expressions_v28<'h, 'n, 'p, 'v, 's>(
+fn prepare_prefix_relocation_expressions_v29<'h, 'n, 'p, 'v, 's, P: PrefixOwner<'v, 's>>(
     source: &'h Source<'s>,
-    handoff: &'h Handoff<'n, 'p, 'v, 's>,
+    handoff: &'h Handoff<'n, 'p, 'v, 's, P>,
     budget: &mut Budget<'_>,
-) -> Result<PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's>> {
+) -> Result<PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's, P>> {
     source.check_query_v18(budget)?;
     handoff.check_original_source(source.source_ssa(budget)?, budget)?;
     let relocation = handoff.relocation(budget)?;
     relocation.replay(budget)?;
     let floor = budget.storage();
-    let capture: ConstructorCapture<'_, '_, '_, '_, '_, '_, '_> =
+    let capture: ConstructorCapture<'_, '_, '_, '_, 'v, 's, '_, P> =
         (source, handoff, relocation, &mut *budget, floor);
     let construct = move || {
         let (source, handoff, relocation, budget, floor) = std::convert::identity(capture);
-        let header = headers()?;
+        let header = headers::<P>()?;
         budget.reserve_storage(header)?;
         let original = source.canonical(budget)?;
-        let prefix = relocation.prefix(budget)?.output(budget)?;
+        let prefix = relocation.prefix(budget)?.checked_prefix_v29(budget)?;
         let execution = prefix.execution();
         budget.charge_work(
             original
@@ -376,11 +421,11 @@ pub fn prepare_mixed_relocation_expressions_v28<'h, 'n, 'p, 'v, 's>(
                 .ok_or(Resource::Arithmetic)?,
         )?;
         if original.canonical_bytes() != prefix.input_audit_bytes()
-            || execution.policy_version() != 10
+            || execution.policy_version() != P::POLICY_VERSION
             || execution.graph_schema() != 18
         {
             return Err(Error::Binding(
-                "exact original audit and nominal Policy10 prefix",
+                "exact original audit and nominal checked prefix",
             ));
         }
         let (pair, pair_storage) = relocation
@@ -399,6 +444,7 @@ pub fn prepare_mixed_relocation_expressions_v28<'h, 'n, 'p, 'v, 's>(
             prefix: *pair.input().identity(),
             output: *pair.output().identity(),
             prefix_execution: Sha256::digest(execution.canonical_bytes()).into(),
+            prefix_policy: P::POLICY_VERSION,
             operations: pair.origins().len(),
             moved_operations: plan.nodes.len(),
             moved_results: plan.results.len(),
@@ -423,11 +469,11 @@ pub fn prepare_mixed_relocation_expressions_v28<'h, 'n, 'p, 'v, 's>(
     {
         assert_eq!(
             std::mem::size_of_val(&construct),
-            size_of::<ConstructorCapture<'_, '_, '_, '_, '_, '_, '_>>()
+            size_of::<ConstructorCapture<'_, '_, '_, '_, 'v, 's, '_, P>>()
         );
         assert_eq!(
             std::mem::align_of_val(&construct),
-            align_of::<ConstructorCapture<'_, '_, '_, '_, '_, '_, '_>>()
+            align_of::<ConstructorCapture<'_, '_, '_, '_, 'v, 's, '_, P>>()
         );
     }
     let selected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(construct));

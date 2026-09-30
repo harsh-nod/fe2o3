@@ -148,6 +148,21 @@ impl ObserverAdmissionV18 {
         ])
     }
 
+    pub(crate) fn additional_pass_work(self, limits: Limits, passes: usize) -> Result<usize> {
+        // The census updates the same bounded registries in place. No copy of
+        // a full graph is retained for each round; only new pass spans persist.
+        admission_mul_v18(
+            passes,
+            admission_sum_v18(&[
+                admission_mul_v18(4, limits.nodes)?,
+                self.source.blocks,
+                self.operations,
+                admission_mul_v18(2, self.source.values)?,
+                self.validation()?,
+            ])?,
+        )
+    }
+
     pub(crate) fn map_work(
         self,
         limits: crate::kir_optimization_map_v12::CaptureLimitsV12,
@@ -297,13 +312,15 @@ impl Capture {
     ) -> Result<Self> {
         // Neutral arithmetic creates at most one false constant per checked
         // binary; the remaining integer/CSE/DCE steps only replace or erase.
-        // These fixed rosters fit the existing eight-pass scalar/CFG envelope.
+        // The first round fits the existing eight-pass scalar/CFG envelope.
+        // Policy11 admits each further round before extending its census work.
         if !matches!(
             policy,
             FixedPolicy::Checked3
                 | FixedPolicy::Integer6
                 | FixedPolicy::IntegerWorklist9
                 | FixedPolicy::MixedPureCse10
+                | FixedPolicy::MixedFixedpoint11
         ) {
             return Err(E::Passes);
         }

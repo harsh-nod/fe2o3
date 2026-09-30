@@ -160,7 +160,11 @@ impl ExecutionCfgCarriersV29 {
         budget.source_reference_charge_v29(references.plan, 8)?;
         let local = place.local().index() as usize;
         if cursor.cfg.nominal_locals.get(local) != Some(&0)
-            || cursor.cfg.reference_locals.get(local) != Some(&true)
+            || (cursor.cfg.reference_locals.get(local) != Some(&true)
+                && !matches!(
+                    carrier.binding,
+                    SemanticPromotedBindingV1::IndexWitness { .. }
+                ))
             || cursor.function.locals().get(local).map(|local| local.ty())
                 != Some(carrier.source_type)
             || matches!(carrier.binding, SemanticPromotedBindingV1::Ordinary)

@@ -133,6 +133,17 @@ fn expression(
             return Err(Error::Statement("relocated constant result"));
         }
         emit!(out, "{}int", bits(constant));
+    } else if matches!(row.operation.kind, OperationKind::Select { .. }) {
+        if result != 0 {
+            return Err(Error::Statement("relocated Select result ordinal"));
+        }
+        let operands = select_operands(input, operation, out)?;
+        emit!(out, "select_value_v28(");
+        for definition in operands {
+            expression_operand(input, plan, definition, out)?;
+            emit!(out, ",");
+        }
+        emit!(out, ")");
     } else if let Some((operator, width, signed_value)) = concrete(input, operation) {
         let arity = if matches!(operator, BinaryOp::Checked(_)) {
             2
@@ -202,7 +213,7 @@ fn expression(
         }
         emit!(out, " }}");
     } else {
-        if !total(&row.operation.kind) || result >= row.results.len() {
+        if !opaque_total(&row.operation.kind) || result >= row.results.len() {
             return Err(Error::Statement("relocated exact total expression"));
         }
         let interpretation = total_interpretation(plan, operation, false)?;
@@ -430,6 +441,7 @@ pub(in super::super) fn generate(
             out,
             "// V28 prefix-to-final relocation only; generated obligations are not executed proofs.\nopen spec fn signed(x: int, m: int) -> int {{ if x < m / 2 {{ x }} else {{ x - m }} }}\n"
         );
+        select_prelude(input, output, out)?;
         for width in [8, 16, 32, 64] {
             let max = (1u128 << width) - 1;
             emit!(

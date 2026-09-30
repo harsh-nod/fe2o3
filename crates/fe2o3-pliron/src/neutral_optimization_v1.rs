@@ -357,6 +357,13 @@ pub use mixed_pure_cse_v18::{
     CheckedNeutralKernelIrOwnerMixedPureCseV18, KirNeutralOptimizationOutputMixedPureCseV18,
     optimize_neutral_kernel_ir_mixed_pure_cse_v18,
 };
+
+#[path = "neutral_mixed_fixedpoint_v18.rs"]
+mod mixed_fixedpoint_v18;
+pub use mixed_fixedpoint_v18::{
+    CheckedNeutralKernelIrOwnerMixedFixedpointV18, KirNeutralOptimizationOutputMixedFixedpointV18,
+    optimize_neutral_kernel_ir_mixed_fixedpoint_v18,
+};
 #[path = "neutral_optimization_policy3_v1.rs"]
 mod policy3;
 #[path = "neutral_optimization_v18.rs"]

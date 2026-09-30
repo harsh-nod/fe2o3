@@ -115,3 +115,7 @@ pub use worklist::KirOptimizationMapIntegerWorklistV18;
 #[path = "kir_optimization_map_mixed_pure_cse_v18.rs"]
 mod mixed_pure_cse;
 pub use mixed_pure_cse::KirOptimizationMapMixedPureCseV18;
+
+#[path = "kir_optimization_map_mixed_fixedpoint_v18.rs"]
+mod mixed_fixedpoint;
+pub use mixed_fixedpoint::KirOptimizationMapMixedFixedpointV18;

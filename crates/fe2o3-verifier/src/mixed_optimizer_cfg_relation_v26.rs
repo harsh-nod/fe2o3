@@ -234,7 +234,9 @@ fn equation(
         return Ok(());
     }
     let Some((operator, width, signed)) = concrete(input, operation) else {
-        if plan.total_classes.is_some() && total(&row.operation.kind) {
+        if matches!(row.operation.kind, OperationKind::Select { .. })
+            || (plan.total_classes.is_some() && opaque_total(&row.operation.kind))
+        {
             emit!(out, " && base[{definition}] == ");
             external_total_value(input, plan, operation, result as usize, out)?;
         }

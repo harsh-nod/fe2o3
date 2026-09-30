@@ -106,6 +106,21 @@ pub(crate) fn optimize_mixed_pure_cse_v18_graph(
     optimize_graph::<MixedPureCsePolicyV18>(input, layouts, wrapper, budget)
 }
 
+pub(crate) fn optimize_mixed_fixedpoint_v18_graph(
+    input: &VerifiedCanonicalKernelIrModuleV18,
+    layouts: StorageLayoutLimitsV1,
+    wrapper: usize,
+    budget: &mut Budget<'_>,
+) -> Result<
+    ExecutedV18Parts<
+        crate::KirOptimizationMapMixedFixedpointV18,
+        crate::MixedFixedpointExecutionWitnessV18,
+    >,
+    Failure,
+> {
+    optimize_graph::<MixedFixedpointPolicyV18>(input, layouts, wrapper, budget)
+}
+
 fn optimize_graph<P: ExecutionPolicyV18>(
     input: &VerifiedCanonicalKernelIrModuleV18,
     layouts: StorageLayoutLimitsV1,
@@ -134,7 +149,7 @@ fn optimize_graph<P: ExecutionPolicyV18>(
                 budget,
             )
             .map_err(Failure::Mapping)?;
-        let (profile, map_limits) = P::resources(
+        let (mut profile, map_limits) = P::resources(
             input.canonical_bytes().len(),
             limits.nodes,
             observer_admission,
@@ -200,6 +215,26 @@ fn optimize_graph<P: ExecutionPolicyV18>(
             .map_err(|_| ResourceError::Accounting)?;
         graph.retained_storage =
             resources::add(graph.retained_storage, profile.persistent_storage())?;
+        let rounds = if P::POLICY == FixedPolicy::MixedFixedpoint11 {
+            let occurrence_work = observer_admission
+                .additional_pass_work(limits, P::POLICY.passes().len())
+                .map_err(Failure::Mapping)?;
+            // One more existing opaque-pass envelope covers the added map
+            // scans and pass hooks. Only actual additional rounds pay it.
+            Some(crate::fixed_policy_v3::FixedpointRoundResourcesV18 {
+                work: resources::add(profile.work(), occurrence_work)?,
+                occurrence_work,
+                presentation_limit: input
+                    .canonical_bytes()
+                    .len()
+                    .checked_mul(8)
+                    .and_then(|n| n.checked_add(32_768))
+                    .ok_or(ResourceError::Arithmetic)?
+                    .min(POLICY3_CANONICAL_CAP),
+            })
+        } else {
+            None
+        };
         let execution = execute_captured_fixed_policy_v1(
             &mut graph.session,
             &graph.root,
@@ -207,6 +242,7 @@ fn optimize_graph<P: ExecutionPolicyV18>(
             &capture,
             Some(&occurrences),
             P::POLICY,
+            rounds,
             budget,
         )
         .map_err(Failure::Execution)?;
@@ -215,6 +251,11 @@ fn optimize_graph<P: ExecutionPolicyV18>(
         }
         let (report, cse_work) = execution;
         let report = report.map_err(Failure::Pass)?;
+        if P::POLICY == FixedPolicy::MixedFixedpoint11 {
+            profile
+                .set_report_passes(report.pass_capacity())
+                .map_err(Failure::Execution)?;
+        }
         graph.epoch = *graph
             .session
             .operation_graph_epochs
@@ -294,6 +335,7 @@ fn optimize_graph<P: ExecutionPolicyV18>(
             map_storage,
             row_storage,
             profile.retained_storage(),
+            P::execution_storage(&execution),
             wrapper,
         ]
         .into_iter()
@@ -337,6 +379,9 @@ trait ExecutionPolicyV18 {
     const POLICY: FixedPolicy;
     type Map;
     type Execution;
+    fn execution_storage(_execution: &Self::Execution) -> usize {
+        0
+    }
     fn resources(
         bytes: usize,
         nodes: usize,
@@ -376,11 +421,17 @@ trait ExecutionPolicyV18 {
 
 macro_rules! execution_policy_v18 {
     ($name:ident, $policy:ident, $map:ty, $execution:ty, $resources:path, $finish:ident) => {
+        execution_policy_v18!($name, $policy, $map, $execution, $resources, $finish, |_| 0);
+    };
+    ($name:ident, $policy:ident, $map:ty, $execution:ty, $resources:path, $finish:ident, $storage:expr) => {
         struct $name;
         impl ExecutionPolicyV18 for $name {
             const POLICY: FixedPolicy = FixedPolicy::$policy;
             type Map = $map;
             type Execution = $execution;
+            fn execution_storage(execution: &Self::Execution) -> usize {
+                ($storage)(execution)
+            }
             fn resources(
                 bytes: usize,
                 nodes: usize,
@@ -458,4 +509,13 @@ execution_policy_v18!(
     crate::MixedPureCseExecutionWitnessV18,
     crate::optimization_v12::mixed_pure_cse_execution_resources_v18,
     finish_mixed_pure_cse_v18
+);
+execution_policy_v18!(
+    MixedFixedpointPolicyV18,
+    MixedFixedpoint11,
+    crate::KirOptimizationMapMixedFixedpointV18,
+    crate::MixedFixedpointExecutionWitnessV18,
+    crate::optimization_v12::mixed_fixedpoint_execution_resources_v18,
+    finish_mixed_fixedpoint_v18,
+    |execution: &crate::MixedFixedpointExecutionWitnessV18| execution.retained_storage()
 );

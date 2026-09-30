@@ -47,15 +47,18 @@ fn with_composed(
     nested: bool,
     consume: impl FnOnce(&Prefix<'_, '_, '_, '_>, &Inventory<'_>, &Pair<'_>, &mut Budget<'_>),
 ) {
+    with_composed_module(&composed_fixture(nested), consume);
+}
+
+fn with_composed_module(
+    module: &Module,
+    consume: impl FnOnce(&Prefix<'_, '_, '_, '_>, &Inventory<'_>, &Pair<'_>, &mut Budget<'_>),
+) {
     let mut work = Work::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(29).unwrap();
-    let (owner, stored) = Owner::from_module_ref_with_verification_budget_v18(
-        &composed_fixture(nested),
-        LAYOUTS,
-        &mut budget,
-    )
-    .unwrap();
+    let (owner, stored) =
+        Owner::from_module_ref_with_verification_budget_v18(module, LAYOUTS, &mut budget).unwrap();
     budget.reserve_storage(stored.retained_storage()).unwrap();
     let observed =
         fe2o3_pliron::optimize_neutral_kernel_ir_mixed_pure_cse_v18(&owner, LAYOUTS, &mut budget)
@@ -111,6 +114,62 @@ fn with_composed(
     drop(owner);
     budget.release_storage(budget.storage() - 29).unwrap();
     assert_eq!(budget.storage(), 29);
+}
+
+fn composed_select_fixture() -> Module {
+    let mut module = composed_fixture(false);
+    let function = &mut module.functions[0];
+    function.signature.parameters.push(Type::BOOL);
+    let body = function.body.as_mut().unwrap();
+    body.parameters.push(ValueId(31));
+    body.blocks[2].operations.push(op(
+        32,
+        scalar(),
+        OperationKind::Select {
+            condition: ValueId(31),
+            true_value: ValueId(20),
+            false_value: ValueId(2),
+        },
+    ));
+    body.blocks[2].operations.push(Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(30),
+            value: ValueId(32),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    module
+}
+
+#[test]
+fn composed_relocation_select_is_concrete_and_non_select_operator_bridge_stays_checked() {
+    with_composed_module(
+        &composed_select_fixture(),
+        |checked, output, pair, budget| {
+            assert!(pair.origins().iter().enumerate().any(|(ordinal, row)| {
+                row.hoist.is_some()
+                    && matches!(
+                        checked.output().operations()[ordinal].operation.kind,
+                        OperationKind::Select { .. }
+                    )
+            }));
+            let floor = budget.storage();
+            let text = generated_composed(checked, output, pair, budget).unwrap();
+            assert_eq!(text.matches("open spec fn select_value_v28(").count(), 2);
+            assert!(text.contains("select_value_v28(base[4],relocated_value_"));
+            assert!(text.contains("proof fn composed_original_to_final_trace_0_v28"));
+            let retained = text.retained;
+            drop(text);
+            budget.release_storage(retained).unwrap();
+            budget.reserve_storage(2 * SOURCE_LIMIT).unwrap();
+            let mut writer = Writer::new(budget).unwrap();
+            semantics::bridge_negative_controls(checked, output, pair, &mut writer).unwrap();
+            drop(writer);
+            budget.release_storage(budget.storage() - floor).unwrap();
+            assert_eq!(budget.storage(), floor);
+        },
+    );
 }
 
 fn generated_composed(

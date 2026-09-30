@@ -12,6 +12,9 @@ use super::*;
 use crate::CanonicalGeneratedVerusProofInputV3;
 
 const DOMAIN: &[u8] = b"FE2O3/V18/POLICY10-PREFIX/LICM-EXPRESSION-CFG/V28\0";
+const FIXEDPOINT_DOMAIN: &[u8] = b"FE2O3/V18/POLICY11-PREFIX/LICM-EXPRESSION-CFG/V29\0";
+const FIXEDPOINT_COMPOSED_DOMAIN: &[u8] =
+    b"FE2O3/V18/ORIGINAL-POLICY11-LICM/COMPOSED-EXPRESSION-CFG/V29\0";
 const COMPOSED_DOMAIN: &[u8] = b"FE2O3/V18/ORIGINAL-POLICY10-LICM/COMPOSED-EXPRESSION-CFG/V28\0";
 
 /// Inert identity and graph census for generated relocation CFG obligations.
@@ -50,14 +53,22 @@ impl MixedOptimizerRelocationCfgSubjectV28 {
 /// Owns the actual source/final-native expression request and exact generated
 /// bytes. Neither a V27 receipt nor an external digest constructs this owner.
 #[must_use = "retain or discard the exact relocation CFG request"]
-pub struct PreparedMixedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's> {
-    expressions: PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's>,
+pub struct PreparedMixedRelocationCfgRefinementV28<
+    'h,
+    'n,
+    'p,
+    'v,
+    's,
+    P: PrefixOwner<'v, 's> = Policy10<'v, 's>,
+> {
+    expressions: PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's, P>,
     generated: CanonicalGeneratedVerusProofInputV3,
     subject: MixedOptimizerRelocationCfgSubjectV28,
     retained: usize,
     required: usize,
 }
-type Prepared<'h, 'n, 'p, 'v, 's> = PreparedMixedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's>;
+type Prepared<'h, 'n, 'p, 'v, 's, P = Policy10<'v, 's>> =
+    PreparedMixedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's, P>;
 /// A freshly generated composed request, not a converted tail-only receipt.
 /// The private common storage retains the original, intermediate and final
 /// owner chain; only this constructor emits the original-to-final theorem.
@@ -68,10 +79,17 @@ type Prepared<'h, 'n, 'p, 'v, 's> = PreparedMixedRelocationCfgRefinementV28<'h, 
 ///     -> PreparedMixedComposedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's> { old }
 /// ```
 #[must_use = "retain or discard the exact composed relocation CFG request"]
-pub struct PreparedMixedComposedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's>(
-    Prepared<'h, 'n, 'p, 'v, 's>,
-);
-impl PreparedMixedComposedRelocationCfgRefinementV28<'_, '_, '_, '_, '_> {
+pub struct PreparedMixedComposedRelocationCfgRefinementV28<
+    'h,
+    'n,
+    'p,
+    'v,
+    's,
+    P: PrefixOwner<'v, 's> = Policy10<'v, 's>,
+>(Prepared<'h, 'n, 'p, 'v, 's, P>);
+impl<'v, 's, P: PrefixOwner<'v, 's>>
+    PreparedMixedComposedRelocationCfgRefinementV28<'_, '_, '_, 'v, 's, P>
+{
     /// Observe the composed subject after checking the original custody ledger.
     pub fn subject(&self, budget: &Budget<'_>) -> Result<MixedOptimizerRelocationCfgSubjectV28> {
         self.0.subject(budget)
@@ -117,8 +135,8 @@ impl PreparedMixedComposedRelocationCfgRefinementV28<'_, '_, '_, '_, '_> {
         false
     }
 }
-type Capture<'a, 'h, 'n, 'p, 'v, 's, 'w> = (
-    &'a PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's>,
+type Capture<'a, 'h, 'n, 'p, 'v, 's, 'w, P> = (
+    &'a PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's, P>,
     &'a mut Budget<'w>,
     usize,
     bool,
@@ -129,21 +147,22 @@ type Built = (
     usize,
 );
 
-fn headers() -> Result<usize> {
-    let owner = size_of::<Prepared<'_, '_, '_, '_, '_>>()
+fn headers<'v, 's: 'v, P: PrefixOwner<'v, 's>>() -> Result<usize> {
+    let owner = size_of::<Prepared<'_, '_, '_, 'v, 's, P>>()
         .checked_sub(size_of::<
-            PreparedMixedRelocationExpressionsV28<'_, '_, '_, '_, '_>,
+            PreparedMixedRelocationExpressionsV28<'_, '_, '_, 'v, 's, P>,
         >())
         .ok_or(Resource::Arithmetic)?;
     [
         owner,
-        align_of::<Prepared<'_, '_, '_, '_, '_>>(),
-        size_of::<Capture<'_, '_, '_, '_, '_, '_, '_>>(),
-        align_of::<Capture<'_, '_, '_, '_, '_, '_, '_>>(),
-        size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, '_, '_, '_, '_, '_>>>(),
+        align_of::<Prepared<'_, '_, '_, 'v, 's, P>>(),
+        size_of::<Capture<'_, '_, '_, '_, 'v, 's, '_, P>>(),
+        align_of::<Capture<'_, '_, '_, '_, 'v, 's, '_, P>>(),
+        size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, '_, '_, 'v, 's, '_, P>>>(),
         size_of::<Result<Built>>(),
         size_of::<std::thread::Result<Result<Built>>>(),
         size_of::<Writer<'_, '_>>(),
+        PrefixView::inspection_storage_v29()?,
         3 * size_of::<Inventory<'_>>(),
         size_of::<fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV18<'_, '_, '_, '_>>(),
         size_of::<Sha256>(),
@@ -156,7 +175,7 @@ fn headers() -> Result<usize> {
     })
 }
 
-impl Prepared<'_, '_, '_, '_, '_> {
+impl<'v, 's, P: PrefixOwner<'v, 's>> Prepared<'_, '_, '_, 'v, 's, P> {
     fn custody(&self, budget: &Budget<'_>) -> Result<()> {
         self.expressions
             .handoff
@@ -239,21 +258,23 @@ impl Prepared<'_, '_, '_, '_, '_> {
     }
 }
 
-impl<'h, 'n, 'p, 'v, 's> PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's> {
+impl<'h, 'n, 'p, 'v, 's, P: PrefixOwner<'v, 's>>
+    PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, 's, P>
+{
     /// Generate prefix-to-final CFG obligations while retaining the exact
     /// source-bound expression request; this does not run Verus.
     pub fn prepare_cfg_refinement(
         self,
         budget: &mut Budget<'_>,
-    ) -> Result<Prepared<'h, 'n, 'p, 'v, 's>> {
+    ) -> Result<Prepared<'h, 'n, 'p, 'v, 's, P>> {
         self.prepare_cfg_profile(budget, false)
     }
-    /// Generate original-to-Policy10 and LICM CFG obligations with an exact
+    /// Generate original-to-prefix and LICM CFG obligations with an exact
     /// intermediate interpreter bridge; this does not execute Verus.
     pub fn prepare_composed_cfg_refinement(
         self,
         budget: &mut Budget<'_>,
-    ) -> Result<PreparedMixedComposedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's>> {
+    ) -> Result<PreparedMixedComposedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's, P>> {
         self.prepare_cfg_profile(budget, true)
             .map(PreparedMixedComposedRelocationCfgRefinementV28)
     }
@@ -261,13 +282,14 @@ impl<'h, 'n, 'p, 'v, 's> PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, '
         self,
         budget: &mut Budget<'_>,
         composed: bool,
-    ) -> Result<Prepared<'h, 'n, 'p, 'v, 's>> {
+    ) -> Result<Prepared<'h, 'n, 'p, 'v, 's, P>> {
         let floor = budget.storage();
-        let capture: Capture<'_, '_, '_, '_, '_, '_, '_> = (&self, &mut *budget, floor, composed);
+        let capture: Capture<'_, '_, '_, '_, 'v, 's, '_, P> =
+            (&self, &mut *budget, floor, composed);
         let construct = move || -> Result<Built> {
             let (expressions, budget, floor, composed) = std::convert::identity(capture);
             expressions.replay(budget)?;
-            budget.reserve_storage(headers()?)?;
+            budget.reserve_storage(headers::<P>()?)?;
             let pair = &expressions.pair;
             let (input, input_storage) =
                 Inventory::derive_v18(pair.input(), budget).map_err(Error::Inventory)?;
@@ -297,9 +319,9 @@ impl<'h, 'n, 'p, 'v, 's> PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, '
                     .handoff
                     .relocation(writer.budget)?
                     .prefix(writer.budget)?
-                    .output(writer.budget)?;
+                    .checked_prefix_v29(writer.budget)?;
                 if !std::ptr::eq(prefix.owner(), pair.input()) {
-                    return Err(Error::Binding("composed exact Policy10 intermediate owner"));
+                    return Err(Error::Binding("composed exact nominal intermediate owner"));
                 }
                 let (transition, storage) =
                     fe2o3_kernel_analysis::check_canonical_kir_transition_v18(
@@ -329,7 +351,13 @@ impl<'h, 'n, 'p, 'v, 's> PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, '
                 semantics::generate_relocation_cfg_v28(&input, &output, pair, &mut writer)?
             };
             let text = writer.finish()?;
-            let domain = if composed { COMPOSED_DOMAIN } else { DOMAIN };
+            let domain = match (P::POLICY_VERSION, composed) {
+                (10, false) => DOMAIN,
+                (10, true) => COMPOSED_DOMAIN,
+                (11, false) => FIXEDPOINT_DOMAIN,
+                (11, true) => FIXEDPOINT_COMPOSED_DOMAIN,
+                _ => return Err(Error::Binding("closed mixed prefix policy")),
+            };
             budget.charge_work(
                 text.len()
                     .checked_mul(3)
@@ -387,11 +415,11 @@ impl<'h, 'n, 'p, 'v, 's> PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, '
         {
             assert_eq!(
                 std::mem::size_of_val(&construct),
-                size_of::<Capture<'_, '_, '_, '_, '_, '_, '_>>()
+                size_of::<Capture<'_, '_, '_, '_, 'v, 's, '_, P>>()
             );
             assert_eq!(
                 std::mem::align_of_val(&construct),
-                align_of::<Capture<'_, '_, '_, '_, '_, '_, '_>>()
+                align_of::<Capture<'_, '_, '_, '_, 'v, 's, '_, P>>()
             );
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(construct)) {
@@ -425,9 +453,62 @@ impl<'h, 'n, 'p, 'v, 's> PreparedMixedRelocationExpressionsV28<'h, 'n, 'p, 'v, '
     }
 }
 
+/// Policy11 prefix-to-final request; no Policy10 receipt conversion exists.
+pub type PreparedMixedFixedpointRelocationCfgRefinementV29<'h, 'n, 'p, 'v, 's> =
+    PreparedMixedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's, Policy11<'v, 's>>;
+/// Policy11 original-to-final request retaining the entire nominal chain.
+pub type PreparedMixedFixedpointComposedRelocationCfgRefinementV29<'h, 'n, 'p, 'v, 's> =
+    PreparedMixedComposedRelocationCfgRefinementV28<'h, 'n, 'p, 'v, 's, Policy11<'v, 's>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixedpoint_relocation_requests_keep_nominal_policy_and_statement_domains() {
+        use std::any::TypeId;
+        assert_ne!(
+            TypeId::of::<
+                PreparedMixedRelocationExpressionsV28<'static, 'static, 'static, 'static, 'static>,
+            >(),
+            TypeId::of::<
+                PreparedMixedFixedpointRelocationExpressionsV29<
+                    'static,
+                    'static,
+                    'static,
+                    'static,
+                    'static,
+                >,
+            >(),
+        );
+        assert_ne!(
+            TypeId::of::<
+                PreparedMixedComposedRelocationCfgRefinementV28<
+                    'static,
+                    'static,
+                    'static,
+                    'static,
+                    'static,
+                >,
+            >(),
+            TypeId::of::<
+                PreparedMixedFixedpointComposedRelocationCfgRefinementV29<
+                    'static,
+                    'static,
+                    'static,
+                    'static,
+                    'static,
+                >,
+            >(),
+        );
+        assert_ne!(DOMAIN, FIXEDPOINT_DOMAIN);
+        assert_ne!(COMPOSED_DOMAIN, FIXEDPOINT_COMPOSED_DOMAIN);
+        assert_ne!(FIXEDPOINT_DOMAIN, FIXEDPOINT_COMPOSED_DOMAIN);
+        assert_eq!(
+            headers::<Policy10<'_, '_>>().unwrap(),
+            headers::<Policy11<'_, '_>>().unwrap()
+        );
+    }
 
     #[test]
     fn relocation_cfg_request_headers_cover_the_actual_named_capture_and_owner_fields() {
@@ -455,11 +536,12 @@ mod tests {
             + size_of::<Result<Built>>()
             + size_of::<std::thread::Result<Result<Built>>>()
             + size_of::<Writer<'_, '_>>()
+            + PrefixView::inspection_storage_v29().unwrap()
             + 3 * size_of::<Inventory<'_>>()
             + size_of::<fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV18<'_, '_, '_, '_>>()
             + size_of::<Sha256>()
             + 12 * size_of::<usize>()
             + 2 * SOURCE_LIMIT;
-        assert_eq!(headers().unwrap(), expected);
+        assert_eq!(headers::<Policy10<'_, '_>>().unwrap(), expected);
     }
 }
