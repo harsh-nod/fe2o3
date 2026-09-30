@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use super::*;
+use crate::{Gfx942DeviceBackingUsageV1, Gfx942HostVisibleBackingUsageV1};
 
 /// The exact directional queue, source session, and destination session.
 /// Returning these owners does not destroy their queues or release allocations.
@@ -172,6 +173,13 @@ impl Gfx942XgmiOwnedRetainedPairFailureV1 {
         !self.failure.entry_refusal || self.failure.owner.context().terminal()
     }
 
+    /// Observes accounting in `[source, destination]` order, even after failure.
+    /// The inert, independently sampled values do not recover or release custody.
+    pub fn backing_usage_v1(&self) -> [Gfx942XgmiRetainedEndpointBackingUsageV1; 2] {
+        let parts = self.failure.owner.context();
+        observe_backing_usage_v1([&parts.source, &parts.destination])
+    }
+
     /// Returns only the original nonterminal entry inputs, not admitted custody.
     #[allow(clippy::result_large_err)]
     pub fn recover_unadmitted(
@@ -232,6 +240,13 @@ impl Gfx942NativeXgmiSdmaOwnedRetainedPairV1 {
 
     pub fn is_terminal(&self) -> bool {
         self.owner.context().terminal()
+    }
+
+    /// Observes accounting in `[source, destination]` order, even when terminal.
+    /// The inert, independently sampled values do not validate or change custody.
+    pub fn backing_usage_v1(&self) -> [Gfx942XgmiRetainedEndpointBackingUsageV1; 2] {
+        let parts = self.owner.context();
+        observe_backing_usage_v1([&parts.source, &parts.destination])
     }
 
     /// Fail-closes without dropping, releasing, or returning any native owner.
@@ -303,6 +318,50 @@ impl Gfx942NativeXgmiSdmaOwnedRetainedPairV1 {
             .map(Parts::into_parts)
             .map_err(|failure| Gfx942XgmiOwnedRetainedPairFailureV1 { failure })
     }
+}
+
+/// Inert accounting observations for one directional retained-pair endpoint.
+///
+/// Each account is read separately, with no coherent snapshot across accounts
+/// or endpoints. These values grant no memory, currentness, completion, or
+/// release authority and do not expose a session or accounting token.
+///
+/// `device` and `host_visible` being `None` means the corresponding account is
+/// unconfigured, not zero resident storage. `native` being `None` means no
+/// inclusive native/composed session account is available. Inclusive native
+/// usage overlaps the component accounts and must not be added to their usage.
+/// Retained and quarantined charges and poison flags are reported unchanged.
+///
+/// Both custody types return `[source, destination]`, not device-ID order. A
+/// runtime that uses reverse-direction custody must restore its own endpoint
+/// argument order when presenting these observations.
+///
+/// ```no_run
+/// use fe2o3_kfd::{Gfx942NativeXgmiSdmaOwnedRetainedPairV1,
+///     Gfx942XgmiOwnedRetainedPairFailureV1,
+///     Gfx942XgmiRetainedEndpointBackingUsageV1};
+/// fn observe(owner: &Gfx942NativeXgmiSdmaOwnedRetainedPairV1,
+///     failure: &Gfx942XgmiOwnedRetainedPairFailureV1)
+///     -> ([Gfx942XgmiRetainedEndpointBackingUsageV1; 2],
+///         [Gfx942XgmiRetainedEndpointBackingUsageV1; 2]) {
+///     (owner.backing_usage_v1(), failure.backing_usage_v1())
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942XgmiRetainedEndpointBackingUsageV1 {
+    pub device: Option<Gfx942DeviceBackingUsageV1>,
+    pub host_visible: Option<Gfx942HostVisibleBackingUsageV1>,
+    pub native: Option<fe2o3_resource_accounting::ResourceCreditUsageV1>,
+}
+
+fn observe_backing_usage_v1(
+    sessions: [&SharedGttMemorySessionV1; 2],
+) -> [Gfx942XgmiRetainedEndpointBackingUsageV1; 2] {
+    sessions.map(|session| Gfx942XgmiRetainedEndpointBackingUsageV1 {
+        device: session.device_backing_usage_v1(),
+        host_visible: session.host_visible_backing_usage_v1(),
+        native: session.native_backing_usage_v1(),
+    })
 }
 
 #[cfg(test)]

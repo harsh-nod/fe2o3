@@ -58,9 +58,9 @@ pub use retained_pair::{
     GFX942_XGMI_RETAINED_PAIR_POLICY_SHA256_V1, GFX942_XGMI_RETAINED_PAIR_POLICY_V1,
     GFX942_XGMI_RETAINED_PAIR_PROFILE_V1, Gfx942NativeXgmiSdmaOwnedRetainedPairV1,
     Gfx942NativeXgmiSdmaRetainedPairV1, Gfx942XgmiOwnedRetainedPairFailureV1,
-    Gfx942XgmiOwnedRetainedPairPartsV1, Gfx942XgmiRetainedPairCompletedBatchV1,
-    Gfx942XgmiRetainedPairCompletedCopyV1, Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
-    Gfx942XgmiRetainedPairWaitFailureV1,
+    Gfx942XgmiOwnedRetainedPairPartsV1, Gfx942XgmiRetainedEndpointBackingUsageV1,
+    Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairCompletedCopyV1,
+    Gfx942XgmiRetainedPairEnvironmentAssumptionV1, Gfx942XgmiRetainedPairWaitFailureV1,
 };
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::Gfx942XgmiCopyCallDiagnosticsV1;

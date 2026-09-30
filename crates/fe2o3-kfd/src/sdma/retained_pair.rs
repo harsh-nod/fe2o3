@@ -6,7 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 pub use owned::{
     Gfx942NativeXgmiSdmaOwnedRetainedPairV1, Gfx942XgmiOwnedRetainedPairFailureV1,
-    Gfx942XgmiOwnedRetainedPairPartsV1,
+    Gfx942XgmiOwnedRetainedPairPartsV1, Gfx942XgmiRetainedEndpointBackingUsageV1,
 };
 
 /// Identifies the narrower observation contract; it grants no device authority.

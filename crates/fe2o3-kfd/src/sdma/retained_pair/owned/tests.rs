@@ -170,6 +170,79 @@ fn owned_retained_pair_recovery_moves_opaque_error_without_replacement() {
 }
 
 #[test]
+fn owned_retained_pair_backing_usage_signatures_are_borrowed_and_inert() {
+    type Usage = crate::Gfx942XgmiRetainedEndpointBackingUsageV1;
+    fn inert<T: Copy + fmt::Debug + Eq>() {}
+    inert::<Usage>();
+    let _: fn(&Gfx942NativeXgmiSdmaOwnedRetainedPairV1) -> [Usage; 2] =
+        Gfx942NativeXgmiSdmaOwnedRetainedPairV1::backing_usage_v1;
+    let _: fn(&Gfx942XgmiOwnedRetainedPairFailureV1) -> [Usage; 2] =
+        Gfx942XgmiOwnedRetainedPairFailureV1::backing_usage_v1;
+    let _: fn([&SharedGttMemorySessionV1; 2]) -> [Usage; 2] = observe_backing_usage_v1;
+}
+
+#[test]
+fn owned_retained_pair_backing_usage_values_preserve_optional_observations() {
+    use fe2o3_resource_accounting::{ResourceCreditUsageV1, ResourceKindV1, ResourceVectorV1};
+
+    // These are inert values, not fabricated native sessions or measured usage.
+    let device = Gfx942DeviceBackingUsageV1 {
+        budget: crate::Gfx942DeviceBackingBudgetV1::new(8192, 8).unwrap(),
+        used_backing_bytes: 4096,
+        used_allocation_records: 3,
+        reserved_records: 1,
+        retained_records: 1,
+        quarantined_records: 1,
+        poisoned: true,
+    };
+    let host_visible = Gfx942HostVisibleBackingUsageV1 {
+        budget: crate::Gfx942HostVisibleBackingBudgetV1::new(16384, 8).unwrap(),
+        used_backing_bytes: 8192,
+        used_allocation_records: 2,
+        reserved_records: 0,
+        retained_records: 1,
+        quarantined_records: 1,
+        poisoned: false,
+    };
+    let native = ResourceCreditUsageV1 {
+        capacity: ResourceVectorV1::ZERO
+            .with(ResourceKindV1::ResidentDeviceAllocationBytes, 8192)
+            .with(ResourceKindV1::ResidentHostAllocationBytes, 16384)
+            .with(ResourceKindV1::AllocationRecords, 16),
+        used: ResourceVectorV1::ZERO
+            .with(ResourceKindV1::ResidentDeviceAllocationBytes, 4096)
+            .with(ResourceKindV1::ResidentHostAllocationBytes, 8192)
+            .with(ResourceKindV1::AllocationRecords, 5),
+        reserved_records: 1,
+        retained_records: 2,
+        quarantined_records: 2,
+        record_capacity: 16,
+        poisoned: true,
+    };
+    let source = Gfx942XgmiRetainedEndpointBackingUsageV1 {
+        device: Some(device),
+        host_visible: Some(host_visible),
+        native: Some(native),
+    };
+    let destination = Gfx942XgmiRetainedEndpointBackingUsageV1 {
+        device: None,
+        host_visible: None,
+        native: None,
+    };
+    let observed = [source, destination];
+    assert_eq!(observed[0].device, Some(device));
+    assert_eq!(observed[0].host_visible, Some(host_visible));
+    assert_eq!(observed[0].native, Some(native));
+    assert_eq!(observed[1].device, None);
+    assert_eq!(observed[1].host_visible, None);
+    assert_eq!(observed[1].native, None);
+    let mut local_copy = observed;
+    local_copy[0].native = None;
+    assert_eq!(observed, [source, destination]);
+    assert_ne!(local_copy, observed);
+}
+
+#[test]
 fn owned_retained_pair_public_signatures_preserve_concrete_move_only_parts() {
     let _: fn(
         Gfx942NativeXgmiSdmaQueueV1,

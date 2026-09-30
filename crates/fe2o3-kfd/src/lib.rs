@@ -234,9 +234,10 @@ pub use sdma::{
     Gfx942SdmaStripedWaitDiagnosticsV1, Gfx942SdmaUnpublishedCopyRequestV1,
     Gfx942XgmiBatchSubmissionFailureV1, Gfx942XgmiBatchWaitFailureV1, Gfx942XgmiCompletedCopyV1,
     Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1, Gfx942XgmiOwnedRetainedPairFailureV1,
-    Gfx942XgmiOwnedRetainedPairPartsV1, Gfx942XgmiRetainedPairCompletedBatchV1,
-    Gfx942XgmiRetainedPairCompletedCopyV1, Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
-    Gfx942XgmiRetainedPairWaitFailureV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiWaitFailureV1,
+    Gfx942XgmiOwnedRetainedPairPartsV1, Gfx942XgmiRetainedEndpointBackingUsageV1,
+    Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairCompletedCopyV1,
+    Gfx942XgmiRetainedPairEnvironmentAssumptionV1, Gfx942XgmiRetainedPairWaitFailureV1,
+    Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiWaitFailureV1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
