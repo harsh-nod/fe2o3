@@ -79,10 +79,24 @@ if [[ ${installer_status} -ne 2 \
 fi
 
 if [[ ${runtime_status} -ne 1 \
-  || "${runtime_usage}" != 'compiler runtime deployment: usage: fe2o3-compiler-runtime-deployment verify|install BUNDLE POLICY_SHA256 MANIFEST_SHA256 [OFFLINE_ROOT]' ]]; then
+  || "${runtime_usage}" != 'compiler runtime deployment: usage: fe2o3-compiler-runtime-deployment verify|install BUNDLE POLICY_SHA256 MANIFEST_SHA256 [OFFLINE_ROOT]'$'\n''       fe2o3-compiler-runtime-deployment package RECIPE SOURCE_ROOT PROFILE_ROOT DESTINATION WORK STORAGE' ]]; then
   printf 'static compiler runtime deployment argument gate changed\n' >&2
   exit 1
 fi
+for package_case in missing extra; do
+  package_args=(package)
+  if [[ ${package_case} == extra ]]; then
+    package_args+=(unused-recipe unused-source unused-profile unused-destination 1 1 extra)
+  fi
+  set +e
+  runtime_package_usage="$(/usr/bin/env -i "${runtime_deployment}" "${package_args[@]}" 2>&1)"
+  runtime_package_status=$?
+  set -e
+  if [[ ${runtime_package_status} -ne 1 || "${runtime_package_usage}" != "${runtime_usage}" ]]; then
+    printf 'static compiler runtime package argument gate changed\n' >&2
+    exit 1
+  fi
+done
 
 # Explicit V3 selection uses the same tools, never header detection or fallback.
 for executable in "${manifest}" "${verifier}" "${installer}"; do

@@ -48,6 +48,89 @@ and complete roster, and rechecks source descriptors and paths. The returned
 move-only owner exposes inert policy/inventory data, not descriptors or compiler
 authority. Removing or changing the bundle afterward does not change its copies.
 
+## Assemble Unapproved Records
+
+The same command can assemble a new bundle from explicit operator-selected
+inputs. This is not release approval. The six closure pins, proof-runtime
+identity and per-file expected hashes are **UNAPPROVED input assertions** until
+independent release review establishes their provenance. The assembler measures
+every listed code file and compares all bytes to its expected hash; it does not
+remeasure Cargo, the wrappers, the complete rustc lib tree or the proof runtime.
+Do not replace the existing canonical rustc-tree or proof-runtime identities with
+a directory hash, a packaged subset, or unit-test values.
+
+The recipe is an ASCII mode0444 single-link file, at most 64 KiB, with exactly
+one final newline. It has the following fixed field order. Angle-bracket values
+below denote actual reviewed inputs, not literal recipe syntax:
+
+```text
+fe2o3-compiler-runtime-package-input-v1
+cargo_sha256=<64 lowercase hex digits>
+trampoline_sha256=<64 lowercase hex digits>
+wrapper_sha256=<64 lowercase hex digits>
+rustc_sha256=<64 lowercase hex digits>
+rustc_tree_sha256=<canonical full rustc lib-tree pin>
+backend_sha256=<64 lowercase hex digits>
+proof_runtime_identity=<existing reviewed proof-runtime identity>
+helper_uid=<canonical positive decimal>
+helper_gid=<canonical positive decimal>
+<role> <positive byte length> <64 lowercase hex digits> <relative path>
+```
+
+Rows are strictly sorted by relative path and use exactly one space between
+fields. No comments, blank lines, extra fields, duplicate paths, file/directory
+prefix collisions, links or traversal are accepted. Closed roles are `rustc`,
+`backend`, `proc-macro`, `interpreter`, `proof-helper`, and `shared-library`.
+The existing manifest codec requires all five singleton roles and at least one
+shared library, its existing count/path/byte bounds, and matching rustc/backend
+closure pins. This is an explicit roster, not automatic ELF dependency discovery.
+
+`SOURCE_ROOT/<relative path>` must contain each exact-role-mode source file.
+The source root and traversed directories are mode0700 and all source objects
+belong to the invoking effective UID/GID, with no xattrs or multiple links.
+Unlisted source files are not selected or copied. `PROFILE_ROOT` is a private
+root-owned mode0700 offline root containing the genuinely provisioned fixed
+`etc/fe2o3/compiler-execution/client-profile-v3`, mode0444, beneath root-owned
+mode0755 parents. The assembler reads that original profile and uses its actual
+identity; helper UID/GID must differ from both profile services.
+
+`DESTINATION` must be absent beneath an existing private mode0700 parent owned
+by the invoking UID/GID, outside both input trees. Paths are canonical absolute
+paths of at most 4096 bytes. Exclude concurrent administrative writers and keep
+input roots, directory/file identities and the output parent stable. Original
+descriptors remain retained through copying and final existing-bundle verification.
+Files and directory entries are synced; no symlinks or hardlinks are created.
+Failure may leave an explicitly unapproved partial bundle: there is no automatic
+rollback, overwrite or reuse. Discard/recover only the operator's owned scratch.
+
+```sh
+fe2o3-compiler-runtime-deployment package "$RECIPE" "$SOURCE_ROOT" \
+  "$PROFILE_ROOT" "$DESTINATION" "$WORK_LIMIT" "$STORAGE_LIMIT"
+```
+
+The two limits are canonical positive decimal `usize` values and fund one
+original budget for recipe parsing and packaging. The library exposes
+`CompilerRuntimePackagePlanV1::READ_WORK`, `READ_STORAGE`, returned-plan `STORAGE`,
+and `plan.quota().work()/storage()`. Retain the returned plan charge on the caller
+account before packaging. Package storage is additional peak above that floor;
+the quota covers full source/output/verifier backing overlap, fixed streaming
+buffers, bounded metadata and nested canonical profile/record codecs. Work,
+peak and failed-request history are never reset or refunded. These are logical
+bounds, not wall-clock, allocator-RSS or ELF-runtime enforcement guarantees.
+
+Success emits `release_approval=UNAPPROVED`, `unapproved_policy_sha256`,
+`unapproved_manifest_sha256`, and `compiler_execution_authority=false`.
+These are reviewable raw record hashes, not approved owner construction. The
+assembler does not install anything, provision a profile, start services or run
+input executables. Independent approval must precede using these hashes as
+trusted installer pins.
+
+The ignored `compiler_runtime_package::tests::native_public_package_requires_root_owned_profile_and_roundtrips`
+test requires `FE2O3_RUNTIME_PACKAGE_NATIVE=isolated-disposable-root` and effective
+UID/GID 0 before creating any fixtures. It tests the public root-ownership branch
+only in TempDir-owned scratch with explicitly synthetic inert profile/code bytes;
+it is not qualification of an approved compiler or runtime.
+
 ## Install
 
 The existing `scripts/build-static-compiler-execution-deployment-verifier.sh`

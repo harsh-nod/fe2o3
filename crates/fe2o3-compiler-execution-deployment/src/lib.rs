@@ -24,6 +24,7 @@ mod cgroup;
 mod client_transaction;
 mod compiler_runtime_bundle;
 mod compiler_runtime_install;
+mod compiler_runtime_package;
 mod fault;
 mod host;
 mod install;
@@ -42,15 +43,19 @@ pub use profile::{
 };
 
 pub use boot::execute_compiler_execution_systemd_machine_tool_v1;
+pub use cgroup::{
+    CompilerExecutionQualificationCgroupCleanupV1, CompilerExecutionQualificationCgroupV1,
+    create_compiler_execution_qualification_cgroup_v1,
+};
 pub use compiler_runtime_bundle::{
     VerifiedCompilerRuntimeDeploymentV1, verify_compiler_runtime_deployment_v1,
 };
 pub use compiler_runtime_install::{
     InstalledCompilerRuntimeDeploymentV1, install_compiler_runtime_deployment_v1,
 };
-pub use cgroup::{
-    CompilerExecutionQualificationCgroupCleanupV1, CompilerExecutionQualificationCgroupV1,
-    create_compiler_execution_qualification_cgroup_v1,
+pub use compiler_runtime_package::{
+    CompilerRuntimePackageErrorV1, CompilerRuntimePackagePlanV1, CompilerRuntimePackageQuotaV1,
+    PackagedCompilerRuntimeDeploymentV1, package_compiler_runtime_deployment_v1,
 };
 pub use fault::QualificationFaultPointV1;
 pub use host::{

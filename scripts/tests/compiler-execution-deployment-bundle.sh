@@ -87,6 +87,10 @@ for binary in \
   fe2o3-compiler-execution-qualification; do
   grep -Fq -- "${binary}" "${verifier_builder}" || fail "missing static image ${binary}"
 done
+grep -Fq -- 'package RECIPE SOURCE_ROOT PROFILE_ROOT DESTINATION WORK STORAGE' "${verifier_builder}" ||
+  fail 'runtime package command argument contract is missing'
+grep -Fq -- 'runtime_package_status' "${verifier_builder}" ||
+  fail 'runtime package missing/extra argument gates are missing'
 for boot_contract in \
   '/proc/self/fd/' \
   'usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2' \
