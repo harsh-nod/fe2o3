@@ -83,11 +83,22 @@ struct Record {
 }
 
 include!("retained_charge_body.rs");
+include!("independent_retained_observation_body.rs");
 
 impl Record {
     fn matches_retained_charge(&self, owner: u64, expected: ResourceVectorV1) -> bool {
         retained_credit_record_matches_body!(self, owner, expected)
     }
+}
+
+fn independent_retained_observation_v1(
+    records: &[Option<Record>],
+    poisoned: bool,
+    slot: usize,
+    owner: u64,
+    expected: ResourceVectorV1,
+) -> bool {
+    independent_retained_observation_body_v1!(records, poisoned, slot, owner, expected)
 }
 
 struct AccountState {
@@ -248,12 +259,13 @@ impl ResourceCreditAccountV1 {
                 let Ok(state) = account.state.lock() else {
                     return false;
                 };
-                !state.poisoned
-                    && state
-                        .records
-                        .get(token.slot)
-                        .and_then(Option::as_ref)
-                        .is_some_and(|record| record.matches_retained_charge(token.owner, expected))
+                independent_retained_observation_v1(
+                    &state.records,
+                    state.poisoned,
+                    token.slot,
+                    token.owner,
+                    expected,
+                )
             }
             (AccountHandle::Domain(account), TokenAccount::Domain(root)) => {
                 account.matches_retained_charge(root, token.slot, token.owner, expected)

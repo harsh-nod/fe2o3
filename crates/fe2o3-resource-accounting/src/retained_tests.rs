@@ -113,6 +113,153 @@ fn retained_record_predicate_checks_every_vector_coordinate_and_zero_charge() {
 }
 
 #[test]
+fn independent_retained_observation_exact_raw_state_and_unchanged_records() {
+    for actual_owner in [0, 1, 2, u64::MAX] {
+        for owner in [0, 1, 2, u64::MAX] {
+            for phase in [
+                Phase::Reserved,
+                Phase::Retained,
+                Phase::Quarantined,
+                Phase::Vacant,
+            ] {
+                let records = [
+                    None,
+                    Some(Record {
+                        owner: actual_owner,
+                        charge: charge(),
+                        phase,
+                    }),
+                    None,
+                ];
+                let before = records.map(|record| record.map(|r| (r.owner, r.charge, r.phase)));
+                for poisoned in [false, true] {
+                    for slot in [0, 1, 2, 3, usize::MAX] {
+                        assert_eq!(
+                            independent_retained_observation_v1(
+                                &records,
+                                poisoned,
+                                slot,
+                                owner,
+                                charge()
+                            ),
+                            !poisoned
+                                && slot == 1
+                                && owner != 0
+                                && owner == actual_owner
+                                && phase == Phase::Retained,
+                        );
+                        assert_eq!(
+                            records.map(|record| record.map(|r| (r.owner, r.charge, r.phase))),
+                            before
+                        );
+                    }
+                    assert!(!independent_retained_observation_v1(
+                        &[],
+                        poisoned,
+                        0,
+                        owner,
+                        charge()
+                    ));
+                    assert!(!independent_retained_observation_v1(
+                        &[],
+                        poisoned,
+                        usize::MAX,
+                        owner,
+                        charge()
+                    ));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn independent_retained_observation_selects_exact_record_and_complete_vector() {
+    for expected in [
+        ResourceVectorV1::ZERO,
+        charge(),
+        KINDS
+            .iter()
+            .fold(ResourceVectorV1::ZERO, |v, &k| v.with(k, u64::MAX)),
+    ] {
+        let records = [
+            Some(Record {
+                owner: 3,
+                charge: expected,
+                phase: Phase::Retained,
+            }),
+            Some(Record {
+                owner: 7,
+                charge: expected,
+                phase: Phase::Retained,
+            }),
+            Some(Record {
+                owner: 7,
+                charge: expected,
+                phase: Phase::Quarantined,
+            }),
+        ];
+        assert!(independent_retained_observation_v1(
+            &records, false, 1, 7, expected
+        ));
+        assert!(!independent_retained_observation_v1(
+            &records, false, 0, 7, expected
+        ));
+        assert!(!independent_retained_observation_v1(
+            &records, false, 2, 7, expected
+        ));
+        for kind in KINDS {
+            let changed = expected.with(kind, expected.get(kind) ^ 1);
+            assert!(!independent_retained_observation_v1(
+                &records, false, 1, 7, changed
+            ));
+            let mut changed_records = records;
+            changed_records[1].as_mut().unwrap().charge = changed;
+            assert!(!independent_retained_observation_v1(
+                &changed_records,
+                false,
+                1,
+                7,
+                expected
+            ));
+        }
+        assert_eq!(records[1].unwrap().charge, expected);
+    }
+}
+
+#[test]
+fn independent_retained_observation_rechecks_locked_fields_without_touching_token() {
+    let a = account();
+    let credits = a.reserve(charge()).unwrap().retain();
+    let token = credits.token.as_ref().unwrap();
+    let token_address = token as *const _;
+    let (slot, owner) = (token.slot, token.owner);
+    let original = a.independent().state.lock().unwrap().records[slot];
+    for mode in 0..5 {
+        {
+            let mut state = a.independent().state.lock().unwrap();
+            state.poisoned = mode == 1;
+            state.records[slot] = if mode == 2 { None } else { original };
+            if mode == 3 {
+                state.records[slot].as_mut().unwrap().phase = Phase::Quarantined;
+            }
+        }
+        let before = snapshot(&a);
+        for _ in 0..4 {
+            assert_eq!(
+                a.matches_retained_charge_v1(&credits, charge()),
+                mode == 0 || mode == 4
+            );
+            let observed = credits.token.as_ref().unwrap();
+            assert_eq!(observed as *const _, token_address);
+            assert_eq!((observed.slot, observed.owner), (slot, owner));
+        }
+        assert_eq!(snapshot(&a), before);
+    }
+    credits.release_after_disposal().unwrap();
+}
+
+#[test]
 fn retained_charge_exact_independent_account_vector_and_unchanged_queries() {
     let a = account();
     let cloned = a.clone();
