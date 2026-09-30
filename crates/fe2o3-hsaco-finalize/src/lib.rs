@@ -32,6 +32,7 @@ mod first_build_worker_native_binding;
 mod first_build_worker_native_resources;
 mod first_build_worker_v3;
 mod link_plan;
+mod mixed_worker_lineage_v29;
 mod native_worker_compact_replay;
 mod native_worker_engine;
 mod native_worker_finalization;
@@ -145,6 +146,10 @@ pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
+};
+pub use mixed_worker_lineage_v29::{
+    MixedWorkerLineageErrorV29, PreparedFinalizedMixedContentV29,
+    finalize_protected_worker_mixed_content_v29,
 };
 pub use native_worker_compact_replay::{
     ConditionalWorkerCompactFinalizerReplayV5, ConditionalWorkerCompactReplayIdentityV5,

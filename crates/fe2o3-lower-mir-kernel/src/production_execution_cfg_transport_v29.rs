@@ -53,27 +53,42 @@ impl<'a> ExecutionCfgV29<'a> {
         control: Option<&ExecutionSourceControlV29<'_>>,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        if let Some((references, instance)) = references {
+            references.check(budget)?;
+            budget.source_reference_charge_v29(references.plan, 4)?;
+            let original = references
+                .plan
+                .instances
+                .instance(instance)
+                .ok_or_else(execution_cfg_error_v29)?;
+            if !std::ptr::eq(original.declaration(), function)
+                || !std::ptr::eq(original.ssa(), ssa)
+                || !std::ptr::eq(
+                    references.plan.instances.owner().source_semantic().types(),
+                    types,
+                )
+            {
+                return Err(execution_cfg_error_v29());
+            }
+        }
         let blocks = function.blocks().len();
         let mut nominal_locals = emission_vec_v1(function.locals().len(), budget)?;
         let mut reference_locals = emission_vec_v1(function.locals().len(), budget)?;
         let promoted = ssa.plan().promoted_variables();
         for (index, local) in function.locals().iter().enumerate() {
             nominal_locals.push(execution_cfg_nominal_count_v29(types, local.ty(), budget)?);
-            reference_locals.push(if let Some((references, _)) = references {
+            reference_locals.push(if references.is_some() {
                 // Retained references belong to the physical storage census,
                 // not to the cursor's SSA definition and archive obligations.
+                // Fat references are enrolled independently of their descriptor
+                // representation; the source plan still determines that type.
                 charge_execution_cfg_lookup_v29(promoted.len(), budget)?;
                 let local_index =
                     u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?;
                 promoted
                     .binary_search_by_key(&local_index, |variable| variable.get())
                     .is_ok()
-                    && source_reference_type_present_v29(
-                        types,
-                        local.ty(),
-                        references.plan.descriptor_root.is_some(),
-                        budget,
-                    )?
+                    && source_reference_type_present_v29(types, local.ty(), budget)?
             } else {
                 false
             });

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_execution_rvalue_archive_v30_tests.rs"]
+mod rvalue_archive_tests;
+
 thread_local! {
     static PAYLOAD_COMPLETED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PAYLOAD_MUTATION: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

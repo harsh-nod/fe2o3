@@ -13413,6 +13413,7 @@ struct SemanticFunctionLoweringV1<'a, 'service> {
     promoted_enum_variant_by_value: BTreeMap<(u32, SsaValueV1), u32>,
     block_parameters: BTreeMap<u32, BTreeMap<u32, Vec<ValueDef>>>,
     semantic_ssa_bindings: SemanticSsaBindingsV1,
+    semantic_rvalue_bindings: ExecutionRvalueBindingsV30,
     semantic_ssa_archive_credit: Option<ExecutionArchiveCreditV29>,
     pending_semantic_ssa_definitions: BTreeMap<(u32, u32), VecDeque<SsaValueV1>>,
     next_value: u32,
@@ -14556,6 +14557,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                     );
                     let result = match result {
                         Ok(value) => {
+                            this.archive_rvalue_result_v30(block, statement, assignment, &value)?;
                             this.with_scoped_store_payload_v29(payload, value, |this, value| {
                                 this.assign_place(
                                     block,
@@ -14889,17 +14891,12 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
-        let expected = lower_parameter_type(self.types, &[], result_type)?;
+        let expected =
+            self.source_slice_reborrow_expected_v29(block, statement, result_type, place)?;
         // A reborrow preserves the whole slice value, including its length and access.
         self.use_source_place_v29(block, statement, place)?;
         let binding = self.resolve_place(block, statement, place, operations)?;
-        if !matches!(
-            &binding,
-            SemanticValueBindingV1::Value { ty, .. }
-                if matches!(ty, Type::Slice(_)) && *ty == expected
-        ) {
-            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-        }
+        check_source_slice_reborrow_binding_v29(&expected, &binding)?;
         Ok(binding)
     }
 

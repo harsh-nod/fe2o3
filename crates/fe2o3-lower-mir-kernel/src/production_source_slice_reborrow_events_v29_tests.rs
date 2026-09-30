@@ -101,7 +101,6 @@ fn audit_slice_reborrow_source_events_v29(
     instances: &ExecutionInstancesV29<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) {
-    assert!(references.plan.descriptor_root.is_some());
     let floor = budget.storage();
     with_source_reference_availability_v29(
         instances,
@@ -155,6 +154,65 @@ fn audit_slice_reborrow_source_events_v29(
                 panic!("source reborrow destination lacks its original SSA definition");
             };
             let pending = cursor.events.pending.clone();
+            let source = instances.owner().source_semantic();
+            let representation = if references.plan.descriptor_root.is_some() {
+                AddressSpace::Global
+            } else {
+                AddressSpace::Generic
+            };
+            let result_type = assignment.destination().ty();
+            let original_site = SourceReferenceSiteV29 {
+                instance: instances.root(),
+                block,
+                statement: Some(0),
+            };
+            assert!(!references.plan.loans.iter().any(|loan| loan.site == original_site),
+                "same-type slice transport must not invent a local referent loan");
+            let key = source_reference_selector_site_v29(instances.root(), site, place, 0);
+            if references.plan.descriptor_root.is_some() {
+                let retained = references.plan.descriptor_values.get(&key)
+                    .expect("C1 must retain the exact original reborrow holder read");
+                assert_eq!(retained.ty, result_type);
+                let descriptor = references.plan.descriptor_sets[retained.descriptor
+                    .expect("the original kernel ABI supplies this descriptor")];
+                assert_eq!((descriptor.representation, descriptor.has_unknown, descriptor.count),
+                    (AddressSpace::Global, false, 1));
+                assert_eq!(references.plan.descriptor_origins[descriptor.first],
+                    SourceDescriptorOriginV29 { original_argument: 0, data_component: 0, length_component: 1 });
+            } else {
+                assert!(references.plan.descriptor_values.get(&key).is_none(),
+                    "an ordinary Generic carrier must not acquire a kernel-ABI origin");
+            }
+            with_canonical_call_scratch_v1(budget, |budget| {
+                let legacy = ExecutionCfgV29::new(
+                    source.types(), function, cursor.ssa, &cursor.occurrences, budget,
+                )?;
+                assert!(!legacy.reference_locals[1]);
+                assert!(!legacy.reference_locals[destination.index() as usize]);
+                drop(legacy);
+                let query = |source_place: &SemanticPlaceV1, types: &[SemanticTypeDeclV1], budget: &mut ArgumentBudgetV1<'_>| {
+                    source_slice_reborrow_representation_v29(
+                        &cursor, function, types, source.callables(), site, result_type, source_place, budget,
+                    )
+                };
+                assert_eq!(query(place, source.types(), budget)?, representation);
+                let copied = place.clone();
+                for refusal in [
+                    query(&copied, source.types(), budget),
+                    query(place, &source.types().to_vec(), budget),
+                ] {
+                    assert!(matches!(refusal,
+                        Err(ProductionSemanticKirErrorV1::Unsupported {
+                            function: 0, block: None, statement: None,
+                            detail: "source runtime slice descriptor/index/extent correspondence differs",
+                        })
+                    ));
+                }
+                assert_eq!(query(place, source.types(), budget)?, representation);
+                Ok(())
+            })?;
+            assert_eq!(cursor.events.pending, pending);
+            assert!(!cursor.claimed[source_index] && !cursor.claimed[destination_index]);
             // The actual emitter must claim the use; a valid destination cannot skip it.
             assert_slice_reborrow_event_refusal_v29(cursor.define(
                 site,
@@ -200,8 +258,54 @@ fn audit_slice_reborrow_source_events_v29(
     assert_eq!(budget.storage(), floor);
 }
 
-fn slice_reborrow_kernel_abi_probe_v29(
+fn prepare_slice_reborrow_profile_v29(
     write: bool,
+    kernel_abi: bool,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<ProductionPreparedSourceV18, EntranceError> {
+    with_pending_api_owner_v18(
+        ModuleFixture::Ordinary,
+        false,
+        budget,
+        || slice_reborrow_source_owner_v29(write),
+        |owner, launch, input, _, budget| {
+            assert_eq!(
+                owner.source_semantic().functions()[0]
+                    .abi()
+                    .source_argument_ownership()[0],
+                if write {
+                    SemanticSourceArgumentOwnershipV1::UniqueBorrow
+                } else {
+                    SemanticSourceArgumentOwnershipV1::SharedBorrow
+                }
+            );
+            if kernel_abi {
+                let fixture = kernel_argument_abi_v18::tests::FixtureKernelAbiV18::new(&owner);
+                let roots = fixture.roots();
+                ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
+                    owner,
+                    launch,
+                    input,
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                )
+            } else {
+                ProductionPendingScopedSourceOwnerV29::prepare_source_with_budget_v18(
+                    owner,
+                    launch,
+                    input,
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                )
+            }
+        },
+    )
+}
+
+fn slice_reborrow_profile_probe_v29(
+    write: bool,
+    kernel_abi: bool,
     fault: DescriptorFault,
     allowance: Option<(usize, usize)>,
 ) -> (
@@ -216,25 +320,8 @@ fn slice_reborrow_kernel_abi_probe_v29(
     let (result, used, peak, denied_storage) = {
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
-        let prepared = with_pending_api_owner_v18(
-            ModuleFixture::Ordinary,
-            false,
-            &mut budget,
-            || slice_reborrow_source_owner_v29(write),
-            |owner, launch, input, _, budget| {
-                let fixture = kernel_argument_abi_v18::tests::FixtureKernelAbiV18::new(&owner);
-                let roots = fixture.roots();
-                ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
-                    owner,
-                    launch,
-                    input,
-                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
-                    ProductionSemanticKirLimitsV1::default(),
-                    budget,
-                )
-                .unwrap()
-            },
-        );
+        let prepared = prepare_slice_reborrow_profile_v29(write, kernel_abi, &mut budget)
+            .unwrap_or_else(|error| panic!("write={write}, kernel_abi={kernel_abi}: {error:?}"));
         let retained = prepared.adopted_storage();
         budget
             .reserve_storage(budget.peak_storage() + 1 - budget.storage())
@@ -262,9 +349,62 @@ fn slice_reborrow_kernel_abi_probe_v29(
             }
             let canonical = view.canonical(budget)?;
             let (_, root) = view.root(0, budget)?;
-            for ty in &canonical.module().functions[root].signature.parameters[..2] {
+            let expected_space = if kernel_abi {
+                AddressSpace::Global
+            } else {
+                AddressSpace::Generic
+            };
+            let actual = &canonical.module().functions[root];
+            for (position, ty) in actual.signature.parameters[..2].iter().enumerate() {
                 assert!(matches!(ty, Type::Slice(slice)
-                    if slice.address_space == AddressSpace::Global));
+                    if slice.address_space == expected_space));
+                let mut expected = lower_parameter_type(
+                    semantic.types(),
+                    semantic.callables(),
+                    original.abi().source_input_types()[position],
+                )
+                .unwrap();
+                let Type::Slice(slice) = &mut expected else {
+                    panic!("original slice");
+                };
+                slice.address_space = expected_space;
+                let id = actual.body.as_ref().unwrap().parameters[position];
+                let binding = SemanticValueBindingV1::Value { id, ty: ty.clone() };
+                check_source_slice_reborrow_binding_v29(&expected, &binding).unwrap();
+                for fault in 0..3 {
+                    let mut forged = ty.clone();
+                    let Type::Slice(slice) = &mut forged else {
+                        unreachable!()
+                    };
+                    match fault {
+                        0 => {
+                            slice.address_space = if kernel_abi {
+                                AddressSpace::Generic
+                            } else {
+                                AddressSpace::Global
+                            }
+                        }
+                        1 => {
+                            slice.access = match slice.access {
+                                AccessMode::ReadOnly => AccessMode::ReadWrite,
+                                AccessMode::ReadWrite | AccessMode::WriteOnly => {
+                                    AccessMode::ReadOnly
+                                }
+                            }
+                        }
+                        2 => *slice.element = Type::Scalar(ScalarType::U64),
+                        _ => unreachable!(),
+                    }
+                    assert_ne!(&forged, ty);
+                    assert!(matches!(
+                        check_source_slice_reborrow_binding_v29(
+                            &expected,
+                            &SemanticValueBindingV1::Value { id, ty: forged }
+                        ),
+                        Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+                    ));
+                }
+                check_source_slice_reborrow_binding_v29(&expected, &binding).unwrap();
             }
             let identity = *view.owner.pending_identity();
             let floor = budget.storage();
@@ -277,8 +417,15 @@ fn slice_reborrow_kernel_abi_probe_v29(
         let used = budget.work() - before;
         let peak = budget.peak_storage() - entry;
         let denied_storage = budget.failed_storage();
-        budget.release_storage(budget.storage() - MODULE_FLOOR);
+        let denied_work = budget.failed_work();
+        budget
+            .release_storage(budget.storage().checked_sub(MODULE_FLOOR).unwrap())
+            .unwrap();
         assert_eq!(budget.storage(), MODULE_FLOOR);
+        assert_eq!(
+            (budget.failed_work(), budget.failed_storage()),
+            (denied_work, denied_storage)
+        );
         DESCRIPTOR_RUN_COMPLETED.set(true);
         (result, used, peak, denied_storage)
     };
@@ -287,10 +434,15 @@ fn slice_reborrow_kernel_abi_probe_v29(
 
 #[test]
 fn source_same_type_slice_reborrow_consumes_original_use_before_definition_and_replays() {
-    for write in [false, true] {
-        slice_reborrow_kernel_abi_probe_v29(write, DescriptorFault::SliceReborrowSourceAudit, None)
-            .0
-            .unwrap_or_else(|error| panic!("write={write}: {error:?}"));
+    for (write, kernel_abi) in [(false, true), (false, false), (true, false)] {
+        slice_reborrow_profile_probe_v29(
+            write,
+            kernel_abi,
+            DescriptorFault::SliceReborrowSourceAudit,
+            None,
+        )
+        .0
+        .unwrap_or_else(|error| panic!("write={write}, kernel_abi={kernel_abi}: {error:?}"));
         descriptor_resource_assertions_completed(true);
         assert!(DESCRIPTOR_EMITTED.get() > 0);
         assert_eq!(DESCRIPTOR_TAMPERED.get(), 0);
@@ -299,9 +451,9 @@ fn source_same_type_slice_reborrow_consumes_original_use_before_definition_and_r
 
 #[test]
 fn source_same_type_slice_reborrow_has_exact_and_one_short_source_resources() {
-    for write in [false, true] {
+    for (write, kernel_abi) in [(false, true), (false, false), (true, false)] {
         let run = |allowance| {
-            slice_reborrow_kernel_abi_probe_v29(write, DescriptorFault::None, allowance)
+            slice_reborrow_profile_probe_v29(write, kernel_abi, DescriptorFault::None, allowance)
         };
         let (result, work, peak, denied_work, denied_storage) = run(None);
         result.unwrap();
@@ -319,41 +471,105 @@ fn source_same_type_slice_reborrow_has_exact_and_one_short_source_resources() {
         descriptor_resource_assertions_completed(false);
         assert!(matches!(
             entrance_resource(short_work.0.unwrap_err()),
-            ArgumentResourceV1::Work(_)
+            ArgumentResourceV1::Work(error)
+                if Some(error.actual()) == short_work.3 && error.limit() == MODULE_LIMIT
         ));
         assert!(short_work.3.is_some());
         let short_storage = run(Some((work, peak - 1)));
         descriptor_resource_assertions_completed(false);
         assert!(matches!(
             entrance_resource(short_storage.0.unwrap_err()),
-            ArgumentResourceV1::Storage(_)
+            ArgumentResourceV1::Storage(error)
+                if Some(error.actual()) == short_storage.4 && error.limit() == MODULE_LIMIT
         ));
         assert!(short_storage.4.is_some());
     }
 }
 
 #[test]
-fn source_same_type_slice_reborrow_generic_profile_preserves_exact_representation_refusal() {
-    // Unprofiled AS0 descriptors are Generic. The existing same-type slice
-    // reborrow lowering expects Global; source admission alone is not lowering.
-    for write in [false, true] {
-        let result = run_descriptor_owner_module(
-            slice_reborrow_source_owner_v29(write),
-            DescriptorCase {
-                write,
-                ..DescriptorCase::READ
-            },
-            DescriptorFault::None,
-            MODULE_LIMIT,
-            MODULE_LIMIT,
-        );
-        assert!(matches!(
-            result.0,
-            Err(ScopedModuleErrorV29::Source(
-                ProductionSemanticKirErrorV1::CorrespondenceMismatch
+fn source_same_type_slice_reborrow_kernel_profile_rejects_unowned_mutable_descriptor() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let error = prepare_slice_reborrow_profile_v29(true, true, &mut budget)
+        .err()
+        .expect("UniqueBorrow cannot become an ExclusiveOwner kernel descriptor");
+    assert!(
+        matches!(
+            &error,
+            EntranceError::Source(ProductionPendingScopedSourceErrorV29::Source(
+                ProductionSemanticKirErrorV1::Unsupported {
+                    function: 0,
+                    block: None,
+                    statement: None,
+                    detail: "kernel argument ABI profile differs from the complete original descriptor/source contract",
+                }
             ))
-        ));
-        descriptor_resource_assertions_completed(false);
+        ),
+        "{error:?}"
+    );
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+    assert_eq!(
+        (budget.failed_work(), budget.failed_storage()),
+        (None, None)
+    );
+}
+
+#[test]
+fn source_same_type_slice_reborrow_generic_profile_preserves_exact_representation_refusal() {
+    // The shared type checker sees actual source-bound physical parameters,
+    // refuses each changed representation/access/element, then accepts restore.
+    for write in [false, true] {
+        slice_reborrow_profile_probe_v29(write, false, DescriptorFault::None, None)
+            .0
+            .unwrap();
+        descriptor_resource_assertions_completed(true);
+        assert!(DESCRIPTOR_EMITTED.get() > 0);
         assert_eq!(DESCRIPTOR_TAMPERED.get(), 0);
     }
+}
+
+#[test]
+fn source_same_type_slice_reborrow_generic_profile_consumes_original_use_and_replays() {
+    for write in [false, true] {
+        slice_reborrow_profile_probe_v29(
+            write,
+            false,
+            DescriptorFault::SliceReborrowSourceAudit,
+            None,
+        )
+        .0
+        .unwrap_or_else(|error| panic!("write={write}: {error:?}"));
+        descriptor_resource_assertions_completed(true);
+        assert!(DESCRIPTOR_EMITTED.get() > 0);
+        assert_eq!(DESCRIPTOR_TAMPERED.get(), 0);
+    }
+}
+
+#[test]
+fn source_same_type_slice_reborrow_representation_query_has_independent_fixed_headers() {
+    use std::mem::size_of;
+    let expected = size_of::<AddressSpace>()
+        + 2 * size_of::<Result<AddressSpace, ProductionSemanticKirErrorV1>>()
+        + size_of::<Type>()
+        + 2 * size_of::<Result<Type, ProductionSemanticKirErrorV1>>()
+        + size_of::<Type>()
+        + size_of::<usize>()
+        + 2 * size_of::<Result<usize, ProductionSemanticKirErrorV1>>()
+        + size_of::<ExecutionSiteV29>()
+        + size_of::<SemanticTypeIdV1>()
+        + size_of::<&ExecutionAvailabilityV29<'_>>()
+        + size_of::<&SourceReferenceEmissionV29<'_, '_>>()
+        + size_of::<&SemanticFunctionDeclV1>()
+        + size_of::<&[SemanticTypeDeclV1]>()
+        + size_of::<&[SemanticCallableDeclV1]>()
+        + size_of::<&SemanticPlaceV1>()
+        + size_of::<&mut dyn SemanticEmissionBudgetV1>()
+        + size_of::<&Type>()
+        + size_of::<&SemanticValueBindingV1>()
+        + size_of::<Result<(), ProductionSemanticKirErrorV1>>();
+    assert_eq!(
+        source_slice_reborrow_representation_headers_v29().unwrap(),
+        expected
+    );
 }

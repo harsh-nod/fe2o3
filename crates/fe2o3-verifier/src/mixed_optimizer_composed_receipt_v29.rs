@@ -2,6 +2,9 @@
 //! Public request preparation and signed bytes remain inert. Only the admitted
 //! runtime execution below constructs the move-only executed owner.
 
+#[path = "mixed_optimizer_composed_lineage_v29.rs"]
+mod lineage;
+
 use super::*;
 use crate::functional_refinement_receipt_v2::{
     MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2 as OUTPUT_LIMIT,

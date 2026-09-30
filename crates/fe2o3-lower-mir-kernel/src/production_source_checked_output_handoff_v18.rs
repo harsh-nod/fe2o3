@@ -115,16 +115,35 @@ pub struct ProductionClosedScalarOutputHandoffV18<'view, 'source> {
     owned: SourceOutputHandoffV18<'view, 'source, ScalarSourceOptimizerV18>,
 }
 
-struct SourceOutputHandoffV18<'view, 'source, P: SourceOptimizerPolicyV18> {
+// Storage custody is independent of the kind of checked transformation.
+// Scalar adoption keeps its original receipt and exact containing layout.
+trait SourceOutputStoragePolicyV30 {
+    type Owned;
+    type Credit;
+    fn output_storage(output: &Self::Owned) -> usize;
+    fn receipt_storage(receipt: &Self::Credit) -> usize;
+}
+impl<P: SourceOptimizerPolicyV18> SourceOutputStoragePolicyV30 for P {
+    type Owned = P::Output;
+    type Credit = fe2o3_pliron::KirNeutralOwnedOriginStorageV1;
+    fn output_storage(output: &Self::Owned) -> usize {
+        P::checked_storage(output)
+    }
+    fn receipt_storage(receipt: &Self::Credit) -> usize {
+        receipt.retained_storage()
+    }
+}
+
+struct SourceOutputHandoffV18<'view, 'source, P: SourceOutputStoragePolicyV30> {
     source: &'view ProductionSourceOwnedViewV18<'source>,
-    output: P::Output,
-    receipt: fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
+    output: P::Owned,
+    receipt: P::Credit,
     required: usize,
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
 }
 
-impl<P: SourceOptimizerPolicyV18> SourceOutputHandoffV18<'_, '_, P> {
+impl<P: SourceOutputStoragePolicyV30> SourceOutputHandoffV18<'_, '_, P> {
     fn custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         if self.slot != std::ptr::from_ref(budget) as usize
             || self.ledger != budget.work_ledger_identity_v1()
@@ -150,7 +169,7 @@ impl<P: SourceOptimizerPolicyV18> SourceOutputHandoffV18<'_, '_, P> {
     /// Borrows the exact adopted output while its source and credit remain live.
     ///
     /// This method is separate from cleanup-only custody observation.
-    fn output(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<&P::Output> {
+    fn output(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<&P::Owned> {
         self.check(budget)?;
         Ok(&self.output)
     }
@@ -191,14 +210,14 @@ impl<P: SourceOptimizerPolicyV18> SourceOutputHandoffV18<'_, '_, P> {
     fn retained_storage(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<usize> {
         self.check(budget)?;
         // The retained entrance checked this sum before its atomic reservation.
-        Ok(P::checked_storage(&self.output) + self.receipt.retained_storage())
+        Ok(P::output_storage(&self.output) + P::receipt_storage(&self.receipt))
     }
 
     /// Drops the actual graph before refund; foreign or undercut custody refunds nothing.
     fn discard(self, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         let result = self.check(budget);
         let custody = self.custody(budget);
-        let retained = P::checked_storage(&self.output) + self.receipt.retained_storage();
+        let retained = P::output_storage(&self.output) + P::receipt_storage(&self.receipt);
         let Self { source, output, .. } = self;
         drop(output);
         let settlement = custody.and_then(|()| {
@@ -271,15 +290,13 @@ fn closed_scalar_handoff_credit_v18() -> Result<usize, ArgumentResourceV1> {
     source_output_handoff_credit_v18::<ScalarSourceOptimizerV18>()
 }
 
-fn source_output_handoff_credit_v18<P: SourceOptimizerPolicyV18>()
+fn source_output_handoff_credit_v18<P: SourceOutputStoragePolicyV30>()
 -> Result<usize, ArgumentResourceV1> {
     // Stage A pays the checked owner's inline value and the live origin receipt.
     // Pay the containing handoff's additional fields/padding and alignment.
     let extra = size_of::<SourceOutputHandoffV18<'_, '_, P>>()
-        .checked_sub(size_of::<P::Output>())
-        .and_then(|bytes| {
-            bytes.checked_sub(size_of::<fe2o3_pliron::KirNeutralOwnedOriginStorageV1>())
-        })
+        .checked_sub(size_of::<P::Owned>())
+        .and_then(|bytes| bytes.checked_sub(size_of::<P::Credit>()))
         .ok_or(ArgumentResourceV1::Arithmetic)?;
     argument_sum_v1(&[
         extra,

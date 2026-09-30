@@ -322,10 +322,35 @@ fn source_issued_pointer_walk_quote_v26(
     )?)?;
     budget.reserve_storage(std::mem::size_of::<(
         [usize; 16],
+        SourcePointerOriginBoundaryV29,
         Option<ValueId>,
         Result<Option<ValueId>, ProductionSemanticKirErrorV1>,
+        Result<Option<ValueId>, fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1>,
     )>())?;
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum SourcePointerOriginBoundaryV29 {
+    Global(Option<ValueId>),
+    // A structural endpoint only. Its original selected edges and every leaf's
+    // memory obligations are checked by the selected-reference relation.
+    Selected(ValueId),
+}
+
+fn source_reference_pointer_transport_until_v29(
+    actual: &SourceIssuedActualV29<'_>,
+    pointer: ValueId,
+    boundary: ValueId,
+    view: &mut fe2o3_kernel_ir::FunctionControlFlowViewV1<'_, '_, '_>,
+) -> Result<Option<ValueId>, fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1> {
+    source_pointer_transport_walk_v29(
+        actual,
+        pointer,
+        SourcePointerOriginBoundaryV29::Selected(boundary),
+        view,
+        |_| {},
+    )
 }
 
 fn source_issued_pointer_walk_v26(
@@ -339,13 +364,34 @@ fn source_issued_pointer_walk_v26(
 
 fn source_issued_pointer_walk_visit_v26(
     actual: &SourceIssuedActualV29<'_>,
-    mut pointer: ValueId,
+    pointer: ValueId,
     issuer: Option<ValueId>,
+    view: &mut fe2o3_kernel_ir::FunctionControlFlowViewV1<'_, '_, '_>,
+    visit: impl FnMut(usize),
+) -> Result<Option<ValueId>, fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1> {
+    source_pointer_transport_walk_v29(
+        actual,
+        pointer,
+        SourcePointerOriginBoundaryV29::Global(issuer),
+        view,
+        visit,
+    )
+}
+
+fn source_pointer_transport_walk_v29(
+    actual: &SourceIssuedActualV29<'_>,
+    mut pointer: ValueId,
+    boundary: SourcePointerOriginBoundaryV29,
     view: &mut fe2o3_kernel_ir::FunctionControlFlowViewV1<'_, '_, '_>,
     mut visit: impl FnMut(usize),
 ) -> Result<Option<ValueId>, fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1> {
     for _ in 0..=actual.values.len() {
-        let Some(origin) = view.unique_value_origin(pointer)? else {
+        let Some(origin) = (match boundary {
+            SourcePointerOriginBoundaryV29::Global(_) => view.unique_value_origin(pointer)?,
+            SourcePointerOriginBoundaryV29::Selected(value) => {
+                view.unique_value_origin_until(pointer, value)?
+            }
+        }) else {
             break;
         };
         let Ok(current_index) = actual
@@ -374,17 +420,26 @@ fn source_issued_pointer_walk_visit_v26(
         // Classification strips access restriction in either cast order.
         // Exact replay instead stops at the named issuer, even when that
         // issuer's own physical representation is already restricted.
-        let stop = match issuer {
-            Some(issuer) => issuer == origin,
-            None => !matches!(
-                result.operation.map(|operation| &operation.kind),
-                Some(OperationKind::Cast {
-                    kind: CastKind::RestrictPointerAccess,
-                    ..
-                })
-            ),
+        let stop = match boundary {
+            SourcePointerOriginBoundaryV29::Global(Some(issuer)) => {
+                target_space == AddressSpace::Global && issuer == origin
+            }
+            SourcePointerOriginBoundaryV29::Selected(value) => {
+                matches!(target_space, AddressSpace::Global | AddressSpace::Generic)
+                    && value == origin
+            }
+            SourcePointerOriginBoundaryV29::Global(None) => {
+                target_space == AddressSpace::Global
+                    && !matches!(
+                        result.operation.map(|operation| &operation.kind),
+                        Some(OperationKind::Cast {
+                            kind: CastKind::RestrictPointerAccess,
+                            ..
+                        })
+                    )
+            }
         };
-        if target_space == AddressSpace::Global && stop {
+        if stop {
             return Ok(Some(origin));
         }
         let Some(Operation {

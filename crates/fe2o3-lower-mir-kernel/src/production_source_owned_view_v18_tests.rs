@@ -1,4 +1,7 @@
 // These use the original admitted multi-root fixtures and actual source emitter.
+#[path = "production_source_rvalue_results_v30_tests.rs"]
+mod rvalue_results_tests;
+
 include!("production_source_descriptor_propagation_v29_tests.rs");
 include!("production_source_descriptor_resources_v29_tests.rs");
 type EntranceError = ProductionSourceOwnedViewErrorV18;

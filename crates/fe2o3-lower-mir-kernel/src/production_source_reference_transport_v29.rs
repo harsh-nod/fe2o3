@@ -83,7 +83,6 @@ fn source_reference_anchor_type_v29(
 fn source_reference_type_present_v29(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
-    descriptors: bool,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<bool, ProductionSemanticKirErrorV1> {
     let mut pending = source_reference_emission_vec_v29(1, budget)?;
@@ -106,7 +105,6 @@ fn source_reference_type_present_v29(
                     SemanticPointerKindV1::Reference | SemanticPointerKindV1::Raw
                 ) && pointer.metadata() == SemanticPointerMetadataV1::None)
                     || (pointer.kind() == SemanticPointerKindV1::Reference
-                        && descriptors
                         && pointer.metadata() == SemanticPointerMetadataV1::SliceLength)
             }
             SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {

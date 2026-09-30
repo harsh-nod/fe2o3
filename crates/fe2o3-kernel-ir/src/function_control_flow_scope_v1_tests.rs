@@ -3,6 +3,227 @@ use crate::{
     BasicBlock, CanonicalKernelIrWorkBudgetV1 as Work, Signature, Terminator, Type, ValueId,
 };
 
+#[test]
+fn exact_boundary_transport_preserves_the_boundary_selection_and_legacy_ambiguity() {
+    let function = origin_graph(true);
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    budget.reserve_storage(FLOOR).unwrap();
+    with_function_control_flow_v1(&function, Default::default(), &mut budget, |view| {
+        assert_eq!(view.unique_value_origin(ValueId(30))?, None);
+        let retained = view.budget.storage();
+        for _ in 0..2 {
+            assert_eq!(
+                view.unique_value_origin_until(ValueId(30), ValueId(20))?,
+                Some(ValueId(20))
+            );
+            assert_eq!(view.budget.storage(), retained);
+            assert_eq!(
+                view.unique_value_origin_until(ValueId(20), ValueId(20))?,
+                Some(ValueId(20))
+            );
+            assert_eq!(view.budget.storage(), retained);
+            assert_eq!(
+                view.unique_value_origin_until(ValueId(30), ValueId(0))?,
+                None
+            );
+            assert_eq!(view.budget.storage(), retained);
+            assert_eq!(view.unique_value_origin(ValueId(30))?, None);
+            assert_eq!(
+                view.block_parameter_input(BlockId(10), 0, 0)?.argument,
+                ValueId(0)
+            );
+            assert_eq!(
+                view.block_parameter_input(BlockId(10), 0, 1)?.argument,
+                ValueId(1)
+            );
+            assert_eq!(
+                view.block_parameter_input(BlockId(10), 0, 2)?.argument,
+                ValueId(20)
+            );
+        }
+        assert_eq!(
+            view.unique_value_origin_until(ValueId(40), ValueId(20))?,
+            None
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(budget.storage(), FLOOR);
+}
+
+#[test]
+fn exact_boundary_transport_rejects_bypasses_and_replays_boundary_edge_shapes() {
+    for malformed in [false, true] {
+        let mut function = origin_graph(true);
+        let body = function.body.as_mut().unwrap();
+        if malformed {
+            let Some(Terminator::ConditionalBranch { then_arguments, .. }) =
+                &mut body.blocks[0].terminator
+            else {
+                unreachable!()
+            };
+            then_arguments.clear();
+        } else {
+            // Even an unreachable extra predecessor is not silently discarded.
+            body.blocks[3].terminator = Some(Terminator::Branch {
+                target: BlockId(30),
+                arguments: vec![ValueId(1)],
+            });
+        }
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        budget.reserve_storage(FLOOR).unwrap();
+        let mut called = false;
+        let result =
+            with_function_control_flow_v1(&function, Default::default(), &mut budget, |view| {
+                called = true;
+                let held = view.budget.storage();
+                let result = view.unique_value_origin_until(ValueId(30), ValueId(20));
+                assert_eq!(view.budget.storage(), held);
+                if malformed {
+                    assert_eq!(result, Err(Error::Resource(Resource::Accounting)));
+                    let before = (view.budget.work(), view.budget.storage());
+                    assert_eq!(
+                        view.unique_value_origin(ValueId(30)),
+                        Err(Error::Resource(Resource::Accounting))
+                    );
+                    assert_eq!(
+                        view.unique_value_origin_until(ValueId(30), ValueId(20)),
+                        Err(Error::Resource(Resource::Accounting))
+                    );
+                    assert_eq!((view.budget.work(), view.budget.storage()), before);
+                } else {
+                    assert_eq!(result, Ok(None));
+                }
+                Ok(())
+            });
+        assert!(called);
+        assert_eq!(
+            result,
+            if malformed {
+                Err(Error::Resource(Resource::Accounting))
+            } else {
+                Ok(())
+            }
+        );
+        assert_eq!(budget.storage(), FLOOR);
+    }
+}
+
+#[test]
+fn exact_boundary_query_header_has_an_independent_frame_equation() {
+    let expected = size_of::<Vec<(ValueId, Option<ValueId>)>>()
+        + size_of::<Result<Vec<(ValueId, Option<ValueId>)>, Resource>>()
+        + 2 * size_of::<Option<ValueId>>()
+        + 2 * size_of::<Result<Option<ValueId>, Error>>()
+        + size_of::<Result<(), Resource>>()
+        + size_of::<Result<usize, usize>>()
+        + size_of::<Result<usize, Resource>>()
+        + 2 * size_of::<usize>()
+        + size_of::<(&mut FunctionControlFlowViewV1<'_, '_, '_>, ValueId, ValueId)>();
+    assert_eq!(boundary_origin_header_v1().unwrap(), expected);
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, FLOOR + expected);
+    budget.reserve_storage(FLOOR).unwrap();
+    budget
+        .reserve_storage(boundary_origin_header_v1().unwrap())
+        .unwrap();
+    assert_eq!(budget.peak_storage(), FLOOR + expected);
+    budget.release_storage(expected).unwrap();
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, FLOOR + expected - 1);
+    budget.reserve_storage(FLOOR).unwrap();
+    assert!(
+        matches!(budget.reserve_storage(boundary_origin_header_v1().unwrap()),
+        Err(Resource::Storage(error)) if error.actual() == FLOOR + expected && error.limit() == FLOOR + expected - 1)
+    );
+    assert_eq!(budget.storage(), FLOOR);
+}
+
+#[test]
+fn exact_boundary_query_whole_scope_exact_limits_sticky_refusal_and_panic_refund() {
+    let function = origin_graph(true);
+    let run = |work_limit, storage_limit| {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(FLOOR).unwrap();
+        let mut completed = 0;
+        let mut entry_peak = 0;
+        let result =
+            with_function_control_flow_v1(&function, Default::default(), &mut budget, |view| {
+                entry_peak = view.budget.peak_storage();
+                let held = view.budget.storage();
+                let result = view.unique_value_origin_until(ValueId(30), ValueId(20));
+                assert_eq!(view.budget.storage(), held);
+                match result {
+                    Ok(origin) => {
+                        assert_eq!(origin, Some(ValueId(20)));
+                        completed += 1;
+                    }
+                    Err(error) => {
+                        let before = (view.budget.work(), view.budget.storage());
+                        assert_eq!(
+                            view.unique_value_origin_until(ValueId(30), ValueId(20)),
+                            Err(error.clone())
+                        );
+                        assert_eq!((view.budget.work(), view.budget.storage()), before);
+                        return Err(error);
+                    }
+                }
+                Ok(())
+            });
+        assert_eq!(budget.storage(), FLOOR);
+        (
+            result,
+            budget.work(),
+            budget.peak_storage(),
+            completed,
+            entry_peak,
+        )
+    };
+    let baseline = run(LIMIT, LIMIT);
+    assert_eq!(baseline.0, Ok(()));
+    assert_eq!(baseline.3, 1);
+    assert!(baseline.2 > baseline.4);
+    let exact = run(baseline.1, baseline.2);
+    assert_eq!(exact, baseline);
+    let work_short = run(baseline.1 - 1, baseline.2);
+    assert!(
+        matches!(work_short.0, Err(Error::Resource(Resource::Work(error)))
+        if error.actual() == baseline.1 && error.limit() == baseline.1 - 1)
+    );
+    assert_eq!(work_short.3, 0);
+    let storage_short = run(baseline.1, baseline.2 - 1);
+    assert!(
+        matches!(storage_short.0, Err(Error::Resource(Resource::Storage(error)))
+        if error.actual() == baseline.2 && error.limit() == baseline.2 - 1)
+    );
+    assert_eq!(storage_short.3, 0);
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    budget.reserve_storage(FLOOR).unwrap();
+    let marker = std::sync::Arc::new(());
+    let expected = marker.clone();
+    let unwind = catch_unwind(AssertUnwindSafe(|| {
+        with_function_control_flow_v1(&function, Default::default(), &mut budget, |view| {
+            let held = view.budget.storage();
+            assert_eq!(
+                view.unique_value_origin_until(ValueId(30), ValueId(20))?,
+                Some(ValueId(20))
+            );
+            assert_eq!(view.budget.storage(), held);
+            std::panic::panic_any(marker)
+        })
+    }));
+    let payload = unwind
+        .unwrap_err()
+        .downcast::<std::sync::Arc<()>>()
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(&payload, &expected));
+    assert_eq!(budget.storage(), FLOOR);
+}
+
 const LIMIT: usize = 100_000_000;
 const FLOOR: usize = 37;
 
@@ -188,6 +409,12 @@ fn independent_scope_header_and_query_costs_match_exact_and_one_short_limits() {
         + size_of::<FunctionControlFlowViewV1<'_, '_, '_>>()
         + size_of::<Result<(), Error>>()
         + size_of::<Result<Result<(), Error>, Box<dyn std::any::Any + Send>>>()
+        + size_of::<FunctionControlFlowParameterV1>()
+        + size_of::<Result<FunctionControlFlowParameterV1, Error>>()
+        + size_of::<FunctionControlFlowParameterInputV1>()
+        + size_of::<Result<FunctionControlFlowParameterInputV1, Error>>()
+        + size_of::<&Function>()
+        + size_of::<&MeteredIndexedControlFlowV1>()
         + 3 * size_of::<usize>();
     drop(flow);
     let constructor = run(&function, LIMIT, LIMIT, false);
@@ -261,6 +488,201 @@ fn origin_graph(ambiguous: bool) -> Function {
         vec![ValueId(0), ValueId(1), ValueId(2)],
         vec![entry, header, exit, island],
     )
+}
+
+#[test]
+fn exact_parameter_inputs_preserve_parallel_edges_loop_recurrence_and_disconnected_rows() {
+    for ambiguous in [false, true] {
+        let function = origin_graph(ambiguous);
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        budget.reserve_storage(FLOOR).unwrap();
+        with_function_control_flow_v1(&function, Default::default(), &mut budget, |view| {
+            assert_eq!(
+                view.block_parameter(BlockId(10), 0)?,
+                FunctionControlFlowParameterV1 {
+                    value: ValueId(20),
+                    incoming_count: 3,
+                }
+            );
+            for (incoming, source, ordinal, argument) in [
+                (0, 90, 0, 0),
+                (1, 90, 1, u32::from(ambiguous)),
+                (2, 10, 0, 20),
+            ] {
+                assert_eq!(
+                    view.block_parameter_input(BlockId(10), 0, incoming)?,
+                    FunctionControlFlowParameterInputV1 {
+                        source: BlockId(source),
+                        source_ordinal: ordinal,
+                        source_reachable: true,
+                        target: BlockId(10),
+                        parameter_ordinal: 0,
+                        parameter: ValueId(20),
+                        argument: ValueId(argument),
+                    }
+                );
+            }
+            assert_eq!(
+                view.block_parameter_input(BlockId(30), 0, 0)?
+                    .source_ordinal,
+                1
+            );
+            assert_eq!(
+                view.block_parameter_input(BlockId(30), 0, 0)?.argument,
+                ValueId(20)
+            );
+            assert_eq!(
+                view.block_parameter_input(BlockId(40), 0, 0)?,
+                FunctionControlFlowParameterInputV1 {
+                    source: BlockId(40),
+                    source_ordinal: 0,
+                    source_reachable: false,
+                    target: BlockId(40),
+                    parameter_ordinal: 0,
+                    parameter: ValueId(40),
+                    argument: ValueId(40),
+                }
+            );
+            assert_eq!(
+                view.unique_value_origin(ValueId(20))?,
+                (!ambiguous).then_some(ValueId(0))
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(budget.storage(), FLOOR);
+    }
+}
+
+#[test]
+fn exact_parameter_inputs_keep_diamond_predecessors_separate() {
+    let mut function = origin_graph(true);
+    let body = function.body.as_mut().unwrap();
+    let mut left = BasicBlock::new(BlockId(51));
+    left.terminator = Some(Terminator::Branch {
+        target: BlockId(10),
+        arguments: vec![ValueId(0)],
+    });
+    let mut right = BasicBlock::new(BlockId(52));
+    right.terminator = Some(Terminator::Branch {
+        target: BlockId(10),
+        arguments: vec![ValueId(1)],
+    });
+    body.blocks[0].terminator = Some(choose(51, 52));
+    body.blocks[1].terminator = Some(Terminator::Branch {
+        target: BlockId(30),
+        arguments: vec![ValueId(20)],
+    });
+    body.blocks.extend([left, right]);
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    with_function_control_flow_v1(&function, Default::default(), &mut budget, |view| {
+        assert_eq!(view.block_parameter(BlockId(10), 0)?.incoming_count, 2);
+        for (incoming, source, argument) in [(0, 51, 0), (1, 52, 1)] {
+            let row = view.block_parameter_input(BlockId(10), 0, incoming)?;
+            assert_eq!(
+                (row.source, row.source_ordinal, row.argument),
+                (BlockId(source), 0, ValueId(argument))
+            );
+        }
+        assert_eq!(view.unique_value_origin(ValueId(20))?, None);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
+#[test]
+fn parameter_query_bad_coordinates_and_missing_or_extra_arguments_are_sticky() {
+    for fault in 0..4 {
+        let mut function = origin_graph(true);
+        if fault >= 2 {
+            let Some(Terminator::ConditionalBranch { then_arguments, .. }) =
+                function.body.as_mut().unwrap().blocks[0]
+                    .terminator
+                    .as_mut()
+            else {
+                unreachable!()
+            };
+            if fault == 2 {
+                then_arguments.clear();
+            } else {
+                then_arguments.push(ValueId(1));
+            }
+        }
+        let expected = match fault {
+            0 => Error::InvalidParameter {
+                block: BlockId(10),
+                ordinal: 1,
+            },
+            1 => Error::InvalidIncomingEdge {
+                target: BlockId(10),
+                ordinal: 3,
+            },
+            _ => Error::InvalidEdgeArguments {
+                source: BlockId(90),
+                ordinal: 0,
+                target: BlockId(10),
+                expected: 1,
+                actual: if fault == 2 { 0 } else { 2 },
+            },
+        };
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        budget.reserve_storage(FLOOR).unwrap();
+        let mut called = false;
+        let result =
+            with_function_control_flow_v1(&function, Default::default(), &mut budget, |view| {
+                called = true;
+                let result = view.block_parameter_input(
+                    BlockId(10),
+                    usize::from(fault == 0),
+                    if fault == 1 { 3 } else { 0 },
+                );
+                assert_eq!(result, Err(expected.clone()));
+                let work = view.budget.work();
+                assert_eq!(view.block_parameter(BlockId(10), 0), Err(expected.clone()));
+                assert_eq!(view.budget.work(), work);
+                Ok(())
+            });
+        assert!(called);
+        assert_eq!(result, Err(expected));
+        assert_eq!(budget.storage(), FLOOR);
+    }
+}
+
+#[test]
+fn parameter_query_work_and_scope_storage_have_independent_exact_bounds() {
+    let function = origin_graph(true);
+    let run = |work_limit, storage_limit, query| {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(FLOOR).unwrap();
+        let result =
+            with_function_control_flow_v1(&function, Default::default(), &mut budget, |view| {
+                if query {
+                    assert_eq!(view.block_parameter(BlockId(10), 0)?.incoming_count, 3);
+                    assert_eq!(
+                        view.block_parameter_input(BlockId(10), 0, 1)?.argument,
+                        ValueId(1)
+                    );
+                }
+                Ok(())
+            });
+        assert_eq!(budget.storage(), FLOOR);
+        (result, budget.work(), budget.peak_storage())
+    };
+    let baseline = run(LIMIT, LIMIT, false);
+    assert_eq!(baseline.0, Ok(()));
+    let lookup = 4usize.ilog2() as usize + 3;
+    let expected_work = baseline.1 + 2 * lookup + 5 + 11;
+    let exact = run(expected_work, baseline.2, true);
+    assert_eq!(exact, (Ok(()), expected_work, baseline.2));
+    assert!(matches!(run(expected_work - 1, baseline.2, true).0,
+        Err(Error::Resource(Resource::Work(error))) if error.actual() == expected_work && error.limit() == expected_work - 1));
+    assert!(matches!(run(expected_work, baseline.2 - 1, true).0,
+        Err(Error::Resource(Resource::Storage(error))) if error.actual() == baseline.2 && error.limit() == baseline.2 - 1));
 }
 
 #[test]
@@ -527,6 +949,7 @@ fn structural_origin_storage_failure_preserves_exact_scope_diagnostic_and_histor
     }
     let header = size_of::<LiveOriginMeterMirror<'_, '_>>()
         + 4 * size_of::<Vec<()>>()
+        + size_of::<Option<ValueId>>()
         + size_of::<Result<Vec<(ValueId, Option<ValueId>)>, Resource>>()
         + size_of::<Result<Vec<Option<ValueId>>, crate::FormalGuardedMemoryResourceErrorV1>>();
     let function = origin_graph(false);

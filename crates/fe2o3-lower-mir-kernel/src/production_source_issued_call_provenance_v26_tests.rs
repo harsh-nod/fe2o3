@@ -259,8 +259,10 @@ fn issued_call_pointer_quote_has_independent_header_and_work_equations() {
     let expected_work = 3 * 8 * (40 + 3 * 4);
     let expected_header = std::mem::size_of::<(
         [usize; 16],
+        SourcePointerOriginBoundaryV29,
         Option<ValueId>,
         Result<Option<ValueId>, ProductionSemanticKirErrorV1>,
+        Result<Option<ValueId>, fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1>,
     )>();
     for short in [0, 1, 2] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(expected_work - usize::from(short == 1));
@@ -362,5 +364,174 @@ fn issued_call_transport_preserves_both_restriction_and_generic_cast_orders() {
                 assert_eq!(budget.storage(), 17);
             }
         }
+    }
+}
+
+fn run_selected_transport(
+    function: &Function,
+    pointer: ValueId,
+    boundary: ValueId,
+    work_limit: usize,
+    storage_limit: usize,
+) -> (
+    Result<Option<ValueId>, ProductionSemanticKirErrorV1>,
+    usize,
+    usize,
+    usize,
+    Option<usize>,
+    Option<usize>,
+) {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+    let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+    budget.reserve_storage(17).unwrap();
+    let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
+        let actual = SourceIssuedActualV29::from_function(function, budget)?;
+        source_issued_pointer_walk_quote_v26(actual.values.len(), 1, budget)?;
+        let mut result = None;
+        fe2o3_kernel_ir::with_function_control_flow_v1(
+            function,
+            Default::default(),
+            budget,
+            |view| {
+                result =
+                    source_reference_pointer_transport_until_v29(&actual, pointer, boundary, view)?;
+                Ok(())
+            },
+        )
+        .map_err(|error| match error {
+            fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1::Resource(error) => error.into(),
+            _ => source_issued_error_v29(),
+        })?;
+        Ok(result)
+    });
+    (
+        result,
+        budget.work(),
+        budget.storage(),
+        budget.peak_storage(),
+        budget.failed_work(),
+        budget.failed_storage(),
+    )
+}
+
+#[test]
+fn selected_reference_pointer_transport_stops_at_exact_parallel_selection_not_a_leaf() {
+    let function = transport_graph(9);
+    for boundary in [0, 1, 3, 4, 99] {
+        let (result, _, held, _, _, _) = run_selected_transport(
+            &function,
+            ValueId(7),
+            ValueId(boundary),
+            usize::MAX,
+            usize::MAX,
+        );
+        assert_eq!(result.unwrap(), None, "boundary {boundary}");
+        assert_eq!(held, 17);
+    }
+    for (pointer, boundary) in [(7, 5), (5, 5), (7, 7)] {
+        let (result, _, held, _, _, _) = run_selected_transport(
+            &function,
+            ValueId(pointer),
+            ValueId(boundary),
+            usize::MAX,
+            usize::MAX,
+        );
+        assert_eq!(result.unwrap(), Some(ValueId(boundary)));
+        assert_eq!(held, 17);
+    }
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    assert_eq!(
+        source_issued_global_pointer_origin_v26(&function, ValueId(7), &mut budget).unwrap(),
+        None,
+    );
+    let (result, _, held, _) = run_transport(9, usize::MAX, usize::MAX);
+    assert!(matches!(
+        result,
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            function: 0,
+            detail: "source issued pointer differs from its original issuer or actual guard",
+            ..
+        })
+    ));
+    assert_eq!(held, 17);
+}
+
+#[test]
+fn selected_reference_pointer_transport_preserves_typed_casts_and_loop_boundary() {
+    for fault in [5, 6, 7] {
+        let (result, _, held, _, _, _) = run_selected_transport(
+            &transport_graph(fault),
+            ValueId(7),
+            ValueId(5),
+            usize::MAX,
+            usize::MAX,
+        );
+        assert_eq!(result.unwrap(), None, "fault {fault}");
+        assert_eq!(held, 17);
+    }
+    let mut function = transport_graph(9);
+    let body = function.body.as_mut().unwrap();
+    body.blocks[1].terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(20),
+        then_arguments: vec![ValueId(5)],
+        else_target: BlockId(30),
+        else_arguments: vec![ValueId(6)],
+    });
+    let (result, _, held, _, _, _) =
+        run_selected_transport(&function, ValueId(7), ValueId(5), usize::MAX, usize::MAX);
+    assert_eq!(result.unwrap(), Some(ValueId(5)));
+    assert_eq!(held, 17);
+    // Stopping at an exact parameter is deliberately not evidence about its
+    // incoming roots. The source-selected relation must authenticate them.
+    let OperationKind::Cast { kind, .. } =
+        &mut function.body.as_mut().unwrap().blocks[0].operations[0].kind
+    else {
+        unreachable!()
+    };
+    *kind = CastKind::Bitcast;
+    let (result, _, held, _, _, _) =
+        run_selected_transport(&function, ValueId(7), ValueId(5), usize::MAX, usize::MAX);
+    assert_eq!(result.unwrap(), Some(ValueId(5)));
+    assert_eq!(held, 17);
+}
+
+#[test]
+fn selected_reference_pointer_transport_has_exact_scoped_work_and_storage_refusal() {
+    let function = transport_graph(9);
+    let run =
+        |work, storage| run_selected_transport(&function, ValueId(7), ValueId(5), work, storage);
+    let (result, work, held, peak, failed_work, failed_storage) = run(usize::MAX, usize::MAX);
+    assert_eq!(result.unwrap(), Some(ValueId(5)));
+    assert_eq!((held, failed_work, failed_storage), (17, None, None));
+    let (result, exact_work, exact_held, exact_peak, failed_work, failed_storage) = run(work, peak);
+    assert_eq!(result.unwrap(), Some(ValueId(5)));
+    assert_eq!((exact_work, exact_held, exact_peak), (work, held, peak));
+    assert_eq!((failed_work, failed_storage), (None, None));
+    for short_work in [true, false] {
+        let work_limit = work - usize::from(short_work);
+        let storage_limit = peak - usize::from(!short_work);
+        let (result, _, held, _, failed_work, failed_storage) = run(work_limit, storage_limit);
+        match result {
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Work(error),
+            )) if short_work => {
+                assert_eq!(error.actual(), work);
+                assert_eq!(error.limit(), work_limit);
+                assert_eq!(failed_work, Some(work));
+                assert_eq!(failed_storage, None);
+            }
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(error),
+            )) if !short_work => {
+                assert_eq!(error.actual(), peak);
+                assert_eq!(error.limit(), storage_limit);
+                assert_eq!(failed_work, None);
+                assert_eq!(failed_storage, Some(peak));
+            }
+            other => panic!("unexpected selected transport refusal: {other:?}"),
+        }
+        assert_eq!(held, 17);
     }
 }

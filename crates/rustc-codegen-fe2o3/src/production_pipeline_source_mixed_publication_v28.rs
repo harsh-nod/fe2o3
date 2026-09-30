@@ -12,6 +12,10 @@ use fe2o3_verifier::MixedOptimizerRelocationCfgSubjectV28 as Subject;
 #[path = "production_pipeline_source_mixed_publication_execution_v29.rs"]
 mod execution;
 
+#[path = "production_pipeline_source_mixed_lineage_v29.rs"]
+mod lineage;
+pub(crate) use lineage::{ExecutedProtectedMixedPublicationV29, FinalizedProtectedMixedLineageV29};
+
 /// These producer/consumer joins have no admitted mixed implementation yet.
 /// They cannot be closed by caller flags, graph hashes or existing V12 receipts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +35,7 @@ pub(crate) enum MixedPublicationErrorV28 {
     ExtractionOnly,
     LiveInvocation(ProtectedRustcInvocationErrorV1),
     Binding(&'static str),
+    Lineage(fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29),
 }
 impl std::fmt::Display for MixedPublicationErrorV28 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,6 +46,7 @@ impl std::error::Error for MixedPublicationErrorV28 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::LiveInvocation(error) => Some(error),
+            Self::Lineage(error) => Some(error),
             Self::ExtractionOnly | Self::Binding(_) => None,
         }
     }

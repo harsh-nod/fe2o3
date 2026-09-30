@@ -408,6 +408,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             block_parameters,
             semantic_ssa_bindings: SemanticSsaBindingsV1::default(),
             semantic_ssa_archive_credit: None,
+            semantic_rvalue_bindings: BTreeMap::new(),
             pending_semantic_ssa_definitions,
             next_value,
             emission_placement,

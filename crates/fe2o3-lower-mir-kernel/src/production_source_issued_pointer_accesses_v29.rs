@@ -88,6 +88,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             std::mem::size_of::<PendingSourceIssuedIssuerV29>(),
             std::mem::size_of::<(SourceIssuedRootTransportV29, PendingSourceIssuedIssuerV29)>(),
             std::mem::size_of::<Result<(SourceIssuedRootTransportV29, PendingSourceIssuedIssuerV29), ProductionSemanticKirErrorV1>>(),
+            execution_rvalue_headers_v30()?,
         ])?)?;
         budget.charge_work(5)?;
         let frame = row.source.ok_or_else(source_issued_error_v29)?;
@@ -397,6 +398,27 @@ fn check_source_issued_payload_v29(
     };
     if matches!(payload, ScopedMemoryPayloadV29::Load { .. }) {
         return Ok(());
+    }
+    if let ScopedMemoryPayloadV29::Store {
+        value,
+        source: ScopedMemoryStoreSourceV29::Assignment { site, ty },
+    } = payload
+    {
+        let archive = original
+            .source_index
+            .sidecar(original.instance, budget)?
+            .execution_observation
+            .as_ref()
+            .ok_or_else(source_issued_error_v29)?;
+        let binding = archive.lookup_rvalue_original_v30(
+            original.instances,
+            original.instance,
+            site,
+            ty,
+            budget,
+        )?;
+        let actual = actual.value(value, budget)?;
+        return check_issued_assignment_binding_v30(binding, value, actual.ty, operation, budget);
     }
     let ScopedMemoryPayloadV29::Store {
         value,

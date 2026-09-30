@@ -105,6 +105,7 @@ fn original_correspondence_header_oracle_v18<T, E, F>(_: &F) -> usize {
         + size_of::<Result<T, E>>()
         + size_of::<AssertUnwindSafe<Result<T, E>>>()
         + disposal
+        + source_rvalue_headers_v30().unwrap()
         + source_owned_finish_header_oracle_v26::<T, E>()
 }
 

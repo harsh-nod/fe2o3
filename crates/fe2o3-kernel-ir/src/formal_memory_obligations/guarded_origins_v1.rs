@@ -313,12 +313,25 @@ pub(crate) fn structural_origins_v1(
     flow: &IndexedControlFlow,
     budget: &mut Budget<'_>,
 ) -> Result<Vec<(ValueId, Option<ValueId>)>, VerificationResourceError> {
+    structural_origins_until_v1(function, flow, None, budget)
+}
+
+// A named boundary stops structural parameter expansion. This proves no fact
+// about the boundary itself, its type, initialization, bounds or source owner.
+// The unchanged SCC resolver still includes every other incoming edge.
+pub(crate) fn structural_origins_until_v1(
+    function: &Function,
+    flow: &IndexedControlFlow,
+    boundary: Option<ValueId>,
+    budget: &mut Budget<'_>,
+) -> Result<Vec<(ValueId, Option<ValueId>)>, VerificationResourceError> {
     use super::meter::LiveGuardMeter;
     let mut meter = LiveGuardMeter::new(budget, usize::MAX, usize::MAX, usize::MAX);
     meter
         .storage(
             size_of::<LiveGuardMeter<'_, '_>>()
                 .checked_add(4 * size_of::<Vec<()>>())
+                .and_then(|n| n.checked_add(size_of::<Option<ValueId>>()))
                 .and_then(|n| {
                     n.checked_add(size_of::<
                         Result<Vec<(ValueId, Option<ValueId>)>, VerificationResourceError>,
@@ -369,10 +382,15 @@ pub(crate) fn structural_origins_v1(
                 // is conservative and does not coalesce duplicate successors.
                 incoming.push(arguments[ordinal]);
             }
-            inputs.push(Input {
-                value: parameter.id,
-                incoming: start..incoming.len(),
-            });
+            if boundary.is_some() {
+                meter.charge(1).map_err(structural_resource_error)?;
+            }
+            if boundary != Some(parameter.id) {
+                inputs.push(Input {
+                    value: parameter.id,
+                    incoming: start..incoming.len(),
+                });
+            }
         }
         // Zero-parameter destinations must not hide extra edge arguments.
         if block.parameters.is_empty() {

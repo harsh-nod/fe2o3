@@ -404,6 +404,7 @@ mixed_source_completion_v26!(
 );
 
 include!("production_source_mixed_prefix_v29.rs");
+include!("production_source_aggregate_owner_v30.rs");
 include!("production_source_mixed_contract_v26.rs");
 
 #[path = "production_source_mixed_licm_v28.rs"]

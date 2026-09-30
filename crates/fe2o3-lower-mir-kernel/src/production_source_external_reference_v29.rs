@@ -915,3 +915,4 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         })
     }
 }
+include!("production_source_reference_selection_v29.rs");

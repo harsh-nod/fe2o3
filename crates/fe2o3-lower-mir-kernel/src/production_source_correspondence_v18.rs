@@ -1,4 +1,5 @@
 include!("production_source_inventory_rows_v18.rs");
+include!("production_source_rvalue_results_v30.rs");
 
 // The attachment index contains source metadata only. All graph lookups reuse
 // the caller's existing canonical inventory; no graph/definition index is built.
@@ -281,6 +282,7 @@ fn source_correspondence_owned_headers_v18<T, E, F>(_: &F) -> Result<usize, Argu
         size_of::<Result<T, E>>(),
         size_of::<std::panic::AssertUnwindSafe<Result<T, E>>>(),
         source_reference_cleanup_headers_v29()?,
+        source_rvalue_headers_v30()?,
     ])
 }
 

@@ -29,6 +29,9 @@ fn headers<R, F, P, E>() -> Result<usize, Resource> {
         2 * size_of::<Result<R, Error>>(),
         2 * size_of::<std::thread::Result<Result<R, Error>>>(),
         2 * size_of::<Result<(), Error>>(),
+        size_of::<ExecutedProtectedMixedPublicationV29<'_, '_, '_, '_, '_>>(),
+        align_of::<ExecutedProtectedMixedPublicationV29<'_, '_, '_, '_, '_>>(),
+        size_of::<Result<ExecutedProtectedMixedPublicationV29<'_, '_, '_, '_, '_>, Error>>(),
     ]
     .into_iter()
     .try_fold(0usize, |n, bytes| {
@@ -53,8 +56,9 @@ impl<'a, 'v, 's> PreparedMixedPublicationV28<'a, 'v, 's> {
 
 impl<'a, 'v, 's> ProtectedMixedPublicationV28<'a, 'v, 's> {
     /// Revalidate original protected compiler custody, execute the exact
-    /// original/Policy11/final CFG model, and lend both retained owners to the
-    /// existing publication continuation. This is not publication admission.
+    /// original/Policy11/final CFG model, and lend the joined nominal owner to
+    /// the existing publication continuation. Its finalizer path mandatorily
+    /// checks the actual Worker; this is still not publication admission.
     pub(crate) fn with_executed_composition_v29<R, F>(
         &self,
         runtime: &Runtime,
@@ -63,9 +67,8 @@ impl<'a, 'v, 's> ProtectedMixedPublicationV28<'a, 'v, 's> {
         consume: F,
     ) -> Result<R, Error>
     where
-        F: for<'r, 'w> FnOnce(
-            &ProtectedMixedPublicationV28<'a, 'v, 's>,
-            &Executed<'r, 'a, 'v, 'v, 'v, 's>,
+        F: for<'e, 'r, 'w> FnOnce(
+            &ExecutedProtectedMixedPublicationV29<'e, 'r, 'a, 'v, 's>,
             &mut Budget<'w>,
         ) -> Result<R, Error>,
     {
@@ -99,7 +102,9 @@ impl<'a, 'v, 's> ProtectedMixedPublicationV28<'a, 'v, 's> {
                     .replay_signed_receipt(budget)
                     .map_err(Error::MixedRelocationExpressions)?;
                 candidate.revalidate(budget)?;
-                consume.take()(candidate, executed, budget)
+                let joined =
+                    ExecutedProtectedMixedPublicationV29::new(candidate, executed, budget)?;
+                consume.take()(&joined, budget)
             };
             #[cfg(test)]
             {
@@ -185,6 +190,16 @@ mod tests {
             + 2 * size_of::<Result<R, Error>>()
             + 2 * size_of::<std::thread::Result<Result<R, Error>>>()
             + 2 * size_of::<Result<(), Error>>();
+        let expected = expected
+            + size_of::<(
+                &ProtectedMixedPublicationV28<'_, '_, '_>,
+                &Executed<'_, '_, '_, '_, '_, '_>,
+            )>()
+            + align_of::<(
+                &ProtectedMixedPublicationV28<'_, '_, '_>,
+                &Executed<'_, '_, '_, '_, '_, '_>,
+            )>()
+            + size_of::<Result<ExecutedProtectedMixedPublicationV29<'_, '_, '_, '_, '_>, Error>>();
         assert_eq!(size_of::<Pending<F>>(), size_of::<Option<F>>());
         assert_eq!(
             headers::<

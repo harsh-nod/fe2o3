@@ -404,20 +404,34 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         let node = local
             .node
             .ok_or_else(|| source_reference_error_v29("source reference borrows a dead holder"))?;
+        budget.charge_work(16)?;
         // This already-supported same-type fat-reference reborrow is an alias of
         // its existing allocation binding, not a reference to the descriptor cell.
         if source.projections().len() == 1
             && source.projections()[0].kind() == SemanticProjectionKindV1::Dereference
+            && source.projections()[0].result_type() == source.ty()
             && self.plan.nodes[node].ty == ty
             && matches!(types.get(ty.index() as usize).map(|ty| ty.shape()),
                 Some(SemanticTypeShapeV1::Pointer(pointer)) if pointer.kind() == SemanticPointerKindV1::Reference
-                    && pointer.mutability() == SemanticMutabilityV1::Immutable
-                    && pointer.metadata() == SemanticPointerMetadataV1::SliceLength)
+                    && pointer.address_space() == 0
+                    && pointer.pointer_width_bits() == 64
+                    && pointer.metadata() == SemanticPointerMetadataV1::SliceLength
+                    && pointer.pointee() == source.ty()
+                    && matches!((kind, pointer.mutability()),
+                        (SemanticBorrowKindV1::Shared, SemanticMutabilityV1::Immutable)
+                            | (SemanticBorrowKindV1::Mutable, SemanticMutabilityV1::Mutable)))
+            && matches!(
+                types.get(source.ty().index() as usize).map(|ty| ty.shape()),
+                Some(SemanticTypeShapeV1::Slice { .. })
+            )
             && matches!(
                 self.plan.nodes[node].kind,
                 SourceReferenceNodeKindV29::Plain(_)
             )
         {
+            // Reborrowing reads the live whole holder, not its pointee. The
+            // common transfer retains the exact descriptor fact at this use.
+            self.resolve_reference_place(site, source, SourceReferenceAccessV29::Read, budget)?;
             return Ok(node);
         }
         let resolved = self.resolve_reference_place(

@@ -22,7 +22,7 @@ mod exact_origin_v18;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
 mod report_construction_v18;
-pub(crate) use guarded_access_v1::origins::structural_origins_v1;
+pub(crate) use guarded_access_v1::origins::{structural_origins_until_v1, structural_origins_v1};
 mod closed_scalar_v18;
 mod ordered_composition_v1;
 mod physical_entry_v20;

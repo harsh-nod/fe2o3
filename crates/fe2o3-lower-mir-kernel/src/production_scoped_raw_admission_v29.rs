@@ -202,6 +202,7 @@ fn assemble_pending_scoped_root_body_v29(
             sidecars,
             active_instances,
             coordinates,
+            rvalue_results: None,
             slot_relocation: None,
             additional_storage_bytes,
         })
@@ -1619,6 +1620,7 @@ impl SourceRootTransactionV29<'_, '_> {
                 return Err(source_raw_physical_error_v29());
             }
         }
+        retain_source_rvalues_v30(&mut pending, self.instances, plan, budget)?;
         #[cfg(not(test))]
         discard_root_execution_archives_v29(&mut pending, self.instances, plan, budget)?;
         Ok((pending, payload, slots))

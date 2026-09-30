@@ -632,6 +632,7 @@ pub(super) fn matches_roots(
             sidecars,
             active_instances,
             coordinates: coords,
+            rvalue_results,
             slot_relocation,
             source_slots: slots,
             insertions,
@@ -656,6 +657,8 @@ pub(super) fn matches_roots(
             budget,
         )? && fixed_rows(&active_instances.rows, &b.active_instances.rows, budget)?
             && coordinates(coords, &b.coordinates, budget)?
+            && optional(rvalue_results.as_ref(), b.rvalue_results.as_ref(), budget,
+                |a, b, budget| a.matches_replay_v30(b, budget))?
             && source_slots(slots, &b.source_slots, budget)?
             && optional(
                 slot_relocation.as_ref(),

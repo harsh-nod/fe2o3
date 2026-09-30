@@ -1551,6 +1551,9 @@ mod source_attachment_inventory_v18 {
                 sidecars: _,
                 active_instances: _,
                 coordinates: _,
+                // Original rvalue locators are queried against the original
+                // inventory, never projected as optimizer occurrence evidence.
+                rvalue_results: _,
                 slot_relocation: _,
                 source_slots: _,
                 insertions: _,

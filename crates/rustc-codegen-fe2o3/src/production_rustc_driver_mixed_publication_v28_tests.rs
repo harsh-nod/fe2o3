@@ -204,10 +204,14 @@ impl Callbacks for PublicationCallbacks {
             };
             let (measured, execution_work, execution_storage) =
                 run_preparation(500_000_000, 20_000_000)?;
-            measured.map_err(|error| format!("composed execution preparation: {error:?}"))?;
+            measured
+                .map_err(|error| format!("composed execution preparation: {error:?}"))?
+                .into_observation();
             let (exact, exact_work, exact_storage) =
                 run_preparation(execution_work, execution_storage)?;
-            exact.map_err(|error| format!("exact composed execution preparation: {error:?}"))?;
+            exact
+                .map_err(|error| format!("exact composed execution preparation: {error:?}"))?
+                .into_observation();
             assert_eq!(
                 (exact_work, exact_storage),
                 (execution_work, execution_storage)
@@ -327,6 +331,18 @@ impl Callbacks for PublicationCallbacks {
                     foreign.reserve_storage(original.storage())?;
                     assert!(
                         foreign.work_ledger_identity_v1() != original.work_ledger_identity_v1()
+                    );
+                    let before = (foreign.work(), foreign.storage(), foreign.peak_storage());
+                    assert!(matches!(
+                        candidate.check_lineage_account_v29(&foreign),
+                        Err(Error::Source(ProductionSourceOwnedViewErrorV18::Resource(
+                            Resource::Accounting
+                        )))
+                    ));
+                    assert_eq!(
+                        (foreign.work(), foreign.storage(), foreign.peak_storage()),
+                        before,
+                        "lineage preflight must not charge a fully funded foreign ledger"
                     );
                     candidate.worker(&mut foreign)?;
                     Ok(())

@@ -78,11 +78,14 @@ impl std::ops::Index<&SsaValueV1> for SemanticSsaBindingsV1 {
 
 // This owns emitted locators, not source-value or pointer-provenance proofs.
 // The original map moves once from the emitter through expanded-root checking.
+include!("production_execution_rvalue_archive_v30.rs");
+
 struct ExecutionArchiveV29 {
     subject: ScopedInitializationSubjectV29,
     plan: fe2o3_mir_model::SsaPlanIdentityV1,
     credit: ExecutionArchiveCreditV29,
     bindings: SemanticSsaBindingsV1,
+    rvalues: ExecutionRvalueBindingsV30,
     #[cfg(test)]
     locals: Vec<Option<SemanticValueBindingV1>>,
     #[cfg(test)]
@@ -363,7 +366,9 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<Option<ExecutionArchiveV29>, ProductionSemanticKirErrorV1> {
         let Some(cursor) = self.execution.as_ref() else {
-            if self.semantic_ssa_archive_credit.is_some() {
+            if self.semantic_ssa_archive_credit.is_some()
+                || !self.semantic_rvalue_bindings.is_empty()
+            {
                 return Err(execution_archive_error_v29());
             }
             return Ok(None);
@@ -380,7 +385,9 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 credit.check(budget)?;
                 credit
             }
-            None if self.semantic_ssa_bindings.is_empty() => {
+            None if self.semantic_ssa_bindings.is_empty()
+                && self.semantic_rvalue_bindings.is_empty() =>
+            {
                 ExecutionArchiveCreditV29::new(budget)?
             }
             None => return Err(execution_archive_error_v29()),
@@ -398,6 +405,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             plan: cursor.ssa.plan().identity(),
             credit,
             bindings: std::mem::take(&mut self.semantic_ssa_bindings),
+            rvalues: std::mem::take(&mut self.semantic_rvalue_bindings),
             #[cfg(test)]
             locals: std::mem::take(&mut self.locals),
             #[cfg(test)]
@@ -516,7 +524,10 @@ fn check_execution_archive_instance_v29(
         (Some(true), Some(archive)) => {
             archive.check_original_v29(instances, instance, budget)?;
             // Prepay destruction before the first backing is dropped.
-            budget.charge_work(archive.bindings.len())?;
+            budget.charge_work(argument_sum_v1(&[
+                archive.bindings.len(),
+                archive.rvalues.len(),
+            ])?)?;
             Ok(archive.credit.bytes)
         }
         (Some(false), None) => Ok(0),

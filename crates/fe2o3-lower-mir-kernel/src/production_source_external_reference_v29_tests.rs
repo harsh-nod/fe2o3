@@ -655,3 +655,5 @@ fn external_helper_receipt_query_rejects_fully_funded_foreign_ledger_and_poison_
     );
     assert_eq!(EXTERNAL_POISON_CHECKS.get(), 1);
 }
+#[path = "production_source_reference_selection_v29_tests.rs"]
+mod selection_tests;

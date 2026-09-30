@@ -1,5 +1,7 @@
 // Runtime extents are whole source descriptors, never fixed-array lengths or
 // local initialized-byte evidence. These rows are original occurrence locators.
+include!("production_source_slice_reborrow_representation_v29.rs");
+
 #[derive(Clone, Copy, Debug)]
 struct SourceReferenceDescriptorV29 {
     instance: ProductionCallInstanceIdV1,

@@ -20,6 +20,7 @@ struct ScopedModuleRootV29 {
     sidecars: InstanceRowsV1<PendingInstanceSidecarsV29>,
     active_instances: PendingActiveInstanceIndexV1,
     coordinates: OwnedInstanceCoordinatesV1,
+    rvalue_results: Option<OwnedSourceRvaluesV30>,
     slot_relocation: Option<scoped_slot_relocation_v29::RelocationV29>,
     source_slots: OwnedScopedSourceSlotsV29,
     insertions: Vec<LifecycleInsertionV29>,
@@ -456,6 +457,7 @@ fn scoped_module_candidate_v29(
             sidecars,
             active_instances,
             coordinates,
+            rvalue_results,
             slot_relocation,
             additional_storage_bytes,
         } = pending;
@@ -496,6 +498,7 @@ fn scoped_module_candidate_v29(
             sidecars,
             active_instances,
             coordinates,
+            rvalue_results,
             slot_relocation,
             source_slots,
             insertions,

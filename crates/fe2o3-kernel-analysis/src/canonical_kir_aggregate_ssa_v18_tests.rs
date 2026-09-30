@@ -1,4 +1,5 @@
 use super::*;
+include!("canonical_kir_aggregate_occurrences_v30_tests.rs");
 use fe2o3_kernel_ir::{
     BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, Function, Operation, Signature,
     StorageLayoutLimitsV1, StorageLayoutV1,

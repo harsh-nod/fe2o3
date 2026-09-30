@@ -18,10 +18,13 @@ use std::{fmt, mem::size_of};
 
 #[path = "canonical_kir_aggregate_ssa_census_v18.rs"]
 mod census;
+#[path = "canonical_kir_aggregate_occurrences_v30.rs"]
+mod occurrences;
 #[path = "canonical_kir_aggregate_ssa_pair_v18.rs"]
 mod pair;
 #[path = "canonical_kir_aggregate_ssa_plan_v18.rs"]
 mod plan;
+pub use occurrences::*;
 
 /// No partial candidate or witness is returned on a denied transaction.
 #[derive(Debug)]
