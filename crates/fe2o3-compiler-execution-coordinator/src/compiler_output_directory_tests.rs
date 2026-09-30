@@ -66,7 +66,7 @@ fn check_boundary(
     assert_eq!(b.failed_work(), denied_work, "{case:?}");
     assert_eq!(b.failed_storage(), denied_storage, "{case:?}");
     if denied_work.is_some() {
-        assert!(b.charge_work(b.work_limit()).is_err());
+        assert!(b.charge_work(total_work).is_err());
         assert_eq!(b.failed_work(), denied_work);
     }
     if denied_storage.is_some() {
@@ -409,6 +409,7 @@ fn output_binding_checks_the_actual_staged_197_slot() {
     let file = File::open(directory.path()).unwrap();
     let foreign_directory = tempfile::tempdir().unwrap();
     let foreign = File::open(foreign_directory.path()).unwrap();
+    let total_work = Stage::STAGING_WORK + 3 * CompilerOutputDirectory::WORK;
     for (destination, actual, expected_error) in [
         (197, &file, None),
         (196, &file, Some("stage has no original output at 197")),
@@ -418,7 +419,7 @@ fn output_binding_checks_the_actual_staged_197_slot() {
             Some("compiler output directory differs from authenticated object"),
         ),
     ] {
-        let mut work = Work::new(Stage::STAGING_WORK + 3 * CompilerOutputDirectory::WORK);
+        let mut work = Work::new(total_work);
         let mut b = Budget::new(&mut work, stage_limit());
         b.reserve_storage(STAGE_SOURCES).unwrap();
         let owner = CompilerOutputDirectory::capture(
@@ -447,7 +448,7 @@ fn output_binding_checks_the_actual_staged_197_slot() {
         assert_eq!(stage.binding(destination).unwrap().as_raw_fd(), staged_fd);
         assert_eq!(refs(actual), before + 1);
         assert_eq!(b.storage(), floor);
-        assert_eq!(b.work(), b.work_limit());
+        assert_eq!(b.work(), total_work);
         assert_eq!((b.failed_work(), b.failed_storage()), (None, None));
         drop(stage);
         assert_eq!(refs(actual), before);
