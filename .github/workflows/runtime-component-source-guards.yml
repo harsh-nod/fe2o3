@@ -1,0 +1,75 @@
+name: Runtime component source guards
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/runtime-component-source-guards.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "crates/fe2o3-runtime-model/**"
+      - "crates/fe2o3-runtime/**"
+      - "crates/fe2o3-resource-accounting/**"
+      - "crates/fe2o3-kfd/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/runtime-component-source-guards.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "crates/fe2o3-runtime-model/**"
+      - "crates/fe2o3-runtime/**"
+      - "crates/fe2o3-resource-accounting/**"
+      - "crates/fe2o3-kfd/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-component-source-guards-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-controls:
+    name: Source and classifier controls (no solver)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      # These construct mutations and test classifiers; they do not execute
+      # Verus, Rust tests, native hardware, or authenticated proof campaigns.
+      - name: Model and request construction source guards
+        run: |
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-distributed-publication-contract.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-queued-query.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-request-charge.py
+
+      - name: Retained accounting source guards
+        run: |
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-credit-record.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-independent-retained-observation.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-domain-retained-observation.py
+
+      - name: Runtime and KFD shared-body source guards
+        run: |
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-input-fold.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-routing.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-owned-storage.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-post-catch.py
+
+      # Keep subprocess lifecycle tests in their separately owned campaign.
+      - name: Resource-domain source and classifier controls
+        run: >-
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-resource-domain.py
+          Qualification.test_reviewed_closure_and_each_source_drift
+          Qualification.test_manifest_and_roster_drift
+          Qualification.test_positive_requires_exact_summary_and_exit
+          Qualification.test_negative_requires_logical_failure
+          Qualification.test_mutants_are_exact_distinct_body_edits
+          Qualification.test_duplicate_mutation_target_and_symlink_reject

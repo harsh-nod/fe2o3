@@ -27,6 +27,14 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
+runs eleven explicit commands covering the newer model, runtime, accounting and
+KFD source/classifier controls. Those commands pass locally; workflow YAML and
+command inventory checks also pass. The resource-domain command selects its six
+source-only controls, not its three subprocess lifecycle tests. This adds drift
+detection, not solver execution, Rust test execution, authenticated proof
+acceptance or a hosted CI result. GitHub publication is still blocked by DNS.
+
 The [distributed publication description contract](runtime-distributed-publication-contract-v1.md)
 is integrated at `1cb78d01c`. Its signed candidate passes the full model executable:
 1,104 tests pass, nineteen existing manual benchmarks remain ignored, and no test
