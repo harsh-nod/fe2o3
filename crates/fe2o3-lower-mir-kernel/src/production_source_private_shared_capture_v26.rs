@@ -108,6 +108,12 @@ impl OriginalEntryIndexV20<'_, '_> {
                     .missing("private shared capture SSA holder differs");
             }
             match definition.origin {
+                OriginalEntryDefinitionV20::CallReturn { .. } => {
+                    return self
+                        .source
+                        .source
+                        .missing("private shared call-return referent is not interpreted");
+                }
                 OriginalEntryDefinitionV20::Argument(argument) => {
                     let Some((caller, block)) = incoming else {
                         return self

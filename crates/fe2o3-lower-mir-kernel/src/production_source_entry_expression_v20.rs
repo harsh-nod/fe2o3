@@ -11,6 +11,7 @@ use fe2o3_pliron::{
 enum OriginalEntryDefinitionV20 {
     Argument(u32),
     Assignment { block: u32, statement: u32 },
+    CallReturn { block: u32, edge: usize },
 }
 
 #[derive(Clone, Copy)]
@@ -70,6 +71,7 @@ impl<'a, 'source> OriginalEntryIndexV20<'a, 'source> {
                     capacity,
                     rows.events().len(),
                     rows.entry_definitions().len(),
+                    rows.edge_definitions().len(),
                 ])?;
             }
             let mut definitions =
@@ -135,6 +137,41 @@ impl<'a, 'source> OriginalEntryIndexV20<'a, 'source> {
                             },
                         });
                     }
+                }
+                for (edge, occurrence) in rows.edge_definitions().iter().enumerate() {
+                    budget.charge_work(7)?;
+                    let Some(EntryValueV20::Definition(value)) = occurrence.value() else {
+                        continue;
+                    };
+                    if !matches!(
+                        owner
+                            .source_semantic()
+                            .functions()
+                            .get(id.index() as usize)
+                            .and_then(|function| function
+                                .blocks()
+                                .get(occurrence.edge().source().get() as usize))
+                            .map(|block| block.terminator().kind()),
+                        Some(SemanticTerminatorKindV1::Call(_))
+                    ) {
+                        continue;
+                    }
+                    source_entry_call_return_v32(
+                        source,
+                        id,
+                        edge,
+                        occurrence.variable().get(),
+                        value.get(),
+                        budget,
+                    )?;
+                    definitions.push(OriginalEntryDefinitionRowV20 {
+                        key: [id.index(), value.get()],
+                        local: occurrence.variable().get(),
+                        origin: OriginalEntryDefinitionV20::CallReturn {
+                            block: occurrence.edge().source().get(),
+                            edge,
+                        },
+                    });
                 }
             }
             private_array_heapsort_v1(
@@ -348,6 +385,7 @@ impl<'a, 'source> OriginalEntryIndexV20<'a, 'source> {
                         }
                         match definition.origin {
                             OriginalEntryDefinitionV20::Argument(argument) => state = OriginalEntryStateV20::Argument(argument),
+                            OriginalEntryDefinitionV20::CallReturn { .. } => return self.source.source.missing("private entry call-return computation is not interpreted"),
                             OriginalEntryDefinitionV20::Assignment { block, statement } => {
                                 let Some(SemanticStatementKindV1::Assign(assignment)) = function.blocks()
                                     .get(block as usize).and_then(|b| b.statements().get(statement as usize)).map(|s| s.kind())
@@ -383,3 +421,4 @@ enum OriginalEntryStateV20<'a> {
 }
 
 include!("production_source_private_expression_v22.rs");
+include!("production_source_call_return_v32.rs");

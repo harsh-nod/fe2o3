@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_call_return_v32_tests.rs"]
+mod call_return;
+
 #[path = "production_source_scalar_boundary_forwarding_v32_tests.rs"]
 mod forwarding;
 #[path = "production_source_scalar_boundary_incoming_v32_tests.rs"]

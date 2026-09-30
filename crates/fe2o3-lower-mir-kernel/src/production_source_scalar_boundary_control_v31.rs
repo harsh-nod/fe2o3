@@ -437,6 +437,13 @@ impl SourceBoundaryCheckV31<'_> {
         }
         let function = leaves.original_function(instance, budget)?;
         let input = match definition.origin {
+            OriginalEntryDefinitionV20::CallReturn { .. } => {
+                return self
+                    .leaves
+                    .relation
+                    .source
+                    .missing("source SSA call-return computation is not interpreted");
+            }
             OriginalEntryDefinitionV20::Argument(argument) => {
                 OriginalPrivateInputV22::Argument(argument)
             }
@@ -492,6 +499,9 @@ impl SourceBoundaryCheckV31<'_> {
     ) -> SourceOwnedResultV18<()> {
         let run = |budget: &mut ArgumentBudgetV1<'_>| {
             self.leaves.relation.retain_query((|| {
+                if self.call_return_value_v32(row, original, actual, budget)? {
+                    return Ok(());
+                }
                 let expression = self.expression(
                     row.instance,
                     row.variable,

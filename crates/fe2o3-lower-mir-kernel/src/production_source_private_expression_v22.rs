@@ -30,6 +30,7 @@ fn original_private_expression_headers_v22() -> Result<usize, ArgumentResourceV1
     argument_sum_v1(&[
         argument_product_v1(MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1, frame)?,
         issued_discriminant_query_headers_v31()?,
+        source_call_return_headers_v32()?,
     ])
 }
 
@@ -398,6 +399,12 @@ impl OriginalEntryIndexV20<'_, '_> {
                         .missing("private source expression SSA local differs");
                 }
                 let input = match definition.origin {
+                    OriginalEntryDefinitionV20::CallReturn { .. } => {
+                        return self
+                            .source
+                            .source
+                            .missing("private source call-return computation is not interpreted");
+                    }
                     OriginalEntryDefinitionV20::Argument(argument) => {
                         OriginalPrivateInputV22::Argument(argument)
                     }
