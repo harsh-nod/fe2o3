@@ -5,8 +5,9 @@
 //! provisions or rewrites those inputs. No fixed test keys, image substitutions,
 //! compiler exec fixture, or synthetic Prepared producer is used by this matrix.
 //! Missing/mismatched prerequisites fail, never count as negative-control passes.
-//! No compiler or proof-helper process is launched. This is not activation-ABI,
-//! service-manager, Cargo-authorship, or executable-enforcement qualification.
+//! Positive pre-exec cases require a real distinct-UID sender, writable isolated
+//! cgroup parent and installed proof runtime. They execute the approved helper,
+//! but NEVER release the compiler gate. Not Cargo-authorship or proof qualification.
 use super::*;
 use crate::compiler_invocation_backing::CompilerInvocationBacking as Backing;
 use crate::compiler_output_directory::CompilerOutputDirectory as Output;
@@ -37,6 +38,8 @@ use std::{
 // Separate from the unchanged synthetic native-root issuer fixtures.
 #[path = "native_root_request_provisioned_fixture_tests.rs"]
 mod fixtures;
+#[path = "native_root_request_preexec_process_tests.rs"]
+mod preexec;
 
 const WORK: usize = 1 << 60;
 const STORAGE: usize = 64 * 1024 * 1024 * 1024;
@@ -44,7 +47,7 @@ const HARNESS: usize = 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const CASE_ENV: &str = "FE2O3_NATIVE_ROOT_REQUEST_CASE";
 
-impl Native {
+impl Native<'_> {
     // Only the explicitly selected subprocess consumes budget, AFTER the real
     // complete request is installed. This cannot supply owners or approval.
     pub(in crate::native_entrypoint) fn drain_received_budget_for_test(
@@ -78,6 +81,21 @@ fn test_name(name: &str) -> String {
     format!("native_entrypoint::tests::root_request::{name}")
 }
 
+fn postclone_case(case: &str) -> Option<(&'static str, &'static str)> {
+    let case = case.strip_prefix("postclone-")?;
+    for phase in ["helper-ready", "compiler-profile", "compiler-trace"] {
+        if let Some(action) = case.strip_prefix(phase) {
+            return match action {
+                "-work" => Some((phase, "work")),
+                "-storage" => Some((phase, "storage")),
+                "-unwind" => Some((phase, "unwind")),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
 fn require_output(output: std::process::Output, marker: &str) {
     assert!(
         output.status.success(),
@@ -109,18 +127,24 @@ fn complete_root_request_consuming_matrix() {
         "moved-account",
         "trailing",
         "unwind",
+        "helper-unwind",
+        "compiler-unwind",
+        "compiler-work",
+        "compiler-storage",
+        "two-turn-quota",
+        "peer-uid-alias",
+        "peer-gid-alias",
+        "postclone-helper-ready-work",
+        "postclone-helper-ready-storage",
+        "postclone-helper-ready-unwind",
+        "postclone-compiler-profile-work",
+        "postclone-compiler-profile-storage",
+        "postclone-compiler-profile-unwind",
+        "postclone-compiler-trace-work",
+        "postclone-compiler-trace-storage",
+        "postclone-compiler-trace-unwind",
     ] {
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &test_name("complete_root_request_case"),
-                "--ignored",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(CASE_ENV, case)
-            .output()
-            .unwrap();
+        let output = preexec::run_case(case);
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("ROOT_REQUEST_PROVISIONED"),
             "{case}: must admit actual provisioned owners before any credited control: {}",
@@ -137,7 +161,56 @@ fn complete_root_request_consuming_matrix() {
             "{case}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        if case == "unwind" {
+        if case.starts_with("mask")
+            || case == "trailing"
+            || case.starts_with("compiler-")
+            || case == "two-turn-quota"
+        {
+            for marker in [
+                "ROOT_REQUEST_HELPER_EXEC",
+                "ROOT_REQUEST_COMPILER_CHANNEL_GATE_CLOSED",
+            ] {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains(marker),
+                    "{case} must reach {marker}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+        if case == "helper-unwind" {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("ROOT_REQUEST_HELPER_EXEC"));
+        }
+        if let Some((phase, action)) = postclone_case(case) {
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(&format!(
+                    "ROOT_REQUEST_POSTCLONE_REACHED phase={phase} kind={action}"
+                )),
+                "{case}: actual postclone phase must be reached: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if phase != "helper-ready" {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains("ROOT_REQUEST_HELPER_EXEC")
+                );
+            }
+            if action != "unwind" {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("ROOT_REQUEST_POSTCLONE_REFUSED")
+                );
+            }
+        }
+        if case.starts_with("peer-") {
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("ROOT_REQUEST_PEER_ALIAS_REFUSED")
+            );
+        }
+        if case == "two-turn-quota" {
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("ROOT_REQUEST_TWO_TURN_QUOTA")
+            );
+        }
+        if case.ends_with("unwind") {
             assert_eq!(
                 output.status.code(),
                 Some(125),
@@ -161,8 +234,10 @@ fn complete_root_request_case() {
     assert!(mask < 8);
     let mut work = Work::new(WORK);
     let mut displaced_work = Work::new(WORK);
+    let mut foreign_work = Work::new(WORK);
     let mut b = Budget::new(&mut work, STORAGE);
     let mut displaced = Budget::new(&mut displaced_work, STORAGE);
+    let mut foreign = Budget::new(&mut foreign_work, STORAGE);
     b.reserve_storage(HARNESS + FRAME).unwrap();
     let ledger = b.work_ledger_identity_v1();
     let address = &b as *const Budget<'_> as usize;
@@ -266,15 +341,24 @@ fn complete_root_request_case() {
     for (index, file) in streams.iter().enumerate() {
         fs::seek(file, fs::SeekFrom::Start(17 + index as u64)).unwrap();
     }
-    let client = net::socket_with(
-        net::AddressFamily::UNIX,
-        net::SocketType::SEQPACKET,
-        net::SocketFlags::CLOEXEC | net::SocketFlags::NONBLOCK,
-        None,
-    )
-    .unwrap();
-    net::sockopt::set_socket_passcred(&client, true).unwrap();
-    net::connect(&client, &net::SocketAddrUnix::new(SOCKET).unwrap()).unwrap();
+    let (mut uid, mut gid) = preexec::identity_from_environment();
+    assert_ne!(
+        uid,
+        approval.policy().proof_helper_uid(),
+        "default client UID must be independently provisioned"
+    );
+    assert_ne!(
+        gid,
+        approval.policy().proof_helper_gid(),
+        "default client GID must be independently provisioned"
+    );
+    if case == "peer-uid-alias" {
+        uid = approval.policy().proof_helper_uid();
+    }
+    if case == "peer-gid-alias" {
+        gid = approval.policy().proof_helper_gid();
+    }
+    let (proxy, client) = preexec::Sender::connect((uid, gid));
     let sender = MessageSender::new(rustix::process::getpid().as_raw_pid(), 0, 0);
     turn(&mut native, &mut b);
     let (hello, _) = Record::hello(
@@ -289,11 +373,7 @@ fn complete_root_request_case() {
         &mut sender_budget,
     )
     .unwrap();
-    assert!(
-        launch_io::send_packet(client.as_fd(), hello.canonical_bytes())
-            .unwrap()
-            .is_some()
-    );
+    proxy.send(hello.canonical_bytes(), None);
     turn(&mut native, &mut b);
     turn(&mut native, &mut b);
     let bytes = launch_io::receive_authenticated_packet::<N>(client.as_fd(), sender)
@@ -322,15 +402,7 @@ fn complete_root_request_case() {
             Role::Stderr => &streams[2],
         };
         let (record, _) = Record::input(&challenge, role, &mut sender_budget).unwrap();
-        assert!(
-            launch_io::send_packet_with_descriptor(
-                client.as_fd(),
-                record.canonical_bytes(),
-                file.as_fd()
-            )
-            .unwrap()
-            .is_some()
-        );
+        proxy.send(record.canonical_bytes(), Some(file.as_fd()));
         if index + 1 == count {
             let (capture, files) = native.intake.as_ref().unwrap().received_for_test();
             let capture =
@@ -490,10 +562,145 @@ fn complete_root_request_case() {
     if case == "unwind" {
         panic!("unwind with complete original request retained");
     }
+    if case.starts_with("peer-") {
+        native.continuity(&mut b).unwrap();
+        // SAFETY: observation only, through this Native's existing creator.
+        let before = unsafe { native.creator.cleanup_for_launch() }
+            .report()
+            .unwrap();
+        let result = native.intake(&mut b);
+        assert!(
+            matches!(
+                result,
+                Err(Failure::Invalid {
+                    reason: "proof helper and original compiler peer credentials overlap",
+                    ..
+                })
+            ),
+            "must reach actual approved helper/original peer join: {result:?}"
+        );
+        let after = unsafe { native.creator.cleanup_for_launch() }
+            .report()
+            .unwrap();
+        assert_eq!(after.work - before.work, Cleanup::GUARD_CLONE_WORK);
+        assert_eq!(after.storage, before.storage);
+        assert!(after.failed_work.is_none());
+        assert!(
+            native
+                .request
+                .as_ref()
+                .unwrap()
+                .received_for_test()
+                .1
+                .is_none(),
+            "real helper backing preparation consumed the compiler owner"
+        );
+        assert!(b.failed_work().is_none() && b.failed_storage().is_none());
+        assert_no_ack(&client, sender);
+        assert_failed_retry(&mut native, &mut b, &client, sender);
+        eprintln!("ROOT_REQUEST_PEER_ALIAS_REFUSED case={case}");
+        finish(native, &mut b, files, f, &case);
+        return;
+    }
+    let fault = postclone_case(&case);
+    if let Some(("helper-ready", action)) = fault {
+        exercise_postclone_failure(&mut native, &mut b, &client, sender, "helper-ready", action);
+        finish(native, &mut b, files, f, &case);
+        return;
+    }
+    if case.starts_with("mask")
+        || case == "trailing"
+        || case.starts_with("compiler-")
+        || case == "helper-unwind"
+        || fault.is_some()
+        || case == "two-turn-quota"
+    {
+        let launch = RootCompilerRequest::launch_quota().unwrap();
+        let complete_work = launch.work().checked_add(2 * continuity.work()).unwrap();
+        let complete_scratch = launch.scratch().checked_add(continuity.scratch()).unwrap();
+        if case == "two-turn-quota" {
+            // Restrict the SAME original account across BOTH consuming turns.
+            // Logical ballast stays reserved through drain; no fresh budget,
+            // counter reset or replenishment occurs at the helper boundary.
+            b.charge_work((WORK - b.work()).checked_sub(complete_work).unwrap())
+                .unwrap();
+            let available = b.storage_limit() - b.storage();
+            b.reserve_storage(available.saturating_sub(complete_scratch))
+                .unwrap();
+            assert_eq!(WORK - b.work(), complete_work);
+            assert!(b.storage_limit() - b.storage() <= complete_scratch);
+        }
+        let launch_work = b.work();
+        let launch_storage = b.storage();
+        let launch_peak = b.peak_storage();
+        turn(&mut native, &mut b);
+        let helper = native
+            .request
+            .as_ref()
+            .unwrap()
+            .helper_pid_for_test()
+            .expect("actual helper exec/READY must complete");
+        assert!(disk::metadata(format!("/proc/{}/exe", helper.as_raw_pid())).is_ok());
+        assert_no_ack(&client, sender);
+        assert!(b.failed_work().is_none() && b.failed_storage().is_none());
+        assert!(b.work() - launch_work <= complete_work);
+        assert!(b.peak_storage() <= launch_peak.max(launch_storage + complete_scratch));
+        assert!(b.work_ledger_identity_v1() == ledger);
+        assert_eq!(&b as *const Budget<'_> as usize, address);
+        eprintln!(
+            "ROOT_REQUEST_HELPER_EXEC case={case} pid={}",
+            helper.as_raw_pid()
+        );
+        if case == "helper-unwind" {
+            panic!("unwind after genuine helper exec");
+        }
+        if let Some((phase, action)) = fault {
+            exercise_postclone_failure(&mut native, &mut b, &client, sender, phase, action);
+            finish(native, &mut b, files, f, &case);
+            return;
+        }
+        turn(&mut native, &mut b);
+        let compiler = native
+            .request
+            .as_ref()
+            .unwrap()
+            .compiler_pid_for_test()
+            .expect("original compiler channel must be joined behind the closed gate");
+        // The compiler has not exec'd rustc: its running image is still this test
+        // coordinator. The approved image and exact argv/FDs are staged only.
+        assert_eq!(
+            identity(&File::open(format!("/proc/{}/exe", compiler.as_raw_pid())).unwrap()),
+            identity(&File::open("/proc/self/exe").unwrap())
+        );
+        assert_no_ack(&client, sender);
+        assert!(b.failed_work().is_none() && b.failed_storage().is_none());
+        assert!(b.work() - launch_work <= complete_work);
+        assert!(b.peak_storage() <= launch_peak.max(launch_storage + complete_scratch));
+        assert!(b.work_ledger_identity_v1() == ledger);
+        assert_eq!(&b as *const Budget<'_> as usize, address);
+        eprintln!(
+            "ROOT_REQUEST_COMPILER_CHANNEL_GATE_CLOSED case={case} pid={}",
+            compiler.as_raw_pid()
+        );
+        if case == "compiler-unwind" {
+            panic!("unwind after genuine compiler channel");
+        }
+        if case == "two-turn-quota" {
+            // This control stops before the separate V4-refusal turn. Its real
+            // helper/trace owners still require the original pool to drain.
+            eprintln!(
+                "ROOT_REQUEST_TWO_TURN_QUOTA work={} allowance={complete_work} storage={} scratch={complete_scratch}",
+                b.work() - launch_work,
+                b.storage() - launch_storage
+            );
+            finish(native, &mut b, files, f, &case);
+            return;
+        }
+    }
     native.continuity(&mut b).unwrap();
     let mut retained = b.storage();
     match case.as_str() {
-        "short-work" => {
+        "short-work" | "compiler-work" => {
             let entry = root::LOCAL_WORK + Backing::LOCAL_WORK;
             b.charge_work(WORK - b.work() - entry + 1).unwrap();
             assert!(matches!(
@@ -503,8 +710,6 @@ fn complete_root_request_case() {
             assert!(b.failed_work().is_some());
         }
         "foreign-account" => {
-            let mut foreign_work = Work::new(WORK);
-            let mut foreign = Budget::new(&mut foreign_work, STORAGE);
             foreign.reserve_storage(retained).unwrap();
             let spent = b.work();
             assert!(matches!(
@@ -528,7 +733,7 @@ fn complete_root_request_case() {
             ));
             assert_eq!(b.work() - spent, root::LOCAL_WORK + Backing::LOCAL_WORK);
         }
-        "exhausted-storage" => {
+        "exhausted-storage" | "compiler-storage" => {
             b.reserve_storage(STORAGE - b.storage()).unwrap();
             retained = b.storage();
             assert!(matches!(
@@ -538,11 +743,7 @@ fn complete_root_request_case() {
             assert!(b.failed_storage().is_some());
         }
         "trailing" => {
-            assert!(
-                launch_io::send_packet(client.as_fd(), last.as_ref().unwrap().canonical_bytes())
-                    .unwrap()
-                    .is_some()
-            );
+            proxy.send(last.as_ref().unwrap().canonical_bytes(), None);
             assert!(matches!(
                 native.intake(&mut b),
                 Err(Failure::Invalid {
@@ -589,6 +790,68 @@ fn complete_root_request_case() {
     finish(native, &mut b, files, f, &case);
 }
 
+fn exercise_postclone_failure<'work>(
+    native: &mut Native<'work>,
+    b: &mut Budget<'work>,
+    client: &OwnedFd,
+    sender: MessageSender,
+    phase: &'static str,
+    action: &'static str,
+) {
+    native.continuity(b).unwrap();
+    native
+        .request
+        .as_ref()
+        .unwrap()
+        .arm_postclone_fault_for_test(phase, action, b);
+    let storage = b.storage();
+    let result = native.intake(b);
+    match action {
+        "work" => assert!(
+            matches!(result, Err(Failure::Resource(Resource::Work(_)))),
+            "{result:?}"
+        ),
+        "storage" => assert!(
+            matches!(result, Err(Failure::Resource(Resource::Storage(_)))),
+            "{result:?}"
+        ),
+        "unwind" => panic!("selected postclone unwind returned"),
+        _ => unreachable!(),
+    }
+    let observed = RootCompilerRequest::postclone_fault_observation_for_test();
+    assert_eq!((observed.phase, observed.action), (phase, action));
+    assert_eq!(
+        (
+            b.work(),
+            b.peak_storage(),
+            b.failed_work(),
+            b.failed_storage()
+        ),
+        (
+            observed.work,
+            observed.peak,
+            observed.failed_work,
+            observed.failed_storage
+        )
+    );
+    assert_eq!(
+        b.storage(),
+        if phase == "helper-ready" {
+            observed.storage
+        } else {
+            storage
+        }
+    );
+    if action == "work" {
+        assert!(b.failed_work().is_some() && b.failed_storage().is_none());
+    } else {
+        assert!(b.failed_storage().is_some() && b.failed_work().is_none());
+    }
+    assert_no_ack(client, sender);
+    assert_failed_retry(native, b, client, sender);
+    eprintln!("ROOT_REQUEST_POSTCLONE_REFUSED phase={phase} kind={action}");
+}
+
 fn assert_no_ack(client: &OwnedFd, sender: MessageSender) {
     assert!(
         launch_io::receive_authenticated_packet::<N>(client.as_fd(), sender)
@@ -598,9 +861,9 @@ fn assert_no_ack(client: &OwnedFd, sender: MessageSender) {
     );
 }
 
-fn assert_failed_retry(
-    native: &mut Native,
-    b: &mut Budget<'_>,
+fn assert_failed_retry<'work>(
+    native: &mut Native<'work>,
+    b: &mut Budget<'work>,
     client: &OwnedFd,
     sender: MessageSender,
 ) {
@@ -613,7 +876,7 @@ fn assert_failed_retry(
     );
     let spent = b.work();
     let retry = native.intake(b);
-    if history.2.is_some() {
+    if WORK - spent < root::LOCAL_WORK + Backing::LOCAL_WORK {
         assert!(matches!(retry, Err(Failure::Resource(Resource::Work(_)))));
     } else {
         assert!(matches!(
@@ -638,9 +901,9 @@ fn assert_failed_retry(
     assert_no_ack(client, sender);
 }
 
-fn finish(
-    mut native: Native,
-    b: &mut Budget<'_>,
+fn finish<'work>(
+    mut native: Native<'work>,
+    b: &mut Budget<'work>,
     files: [Option<RawFd>; 6],
     f: fixtures::Fixture,
     case: &str,
@@ -724,7 +987,7 @@ fn finish(
     eprintln!("ROOT_REQUEST_DRAINED case={case}");
 }
 
-fn turn(native: &mut Native, b: &mut Budget<'_>) {
+fn turn<'work>(native: &mut Native<'work>, b: &mut Budget<'work>) {
     native.continuity(b).unwrap();
     assert!(
         !native

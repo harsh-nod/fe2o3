@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn request_quotes_fund_both_inventories_and_every_refusal_turn_without_cleanup_growth() {
+fn request_quotes_fund_original_inputs_two_native_slots_and_every_refusal_turn() {
     let admission = RootCompilerRequest::preparation_quota().unwrap();
     let refusal = RootCompilerRequest::refusal_quota().unwrap();
     let bytes =
@@ -17,7 +17,21 @@ fn request_quotes_fund_both_inventories_and_every_refusal_turn_without_cleanup_g
         crate::InheritedCompilerExecutionDeploymentV3::original_root_startup_quota(2, 1).unwrap();
     let old_first = crate::InheritedCompilerExecutionDeploymentV3::startup_quota(1, 1).unwrap();
     let old_next = crate::InheritedCompilerExecutionDeploymentV3::startup_quota(2, 1).unwrap();
-    assert_eq!(first.cleanup_storage(), old_first.cleanup_storage());
+    let (cleanup_work, cleanup_storage) = RootCompilerRequest::cleanup_growth().unwrap();
+    assert_eq!(
+        first.cleanup_storage(),
+        old_first.cleanup_storage() + cleanup_storage
+    );
+    assert_eq!(
+        first.cleanup_work(),
+        old_first.cleanup_work() + cleanup_work
+    );
+    assert!(RootCompilerRequest::launch_quota().unwrap().scratch() > admission.scratch());
+    let guard = Prepared::maximum_cleanup_guard_quota().unwrap();
+    let launch = RootCompilerRequest::launch_quota().unwrap();
+    assert!(launch.work() >= 2 * guard.work());
+    assert!(launch.scratch() >= guard.scratch());
+    assert!(cleanup_work >= 2 * Cleanup::GUARD_CLONE_WORK);
     assert_eq!(
         next.request_work() - first.request_work(),
         old_next.request_work() - old_first.request_work()
@@ -25,6 +39,21 @@ fn request_quotes_fund_both_inventories_and_every_refusal_turn_without_cleanup_g
             + Prepared::maximum_revalidation_quota().unwrap().work()
             + refusal.work()
     );
+}
+
+#[test]
+fn helper_peer_separation_rejects_either_alias_not_only_equal_pairs() {
+    let helper = Credentials::new(42001, 42002).unwrap();
+    for (uid, gid) in [(42001, 42004), (42003, 42002), (42001, 42002)] {
+        assert!(matches!(
+            require_separate_helper_peer(helper, Credentials::new(uid, gid).unwrap()),
+            Err(Error::Invalid {
+                reason: "proof helper and original compiler peer credentials overlap",
+                ..
+            })
+        ));
+    }
+    require_separate_helper_peer(helper, Credentials::new(42003, 42004).unwrap()).unwrap();
 }
 
 #[test]

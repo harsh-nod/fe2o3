@@ -65,7 +65,7 @@ impl Fake {
         self.effect(name)
     }
 }
-impl Runtime for Fake {
+impl<'work> Runtime<'work> for Fake {
     fn start(&mut self, b: &mut Budget<'_>) -> Result<()> {
         b.reserve_storage(RETAINED)?;
         self.request("start", b)
@@ -443,14 +443,20 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
     let continuity = Prepared::maximum_revalidation_quota().unwrap();
     let request = RootCompilerRequest::preparation_quota().unwrap();
     let refusal = RootCompilerRequest::refusal_quota().unwrap();
-    assert_eq!(root.cleanup_work(), old.cleanup_work());
-    assert_eq!(root.cleanup_storage(), old.cleanup_storage());
+    let launch = RootCompilerRequest::launch_quota().unwrap();
+    let (cleanup_work, cleanup_storage) = RootCompilerRequest::cleanup_growth().unwrap();
+    assert_eq!(root.cleanup_work(), old.cleanup_work() + cleanup_work);
+    assert_eq!(
+        root.cleanup_storage(),
+        old.cleanup_storage() + cleanup_storage
+    );
     assert_eq!(
         root.request_work(),
         old.request_work()
             + super::root::LOCAL_WORK
             + fe2o3_compiler_execution_supervisor::ProvisionedProtectedIssuerServiceInputsV2::WORK
             + request.work()
+            + launch.work()
             + 2 * (Receiver::TURN_WORK + continuity.work() + refusal.work())
     );
     assert!(
@@ -461,6 +467,7 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
                 + continuity.scratch()
                 + RootCompilerRequest::ENVELOPE
                 + request.scratch()
+                + launch.scratch()
                 + refusal.scratch()
     );
     assert!(Deployment::original_root_startup_quota(usize::MAX, 1).is_err());
@@ -475,7 +482,7 @@ struct GuardedFake {
     creator: CreatorScope,
 }
 
-impl Runtime for GuardedFake {
+impl<'work> Runtime<'work> for GuardedFake {
     fn start(&mut self, b: &mut Budget<'_>) -> Result<()> {
         self.inner.start(b)
     }

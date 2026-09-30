@@ -24,7 +24,7 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(120);
 const _: () = assert!(CreatorScope::CONTROL_WORK + 4096 <= root::LOCAL_WORK);
 // Includes control state, error paths and account handles, not generated stack/RSS.
 pub(crate) const FRAME: usize =
-    4 * size_of::<Native>() + 4 * size_of::<Failure>() + 2 * size_of::<Account>() + 16384;
+    4 * size_of::<Native<'static>>() + 4 * size_of::<Failure>() + 2 * size_of::<Account>() + 16384;
 
 /// Runs one fixed native V3 activation with two independent, nonrenewable accounts.
 ///
@@ -34,9 +34,9 @@ pub(crate) const FRAME: usize =
 /// even if cleanup succeeds. No V1/V2 fallback or runtime family selector exists.
 /// The paired binary selects this original-root listener. One bounded authenticated
 /// intake consumes its whole original request into fixed-origin compiler backing
-/// before the same RuntimeEnforcementUnavailable refusal; it cannot start a
-/// compiler or return RootSession/Ready authority. Installed/native qualification
-/// and the runtime/source enforcement required for compiler launch remain separate.
+/// and an approved helper-backed compiler child behind a CLOSED exec gate before
+/// the same RuntimeEnforcementUnavailable refusal. Helper READY is not proof;
+/// compiler exec, runtime/source enforcement and publication remain unavailable.
 ///
 /// Every return requires termination of the dedicated process. Once cleanup is
 /// admitted, return/unwind before successful original-pool empty shutdown exits
@@ -55,9 +55,31 @@ pub(crate) const FRAME: usize =
 /// and `environ` is a valid readable null-terminated C environment. No handler may
 /// change the mask or consume termination signals. Do not retry, fork, or continue
 /// application work after this call, including after refusal or caught unwind.
-/// The actual external unit must retain whole-cgroup termination custody after
-/// main-process exit. The checked-in unit uses KillMode=mixed; this function does
-/// not admit its effective configuration, containment, or installed native image.
+///
+/// Independently establish trusted host-root administrator provenance in the
+/// deployment's actual user, mount and cgroup context, and bind the approved helper
+/// and authenticated peer to their actual deployment roles with the required
+/// separation. Exact root IDs, activation text, sealed configuration, fixed policy
+/// approval and namespace readback do not establish that external provenance.
+///
+/// Keep the dedicated creator thread and original privileged cleanup controller
+/// alive through all in-process launches and aggregate cleanup, outside every
+/// child containment domain. Preserve exclusive consuming-wait ownership and
+/// exclude competing FD, credential, signal, namespace/map, cgroup and approved
+/// backing mutations. No staged binding, executed image or descendant may expose
+/// cgroup controls, relocate itself, delegate its domain or create child cgroups.
+/// Retain the original independently funded pool through unresolved cleanup;
+/// neither resource exhaustion nor foreground refusal permits replacement.
+///
+/// An actual outside service-manager custodian must retain whole-service-domain
+/// termination responsibility after main-process exit, including fail-stop or
+/// unwind. CreatorScope enforces process exit with an unresolved original pool;
+/// it does not authenticate that custodian or prove eventual descendant cleanup.
+/// The checked-in unit uses KillMode=mixed, but this function and the paired main's
+/// comments do not admit its effective configuration, containment or installed
+/// native image. The paired deployment must establish these obligations before
+/// invoking this route. Helper bootstrap custody is not compiler runtime/source
+/// enforcement, proof acceptance or permission to open the compiler exec gate.
 ///
 /// ```compile_fail
 /// use fe2o3_compiler_execution_coordinator::run_inherited_compiler_execution_coordinator_v3;
@@ -82,17 +104,18 @@ pub unsafe fn run_inherited_compiler_execution_coordinator_v3() -> Result<()> {
                 request: None,
                 activation: None,
                 signals: None,
-                // SAFETY: this unsafe entry owns the dedicated process, original
-                // pool and external whole-cgroup cleanup contract. Activation
-                // validates the main thread before either native child is cloned.
+                // SAFETY: the caller supplies the full external deployment and
+                // outside-custodian contract above; this scope authenticates neither.
+                // Native keeps this original pool through cleanup or fail-stop.
+                // Activation checks the main thread before any native child clone.
                 creator: unsafe { CreatorScope::enter(cleanup) },
             })
         })
     })
 }
 
-fn run_scoped<R: Runtime>(
-    b: &mut Budget<'_>,
+fn run_scoped<'work, R: Runtime<'work>>(
+    b: &mut Budget<'work>,
     monitor_turns: usize,
     cleanup_turns: usize,
     create: impl FnOnce() -> Result<R>,
@@ -119,12 +142,12 @@ fn run_scoped<R: Runtime>(
 }
 
 // Private orchestration seam: tests substitute effects, never admitted authority.
-trait Runtime {
+trait Runtime<'work> {
     fn start(&mut self, b: &mut Budget<'_>) -> Result<()>;
     fn publish(&mut self, b: &mut Budget<'_>) -> Result<()>;
     fn wait(&mut self, b: &mut Budget<'_>) -> Result<Option<i32>>;
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()>;
-    fn intake(&mut self, _b: &mut Budget<'_>) -> Result<bool> {
+    fn intake(&mut self, _b: &mut Budget<'work>) -> Result<bool> {
         Ok(false)
     }
     fn cancel(&mut self);
@@ -133,7 +156,11 @@ trait Runtime {
     fn restore(&mut self, b: &mut Budget<'_>) -> Result<()>;
 }
 
-fn monitor(runtime: &mut impl Runtime, turns: usize, b: &mut Budget<'_>) -> Result<()> {
+fn monitor<'work>(
+    runtime: &mut impl Runtime<'work>,
+    turns: usize,
+    b: &mut Budget<'work>,
+) -> Result<()> {
     runtime.start(b)?;
     runtime.publish(b)?;
     for _ in 0..turns {
@@ -155,7 +182,11 @@ fn monitor(runtime: &mut impl Runtime, turns: usize, b: &mut Budget<'_>) -> Resu
 
 // Ok means the pool is terminal, even if waiting failed. Err means custody must
 // remain in the charged pool and the signal mask must not be restored.
-fn drain(runtime: &mut impl Runtime, turns: usize, b: &mut Budget<'_>) -> Result<Option<Failure>> {
+fn drain<'work>(
+    runtime: &mut impl Runtime<'work>,
+    turns: usize,
+    b: &mut Budget<'work>,
+) -> Result<Option<Failure>> {
     match runtime.shutdown() {
         Ok(()) => return Ok(None),
         Err(Failure::Cleanup(CleanupError::Busy)) => {}
@@ -178,17 +209,17 @@ fn drain(runtime: &mut impl Runtime, turns: usize, b: &mut Budget<'_>) -> Result
     Err(CleanupError::Busy.into())
 }
 
-struct Native {
+struct Native<'work> {
     // Cancel foreground custody before the armed creator scope can fail-stop.
     prepared: Option<Prepared>,
     intake: Option<Receiver>,
-    request: Option<RootCompilerRequest>,
+    request: Option<RootCompilerRequest<'work>>,
     activation: Option<Activation>,
     signals: Option<TerminationSignals>,
     creator: CreatorScope,
 }
 
-impl Runtime for Native {
+impl<'work> Runtime<'work> for Native<'work> {
     #[allow(unsafe_code)]
     fn start(&mut self, b: &mut Budget<'_>) -> Result<()> {
         // SAFETY: only the unique dedicated entrypoint constructs Native.
@@ -202,9 +233,10 @@ impl Runtime for Native {
         // SAFETY: activation succeeded and this is the one FD ownership transfer.
         let (deployment, charge) = unsafe { Deployment::admit(b) }?;
         b.reserve_storage(charge.additional_storage())?;
-        // SAFETY: this closed synchronous composition launches anchor then
-        // original-root preparation on this main thread. It borrows the original pool;
-        // Native retains the scope through cancellation and empty shutdown.
+        // SAFETY: this closed synchronous composition borrows, never replaces,
+        // the original pool on the creator's main thread. Native retains the scope
+        // through cancellation and empty shutdown or fail-stop. The entrypoint's
+        // caller supplies external administrator/custodian and exclusion obligations.
         let cleanup = unsafe { self.creator.cleanup_for_launch() };
         let (prepared, growth) = deployment.prepare_original_root(LAUNCH_TIMEOUT, cleanup, b)?;
         // Keep genuine foreground custody even if this outer growth reservation
@@ -248,9 +280,14 @@ impl Runtime for Native {
             .revalidate(b)?)
     }
 
-    fn intake(&mut self, b: &mut Budget<'_>) -> Result<bool> {
+    #[allow(unsafe_code)]
+    fn intake(&mut self, b: &mut Budget<'work>) -> Result<bool> {
         if let Some(request) = &mut self.request {
-            return request.step(b);
+            // SAFETY: Native retains the original creator/pool and complete request.
+            // The entrypoint's external administrator, role-binding, outside-custodian
+            // and wait/mutation/containment obligations apply through every error and
+            // aggregate retirement; runtime checks do not manufacture that provenance.
+            return unsafe { request.step(self.creator.cleanup_for_launch(), b) };
         }
         let complete = self
             .intake
@@ -276,7 +313,16 @@ impl Runtime for Native {
             ));
             #[cfg(test)]
             self.drain_received_budget_for_test(b);
-            return self.request.as_mut().unwrap().step(b);
+            // SAFETY: same original creator/pool as anchor preparation; the installed
+            // request owns failure. All entrypoint deployment/custodian, role-binding
+            // and exclusion obligations remain in force for subsequent helper exec,
+            // closed-gate compiler custody and unresolved aggregate cleanup.
+            return unsafe {
+                self.request
+                    .as_mut()
+                    .unwrap()
+                    .step(self.creator.cleanup_for_launch(), b)
+            };
         }
         Ok(false)
     }
