@@ -394,3 +394,21 @@ No protected proof or GPU execution occurred in these runs. M0 remains complete,
 M1-M7 remain incomplete, and strict production-to-required-proof-to-safe-GPU
 coverage remains **0/47**. Publishing this evidence does not activate the
 integration candidate on public main.
+
+r203 subsequently tested the combined source/lifetime/terminal-cleanup candidate
+`5b87cc8e4f684b10ffc8d3c15feb0ea7fd2cdc03`: **48 passed, 35 failed,
+zero ignored** (83 selected tests, not the complete lowerer suite). Compilation
+succeeded. Most failures stop at the shared source-dependency consistency check,
+`scoped source dependency differs from its original formation`, before the
+intended emission, pending-owner or source-replay assertions. One negative
+fixture instead stops at `InvalidTypeOperation` for an aggregate during fixture
+admission. These failures earn no intended-negative coverage.
+
+The earlier ABI and temporary-view compilation failures no longer stop this
+run, but the integration is still failing. The source/tool inventories remained
+unchanged. Source snapshot SHA-256:
+`47922ae57b118994c8660ff2d9b3c44fa1bb632477456de943a206465b1daf40`.
+Log SHA-256:
+`e2e27cd3a57ffc551312f3e00d74416420f4ec667418d026868733b368249d5e`.
+No simulator, protected proof or GPU execution occurred. Milestone and strict
+end-to-end coverage counts are unchanged.
