@@ -1,5 +1,5 @@
 thread_local! {
-    static COMPLETED_SELECTED_METADATA_CHECKS_V30: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static COMPLETED_SELECTED_METADATA_CHECKS_V30: std::cell::Cell<[usize; 3]> = const { std::cell::Cell::new([0; 3]) };
 }
 
 fn completed_metadata_scope_oracle_v30() -> usize {
@@ -38,6 +38,30 @@ fn audit_completed_descriptor_metadata_v30(
     let Some((instance, descriptor)) = descriptor else {
         return Ok(());
     };
+    let observation = SOURCE_EMISSION_OBSERVATION_V29
+        .get()
+        .expect("source-owned metadata completion phase");
+    assert_eq!(
+        observation.owner,
+        std::ptr::from_ref(plan.instances.owner()) as usize
+    );
+    assert_eq!(observation.slot, std::ptr::from_ref(budget) as usize);
+    assert!(observation.ledger == budget.work_ledger_identity_v1());
+    let phase = match observation.phase {
+        SourceEmissionPhaseV29::Admission => 0,
+        SourceEmissionPhaseV29::ConstructionReplay => 1,
+        SourceEmissionPhaseV29::ConsumerReplay => 2,
+    };
+    assert_eq!(
+        COMPLETED_SELECTED_METADATA_CHECKS_V30.get(),
+        match phase {
+            0 => [0, 0, 0],
+            1 => [1, 0, 0],
+            2 => [1, 1, 0],
+            _ => unreachable!(),
+        },
+        "metadata completion must follow the exact original owner lifecycle"
+    );
     let origin = SourceExternalReferenceOriginV29::Descriptor {
         instance,
         descriptor,
@@ -117,7 +141,9 @@ fn audit_completed_descriptor_metadata_v30(
         check_source_external_origin_metadata_v30(plan, origin, budget)?;
     }
     check_source_external_metadata_complete_v30(plan, budget)?;
-    COMPLETED_SELECTED_METADATA_CHECKS_V30.set(COMPLETED_SELECTED_METADATA_CHECKS_V30.get() + 1);
+    let mut checked = COMPLETED_SELECTED_METADATA_CHECKS_V30.get();
+    checked[phase] += 1;
+    COMPLETED_SELECTED_METADATA_CHECKS_V30.set(checked);
     Ok(())
 }
 
@@ -132,7 +158,7 @@ fn selected_descriptor_metadata_is_mandatory_after_all_original_cfg_arms_complet
     let _restore = Restore(
         SOURCE_EXTERNAL_METADATA_AUDIT_V30.replace(Some(audit_completed_descriptor_metadata_v30)),
     );
-    COMPLETED_SELECTED_METADATA_CHECKS_V30.set(0);
+    COMPLETED_SELECTED_METADATA_CHECKS_V30.set([0; 3]);
     let reached = std::cell::Cell::new(false);
     let (result, _, _) = run_selected_memory_owner(
         mixed_selected_memory_owner(),
@@ -140,6 +166,7 @@ fn selected_descriptor_metadata_is_mandatory_after_all_original_cfg_arms_complet
         SELECTED_MEMORY_LIMIT,
         |original, _| {
             assert_eq!(retained_selected_memory(original).selected.len(), 1);
+            assert_eq!(COMPLETED_SELECTED_METADATA_CHECKS_V30.get(), [1, 1, 1]);
             reached.set(true);
             Ok(())
         },
@@ -148,8 +175,8 @@ fn selected_descriptor_metadata_is_mandatory_after_all_original_cfg_arms_complet
     assert!(reached.get());
     assert_eq!(
         COMPLETED_SELECTED_METADATA_CHECKS_V30.get(),
-        2,
-        "construction and source-consumer C1 plans"
+        [1, 1, 1],
+        "admission, construction replay, and source-consumer replay C1 plans"
     );
 }
 
