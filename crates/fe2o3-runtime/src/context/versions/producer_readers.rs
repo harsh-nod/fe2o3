@@ -10,10 +10,15 @@ use fe2o3_runtime_model::{
 };
 
 include!("producer_input_preflight_body.rs");
+include!("producer_input_fold_body.rs");
 
 #[cfg(test)]
 #[path = "producer_input_preflight_tests.rs"]
 mod preflight_tests;
+
+#[cfg(test)]
+#[path = "producer_input_fold_tests.rs"]
+mod fold_tests;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::context) struct SubmissionProducerReaderMarkerV1 {
@@ -105,6 +110,82 @@ struct ProducerInputRootV1<'a> {
     root: &'a RetainedProducerReadV1,
     consumer: ContextWriterKeyV1,
     launch: bool,
+}
+
+// This adapter borrows retained Context storage. Each reached credit predicate
+// calls the existing account implementation afresh; no account snapshot is kept.
+struct ProducerInputObservationsV1<'a, B: RuntimeBackendV1> {
+    context: &'a RuntimeContextV1<B>,
+    versions: &'a ContextVersionsV1,
+    root: &'a RetainedProducerReadV1,
+    id: RuntimeSubmissionIdV1,
+    consumer: ContextWriterKeyV1,
+    launch: bool,
+}
+
+impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
+    fn input_count(&self) -> usize {
+        self.root.inputs.len()
+    }
+
+    fn active_count(&self) -> usize {
+        self.root.references.len()
+    }
+
+    fn queued_count(&self) -> usize {
+        self.root.queued_references.len()
+    }
+
+    fn observe_expected_credit(
+        &mut self,
+        id: RuntimeAllocationIdV1,
+        device: RuntimeDeviceIdV1,
+        byte_len: u64,
+    ) -> bool {
+        self.context
+            .allocation_admission
+            .has_expected_credit(id, device, byte_len)
+    }
+
+    fn validate(
+        &mut self,
+        index: usize,
+        active_index: &mut usize,
+        queued_index: &mut usize,
+    ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
+        let context = self.context;
+        let versions = self.versions;
+        let root = self.root;
+        let id = self.id;
+        let consumer = self.consumer;
+        let launch = self.launch;
+        producer_input_validate_body!(
+            completion_journal_rust_syntax,
+            context,
+            versions,
+            root,
+            id,
+            consumer,
+            launch,
+            index,
+            active_index,
+            queued_index,
+            self
+        )
+    }
+
+    fn reconcile(&mut self) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
+        let invalid_reference = ContextVersionJournalErrorV1::InvalidReference;
+        producer_input_fold_body!(
+            completion_journal_rust_syntax,
+            self,
+            invalid_reference,
+            (index, aggregate, active_index, queued_index, input_count),
+            [],
+            [],
+            []
+        )
+    }
 }
 
 pub(super) struct PreparedProducerReadsV1 {
@@ -756,7 +837,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         id: RuntimeSubmissionIdV1,
     ) -> Result<Option<ContextProducerReadStatusV1>, ContextVersionJournalErrorV1> {
-        use ContextVersionJournalErrorV1 as E;
         let Some(ProducerInputRootV1 {
             versions,
             root,
@@ -766,133 +846,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         else {
             return Ok(None);
         };
-        let mut aggregate = ContextProducerReadStatusV1::Success;
-        let mut active_index = 0usize;
-        let mut queued_index = 0usize;
-        for (index, input) in root.inputs.iter().enumerate() {
-            let source = input.source;
-            let (allocation, byte_offset, byte_len, producer, status) = match input.request {
-                ProducerReadRequestV1::Active(request) => {
-                    let reference = *root
-                        .references
-                        .get(active_index)
-                        .ok_or(E::InvalidReference)?;
-                    if root.requests.get(active_index) != Some(&request)
-                        || reference.consumer != consumer
-                        || root.references[0]
-                            .incarnation
-                            .checked_add(active_index as u64)
-                            != Some(reference.incarnation)
-                        || versions.journal.lookup_producer_read(reference)? != request
-                    {
-                        return Err(E::InvalidReference);
-                    }
-                    active_index += 1;
-                    (
-                        fe2o3_runtime_model::ContextAllocationWriteV1 {
-                            allocation: request.read.allocation,
-                            device: request.read.device,
-                            byte_extent: request.read.byte_extent,
-                        },
-                        request.read.byte_offset,
-                        request.read.byte_len,
-                        request.producer,
-                        versions.journal.producer_read_status(reference)?,
-                    )
-                }
-                ProducerReadRequestV1::Queued(request) => {
-                    let reference = *root
-                        .queued_references
-                        .get(queued_index)
-                        .ok_or(E::InvalidReference)?;
-                    if root.queued_requests.get(queued_index) != Some(&request)
-                        || reference.consumer != consumer
-                        || root.queued_references[0]
-                            .incarnation
-                            .checked_add(queued_index as u64)
-                            != Some(reference.incarnation)
-                        || versions.journal.lookup_queued_producer_read(reference)? != request
-                    {
-                        return Err(E::InvalidReference);
-                    }
-                    queued_index += 1;
-                    (
-                        request.allocation,
-                        request.byte_offset,
-                        request.byte_len,
-                        request.producer,
-                        versions.journal.queued_producer_read_status(reference)?,
-                    )
-                }
-            };
-            let bound = if launch {
-                self.producer_launches.get(&id).is_some_and(|launch| {
-                    launch.dependencies_held
-                        && launch.dependencies.contains(&input.dependency)
-                        && launch.sources.iter().any(|original| {
-                            original.region == source.region && original.record == source.record
-                        })
-                })
-            } else {
-                self.scalar_peer_copies.get(&id).is_some_and(|peer| {
-                    peer.directed.is_some()
-                        && peer.dependencies_held
-                        && peer.dependencies.contains(&input.dependency)
-                        && peer.source.region == source.region
-                        && peer.source.record == source.record
-                })
-            };
-            if !bound
-                || producer.key
-                    != (ContextWriterKeyV1 {
-                        context_generation: input.dependency.submission.context_generation,
-                        local: input.dependency.submission.local,
-                        kind: ContextWriterKindV1::Submission,
-                    })
-                || input.dependency.submission.local >= id.local
-                || index > 0
-                    && root.inputs[index - 1].source.region.allocation >= source.region.allocation
-                || self.allocations.get(&source.region.allocation) != Some(&source.record)
-                || !self
-                    .backend_allocations
-                    .contains(&source.record.backend_allocation)
-                || !self.allocation_admission.has_expected_credit(
-                    source.region.allocation,
-                    source.record.device,
-                    source.record.byte_len,
-                )
-                || versions.validate_live(source.region.allocation, &source.record)?
-                    != allocation.allocation
-                || allocation.device
-                    != enrollment(
-                        source.region.allocation,
-                        source.record.device,
-                        source.record.byte_len,
-                    )
-                    .device
-                || allocation.byte_extent != source.record.byte_len
-                || byte_offset != source.region.byte_offset
-                || byte_len != source.region.byte_len
-            {
-                return Err(E::InvalidReference);
-            }
-            // Resolved reservations outlive their writer slot; never revalidate admission.
-            aggregate = match (aggregate, status) {
-                (ContextProducerReadStatusV1::Unknown, _)
-                | (_, ContextProducerReadStatusV1::Unknown) => ContextProducerReadStatusV1::Unknown,
-                (ContextProducerReadStatusV1::NoEffect, _)
-                | (_, ContextProducerReadStatusV1::NoEffect) => {
-                    ContextProducerReadStatusV1::NoEffect
-                }
-                (ContextProducerReadStatusV1::Pending, _)
-                | (_, ContextProducerReadStatusV1::Pending) => ContextProducerReadStatusV1::Pending,
-                _ => ContextProducerReadStatusV1::Success,
-            };
+        ProducerInputObservationsV1 {
+            context: self,
+            versions,
+            root,
+            id,
+            consumer,
+            launch,
         }
-        if active_index != root.references.len() || queued_index != root.queued_references.len() {
-            return Err(E::InvalidReference);
-        }
-        Ok(Some(aggregate))
+        .reconcile()
+        .map(Some)
     }
 
     pub(in crate::context) fn directed_input_status_v1(
