@@ -145,31 +145,20 @@ fn preflight_overflow_restores_entry_storage_and_preserves_first_denials() {
 }
 
 #[test]
-fn full_charge_keeps_all_four_sources_staged_data_and_complete_original_input() {
-    let (input, invocation, rustc, interpreter, backend, proc_macro) =
-        (1001, 2003, 3007, 4009, 5011, 6013);
-    let charge =
-        retained_storage_for(input, invocation, rustc, interpreter, backend, proc_macro).unwrap();
+fn full_charge_keeps_complete_inventory_transfer_and_original_input() {
+    let (input, invocation, sources, staged_four) = (1001, 2003, 30007, 19040);
+    let charge = retained_storage_for(input, invocation, sources).unwrap();
     assert_eq!(
         charge.additional_storage(),
-        invocation
-            + rustc
-            + interpreter
-            + backend
-            + proc_macro
-            + CompilerInvocationBacking::ENVELOPE
+        invocation + sources + CompilerInvocationBacking::ENVELOPE
     );
     assert_eq!(
         charge.retained_storage(),
         input + charge.additional_storage()
     );
-    let duplicate_charge = transfer_storage(rustc, interpreter, backend, proc_macro).unwrap();
     assert_eq!(
-        staged_floor(charge.retained_storage(), duplicate_charge).unwrap(),
-        input
-            + invocation
-            + 2 * (rustc + interpreter + backend + proc_macro)
-            + CompilerInvocationBacking::ENVELOPE
+        staged_floor(charge.retained_storage(), staged_four).unwrap(),
+        input + invocation + sources + staged_four + CompilerInvocationBacking::ENVELOPE
     );
     // The whole owner can stay in the native child's retained cleanup state.
     fn send_static<T: Send + 'static>() {}
@@ -178,28 +167,14 @@ fn full_charge_keeps_all_four_sources_staged_data_and_complete_original_input() 
 
 #[test]
 fn every_retention_addition_refuses_arithmetic_overflow() {
-    for (input, invocation, rustc, interpreter, backend, proc_macro) in [
-        (usize::MAX, 1, 1, 1, 1, 1),
-        (1, usize::MAX, 1, 1, 1, 1),
-        (1, 1, usize::MAX, 1, 1, 1),
-        (1, 1, 1, usize::MAX, 1, 1),
-        (1, 1, 1, 1, usize::MAX, 1),
-        (1, 1, 1, 1, 1, usize::MAX),
-    ] {
+    for (input, invocation, sources) in [(usize::MAX, 1, 1), (1, usize::MAX, 1), (1, 1, usize::MAX)]
+    {
         assert!(matches!(
-            retained_storage_for(input, invocation, rustc, interpreter, backend, proc_macro),
+            retained_storage_for(input, invocation, sources),
             Err(CompilerInvocationBackingError::Resource(
                 Resource::Arithmetic
             ))
         ));
     }
     assert!(staged_floor(usize::MAX, 1).is_err());
-    for (rustc, interpreter, backend, proc_macro) in [
-        (usize::MAX, 1, 1, 1),
-        (1, usize::MAX, 1, 1),
-        (1, 1, usize::MAX, 1),
-        (1, 1, 1, usize::MAX),
-    ] {
-        assert!(transfer_storage(rustc, interpreter, backend, proc_macro).is_err());
-    }
 }

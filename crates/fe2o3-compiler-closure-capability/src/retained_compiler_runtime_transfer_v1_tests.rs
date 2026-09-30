@@ -553,3 +553,6 @@ fn post_duplicate_unwind_preserves_original_account_and_work() {
 
 #[path = "retained_compiler_runtime_dynamic_transfer_v1_tests.rs"]
 mod dynamic;
+
+#[path = "retained_compiler_runtime_inventory_transfer_v1_tests.rs"]
+mod inventory;

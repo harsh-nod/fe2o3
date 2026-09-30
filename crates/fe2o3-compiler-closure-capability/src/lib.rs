@@ -112,8 +112,8 @@ pub use native_capability::{
 };
 pub use retained_compiler_runtime_v1::{
     COMPILER_RUNTIME_MANIFEST_PATH_V1, COMPILER_RUNTIME_ROOT_V1, RetainedCompilerRuntimeErrorV1,
-    RetainedCompilerRuntimeExecTransferChargeV1, RetainedCompilerRuntimeStorageV1,
-    RetainedCompilerRuntimeV1,
+    RetainedCompilerRuntimeExecTransferChargeV1, RetainedCompilerRuntimeInventoryTransferV1,
+    RetainedCompilerRuntimeStorageV1, RetainedCompilerRuntimeV1,
 };
 pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1};
 use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};

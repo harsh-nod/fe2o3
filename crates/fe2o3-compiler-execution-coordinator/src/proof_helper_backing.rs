@@ -137,11 +137,12 @@ pub(crate) struct ProofHelperBacking {
 impl ProofHelperBacking {
     const ENVELOPE: usize = size_of::<(Self, usize)>() - size_of::<Compiler>() - size_of::<Image>();
     /// Local scalar/credential/FD work, at most two bounded manifest selections,
-    /// and descriptor retirement on a consuming refusal.
+    /// and descriptor retirement on a consuming refusal, including the compiler's
+    /// complete original inventory and complete transferred source set.
     /// Runtime and Image operations additionally charge their existing envelopes
     /// on the same ledger; this is NOT an aggregate preparation/launch quota.
     pub(crate) const LOCAL_WORK: usize =
-        ENTRY_WORK + (MAX_ENTRIES + 64) * 1088 + 8 * MANIFEST_BYTES;
+        ENTRY_WORK + (2 * MAX_ENTRIES + 64) * 1088 + 8 * MANIFEST_BYTES;
     /// Local fixed frames only; nested scratch and coexisting owners are separate.
     pub(crate) const FRAME_STORAGE: usize = 4 * size_of::<(Self, usize)>()
         + 8 * size_of::<ProofHelperBackingError>()

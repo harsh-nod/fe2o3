@@ -13,8 +13,7 @@ use crate::compiler_output_directory::{CompilerOutputDirectory as Output, Error 
 use fe2o3_build_authority::COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1 as MAX_RUNTIME_ENTRIES;
 use fe2o3_compiler_closure_capability::{
     RetainedCompilerRuntimeErrorV1 as RuntimeError,
-    RetainedCompilerRuntimeExecTransferChargeV1 as TransferCharge,
-    RetainedCompilerRuntimeV1 as Runtime,
+    RetainedCompilerRuntimeInventoryTransferV1 as Sources, RetainedCompilerRuntimeV1 as Runtime,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -108,7 +107,7 @@ impl CompilerInvocationBackingCharge {
     }
 }
 
-/// Move-only custody of one genuine inventory, exact inputs and four image sources.
+/// Move-only custody of one genuine inventory, exact inputs and its complete source set.
 ///
 /// An owning launch can borrow these inputs and ask for contextual revalidation.
 /// It cannot detach the runtime, select another source or convert this backing
@@ -119,14 +118,7 @@ pub(crate) struct CompilerInvocationBacking {
     descriptor: Descriptor,
     output: Output,
     invocation: Invocation,
-    rustc: File,
-    interpreter: File,
-    codegen_backend: File,
-    fe2o3_proc_macro: File,
-    rustc_charge: TransferCharge,
-    interpreter_charge: TransferCharge,
-    codegen_backend_charge: TransferCharge,
-    fe2o3_proc_macro_charge: TransferCharge,
+    sources: Sources,
     retained: usize,
 }
 
@@ -136,12 +128,12 @@ impl CompilerInvocationBacking {
         - size_of::<Descriptor>()
         - size_of::<Output>()
         - size_of::<Invocation>()
-        - 4 * size_of::<File>()
-        - 4 * size_of::<TransferCharge>();
-    /// Scalar bookkeeping and bounded retirement of consumed inventory on error.
+        - size_of::<Sources>();
+    /// Scalar bookkeeping and bounded retirement of inventory AND transfer set
+    /// on consuming error. Both can contain the manifest's maximum entry count.
     /// Measurement, runtime and invocation operations additionally charge their
     /// own work on the same Budget. This is not a complete launch work quota.
-    pub(crate) const LOCAL_WORK: usize = ENTRY + (MAX_RUNTIME_ENTRIES + 32) * 1088;
+    pub(crate) const LOCAL_WORK: usize = ENTRY + (2 * MAX_RUNTIME_ENTRIES + 32) * 1088;
     /// Local frames only; nested scratch and all overlapping backing are separate.
     pub(crate) const FRAME_STORAGE: usize =
         4 * size_of::<(Self, CompilerInvocationBackingCharge)>()
@@ -178,24 +170,12 @@ impl CompilerInvocationBacking {
             output.revalidate(descriptor.artifact_output_directory(), b)?;
             let (invocation, invocation_charge) = Invocation::stage(&descriptor, b)?;
             b.reserve_storage(invocation_charge.additional_storage())?;
-            let (rustc, rustc_charge) = runtime.try_clone_rustc_for_exec(b)?;
-            b.reserve_storage(rustc_charge.full_storage())?;
-            let (interpreter, interpreter_charge) =
-                runtime.try_clone_elf_interpreter_for_exec(b)?;
-            b.reserve_storage(interpreter_charge.full_storage())?;
-            let (codegen_backend, codegen_backend_charge) =
-                runtime.try_clone_codegen_backend_for_load(b)?;
-            b.reserve_storage(codegen_backend_charge.full_storage())?;
-            let (fe2o3_proc_macro, fe2o3_proc_macro_charge) =
-                runtime.try_clone_fe2o3_proc_macro_for_load(b)?;
-            b.reserve_storage(fe2o3_proc_macro_charge.full_storage())?;
+            let (sources, sources_charge) = runtime.try_clone_inventory_for_staging(b)?;
+            b.reserve_storage(sources_charge.full_storage())?;
             let charge = retained_storage_for(
                 input,
                 invocation.retained_storage(),
-                rustc_charge.full_storage(),
-                interpreter_charge.full_storage(),
-                codegen_backend_charge.full_storage(),
-                fe2o3_proc_macro_charge.full_storage(),
+                sources_charge.full_storage(),
             )?;
             b.reserve_storage(Self::ENVELOPE)?;
             let owner = Self {
@@ -203,14 +183,7 @@ impl CompilerInvocationBacking {
                 descriptor,
                 output,
                 invocation,
-                rustc,
-                interpreter,
-                codegen_backend,
-                fe2o3_proc_macro,
-                rustc_charge,
-                interpreter_charge,
-                codegen_backend_charge,
-                fe2o3_proc_macro_charge,
+                sources,
                 retained: charge.retained_storage(),
             };
             owner.check(b)?;
@@ -236,27 +209,33 @@ impl CompilerInvocationBacking {
     }
 
     /// Borrow only the fixed rustc transfer for the owning native stage.
-    pub(crate) const fn rustc_source(&self) -> &File {
-        &self.rustc
+    pub(crate) fn rustc_source(&self) -> &File {
+        self.sources.rustc_source()
     }
 
     /// Borrow only the fixed interpreter transfer for the owning native stage.
-    pub(crate) const fn elf_interpreter_source(&self) -> &File {
-        &self.interpreter
+    pub(crate) fn elf_interpreter_source(&self) -> &File {
+        self.sources.elf_interpreter_source()
     }
 
     /// Fixed approved backend input, not proof of the descriptor's load binding.
     /// A descriptor naming `/proc/./self/fd/198` requires the owning native launch
     /// to bind this source to child FD 198, preserving the exact selector. Merely
     /// retaining this File or substituting a pathname/environment is insufficient.
-    pub(crate) const fn codegen_backend_source(&self) -> &File {
-        &self.codegen_backend
+    pub(crate) fn codegen_backend_source(&self) -> &File {
+        self.sources.codegen_backend_source()
     }
 
     /// Fixed approved fe2o3 proc-macro input. The owning launch must independently
     /// establish its exact rustc input binding and ELF dependency resolution.
-    pub(crate) const fn fe2o3_proc_macro_source(&self) -> &File {
-        &self.fe2o3_proc_macro
+    pub(crate) fn fe2o3_proc_macro_source(&self) -> &File {
+        self.sources.fe2o3_proc_macro_source()
+    }
+
+    /// Complete borrowed files for the future owning filesystem-view stage.
+    /// Includes shared libraries but does not establish their loader mappings.
+    pub(crate) const fn inventory_sources(&self) -> &Sources {
+        &self.sources
     }
 
     pub(crate) const fn retained_storage(&self) -> usize {
@@ -274,14 +253,10 @@ impl CompilerInvocationBacking {
     /// Reserve it while those duplicates coexist with this complete owner. Native
     /// stage structures, other bindings and pointer tables require separate charge.
     pub(crate) fn staged_sources_storage(&self) -> Result<usize> {
-        transfer_storage(
-            self.rustc_charge.full_storage(),
-            self.interpreter_charge.full_storage(),
-            self.codegen_backend_charge.full_storage(),
-            self.fe2o3_proc_macro_charge.full_storage(),
-        )?
-        .checked_add(crate::native_launch::FILE_STORAGE)
-        .ok_or_else(|| Resource::Arithmetic.into())
+        self.sources
+            .compiler_staging_storage()
+            .checked_add(crate::native_launch::FILE_STORAGE)
+            .ok_or_else(|| Resource::Arithmetic.into())
     }
 
     /// Recheck the full closure, original account, inventory and retained transfers.
@@ -336,13 +311,8 @@ impl CompilerInvocationBacking {
         // A fresh budget cannot recreate the runtime's account association.
         self.runtime
             .require_compiler(*self.descriptor.compiler_closure(), b)?;
-        self.runtime.validate_rustc_exec_transfer(&self.rustc, b)?;
         self.runtime
-            .validate_elf_interpreter_exec_transfer(&self.interpreter, b)?;
-        self.runtime
-            .validate_codegen_backend_load_transfer(&self.codegen_backend, b)?;
-        self.runtime
-            .validate_fe2o3_proc_macro_load_transfer(&self.fe2o3_proc_macro, b)?;
+            .validate_inventory_transfer(self.inventory_sources(), b)?;
         Ok(())
     }
 }
@@ -377,19 +347,6 @@ fn measure_inputs(runtime: usize, descriptor: &Descriptor, b: &mut Budget<'_>) -
     Ok(input)
 }
 
-fn transfer_storage(
-    rustc: usize,
-    interpreter: usize,
-    codegen_backend: usize,
-    fe2o3_proc_macro: usize,
-) -> Result<usize> {
-    rustc
-        .checked_add(interpreter)
-        .and_then(|n| n.checked_add(codegen_backend))
-        .and_then(|n| n.checked_add(fe2o3_proc_macro))
-        .ok_or_else(|| Resource::Arithmetic.into())
-}
-
 fn staged_floor(retained: usize, transfers: usize) -> Result<usize> {
     retained
         .checked_add(transfers)
@@ -399,12 +356,9 @@ fn staged_floor(retained: usize, transfers: usize) -> Result<usize> {
 fn retained_storage_for(
     input: usize,
     invocation: usize,
-    rustc: usize,
-    interpreter: usize,
-    codegen_backend: usize,
-    fe2o3_proc_macro: usize,
+    sources: usize,
 ) -> Result<CompilerInvocationBackingCharge> {
-    let additional = transfer_storage(rustc, interpreter, codegen_backend, fe2o3_proc_macro)?
+    let additional = sources
         .checked_add(invocation)
         .and_then(|n| n.checked_add(CompilerInvocationBacking::ENVELOPE))
         .ok_or(Resource::Arithmetic)?;

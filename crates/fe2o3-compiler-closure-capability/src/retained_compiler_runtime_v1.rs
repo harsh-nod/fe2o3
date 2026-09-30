@@ -40,15 +40,18 @@ type ImmutableCheck = fn(&File) -> Result<()>;
 
 #[path = "retained_compiler_runtime_transfer_v1.rs"]
 mod transfer;
-pub use transfer::RetainedCompilerRuntimeExecTransferChargeV1;
+pub use transfer::{
+    RetainedCompilerRuntimeExecTransferChargeV1, RetainedCompilerRuntimeInventoryTransferV1,
+};
 
 /// Move-only custody of independently approved, immutable compiler code files.
 ///
 /// The sole public positive loader consumes fixed-root compiler approval. No
 /// caller-supplied bytes, FD, alternate path, PID, successful exit or callback
-/// can manufacture this owner. Only the admitted rustc, ELF interpreter and proof
-/// executor may be duplicated through fixed-role inert exec-source entrypoints,
-/// each with its own full charge and final origin recheck.
+/// can manufacture this owner. Fixed-role transfers and the complete inventory
+/// transfer duplicate only admitted files, each with its own full charge and
+/// final origin recheck. A complete transfer includes shared libraries, not a
+/// directory binding or permission to resolve arbitrary loader paths.
 /// This is inventory custody only: no ELF dependency-resolution, process launch,
 /// mapping history, protected sibling association or completed-guard claim.
 ///
