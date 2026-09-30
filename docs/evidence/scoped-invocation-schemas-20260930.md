@@ -465,3 +465,64 @@ The compiler candidate remains separate from public main. Typed optimizer
 integration, actual-source presence/control flow, protected proof and GPU
 validation remain unfinished. M0 is complete, M1-M7 are incomplete, and strict
 production-to-required-proof-to-safe-GPU coverage remains **0/47**.
+
+## Shared Optimizer and Simulator Regression
+
+These later component runs retain the same pinned, offline, serial, GPU-disabled
+runner contract. Source and tool inventories were unchanged during every run.
+Counts overlap between runs and must not be summed as independent coverage.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r210 | `a31e0f524feabf25ea5892dc7a6d48c0ace5b316` | Complete analysis and Pliron libraries | Analysis: 717 passed; Pliron: 2404 passed; zero failed or ignored |
+| r211 | `4fb782dea318eca004638631c0b91e8b1696a03d` | Complete IR and simulator packages | 2494 passed, two failed, one pre-existing ignored |
+| r212 | `a31e0f524feabf25ea5892dc7a6d48c0ace5b316` | Analysis and Pliron documentation | 181 passed, zero failed or ignored |
+| r213 | `d6849f8a3d5c06d24de5e36ee1d47aef28b15011` | Complete simulator package | 494 passed, zero failed or ignored |
+| r214 | `b49bfe39da7fde320f6a3763c04637dd7ce41e17` | Selected integrated source and Rust-driver tests | Simulator CLI test compilation failed; no tests ran |
+| r215 | `884e7565db439cd7d6f465c5df7d0e790d202240` | Complete IR and simulator packages | 2501 passed, zero failed, one pre-existing ignored |
+| r216 | `59d6a8a48bd308a5f664fff06f747f2ecad7ea03` | Complete Pliron library | Ambiguous module import prevented compilation; no tests ran |
+| r217 | `a68557fe1db0025cdb302c3ec7d6dd3bff304ec3` | Complete Pliron library | 2423 passed, zero failed or ignored |
+| r218 | `77b271a5493d9b14417f8a568f60166cf5914d6a` | Selected integrated source and Rust-driver tests | Rust-driver test compilation failed; no tests ran |
+| r219 | `2ca8f6e13a8a6116af2343cfbefcc67d1f64c0bf` | Complete simulator CLI library | 92 passed, zero failed or ignored |
+| r220 | `a68557fe1db0025cdb302c3ec7d6dd3bff304ec3` | Complete Pliron documentation | 110 passed, zero failed or ignored |
+
+r210 and r212 exercise scoped canonical analysis factories, structural admission,
+and the shared occurrence transition checker alongside their legacy regressions.
+r217 and r220 additionally exercise actual scoped-owner execution of the existing
+fixed optimizer policies, including typed extraction and consuming adoption. The
+same shared optimizer machinery is used; these results do not cover the full
+production LICM, native, composed-CFG and source-final continuation.
+
+r211's two failures were capability-matrix test expectations that still counted
+nine profiles after V23 added a tenth. r213 checks the repaired matrix, including
+the explicit refusal of V23 on the older simulator entry, without weakening the
+other profile expectations. r215 also checks original presence values transported
+through one authenticated zero-extension into an integer switch, with paired
+producer identity, dominance, live capability state and false-path reachability
+controls. Its ignored test is the existing
+`control_flow_bounds::sparse_wire_maximum_block_count_is_bounded_and_admitted`.
+
+r214 and r218 both stopped before any selected test executed. The former exposed
+missing new diagnostic variants in simulator CLI matches, repaired and tested in
+r219. The latter exposed the same two missing variants in an older Rust-driver
+CPU-capture reporting helper. Neither failed build establishes genuine Rust
+source materialization, simulator execution, or the intended source negatives.
+r216's module import ambiguity was qualified explicitly before r217 and r220.
+
+Log SHA-256:
+
+- r210: `0bfb9b3bab088a9b5281355fc4c14bffd25fa7c8bb5feb61d0e4b9a5267e7589`
+- r211: `c9443015dd2ed10239e50fbac0ea7315fdad7a92f7ac32e251b555831ea548f5`
+- r212: `ce355bf8fbef75165245194dabe9f17cd6fa60f5c13b8e41217c31742147218d`
+- r213: `19fc434cb2861693c6a45694c6702fba958443f3ff0bdf1b6accb8e18caeaf00`
+- r214: `ed2b2fcf3799bc7b20a33ed4746078e5a548f4d1cb62fe17c27304d3e8245604`
+- r215: `84e987411e6fcfc585f45154fddb0aa7c6554bb2b4657a9603b619ae1e359dea`
+- r216: `3638197f7b22492963e158aa9dc1b6860762625714f073f4b919738a26af1331`
+- r217: `87c43d7e2d111d938300c49d41f69f86476c147d2048236e9616159a61979cf3`
+- r218: `9fc05a560ef71c34afdd3bf15d097b4187ec1d27bda4080ba5f3d4e19b9d8cfe`
+- r219: `8cd9c3729613524e8ee98ca239f555ecb02efd907169c6ba4dc80e5112209f21`
+- r220: `4bfa4f146746ce5fcadb52020507664e2f43da996961c90f19bb7bec74fd29af`
+
+No protected proof or GPU execution occurred. These candidate component results
+do not activate the production path or advance the milestone acceptance count:
+M0 is complete, M1-M7 remain incomplete, and strict end-to-end coverage is **0/47**.
