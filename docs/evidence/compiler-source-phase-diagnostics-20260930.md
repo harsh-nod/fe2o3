@@ -247,6 +247,83 @@ Log SHA-256:
 These are constructed original semantic-MIR emission results. They do not
 establish a passing genuine Rust matrix, proof, simulator or hardware launch.
 
+## Exact Native Predicate
+
+r121 ran the actual80 Rust matrix on `a335a38ff`, changing only the seven-way
+native correspondence diagnostic. It ended with status101 after a 6m35s backend
+build and a 279.57-second matrix, with stable source/tool inventories. All40 MIR2
+sessions identify `pending global native changed exact data root`; all40 MIR0
+sessions retain the destination-definition refusal. No named negative consumer
+was reached. Private actual-source scratch was verified absent after termination.
+
+The issued-pointer replay retains both a descriptor's ABI root and its transported
+metadata receiver and checks their CFG ancestry. The pending native endpoint had
+retained only the root and demanded direct equality for metadata operands. The
+isolated repair retains both coordinates while preserving ancestry, guard,
+access, pointer-transport and native-owner checks. r121 localizes the failing
+predicate; it does not test that repair or establish a completed memory proof.
+
+r121 source snapshot:
+`b789be716161a9dd47f80d68cd9a5533f2491e8b6c492763a9e2ab885a001fd5`.
+Log SHA-256:
+`2194d499e8a0f6cf7b6036e5fbfc2bd1793f3ec9c42fe7770477c376d17c33cc`.
+
+## Receiver Repair And Definition Diagnostics
+
+r122 attempted the combined original-witness, destination-definition and native
+receiver controls on `d5a0d654f`. Compilation stopped at one test-fixture type
+error: the secondary reader block tag was `u32`, but its helper requires `u8`.
+No tests ran. Correcting that fixture produced candidate `b3dbf2c7d`.
+
+r123 compiled that candidate and ran 416 selected lowerer tests: **409 passed,
+7 failed**, with no ignored tests. It completed with status101 after a 7m33s
+build and 38.16 seconds of tests, with unchanged source/tool inventories.
+Original ThreadIndex/DisjointIndex positives, the nine reader-substitution
+cases in both control-flow forms, dead-parent rejection, exact/one-short budgets,
+and the injected reader unwind now pass. Five destination diagnostic controls
+and the existing global-memory/issued-pointer controls also pass.
+
+The seven failures remain unaccepted:
+
+- Three new native-receiver fixtures fail deterministic block identity ordering
+  before native correspondence is tested.
+- The new elided-definition positive fails SSA admission before its claimed
+  elision; its access-result Option lacks the required branch.
+- Two origin fixtures still lack a closed shared-reader consumer, leaving the
+  original witness unpromoted.
+- The equal-shaped loan positive reaches its observer, whose expected single
+  read ignores the two reads recorded across overlapping active shared loans.
+
+The fixture corrections preserve genuine original consumers, Option dominance,
+deterministic identities, and exact effect counts. They still require execution;
+static review is not acceptance.
+
+r124 then ran the actual80 Rust matrix on the same `b3dbf2c7d`. It completed
+with status101 after a 7m22s backend build and a 276.59-second matrix. All80
+sessions still fail before their intended consumer:
+
+- All40 MIR0 sessions now identify the cursor's ordered-claim predicate:
+  `execution destination claim is duplicate or out of order`.
+- All40 MIR2 sessions pass the previous native exact-data-root failure and stop
+  later at `slice Store guard transport differs`.
+
+No negative mode reaches its named consumer boundary. Source and tool inventories
+remain unchanged, and private actual-source scratch is absent after termination.
+These results localize the next two production repairs; they do not complete
+source verification, proof execution, simulation or GPU launch. The source
+candidate remains unmerged pending reconciliation with the #271 dependency.
+
+r122 source snapshot:
+`af307985d634429c37cc0c835ae940e5023a1aa37ec14b32183a4b619e0ed07e`.
+r122 log SHA-256:
+`996e359e551e38d9013caf38373fe190a6c4e3a56d5a624a434feca9cf7a7ca1`.
+r123/r124 source snapshot:
+`3ec417ca160ace1406e5727dee7d95b9e887ad41b18ba20693e289024ac19c7c`.
+r123 log SHA-256:
+`f8af70206d8d0ba2d5794340439e63c5b48fc0c55cfac4ff37e4bb16b5d06729`.
+r124 log SHA-256:
+`da450f6abd928f18925e086c29f32fcb57772be260d8a295aa5a89af6d013c7c`.
+
 ## Runtime Observation
 
 A primary-session read-only SSH check reached MI350-2 on 2026-09-30 and confirmed
