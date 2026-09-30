@@ -6,6 +6,45 @@ struct SourceBoundaryCheckV31<'a> {
     inline: &'a Gfx942InlineScalarCorrespondenceV30<'a>,
     optimized: Option<&'a ProductionOptimizedSourceScalarLeavesV18<'a>>,
     inventory: &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'a>,
+    bindings: std::ops::Range<usize>,
+}
+
+fn source_boundary_function_seen_v31(
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
+    function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<(std::ops::Range<usize>, Vec<bool>)> {
+    budget.charge_work(3)?;
+    let row = inventory.functions().get(function.0 as usize).ok_or(
+        ProductionSourceOwnedViewErrorV18::Binding(
+            "source SSA boundary function binding range is absent",
+        ),
+    )?;
+    if row.coordinate != function
+        || row.edge_arguments.start > row.edge_arguments.end
+        || row.edge_arguments.end > inventory.edge_arguments().len()
+    {
+        return Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "source SSA boundary function binding range differs",
+        ));
+    }
+    let bindings = row.edge_arguments.clone();
+    let mut seen = emission_vec_v1(bindings.len(), budget).map_err(source_emission_error_v18)?;
+    budget.charge_work(bindings.len())?;
+    seen.resize(bindings.len(), false);
+    Ok((bindings, seen))
+}
+
+fn source_boundary_seen_index_v31(
+    bindings: &std::ops::Range<usize>,
+    binding: usize,
+) -> SourceOwnedResultV18<usize> {
+    binding
+        .checked_sub(bindings.start)
+        .filter(|index| *index < bindings.len())
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "source SSA physical argument belongs to another function",
+        ))
 }
 
 fn source_boundary_control_headers_v31() -> Result<usize, ArgumentResourceV1> {
@@ -19,6 +58,11 @@ fn source_boundary_control_headers_v31() -> Result<usize, ArgumentResourceV1> {
         OptimizedSourceScalarNormalizationV18<'a>,
         Vec<SourceReferenceSelectionControlV30>,
         Vec<bool>,
+        std::ops::Range<usize>,
+        (std::ops::Range<usize>, Vec<bool>),
+        SourceOwnedResultV18<(std::ops::Range<usize>, Vec<bool>)>,
+        SourceOwnedResultV18<usize>,
+        &'a fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'a>,
         SourceOwnedResultV18<OriginalEntryIndexV20<'a, 'a>>,
         SourceOwnedResultV18<SourceRootArgumentsV18<'a, 'a>>,
         SourceOwnedResultV18<Gfx942InlineScalarCorrespondenceV30<'a>>,
@@ -475,20 +519,19 @@ impl SourceBoundaryCheckV31<'_> {
                 "source SSA physical argument binding is absent",
             ),
         )?;
+        let seen_index = source_boundary_seen_index_v31(&self.bindings, binding_index)?;
         if binding.target_definition != definition_index
             || binding.coordinate.edge != edge.coordinate
             || binding.coordinate.argument != argument
             || binding.value != edge.arguments[argument as usize]
-            || *seen
-                .get(binding_index)
-                .ok_or(ArgumentResourceV1::Accounting)?
+            || *seen.get(seen_index).ok_or(ArgumentResourceV1::Accounting)?
         {
             return relation
                 .source
                 .missing("source SSA physical argument binding differs or repeats");
         }
         self.value(row, original, binding.value, budget)?;
-        seen[binding_index] = true;
+        seen[seen_index] = true;
         Ok(())
     }
 }
@@ -537,10 +580,6 @@ impl SourceScalarLeavesV18<'_, '_> {
                     budget,
                 )
                 .map_err(source_emission_error_v18)?;
-                let mut seen = emission_vec_v1(inventory.edge_arguments().len(), budget)
-                    .map_err(source_emission_error_v18)?;
-                budget.charge_work(inventory.edge_arguments().len())?;
-                seen.resize(inventory.edge_arguments().len(), false);
                 let function = relation
                     .inventory
                     .functions()
@@ -548,6 +587,11 @@ impl SourceScalarLeavesV18<'_, '_> {
                     .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                         "source SSA boundary physical function is absent",
                     ))?;
+                let (bindings, mut seen) = source_boundary_function_seen_v31(
+                    inventory,
+                    optimized.map_or(function.coordinate, |leaves| leaves.function.coordinate),
+                    budget,
+                )?;
                 let nested = |origins: &value_origin_v1::WholeValueOriginsV18<'_>,
                               budget: &mut ArgumentBudgetV1<'_>| {
                     relation.retain_query((|| {
@@ -559,6 +603,7 @@ impl SourceScalarLeavesV18<'_, '_> {
                             inline: output_inline.as_ref().unwrap_or(&inline),
                             optimized,
                             inventory,
+                            bindings: bindings.clone(),
                         };
                         for source in &root.coordinates.sources.rows {
                             budget.charge_work(
@@ -813,7 +858,10 @@ impl SourceScalarLeavesV18<'_, '_> {
                                 budget,
                             )?;
                         }
-                        for (at, binding) in inventory.edge_arguments().iter().enumerate() {
+                        for (at, binding) in inventory.edge_arguments()[bindings.clone()]
+                            .iter()
+                            .enumerate()
+                        {
                             budget.charge_work(1)?;
                             if check.boundary_target(binding.target_definition, budget)?
                                 && !seen[at]

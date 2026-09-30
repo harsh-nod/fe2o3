@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "production_source_scalar_boundary_function_scope_v31_tests.rs"]
+mod function_scope;
 #[path = "production_source_issued_presence_v31_tests.rs"]
 mod issued_presence;
 
@@ -351,6 +353,7 @@ fn with_check<'work>(
                         inline: &transported,
                         optimized: Some(leaves),
                         inventory,
+                        bindings: leaves.function.edge_arguments.clone(),
                     };
                     consume(&check, budget)
                 },
@@ -1017,6 +1020,7 @@ fn source_scalar_boundaries_derivation_and_control_frames_match_field_envelopes(
         &'a (),
         Option<&'a ()>,
         &'a (),
+        std::ops::Range<usize>,
     );
     type Index<'a> = (&'a (), Vec<OriginalEntryDefinitionRowV20>, usize);
     type Arguments<'a> = (&'a (), usize, Vec<Option<SourceRootParameterV18>>);
@@ -1047,6 +1051,11 @@ fn source_scalar_boundaries_derivation_and_control_frames_match_field_envelopes(
         Normalizer<'a>,
         Vec<SourceReferenceSelectionControlV30>,
         Vec<bool>,
+        std::ops::Range<usize>,
+        (std::ops::Range<usize>, Vec<bool>),
+        SourceOwnedResultV18<(std::ops::Range<usize>, Vec<bool>)>,
+        SourceOwnedResultV18<usize>,
+        &'a (),
         SourceOwnedResultV18<Index<'a>>,
         SourceOwnedResultV18<Arguments<'a>>,
         SourceOwnedResultV18<Gfx942InlineScalarCorrespondenceV30<'a>>,
