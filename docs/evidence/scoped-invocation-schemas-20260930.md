@@ -526,3 +526,60 @@ Log SHA-256:
 No protected proof or GPU execution occurred. These candidate component results
 do not activate the production path or advance the milestone acceptance count:
 M0 is complete, M1-M7 remain incomplete, and strict end-to-end coverage is **0/47**.
+
+## Original Source and Adopter Custody
+
+The following candidate runs retained stable source/tool inventories and the
+pinned offline, serial, GPU-disabled runner contract. Counts overlap earlier
+runs; they are not additional independent kernel coverage.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r221 | `42688e2bf2108fd4704b984c8896db4df59fd37d` | Selected source, lowerer, Pliron and Rust-driver tests | Compilation succeeded; CLI 2 passed; lowerer 69 passed and 19 failed; Pliron 33 passed; driver run timed out |
+| r222 | `e4bda9fcb2e2a6043bf0c01f217f6a3ff9834f45` | Complete Pliron library | 2436 passed, two failed, zero ignored |
+| r224 | `d26bb4e9602f300628e5b3a5232f6fee560a3db0` | Complete Pliron library | 2436 passed, two failed, zero ignored |
+| r226 | `b6e1db3433f171ab736000276ee1d27b8c5e1af6` | Complete Pliron library | 2438 passed, zero failed or ignored |
+
+r221 repaired the Rust-driver diagnostic compilation gap. Its lowerer failures
+identified an owned disjoint-slice fixture still using a by-value ABI descriptor;
+the production admission correctly rejected that mismatch. The driver completed
+one implicit-capability control, then stopped during the first actual-source
+frontend parent. No genuine scoped Rust-source positive or intended source
+negative is credited by this run. The later fixture correction preserves the
+production contract and requires its own rerun.
+
+r222 and r224 exposed two setup errors in new late-history refusal tests. The
+first used an over-limit module name. After fixing that, the second exhausted
+storage at the transfer wrapper instead of the intended history allocation.
+The corrected tests prepay the concrete wrapper headers and retain the exact
+late-history failure equation. r226 reaches and passes those controls for both
+legacy and scoped owners, including selected-error preservation through hostile
+destruction. No production limit or rejection boundary was weakened.
+
+Separate provisioning preparation built a script-side static readback helper.
+r223 (`e74951a17260e173728adc26063efa1974fa8493`) failed direct linking because
+host proc-macro dependencies were absent from the rustc search path. After that
+and an explicit numeric conversion were corrected, r225
+(`b7d3ef205ba23e2b2dc61089f8410142e74bd16c`) built successfully and passed the
+standalone static ELF checks. Helper SHA-256:
+`afc9123fa5e425fa7d04d23ee07d9a0f0a143ee083786da016b04f92747b4d70`.
+This is not container qualification, native provisioning, service activation,
+protected proof execution or administrator approval of the helper.
+
+The r221 and r225 reported wall-clock intervals exceed the configured deadline:
+r221 records
+21:18:08-23:04:42 UTC and exits 124; r225 records 21:33:49-23:05:31 UTC and exits
+zero. The configured timeout was 1200 seconds with a 30-second kill grace; these
+observations do not establish a 1200-second wall-clock completion guarantee.
+The cause of that discrepancy has not been verified.
+
+Log SHA-256:
+
+- r221: `afc33f933d6169924fa567b3d39a90f7ef26c405b10a9bf29c9bd9969fc8dcdd`
+- r222: `ae3613566a54c3a76be642a76973b6b8bb2e3a7f7875b5e4f24891afa81342ac`
+- r223: `11eb003bfda8f7fcf5ceb646b831cb3c0d467b1dcf9d3643ac6e2d9a3238f9c1`
+- r224: `0c6cd34efe4f4e1ffbc30a2ca5b61d1a12bd1484ffb73338c675cacefe170e2f`
+- r225: `0367215aff77b3d30385bc958c572af646cd9f5b5513810a0cbfe70061452968`
+- r226: `ff11b296f3e9e8630b56d2ac8a6f8be877d879263c2efb2e93b5c89e488bb16f`
+
+M0 remains complete; M1-M7 and strict end-to-end **0/47** remain unchanged.
