@@ -1,5 +1,27 @@
 use super::*;
 
+fn rebuild_root(
+    old: &SemanticFunctionDeclV1,
+    locals: Vec<SemanticLocalDeclV1>,
+    blocks: Vec<SemanticBasicBlockV1>,
+) -> SemanticFunctionDeclV1 {
+    SemanticFunctionDeclV1::new(
+        old.identity(),
+        old.role(),
+        old.item_definition_identity(),
+        old.monomorphization_identity(),
+        old.generic_type_arguments_identity(),
+        old.const_generic_arguments_identity(),
+        old.source(),
+        old.abi().clone(),
+        locals,
+        old.entry(),
+        blocks,
+    )
+    .unwrap()
+    .with_kernel_entry(old.kernel_entry().unwrap().clone())
+}
+
 fn loop_owner(entry_loop: bool, parallel: bool) -> ProductionSemanticSsaOwnerV1 {
     let base = private_entry_phi_owner_v20();
     let source = base.source_semantic();
@@ -82,14 +104,7 @@ fn loop_owner(entry_loop: bool, parallel: bool) -> ProductionSemanticSsaOwnerV1 
         ]
     };
     let old = &source.functions()[0];
-    let root = function(
-        179,
-        SemanticFunctionRoleV1::KernelRoot,
-        old.abi().clone(),
-        old.locals().to_vec(),
-        blocks,
-    )
-    .with_kernel_entry(old.kernel_entry().unwrap().clone());
+    let root = rebuild_root(old, old.locals().to_vec(), blocks);
     let mut functions = source.functions().to_vec();
     functions[0] = root;
     let admitted = InertSemanticMirRequestV1::new_with_callables(
@@ -128,10 +143,8 @@ fn two_phi_roots() -> ProductionSemanticSsaOwnerV1 {
     let first = &source.functions()[0];
     let second = &source.functions()[1];
     let mut functions = source.functions().to_vec();
-    functions[1] = function(
-        220,
-        SemanticFunctionRoleV1::KernelRoot,
-        second.abi().clone(),
+    functions[1] = rebuild_root(
+        second,
         first
             .locals()
             .iter()
@@ -150,8 +163,7 @@ fn two_phi_roots() -> ProductionSemanticSsaOwnerV1 {
                 )
             })
             .collect(),
-    )
-    .with_kernel_entry(second.kernel_entry().unwrap().clone());
+    );
     let admitted = InertSemanticMirRequestV1::new_with_callables(
         source.target(),
         source.types().to_vec(),
@@ -226,14 +238,7 @@ fn comparison_loop() -> ProductionSemanticSsaOwnerV1 {
         },
     );
     let mut functions = source.functions().to_vec();
-    functions[0] = function(
-        212,
-        SemanticFunctionRoleV1::KernelRoot,
-        old.abi().clone(),
-        locals,
-        blocks,
-    )
-    .with_kernel_entry(old.kernel_entry().unwrap().clone());
+    functions[0] = rebuild_root(old, locals, blocks);
     let admitted = InertSemanticMirRequestV1::new_with_callables(
         source.target(),
         types,
