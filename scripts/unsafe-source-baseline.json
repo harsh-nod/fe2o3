@@ -1156,7 +1156,7 @@
     "function": 1
   },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_restrictions_exec_tests.rs": {
-    "block": 3
+    "block": 6
   },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_spawn.rs": {
     "function": 2
