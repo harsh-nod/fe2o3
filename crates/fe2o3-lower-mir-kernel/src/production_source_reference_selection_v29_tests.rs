@@ -7,6 +7,7 @@ include!("production_source_reference_selection_memory_v30_tests.rs");
 include!("production_source_reference_selection_replay_v30_tests.rs");
 include!("production_source_reference_selection_metadata_v30_tests.rs");
 include!("production_source_reference_selection_optimized_v30_tests.rs");
+include!("production_source_reference_selection_final_v30_tests.rs");
 
 fn selection_owner(parallel: bool, recurrence: bool) -> ProductionSemanticSsaOwnerV1 {
     let prior = distinct_origin_join_owner();

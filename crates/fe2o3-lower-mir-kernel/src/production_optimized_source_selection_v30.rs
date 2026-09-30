@@ -10,6 +10,9 @@ use fe2o3_kernel_ir::{
     CanonicalKirFunctionCoordinateV1 as FunctionCoordinate, CanonicalKirTransitionRangeV1,
 };
 
+#[path = "production_selected_final_source_v30.rs"]
+pub(in super::super) mod final_source;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SelectedDefinitionRoleV30 {
     AccessPointer,
