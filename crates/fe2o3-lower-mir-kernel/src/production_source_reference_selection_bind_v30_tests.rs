@@ -399,7 +399,7 @@ fn selected_control_and_parallel_join_indexes_have_logarithmic_matching_work() {
                 let mut previous = None;
                 for count in [64usize, 256, 1024] {
                     let (mut function, mut bound) = actual_selection_fixture(graph, false);
-                    function.signature.parameters[2] = Type::U32;
+                    function.signature.parameters[2] = Type::Scalar(ScalarType::U32);
                     let inputs = [bound.edges[0].original.input, bound.edges[1].original.input];
                     let source_edge = bound.edges[0];
                     bound.edges = (0..count)

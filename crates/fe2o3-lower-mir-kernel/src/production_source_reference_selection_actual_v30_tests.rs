@@ -133,7 +133,11 @@ fn assert_actual_selection_error(result: Result<(), ProductionSemanticKirErrorV1
 fn actual_entry_selection_fixture(
     graph: &SourceReferenceSelectionGraphV29,
 ) -> (Function, SourceReferenceSelectionActualV30) {
-    let ty = Type::pointer(Type::U32, AddressSpace::Global, AccessMode::ReadWrite);
+    let ty = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
     let mut invocation = BasicBlock::new(BlockId(10));
     invocation.terminator = Some(Terminator::Branch {
         target: BlockId(13),
