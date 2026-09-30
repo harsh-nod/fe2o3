@@ -175,6 +175,7 @@ struct SourceScalarLeavesV18<'relation, 'source> {
     rows: Vec<SourceScalarLeafRowV18>,
     lookup: Vec<SourceScalarLeafLookupV18>,
     wrapping: Vec<SourceWrappingValueV23>,
+    boundaries: SourceScalarBoundariesV31,
     floor: usize,
     ordinary_values: bool,
 }
@@ -207,6 +208,17 @@ impl SemanticExpressionLeavesV18 for SourceExpressionLeavesV18<'_, '_, '_, '_, '
                 self.leaves.query(budget)?;
                 let relation = self.leaves.relation;
                 if symbol < PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2 {
+                    if let Some(row) = self
+                        .leaves
+                        .boundary_find_v31([2, symbol as usize, 0, 0], budget)?
+                    {
+                        if row.scalar != scalar {
+                            return relation
+                                .source
+                                .missing("source SSA boundary symbol type differs");
+                        }
+                        return Ok(NormalizedScalarExpressionV1::Symbol { symbol, scalar });
+                    }
                     let row = self.leaves.find([2, symbol as usize, 0], budget)?.ok_or(
                         ProductionSourceOwnedViewErrorV18::Binding(
                             "source expression private read name is absent",
@@ -1668,6 +1680,7 @@ fn assign_source_leaf_symbols_v18(
 
 include!("production_source_leaf_lookup_work_v18.rs");
 include!("production_source_wrapping_value_v23.rs");
+include!("production_source_scalar_boundaries_v31.rs");
 
 impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
     fn observe_custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
@@ -1837,6 +1850,9 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
             }
             // All temporary census credit remains in the containing checked
             // scope until its concrete owners have been destroyed.
+            let boundaries = if matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22) {
+                source_scalar_boundaries_v31(relation, root, &rows, budget)?
+            } else { SourceScalarBoundariesV31::empty() };
             drop(reserved);
             let ordinary_values = matches!(namespace,
                 SourceScalarNamespaceV18::PrivateSourceWritesV22
@@ -1844,8 +1860,10 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
             let wrapping = if ordinary_values {
                 source_wrapping_values_v23(relation, root, budget)?
             } else { Vec::new() };
-            Ok(Self { relation, root, rows, lookup, wrapping, floor: budget.storage(),
-                ordinary_values })
+            let leaves = Self { relation, root, rows, lookup, wrapping, boundaries,
+                floor: budget.storage(), ordinary_values };
+            leaves.check_boundary_equations_v31(budget)?;
+            Ok(leaves)
         })())
     }
 
@@ -2021,6 +2039,12 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                     .relation
                     .source
                     .missing("scalar leaf substituted physical root");
+            }
+            if let Some(row) = self.boundary_find_v31([1, value.0 as usize, 0, 0], budget)? {
+                return Ok(Some(NormalizedScalarExpressionV1::Symbol {
+                    symbol: row.symbol,
+                    scalar: row.scalar,
+                }));
             }
             let Some(row) = self.find([1, value.0 as usize, 0], budget)? else {
                 return Ok(None);

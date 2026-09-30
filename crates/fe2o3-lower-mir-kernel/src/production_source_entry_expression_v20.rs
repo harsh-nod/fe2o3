@@ -339,6 +339,9 @@ impl<'a, 'source> OriginalEntryIndexV20<'a, 'source> {
                             return self.source.source.missing("private entry uncaptured projection is unsupported");
                         }
                         let value = self.promoted_use(function_id, site, role, place.local().index(), budget)?;
+                        if let EntryValueV20::BlockArgument { block, variable } = value {
+                            return original.boundary_expression_v31(instance, block, variable, ty, scalar, budget);
+                        }
                         let definition = self.definition(function_id, value, budget)?;
                         if definition.local != place.local().index() {
                             return self.source.source.missing("private entry SSA source local differs");

@@ -383,6 +383,10 @@ impl OriginalEntryIndexV20<'_, '_> {
                 }
                 let value =
                     self.promoted_use(function_id, site, role, place.local().index(), budget)?;
+                if let EntryValueV20::BlockArgument { block, variable } = value {
+                    return leaves
+                        .boundary_expression_v31(instance, block, variable, ty, scalar, budget);
+                }
                 let definition = self.definition(function_id, value, budget)?;
                 if definition.local != place.local().index() {
                     return self
@@ -472,6 +476,85 @@ impl OriginalEntryIndexV20<'_, '_> {
                         remaining,
                         budget,
                     ),
+                    SemanticRvalueKindV1::Binary {
+                        operation,
+                        left,
+                        right,
+                    } if lower_compare(*operation).is_some() => {
+                        let source = self.source.source.source_semantic(budget)?;
+                        let operand_ty = semantic_operand_type(left);
+                        let operand_scalar = kir_semantic_scalar_v1(
+                            &lower_scalar_type(source.types(), operand_ty)
+                                .map_err(source_emission_error_v18)?,
+                        )
+                        .filter(|scalar| {
+                            matches!(
+                                scalar,
+                                ProductionSemanticScalarTypeV2::Bool
+                                    | ProductionSemanticScalarTypeV2::Integer {
+                                        bits: 8 | 16 | 32 | 64,
+                                        ..
+                                    }
+                            )
+                        })
+                        .ok_or(
+                            ProductionSourceOwnedViewErrorV18::Binding(
+                                "source SSA comparison operand type is unsupported",
+                            ),
+                        )?;
+                        if scalar != ProductionSemanticScalarTypeV2::Bool
+                            || semantic_operand_type(right) != operand_ty
+                        {
+                            return self
+                                .source
+                                .source
+                                .missing("source SSA comparison types differ");
+                        }
+                        budget.reserve_storage(argument_product_v1(
+                            2,
+                            size_of::<ProductionSemanticExpressionV2>(),
+                        )?)?;
+                        let lhs = self.private_expression_v22(
+                            leaves,
+                            instance,
+                            operand_ty,
+                            operand_scalar,
+                            OriginalPrivateInputV22::Operand {
+                                site,
+                                role: EntryOperandV20::RvalueOperand(0),
+                                operand: left,
+                            },
+                            next,
+                            remaining,
+                            budget,
+                        )?;
+                        let rhs = self.private_expression_v22(
+                            leaves,
+                            instance,
+                            operand_ty,
+                            operand_scalar,
+                            OriginalPrivateInputV22::Operand {
+                                site,
+                                role: EntryOperandV20::RvalueOperand(1),
+                                operand: right,
+                            },
+                            next,
+                            remaining,
+                            budget,
+                        )?;
+                        Ok(ProductionSemanticExpressionV2::Compare {
+                            operation: normalize_kir_comparison_v1(
+                                lower_compare(*operation).ok_or(
+                                    ProductionSourceOwnedViewErrorV18::Binding(
+                                        "source SSA comparison operator differs",
+                                    ),
+                                )?,
+                            ),
+                            operand_scalar,
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        })
+                    }
                     SemanticRvalueKindV1::Binary {
                         operation,
                         left,

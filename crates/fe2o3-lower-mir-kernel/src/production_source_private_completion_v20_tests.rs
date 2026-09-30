@@ -19,6 +19,9 @@ mod source_spills_v25;
 #[path = "production_source_private_raw_dereference_v26_tests.rs"]
 mod source_raw_dereference_v26;
 
+#[path = "production_source_scalar_boundaries_v31_tests.rs"]
+mod scalar_boundaries_v31;
+
 fn private_entry_owner_v20(case: PrivateEntryFixtureV20) -> ProductionSemanticSsaOwnerV1 {
     let base = module_fixture_owner(ModuleFixture::Ordinary);
     let semantic = base.source_semantic();
@@ -498,7 +501,7 @@ fn private_source_completion_does_not_guess_arithmetic_helper_arguments() {
 }
 
 #[test]
-fn private_source_completion_refuses_genuine_phi_without_selecting_a_predecessor() {
+fn private_source_completion_checks_genuine_phi_without_selecting_a_predecessor() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
@@ -519,23 +522,18 @@ fn private_source_completion_refuses_genuine_phi_without_selecting_a_predecessor
                 ..
             })
         )));
-        let error = source
-            .private_completed_integer_output_v20(
-                ProductionKernelArgumentAbiInputV18 { roots: &roots },
-                budget,
-            )
-            .err()
-            .expect("genuine phi must refuse");
-        assert!(
-            error
-                .to_string()
-                .contains("private entry requires unsupported SSA block argument"),
-            "{error}"
-        );
+        let floor = budget.storage();
+        let handoff = source.private_completed_integer_output_v20(
+            ProductionKernelArgumentAbiInputV18 { roots: &roots },
+            budget,
+        )?;
+        handoff.check_original_source(source.source_ssa(budget)?, budget)?;
+        handoff.discard(budget)?;
+        assert_eq!(budget.storage(), floor);
         completed.set(true);
-        Err::<(), _>(error)
+        Ok::<(), ProductionPrivateSourceHandoffErrorV20>(())
     });
-    assert!(result.is_err());
+    result.unwrap();
     assert!(completed.get());
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }

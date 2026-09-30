@@ -5,6 +5,8 @@ struct OptimizedSourceScalarReadV18 {
     operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
 }
 
+include!("production_optimized_source_scalar_boundary_v31.rs");
+
 #[cfg(test)]
 thread_local! {
     static OPTIMIZED_SCALAR_ATTEMPT_PROBE_V18: std::cell::Cell<Option<(usize, usize, usize, usize)>> = const { std::cell::Cell::new(None) };
@@ -31,6 +33,7 @@ pub struct ProductionOptimizedSourceScalarLeavesV18<'scope> {
     function: &'scope fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'scope>,
     reads: &'scope [OptimizedSourceScalarReadV18],
     wrapping: &'scope [SourceWrappingValueV23],
+    boundaries: &'scope OptimizedSourceScalarBoundariesV31,
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     floor: usize,
@@ -246,7 +249,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
             #[cfg(test)]
             test_optimized_scalar_attempt_header_v18(budget);
             let floor = budget.storage();
-            let (reads, wrapping, function, retained) = self.retain_query(
+            let (reads, wrapping, boundaries, function, retained) = self.retain_query(
                 scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
                     let floor = budget.storage();
                     self.retain_query((|| {
@@ -255,6 +258,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                             size_of::<Vec<OptimizedSourceScalarReadV18>>(),
                             size_of::<Vec<SourceWrappingValueV23>>(),
                             size_of::<SourceWrappingValueV23>(),
+                            optimized_source_boundary_headers_v31()?,
                             size_of::<std::thread::Result<Result<T, E>>>(),
                             source_reference_cleanup_headers_v29()?,
                         ])?)?;
@@ -264,11 +268,13 @@ impl ProductionSourceCorrespondenceV18<'_> {
                         let reads = optimized_source_scalar_reads_v18(original, optimized, budget)?;
                         let wrapping =
                             optimized_source_wrapping_values_v23(original, optimized, budget)?;
+                        let boundaries =
+                            optimized_source_scalar_boundaries_v31(original, optimized, budget)?;
                         let retained = budget
                             .storage()
                             .checked_sub(floor)
                             .ok_or(ArgumentResourceV1::Accounting)?;
-                        Ok((reads, wrapping, function, retained))
+                        Ok((reads, wrapping, boundaries, function, retained))
                     })())
                 }),
             )?;
@@ -278,11 +284,15 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 function,
                 reads: &reads,
                 wrapping: &wrapping,
+                boundaries: &boundaries,
                 slot: std::ptr::from_ref(budget) as usize,
                 ledger: budget.work_ledger_identity_v1(),
                 floor: budget.storage(),
             };
             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                original
+                    .leaves
+                    .check_boundary_actual_v31(Some(&leaves), budget)?;
                 consume
                     .take()
                     .expect("optimized leaf consumer is invoked once")(
@@ -299,6 +309,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
             drop(leaves);
             drop(reads);
             drop(wrapping);
+            drop(boundaries);
             let released = if self.source.cleanup.is_denied() {
                 Err(ArgumentResourceV1::Accounting)
             } else {
@@ -506,6 +517,12 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                 return relation
                     .source
                     .missing("optimized scalar read foreign output function");
+            }
+            if let Some(row) = self.boundary_value_v31(value, budget)? {
+                return Ok(Some(NormalizedScalarExpressionV1::Symbol {
+                    symbol: row.symbol,
+                    scalar: row.scalar,
+                }));
             }
             let mut first = 0usize;
             let mut end = self.reads.len();
