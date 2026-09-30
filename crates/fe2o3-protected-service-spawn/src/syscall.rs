@@ -46,6 +46,10 @@ const FAILURE_BASE: u8 = 0xc0;
 mod compiler_channel;
 pub(crate) use compiler_channel::SCRATCH as COMPILER_CHANNEL_SCRATCH;
 
+#[path = "native_compiler_personality.rs"]
+mod compiler_personality;
+pub(crate) use compiler_personality::WORK as COMPILER_PERSONALITY_WORK;
+
 #[path = "native_compiler_restrictions.rs"]
 mod compiler_restrictions;
 pub(crate) use compiler_restrictions::{
@@ -588,6 +592,8 @@ unsafe fn child_exec(
         if normalize_signal_state() != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 1);
         }
+        let mut personality = None;
+        let mut personality_acquisition_failed = false;
         if let Err(stage) = establish_guarded_profile(expected_parent, || {
             if let Some((reader, writer)) = mapping_gate {
                 // The child must not keep its own release writer alive. This gate
@@ -596,15 +602,39 @@ unsafe fn child_exec(
                     return -1;
                 }
             }
+            if staged.compiler.is_some() {
+                // The actual mapping gate has closed both child ends. Its
+                // verified maps include root->root for UID/GID, so proc ownership
+                // remains root-visible here. Profile setup closes no descriptors;
+                // this private owner is consumed before READY/close_range/remaps.
+                personality = compiler_personality::Observation::acquire();
+                if personality.is_none() {
+                    personality_acquisition_failed = true;
+                    return -1;
+                }
+            }
             establish_profile(credentials, cap_last_cap)
         }) {
-            child_fail(staged.exec_status_writer.as_raw_fd(), stage);
+            if let Some(observation) = personality.take() {
+                observation.abort();
+            }
+            child_fail(
+                staged.exec_status_writer.as_raw_fd(),
+                if personality_acquisition_failed {
+                    15
+                } else {
+                    stage
+                },
+            );
         }
         // Socket SO_PEERCRED must capture the final child identity, not root.
         let compiler_client = if let Some(transfer) = &staged.compiler_child_channel_transfer {
             let client =
                 compiler_channel::create_and_transfer(transfer.as_raw_fd(), expected_parent);
             if client < 0 {
+                if let Some(observation) = personality.take() {
+                    observation.abort();
+                }
                 child_fail(staged.exec_status_writer.as_raw_fd(), 11);
             }
             client
@@ -614,8 +644,18 @@ unsafe fn child_exec(
         // Only the closed compiler stage opts in. Install after child-channel
         // setup, before any READY or user instruction. Installation failure uses
         // the existing owned status/terminal cleanup path, never a weak fallback.
-        if staged.compiler.is_some() && !compiler_restrictions::install() {
-            child_fail(staged.exec_status_writer.as_raw_fd(), 13);
+        if staged.compiler.is_some() {
+            let installed = match personality.take() {
+                Some(observation) => compiler_restrictions::install(observation),
+                None => Err(compiler_restrictions::InstallFailure::PersonalityObservation),
+            };
+            if let Err(error) = installed {
+                let stage = match error {
+                    compiler_restrictions::InstallFailure::Filter => 13,
+                    compiler_restrictions::InstallFailure::PersonalityObservation => 16,
+                };
+                child_fail(staged.exec_status_writer.as_raw_fd(), stage);
+            }
         }
         // Compiler stages and actually mapped children must be confined after
         // mappings/profile/channel setup. Unmapped generic service stages keep

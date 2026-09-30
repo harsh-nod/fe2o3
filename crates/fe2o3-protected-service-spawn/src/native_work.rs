@@ -10,10 +10,12 @@ const CONTROL_WORK: usize = 256;
 // Compiler mode additionally changes cwd after the common stdio close/remap.
 pub(crate) const COMPILER_CWD_WORK: usize = OPERATION_WORK;
 
-// Read-only personality query, GET_NO_NEW_PRIVS, SET_SECCOMP and GET_SECCOMP,
-// plus fixed filter copy/verification and control. Compiler stages only.
-pub(crate) const COMPILER_RESTRICTION_WORK: usize =
-    4 * OPERATION_WORK + crate::syscall::COMPILER_RESTRICTION_INSTRUCTIONS * 64 + CONTROL_WORK;
+// Exact-child proc acquisition/read/close, GET_NO_NEW_PRIVS, SET_SECCOMP and
+// GET_SECCOMP, plus fixed filter copy/verification/control. Compiler stages only.
+pub(crate) const COMPILER_RESTRICTION_WORK: usize = crate::syscall::COMPILER_PERSONALITY_WORK
+    + 3 * OPERATION_WORK
+    + crate::syscall::COMPILER_RESTRICTION_INSTRUCTIONS * 64
+    + CONTROL_WORK;
 
 // GET_NO_NEW_PRIVS, SET_SECCOMP, GET_SECCOMP and immutable filter validation.
 // Worst-case allowance paid on the original parent ledger before every clone,

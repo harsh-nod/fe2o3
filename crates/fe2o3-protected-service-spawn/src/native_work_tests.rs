@@ -2,9 +2,26 @@ use super::child_work;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
 
 #[test]
+fn existing_coordinator_compiler_setup_allowance_still_bounds_all_child_extras() {
+    let actual =
+        super::COMPILER_CWD_WORK + super::COMPILER_RESTRICTION_WORK + super::COMPILER_CHANNEL_WORK;
+    assert_eq!(actual, 46_144);
+    // The existing root-request launch quote adds a second copy of this staging
+    // allowance for compiler-only child work above generic spawn_work_for.
+    assert!(
+        crate::native_spawn::StagedProtectedServiceExecV2::COMPILER_CHILD_CHANNEL_STAGING_WORK
+            >= actual
+    );
+}
+#[test]
 fn compiler_restriction_work_prepays_fixed_filter_and_all_install_calls() {
-    assert_eq!(super::COMPILER_RESTRICTION_WORK, 4 * 1088 + 57 * 64 + 256);
-    assert_eq!(super::COMPILER_RESTRICTION_WORK, 8256);
+    let observation = 19 * 1088 + (32 + 10 + 1) * 64 + 256;
+    assert_eq!(
+        super::COMPILER_RESTRICTION_WORK,
+        observation + 3 * 1088 + 57 * 64 + 256
+    );
+    assert_eq!(super::COMPILER_RESTRICTION_WORK, 30_848);
+    assert_eq!(super::COMPILER_RESTRICTION_WORK - 8256, 22_592);
 }
 
 #[test]

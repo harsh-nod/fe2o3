@@ -22,7 +22,6 @@ const KILL: u32 = 0x8000_0000; // SECCOMP_RET_KILL_PROCESS, including sibling th
 const ALLOW: u32 = 0x7fff_0000;
 const ARCH: u32 = 0xc000_003e;
 const X32: u32 = 0x4000_0000;
-const READ_IMPLIES_EXEC: libc::c_long = 0x0040_0000;
 
 // x86-64 only; other audit architectures and the x32 ABI are refused first.
 const DENIED: [u32; 17] = [
@@ -53,10 +52,11 @@ struct Program {
 }
 
 // Includes the immutable program's bytes conservatively as well as child ABI
-// frames, including the scalar personality result. No allocation, mutex,
-// callback or fallible preparation after clone.
-pub(crate) const SCRATCH: usize =
-    INSTRUCTIONS * size_of::<Instruction>() + size_of::<Program>() + 256;
+// frames and exact-child proc observation. No allocation or destructor after clone.
+pub(crate) const SCRATCH: usize = INSTRUCTIONS * size_of::<Instruction>()
+    + size_of::<Program>()
+    + 256
+    + super::compiler_personality::SCRATCH;
 
 const fn instruction(code: u16, value: u32, yes: u8, no: u8) -> Instruction {
     Instruction {
@@ -103,28 +103,40 @@ const fn program() -> [Instruction; INSTRUCTIONS] {
 
 static FILTER: [Instruction; INSTRUCTIONS] = program();
 
+pub(super) enum InstallFailure {
+    PersonalityObservation,
+    Filter,
+}
+
 /// Called only in the already cap-free, NNP direct child, before profile-ready
 /// and first exec. The original parent prepays all work/scratch before clone.
-/// Query errors or inherited READ_IMPLIES_EXEC refuse before filter installation.
+/// Proc observation errors or inherited READ_IMPLIES_EXEC refuse before installation.
 /// Success means that inherited bit was absent and this fixed filter installed,
 /// not code admission or validation of personality established by a later exec.
-pub(super) unsafe fn install() -> bool {
+pub(super) unsafe fn install(
+    observation: super::compiler_personality::Observation,
+) -> Result<(), InstallFailure> {
     let program = Program {
         length: INSTRUCTIONS as u16,
         instructions: FILTER.as_ptr(),
     };
     // SAFETY: fixed native Linux ABI, immutable static filter and live stack
-    // header. The personality sentinel only queries this actual child and must
-    // precede the filter, which denies all later personality calls. The kernel
+    // header. Read the retained actual-child proc inode after profile transition,
+    // closing it before the filter, which denies all personality calls. The kernel
     // copies both filter records synchronously; no pointer escapes. NNP is
     // already established, and a successful filter cannot later be removed.
     unsafe {
-        let personality = libc::syscall(libc::SYS_personality, u32::MAX as libc::c_ulong);
-        personality >= 0
-            && personality & READ_IMPLIES_EXEC == 0
-            && libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) == 1
+        if observation.read_and_close().is_none() {
+            return Err(InstallFailure::PersonalityObservation);
+        }
+        if libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) == 1
             && libc::prctl(libc::PR_SET_SECCOMP, 2, &raw const program, 0, 0) == 0
             && libc::prctl(libc::PR_GET_SECCOMP, 0, 0, 0, 0) == 2
+        {
+            Ok(())
+        } else {
+            Err(InstallFailure::Filter)
+        }
     }
 }
 
