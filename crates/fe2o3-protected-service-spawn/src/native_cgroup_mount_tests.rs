@@ -163,6 +163,7 @@ fn actual_threaded_domain_membership_is_refused() {
     println!("CGROUP-MOUNT-CONTROL:threaded-domain:reached");
 }
 
+#[allow(unsafe_code)]
 fn mount(source: Option<&CStr>, target: &CStr, flags: libc::c_ulong) {
     // SAFETY: all strings remain alive through the syscall; only the isolated
     // subprocess's private mount namespace is modified, with no data argument.
@@ -193,6 +194,7 @@ fn root() -> OwnedFd {
     .unwrap()
 }
 
+#[allow(unsafe_code)]
 fn exercise(mode: &str) {
     assert!(crate::syscall::has_exact_root_identity());
     let membership = open_proc(c"/proc/self/cgroup").unwrap();
