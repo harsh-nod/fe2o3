@@ -69,9 +69,12 @@ at `14e4253eb`. Its signed component campaign passes three full 13-obligation
 136 selected CPU tests, 53 doctests and scoped static gates. That candidate's
 no-default check retains its two explicit baseline warnings. At `14e4253eb`, the
 merged source guard incorporates only the separately reviewed custody delta and
-passes its lightweight calibration. Later shared-account changes require a new
-reviewed source-guard binding; the executable fold proof is unchanged. The theorem
-covers the actual shared fold over ordered
+passes its lightweight calibration. The subsequent shared-account guard refresh
+changes only the bound hashes of the two separately qualified scale-account
+files. The two-file executable proof closure, thirteen-obligation expectation
+and twenty-two mutations are unchanged; lightweight calibration passes without
+a new solver or merged-runtime claim. The theorem covers the actual shared fold
+over ordered
 validation receipts, not the per-input validator, live credit ledger or native
 authority. No combined full-runtime, native or performance acceptance follows
 from these separate component results. Evidence remains local and publication
