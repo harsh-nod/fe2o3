@@ -78,9 +78,9 @@ expands the mutated accounting body. The capture summary reports one verified
 obligation and one error, without a per-function attribution of that count.
 
 The source-pinned policy now permits only the observed singleton for each
-selector. The 25 actual-body mutants are defined but a fresh signed campaign
-with three full positives, including relocation, is still pending. No
-historical packet is retroactively reclassified by the policy update.
+selector. At that development checkpoint the 25 actual-body mutants were
+defined but the signed campaign was pending. No historical capture is
+retroactively reclassified by the policy update.
 
 The development recorders and raw packets currently live in the retained local
 qualification directory, outside repository CI. The public component checker
@@ -96,3 +96,38 @@ This document is outside the development build-source inventory and has a
 separate evidence hash. Fresh group-closure observations cover only children
 of each live recorder in its unchanged PID namespace, not host-wide or
 historical process absence.
+
+## Signed Qualification
+
+Signed candidate `c9937ee54` retains the production extraction and development
+byte binding. Its first campaign remains rejected: the sixth mutation used a
+leading Boolean block without parentheses, causing Rust E0308 rather than a
+logical proof failure. Two positive runs and five logical negatives in that
+rejected campaign do not count toward acceptance.
+
+Signed child `cdebb1707` changes only the mutation generator's parentheses and
+a paired source control. All fourteen executable proof inputs and all 3,096
+selected native Rust inputs remain unchanged. Its fresh campaign passes all
+33 stages: three full 41-obligation runs, including a relocated root, all 25
+logical negatives, and both pinned release checks. Each negative joins the
+expected family's postcondition to the actual mutated body expansion. This
+matters because the General-account selector also matches the Runtime suffix.
+
+All 33 newly recorded process groups close in the recorder's unchanged PID
+namespace. No historical groups are probed and no host-wide absence is claimed.
+The retained local result is
+`signed-campaign-attempt-2/results.json`, SHA-256
+`ef7e3cc8bd5d73d8bd5470b3094289f04e84306827d57e45cb879dae2c6aa0db`;
+its closing census is
+`d49d2d2e113afbe794dc73046c68ce3a4ddab21a5929d0f6c3fa3e1b20509a40`.
+These live under the retained local qualification directory, not a portable
+published evidence bundle.
+
+Integration at `637d6124c` and `aa74e2b37` preserves the exact proof closure.
+The merged source guards also retain the independently integrated publication
+model and retained-routing sources. Their compatibility hashes are refreshed;
+no old theorem or combined Rust suite is newly qualified by those hashes.
+All twelve merged-tree CI source-control commands pass locally. The CI job
+adds the source-only dispatch control, not a solver campaign or hosted result.
+CPU/static evidence remains the earlier exact-byte development reuse. Live
+freshness, conservation, native execution, A0-A7 and HIP/HSA parity remain open.

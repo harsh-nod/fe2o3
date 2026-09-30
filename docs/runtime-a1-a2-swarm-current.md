@@ -4,8 +4,9 @@
 
 Local qualification snapshot: 2026-09-30 UTC.
 The browser-visible [#182](https://github.com/harsh-nod/fe2o3/issues/182) page
-still reports Open at this read. Its API/comments cannot be refreshed, and
-terminal GitHub/MI300X access remains blocked by DNS failures.
+still reports Open at that read. Its API/comments have not been refreshed.
+Terminal GitHub DNS and MI300X SSH access have recovered; this does not itself
+qualify a new hardware run or confirm publication of the latest commits.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -28,12 +29,25 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 ## Latest Qualification
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
-runs eleven explicit commands covering the newer model, runtime, accounting and
+runs twelve explicit commands covering the newer model, runtime, accounting and
 KFD source/classifier controls. Those commands pass locally; workflow YAML and
 command inventory checks also pass. The resource-domain command selects its six
 source-only controls, not its three subprocess lifecycle tests. This adds drift
 detection, not solver execution, Rust test execution, authenticated proof
-acceptance or a hosted CI result. GitHub publication is still blocked by DNS.
+acceptance or a hosted CI result.
+
+The [serialized retained-credit dispatch](runtime-retained-credit-dispatch-v1.md)
+is integrated through `637d6124c` and `aa74e2b37`. Signed child `cdebb1707`
+passes three full 41-obligation proof runs, including relocation, and all 25
+actual-body logical negatives. All 33 fresh campaign process groups close.
+The first signed campaign remains rejected because a generated mutation did
+not compile; the child fixes only that mutation's Boolean grouping and adds
+a source control. Its full campaign starts again without reusing partial
+passes. Earlier 107-case CPU and strict four-crate static evidence is bound to
+unchanged production/test Rust, not rerun on the merged tree. The proof joins
+five actual dispatch bodies with the existing record and post-lock observers;
+Arc identity, locking, map correspondence, concurrent freshness and native
+authority remain explicit boundaries. No A0-A7 exit is closed.
 
 The [distributed publication description contract](runtime-distributed-publication-contract-v1.md)
 is integrated at `1cb78d01c`. Its signed candidate passes the full model executable:

@@ -55,6 +55,7 @@ jobs:
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-credit-record.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-independent-retained-observation.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-domain-retained-observation.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-credit-dispatch.py
 
       - name: Runtime and KFD shared-body source guards
         run: |
