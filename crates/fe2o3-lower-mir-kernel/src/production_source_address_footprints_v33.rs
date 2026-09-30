@@ -29,18 +29,18 @@ fn source_address_footprint_v33(
 ) -> Result<Option<SourceAddressFootprintV33>, ProductionSemanticKirErrorV1> {
     use SourceAddressFootprintRoleV33 as Role;
     budget.charge_work(1)?;
-    let (operand, pointer, access, role, typed) = match (operation.kind, ordinal) {
+    let (operand, pointer, access, role, typed) = match (&operation.kind, ordinal) {
         (OperationKind::Load { pointer, access }, 0) => {
-            (0, pointer, access, Role::ValueRead, false)
+            (0, *pointer, *access, Role::ValueRead, false)
         }
         (
             OperationKind::Store {
                 pointer, access, ..
             },
             0,
-        ) => (0, pointer, access, Role::ValueWrite, false),
+        ) => (0, *pointer, *access, Role::ValueWrite, false),
         (OperationKind::Storage(operation), ordinal) => {
-            let (operand, pointer, access, role) = match (operation, ordinal) {
+            let (operand, pointer, access, role) = match (*operation, ordinal) {
                 (ScopedObjectOperationV29::ReadValue { address, access }, 0) => {
                     (0, address, access, Role::ValueRead)
                 }
