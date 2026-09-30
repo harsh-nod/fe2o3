@@ -209,6 +209,8 @@ fn issued_helper_retained_replay_rejects_foreign_issuer_access_instance_and_poin
                         .map_err(source_emission_error_v18)?,
                     accesses: emission_vec_v1(rows.accesses.len(), budget)
                         .map_err(source_emission_error_v18)?,
+                    selected: copied_selected_rows_v30(&rows.selected, budget)
+                        .map_err(source_emission_error_v18)?,
                 };
                 budget
                     .charge_work(rows.sources.len() + rows.issuers.len() + rows.accesses.len())?;

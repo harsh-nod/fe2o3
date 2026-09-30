@@ -9,6 +9,7 @@ struct SourceIssuedAccessesV29<'scope, 'owner, 'source> {
     queries: Vec<SourceIssuedAccessV29>,
     transports: Vec<SourceIssuedRootTransportV29>,
     retained: PendingSourceIssuedRolesV29,
+    selected_guards: Option<SourceSelectedGuardCacheV30>,
     owned: usize,
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
@@ -49,6 +50,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             queries: Vec::new(),
             transports: Vec::new(),
             retained: PendingSourceIssuedRolesV29::empty(),
+            selected_guards: None,
             owned,
             slot: std::ptr::from_ref(budget) as usize,
             ledger: budget.work_ledger_identity_v1(),
@@ -215,7 +217,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             )?;
             true
         } else {
-            false
+            self.selected_reference_access_v30(references, instance, anchor, row, place, budget)?
         };
         self.owned = argument_sum_v1(&[
             self.owned,
@@ -260,8 +262,12 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             std::mem::size_of::<Result<(BlockId, usize), ProductionSemanticKirErrorV1>>(),
             3 * std::mem::size_of::<usize>(),
         ])?)?;
-        let guards =
-            source_issued_guards_v29(&self.source_index.pending.function, &self.actual, budget)?;
+        let guards = match self.selected_guards.take() {
+            Some(cache) => cache.issued,
+            None => {
+                source_issued_guards_v29(&self.source_index.pending.function, &self.actual, budget)?
+            }
+        };
         budget.reserve_storage(std::mem::size_of::<Vec<SourceIssuedPointerTransportV26>>())?;
         let mut pointer_transports = emission_vec_v1(self.queries.len(), budget)?;
         for query in &self.queries {
@@ -367,6 +373,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
                 return Err(source_issued_error_v29());
             }
         }
+        self.finish_selected_v30(budget)?;
         let extra = budget
             .storage()
             .checked_sub(before)
@@ -374,7 +381,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
         let owned = argument_sum_v1(&[self.owned, extra])?;
         let retained = std::mem::replace(&mut self.retained, PendingSourceIssuedRolesV29::empty());
         let refund = owned
-            .checked_sub(retained.retained_storage()?)
+            .checked_sub(retained.retained_storage(budget)?)
             .ok_or(ArgumentResourceV1::Accounting)?;
         drop((self, guards, ranges));
         budget.release_storage(refund)?;

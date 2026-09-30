@@ -348,15 +348,8 @@ fn distinct_origin_join_owner() -> ProductionSemanticSsaOwnerV1 {
 }
 
 #[test]
-fn distinct_issued_reference_join_remains_an_explicit_original_origin_refusal() {
-    run_original_owner_case(
-        0,
-        (0, 0, 0),
-        distinct_origin_join_owner(),
-        Some(EarlyIssuedSourceRefusal::Unsupported(
-            "source reference dereference has no checked origin",
-        )),
-    );
+fn distinct_issued_reference_join_retains_conditional_original_origin_obligations() {
+    selection_tests::check_distinct_selection_memory();
 }
 
 thread_local! {

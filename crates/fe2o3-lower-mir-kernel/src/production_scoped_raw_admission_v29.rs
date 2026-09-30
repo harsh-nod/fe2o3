@@ -10,7 +10,7 @@ include!("production_optimized_source_private_memory_v18.rs");
 include!("production_source_issued_role_replay_v18.rs");
 #[cfg(test)]
 #[path = "production_source_issued_roles_v29_tests.rs"]
-mod issued_role_tests_v29;
+pub(super) mod issued_role_tests_v29;
 
 pub(super) fn assemble_original_zero_raw_v29(
     instances: &ProductionCallInstancePlanV1<'_>,
@@ -2737,7 +2737,7 @@ fn retain_pending_memory_v29(
         output.alternatives.len(),
     ));
     output.retained_storage = argument_sum_v1(&[
-        output.issued.retained_storage()?,
+        output.issued.retained_storage(budget)?,
         argument_product_v1(
             output.projects.capacity(),
             std::mem::size_of::<PendingSourceObjectProjectV29>(),

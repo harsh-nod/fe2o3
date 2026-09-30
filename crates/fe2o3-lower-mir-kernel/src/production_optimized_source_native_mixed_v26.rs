@@ -65,7 +65,7 @@ impl ProductionMixedMemoryCheckedNativePoliciesV26<'_, '_> {
     }
     // Internal stage transport borrows the completed source evidence only after
     // replaying the same owner and current-account checks as every public query.
-    pub(super) fn source_obligations_v30(
+    pub(in crate::production_semantic_kir_v1) fn source_obligations_v30(
         &self,
         original: &ProductionSourceCorrespondenceV18<'_>,
         optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
@@ -75,7 +75,7 @@ impl ProductionMixedMemoryCheckedNativePoliciesV26<'_, '_> {
         Ok(self.obligations)
     }
 
-    pub(super) fn completed_globals_v30(
+    pub(in crate::production_semantic_kir_v1) fn completed_globals_v30(
         &self,
         original: &ProductionSourceCorrespondenceV18<'_>,
         optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,

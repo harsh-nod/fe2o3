@@ -3,6 +3,7 @@ struct SourceIssuedActualValueV29<'a> {
     id: ValueId,
     ty: &'a Type,
     operation: Option<&'a Operation>,
+    location: Option<(BlockId, usize)>,
     input: Option<usize>,
 }
 
@@ -105,6 +106,7 @@ impl<'a> SourceIssuedActualV29<'a> {
                 id,
                 ty,
                 operation: None,
+                location: None,
                 input: Some(ordinal),
             });
         }
@@ -116,10 +118,11 @@ impl<'a> SourceIssuedActualV29<'a> {
                     id: value.id,
                     ty: &value.ty,
                     operation: None,
+                    location: None,
                     input: None,
                 });
             }
-            for operation in &block.operations {
+            for (ordinal, operation) in block.operations.iter().enumerate() {
                 budget.charge_work(1)?;
                 for value in &operation.results {
                     budget.charge_work(1)?;
@@ -127,6 +130,7 @@ impl<'a> SourceIssuedActualV29<'a> {
                         id: value.id,
                         ty: &value.ty,
                         operation: Some(operation),
+                        location: Some((block.id, ordinal)),
                         input: None,
                     });
                 }

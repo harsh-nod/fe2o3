@@ -213,6 +213,14 @@ fn check_immutable_issued_roles_inner_v18(
             .source
             .missing("issued immutable receipt differs from its original owner");
     }
+    // V18/V26 roles contain one issuer and one dominating guard per access.
+    // Selected receipts require the distinct ordered, conditional V30 replay.
+    budget.charge_work(1)?;
+    if !rows.selected.is_empty() {
+        return original
+            .source
+            .missing("selected reference access requires its conditional V30 consumer");
+    }
     let semantic = original.source.source_semantic(budget)?;
     let mut source_count = 0usize;
     for instance in &owner.coordinates.sources.rows {

@@ -2,6 +2,7 @@
 // Emitted pointer edges and final conditional access obligations must be replayed
 // separately before a selected reference can authorize a memory access.
 include!("production_source_reference_selection_actual_v30.rs");
+include!("production_source_reference_selection_memory_v30.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceReferenceSelectionValueV29 {
     instance: ProductionCallInstanceIdV1,
@@ -114,6 +115,58 @@ fn source_reference_selection_call_headers_v29<R>(
 }
 
 impl<'scope, 'owner, 'source> SourceReferenceSelectionBuilderV29<'scope, 'owner, 'source> {
+    fn build(
+        plan: &'scope SourceReferencePlanV29<'owner, 'source>,
+        instance: ProductionCallInstanceIdV1,
+        site: ExecutionSiteV29,
+        role: ExecutionOperandV29,
+        source: &SemanticPlaceV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        plan.check_owner(plan.instances, budget)?;
+        budget.reserve_storage(source_reference_selection_headers_v29()?)?;
+        let mut node_bound = 0;
+        for instance in plan.instances.instances() {
+            budget.charge_work(3)?;
+            let function = instance.declaration();
+            node_bound = argument_sum_v1(&[
+                node_bound,
+                instance.ssa().plan().definition_count(),
+                argument_product_v1(function.locals().len(), function.blocks().len())?,
+            ])?;
+        }
+        let mut builder = Self {
+            plan,
+            graph: SourceReferenceSelectionGraphV29 {
+                subject: SourceReferenceSelectionSubjectV29 {
+                    instance,
+                    site,
+                    role,
+                    source: source as *const SemanticPlaceV1 as usize,
+                },
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
+            indices: BTreeMap::new(),
+            originals: BTreeMap::new(),
+            node_bound,
+        };
+        let value = builder.use_value(instance, site, role, source, budget)?;
+        if builder.intern(value, budget)? != 0 {
+            return Err(source_reference_selection_error_v29());
+        }
+        let mut next = 0;
+        while next < builder.graph.nodes.len() {
+            budget.charge_work(2)?;
+            let value = builder.graph.nodes[next].value;
+            let step = builder.expand(value, budget)?;
+            builder.graph.nodes[next].step = step;
+            next = argument_sum_v1(&[next, 1])?;
+        }
+        builder.check_seeded(budget)?;
+        Ok(builder)
+    }
+
     fn original(
         &mut self,
         instance: ProductionCallInstanceIdV1,
@@ -566,47 +619,9 @@ fn with_source_reference_selection_v29<R>(
 ) -> Result<R, ProductionSemanticKirErrorV1> {
     plan.check_owner(plan.instances, budget)?;
     let result = with_canonical_call_scratch_v1(budget, |budget| {
-        budget.reserve_storage(source_reference_selection_headers_v29()?)?;
         budget.reserve_storage(source_reference_selection_call_headers_v29::<R>(&consume)?)?;
-        let mut node_bound = 0;
-        for instance in plan.instances.instances() {
-            budget.charge_work(3)?;
-            let function = instance.declaration();
-            node_bound = argument_sum_v1(&[
-                node_bound,
-                instance.ssa().plan().definition_count(),
-                argument_product_v1(function.locals().len(), function.blocks().len())?,
-            ])?;
-        }
-        let mut builder = SourceReferenceSelectionBuilderV29 {
-            plan,
-            graph: SourceReferenceSelectionGraphV29 {
-                subject: SourceReferenceSelectionSubjectV29 {
-                    instance,
-                    site,
-                    role,
-                    source: source as *const SemanticPlaceV1 as usize,
-                },
-                nodes: Vec::new(),
-                edges: Vec::new(),
-            },
-            indices: BTreeMap::new(),
-            originals: BTreeMap::new(),
-            node_bound,
-        };
-        let value = builder.use_value(instance, site, role, source, budget)?;
-        if builder.intern(value, budget)? != 0 {
-            return Err(source_reference_selection_error_v29());
-        }
-        let mut next = 0;
-        while next < builder.graph.nodes.len() {
-            budget.charge_work(2)?;
-            let value = builder.graph.nodes[next].value;
-            let step = builder.expand(value, budget)?;
-            builder.graph.nodes[next].step = step;
-            next = argument_sum_v1(&[next, 1])?;
-        }
-        builder.check_seeded(budget)?;
+        let builder =
+            SourceReferenceSelectionBuilderV29::build(plan, instance, site, role, source, budget)?;
         let retained = budget.storage();
         let result = consume(&builder.graph, budget);
         if !plan.retains_custody(plan.instances, budget) || budget.storage() != retained {

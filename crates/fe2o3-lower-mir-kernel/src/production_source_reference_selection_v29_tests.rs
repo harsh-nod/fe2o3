@@ -3,6 +3,7 @@ use production_call_instances_v1::with_production_call_instances_v1;
 
 include!("production_source_reference_selection_actual_v30_tests.rs");
 include!("production_source_reference_selection_bind_v30_tests.rs");
+include!("production_source_reference_selection_memory_v30_tests.rs");
 
 fn selection_owner(parallel: bool, recurrence: bool) -> ProductionSemanticSsaOwnerV1 {
     let prior = distinct_origin_join_owner();

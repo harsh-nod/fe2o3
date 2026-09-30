@@ -68,7 +68,7 @@ fn run_issued_role_source_shape_v18(
     )
 }
 
-fn run_issued_role_owner_v18(
+pub(in super::super) fn run_issued_role_owner_v18(
     owner: ProductionSemanticSsaOwnerV1,
     work_limit: usize,
     storage_limit: usize,
@@ -105,20 +105,45 @@ fn run_issued_role_owner_v18(
     let arguments: Vec<_> = ["first", "second"]
         .into_iter()
         .enumerate()
-        .map(|(ordinal, name)| ProductionKernelArgumentAbiArgumentV18 {
-            semantic_type_identity: semantic.types()[4].identity(),
-            kind: ProductionKernelArgumentAbiKindV18::Descriptor {
-                source: SourceTypeDescriptorV3::DisjointSlice(ScalarTypeV1::U32),
-                argument: LogicalArgumentV1::disjoint_slice(
-                    ordinal as u16,
-                    ValidName::new(name).unwrap(),
-                    &source,
-                    &layout,
-                    fe2o3_kernel_descriptor::AccessMode::ReadWrite,
-                    (ordinal * 16) as u32,
-                )
-                .unwrap(),
-            },
+        .map(|(ordinal, name)| {
+            let ty = semantic.functions()[0].abi().source_input_types()[ordinal];
+            let kind = if shared_slice_leaf_v1(semantic.types(), ty) {
+                let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(
+                    ScalarTypeV1::U32,
+                ));
+                let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(
+                    ScalarTypeV1::U32,
+                ));
+                ProductionKernelArgumentAbiKindV18::Descriptor {
+                    source: SourceTypeDescriptorV3::SharedSlice(ScalarTypeV1::U32),
+                    argument: LogicalArgumentV1::shared_slice(
+                        ordinal as u16,
+                        ValidName::new(name).unwrap(),
+                        &source,
+                        &layout,
+                        (ordinal * 16) as u32,
+                    )
+                    .unwrap(),
+                }
+            } else {
+                assert_eq!(ty.index(), 4, "the exact original disjoint carrier");
+                ProductionKernelArgumentAbiKindV18::Descriptor {
+                    source: SourceTypeDescriptorV3::DisjointSlice(ScalarTypeV1::U32),
+                    argument: LogicalArgumentV1::disjoint_slice(
+                        ordinal as u16,
+                        ValidName::new(name).unwrap(),
+                        &source,
+                        &layout,
+                        fe2o3_kernel_descriptor::AccessMode::ReadWrite,
+                        (ordinal * 16) as u32,
+                    )
+                    .unwrap(),
+                }
+            };
+            ProductionKernelArgumentAbiArgumentV18 {
+                semantic_type_identity: semantic.types()[ty.index() as usize].identity(),
+                kind,
+            }
         })
         .collect();
     let roots = [ProductionKernelArgumentAbiRootV18 {
@@ -128,7 +153,7 @@ fn run_issued_role_owner_v18(
         explicit_argument_bytes: 32,
         kernarg_alignment_bytes: 8,
     }];
-    let classes = [ProductionScopeCallableCandidateV29::Ordinary; 3];
+    let classes = vec![ProductionScopeCallableCandidateV29::Ordinary; semantic.callables().len()];
     let input = ProductionExecutionSourceInputV29 {
         semantic_sha256: &hash,
         roots: &[],
@@ -201,7 +226,7 @@ fn check_issued_role_positive_v18(
     assert_eq!(rows.issuers[0].element, ScalarType::U32);
     assert_eq!(rows.issuers[0].access, AccessMode::ReadWrite);
     assert_eq!(
-        rows.retained_storage()?,
+        rows.retained_storage(budget)?,
         rows.sources.capacity() * std::mem::size_of::<PendingSourceIssuedSiteV29>()
             + rows.issuers.capacity() * std::mem::size_of::<PendingSourceIssuedIssuerV29>()
             + rows.accesses.capacity() * std::mem::size_of::<PendingSourceIssuedAccessV29>()
@@ -276,7 +301,7 @@ fn issued_pointer_original_issuers_and_accesses_grow_independently() {
                         );
                     }
                     assert_eq!(
-                        rows.retained_storage()?,
+                        rows.retained_storage(budget)?,
                         rows.sources.capacity() * std::mem::size_of::<PendingSourceIssuedSiteV29>()
                             + rows.issuers.capacity()
                                 * std::mem::size_of::<PendingSourceIssuedIssuerV29>()
@@ -462,6 +487,8 @@ fn copied_issued_rows_v18(
         issuers: emission_vec_v1(rows.issuers.len() + 1, budget)
             .map_err(immutable_memory_error_v29)?,
         accesses: emission_vec_v1(rows.accesses.len() + 1, budget)
+            .map_err(immutable_memory_error_v29)?,
+        selected: copied_selected_rows_v30(&rows.selected, budget)
             .map_err(immutable_memory_error_v29)?,
     };
     budget.charge_work(rows.sources.len() + rows.issuers.len() + rows.accesses.len())?;
@@ -710,7 +737,9 @@ fn issued_pointer_retained_replay_header_cut_preserves_first_failure_and_cleanup
     }
 }
 
-fn issued_role_resource_v18(error: ProductionSourceOwnedViewErrorV18) -> ArgumentResourceV1 {
+pub(in super::super) fn issued_role_resource_v18(
+    error: ProductionSourceOwnedViewErrorV18,
+) -> ArgumentResourceV1 {
     use ProductionPendingScopedSourceErrorV29 as Pending;
     use ProductionSourceOwnedViewErrorV18 as View;
     use fe2o3_kernel_ir::{

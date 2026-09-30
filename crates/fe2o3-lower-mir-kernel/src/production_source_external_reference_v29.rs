@@ -10,6 +10,7 @@ enum SourceExternalReferenceOriginV29 {
         instance: ProductionCallInstanceIdV1,
         recipe: SourceIssuedSemanticRecipeV29,
     },
+    Selected(SourceReferenceSelectionSubjectV29),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,6 +212,7 @@ fn source_external_reference_origin_from_use_v29(
     source_index: Option<&SourceAddressSourceIndexV29<'_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Option<SourceExternalReferenceOriginV29>, ProductionSemanticKirErrorV1> {
+    let subject = (instance, execution, role, source);
     with_canonical_call_scratch_v1(budget, |budget| {
         budget.reserve_storage(argument_sum_v1(&[
             std::mem::size_of::<SourceReferenceSiteV29>(),
@@ -254,8 +256,8 @@ fn source_external_reference_origin_from_use_v29(
                 .occurrences(instance)
                 .ok_or_else(source_external_reference_error_v29)?;
             let mut entry = None;
-            // Definitions are immutable and finite. A join without one exact
-            // origin remains a refusal, not an arbitrary selected predecessor.
+            // Definitions are immutable and finite. A distinct-origin join
+            // retains its canonical edge selection, never one predecessor.
             for _ in 0..=original.definitions.len() {
                 if let Some(recipe) = original.resolve(value, budget)? {
                     if recipe.form != SourceIssuedFormV29::Pointer {
@@ -306,6 +308,30 @@ fn source_external_reference_origin_from_use_v29(
                     Some(SourceIssuedDefinitionV29::Edge(_)) => return Ok(None),
                     None => {
                         entry = original.entry_dependency_v26(value, budget)?;
+                        if entry.is_none() && matches!(value, SsaValueV1::BlockArgument { .. }) {
+                            return with_source_reference_selection_v29(
+                                plan,
+                                subject.0,
+                                subject.1,
+                                subject.2,
+                                subject.3,
+                                budget,
+                                |graph, budget| {
+                                    budget.charge_work(graph.nodes.len())?;
+                                    if !graph.nodes.iter().any(|node| {
+                                        matches!(
+                                            node.step,
+                                            SourceReferenceSelectionStepV29::Parameter { .. }
+                                        )
+                                    }) {
+                                        return Err(source_external_reference_error_v29());
+                                    }
+                                    Ok(Some(SourceExternalReferenceOriginV29::Selected(
+                                        graph.subject,
+                                    )))
+                                },
+                            );
+                        }
                         break;
                     }
                 }

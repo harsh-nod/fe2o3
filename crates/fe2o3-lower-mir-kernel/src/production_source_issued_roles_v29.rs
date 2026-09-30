@@ -41,6 +41,7 @@ struct PendingSourceIssuedRolesV29 {
     sources: Vec<PendingSourceIssuedSiteV29>,
     issuers: Vec<PendingSourceIssuedIssuerV29>,
     accesses: Vec<PendingSourceIssuedAccessV29>,
+    selected: Vec<PendingSourceSelectedAccessV30>,
 }
 
 impl PendingSourceIssuedRolesV29 {
@@ -49,11 +50,15 @@ impl PendingSourceIssuedRolesV29 {
             sources: Vec::new(),
             issuers: Vec::new(),
             accesses: Vec::new(),
+            selected: Vec::new(),
         }
     }
 
-    fn retained_storage(&self) -> Result<usize, ArgumentResourceV1> {
-        argument_sum_v1(&[
+    fn retained_storage(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<usize, ArgumentResourceV1> {
+        let mut storage = argument_sum_v1(&[
             argument_product_v1(
                 self.sources.capacity(),
                 std::mem::size_of::<PendingSourceIssuedSiteV29>(),
@@ -66,7 +71,16 @@ impl PendingSourceIssuedRolesV29 {
                 self.accesses.capacity(),
                 std::mem::size_of::<PendingSourceIssuedAccessV29>(),
             )?,
-        ])
+            argument_product_v1(
+                self.selected.capacity(),
+                std::mem::size_of::<PendingSourceSelectedAccessV30>(),
+            )?,
+        ])?;
+        for row in &self.selected {
+            budget.charge_work(6)?;
+            storage = argument_sum_v1(&[storage, row.retained_storage()?])?;
+        }
+        Ok(storage)
     }
 }
 
@@ -75,10 +89,11 @@ fn pending_issued_roles_match_v29(
     right: &PendingSourceIssuedRolesV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<bool, ProductionSemanticKirErrorV1> {
-    budget.charge_work(3)?;
+    budget.charge_work(4)?;
     if left.sources.len() != right.sources.len()
         || left.issuers.len() != right.issuers.len()
         || left.accesses.len() != right.accesses.len()
+        || left.selected.len() != right.selected.len()
     {
         return Ok(false);
     }
@@ -96,6 +111,11 @@ fn pending_issued_roles_match_v29(
             std::mem::size_of::<PendingSourceIssuedAccessV29>(),
         )?,
     ])?)?;
+    for (a, b) in left.selected.iter().zip(&right.selected) {
+        if !a.matches(b, budget)? {
+            return Ok(false);
+        }
+    }
     Ok(left.sources == right.sources
         && left.issuers == right.issuers
         && left.accesses == right.accesses)
