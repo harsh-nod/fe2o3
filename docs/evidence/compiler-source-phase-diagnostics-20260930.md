@@ -626,3 +626,75 @@ Log SHA-256:
 `6c8ee1768a80e4ff3414045dda36f5a15d7caa71726532ba2fa19266e22f5989`.
 The next repair must preserve the exact original data-root binding; removing or
 weakening the identity check would not satisfy this gate.
+
+## Helper Claim and ABI Fixture Rerun
+
+r148 at `0b64fc8768f285ae23b3df4101cafbff605f0136` executed 96 selected
+lowerer tests: **76 passed, 20 failed, none ignored**. Source and tools remained
+unchanged. This includes the original-move claim repair, two additional helper
+positives, and the F32 ABI fixture correction.
+
+- The independent physical-root ABI test passes: the logical context adds no
+  physical argument in that fixture.
+- Four context-read controls now reach lifecycle validation instead of the old
+  ABI-construction panic, but fail before their intended read gate.
+- Ten helper index-call controls and three native-helper receiver controls now
+  report `scoped memory anchors differ from their source instance`, replacing
+  the earlier defined-child-request failure. Their required observers still do
+  not complete.
+- Three inherited aggregate-runtime controls still encounter the private-entry
+  SSA block-argument gap.
+
+Inspection identified an ordering defect in the claim repair: the original move
+clears the live SSA slot before the memory-occurrence capture checks it. The
+follow-up must capture first, then claim the original Use/MoveKill and validate
+the archive before removing the holder. The live-slot predicate is not relaxed.
+These failing negatives receive no intended-boundary credit.
+
+r148 log SHA-256:
+`f25313510cdfd14d73c229fa13d23b1dc539e74039ec7c70ce31f85efefe2503`.
+The separate [scoped-invocation schema tests](scoped-invocation-schemas-20260930.md)
+do not close these compiler integration failures.
+
+## Capture Ordering and Focused Rerun
+
+Candidate `450d8a0f8fa992957a0cb90610f680e0e0ebb031` includes the original
+memory-occurrence capture before the move claim, plus separate exact data and
+length metadata-carrier replay. Neither repair relaxes the original source
+identity requirement.
+
+r154 built the lowerer library and started its full 4,249-test suite. The run
+was deliberately stopped during unrelated optimizer resource tests so the
+focused integration failures could be examined. Its terminal status is 101;
+it is not a full-suite pass or a timeout. Full-suite verification remains due.
+
+r155 reused the unchanged candidate and executed 104 selected tests:
+**95 passed, nine failed, none ignored**.
+
+- All 13 `original_index_call_` controls passed, including the capture/claim
+  order, hostile source substitutions and resource accounting.
+- The selected context descriptor read-gate controls passed.
+- Three aggregate-runtime controls still stopped at unsupported private-entry
+  SSA block arguments.
+- Three new carrier controls failed a fixture assertion requiring distinct
+  data/length receiver IDs. Their intended native correspondence checks were
+  not reached; dropping that assertion would not establish the claimed coverage.
+- One mixed-predecessor fixture stopped at non-deterministic block identity
+  ordering before its intended rejection boundary.
+- Two older helper controls required a non-root receiver in both source phases;
+  the optimized phase can legitimately replace a transported receiver with the
+  ABI root. They stopped at that fixture assertion.
+
+After r155, candidate `e398b1c03182021258ba4113fc370efd8a009da4` incorporated
+the immutable #271 checkpoint `42102e4f8cd55deecc5044d5ebfa84840de78179`,
+fixed the appended block identities, and limited the non-root transport
+assertion to the original phase while retaining exact operand/type checks for
+both phases. These later changes were not tested by r155.
+
+Both r154 and r155 retained the same source and tool inventories. Log SHA-256:
+
+- r154: `c4bc328e07f9bb76b75a3af59efb8c0488e0bb4c09e1ceef5aea0007163edce6`
+- r155: `b3ef1bf758dbe1dddf38d6c5bc9d300b5c7d07f48e464db9022f3c9f91184e45`
+
+No protected proof, simulator or hardware launch occurred. M1 and the strict
+**0/47** count remain unchanged.

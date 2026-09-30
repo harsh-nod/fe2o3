@@ -271,3 +271,52 @@ This establishes image presence only, not provisioned root-request execution or
 proof-runtime readiness. No container, remote file, installation change, proof
 execution or GPU workload was created by these observations. Runtime integration
 and its genuine provisioned tests remain necessary.
+
+## Approval Paths and Retained Volume
+
+A subsequent September 30 read-only SSH check reached MI350-2 and inspected the
+actual build-authority paths, distinct from the earlier compiler-execution
+provisioning paths. `stat` reported all three absent:
+
+- `/etc/fe2o3/build-authority/policy-v2`
+- `/etc/fe2o3/build-authority/compiler-runtime-manifest-v1`
+- `/opt/fe2o3/compiler-runtime-v1`
+
+`docker volume inspect` confirmed that
+`fe2o3-authoring-proof-native-20260917-r1` exists. This does not establish its
+current file contents, pin integrity, compiler approval or readiness for the
+original-root request matrix. Earlier proof-runtime observations cannot be
+substituted for those checks. These probes created no container, remote file,
+proof job or GPU workload.
+
+A follow-up read-only inventory returned the retained `runtime` directory as
+root-owned mode 0555, its installed manifest as root-owned mode 0444, and the
+separate interpreter directory with a loader and eight DSOs. The installed
+manifest SHA-256 matches the repository pin:
+`ffef09bd240c90e72cbff31a82bc5173c796ba7ab9af239245e7ad892c25641c`.
+This observes the manifest only, not every payload hash, immutable flags,
+canonical loader resolution, writer exclusion or production admission. No
+remote installation or execution was performed.
+
+## Retained Volume Payload Audit
+
+At `2026-09-30T10:40:47Z`, a bounded read-only SSH audit checked the complete
+retained input volume against the local pinned manifest and target-file list.
+The single SSH invocation finished six seconds later with exit 0; its
+connection and overall limits were eight and ninety seconds.
+
+- Both pin-stream hashes matched before the 102 pin rows were interpreted.
+- The exact runtime roster contained 81 files and nine directories; the
+  interpreter roster contained the loader and eight libraries.
+- All 90 files (657,248,772 bytes) matched their pinned SHA-256 values.
+- Owners were 0:0, regular-file link counts were one, and modes matched the
+  pinned layout. No unexpected entries or group/other-writable objects appeared.
+
+This establishes reusable pinned input bytes, not protected runtime admission.
+Immutable flags, xattrs, mounted interpreter links, writer exclusion, compiler
+approval and genuine execution remain separate checks. No remote file was
+written and no container, mount, installation or proof/GPU job was created.
+
+Log: `native-retained-volume-pin-audit-20260930T104047Z-2176959.log` in the local
+evidence directory. SHA-256:
+`18fa62c6d07a851ccd2dccf9a73709b950f876f473730cd47672a9d204336817`.
