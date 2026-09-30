@@ -138,14 +138,19 @@ metadata controls are not mount evidence. The ignored
 `native_cgroup::tests::mounts::actual_membership_mount_boundary` uses an exact,
 timed subprocess with a private mount namespace: it checks actual preparation
 through a writable final submount under a read-only root, rejects a prefix
-mount, an ordinary-domain ancestor without direct PID membership, a hierarchy-root
-alias and wrong filesystem, and verifies that type/procs control-file submounts
+mount, an ordinary-domain ancestor without direct PID membership and wrong
+filesystem, and verifies that type/procs control-file submounts
 are still refused. It creates/writes no cgroup and tests no
 compiler, mapping, spawn, delegation or service startup. Its setup needs isolated
 root, `CAP_SYS_ADMIN`, a writable unified hierarchy, ordinary-domain membership
 and a non-root ordinary-domain ancestor, no intervening mounts, stable privileged
 state and an outside custodian. It must run outside the unit's denied-unshare context;
 the service does not gain `CAP_SYS_ADMIN` for this test.
+
+Separate controls cover physical-hierarchy and namespace-root substitution.
+The former requires an actual root without `cgroup.type`; the latter checks an
+ordinary-domain namespace root and refuses at direct PID membership. A private
+namespace root does not establish the physical-root control's prerequisite.
 
 The separate ignored
 `native_cgroup::tests::mounts::actual_threaded_domain_membership_is_refused`
@@ -168,9 +173,11 @@ The provisioned root-request fixture already requires a non-root `domain\n`
 parent. None of these fixtures has been rerun for this parent-type correction.
 
 The source contract and its mutation checks passed on September 30. The complete
-coordinator/spawn library rerun passed 562 tests, with 35 native tests ignored;
-see [the admission checkpoint](evidence/native-invocation-runtime-20260928.md#ordinary-domain-admission).
-The ignored mount tests remain unrun. An effective-unit/drop-in
+coordinator/spawn library rerun passed 567 tests, with 46 tests ignored.
+Eight selected mapped-child/mount controls subsequently passed on MI350; the
+physical-root and threaded-domain controls remain unrun. See
+[the native observation checkpoint](evidence/native-invocation-runtime-20260928.md#exact-child-observation-on-mi350).
+An effective-unit/drop-in
 inspection and a genuine paired service run are still required: creator
 clone3 and UID-0 map, root/sibling write denial versus owned-subtree creation,
 mapped-helper/compiler namespace denials and legal thread/fork controls, and
@@ -207,8 +214,9 @@ That route rejects a pending parent PID transition and revalidates unchanged
 child PID namespaces before releasing its gate. Both UID and GID maps contain
 `0 0 1`, plus identity rows for the admitted child and peer. Thus parent-root
 proc ownership remains visible as inner UID/GID zero when the child opens it;
-the later profile drop uses those same mapped nonzero IDs. This is a static
-satisfiability argument, not an executed user-namespace control.
+the later profile drop uses those same mapped nonzero IDs. The isolated MI350
+mapped-child control executed this sequence and checked the actual mapping rows;
+it does not establish the installed service's deployment provenance.
 
 After profile drop, the same child rechecks its PID/TID, preads exactly eight
 lowercase hex digits and a newline, and separately checks EOF at offset nine.
@@ -259,8 +267,11 @@ personality denial and legal fork/exec. The locked positive also reuses actual
 child-channel transfer and backpressure controls, not a synthetic FD substitute.
 Exact-test subprocesses have a timeout, direct-child kill/wait custody, bounded
 log reads and reached markers; the
-outside custodian still owns whole-tree retirement. These new tests have **not
-been built or run**. They require isolated root, real procfs/clone3/seccomp, the
+outside custodian still owns whole-tree retirement. Six unmapped controls and
+six mapped controls passed in isolated MI350 containers; the latter were rerun
+with two passing mount controls after correcting the physical-root fixture
+assumption. Other ignored controls remain unexecuted. These tests require
+isolated root, real procfs/clone3/seccomp, the
 static `-pthread` diagnostic, and `CAP_SYS_PTRACE` for positive inspection. The
 locked child-channel control also requires `pidfd_getfd`. The mapped positive
 additionally requires writable cgroup v2, user namespaces and

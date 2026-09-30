@@ -387,3 +387,71 @@ the tested candidate; evidence documents differ. Native mount controls,
 threaded-domain controls, effective-unit startup and protected compiler/proof
 execution remain unrun. The separate locked-personality observation candidate
 is not included. M1-M7 and strict safe-GPU launch coverage remain **0/47**.
+
+## Exact-Child Observation on MI350
+
+Candidate `5f29caec0ad57d73314e39b89a859f6bc622951e` includes the private
+exact-child personality observation and separate physical-root/namespace-root
+mount controls. The observation is acquired by the actual compiler child after
+mapping, consumed after credential drop, and closed before READY or exec.
+Malformed records, dirty inheritance, acquisition/read/EOF failures and profile
+abort refuse at their named stages. `LockPersonality=yes` remains unchanged;
+there is no query-error fallback or personality reset.
+
+| Run | Result |
+| --- | --- |
+| r173, prior candidate `515ac35f1` | 567 library tests passed, 44 ignored |
+| r174 | Container setup refused execution on a noexec tmpfs; zero tests |
+| r175 | Six exact unmapped-child native controls passed |
+| r176 | Second cgroup mount failed with EBUSY; zero tests |
+| r177 | Six mapped controls passed; mount fixture failed its physical-root prerequisite |
+| r179, final candidate | 567 library tests passed, 46 ignored |
+| r180, final candidate | Eight exact mapped-child/mount controls passed |
+
+r179 covers the complete coordinator (287 passed, 17 ignored) and spawn
+(280 passed, 29 ignored) library suites. Sources and tools remained unchanged:
+source snapshot `87de7321fca6008fb65bc5e7f06c8b5ce4a9d512004481e4635943b76ab8fa10`.
+The final public code tree matches the tested candidate; documentation differs.
+The systemd source-contract/mutation script also passed, not service startup.
+
+r180 reran the actual mapped-child positive and five negatives: kernel-denied
+record/EOF reads and dirty inheritance reach stage 16; acquisition refusal
+reaches stage 15; profile abort reaches stage 3. The positives inspect actual
+UID/GID maps and observation-FD closure before READY. The negatives require no
+READY/exec and retired child/domain custody. Two further exact tests check the
+real final-component mount boundary and namespace-root substitution. Nested
+subprocesses and reruns are not counted as additional distinct tests.
+
+r177 exposed a fixture error: a private cgroup namespace root can expose
+`cgroup.type`, unlike the physical hierarchy root. The final tests name those
+controls separately and assert the applicable exact refusal. No production
+predicate was changed. Physical-root and threaded-domain native controls remain
+unrun; namespace-root coverage does not substitute for them.
+
+The isolated Ubuntu 24.04 containers used kernel `6.8.0-124-generic`, no network,
+a read-only root/input mount, private executable tmpfs, 2 CPUs, 2 GiB and 96 PIDs.
+Mapped/mount tests used private cgroup/mount namespaces and only their container
+subtree. SYS_PTRACE and test-only SYS_ADMIN plus unconfined container syscall/LSM
+profiles enabled the diagnostics; these are not the installed service profile.
+The launcher restored its per-mount read-only flag, killed only its owned domain,
+removed that hierarchy and emitted the successful cleanup marker. A separate SSH
+check confirmed all labeled containers absent, removed only seven owned scratch
+files and their directory, then confirmed directory absence. Shared images,
+installations, volumes, host cgroups and other users' files were preserved.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Existing container image | `6232b38791000e3818b58d8847b5a8f5612d606929e01156dd8febc423e0f2ef` |
+| r180 test binary | `517db11e7d91c07225bbb3ba14df50ef56fa89b5efbfe1e7db51e807046fd59f` |
+| Static diagnostic fixture | `efbbb81569743735540d6540f4ee14a014650bd83d5ee1c693f8bcdc48d3fcc6` |
+| r179 library log | `e53cea16878f12a2e6d18827c95ab8d22fd0fbc7af8adc7a1860c26b64625679` |
+| r175 native log | `d7b0b3b7610dda7764e6aa06adf83c88c79670554471c590f4c68c3fa76e327f` |
+| r177 native log | `813b9db8dbbbd75e8e936d46520e3f23fada4c7393dcc43a975e895f54e0dbe3` |
+| r180 launcher | `f68aec403529eeb95a83e0638026f8213c534d63a9465868649fd9061bc9c0d8` |
+| r180 native log | `3b13bcd438253e078e2db2366bcc903cbfa09e4d8fdcd26b65e73da023665998` |
+| Remote cleanup log | `013e466b9a70abf53585ba8c684229ee5d55b798b84170b44806ce10bcbc9338` |
+
+This is native process/isolation evidence, not approved compiler execution,
+proof completion, effective-unit qualification or GPU execution. The production
+exec gate stays closed. M0 is complete; M1-M7 remain incomplete and strict
+production-to-required-proof-to-safe-GPU coverage remains **0/47**.
