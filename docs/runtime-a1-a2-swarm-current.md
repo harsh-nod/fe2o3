@@ -27,6 +27,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [retained-batch routing controller](runtime-retained-pair-routing-v1.md)
+is integrated at `e5b15e142`. Its signed campaign passes three full four-obligation
+runs and all eleven actual-body logical negatives; 21 fresh process groups
+close. Separate signed strict Clippy, no-default and scoped static checks pass
+with five fresh closures. The 24 earlier CPU tests are bound to unchanged signed
+runtime sources. The theorem covers normal-return publish/wait routing, exact
+payload/deadline forwarding and an opaque local owner frame, not native callback
+success, unwinding, automatic Drop or device authority. All milestone exits stay
+open.
+
 The [shared requested-allocation charge](runtime-request-charge-profile-v1.md)
 is integrated at `ee849c0fc`. Runtime and KFD use the same exact nineteen-coordinate
 constructor. Its signed campaign passes three full three-obligation runs and
