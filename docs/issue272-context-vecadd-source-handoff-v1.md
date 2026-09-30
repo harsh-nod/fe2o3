@@ -312,3 +312,18 @@ The r78 log SHA-256 is
 Both runs retained the same source/tool snapshots, with no protected proof,
 compiled kernel artifacts or GPU execution. The actual-source gate remains
 failed; the 53 control passes do not substitute for it.
+
+`r79-actual-ordinary-v40-pure-cse` separately ran the ordinary, no-context
+Policy10 parent at the same candidate revision. All sixteen source sessions
+failed during macro validation: `the typed vecadd V2 profile does not support
+max_grid`. The public macro still selected the legacy exact-signature validator
+when no logical context was present, although typed expansion already used the
+generic signature/launch model. This is a production validation inconsistency,
+not the context-capture defect or a reason to change the kernel's launch contract.
+The correction must make both entry forms use the same generic validator.
+
+The r79 log SHA-256 is
+`2e1a3e8de89f3081d67f673fd02f08b804a21ab214fd9dde00d88cb9c8159a4b`.
+Source/tool snapshots remained unchanged. The harness checked empty compiler
+output directories and removed its dependency trees and parent scratch on
+failure. No positive continuation, protected proof or GPU run is credited.
