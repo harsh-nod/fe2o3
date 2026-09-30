@@ -572,7 +572,14 @@ fn scoped_object_reserve_additional_v29<T>(
     budget.charge_work(2)?;
     let needed = argument_sum_v1(&[values.len(), additional])?;
     if needed > values.capacity() {
-        let count = argument_product_v1(values.capacity().max(2), 2)?.max(needed);
+        // Large typed payloads coexist with their replacement during growth.
+        // A 3/2 geometric factor bounds copying without doubling that live peak.
+        let count = if values.capacity() == 0 {
+            4
+        } else {
+            argument_sum_v1(&[values.capacity(), values.capacity().div_ceil(2)])?
+        }
+        .max(needed);
         let mut replacement = emission_vec_v1(count, budget)?;
         budget.charge_work(values.len())?;
         let old_bytes = argument_product_v1(values.capacity(), std::mem::size_of::<T>())?;

@@ -1,6 +1,123 @@
 use super::*;
 
 #[test]
+fn object_buffer_growth_has_linear_copy_work_and_exact_coexisting_capacity() {
+    let payload = payload_cases()[0].0;
+    let width = std::mem::size_of::<ScopedObjectPayloadV29>();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    let mut rows = Vec::new();
+    let mut expected_capacity = 0;
+    let mut expected_peak = 0;
+    let mut expected_work = 0;
+    for count in 0..2048usize {
+        expected_work += 2;
+        if count == expected_capacity {
+            let next = if count == 0 { 4 } else { (3 * count + 1) / 2 };
+            expected_peak = expected_peak.max((expected_capacity + next) * width);
+            expected_capacity = next;
+            expected_work += 3 + count;
+        }
+        scoped_object_reserve_append_v29(&mut rows, &mut budget).unwrap();
+        assert_eq!(rows.len(), count);
+        assert_eq!(rows.capacity(), expected_capacity);
+        assert_eq!(budget.storage(), expected_capacity * width);
+        assert_eq!(budget.peak_storage(), expected_peak);
+        assert_eq!(budget.work(), expected_work);
+        rows.push(payload);
+    }
+    assert!(rows.iter().all(|row| *row == payload));
+    assert!(expected_work < 6 * rows.len());
+    let retained = rows.capacity() * width;
+    drop(rows);
+    budget.release_storage(retained).unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
+#[test]
+fn object_buffer_growth_preserves_input_at_exact_and_one_short_limits() {
+    let payload = payload_cases()[0].0;
+    let width = std::mem::size_of::<ScopedObjectPayloadV29>();
+    for (work_limit, storage_limit, success) in [
+        (9, 10 * width, true),
+        (8, 10 * width, false),
+        (9, 10 * width - 1, false),
+    ] {
+        let mut rows = vec![payload; 4];
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+        budget.reserve_storage(4 * width).unwrap();
+        let result = scoped_object_reserve_append_v29(&mut rows, &mut budget);
+        assert_eq!(result.is_ok(), success);
+        assert_eq!(rows, vec![payload; 4]);
+        if success {
+            assert_eq!(rows.capacity(), 6);
+            assert_eq!(budget.work(), 9);
+            assert_eq!(budget.storage(), 6 * width);
+            assert_eq!(budget.peak_storage(), 10 * width);
+        } else {
+            assert_eq!(rows.capacity(), 4);
+            match result.unwrap_err() {
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Work(error),
+                ) => {
+                    assert_eq!((error.actual(), error.limit()), (9, 8));
+                    assert_eq!(budget.storage(), 10 * width);
+                    assert_eq!(budget.failed_storage(), None);
+                }
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Storage(error),
+                ) => {
+                    assert_eq!(
+                        (error.actual(), error.limit()),
+                        (10 * width, 10 * width - 1)
+                    );
+                    assert_eq!(budget.storage(), 4 * width);
+                    assert_eq!(budget.failed_storage(), Some(10 * width));
+                }
+                error => panic!("unexpected buffer growth refusal: {error:?}"),
+            }
+        }
+        let retained = budget.storage();
+        drop(rows);
+        budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
+}
+
+#[test]
+fn object_buffer_batch_growth_and_overflow_keep_the_complete_original_prefix() {
+    let payload = payload_cases()[0].0;
+    let width = std::mem::size_of::<ScopedObjectPayloadV29>();
+    let mut rows = vec![payload; 4];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    budget.reserve_storage(4 * width).unwrap();
+    scoped_object_reserve_additional_v29(&mut rows, 100, &mut budget).unwrap();
+    assert_eq!(rows.capacity(), 104);
+    assert_eq!(rows, vec![payload; 4]);
+    assert_eq!(budget.storage(), 104 * width);
+    assert_eq!(budget.peak_storage(), 108 * width);
+    let floor = budget.storage();
+    scoped_object_reserve_additional_v29(&mut rows, 0, &mut budget).unwrap();
+    assert_eq!(budget.storage(), floor);
+    let before = budget.work();
+    assert!(matches!(
+        scoped_object_reserve_additional_v29(&mut rows, usize::MAX, &mut budget),
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Arithmetic
+            )
+        )
+    ));
+    assert_eq!(budget.work(), before + 2);
+    assert_eq!(budget.storage(), floor);
+    assert_eq!(rows, vec![payload; 4]);
+    drop(rows);
+    budget.release_storage(floor).unwrap();
+}
+
+#[test]
 fn each_inert_opcode_has_an_independent_twelve_work_validation_boundary() {
     for (payload, operation) in payload_cases() {
         for limit in [11, 12] {

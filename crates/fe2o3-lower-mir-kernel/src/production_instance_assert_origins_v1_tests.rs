@@ -330,6 +330,29 @@ fn with_assert_pending(
 }
 
 #[test]
+fn scalar_capability_queries_are_paid_even_without_phi_transport() {
+    with_assert_pending(false, false, |_pending, instances, _budget| {
+        let mut without_transport = 0;
+        for index in 0..instances.instances().len() {
+            let id = instances.id_at(index).unwrap();
+            let plan = instances.instance(id).unwrap().ssa().plan();
+            if !plan.promoted_variables().is_empty()
+                && plan
+                    .reverse_postorder()
+                    .iter()
+                    .all(|block| plan.transport_variables(*block).unwrap().is_empty())
+            {
+                let (retained, settled) = scalar_transport_planning_credits_v29(instances, id);
+                assert_eq!(retained, 0);
+                assert!(settled > 0);
+                without_transport += 1;
+            }
+        }
+        assert!(without_transport > 0);
+    });
+}
+
+#[test]
 fn assertion_output_credit_excludes_only_settled_capability_query_scratch() {
     for expected in [false, true] {
         for diamond in [false, true] {

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_ssa_results_v30_tests.rs"]
+mod ssa_tests;
+
 fn probe(
     allowance: Option<(usize, usize)>,
     bad_site: bool,
@@ -100,6 +103,7 @@ fn retained_source_rvalue_replay_detects_type_endpoint_omission_and_source_chang
                     source: original.source,
                     ledger: original.ledger,
                     rows: original.rows.clone(),
+                    values: original.values.clone(),
                     storage: original.storage,
                 };
                 match fault {
@@ -163,6 +167,13 @@ fn retained_rvalue_header_oracle_covers_capture_and_query_envelopes() {
         + h::<Vec<SourceRvalueRowV30>>()
         + h::<SourceRvalueRowV30>()
         + h::<SourceRvalueEndpointV30>()
+        + h::<Vec<SourceSsaRowV30>>()
+        + h::<SourceSsaRowV30>()
+        + h::<&SourceSsaRowV30>()
+        + h::<SsaValueV1>()
+        + h::<(usize, SsaValueV1)>()
+        + h::<&fe2o3_pliron::ProductionSemanticSsaFunctionPlanV1>()
+        + h::<std::collections::btree_map::Iter<'_, SsaValueV1, Box<SemanticValueBindingV1>>>()
         + h::<&ExecutionArchiveV29>()
         + h::<&ExecutionInstancesV29<'_>>()
         + h::<&SourceReferencePlanV29<'_, '_>>()

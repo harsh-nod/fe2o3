@@ -469,7 +469,7 @@ fn original_helper_reference_selection_rejoins_exact_source_archive_and_actual_c
     for (read, write, counts) in [
         (true, false, (0, 1, 1)),
         (false, true, (1, 0, 1)),
-        (true, true, (1, 1, 1)),
+        (true, true, (1, 1, 2)),
     ] {
         ACTUAL_SELECTION_PHASES.set([0; 2]);
         run_original_owner_counts(0, counts, helper_owner(read, write, false));

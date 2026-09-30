@@ -266,9 +266,6 @@ pub(super) fn scalar_transport_planning_credits_v29(
                 .map(|local| local.get()),
         );
     }
-    if transported.is_empty() {
-        return (0, 0);
-    }
     let mut definitions = vec![Vec::new(); function.locals().len()];
     for block in function.blocks() {
         for statement in block.statements() {
@@ -306,6 +303,20 @@ pub(super) fn scalar_transport_planning_credits_v29(
     let (mut memo, mut visiting) = (BTreeSet::new(), BTreeSet::new());
     let mut bytes = 0;
     let mut retired = 0;
+    // Original carrier tracking queries all promoted scalar locals before the
+    // phi transport walk, including locals whose values never cross an edge.
+    // This first pass owns no alias-visited table, but populates the same memo
+    // later queried by transport. Unit/scalar types exclude nominal carriers.
+    for &local in &promoted {
+        let declaration = &function.locals()[local as usize];
+        assert!(matches!(
+            model.types()[declaration.ty().index() as usize].shape(),
+            SemanticTypeShapeV1::Unit
+                | SemanticTypeShapeV1::Scalar(_)
+                | SemanticTypeShapeV1::ValidityScalar(_)
+        ));
+        retired += resolve(local, &definitions, &promoted, &mut memo, &mut visiting);
+    }
     for local in transported {
         bytes += size_of::<BTreeSet<u32>>();
         let mut visited = BTreeSet::new();

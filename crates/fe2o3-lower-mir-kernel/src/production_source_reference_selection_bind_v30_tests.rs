@@ -38,10 +38,40 @@ fn full_selection_bind_owner(entry_loop: bool) -> ProductionSemanticSsaOwnerV1 {
                 REFERENCE,
                 SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(7, REFERENCE))),
             )],
-            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 9)),
+            blocks[8].terminator().kind().clone(),
         );
     }
     functions[selected] = rebuild(original, original.locals().to_vec(), blocks);
+    if !entry_loop {
+        // Keep the helper in the original root closure and carry the selected
+        // argument through it, without activating conditional memory admission.
+        let helper = &functions[1];
+        let mut statements = helper.blocks()[0].statements().to_vec();
+        assert_eq!(statements.len(), 4);
+        assert!(matches!(
+            statements[2].kind(),
+            SemanticStatementKindV1::Store(_)
+        ));
+        statements[0] = assign(
+            3,
+            REFERENCE,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1, REFERENCE))),
+        );
+        statements[1] = assign(
+            2,
+            U32,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(SemanticConstantV1::new(
+                U32,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(7, 4).unwrap()),
+            ))),
+        );
+        statements.remove(2);
+        functions[1] = rebuild(
+            helper,
+            helper.locals().to_vec(),
+            vec![block(100, statements, SemanticTerminatorKindV1::Return)],
+        );
+    }
     admitted_owner(
         source.types().to_vec(),
         functions,
@@ -310,19 +340,17 @@ fn run_full_selection_bind(entry: bool) {
         .filter(|operation| matches!(operation.kind, OperationKind::GetElementPointer { .. }))
         .count();
     assert_eq!(geps, if entry { 1 } else { 2 });
-    assert!(
-        pending
-            .pending_module()
-            .functions
-            .iter()
-            .filter_map(|function| function.body.as_ref())
-            .flat_map(|body| &body.blocks)
-            .flat_map(|block| &block.operations)
-            .all(|operation| !matches!(
-                operation.kind,
-                OperationKind::Load { .. } | OperationKind::Store { .. }
-            ))
-    );
+    assert!(pending
+        .pending_module()
+        .functions
+        .iter()
+        .filter_map(|function| function.body.as_ref())
+        .flat_map(|body| &body.blocks)
+        .flat_map(|block| &block.operations)
+        .all(|operation| !matches!(
+            operation.kind,
+            OperationKind::Load { .. } | OperationKind::Store { .. }
+        )));
     let retained = pending.adopted_storage();
     assert_eq!(budget.storage(), 37 + occurrence_storage + retained);
     drop(pending);

@@ -16,10 +16,18 @@ struct SourceRvalueRowV30 {
     endpoint: SourceRvalueEndpointV30,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceSsaRowV30 {
+    instance: usize,
+    original: SsaValueV1,
+    endpoint: SourceRvalueEndpointV30,
+}
+
 struct OwnedSourceRvaluesV30 {
     source: ExecutionCallSourceV29,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     rows: Vec<SourceRvalueRowV30>,
+    values: Vec<SourceSsaRowV30>,
     storage: usize,
 }
 
@@ -50,6 +58,13 @@ fn source_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
         h::<Vec<SourceRvalueRowV30>>()?,
         h::<SourceRvalueRowV30>()?,
         h::<SourceRvalueEndpointV30>()?,
+        h::<Vec<SourceSsaRowV30>>()?,
+        h::<SourceSsaRowV30>()?,
+        h::<&SourceSsaRowV30>()?,
+        h::<SsaValueV1>()?,
+        h::<(usize, SsaValueV1)>()?,
+        h::<&fe2o3_pliron::ProductionSemanticSsaFunctionPlanV1>()?,
+        h::<std::collections::btree_map::Iter<'_, SsaValueV1, Box<SemanticValueBindingV1>>>()?,
         h::<&ExecutionArchiveV29>()?,
         h::<&ExecutionInstancesV29<'_>>()?,
         h::<&SourceReferencePlanV29<'_, '_>>()?,
@@ -88,6 +103,7 @@ fn retain_source_rvalues_v30(
     budget.reserve_storage(source_rvalue_headers_v30()?)?;
     let source = ExecutionCallSourceV29::from_instances(instances, budget)?;
     let mut count = 0;
+    let mut value_count = 0;
     for selected in &pending.active_instances.rows {
         budget.charge_work(1)?;
         let Some(selected) = *selected else { continue };
@@ -98,8 +114,10 @@ fn retain_source_rvalues_v30(
             .and_then(|row| row.execution_observation.as_ref())
             .ok_or_else(execution_archive_error_v29)?;
         count = argument_sum_v1(&[count, archive.rvalues.len()])?;
+        value_count = argument_sum_v1(&[value_count, archive.bindings.len()])?;
     }
     let mut rows = emission_vec_v1(count, budget)?;
+    let mut values = emission_vec_v1(value_count, budget)?;
     for (ordinal, selected) in pending.active_instances.rows.iter().enumerate() {
         budget.charge_work(1)?;
         let Some(selected) = *selected else { continue };
@@ -116,6 +134,21 @@ fn retain_source_rvalues_v30(
             .get(selected)
             .and_then(|row| row.execution_observation.as_ref())
             .ok_or_else(execution_archive_error_v29)?;
+        // The complete archive has already passed original instance/plan and
+        // definition-site checks. Preserve its exact sorted SSA identities
+        // before the temporary owning bindings are destroyed.
+        archive.check_original_v29(instances, instance, budget)?;
+        for (original, binding) in &archive.bindings.owned {
+            budget.charge_work(3)?;
+            if values.len() == values.capacity() {
+                return Err(ArgumentResourceV1::Accounting.into());
+            }
+            values.push(SourceSsaRowV30 {
+                instance: ordinal,
+                original: *original,
+                endpoint: source_rvalue_endpoint_v30(binding),
+            });
+        }
         let start = rows.len();
         for (block, original) in function.blocks().iter().enumerate() {
             budget.charge_work(2)?;
@@ -153,7 +186,7 @@ fn retain_source_rvalues_v30(
             return Err(execution_archive_error_v29());
         }
     }
-    if rows.len() != count {
+    if rows.len() != count || values.len() != value_count {
         return Err(execution_archive_error_v29());
     }
     let storage = budget
@@ -165,6 +198,7 @@ fn retain_source_rvalues_v30(
         source,
         ledger: budget.work_ledger_identity_v1(),
         rows,
+        values,
         storage,
     });
     pending.additional_storage_bytes = total;
@@ -182,6 +216,10 @@ impl OwnedSourceRvaluesV30 {
                 argument_sum_v1(&[self.rows.len(), other.rows.len()])?,
                 size_of::<SourceRvalueRowV30>(),
             )?,
+            argument_product_v1(
+                argument_sum_v1(&[self.values.len(), other.values.len()])?,
+                size_of::<SourceSsaRowV30>(),
+            )?,
             argument_product_v1(2, size_of::<ExecutionCallSourceV29>())?,
             argument_product_v1(
                 2,
@@ -189,11 +227,130 @@ impl OwnedSourceRvaluesV30 {
             )?,
             4,
         ])?)?;
-        Ok(self.source == other.source && self.ledger == other.ledger && self.rows == other.rows)
+        Ok(self.source == other.source
+            && self.ledger == other.ledger
+            && self.rows == other.rows
+            && self.values == other.values)
     }
 }
 
 impl ProductionSourceCorrespondenceV18<'_> {
+    /// Returns one exact original SSA value's scalar canonical definition, or
+    /// None for its whole Unit binding. This is a source-owned emission locator,
+    /// not a semantic/type-equivalence or memory-provenance proof. A consumer
+    /// must independently compare the original source type and interpretation.
+    pub fn ssa_scalar_definition_v30(
+        &self,
+        root: usize,
+        instance: usize,
+        original: SsaValueV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<usize>> {
+        let result = self.ssa_scalar_contents_v30(root, instance, original, budget);
+        self.retain_query(result)
+    }
+
+    fn ssa_scalar_contents_v30(
+        &self,
+        root: usize,
+        instance: usize,
+        original: SsaValueV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<usize>> {
+        self.query(budget)?;
+        let owner = self.source.root_row(root)?;
+        let results =
+            owner
+                .rvalue_results
+                .as_ref()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original SSA result roster is absent",
+                ))?;
+        budget.charge_work(8)?;
+        let source = self.source.source_ssa(budget)?;
+        if results.source.semantic != *source.source_semantic_sha256()
+            || results.source.ssa != source.identity()
+            || results.source.root != owner.coordinates.root
+            || results.ledger != budget.work_ledger_identity_v1()
+            || budget.storage() < results.storage
+        {
+            return self.source.missing("original SSA result owner differs");
+        }
+        let (function, _) = self.source.instance(root, instance, budget)?;
+        if !self.source.instance_active(root, instance, budget)? {
+            return self
+                .source
+                .missing("original SSA result instance is inactive");
+        }
+        let plan = source
+            .plan_for_function(function)
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "original SSA result plan is absent",
+            ))?
+            .plan();
+        match original {
+            SsaValueV1::Definition(value) if value.get() as usize >= plan.definition_count() => {
+                return self
+                    .source
+                    .missing("original SSA result definition is foreign");
+            }
+            SsaValueV1::BlockArgument { block, variable } => {
+                let variables = plan.transport_variables(block).ok_or(
+                    ProductionSourceOwnedViewErrorV18::Binding(
+                        "original SSA result block is absent",
+                    ),
+                )?;
+                budget.charge_work(variables.len().checked_ilog2().unwrap_or(0) as usize + 2)?;
+                if variables.binary_search(&variable).is_err() {
+                    return self
+                        .source
+                        .missing("original SSA result block argument is foreign");
+                }
+            }
+            _ => {}
+        }
+        budget.charge_work(argument_product_v1(
+            results.values.len().checked_ilog2().unwrap_or(0) as usize + 2,
+            16,
+        )?)?;
+        let key = (instance, original);
+        let index = results
+            .values
+            .binary_search_by_key(&key, |row| (row.instance, row.original))
+            .map_err(|_| {
+                ProductionSourceOwnedViewErrorV18::Binding("original SSA result is missing")
+            })?;
+        match results.values[index].endpoint {
+            SourceRvalueEndpointV30::Unmodeled => self
+                .source
+                .missing("original SSA whole binding is not scalar"),
+            SourceRvalueEndpointV30::Unit => Ok(None),
+            SourceRvalueEndpointV30::Scalar { value, scalar } => {
+                let function = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
+                    u32::try_from(owner.function_ordinal)
+                        .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                );
+                let index = self
+                    .inventory
+                    .definition_index_for_value(function, value, budget)
+                    .map_err(|error| {
+                        ProductionSourceOwnedViewErrorV18::from(
+                            fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
+                        )
+                    })?
+                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                        "original SSA canonical result is absent",
+                    ))?;
+                if self.inventory.definitions()[index].ty != &Type::Scalar(scalar) {
+                    return self
+                        .source
+                        .missing("original SSA canonical result type differs");
+                }
+                Ok(Some(index))
+            }
+        }
+    }
+
     /// Returns the exact captured assignment result in this inventory's dense
     /// definition roster, or None for Unit. This is an emission locator, not
     /// expression equivalence. Unsupported whole bindings fail explicitly.
