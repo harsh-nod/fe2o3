@@ -16,6 +16,7 @@ pub(crate) use resources::{
     CLEANUP_ATTEMPTS as BOUNDED_PAYLOAD_CLEANUP_ATTEMPTS_V1,
     discard_caught_payload as discard_bounded_payload_v1,
 };
+pub(crate) use structural::StructuralBridgeWitnessV18;
 
 #[derive(Debug)]
 pub enum KirBridgeErrorV18 {
@@ -77,6 +78,22 @@ impl KirBridgeStorageV18 {
     pub const fn retained_storage(self) -> usize {
         self.retained
     }
+}
+
+// Only closed optimizer/native consumers can retain this exact structural
+// witness. Public import and extraction keep their historical admission.
+pub(crate) fn import_structural_native_v30<'input>(
+    input: &'input VerifiedCanonicalKernelIrModuleV18,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        KirPlironGraphV18<'input>,
+        StructuralBridgeWitnessV18,
+        KirBridgeStorageV18,
+    ),
+    KirBridgeErrorV18,
+> {
+    structural::import(input, budget)
 }
 
 /// Inert report. This does not certify memory safety, provenance or optimization.
@@ -222,6 +239,15 @@ impl<'input> KirPlironGraphV18<'input> {
         budget: &mut Budget<'_>,
     ) -> ExportResult {
         self.extract(limits, budget, true, None)
+    }
+
+    pub(crate) fn extract_structural_native_v30(
+        &mut self,
+        limits: StorageLayoutLimitsV1,
+        budget: &mut Budget<'_>,
+        witness: &StructuralBridgeWitnessV18,
+    ) -> ExportResult {
+        self.extract(limits, budget, true, Some(witness))
     }
 
     fn extract(

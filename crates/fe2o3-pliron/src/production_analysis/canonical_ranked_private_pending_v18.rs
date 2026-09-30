@@ -226,7 +226,14 @@ impl<'g> PendingCanonicalRankedSourceRolesV18<'_, 'g> {
             let mut reports = reserve_rows::<Option<PrivateReportRowV18>>(count, budget)?;
             budget.charge_work(count)?;
             reports.resize_with(count, || None);
-            exact_snapshot(self.graph, self.layouts, self.epoch, budget)?;
+            budget.reserve_storage(snapshot_structural_headers_v30())?;
+            exact_snapshot(
+                self.graph,
+                self.layouts,
+                self.epoch,
+                Some(self.structural),
+                budget,
+            )?;
             self.graph.visit_private_policy_functions_v18(
                 physical,
                 self.epoch,
@@ -242,7 +249,13 @@ impl<'g> PendingCanonicalRankedSourceRolesV18<'_, 'g> {
                     Ok(())
                 },
             )?;
-            exact_snapshot(self.graph, self.layouts, self.epoch, budget)?;
+            exact_snapshot(
+                self.graph,
+                self.layouts,
+                self.epoch,
+                Some(self.structural),
+                budget,
+            )?;
             let guard = Guard::new(budget);
             let view = PendingCanonicalPrivateMemoryPoliciesV18 {
                 owner: self.owner,

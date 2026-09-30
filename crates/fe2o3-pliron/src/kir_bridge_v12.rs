@@ -33,6 +33,7 @@ pub(crate) use bridge_v18::{
 pub use bridge_v18::{
     KirBridgeErrorV18, KirBridgeReportV18, KirBridgeStorageV18, KirPlironGraphV18,
 };
+pub(crate) use bridge_v18::{StructuralBridgeWitnessV18, import_structural_native_v30};
 
 /// Transfer reservation for a V12 bridge owner or extracted output and report.
 ///

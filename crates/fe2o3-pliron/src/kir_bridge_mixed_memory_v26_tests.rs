@@ -400,6 +400,7 @@ fn run_module_case(
                                     globals,
                                     epoch,
                                     LAYOUTS,
+                                    None,
                                     budget,
                                     |ordinal, input| {
                                         assert_eq!(ordinal, 0);

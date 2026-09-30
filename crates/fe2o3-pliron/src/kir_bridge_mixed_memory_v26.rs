@@ -487,6 +487,8 @@ fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure>
     );
     type Snapshot<'a> = (
         &'a mut KirPlironGraphV18<'a>,
+        [Option<&'a crate::kir_bridge_v1::StructuralBridgeWitnessV18>; 2],
+        [&'a crate::kir_bridge_v1::StructuralBridgeWitnessV18; 2],
         fe2o3_kernel_ir::StorageLayoutLimitsV1,
         u64,
         &'a mut Budget<'a>,
@@ -556,10 +558,14 @@ impl KirPlironGraphV18<'_> {
         &mut self,
         layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
         epoch: u64,
+        structural: Option<&crate::kir_bridge_v1::StructuralBridgeWitnessV18>,
         budget: &mut Budget<'_>,
     ) -> Result<(), Failure> {
         self.check_ranked_policy_epoch_v18(epoch)?;
-        let (owner, report, credit) = self.extract_canonical_v18_o0(layouts, budget)?;
+        let (owner, report, credit) = match structural {
+            Some(witness) => self.extract_structural_native_v30(layouts, budget, witness)?,
+            None => self.extract_canonical_v18_o0(layouts, budget)?,
+        };
         budget.reserve_storage(credit.retained_storage())?;
         drop((owner, report));
         budget.release_storage(credit.retained_storage())?;
@@ -574,6 +580,7 @@ impl KirPlironGraphV18<'_> {
         globals: &Globals<'_, '_>,
         epoch: u64,
         layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
+        structural: Option<&crate::kir_bridge_v1::StructuralBridgeWitnessV18>,
         budget: &mut Budget<'_>,
         mut consume: impl FnMut(usize, &NativeCanonicalMixedAdmissionV26<'_>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
@@ -586,7 +593,7 @@ impl KirPlironGraphV18<'_> {
             std::mem::size_of_val(&consume),
             std::mem::align_of_val(&consume),
         )?)?;
-        self.require_mixed_snapshot_v26(layouts, epoch, budget)?;
+        self.require_mixed_snapshot_v26(layouts, epoch, structural, budget)?;
         let kinds = mixed_rows_v26(physical, globals, budget)?;
         self.check_pending_global_carriers_v18(self.profile.owner(), epoch, budget)?;
         budget.charge_work(
@@ -672,6 +679,6 @@ impl KirPlironGraphV18<'_> {
         drop(live_block);
         globals.owner(budget).map_err(formal_error)?;
         self.validate_custody(budget)?;
-        self.require_mixed_snapshot_v26(layouts, epoch, budget)
+        self.require_mixed_snapshot_v26(layouts, epoch, structural, budget)
     }
 }

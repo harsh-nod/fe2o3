@@ -9,6 +9,8 @@ use fe2o3_kernel_ir::{
 
 const AMPLE: usize = 1 << 40;
 
+include!("canonical_ranked_pending_structural_v30_tests.rs");
+
 #[test]
 fn pending_source_descendant_refusal_suppresses_refunds_before_native_child_exists() {
     for prior_mutation in [false, true] {

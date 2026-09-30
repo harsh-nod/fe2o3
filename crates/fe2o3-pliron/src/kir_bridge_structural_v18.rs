@@ -1,4 +1,4 @@
-//! Structural admission used only by the closed V18 optimizer.
+//! Structural admission used only by the closed V18 optimizer/native consumers.
 //! Public bridge and historical optimizer profiles remain unchanged.
 
 use super::*;

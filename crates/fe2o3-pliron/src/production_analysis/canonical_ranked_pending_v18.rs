@@ -166,6 +166,7 @@ pub struct PendingCanonicalRankedSourceRolesV18<'s, 'g> {
     owner: &'g VerifiedCanonicalKernelIrModuleV18,
     obligations: &'s [CanonicalRankedSourceObligationV18],
     graph: &'s mut crate::KirPlironGraphV18<'g>,
+    structural: &'s crate::kir_bridge_v1::StructuralBridgeWitnessV18,
     epoch: u64,
     layouts: StorageLayoutLimitsV1,
     guard: &'s Guard,
@@ -253,6 +254,7 @@ impl<'g> PendingCanonicalRankedSourceRolesV18<'_, 'g> {
                 &mut analysis,
                 self.graph,
                 self.epoch,
+                Some(self.structural),
                 &mut reports,
                 budget,
                 |owner, reports, observation, guard, budget| {
@@ -338,15 +340,18 @@ pub fn with_pending_canonical_ranked_source_roles_v18<'w, T>(
         )?)?;
         budget.reserve_storage(pending_refund_headers_v18()?)?;
         let obligations = source_obligations(owner, budget)?;
-        let (mut graph, storage) = crate::KirPlironGraphV18::import(owner, budget)?;
+        budget.reserve_storage(pending_structural_headers_v30()?)?;
+        let (mut graph, structural, storage) =
+            crate::kir_bridge_v1::import_structural_native_v30(owner, budget)?;
         budget.reserve_storage(storage.retained_storage())?;
         let epoch = graph.ranked_policy_epoch_v18()?;
-        exact_snapshot(&mut graph, layouts, epoch, budget)?;
+        exact_snapshot(&mut graph, layouts, epoch, Some(&structural), budget)?;
         let guard = Guard::new(budget);
         let mut view = PendingCanonicalRankedSourceRolesV18 {
             owner,
             obligations: &obligations,
             graph: &mut graph,
+            structural: &structural,
             epoch,
             layouts,
             guard: &guard,
@@ -358,6 +363,7 @@ pub fn with_pending_canonical_ranked_source_roles_v18<'w, T>(
             drop(result);
             return Err(error);
         }
+        drop(structural);
         drop(graph);
         drop(obligations);
         result
@@ -372,6 +378,24 @@ fn pending_refund_headers_v18() -> Result<usize, Failure> {
     checked_add(
         size_of::<Cell<bool>>(),
         size_of::<(&Cell<bool>, Ledger, usize, usize)>(),
+    )
+}
+
+fn pending_structural_headers_v30() -> Result<usize, Failure> {
+    type Import<'a> = Result<
+        (
+            crate::KirPlironGraphV18<'a>,
+            crate::kir_bridge_v1::StructuralBridgeWitnessV18,
+            crate::KirBridgeStorageV18,
+        ),
+        crate::KirBridgeErrorV18,
+    >;
+    checked_add(
+        2 * size_of::<Import<'_>>(),
+        checked_add(
+            snapshot_structural_headers_v30(),
+            size_of::<(&VerifiedCanonicalKernelIrModuleV18, &mut Budget<'_>)>(),
+        )?,
     )
 }
 

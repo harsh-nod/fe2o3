@@ -273,6 +273,7 @@ impl<'g> PendingCanonicalRankedSourceRolesV18<'_, 'g> {
                     globals,
                     self.epoch,
                     self.layouts,
+                    Some(self.structural),
                     budget,
                     |ordinal, input| {
                         let slot = reports.get_mut(ordinal).ok_or(Failure::ExactGraph)?;

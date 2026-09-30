@@ -275,14 +275,28 @@ impl<'g> CheckedCanonicalRankedPoliciesV18<'_, 'g> {
     }
 }
 
+fn snapshot_structural_headers_v30() -> usize {
+    type Frames<'a> = (
+        Option<&'a crate::kir_bridge_v1::StructuralBridgeWitnessV18>,
+        Option<&'a crate::kir_bridge_v1::StructuralBridgeWitnessV18>,
+        &'a crate::kir_bridge_v1::StructuralBridgeWitnessV18,
+        &'a crate::kir_bridge_v1::StructuralBridgeWitnessV18,
+    );
+    size_of::<Frames<'_>>() + std::mem::align_of::<Frames<'_>>()
+}
+
 fn exact_snapshot(
     graph: &mut crate::KirPlironGraphV18<'_>,
     limits: StorageLayoutLimitsV1,
     epoch: u64,
+    structural: Option<&crate::kir_bridge_v1::StructuralBridgeWitnessV18>,
     budget: &mut Budget<'_>,
 ) -> Result<(), Failure> {
     graph.check_ranked_policy_epoch_v18(epoch)?;
-    let (owner, report, storage) = graph.extract_canonical_v18_o0(limits, budget)?;
+    let (owner, report, storage) = match structural {
+        Some(witness) => graph.extract_structural_native_v30(limits, budget, witness)?,
+        None => graph.extract_canonical_v18_o0(limits, budget)?,
+    };
     budget.reserve_storage(storage.retained_storage())?;
     drop((owner, report));
     budget.release_storage(storage.retained_storage())?;
@@ -357,6 +371,7 @@ fn with_fixed_native_reports_v18<'g, 'w, T>(
         analysis,
         &mut graph,
         epoch,
+        None,
         &mut reports,
         budget,
         callback,
@@ -371,6 +386,7 @@ fn prepare_native_report_rows_v18<T>(
     owner: &VerifiedCanonicalKernelIrModuleV18,
     budget: &mut Budget<'_>,
 ) -> Result<Vec<Option<ReportRow>>, Failure> {
+    budget.reserve_storage(snapshot_structural_headers_v30())?;
     budget.reserve_storage(checked_add(
         size_of::<Result<Vec<Option<ReportRow>>, Failure>>(),
         size_of::<Result<Result<T, Failure>, Failure>>(),
@@ -400,6 +416,7 @@ fn execute_fixed_native_reports_v18<'g, 'w, T>(
     analysis: &mut AnalysisState,
     graph: &mut crate::KirPlironGraphV18<'g>,
     epoch: u64,
+    structural: Option<&crate::kir_bridge_v1::StructuralBridgeWitnessV18>,
     reports: &mut [Option<ReportRow>],
     budget: &mut Budget<'w>,
     callback: impl for<'s> FnOnce(
@@ -410,7 +427,7 @@ fn execute_fixed_native_reports_v18<'g, 'w, T>(
         &mut Budget<'w>,
     ) -> Result<T, Failure>,
 ) -> Result<Result<T, Failure>, Failure> {
-    exact_snapshot(graph, layouts, epoch, budget)?;
+    exact_snapshot(graph, layouts, epoch, structural, budget)?;
     graph.visit_ranked_policy_functions_v18(epoch, budget, |ordinal, identity| {
         let slot = reports.get_mut(ordinal).ok_or(Failure::ExactGraph)?;
         if slot.is_some() {
@@ -429,7 +446,7 @@ fn execute_fixed_native_reports_v18<'g, 'w, T>(
     })?;
     #[cfg(test)]
     pending::before_post_native_snapshot(budget);
-    exact_snapshot(graph, layouts, epoch, budget)?;
+    exact_snapshot(graph, layouts, epoch, structural, budget)?;
     let guard = Guard::new(budget);
     let result = guard.callback(budget, |budget| {
         callback(owner, &reports, analysis.observation(), &guard, budget)
