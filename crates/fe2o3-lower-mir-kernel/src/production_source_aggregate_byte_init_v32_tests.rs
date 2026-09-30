@@ -311,7 +311,9 @@ mod aggregate_byte_init_tests_v32 {
     fn two_closed_allocation_roots() -> ProductionSemanticSsaOwnerV1 {
         let base = private_entry_phi_owner_v20();
         let source = base.source_semantic();
-        let mut types = source.types().to_vec();
+        // The replacement roots use only the base unit and integer types.
+        // The old fixture's address type is outside their exact root closure.
+        let mut types = source.types()[..2].to_vec();
         let pair = SemanticTypeIdV1::from_index(types.len() as u32);
         types.push(SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([240; 32]),

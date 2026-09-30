@@ -112,11 +112,11 @@ fn call_return_owner() -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
 }
 
-fn source_call(
-    check: &SourceBoundaryCheckV31<'_>,
+fn source_call<'a>(
+    check: &'a SourceBoundaryCheckV31<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> SourceOwnedResultV18<(SourceScalarBoundaryV31, EntryValueV20, usize)> {
-    let row = *check
+) -> SourceOwnedResultV18<(&'a SourceScalarBoundaryV31, EntryValueV20, usize)> {
+    let row = check
         .leaves
         .boundaries
         .rows
@@ -140,12 +140,13 @@ fn source_call(
 
 fn exercise(
     check: &SourceBoundaryCheckV31<'_>,
-    mut row: SourceScalarBoundaryV31,
+    original_row: &SourceScalarBoundaryV31,
     value: EntryValueV20,
     actual: ValueId,
     fault: Option<u8>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
+    let mut row = *original_row;
     match fault {
         Some(0) => row.ty = UNIT,
         Some(1) => row.variable = BoundaryVariableV31::new(1),
@@ -153,7 +154,7 @@ fn exercise(
         Some(3) => {
             // A loop parameter has distinct initial and recurrence inputs. It
             // cannot stand for the exact source call-result incoming value.
-            let definition = check.definition(&row, budget)?;
+            let definition = check.definition(original_row, budget)?;
             let conflicting = check.inventory.definitions()[definition].value.unwrap();
             assert!(
                 check
@@ -163,7 +164,7 @@ fn exercise(
                     .is_none()
             );
             return check
-                .call_return_value_v32(&row, value, conflicting, budget)
+                .call_return_value_v32(original_row, value, conflicting, budget)
                 .map(|_| ());
         }
         Some(4) => {
