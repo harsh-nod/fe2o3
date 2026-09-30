@@ -524,9 +524,13 @@ fn typed_external_reborrow_alias_has_independent_exact_and_one_short_resources()
     };
     type Alias<'a> = Option<(&'a SemanticPlaceV1, ExecutionOperandV29, bool)>;
     let headers = std::mem::size_of::<Alias<'_>>()
-        + 2 * std::mem::size_of::<Result<Alias<'_>, ProductionSemanticKirErrorV1>>();
+        + 2 * std::mem::size_of::<Result<Alias<'_>, ProductionSemanticKirErrorV1>>()
+        + std::mem::size_of::<bool>()
+        + 2 * std::mem::size_of::<Result<bool, ProductionSemanticKirErrorV1>>();
+    // Exact source assignment checks precede the nested permission/type replay.
+    let expected_work = 8 + 24;
     for short in 0..3 {
-        let work_limit = 8 - usize::from(short == 1);
+        let work_limit = expected_work - usize::from(short == 1);
         let storage_limit = headers - usize::from(short == 2);
         let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
         let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
@@ -545,12 +549,12 @@ fn typed_external_reborrow_alias_has_independent_exact_and_one_short_resources()
                 };
                 assert!(std::ptr::eq(actual, place));
                 assert_eq!((role, reborrow), (ExecutionOperandV29::RvaluePlace, true));
-                assert_eq!((budget.work(), budget.storage()), (8, headers));
+                assert_eq!((budget.work(), budget.storage()), (expected_work, headers));
             }
             1 => assert!(matches!(result,
                 Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
                     ArgumentResourceV1::Work(error)
-                )) if error.actual() == 8 && error.limit() == 7
+                )) if error.actual() == expected_work && error.limit() == expected_work - 1
             )),
             2 => assert!(matches!(result,
                 Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
