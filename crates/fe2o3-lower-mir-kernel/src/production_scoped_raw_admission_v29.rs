@@ -1620,7 +1620,12 @@ impl SourceRootTransactionV29<'_, '_> {
                 return Err(source_raw_physical_error_v29());
             }
         }
-        retain_source_rvalues_v30(&mut pending, self.instances, plan, budget)?;
+        retain_source_rvalues_v30(
+            &mut pending,
+            self.instances,
+            references.ok_or_else(source_raw_physical_error_v29)?,
+            budget,
+        )?;
         #[cfg(test)]
         if let Some(observe) = ROOT_EXECUTION_ARCHIVE_DISCARD_OBSERVER_V30.get() {
             observe(&mut pending, self.instances, plan, budget)?;

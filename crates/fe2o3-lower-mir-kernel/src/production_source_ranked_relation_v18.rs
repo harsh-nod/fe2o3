@@ -193,6 +193,45 @@ struct SourceExpressionLeavesV18<'a, 'relation, 'source, 'b, 'w, 'c> {
 }
 
 impl SemanticExpressionLeavesV18 for SourceExpressionLeavesV18<'_, '_, '_, '_, '_, '_> {
+    fn global_invocation_1d(
+        &self,
+        scalar: ProductionSemanticScalarTypeV2,
+        _: &mut dyn CorrelationChargeV18,
+    ) -> Option<NormalizedScalarExpressionV1> {
+        let result = self.ledger.with_budget(|budget| {
+            Ok(self.leaves.relation.retain_query((|| {
+                self.leaves.query(budget)?;
+                budget.charge_work(1)?;
+                if !matches!(
+                    scalar,
+                    ProductionSemanticScalarTypeV2::Integer {
+                        signed: false,
+                        bits: 32 | 64
+                    }
+                ) {
+                    return self
+                        .leaves
+                        .relation
+                        .source
+                        .missing("source launch expression width differs");
+                }
+                Ok(NormalizedScalarExpressionV1::GlobalInvocation1d { scalar })
+            })()))
+        });
+        match result {
+            Ok(Ok(value)) => Some(value),
+            Ok(Err(ProductionSourceOwnedViewErrorV18::Resource(error))) => {
+                self.ledger.fail(error);
+                None
+            }
+            Ok(Err(_)) => {
+                self.ledger.inconsistent_inventory.set(true);
+                None
+            }
+            Err(_) => None,
+        }
+    }
+
     fn begin_node(&self) -> Option<()> {
         self.remaining.set(self.remaining.get().checked_sub(1)?);
         Some(())
@@ -1591,7 +1630,7 @@ fn visit_source_expression_symbols_v18(
         };
         match expression {
             E::Symbol { symbol, .. } => visit(*symbol, budget)?,
-            E::Constant { .. } | E::Load(_) => {}
+            E::Constant { .. } | E::GlobalInvocation1d { .. } | E::Load(_) => {}
             E::Unary { operand, .. } | E::Cast { operand, .. } => push(operand)?,
             E::Binary { lhs, rhs, .. } | E::Compare { lhs, rhs, .. } => {
                 push(rhs)?;

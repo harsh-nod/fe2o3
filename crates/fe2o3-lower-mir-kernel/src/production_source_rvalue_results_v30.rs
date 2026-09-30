@@ -1,6 +1,7 @@
 // Paid original-assignment locators, captured before temporary archives expire.
 // Unmodeled whole bindings are explicit refusals in the new scalar proof query.
 include!("production_source_descriptor_operand_v30.rs");
+include!("production_source_index_computation_v35.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceRvalueEndpointV30 {
@@ -31,6 +32,7 @@ struct OwnedSourceRvaluesV30 {
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     rows: Vec<SourceRvalueRowV30>,
     values: Vec<SourceSsaRowV30>,
+    index_readers: Vec<SourceIndexReaderRowV35>,
     storage: usize,
 }
 
@@ -91,6 +93,7 @@ fn source_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
         h::<ExecutionCallSourceV29>()?,
         h::<ExecutionSiteV29>()?,
         source_descriptor_operand_headers_v30()?,
+        source_index_reader_headers_v35()?,
         h::<std::slice::Iter<'_, SourceRvalueRowV30>>()?,
         argument_product_v1(8, h::<usize>()?)?,
         h::<()>()?,
@@ -100,9 +103,10 @@ fn source_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
 fn retain_source_rvalues_v30(
     pending: &mut PendingScopedRootEmissionV29,
     instances: &ExecutionInstancesV29<'_>,
-    plan: &SourceReferencePlanV29<'_, '_>,
+    references: &SourceReferenceEmissionV29<'_, '_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    let plan = references.plan;
     check_root_execution_archives_v29(pending, instances, plan, budget)?;
     if pending.rvalue_results.is_some() {
         return Err(execution_archive_error_v29());
@@ -201,6 +205,7 @@ fn retain_source_rvalues_v30(
     if rows.len() != count || values.len() != value_count {
         return Err(execution_archive_error_v29());
     }
+    let index_readers = retain_source_index_readers_v35(pending, instances, references, budget)?;
     let storage = budget
         .storage()
         .checked_sub(floor)
@@ -211,6 +216,7 @@ fn retain_source_rvalues_v30(
         ledger: budget.work_ledger_identity_v1(),
         rows,
         values,
+        index_readers,
         storage,
     });
     pending.additional_storage_bytes = total;
@@ -232,6 +238,10 @@ impl OwnedSourceRvaluesV30 {
                 argument_sum_v1(&[self.values.len(), other.values.len()])?,
                 size_of::<SourceSsaRowV30>(),
             )?,
+            argument_product_v1(
+                argument_sum_v1(&[self.index_readers.len(), other.index_readers.len()])?,
+                size_of::<SourceIndexReaderRowV35>(),
+            )?,
             argument_product_v1(2, size_of::<ExecutionCallSourceV29>())?,
             argument_product_v1(
                 2,
@@ -242,7 +252,8 @@ impl OwnedSourceRvaluesV30 {
         Ok(self.source == other.source
             && self.ledger == other.ledger
             && self.rows == other.rows
-            && self.values == other.values)
+            && self.values == other.values
+            && self.index_readers == other.index_readers)
     }
 }
 

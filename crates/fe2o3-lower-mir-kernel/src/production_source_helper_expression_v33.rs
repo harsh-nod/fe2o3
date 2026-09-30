@@ -150,6 +150,7 @@ fn source_helper_equal_work_v33(
     let mut work = 16usize;
     match expression {
         ProductionSemanticExpressionV2::Symbol { .. }
+        | ProductionSemanticExpressionV2::GlobalInvocation1d { .. }
         | ProductionSemanticExpressionV2::Constant { .. } => {}
         ProductionSemanticExpressionV2::Load(load) => {
             work = argument_sum_v1(&[work, argument_product_v1(load.indices.len(), 8)?])?;
@@ -272,6 +273,33 @@ impl OriginalEntryIndexV20<'_, '_> {
                 .source
                 .source
                 .missing("source helper call-return context differs");
+        }
+        if let Some(reader) = self.source.index_reader_computation_v35(
+            leaves.leaves.root,
+            instance,
+            SemanticBlockIdV1::from_index(block),
+            budget,
+        )? {
+            let original = self.source.ssa_scalar_definition_v30(
+                leaves.leaves.root,
+                instance,
+                EntryValueV20::Definition(value),
+                budget,
+            )?;
+            if original != Some(reader.original_definition(budget)?) {
+                return self
+                    .source
+                    .source
+                    .missing("source helper index return differs from retained reader");
+            }
+            let expression = reader.expression(budget)?;
+            if expression.scalar() != scalar {
+                return self
+                    .source
+                    .source
+                    .missing("source helper index return scalar differs");
+            }
+            return Ok(expression);
         }
         let child = self.helper_for_call_v34(leaves.leaves.root, instance, block, call, budget)?;
         self.private_helper_arguments_v33(
@@ -633,6 +661,29 @@ impl OriginalEntryIndexV20<'_, '_> {
                             .source
                             .source
                             .missing("source helper nested call effect is not modeled");
+                    }
+                    if let Some(reader) = self.source.index_reader_computation_v35(
+                        leaves.leaves.root,
+                        instance,
+                        SemanticBlockIdV1::from_index(block as u32),
+                        budget,
+                    )? {
+                        // The reader's complete original ABI/loan/result relation
+                        // is checked even when this pure result is discarded.
+                        let expression = reader.expression(budget)?;
+                        if expression.scalar()
+                            != source_helper_scalar_v33(
+                                self.source.source,
+                                destination.place().ty(),
+                                budget,
+                            )?
+                        {
+                            return self
+                                .source
+                                .source
+                                .missing("source helper nested index scalar differs");
+                        }
+                        continue;
                     }
                     let child = self.helper_for_call_v34(
                         leaves.leaves.root,

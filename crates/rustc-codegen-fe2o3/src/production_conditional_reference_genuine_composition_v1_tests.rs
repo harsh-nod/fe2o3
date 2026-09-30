@@ -553,7 +553,7 @@ fn loads<'a>(
             loads(when_true, out, depth + 1, nodes);
             loads(when_false, out, depth + 1, nodes);
         }
-        E::Constant { .. } | E::Symbol { .. } => (),
+        E::Constant { .. } | E::Symbol { .. } | E::GlobalInvocation1d { .. } => (),
     }
 }
 

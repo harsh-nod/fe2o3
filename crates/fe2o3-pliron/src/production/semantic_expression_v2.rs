@@ -220,6 +220,11 @@ pub enum ProductionSemanticExpressionV2 {
         scalar: ProductionSemanticScalarTypeV2,
         bits: u64,
     },
+    /// The launch's global X invocation coordinate, not a free SSA symbol and
+    /// not a flattened XYZ index. Evaluation requires a checked launch context.
+    GlobalInvocation1d {
+        scalar: ProductionSemanticScalarTypeV2,
+    },
     Load(ProductionSemanticLoadV2),
     Unary {
         operation: ProductionSemanticUnaryOpV2,
@@ -254,10 +259,51 @@ pub enum ProductionSemanticExpressionV2 {
 }
 
 impl ProductionSemanticExpressionV2 {
+    /// Concrete launch law only. These coordinates carry no source, device,
+    /// launch-owner or admission authority; the caller must authenticate them.
+    pub fn evaluate_global_invocation_1d_v35(
+        &self,
+        workgroup: [u64; 3],
+        local: [u64; 3],
+        workgroup_size: [u64; 3],
+        launch_extent: [u64; 3],
+    ) -> Option<u64> {
+        let Self::GlobalInvocation1d {
+            scalar:
+                ProductionSemanticScalarTypeV2::Integer {
+                    signed: false,
+                    bits: bits @ (32 | 64),
+                },
+        } = self
+        else {
+            return None;
+        };
+        let mut global = [0; 3];
+        for axis in 0..3 {
+            if workgroup_size[axis] == 0
+                || local[axis] >= workgroup_size[axis]
+                || launch_extent[axis] == 0
+            {
+                return None;
+            }
+            global[axis] = workgroup[axis]
+                .checked_mul(workgroup_size[axis])?
+                .checked_add(local[axis])?;
+            if global[axis] >= launch_extent[axis] {
+                return None;
+            }
+        }
+        if *bits == 32 && global[0] > u64::from(u32::MAX) {
+            return None;
+        }
+        Some(global[0])
+    }
+
     pub const fn scalar(&self) -> ProductionSemanticScalarTypeV2 {
         match self {
             Self::Symbol { scalar, .. }
             | Self::Constant { scalar, .. }
+            | Self::GlobalInvocation1d { scalar }
             | Self::Unary { scalar, .. }
             | Self::Binary { scalar, .. }
             | Self::Select { scalar, .. } => *scalar,
@@ -272,7 +318,10 @@ impl ProductionSemanticExpressionV2 {
             return true;
         }
         match self {
-            Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => false,
+            Self::Symbol { .. }
+            | Self::Constant { .. }
+            | Self::GlobalInvocation1d { .. }
+            | Self::Load(_) => false,
             Self::Unary { operand, .. } | Self::Cast { operand, .. } => {
                 operand.contains_float_semantics()
             }
@@ -316,6 +365,9 @@ impl ProductionSemanticExpressionV2 {
     pub fn validate_static_domains(&self) -> Result<(), ProductionSemanticExpressionErrorV2> {
         match self {
             Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => Ok(()),
+            Self::GlobalInvocation1d { .. } => {
+                Err(ProductionSemanticExpressionErrorV2::IncompleteDomain)
+            }
             Self::Unary {
                 operation,
                 scalar,
@@ -405,7 +457,10 @@ impl ProductionSemanticExpressionV2 {
 
     fn accumulate_stats(&self, stats: &mut ProductionSemanticExpressionStatsV2) {
         match self {
-            Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => {}
+            Self::Symbol { .. }
+            | Self::Constant { .. }
+            | Self::GlobalInvocation1d { .. }
+            | Self::Load(_) => {}
             Self::Unary {
                 scalar, operand, ..
             } => {
@@ -486,6 +541,18 @@ impl ProductionSemanticExpressionV2 {
             Self::Constant { scalar, bits } => {
                 if scalar.bit_width() < 64 && *bits >= (1_u64 << scalar.bit_width()) {
                     return Err(ProductionSemanticExpressionErrorV2::ConstantOutOfRange);
+                }
+                depth
+            }
+            Self::GlobalInvocation1d { scalar } => {
+                if !matches!(
+                    scalar,
+                    ProductionSemanticScalarTypeV2::Integer {
+                        signed: false,
+                        bits: 32 | 64
+                    }
+                ) {
+                    return Err(ProductionSemanticExpressionErrorV2::TypeMismatch);
                 }
                 depth
             }
@@ -637,7 +704,7 @@ impl ProductionSemanticExpressionV2 {
             Self::Symbol { symbol, .. } => {
                 output.insert(*symbol);
             }
-            Self::Constant { .. } => {}
+            Self::Constant { .. } | Self::GlobalInvocation1d { .. } => {}
             Self::Load(load) => {
                 output.insert(load.proof_symbol());
             }
@@ -953,6 +1020,12 @@ fn hash_expression<M: HashMeterV1>(
             digest.update(scalar_tag(*scalar))?;
             digest.update(bits.to_le_bytes())?;
         }
+        ProductionSemanticExpressionV2::GlobalInvocation1d { scalar } => {
+            // New tag; all pre-existing encodings remain byte-for-byte stable.
+            // The fixed suffix binds Global/X and checked (not wrapping) law.
+            digest.update([8, 0, 0, 1])?;
+            digest.update(scalar_tag(*scalar))?;
+        }
         ProductionSemanticExpressionV2::Load(load) => match load_mode {
             LoadCommitmentModeV2::CompleteMetadata => {
                 digest.update([7])?;
@@ -1057,6 +1130,205 @@ fn hash_ranked_value<M: HashMeterV1>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn launch_x(bits: u16) -> ProductionSemanticExpressionV2 {
+        ProductionSemanticExpressionV2::GlobalInvocation1d {
+            scalar: ProductionSemanticScalarTypeV2::Integer {
+                signed: false,
+                bits,
+            },
+        }
+    }
+
+    #[test]
+    fn launch_x_expression_has_explicit_non_symbol_identity_and_checked_domain() {
+        let expression = launch_x(64);
+        assert_eq!(expression.validate().unwrap().nodes, 1);
+        assert!(!expression.contains_float_semantics());
+        assert_eq!(
+            expression.validate_static_domains(),
+            Err(ProductionSemanticExpressionErrorV2::IncompleteDomain)
+        );
+        let mut symbols = BTreeSet::new();
+        expression.symbols(&mut symbols);
+        assert!(symbols.is_empty());
+        assert_ne!(
+            expression,
+            ProductionSemanticExpressionV2::Symbol {
+                symbol: 0,
+                scalar: expression.scalar()
+            }
+        );
+        for scalar in [
+            ProductionSemanticScalarTypeV2::Bool,
+            ProductionSemanticScalarTypeV2::Integer {
+                signed: true,
+                bits: 64,
+            },
+            ProductionSemanticScalarTypeV2::Integer {
+                signed: false,
+                bits: 16,
+            },
+            ProductionSemanticScalarTypeV2::Float { bits: 64 },
+        ] {
+            assert!(
+                ProductionSemanticExpressionV2::GlobalInvocation1d { scalar }
+                    .validate()
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn launch_x_expression_evaluates_global_x_not_local_group_or_flattened_xyz() {
+        let expression = launch_x(64);
+        let workgroup = [2, 3, 4];
+        let local = [1, 2, 3];
+        let size = [4, 5, 6];
+        let extent = [12, 20, 30];
+        assert_eq!(
+            expression.evaluate_global_invocation_1d_v35(workgroup, local, size, extent),
+            Some(9)
+        );
+        assert_eq!(
+            expression.evaluate_global_invocation_1d_v35([2, 0, 0], [1, 0, 0], size, extent),
+            Some(9)
+        );
+        assert_eq!(
+            expression.evaluate_global_invocation_1d_v35([3, 2, 4], local, size, [16, 20, 30]),
+            Some(13)
+        );
+        assert_eq!(
+            expression.evaluate_global_invocation_1d_v35(
+                [1, 0, 0],
+                [0, 0, 0],
+                [4, 1, 1],
+                [5, 1, 1]
+            ),
+            Some(4)
+        );
+        assert_eq!(
+            expression.evaluate_global_invocation_1d_v35(
+                [1, 0, 0],
+                [1, 0, 0],
+                [4, 1, 1],
+                [5, 1, 1]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn launch_x_expression_rejects_invalid_dimensions_overflow_and_width_substitution() {
+        for axis in 0..3 {
+            let mut size = [1, 1, 1];
+            size[axis] = 0;
+            assert_eq!(
+                launch_x(64).evaluate_global_invocation_1d_v35([0; 3], [0; 3], size, [1; 3]),
+                None
+            );
+            let mut local = [0; 3];
+            local[axis] = 1;
+            assert_eq!(
+                launch_x(64).evaluate_global_invocation_1d_v35([0; 3], local, [1; 3], [1; 3]),
+                None
+            );
+            let mut extent = [1; 3];
+            extent[axis] = 0;
+            assert_eq!(
+                launch_x(64).evaluate_global_invocation_1d_v35([0; 3], [0; 3], [1; 3], extent),
+                None
+            );
+            let mut group = [0; 3];
+            group[axis] = u64::MAX;
+            let mut size = [1; 3];
+            size[axis] = 2;
+            assert_eq!(
+                launch_x(64).evaluate_global_invocation_1d_v35(group, [0; 3], size, [u64::MAX; 3]),
+                None
+            );
+        }
+        let first_outside_u32 = u64::from(u32::MAX) + 1;
+        let group = [first_outside_u32, 0, 0];
+        let extent = [first_outside_u32 + 1, 1, 1];
+        assert_eq!(
+            launch_x(32).evaluate_global_invocation_1d_v35(group, [0; 3], [1; 3], extent),
+            None
+        );
+        assert_eq!(
+            launch_x(64).evaluate_global_invocation_1d_v35(group, [0; 3], [1; 3], extent),
+            Some(first_outside_u32)
+        );
+        assert_eq!(
+            launch_x(32).evaluate_global_invocation_1d_v35(
+                [u64::from(u32::MAX), 0, 0],
+                [0; 3],
+                [1; 3],
+                extent
+            ),
+            Some(u64::from(u32::MAX))
+        );
+    }
+
+    #[test]
+    fn launch_x_expression_hash_has_independent_tag_width_axis_and_checked_law_commitment() {
+        use sha2::{Digest, Sha256};
+        fn expected(tag: [u8; 4], width: u8) -> [u8; 32] {
+            let mut hash = Sha256::new();
+            hash.update(b"fe2o3/production-semantic-expression/v2\0");
+            hash.update(tag);
+            hash.update([1, 0, width, 0]);
+            hash.finalize().into()
+        }
+        for width in [32, 64] {
+            let expression = launch_x(width);
+            let digest = expression.canonical_sha256();
+            assert_eq!(digest, expected([8, 0, 0, 1], width as u8));
+            let contract = ProductionNumericalContractV2::ExactBitVectorOperatorCongruence;
+            let mut transcript = Sha256::new();
+            transcript.update(b"fe2o3/production-semantic-expression-transcript/v2\0");
+            transcript.update(expected([8, 0, 0, 1], width as u8));
+            transcript.update([0]);
+            let transcript: [u8; 32] = transcript.finalize().into();
+            assert_eq!(expression.canonical_transcript_sha256(contract), transcript);
+            assert_eq!(
+                expression.materialized_pliron_transcript_sha256(contract),
+                transcript
+            );
+            let symbol = ProductionSemanticExpressionV2::Symbol {
+                symbol: 0,
+                scalar: expression.scalar(),
+            };
+            assert_ne!(transcript, symbol.canonical_transcript_sha256(contract));
+            assert_ne!(
+                transcript,
+                symbol.materialized_pliron_transcript_sha256(contract)
+            );
+            for changed in [[8, 1, 0, 1], [8, 0, 1, 1], [8, 0, 0, 0], [0, 0, 0, 1]] {
+                assert_ne!(digest, expected(changed, width as u8));
+            }
+            assert_ne!(
+                digest,
+                ProductionSemanticExpressionV2::Symbol {
+                    symbol: 0,
+                    scalar: expression.scalar()
+                }
+                .canonical_sha256()
+            );
+            assert_ne!(
+                digest,
+                ProductionSemanticExpressionV2::Constant {
+                    bits: 0,
+                    scalar: expression.scalar()
+                }
+                .canonical_sha256()
+            );
+        }
+        assert_ne!(
+            launch_x(32).canonical_sha256(),
+            launch_x(64).canonical_sha256()
+        );
+    }
 
     fn u32_symbol(symbol: u32) -> ProductionSemanticExpressionV2 {
         ProductionSemanticExpressionV2::Symbol {

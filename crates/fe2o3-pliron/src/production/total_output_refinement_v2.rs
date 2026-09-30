@@ -444,7 +444,7 @@ fn charge_conditional_expression_v1(
             charge_conditional_expression_v1(when_true, depth + 1, budget)?;
             charge_conditional_expression_v1(when_false, depth + 1, budget)?;
         }
-        E::Constant { .. } | E::Symbol { .. } | E::Load(_) => {}
+        E::Constant { .. } | E::Symbol { .. } | E::GlobalInvocation1d { .. } | E::Load(_) => {}
     }
     Ok(())
 }

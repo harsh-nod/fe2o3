@@ -134,6 +134,7 @@ fn retained_source_ssa_replay_rejects_omission_value_instance_and_endpoint_chang
                         ledger: original.ledger,
                         rows: original.rows.clone(),
                         values: original.values.clone(),
+                        index_readers: original.index_readers.clone(),
                         storage: original.storage,
                     };
                     match fault {

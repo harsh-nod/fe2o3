@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_index_computation_v35_tests.rs"]
+mod computation_tests;
+
 const INDEX: SemanticTypeIdV1 = WORD;
 const THREAD: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
 const THREAD_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);

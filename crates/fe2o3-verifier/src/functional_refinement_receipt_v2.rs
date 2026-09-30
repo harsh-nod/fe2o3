@@ -1182,6 +1182,7 @@ fn render_bitvector_expression_v2(
 
     let width = u64::from(expression.scalar().bit_width());
     let rendered = match expression {
+        Expression::GlobalInvocation1d { .. } => return Err(invalid_ranked_recipe()),
         Expression::Symbol { symbol, .. } => {
             format!("fe2o3_bv_norm_v2(s{symbol}, {width})")
         }
@@ -1327,6 +1328,7 @@ fn render_ieee_congruence_expression_v2(
     use fe2o3_pliron::ProductionSemanticExpressionV2 as Expression;
     let scalar = scalar_tag_v2(expression.scalar());
     let rendered = match expression {
+        Expression::GlobalInvocation1d { .. } => return Err(invalid_ranked_recipe()),
         Expression::Symbol { symbol, .. } => {
             format!(
                 "fe2o3_ieee_operator_congruence_v2({}, s{symbol}, 0, 0)",

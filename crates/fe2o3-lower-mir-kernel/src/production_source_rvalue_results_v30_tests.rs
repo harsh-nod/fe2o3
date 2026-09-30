@@ -104,6 +104,7 @@ fn retained_source_rvalue_replay_detects_type_endpoint_omission_and_source_chang
                     ledger: original.ledger,
                     rows: original.rows.clone(),
                     values: original.values.clone(),
+                    index_readers: original.index_readers.clone(),
                     storage: original.storage,
                 };
                 match fault {
@@ -206,10 +207,88 @@ fn retained_rvalue_header_oracle_covers_capture_and_query_envelopes() {
         + h::<ExecutionCallSourceV29>()
         + h::<ExecutionSiteV29>()
         + descriptor_operand_header_oracle_v30()
+        + index_reader_header_oracle_v35()
         + h::<std::slice::Iter<'_, SourceRvalueRowV30>>()
         + 8 * h::<usize>()
         + h::<()>();
     assert_eq!(source_rvalue_headers_v30().unwrap(), expected);
+}
+
+fn index_reader_header_oracle_v35() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    #[allow(dead_code)]
+    struct Reader {
+        instance: usize,
+        block: u32,
+        function: SemanticFunctionIdV1,
+        callee: fe2o3_mir_model::semantic_mir_v1::SemanticCallableIdV1,
+        argument: SsaValueV1,
+        result: SsaValueV1,
+        reference_type: SemanticTypeIdV1,
+        witness_type: SemanticTypeIdV1,
+        index_space: SemanticDisjointIndexSpaceV1,
+        disjoint: bool,
+        loan: usize,
+        loan_site: SourceReferenceSiteV29,
+        origin: usize,
+        origin_instance: ProductionCallInstanceIdV1,
+        origin_local: SemanticLocalIdV1,
+        origin_generation: u32,
+        emitted_index: ValueId,
+    }
+    assert_eq!(size_of::<Reader>(), size_of::<SourceIndexReaderRowV35>());
+    assert_eq!(
+        std::mem::align_of::<Reader>(),
+        std::mem::align_of::<SourceIndexReaderRowV35>()
+    );
+    let expected = h::<Vec<SourceIndexReaderRowV35>>()
+        + h::<Reader>()
+        + h::<&SourceIndexReaderRowV35>()
+        + h::<&SourceReferenceEmissionV29<'_, '_>>()
+        + h::<SourceIndexWitnessBorrowV29>()
+        + h::<&SourceReferenceLoanV29>()
+        + h::<&SourceReferenceOriginV29>()
+        + h::<&SemanticDirectCallV1>()
+        + h::<&SemanticOperandV1>()
+        + h::<&SemanticSourceReferenceBindingV29>()
+        + h::<(SemanticTypeIdV1, SemanticDisjointIndexSpaceV1, bool)>()
+        + h::<Option<SsaValueV1>>()
+        + h::<SsaValueV1>()
+        + h::<ValueId>()
+        + h::<[u32; 2]>()
+        + h::<(usize, u32)>()
+        + h::<ProductionSourceIndexReadV35<'_, '_>>()
+        + h::<Option<ProductionSourceIndexReadV35<'_, '_>>>()
+        + h::<&ProductionSourceIndexReadV35<'_, '_>>()
+        + h::<fe2o3_mir_model::SsaEdgeIdV1>()
+        + h::<&SsaArgumentV1>()
+        + h::<ProductionSemanticExpressionV2>()
+        + h::<ProductionSemanticScalarTypeV2>()
+        + h::<&AdmittedInertSemanticMirV1>()
+        + h::<ProductionCallInstanceIdV1>()
+        + h::<&production_call_instances_v1::ProductionCallInstanceV1<'_>>()
+        + h::<SemanticFunctionIdV1>()
+        + h::<SemanticBlockIdV1>()
+        + h::<&fe2o3_mir_model::semantic_mir_v1::SemanticCallDestinationV1>()
+        + h::<&SemanticPlaceV1>()
+        + h::<bool>()
+        + h::<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>()
+        + h::<&[SsaArgumentV1]>()
+        + h::<fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>>()
+        + h::<
+            std::iter::Enumerate<
+                std::slice::Iter<'_, fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1>,
+            >,
+        >()
+        + h::<std::iter::Enumerate<std::slice::Iter<'_, Option<usize>>>>()
+        + h::<std::slice::Iter<'_, fe2o3_pliron::ProductionSemanticSsaEventOccurrenceV1>>()
+        + 8 * h::<usize>();
+    assert_eq!(source_index_reader_headers_v35().unwrap(), expected);
+    expected
 }
 
 fn descriptor_operand_header_oracle_v30() -> usize {

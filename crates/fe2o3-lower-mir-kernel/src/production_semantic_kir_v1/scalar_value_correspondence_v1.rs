@@ -23,6 +23,9 @@ fn scalar_value_expressions_correspond_v1(
         scalar_value_expressions_correspond_v1(expected, actual, next, budget)
     };
     Some(match (expected, actual) {
+        (E::GlobalInvocation1d { scalar }, E::GlobalInvocation1d { scalar: other }) => {
+            scalar == other
+        }
         (
             E::Symbol {
                 symbol: left,

@@ -136,7 +136,9 @@ fn argument_indices(
             .ok_or("template load payload overflow")
     };
     match expression {
-        Expression::Symbol { .. } | Expression::Constant { .. } => Ok(0),
+        Expression::Symbol { .. }
+        | Expression::Constant { .. }
+        | Expression::GlobalInvocation1d { .. } => Ok(0),
         Expression::Load(load) => {
             meter.work(load.indices.len())?;
             Ok(load.indices.len())

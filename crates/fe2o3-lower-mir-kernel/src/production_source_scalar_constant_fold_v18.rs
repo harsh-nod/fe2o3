@@ -121,6 +121,7 @@ fn source_scalar_constant_fold_v18(
             source_scalar_constant_fold_v18(&mut when_false.0[0], next, charge)?;
         }
         NormalizedScalarExpressionV1::Symbol { .. }
+        | NormalizedScalarExpressionV1::GlobalInvocation1d { .. }
         | NormalizedScalarExpressionV1::Constant { .. }
         | NormalizedScalarExpressionV1::Load { .. } => (),
     }

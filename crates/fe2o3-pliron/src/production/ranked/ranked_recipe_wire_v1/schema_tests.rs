@@ -629,6 +629,12 @@ fn expression_variants_and_boundary_counts_are_lossless() {
             },
             operand: Box::new(expression(1)),
         },
+        X::GlobalInvocation1d {
+            scalar: ProductionSemanticScalarTypeV2::Integer {
+                signed: false,
+                bits: 64,
+            },
+        },
     ];
     for (index, value) in values.iter().enumerate() {
         assert_eq!(bytes(value)[0], index as u8 + 1);

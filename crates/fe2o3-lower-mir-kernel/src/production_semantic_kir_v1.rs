@@ -4308,6 +4308,9 @@ fn normalized_scalar_box_v18(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum NormalizedScalarExpressionV1 {
+    GlobalInvocation1d {
+        scalar: ProductionSemanticScalarTypeV2,
+    },
     Symbol {
         symbol: u32,
         scalar: ProductionSemanticScalarTypeV2,
@@ -4367,6 +4370,13 @@ mod helper_source_fixture_v1 {
 }
 
 trait SemanticExpressionLeavesV18 {
+    fn global_invocation_1d(
+        &self,
+        _scalar: ProductionSemanticScalarTypeV2,
+        _budget: &mut dyn CorrelationChargeV18,
+    ) -> Option<NormalizedScalarExpressionV1> {
+        None
+    }
     fn begin_node(&self) -> Option<()> {
         Some(())
     }
@@ -4476,6 +4486,9 @@ fn normalize_semantic_expression_v18(
     }
     let next = depth.checked_add(1)?;
     Some(match expression {
+        ProductionSemanticExpressionV2::GlobalInvocation1d { scalar } => {
+            leaves.global_invocation_1d(*scalar, budget)?
+        }
         ProductionSemanticExpressionV2::Symbol { symbol, scalar } => {
             leaves.symbol(*symbol, *scalar, budget)?
         }
@@ -4709,6 +4722,9 @@ fn normalize_kir_expression_inner_v1(
         )
     };
     Some(match &operation.kind {
+        OperationKind::Intrinsic(intrinsic) => {
+            source_global_invocation_intrinsic_v35(intrinsic, scalar)?
+        }
         OperationKind::InlineAssembly(_) => {
             return kir
                 .inline_scalar()
