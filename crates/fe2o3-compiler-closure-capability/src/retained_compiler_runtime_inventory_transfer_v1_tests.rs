@@ -395,6 +395,78 @@ fn partial_duplicate_error_and_unwind_close_only_new_files_without_refund() {
 }
 
 #[test]
+fn full_set_outer_scope_accounting_refusal_drops_duplicates_and_preserves_original_account() {
+    let t = Tree::with_lengths([137, 67, 71, 73, 79, 83]);
+    let mut work = Work::new(WORK_LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(APPROVAL_STORAGE).unwrap();
+    let v = t.retain(&mut b);
+    let floor = b.storage();
+    assert_eq!(floor, v.required_storage());
+    let prefix = b.work();
+    let address = &b as *const Budget<'_> as usize;
+    let ledger = b.work_ledger_identity_v1();
+    assert!(b.charge_work(WORK_LIMIT).is_err());
+    assert!(b.reserve_storage(LIMIT).is_err());
+    let denials = (b.failed_work(), b.failed_storage());
+    assert_eq!(denials, (Some(prefix + WORK_LIMIT), Some(floor + LIMIT)));
+    let charge = inventory_transfer_storage(v.manifest.total_file_bytes() as usize).unwrap();
+    let protected = floor + INVENTORY_SCRATCH + charge.full_storage();
+    let final_work: usize = v
+        .manifest
+        .entries()
+        .map(|entry| ENTRY_IO_WORK + entry.length as usize * 8)
+        .sum();
+    let (uid, gid) = owners();
+    let mut calls = 0;
+    let mut before_final_checks = None;
+    let result = v.clone_inventory_using(uid, gid, synthetic_immutable, &mut b, |b| {
+        calls += 1;
+        assert_eq!(b.storage(), protected);
+        all_refs(&v, if calls == 1 { 1 } else { 2 });
+        t.revalidate(&v, b)?;
+        if calls == 2 {
+            // Fail only the outer frame check, after every duplicate and both
+            // origin revalidations succeed. Never release an original owner byte.
+            assert!(b.charge_work(WORK_LIMIT).is_err());
+            assert!(b.reserve_storage(LIMIT).is_err());
+            assert_eq!((b.failed_work(), b.failed_storage()), denials);
+            b.release_storage(1)?;
+            assert_eq!(b.storage(), protected - 1);
+            assert!(b.storage() >= floor + charge.full_storage());
+            before_final_checks = Some((b.work(), b.peak_storage(), PROBES.with(Cell::get)));
+        }
+        Ok(())
+    });
+    accounting(result);
+    assert_eq!(calls, 2);
+    let (checked_work, peak, probes) = before_final_checks.unwrap();
+    // Every final duplicate passed both metadata/protection checks. The failure
+    // therefore came from prepaid-scope exit, not constructor or validation refusal.
+    assert_eq!(b.work(), checked_work + final_work);
+    assert_eq!(
+        PROBES.with(Cell::get),
+        probes + 2 * v.manifest.entries().len()
+    );
+    assert!(b.work() > prefix);
+    assert!(b.work() < WORK_LIMIT);
+    assert_eq!(b.storage(), floor);
+    assert_eq!(b.storage_limit(), LIMIT);
+    assert_eq!(b.peak_storage(), peak);
+    assert_eq!((b.failed_work(), b.failed_storage()), denials);
+    assert_eq!(&b as *const Budget<'_> as usize, address);
+    assert!(b.work_ledger_identity_v1() == ledger);
+    all_refs(&v, 1);
+    for original in v.files.iter().flatten() {
+        assert_eq!(Snapshot::read(&original.file).unwrap(), original.snapshot);
+    }
+    t.revalidate(&v, &mut b).unwrap();
+    assert_eq!(b.storage(), floor);
+    assert_eq!((b.failed_work(), b.failed_storage()), denials);
+    all_refs(&v, 1);
+}
+
+#[test]
 fn final_origin_recheck_rejects_replaced_shared_library_and_preserves_live_set() {
     for validation in [false, true] {
         let t = Tree::new(64);
