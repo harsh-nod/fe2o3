@@ -94,7 +94,7 @@ fn source_address_accesses_retained_v29(
             output.0.capacity(),
             std::mem::size_of::<SourceAddressAccessSourceV29>(),
         )?,
-        output.1.retained_storage()?,
+        output.1.retained_storage(budget)?,
     ])?;
     let required = argument_sum_v1(&[floor, retained])?;
     let refund = budget.storage().checked_sub(required);

@@ -86,15 +86,7 @@ fn run_selected_memory_owner(
 fn retained_selected_memory<'a>(
     original: &'a ProductionSourceCorrespondenceV18<'_>,
 ) -> &'a PendingSourceIssuedRolesV29 {
-    &original
-        .source
-        .root_row(0)
-        .unwrap()
-        .source_slots
-        .pending_memory
-        .as_ref()
-        .unwrap()
-        .issued
+    scoped_raw_admission_v29::issued_role_tests_v29::issued_rows_v18(original)
 }
 
 fn selected_memory_storage_oracle(rows: &PendingSourceIssuedRolesV29) -> usize {
@@ -585,10 +577,16 @@ fn selected_memory_foreign_ledger_is_rejected_before_receipt_access_and_retains_
             foreign.reserve_storage(floor)?;
             let before = (foreign.work(), foreign.storage(), foreign.peak_storage());
             let called = std::cell::Cell::new(false);
-            let error = with_checked_source_memory_v29(original, 0, None, &mut foreign, |_, _| {
-                called.set(true);
-                Ok(())
-            })
+            let error = scoped_raw_admission_v29::with_checked_source_memory_v29(
+                original,
+                0,
+                None,
+                &mut foreign,
+                |_, _| {
+                    called.set(true);
+                    Ok(())
+                },
+            )
             .unwrap_err();
             assert!(
                 matches!(

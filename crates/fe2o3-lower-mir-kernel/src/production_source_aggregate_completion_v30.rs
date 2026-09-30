@@ -422,7 +422,9 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
                                 inventory_credit.retained_storage(),
                                 physical_credit.retained_storage(),
                             ])?;
-                            drop((state.roles, function_launches, seen, physical, output));
+                            drop((state.roles, function_launches, seen));
+                            drop(physical);
+                            drop(output);
                             budget.release_storage(scratch)?;
                             let (premises, occurrences) = state.globals.into_runtime(budget)?;
                             Ok((premises, occurrences, histories))

@@ -197,7 +197,7 @@ pub(in super::super) fn run_issued_role_owner_v18(
     (result, budget.work(), budget.peak_storage())
 }
 
-fn issued_rows_v18<'a>(
+pub(in super::super) fn issued_rows_v18<'a>(
     original: &'a ProductionSourceCorrespondenceV18<'_>,
 ) -> &'a PendingSourceIssuedRolesV29 {
     &original
