@@ -47,8 +47,9 @@ separately charged; origin, account and file checks bracket duplication. The
 existing four-source Stage map and FD197 check are unchanged. Independent static
 review found no blocking defect, including in the private-module extraction.
 All eleven new inventory library tests passed in the isolated r71 run below;
-doctest validation and a genuine approved-runtime-to-backing composition run
-remain outstanding. Retained library files are not
+the complete capability package and doctests subsequently passed in r73.
+A genuine approved-runtime-to-backing composition run remains outstanding.
+Retained library files are not
 evidence that the loader resolves its paths to those files.
 
 The compiler-only native stage installs a fixed 57-instruction syscall filter
@@ -157,6 +158,27 @@ the log SHA-256 is
 `8fb316645bb421f13097ca805c44333f0a163231fc2ae13ade8de1cf00c247a9`.
 No proof process or GPU execution occurred. M1 and the 0/47 strict-production
 matrix are unchanged.
+
+The subsequent `r72-isolated-broker-profile-output` run passed all 25 selected
+release, broker and wrapper tests at `c0ae8c7cefd4e70d30a1d02068e52efdeb21bb49`,
+replacing the provisional r64 observation. Its log SHA-256 is
+`a4b845235c70f581b7902f81081674db180cf5e9e2631ae6b9910f5a80666652`.
+
+The two ACL fixtures incorrectly named `current_uid + 1` in an environment
+whose user namespace maps only the current UID. Commit `2a4239723` uses that
+mapped UID in a still-extended ACL, checks the exact installed ACL bytes, and
+requires a successful reload after attribute removal. Production rejection
+is unchanged; `EINVAL` is not skipped or treated as success.
+
+`r73-isolated-runtime-capability-acl` at
+`2a423972320534d213d8fc948f610e7a7a864342` passed the complete capability package:
+282 library tests, 48 integration tests and 134 doctests, with four library
+tests still ignored. Both corrected ACL rejection tests and both new inventory
+compile-fail doctests passed. Source/tool snapshots stayed unchanged; the log
+SHA-256 is
+`44fa8a2622d8efa654a0ff1917e7dfcef942271a8b5181dab3d5185694de5e0c`.
+This does not replace the 27 coordinator socket failures or unrun isolated
+native-exec, protected-proof and GPU checks.
 
 | Run | Log SHA-256 |
 | --- | --- |
