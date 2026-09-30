@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_scalar_boundary_normalization_v31_tests.rs"]
+mod normalization;
+
 fn rebuild_root(
     old: &SemanticFunctionDeclV1,
     locals: Vec<SemanticLocalDeclV1>,

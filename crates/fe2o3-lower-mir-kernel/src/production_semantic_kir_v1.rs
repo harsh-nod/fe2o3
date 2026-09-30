@@ -4662,10 +4662,18 @@ fn normalize_kir_expression_inner_v1(
     budget: &mut dyn CorrelationChargeV18,
     helpers: &mut native_helper_value_expansion_v1::NativeValueExpansion<'_, '_>,
 ) -> Option<NormalizedScalarExpressionV1> {
-    let value = unique_kir_ssa_origin_v1(kir, value, budget)?;
+    // A source-owned boundary already checks every incoming edge. Resolving it
+    // to one predecessor would discard that relation (or reject a genuine phi).
     if let Some(leaf) = kir.scalar_leaf(function, value)? {
         return Some(leaf);
     }
+    let origin = unique_kir_ssa_origin_v1(kir, value, budget)?;
+    if origin != value {
+        if let Some(leaf) = kir.scalar_leaf(function, origin)? {
+            return Some(leaf);
+        }
+    }
+    let value = origin;
     if let Some(argument) = kir.scalar_parameter(function, value)? {
         let scalar = kir_semantic_scalar_v1(function.signature.parameters.get(argument as usize)?)?;
         return kir.scalar_argument(function, argument, scalar);
