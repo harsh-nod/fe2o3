@@ -3,10 +3,11 @@
 ## Milestone Snapshot
 
 Local qualification snapshot: 2026-09-30 UTC.
-The browser-visible [#182](https://github.com/harsh-nod/fe2o3/issues/182) page
-still reports Open at that read. Its API/comments have not been refreshed.
-Terminal GitHub DNS and MI300X SSH access have recovered; this does not itself
-qualify a new hardware run or confirm publication of the latest commits.
+The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
+refreshed on this date: the issue remains Open, with 30 comments and its latest
+update on September 27. Both repository branch refs were independently read at
+`2699fe63f1d03c60e1649a2a5a29c6b2481f9d3b`. GitHub and MI300X SSH access have
+recovered; this does not itself qualify a new hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -27,6 +28,18 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [merged runtime CPU regression](evidence/dev-runtime-merged-2026-09-30/README.md)
+at `2699fe63f1` passes all 1,893 active library tests with all features enabled,
+zero failures and zero filtered tests; 32 existing native tests remain ignored.
+The three previously failing telemetry cases pass in the unrestricted host
+environment without changing production checks or test expectations. Cargo
+recompiled the changed crates using the existing target cache. The full run
+completed in 93.63 seconds after a 5 minute 18 second build. Source/tool/namespace
+continuity and the owned process-group closure pass. These are development
+regression receipts, not an independently authenticated qualification campaign,
+an all-workspace result, native execution or performance acceptance. The older
+rejected restricted-environment runs below remain historical failures.
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
 runs twelve explicit commands covering the newer model, runtime, accounting and
@@ -190,8 +203,9 @@ a new solver or merged-runtime claim. The theorem covers the actual shared fold
 over ordered
 validation receipts, not the per-input validator, live credit ledger or native
 authority. No combined full-runtime, native or performance acceptance follows
-from these separate component results. Evidence remains local and publication
-is blocked by DNS failures; protected execution and all A0-A7 exits remain open.
+from these separate component results. That checkpoint's evidence remains local.
+Its former DNS publication blocker has cleared; protected execution and all
+A0-A7 exits remain open.
 
 The opt-in [shared host account](runtime-scale-capacity-v1.md#shared-host-account)
 is integrated at `43d97c8fa`. Runtime/native host tables, custody tables and
@@ -212,11 +226,13 @@ not account locking, ancestry, freshness, token custody or Context authority.
 R75's source manifest is updated under nine lightweight controls, without a
 new R75 solver claim. Component evidence remains local.
 
-A fresh local Unix `SOCK_SEQPACKET` capability probe also returns `EPERM` for
+A prior restricted-environment Unix `SOCK_SEQPACKET` capability probe returned `EPERM` for
 `SO_DOMAIN`, `SO_TYPE`, `getpeername`, `SO_PEERCRED` and setting/reading
-`SO_PASSCRED`. This confirms current environment restrictions relevant to the
-telemetry failures below, not the precise syscall of a historical run. Production
-socket validation and the tests remain enabled and unchanged.
+`SO_PASSCRED`. This confirmed restrictions relevant to the telemetry failures
+below, not the precise syscall of a historical run. The September 30 unrestricted
+probe succeeds for those operations, and the merged runtime regression above
+passes those tests. Production socket validation and the tests remain enabled
+and unchanged.
 
 The earlier merged all-feature runtime library run at `14e4253eb` completed with
 1863 passed, three failed, 32 ignored and zero filtered out (exit 101). All three
