@@ -4,9 +4,9 @@
 
 Local qualification snapshot: 2026-09-30 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
-refreshed on this date: the issue remains Open, with 30 comments and its latest
-update on September 27. Both repository branch refs were independently read at
-`2699fe63f1d03c60e1649a2a5a29c6b2481f9d3b`. GitHub and MI300X SSH access have
+refreshed on this date: the issue remains Open, with 31 comments and its latest
+update at 17:41:21 UTC. Both repository branch refs were confirmed at
+`12782867c81e7d0a4de328355618e84f5feb25c8`. GitHub and MI300X SSH access have
 recovered; this does not itself qualify a new hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
@@ -28,6 +28,16 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [merged KFD regression attempt](evidence/dev-kfd-merged-timeout-2026-09-30/README.md)
+at `12782867c` remains incomplete. It announces 1,824 tests and records 716
+completed successes before its 1,800-second command deadline, with no final
+suite footer. The command includes a 3 minute 21 second build and uses one test
+thread; the earlier completed KFD attempt used two threads and a longer bound.
+The elapsed times are not a matched comparison. The owned process group closes,
+and source/tool/namespace continuity passes. No partial result is promoted to
+full-suite, native or performance acceptance; its exact ELF and rejected raw
+output are retained separately from the earlier failures.
 
 The [merged runtime CPU regression](evidence/dev-runtime-merged-2026-09-30/README.md)
 at `2699fe63f1` passes all 1,893 active library tests with all features enabled,
