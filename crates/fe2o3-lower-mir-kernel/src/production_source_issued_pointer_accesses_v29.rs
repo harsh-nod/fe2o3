@@ -110,7 +110,8 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             issuer_instance,
             recipe,
             pointer,
-        }) = self.resolve_access_v26(instance, frame.site, role, place, budget)?
+        }) =
+            self.resolve_access_v26(references.plan, instance, frame.site, role, place, budget)?
         {
             if recipe.form != SourceIssuedFormV29::Pointer {
                 return Err(source_issued_error_v29());
@@ -120,7 +121,15 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
                 .instance(instance)
                 .ok_or_else(source_issued_error_v29)?
                 .declaration();
-            if function.locals()[place.local().index() as usize].ty() != recipe.pointer_type
+            let holder_type = function.locals()[place.local().index() as usize].ty();
+            if (holder_type != recipe.pointer_type
+                && !source_external_reborrow_types_v30(
+                    self.instances.owner().source_semantic().types(),
+                    recipe.pointer_type,
+                    holder_type,
+                    SemanticBorrowKindV1::Shared,
+                    budget,
+                )?)
                 || lower_scalar_type(self.instances.owner().source_semantic().types(), place.ty())?
                     != Type::Scalar(recipe.element)
             {

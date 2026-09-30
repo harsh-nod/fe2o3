@@ -2,6 +2,8 @@
 // initializedness certificate. The mandatory physical owner caller authenticates
 // the exact original graph/root first; no alternate memory profile is selected.
 
+include!("production_source_reference_selection_replay_v30.rs");
+
 pub(super) fn source_issued_tail_locations_v18(
     original: &ProductionSourceCorrespondenceV18<'_>,
     root: usize,
@@ -41,6 +43,14 @@ pub(super) fn checked_issued_source_rows_v18<'a>(
         let Some(pending) = owner.source_slots.pending_memory.as_ref() else {
             return Ok(None);
         };
+        // This consumer, unlike common immutable physical replay, encodes one
+        // issuer and one dominating guard for every access.
+        budget.charge_work(1)?;
+        if !pending.issued.selected.is_empty() {
+            return original
+                .source
+                .missing("selected reference access requires its conditional V30 consumer");
+        }
         check_immutable_issued_roles_v18(original, root, &pending.issued, budget)?;
         Ok(Some(&pending.issued))
     })())
@@ -213,14 +223,7 @@ fn check_immutable_issued_roles_inner_v18(
             .source
             .missing("issued immutable receipt differs from its original owner");
     }
-    // V18/V26 roles contain one issuer and one dominating guard per access.
-    // Selected receipts require the distinct ordered, conditional V30 replay.
     budget.charge_work(1)?;
-    if !rows.selected.is_empty() {
-        return original
-            .source
-            .missing("selected reference access requires its conditional V30 consumer");
-    }
     let semantic = original.source.source_semantic(budget)?;
     let mut source_count = 0usize;
     for instance in &owner.coordinates.sources.rows {
@@ -278,7 +281,9 @@ fn check_immutable_issued_roles_inner_v18(
                 .source
                 .missing("issued evidence lacks original issuer");
         }
-        return Ok(());
+        if rows.selected.is_empty() {
+            return Ok(());
+        }
     }
     let function = original
         .inventory
@@ -547,6 +552,7 @@ fn check_immutable_issued_roles_inner_v18(
     if !valid {
         return Err(immutable_memory_error_v29(source_issued_error_v29()));
     }
+    check_immutable_selected_rows_v30(original, root, rows, function, &actual, &guards, budget)?;
     Ok(())
 }
 

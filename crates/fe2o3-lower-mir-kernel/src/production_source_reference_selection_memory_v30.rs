@@ -182,7 +182,6 @@ impl PendingSourceSelectedAccessV30 {
     }
 }
 
-#[cfg(test)]
 fn copied_selected_rows_v30(
     rows: &[PendingSourceSelectedAccessV30],
     budget: &mut ArgumentBudgetV1<'_>,

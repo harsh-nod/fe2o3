@@ -461,7 +461,7 @@ impl<'scope, 'owner, 'source> SourceReferenceSelectionBuilderV29<'scope, 'owner,
                 return Err(source_reference_selection_error_v29());
             }
             let dependency = self.use_value(value.instance, site, role, place, budget)?;
-            if dependency.pointer_type != value.pointer_type {
+            if !reborrow && dependency.pointer_type != value.pointer_type {
                 return Err(source_reference_selection_error_v29());
             }
             let input = self.intern(dependency, budget)?;

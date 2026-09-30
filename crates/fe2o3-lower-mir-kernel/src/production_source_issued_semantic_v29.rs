@@ -555,7 +555,7 @@ impl<'scope, 'owner, 'source> SourceIssuedSemanticV29<'scope, 'owner, 'source> {
                 .ok_or_else(source_issued_error_v29)?;
             let (site, rvalue) =
                 source_descriptor_assignment_v29(function, &occurrences, statement, value, budget)?;
-            let Some((place, role, _)) = source_reference_pointer_alias_v29(
+            let Some((place, role, reborrow)) = source_reference_pointer_alias_v29(
                 self.instances.owner().source_semantic().types(),
                 function,
                 site,
@@ -567,6 +567,26 @@ impl<'scope, 'owner, 'source> SourceIssuedSemanticV29<'scope, 'owner, 'source> {
                 self.complete(value, None, budget)?;
                 break;
             };
+            // Permission restriction has a distinct result and actual cast.
+            // The selected graph retains that alias instead of pretending it
+            // has the issuer's unchanged pointer type/archive representation.
+            if reborrow {
+                let Some(SemanticStatementKindV1::Assign(assignment)) =
+                    scoped_source_statement_v29(function, site)
+                else {
+                    return Err(source_issued_error_v29());
+                };
+                budget.charge_work(2)?;
+                if function
+                    .locals()
+                    .get(place.local().index() as usize)
+                    .is_none_or(|local| local.ty() != assignment.destination().ty())
+                {
+                    resolved = None;
+                    self.complete(value, None, budget)?;
+                    break;
+                }
+            }
             let dependency = self.use_value(site, role, place, budget)?;
             budget.charge_work(2)?;
             if self.links.len() == self.links.capacity() {

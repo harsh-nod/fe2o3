@@ -77,8 +77,57 @@ fn source_external_borrow_preserves_holder_v29(
         .is_some())
 }
 
-// The original assignment, including its output type, selects transparent
-// reborrows. A raw pointer, widened mutable borrow, or projected pointer cannot.
+// A shared reborrow may discard mutable permission, never add it. All other
+// pointer representation fields remain exact original-source facts.
+fn source_external_reborrow_types_v30(
+    types: &[SemanticTypeDeclV1],
+    input: SemanticTypeIdV1,
+    output: SemanticTypeIdV1,
+    kind: SemanticBorrowKindV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    source_reference_emission_prepay_v29::<bool>(budget)?;
+    budget.charge_work(24)?;
+    let (Some(input), Some(output)) = (
+        types.get(input.index() as usize),
+        types.get(output.index() as usize),
+    ) else {
+        return Ok(false);
+    };
+    let (SemanticTypeShapeV1::Pointer(from), SemanticTypeShapeV1::Pointer(to)) =
+        (input.shape(), output.shape())
+    else {
+        return Ok(false);
+    };
+    Ok(input.layout().size_bytes() == Some(8)
+        && output.layout().size_bytes() == Some(8)
+        && input.layout().alignment_bytes() == 8
+        && output.layout().alignment_bytes() == 8
+        && from.kind() == SemanticPointerKindV1::Reference
+        && to.kind() == SemanticPointerKindV1::Reference
+        && from.metadata() == SemanticPointerMetadataV1::None
+        && to.metadata() == SemanticPointerMetadataV1::None
+        && from.pointee() == to.pointee()
+        && from.address_space() == 0
+        && to.address_space() == 0
+        && from.pointer_width_bits() == 64
+        && to.pointer_width_bits() == 64
+        && matches!(
+            (kind, from.mutability(), to.mutability()),
+            (
+                SemanticBorrowKindV1::Shared,
+                _,
+                SemanticMutabilityV1::Immutable
+            ) | (
+                SemanticBorrowKindV1::Mutable,
+                SemanticMutabilityV1::Mutable,
+                SemanticMutabilityV1::Mutable
+            )
+        ))
+}
+
+// The original assignment selects the reborrow. Its optional physical access
+// restriction is replayed separately; raw and projected pointers stay closed.
 fn source_reference_pointer_alias_v29<'a>(
     types: &[SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
@@ -107,11 +156,19 @@ fn source_reference_pointer_alias_v29<'a>(
                 .ok_or_else(source_external_reference_error_v29)?;
             if !std::ptr::eq(assignment.value().kind(), rvalue)
                 || assignment.value().result_type() != assignment.destination().ty()
-                || assignment.destination().ty() != local.ty()
                 || place.projections().len() != 1
                 || place.projections()[0].kind() != SemanticProjectionKindV1::Dereference
                 || place.projections()[0].result_type() != place.ty()
             {
+                return Ok(None);
+            }
+            if !source_external_reborrow_types_v30(
+                types,
+                local.ty(),
+                assignment.destination().ty(),
+                *kind,
+                budget,
+            )? {
                 return Ok(None);
             }
             let Some(SemanticTypeShapeV1::Pointer(pointer)) = types
@@ -123,13 +180,6 @@ fn source_reference_pointer_alias_v29<'a>(
             if pointer.kind() != SemanticPointerKindV1::Reference
                 || pointer.metadata() != SemanticPointerMetadataV1::None
                 || pointer.pointee() != place.ty()
-                || !matches!(
-                    (*kind, pointer.mutability()),
-                    (
-                        SemanticBorrowKindV1::Shared,
-                        SemanticMutabilityV1::Immutable
-                    ) | (SemanticBorrowKindV1::Mutable, SemanticMutabilityV1::Mutable)
-                )
             {
                 return Ok(None);
             }
@@ -661,7 +711,15 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         }
         let direct_descriptor =
             source.projections().len() == 2 && kind == SemanticBorrowKindV1::Shared;
-        if !direct_descriptor && (source.projections().len() != 1 || self.plan.nodes[node].ty != ty)
+        if !direct_descriptor
+            && (source.projections().len() != 1
+                || !source_external_reborrow_types_v30(
+                    types,
+                    self.plan.nodes[node].ty,
+                    ty,
+                    kind,
+                    budget,
+                )?)
         {
             return Ok(None);
         }
@@ -769,7 +827,8 @@ fn source_external_reference_borrow_rows_v29(
             .projections()
             .first()
             .is_some_and(|p| p.kind() == SemanticProjectionKindV1::Dereference)
-        && ((source.projections().len() == 1 && original_holder_type == ty)
+        && ((source.projections().len() == 1
+            && source_external_reborrow_types_v30(types, original_holder_type, ty, kind, budget)?)
             || (source.projections().len() == 2 && kind == SemanticBorrowKindV1::Shared));
     if !candidate {
         return if retained.is_none() {
@@ -905,6 +964,30 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 )
             })?;
             self.resolve_place(block, statement, place, operations)?
+        };
+        let binding = match binding {
+            SemanticValueBindingV1::Value {
+                id,
+                ty: Type::Pointer(mut pointer),
+            } if *kind == SemanticBorrowKindV1::Shared
+                && pointer.access == AccessMode::ReadWrite =>
+            {
+                pointer.access = AccessMode::ReadOnly;
+                let to = Type::Pointer(pointer);
+                let result = self.with_emission_budget_v1(|_, budget| {
+                    emission_binding_clone_type_v1(&to, budget)
+                })?;
+                self.emit(
+                    operations,
+                    result,
+                    OperationKind::Cast {
+                        kind: CastKind::RestrictPointerAccess,
+                        value: id,
+                        to,
+                    },
+                )?
+            }
+            binding => binding,
         };
         self.with_emission_budget_v1(|this, budget| {
             references.check(budget)?;

@@ -473,7 +473,7 @@ fn issued_pointer_reused_original_discriminator_remains_an_explicit_admission_ga
     );
 }
 
-fn copied_issued_rows_v18(
+pub(in super::super) fn copied_issued_rows_v18(
     rows: &PendingSourceIssuedRolesV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<PendingSourceIssuedRolesV29> {

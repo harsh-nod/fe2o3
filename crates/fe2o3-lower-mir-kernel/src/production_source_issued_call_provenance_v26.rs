@@ -161,6 +161,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
 
     fn resolve_access_v26(
         &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
         mut instance: ProductionCallInstanceIdV1,
         site: ExecutionSiteV29,
         role: ExecutionOperandV29,
@@ -172,6 +173,7 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
             SourceIssuedResolvedAccessV26,
             Result<Option<SourceIssuedResolvedAccessV26>, ProductionSemanticKirErrorV1>,
         )>())?;
+        let requested_instance = instance;
         let original = self.original_v26(instance, budget)?;
         let mut value = original.use_value(site, role, place, budget)?;
         let SemanticValueBindingV1::Value {
@@ -197,7 +199,15 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
                 }));
             }
             let Some(local) = original.semantic.entry_dependency_v26(value, budget)? else {
-                return Ok(None);
+                return self.resolve_uniform_selection_v30(
+                    plan,
+                    requested_instance,
+                    site,
+                    role,
+                    place,
+                    pointer,
+                    budget,
+                );
             };
             let Some(incoming) = self.instances.incoming(instance) else {
                 return Ok(None);
@@ -252,6 +262,82 @@ impl<'scope, 'owner, 'source> SourceIssuedAccessesV29<'scope, 'owner, 'source> {
                 budget,
             )?;
         }
+    }
+
+    fn resolve_uniform_selection_v30(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        instance: ProductionCallInstanceIdV1,
+        site: ExecutionSiteV29,
+        role: ExecutionOperandV29,
+        place: &SemanticPlaceV1,
+        pointer: ValueId,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<SourceIssuedResolvedAccessV26>, ProductionSemanticKirErrorV1> {
+        plan.check_owner(self.instances, budget)?;
+        budget.reserve_storage(argument_sum_v1(&[
+            source_reference_emission_headers_v29::<Option<SourceExternalReferenceOriginV29>>()?,
+            source_reference_emission_headers_v29::<Option<SourceIssuedResolvedAccessV26>>()?,
+            source_reference_emission_headers_v29::<SourceIssuedRecipeV29>()?,
+        ])?)?;
+        if source_external_reference_origin_from_use_v29(
+            plan,
+            instance,
+            site,
+            role,
+            place,
+            Some(self.source_index),
+            budget,
+        )?
+        .is_none()
+        {
+            return Ok(None);
+        }
+        let origin = with_source_reference_selection_v29(
+            plan,
+            instance,
+            site,
+            role,
+            place,
+            budget,
+            |graph, budget| {
+                let mut origin = None;
+                for node in &graph.nodes {
+                    budget.charge_work(3)?;
+                    if let SourceReferenceSelectionStepV29::Leaf(leaf) = node.step {
+                        if !matches!(leaf, SourceExternalReferenceOriginV29::Issued { .. })
+                            || origin.is_some_and(|prior| prior != leaf)
+                        {
+                            return Ok(None);
+                        }
+                        origin = Some(leaf);
+                    }
+                }
+                // The graph builder already checked every source edge and the
+                // seeded recurrence. No single predecessor supplies this fact.
+                Ok(origin)
+            },
+        )?;
+        let Some(SourceExternalReferenceOriginV29::Issued {
+            instance: issuer_instance,
+            recipe,
+        }) = origin
+        else {
+            return Ok(None);
+        };
+        let recipe = source_issued_archive_recipe_v29(
+            self.instances,
+            issuer_instance,
+            self.source_index,
+            recipe,
+            budget,
+        )?;
+        self.original_v26(issuer_instance, budget)?;
+        Ok(Some(SourceIssuedResolvedAccessV26 {
+            issuer_instance,
+            recipe,
+            pointer,
+        }))
     }
 }
 
