@@ -254,3 +254,20 @@ step but timed out before returning filesystem or image results. The earlier
 host observations above are historical, not reconfirmed by that probe. No remote
 job, container or scratch directory was created. M1-M7 remain incomplete and
 the strict end-to-end count remains **0/47**.
+
+## Subsequent September 30 Host Observation
+
+A later primary-session read-only check reached MI350-2. `stat` reported these
+host paths absent:
+
+- `/etc/fe2o3/compiler-execution`
+- `/etc/fe2o3/compiler-execution/policy-v2`
+- `/etc/fe2o3/compiler-execution/compiler-runtime-manifest-v1`
+- `/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5`
+
+`docker image inspect` returned the retained linux/amd64 image identity
+`sha256:fd5370f370708f6a02cec6d44818a4295609e5bc68aa42455e53f141168a9d5f`.
+This establishes image presence only, not provisioned root-request execution or
+proof-runtime readiness. No container, remote file, installation change, proof
+execution or GPU workload was created by these observations. Runtime integration
+and its genuine provisioned tests remain necessary.

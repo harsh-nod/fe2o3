@@ -485,3 +485,81 @@ the native attempt deliberately cannot resume the compiler. Existing installed
 inventory, staging, trace, proof-helper backing and retirement components do not
 yet compose into an approved compiler execution with continuous source/code/output
 binding. Packaging success is not that execution guarantee. M1 remains incomplete.
+
+## Context Read and Invocation Checkpoint
+
+The following guarded runs retained unchanged source and tool snapshots. They
+are candidate validation, not production qualification or new kernel coverage.
+
+| Run | Candidate | Result |
+| --- | --- | --- |
+| r136 | `3a7c9dc5c` | Compilation stopped on missing public-field documentation; no tests ran. |
+| r137 | `56568c444` | Actual-source matrix executed all 80 cases; all stopped at the same incomplete global-read census. |
+| r138 | `07b51e95c` | Merged compiler/helper candidate stopped on receiver-field, opaque-ledger `Debug`, and referenced-type pattern errors; no tests ran. |
+| r139 | `e10a5035f` | After those source fixes, rustc/LLVM exhausted the local 12 GiB virtual-memory allowance; the build did not complete and no tests ran. |
+| r140 | `87f5e7635` | Device library: 113 passed. Compile-UI matrix: 172 passed, 28 mismatches; its parent test failed. |
+
+r137 reports root 0, function 0, recognized read/store counts `[0, 1]`, read effects
+`(2, 1, 0)` and store counts `(1, 2, 0)`. Two source reads lack correspondence.
+All 16 positive and 64 negative cases fail before their intended downstream
+checks; none counts as successful negative coverage. The fixture still obtains
+its index through the existing thread API, not context-derived invocation.
+
+r138/r139 integrate the immutable #271 checkpoint
+`0e21d8f6a2e089d24ff0486e76e53d2c138a0932`, original index transport through
+helper calls, and exact aggregate receiver metadata. These changes remain
+unqualified candidates. A failed build is not a passing integration result.
+
+r140 exercises the proposed branded invocation/index API. Its mismatches are
+not assumed to be cosmetic: `context_index_output_escape` reports a missing
+return lifetime before reaching the intended output-escape check. The fixture
+must be corrected and rerun before its expected rejection can count. Compiler
+import and canonical scoped-index lifecycle wiring remain unfinished.
+
+Log SHA-256 values:
+
+- r137: `a9717486e336edc68a21c129e3c5674e38d9f315ad5552fdf8bed5c315814923`
+- r138: `718a90df18990261e4ccb7099256fb0266b624d5c0fc58b9e6993ef04d15c32d`
+- r139: `841d54de199c53b2fd00d3ac2cab2e9eb1cb2cb39fa6c888979e2dbdc58d84fa`
+- r140: `669750a2922c8224e47b91e3df60570b2185a4db6e763c8bba017da2c6116709`
+
+No protected proof, simulator or GPU run occurred in these checks. M0 remains
+complete; M1-M7 remain incomplete; strict production-to-safe-launch coverage
+remains **0/47**.
+
+## Scoped Invocation API Regression Result
+
+Device candidate `2a5483ab6cb3b8359f38ba03fa28022c55b8c679` passed the complete
+`fe2o3-device` test command in guarded run r143: **170 library/integration tests
+and 44 doctests passed, none failed or ignored**. Its API UI parent includes
+**200 passing compile-pass/compile-fail cases**; those children are not added
+again to the library/integration total. The host LLVM-shape test also passed and
+removed its private generated library/LLVM scratch outputs.
+
+This supersedes r140's UI failures, not its production-wiring limitation. The
+output-escape fixture now names the output lifetime explicitly and reaches
+E0515 at the returned borrow. r142 established that intended refusal, leaving
+only a one-character underline mismatch; the final snapshot correction was
+verified by r143. The other snapshots were individually reviewed against the
+pinned compiler's diagnostics. No blanket snapshot overwrite was used.
+
+The candidate adds a non-forgeable context-borrowed invocation and branded index,
+plus a sealed disjoint-index consumer that retains the index's scope in the
+returned output borrow. This does not prove GPU bounds or injectivity. Its new
+source terminals remain pending authenticated compiler import and canonical
+scope/lifecycle preservation; no host fallback or production launch is enabled.
+
+r143 source snapshot SHA-256:
+`bb094ac4c40cfab523edcb4d567ff8a8eda346a67becdaad0dfbfc815b32bcde`.
+Log SHA-256:
+`01dbd6490c6f2e686a494a2b0bc223d1b427e6f6eced024666b61c0ceac51161`.
+The source/tool guard, DCO and delta hygiene checks passed. The API changes are
+still an integration candidate, not public-main compiler qualification.
+
+Separately, compiler r141 stopped on three test-module visibility errors before
+execution. A test-only facade and public inert-site constructor corrected those
+errors without widening the production interface. The subsequent candidate also
+reconciles immutable #271 checkpoint
+`7bc097b0b3b32ae542d8549d3d04b824f6a424ed`; its regressions require a new run.
+The r141 build used a bounded 16 GiB host virtual-memory allowance. This changes
+only the local Rust build envelope, not any production work/storage/proof cap.
