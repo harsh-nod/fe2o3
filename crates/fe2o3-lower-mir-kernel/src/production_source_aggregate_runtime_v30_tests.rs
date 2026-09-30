@@ -1,3 +1,5 @@
+include!("production_source_aggregate_vector_credit_v30_tests.rs");
+
 fn aggregate_runtime_launches_v30(
     source: &ProductionSourceOwnedViewV18<'_>,
     budget: &mut ArgumentBudgetV1<'_>,

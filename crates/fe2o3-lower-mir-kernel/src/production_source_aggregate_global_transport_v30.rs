@@ -111,14 +111,8 @@ impl AggregateStageStateV30 for AggregateGlobalTransportV30 {
     fn retained_storage(&self) -> Result<usize, ArgumentResourceV1> {
         argument_sum_v1(&[
             self.coordinates.retained_storage()?,
-            argument_product_v1(
-                self.initial_premises.capacity(),
-                size_of::<ProductionMixedSliceRuntimePremiseV26>(),
-            )?,
-            argument_product_v1(
-                self.initial_occurrences.capacity(),
-                size_of::<ProductionMixedRuntimeOccurrenceV26>(),
-            )?,
+            aggregate_vector_credit_v30(&self.initial_premises)?,
+            aggregate_vector_credit_v30(&self.initial_occurrences)?,
         ])
     }
 }
@@ -337,10 +331,10 @@ impl AggregateGlobalTransportV30 {
             budget,
         )?;
         let temporary = argument_sum_v1(&[
-            argument_product_v1(definitions.capacity(), size_of::<SliceDefinition>())?,
-            argument_product_v1(operations.capacity(), size_of::<AggregateOperationV30>())?,
-            argument_product_v1(edges.capacity(), size_of::<AggregateEdgeV30>())?,
-            argument_product_v1(functions.capacity(), size_of::<AggregateFunctionV30>())?,
+            aggregate_vector_credit_v30(&definitions)?,
+            aggregate_vector_credit_v30(&operations)?,
+            aggregate_vector_credit_v30(&edges)?,
+            aggregate_vector_credit_v30(&functions)?,
         ])?;
         drop(functions);
         drop(edges);
@@ -757,7 +751,7 @@ impl AggregateGlobalTransportV30 {
             seen[index] = true;
             function_launches[index] = launch;
         }
-        let credit = seen.capacity();
+        let credit = aggregate_vector_credit_v30(&seen)?;
         drop(seen);
         budget.release_storage(credit)?;
         Ok(function_launches)

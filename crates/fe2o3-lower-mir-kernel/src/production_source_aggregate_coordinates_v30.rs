@@ -2,6 +2,16 @@ type AggregateOperationV30 = fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1;
 type AggregateEdgeV30 = fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1;
 type AggregateFunctionV30 = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1;
 
+// Only for vectors allocated by source_reference_emission_vec_v29. Its
+// constructor/caller envelopes stay paid with the owned vector, including an
+// empty vector, until that vector is dropped or its full credit is transferred.
+fn aggregate_vector_credit_v30<T>(rows: &Vec<T>) -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        source_reference_emission_headers_v29::<Vec<T>>()?,
+        argument_product_v1(rows.capacity(), size_of::<T>())?,
+    ])
+}
+
 #[derive(Clone, Copy)]
 enum AggregateUniqueCoordinateV30<T> {
     Missing,
@@ -20,12 +30,9 @@ impl AggregateStageStateV30 for AggregateCoordinateTransportV30 {
     fn retained_storage(&self) -> Result<usize, ArgumentResourceV1> {
         argument_sum_v1(&[
             self.definitions.retained_storage()?,
-            argument_product_v1(
-                self.operations.capacity(),
-                size_of::<AggregateOperationV30>(),
-            )?,
-            argument_product_v1(self.edges.capacity(), size_of::<AggregateEdgeV30>())?,
-            argument_product_v1(self.functions.capacity(), size_of::<AggregateFunctionV30>())?,
+            aggregate_vector_credit_v30(&self.operations)?,
+            aggregate_vector_credit_v30(&self.edges)?,
+            aggregate_vector_credit_v30(&self.functions)?,
         ])
     }
 }
@@ -239,18 +246,9 @@ impl AggregateCoordinateTransportV30 {
                     *edge = output;
                 }
                 let credit = argument_sum_v1(&[
-                    argument_product_v1(
-                        functions.capacity(),
-                        size_of::<AggregateUniqueCoordinateV30<AggregateFunctionV30>>(),
-                    )?,
-                    argument_product_v1(
-                        operations.capacity(),
-                        size_of::<AggregateUniqueCoordinateV30<AggregateOperationV30>>(),
-                    )?,
-                    argument_product_v1(
-                        edges.capacity(),
-                        size_of::<AggregateUniqueCoordinateV30<AggregateEdgeV30>>(),
-                    )?,
+                    aggregate_vector_credit_v30(&functions)?,
+                    aggregate_vector_credit_v30(&operations)?,
+                    aggregate_vector_credit_v30(&edges)?,
                 ])?;
                 drop(edges);
                 drop(functions);

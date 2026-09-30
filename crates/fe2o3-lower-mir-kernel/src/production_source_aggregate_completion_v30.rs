@@ -413,11 +413,8 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
                             self.owned.check(budget)?;
                             let roles_credit = state.roles.retained_storage()?;
                             let scratch = argument_sum_v1(&[
-                                argument_product_v1(
-                                    function_launches.capacity(),
-                                    size_of::<fe2o3_kernel_ir::ExplicitLaunchExtent>(),
-                                )?,
-                                seen.capacity(),
+                                aggregate_vector_credit_v30(&function_launches)?,
+                                aggregate_vector_credit_v30(&seen)?,
                                 roles_credit,
                                 inventory_credit.retained_storage(),
                                 physical_credit.retained_storage(),
@@ -435,18 +432,9 @@ impl<'view, 'source> ProductionAggregateSourceOutputHandoffV30<'view, 'source> {
                     budget.release_storage(header)?;
                     let retained = argument_sum_v1(&[
                         owner,
-                        argument_product_v1(
-                            premises.capacity(),
-                            size_of::<ProductionMixedSliceRuntimePremiseV26>(),
-                        )?,
-                        argument_product_v1(
-                            occurrences.capacity(),
-                            size_of::<ProductionMixedRuntimeOccurrenceV26>(),
-                        )?,
-                        argument_product_v1(
-                            histories.capacity(),
-                            size_of::<Option<fe2o3_pliron::CanonicalRankedPolicyHistoryV1>>(),
-                        )?,
+                        aggregate_vector_credit_v30(&premises)?,
+                        aggregate_vector_credit_v30(&occurrences)?,
+                        aggregate_vector_credit_v30(&histories)?,
                     ])?;
                     if entry.checked_add(retained) != Some(budget.storage()) {
                         return Err(ArgumentResourceV1::Accounting.into());

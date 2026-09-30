@@ -66,10 +66,7 @@ fn aggregate_role_headers_v30() -> Result<usize, ArgumentResourceV1> {
 
 impl AggregateStageStateV30 for AggregateSourceRolesV30 {
     fn retained_storage(&self) -> Result<usize, ArgumentResourceV1> {
-        argument_product_v1(
-            self.rows.capacity(),
-            size_of::<Option<AggregateSourceRequirementV30>>(),
-        )
+        aggregate_vector_credit_v30(&self.rows)
     }
 }
 
@@ -183,10 +180,7 @@ impl AggregateSourceRolesV30 {
                         .checked_add(1)
                         .ok_or(ArgumentResourceV1::Arithmetic)?;
                 }
-                let credit = argument_product_v1(
-                    mapped.capacity(),
-                    size_of::<AggregateUniqueCoordinateV30<AggregateOperationV30>>(),
-                )?;
+                let credit = aggregate_vector_credit_v30(&mapped)?;
                 drop(mapped);
                 budget.release_storage(credit)?;
             }
