@@ -849,7 +849,7 @@ fn typed_private_global_store_cannot_initialize_a_same_scalar_private_allocation
         assert!(matches!(
             exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
             Err(Error::Unsupported {
-                detail: "Load requires one exact reaching Store",
+                detail: "Load requires initialized storage on every path",
                 ..
             }),
         ));
