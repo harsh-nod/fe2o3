@@ -159,7 +159,9 @@ def mutations(body):
 
 def selection_notes(leaf, focus):
     need(focus == "*domain_retained_observation_v1", "exact observer selector")
-    return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS, SELECTION_NOTES={
+    return types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS | {
+        "precondition not met: index in bounds for this access",
+    }, SELECTION_NOTES={
         "verifying root module (selected functions)",
         "verifying root module, function domain_retained_observation_v1::domain_retained_observation_v1 (selected functions)",
     })

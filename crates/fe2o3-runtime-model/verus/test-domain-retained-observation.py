@@ -62,14 +62,17 @@ for selected, before, after in (
 cases = check.mutations(sources[check.BODY])
 need(len(cases) == check.MUTANT_COUNT == 15, "fifteen constructed actual-body controls")
 leaf = types.SimpleNamespace(LOGICAL_ERRORS={"postcondition not satisfied", "precondition not satisfied"})
+bounds_error = "precondition not met: index in bounds for this access"
 for name, (body, selector) in cases.items():
     need(body != sources[check.BODY], "actual observer changed: " + name)
     candidate = dict(sources)
     candidate[check.BODY] = body
     refused(lambda: check.audit(candidate), "mutant accepted as positive source")
     notes = check.selection_notes(leaf, selector)
-    need(notes.LOGICAL_ERRORS == leaf.LOGICAL_ERRORS and len(notes.SELECTION_NOTES) == 2,
-         "strict selector and inherited logical diagnostics")
+    need(notes.LOGICAL_ERRORS == leaf.LOGICAL_ERRORS | {bounds_error} and len(notes.SELECTION_NOTES) == 2,
+         "strict selector and exact scoped logical bounds diagnostic")
+need(leaf.LOGICAL_ERRORS == {"postcondition not satisfied", "precondition not satisfied"},
+     "inherited logical diagnostics unchanged")
 refused(lambda: check.selection_notes(leaf, "*unrelated"), "unbound selector accepted")
 
 adapted = check.controller_source()
@@ -116,6 +119,19 @@ def accepts(value=negative, error=diagnostic, status=1):
 
 need(accepts(), "nonvacuous logical negative control")
 need(accepts(error=dict(diagnostic, message="precondition not satisfied")), "bounds logical rejection control")
+bounds_diagnostic = dict(diagnostic, message=bounds_error, spans=[{
+    "file_name": str(check.ROOT / check.BODY), "is_primary": True,
+}])
+need(accepts(error=bounds_diagnostic), "exact logical bounds diagnostic at actual shared body")
+for status in (0, 101, 124, -9):
+    need(not accepts(error=bounds_diagnostic, status=status), "bounds diagnostic with invalid status accepted")
+for patch in ({"code": {"code": "E0308"}}, {"code": {"code": "E0277"}}, {"code": "E0308"},
+              {"level": "warning"}, {"level": "note"}, {"spans": []},
+              {"spans": [{"file_name": "/tmp/foreign.rs", "is_primary": True}]},
+              {"spans": [{"file_name": str(check.ROOT / check.BODY), "is_primary": False}]},
+              {"message": "precondition not met"}, {"message": bounds_error + " extra"},
+              {"message": "precondition not met: index out of bounds"}):
+    need(not accepts(error=dict(bounds_diagnostic, **patch)), "non-exact logical bounds diagnostic accepted")
 for status in (0, 101, 124, -9):
     need(not accepts(status=status), "non-logical status accepted")
 for patch in ({"message": "mismatched types", "code": {"code": "E0308"}},
