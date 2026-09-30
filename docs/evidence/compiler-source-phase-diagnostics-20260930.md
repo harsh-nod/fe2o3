@@ -499,7 +499,7 @@ are candidate validation, not production qualification or new kernel coverage.
 | r139 | `e10a5035f` | After those source fixes, rustc/LLVM exhausted the local 12 GiB virtual-memory allowance; the build did not complete and no tests ran. |
 | r140 | `87f5e7635` | Device library: 113 passed. Compile-UI matrix: 172 passed, 28 mismatches; its parent test failed. |
 
-r137 reports root 0, function 0, observed source instances `[0, 1]`, read counts
+r137 reports root 0, function 0, recognized read/store counts `[0, 1]`, read effects
 `(2, 1, 0)` and store counts `(1, 2, 0)`. Two source reads lack correspondence.
 All 16 positive and 64 negative cases fail before their intended downstream
 checks; none counts as successful negative coverage. The fixture still obtains
