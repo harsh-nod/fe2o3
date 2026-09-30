@@ -59,5 +59,7 @@ Context allocation authority or an authenticated producer input. The separate
 [domain post-lock observation](runtime-domain-retained-observation-v1.md) now
 refines actual ancestry, checked slot, leaf identity and this predicate over
 borrowed locked-state fields. It does not prove account locking or cross-call
-freshness. The enclosing account and runtime checks remain enabled and keep
-their separate proof status.
+freshness. The separate [independent observer](runtime-independent-retained-observation-v1.md)
+refines the stored poison flag, bounded occupied slot and this predicate for
+independent accounts. The enclosing account and runtime checks remain enabled
+and keep their separate proof status.

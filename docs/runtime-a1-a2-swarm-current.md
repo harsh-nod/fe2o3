@@ -27,6 +27,18 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [independent-account post-lock observer](runtime-independent-retained-observation-v1.md)
+is integrated at `f8994fdb8`. Its signed campaign passes three overlapping full
+eight-obligation runs and all ten actual-body logical negatives. Both verifier
+release checks and twenty-one fresh campaign process-group closures pass;
+separate strict accounting Clippy, scoped formatting and whitespace checks pass
+with five more fresh closures. Earlier CPU qualification passes all 79 accounting
+tests and is byte-bound to the signed production/test Rust. This covers the
+actual stored poison flag, bounded occupied slot and complete record predicate,
+not account locking, freshness, conservation or native authority. Compatibility
+guards receive only reviewed source changes, with unchanged executable proof
+closures and no new standalone older-proof claim. Evidence remains local.
+
 The direct merged all-feature runtime regression at `3e4dd6f58` executes all
 1921 library tests with no filter: 1886 pass, the same three telemetry
 `InspectSocket/EPERM` cases fail, and 32 existing native tests remain ignored.
