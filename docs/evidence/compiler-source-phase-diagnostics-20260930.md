@@ -768,3 +768,24 @@ unchanged; log SHA-256:
 This supersedes any inference that merging the newer owner checkpoint alone
 fixed the r162 failures. The build correction and complete regression rerun
 remain necessary before the genuine Rust and protected execution gates.
+
+r168 tested the build correction now committed as `bbe2aa745`. It reuses the
+checked original-issuer query, keeps descriptor-scope access internal, and
+uses a metered array sort key retaining both halves of the 64-bit byte offset.
+An independent ordering control checks the full coordinate and offset order,
+including the 32-bit boundary and maximum values. Query scratch is prepaid and
+its independent frame mirrors are updated.
+
+The expanded selection compiled and ran **131 tests: 118 passed, 13 failed,
+none ignored**. All slice-carrier controls pass, including the exact mixed-root
+refusal. Three aggregate-runtime tests still fail before their required final
+consumer; one aggregate-memory mutation has a diagnostic mismatch. Nine new
+selected-final controls fail lookup-work bounds or source-edge correspondence,
+with several intended negative consumers consequently not reached. The prior
+aggregate retained-storage positive now passes. No failed negative receives
+credit for a different earlier refusal.
+
+Source/tool inventories remained unchanged. Log SHA-256:
+`a772c60576ae53ce9ded8ffc371a10b91d4fc19c58b944c3796bfa0b2909dd6c`.
+The candidate is buildable, but its regression suite and actual Rust production
+path are not qualified. Protected proof, simulator and hardware remain unrun.

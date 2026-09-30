@@ -350,3 +350,40 @@ The public integration applies the four new signed commits on top of their
 already-published signed prerequisites. Its code tree exactly matches this
 tested candidate; only evidence documents differ. Provisioned deployment,
 protected proof execution and GPU validation remain outstanding.
+
+## Ordinary-Domain Admission
+
+Candidate `57b5ae08d470244cbe829f727f82060eeba27c67` binds the creator's
+unit to its exact writable cgroup subtree. Only the final membership component
+may cross that mount; prefix and control-file opens retain `NO_XDEV`.
+The resolved parent must expose the exact protected `domain\n` type record
+before its PID list is used as direct-membership evidence. Threaded domains,
+invalid domains and hierarchy-root membership refuse. These are native
+admission requirements, not a substituted source configuration assertion.
+
+| Run | Result |
+| --- | --- |
+| r169 | Compile failure: two ignored mount-fixture helpers lacked scoped unsafe-code lint exceptions; no tests ran |
+| r170 | 561 passed, one failed, 35 ignored |
+| r171 | 562 passed, none failed, 35 ignored |
+
+The r170 failure was the coordinator's old exact capability-list assertion.
+It now includes the existing unit's `CAP_SETFCAP`, needed by the root UID-map
+creator. No runtime predicate or service setting was relaxed by this test fix.
+r171 ran the complete coordinator (287 passing, 17 ignored) and spawn (275
+passing, 18 ignored) library suites. The systemd source-contract and mutation
+script also passed. The production cgroup module still denies unsafe code;
+only the two isolated mount-fixture functions have explicit lint exceptions.
+
+All runs retained unchanged source/tool inventories. Log SHA-256:
+
+- r169: `49078a9621aee9274a719aeff86f72127dd8abe41c063317547a94d130e2ebc6`
+- r170: `02a1e75ef178c9fc99041a0681a8454d2b8329078da94a623795b07c9cd8afe1`
+- r171: `91f3fed080f782893dc7afd1c31fc208fdb02fd33fd2a018b20c7c0df8af9607`
+
+Public integration adopts the four signed commits atop their already published
+prerequisites. Its crates, lockfiles, scripts and deployment tree exactly match
+the tested candidate; evidence documents differ. Native mount controls,
+threaded-domain controls, effective-unit startup and protected compiler/proof
+execution remain unrun. The separate locked-personality observation candidate
+is not included. M1-M7 and strict safe-GPU launch coverage remain **0/47**.

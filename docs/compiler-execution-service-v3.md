@@ -164,8 +164,10 @@ at actual `/` is intentionally unsupported, not permission to bypass the check.
 The provisioned root-request fixture already requires a non-root `domain\n`
 parent. None of these fixtures has been rerun for this parent-type correction.
 
-The source contract and its mutation checks passed on September 30; the new
-library and ignored mount tests remain unrun. An effective-unit/drop-in
+The source contract and its mutation checks passed on September 30. The complete
+coordinator/spawn library rerun passed 562 tests, with 35 native tests ignored;
+see [the admission checkpoint](evidence/native-invocation-runtime-20260928.md#ordinary-domain-admission).
+The ignored mount tests remain unrun. An effective-unit/drop-in
 inspection and a genuine paired service run are still required: creator
 clone3 and UID-0 map, root/sibling write denial versus owned-subtree creation,
 mapped-helper/compiler namespace denials and legal thread/fork controls, and
