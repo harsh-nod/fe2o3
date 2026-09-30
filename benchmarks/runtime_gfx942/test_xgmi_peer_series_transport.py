@@ -141,6 +141,60 @@ class TransportControls(unittest.TestCase):
             with self.assertRaises(ValueError):
                 transport.sanitized_git(directory, "1" * 40)
 
+    def test_owned_readonly_pack_metadata_normalization_roundtrips_without_byte_changes(self):
+        owned, marker, _ = self.owner()
+        gitdir = owned / "source/.git"
+        packdir = gitdir / "objects/pack"
+        packdir.mkdir(parents=True)
+        members = []
+        for extension in ("pack", "idx", "rev", "promisor"):
+            path = packdir / ("pack-" + "2" * 40 + "." + extension)
+            path.write_bytes(extension.encode("ascii"))
+            path.chmod(0o600 if extension == "promisor" else 0o400)
+            members.append(path)
+        before = {path.name: transport.sha(path) for path in members}
+        source_mode = (owned / "source" / transport.NATIVE_RELATIVE).stat().st_mode
+        transport.sanitized_git(gitdir, marker["commit"])
+        self.assertEqual({path.name: transport.sha(path) for path in members}, before)
+        self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in members))
+        self.assertEqual((owned / "source" / transport.NATIVE_RELATIVE).stat().st_mode, source_mode)
+        files = transport.inventory(owned / "source")
+        archive = self.root / "normalized.tar.gz"
+        transport.make_archive(archive, owned / "source", files)
+        destination = self.root / "normalized-readback"
+        destination.mkdir()
+        transport.validate_archive(archive, files, destination)
+        self.assertEqual(transport.inventory(destination), files)
+
+    def test_owned_pack_normalization_refuses_aliases_special_names_links_and_modes(self):
+        owned, marker, _ = self.owner()
+        gitdir = owned / "source/.git"
+        packdir = gitdir / "objects/pack"
+        packdir.mkdir(parents=True)
+        name = "pack-" + "2" * 40 + ".pack"
+        path = packdir / name
+        outside = self.root / "outside"
+        outside.write_bytes(b"external")
+        cases = {
+            "symlink": lambda: path.symlink_to(outside),
+            "hardlink": lambda: os.link(outside, path),
+            "fifo": lambda: os.mkfifo(path, 0o600),
+            "unexpected-mode": lambda: (path.write_bytes(b"pack"), path.chmod(0o644)),
+        }
+        for label, create in cases.items():
+            with self.subTest(label=label):
+                create()
+                with self.assertRaises(ValueError):
+                    transport.sanitized_git(gitdir, marker["commit"])
+                path.unlink()
+        unknown = packdir / "unexpected.pack"
+        unknown.write_bytes(b"pack")
+        unknown.chmod(0o400)
+        with self.assertRaises(ValueError):
+            transport.sanitized_git(gitdir, marker["commit"])
+        self.assertEqual(unknown.stat().st_mode & 0o777, 0o400)
+        self.assertEqual(outside.read_bytes(), b"external")
+
     def test_shared_lock_preserved_on_success_failure_and_replacement(self):
         lock = self.root / "shared.lock"
         lock.write_bytes(b"other owners convention\n")

@@ -209,6 +209,20 @@ def sanitized_git(gitdir, commit):
     for relative in ("objects/info/alternates", "info/grafts", "refs/replace"):
         path = gitdir / relative
         need(not path.exists() and not path.is_symlink(), "Git alias/replacement metadata refused")
+    packdir = gitdir / "objects/pack"
+    need(packdir.is_dir() and packdir.resolve(strict=True) == packdir, "canonical owned pack directory")
+    for path in packdir.iterdir():
+        info = path.lstat()
+        need(path.resolve(strict=True) == path and stat.S_ISREG(info.st_mode) and info.st_nlink == 1,
+             "ordinary canonical single-link pack member")
+        match = re.fullmatch(r"pack-[0-9a-f]{40}\.(pack|idx|rev|promisor)", path.name)
+        need(match is not None, "exact generated pack member name")
+        mode = stat.S_IMODE(info.st_mode)
+        need(mode == 0o600 or (match[1] != "promisor" and mode == 0o400), "expected private pack mode")
+        if mode == 0o400:
+            before = sha(path)
+            path.chmod(0o600)
+            need(sha(path) == before, "pack bytes unchanged by owned mode normalization")
     for relative in ("FETCH_HEAD", "ORIG_HEAD", "hooks", "logs", "refs/remotes"):
         path = gitdir / relative
         if path.is_dir() and not path.is_symlink():
