@@ -133,7 +133,7 @@ fn paired_native_executables_and_unit_keep_exact_roles_without_legacy_fallback()
         .collect();
     validate_roles(roles.join(":").as_bytes()).unwrap();
     assert!(unit.lines().any(|l| l == "KillMode=mixed"));
-    assert!(unit.lines().any(|l| l == "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"));
+    assert!(unit.lines().any(|l| l == "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"));
     for (source, function) in [
         (
             include_str!("main.rs"),
