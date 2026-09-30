@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "production_source_scalar_boundary_forwarding_v32_tests.rs"]
 mod forwarding;
+#[path = "production_source_scalar_boundary_incoming_v32_tests.rs"]
+mod incoming;
 
 #[path = "production_source_scalar_boundary_function_scope_v31_tests.rs"]
 mod function_scope;
@@ -1058,6 +1060,11 @@ fn source_scalar_boundaries_derivation_and_control_frames_match_field_envelopes(
         (std::ops::Range<usize>, Vec<bool>),
         SourceOwnedResultV18<(std::ops::Range<usize>, Vec<bool>)>,
         SourceOwnedResultV18<usize>,
+        [SourceOwnedResultV18<Option<&'a ()>>; 3],
+        [Option<&'a ()>; 2],
+        [&'a (); 2],
+        [&'a (); 2],
+        &'a (),
         &'a (),
         SourceOwnedResultV18<Index<'a>>,
         SourceOwnedResultV18<Arguments<'a>>,

@@ -62,6 +62,11 @@ fn source_boundary_control_headers_v31() -> Result<usize, ArgumentResourceV1> {
         (std::ops::Range<usize>, Vec<bool>),
         SourceOwnedResultV18<(std::ops::Range<usize>, Vec<bool>)>,
         SourceOwnedResultV18<usize>,
+        [SourceOwnedResultV18<Option<&'a SourceScalarBoundaryV31>>; 3],
+        [Option<&'a SourceScalarBoundaryV31>; 2],
+        [&'a SourceScalarBoundaryV31; 2],
+        [&'a fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1<'a>; 2],
+        &'a fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1,
         &'a fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'a>,
         SourceOwnedResultV18<OriginalEntryIndexV20<'a, 'a>>,
         SourceOwnedResultV18<SourceRootArgumentsV18<'a, 'a>>,
@@ -256,34 +261,140 @@ impl SourceBoundaryCheckV31<'_> {
         }
     }
 
+    #[cfg(test)]
     fn boundary_target(
         &self,
         definition: usize,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<bool> {
+        Ok(self.boundary_name_v32(definition, budget)?.is_some())
+    }
+
+    fn boundary_name_v32(
+        &self,
+        definition: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<&SourceScalarBoundaryV31>> {
+        budget.charge_work(4)?;
+        let row = self.inventory.definitions().get(definition).ok_or(
+            ProductionSourceOwnedViewErrorV18::Binding("source SSA argument definition is absent"),
+        )?;
+        let function = match self.optimized {
+            Some(leaves) => leaves.function.coordinate,
+            None => {
+                let root = self.leaves.relation.source.root_row(self.leaves.root)?;
+                self.inventory
+                    .functions()
+                    .get(root.function_ordinal)
+                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                        "source SSA argument function is absent",
+                    ))?
+                    .coordinate
+            }
+        };
+        if !matches!(row.coordinate,
+            fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::BlockArgument { block, .. }
+            if block.function == function)
+        {
+            return Ok(None);
+        }
+        let value = row.value.ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "source SSA argument value is absent",
+        ))?;
         match self.optimized {
-            None => Ok(self
-                .leaves
-                .boundary_find_v31([3, definition, 0, 0], budget)?
-                .is_some()),
-            Some(leaves) => {
-                let row = self.inventory.definitions().get(definition).ok_or(
-                    ProductionSourceOwnedViewErrorV18::Binding(
-                        "source SSA output argument target is absent",
-                    ),
-                )?;
-                if !matches!(row.coordinate,
-                    fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::BlockArgument { block, .. }
-                    if block.function == leaves.function.coordinate)
+            None => {
+                if let Some(name) = self
+                    .leaves
+                    .boundary_find_v31([3, definition, 0, 0], budget)?
                 {
-                    return Ok(false);
+                    Ok(Some(name))
+                } else {
+                    self.leaves
+                        .boundary_find_v31([4, value.0 as usize, 0, 0], budget)
                 }
-                let value = row.value.ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                    "source SSA output argument target is absent",
-                ))?;
-                Ok(leaves.boundary_value_v31(value, budget)?.is_some())
+            }
+            Some(leaves) => leaves.boundary_value_v31(value, budget),
+        }
+    }
+
+    fn forwarded_edge_v32(
+        &self,
+        binding: &fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1,
+        target: &SourceScalarBoundaryV31,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
+        budget.charge_work(5)?;
+        let incoming = self
+            .inventory
+            .definitions()
+            .get(binding.incoming_definition)
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "source SSA forwarded incoming definition is absent",
+            ))?;
+        let output = self
+            .inventory
+            .definitions()
+            .get(binding.target_definition)
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "source SSA forwarded target definition is absent",
+            ))?;
+        if incoming.value != Some(binding.value)
+            || incoming.ty != output.ty
+            || !matches!(output.coordinate,
+                fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::BlockArgument { block, argument }
+                if block.function == binding.coordinate.edge.source.function && argument == binding.coordinate.argument)
+            || !self
+                .boundary_name_v32(binding.incoming_definition, budget)?
+                .is_some_and(|source| std::ptr::eq(source, target))
+        {
+            return self
+                .leaves
+                .relation
+                .source
+                .missing("source SSA forwarded edge changes its checked boundary");
+        }
+        Ok(())
+    }
+
+    fn incoming_census_v32(
+        &self,
+        seen: &mut [bool],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
+        if seen.len() != self.bindings.len() {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        for (at, binding) in self.inventory.edge_arguments()[self.bindings.clone()]
+            .iter()
+            .enumerate()
+        {
+            budget.charge_work(2)?;
+            let Some(target) = self.boundary_name_v32(binding.target_definition, budget)? else {
+                continue;
+            };
+            if self.definition(target, budget)? == binding.target_definition {
+                if !seen[at] {
+                    return self
+                        .leaves
+                        .relation
+                        .source
+                        .missing("source SSA boundary has an unaccounted incoming edge");
+                }
+            } else {
+                // Only forwarding equations use the precomputed all-incoming
+                // alias table. An opaque terminal still needs its source edge.
+                if seen[at] {
+                    return self
+                        .leaves
+                        .relation
+                        .source
+                        .missing("source SSA forwarded incoming edge repeats");
+                }
+                self.forwarded_edge_v32(binding, target, budget)?;
+                seen[at] = true;
             }
         }
+        Ok(())
     }
     fn expression(
         &self,
@@ -858,20 +969,7 @@ impl SourceScalarLeavesV18<'_, '_> {
                                 budget,
                             )?;
                         }
-                        for (at, binding) in inventory.edge_arguments()[bindings.clone()]
-                            .iter()
-                            .enumerate()
-                        {
-                            budget.charge_work(1)?;
-                            if check.boundary_target(binding.target_definition, budget)?
-                                && !seen[at]
-                            {
-                                return relation.source.missing(
-                                    "source SSA boundary has an unaccounted incoming edge",
-                                );
-                            }
-                        }
-                        Ok(())
+                        check.incoming_census_v32(&mut seen, budget)
                     })())
                 };
                 let capture = std::mem::size_of_val(&nested);
