@@ -135,6 +135,8 @@ mod xgmi_batch_diagnostic;
 mod xgmi_budget;
 pub use xgmi_budget::{KfdNativeXgmiBackingBudgetV1, KfdNativeXgmiBackingUsageV1};
 mod xgmi_directed;
+mod xgmi_native_custody;
+use xgmi_native_custody::NativeXgmiCustodyV1;
 mod xgmi_progress;
 mod xgmi_request;
 mod xgmi_segments;
@@ -7627,9 +7629,8 @@ fn native_xgmi_execution_capabilities_v1() -> RuntimeExecutionCapabilitiesV1 {
 #[must_use = "native XGMI backends must remain owned through quiescence"]
 pub struct KfdNativeXgmiRuntimeBackendV1 {
     descriptions: [BackendDeviceDescriptionV1; 2],
-    sessions: [SharedGttMemorySessionV1; 2],
+    native: NativeXgmiCustodyV1,
     routes: [Gfx942XgmiRouteV1; 2],
-    queues: [Option<Gfx942NativeXgmiSdmaQueueV1>; 2],
     queue_creation_roots: [Gfx942NativeXgmiSdmaQueueCreationRootV1; 2],
     #[cfg(feature = "hardware-diagnostic")]
     xgmi_diagnostic: Option<xgmi_diagnostic::Recorder>,
@@ -7752,7 +7753,12 @@ impl fmt::Debug for KfdNativeXgmiRuntimeBackendV1 {
             .field("queue_creation_roots", &self.queue_creation_roots)
             .field(
                 "queues",
-                &self.queues.iter().filter(|queue| queue.is_some()).count(),
+                &self
+                    .native
+                    .queues()
+                    .iter()
+                    .filter(|queue| queue.is_some())
+                    .count(),
             )
             .field("streams", &self.streams.len())
             .field("allocations", &self.allocations.len())
@@ -9511,9 +9517,8 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         )?;
         Ok(Self {
             descriptions,
-            sessions,
+            native: NativeXgmiCustodyV1::new(sessions),
             routes: [forward, reverse],
-            queues: [None, None],
             queue_creation_roots: [
                 Gfx942NativeXgmiSdmaQueueCreationRootV1::new(),
                 Gfx942NativeXgmiSdmaQueueCreationRootV1::new(),
@@ -9582,7 +9587,8 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 .iter()
                 .any(|root| !root.is_vacant())
             || self
-                .queues
+                .native
+                .queues()
                 .iter()
                 .flatten()
                 .any(Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1)
@@ -9695,14 +9701,15 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         direction: usize,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
-        if self.queues[direction].is_some() {
+        if self.native.queues()[direction].is_some() {
             return Ok(());
         }
         let route = self.routes[direction];
-        let (source, destination) = Self::session_pair(&mut self.sessions, direction);
+        let (sessions, queues) = self.native.parts_mut();
+        let (source, destination) = Self::session_pair(sessions, direction);
         settle_xgmi_queue_creation(
             &mut self.queue_creation_roots,
-            &mut self.queues,
+            queues,
             &mut self.terminal,
             direction,
             |root| Gfx942NativeXgmiSdmaQueueV1::create(source, destination, route, root),
@@ -9783,7 +9790,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         };
         let route = self.routes[direction];
         let result = {
-            let (first, second) = self.sessions.split_at_mut(1);
+            let (first, second) = self.native.sessions_mut().split_at_mut(1);
             if owner == 0 {
                 first[0].map_gfx942_device_memory_for_xgmi_peer(&mut second[0], route, lease)
             } else {
@@ -9824,7 +9831,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         let owner = self.allocations[&allocation].device;
         let route = self.routes[direction];
         let result = {
-            let (first, second) = self.sessions.split_at_mut(1);
+            let (first, second) = self.native.sessions_mut().split_at_mut(1);
             if owner == 0 {
                 first[0].unmap_gfx942_device_memory_from_xgmi_peer(&mut second[0], route, mapping)
             } else {
@@ -10261,9 +10268,9 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         #[cfg(feature = "hardware-diagnostic")]
         let mut diagnostic = None;
         let result = {
-            let (source_session, destination_session) =
-                Self::session_pair(&mut self.sessions, direction);
-            let queue = self.queues[direction]
+            let (sessions, queues) = self.native.parts_mut();
+            let (source_session, destination_session) = Self::session_pair(sessions, direction);
+            let queue = queues[direction]
                 .as_mut()
                 .expect("directional XGMI queue was established");
             #[cfg(feature = "hardware-diagnostic")]
@@ -10373,9 +10380,10 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             #[cfg(feature = "hardware-diagnostic")]
             let mut diagnostic = None;
             let result = {
+                let (sessions, queues) = self.native.parts_mut();
                 let (source_session, destination_session) =
-                    Self::session_pair(&mut self.sessions, active.direction);
-                let queue = self.queues[active.direction]
+                    Self::session_pair(sessions, active.direction);
+                let queue = queues[active.direction]
                     .as_mut()
                     .expect("published XGMI copy retains queue");
                 #[cfg(feature = "hardware-diagnostic")]
@@ -10495,15 +10503,11 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             ));
         }
         for direction in (0..2).rev() {
-            settle_xgmi_queue_retirement(
-                &mut self.queues,
-                &mut self.terminal,
-                direction,
-                |queue| {
-                    let (source, destination) = Self::session_pair(&mut self.sessions, direction);
-                    queue.destroy_and_release(source, destination)
-                },
-            )
+            let (sessions, queues) = self.native.parts_mut();
+            settle_xgmi_queue_retirement(queues, &mut self.terminal, direction, |queue| {
+                let (source, destination) = Self::session_pair(sessions, direction);
+                queue.destroy_and_release(source, destination)
+            })
             .map_err(|error| self.terminal_error(format!("XGMI queue teardown: {error}")))?;
         }
         self.shutdown = true;
@@ -10644,7 +10648,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             }
             return Err(self.terminal_error("native XGMI allocation lacks releasable authority"));
         };
-        if let Err(error) = self.sessions[device].release_gfx942_device_memory(lease) {
+        if let Err(error) = self.native.sessions_mut()[device].release_gfx942_device_memory(lease) {
             return Err(self.terminal_error(format!("native XGMI allocation release: {error}")));
         }
         self.allocations.remove(&allocation);
@@ -10700,7 +10704,8 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             full
         } else {
             match self.allocations[&allocation].authority.as_ref() {
-                Some(XgmiAllocationAuthorityV1::Unmapped(lease)) => self.sessions[device]
+                Some(XgmiAllocationAuthorityV1::Unmapped(lease)) => self.native.sessions_mut()
+                    [device]
                     .read_gfx942_xgmi_device_memory(lease)
                     .map_err(|error| {
                         self.terminal_error(format!("XGMI write read-modify: {error}"))
@@ -10717,7 +10722,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             Some(XgmiAllocationAuthorityV1::Unmapped(lease)) => lease,
             _ => unreachable!("validated unmapped authority"),
         };
-        self.sessions[device]
+        self.native.sessions_mut()[device]
             .write_gfx942_xgmi_device_memory(lease, &full)
             .map_err(|error| self.terminal_error(format!("native XGMI write: {error}")))
     }
@@ -10770,7 +10775,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 self.terminal_error("XGMI allocation authority unavailable after successful unmap")
             );
         };
-        let bytes = self.sessions[device]
+        let bytes = self.native.sessions_mut()[device]
             .read_gfx942_xgmi_device_memory(lease)
             .map_err(|error| self.terminal_error(format!("native XGMI read: {error}")))?;
         destination.copy_from_slice(&bytes[byte_offset as usize..end as usize]);
@@ -11524,7 +11529,8 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
                 .iter()
                 .any(|root| !root.is_vacant())
             || self
-                .queues
+                .native
+                .queues()
                 .iter()
                 .flatten()
                 .any(Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1)
@@ -11552,19 +11558,14 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
             std::process::abort();
         }
         for direction in (0..2).rev() {
-            // Never let Drop unwind into field destruction: sessions precede
-            // queues in the struct and must remain rooted until the abort.
+            // Never let Drop unwind into field destruction: native storage keeps
+            // sessions before queues, rooted until retirement or the abort.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                settle_xgmi_queue_retirement(
-                    &mut self.queues,
-                    &mut self.terminal,
-                    direction,
-                    |queue| {
-                        let (source, destination) =
-                            Self::session_pair(&mut self.sessions, direction);
-                        queue.destroy_and_release(source, destination)
-                    },
-                )
+                let (sessions, queues) = self.native.parts_mut();
+                settle_xgmi_queue_retirement(queues, &mut self.terminal, direction, |queue| {
+                    let (source, destination) = Self::session_pair(sessions, direction);
+                    queue.destroy_and_release(source, destination)
+                })
             }));
             if !matches!(result, Ok(Ok(()))) {
                 std::process::abort();

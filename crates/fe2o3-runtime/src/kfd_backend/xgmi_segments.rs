@@ -679,8 +679,9 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         };
         timer.end(Phase::Preparation, preparation_start);
         let result = {
-            let (source, destination) = Self::session_pair(&mut self.sessions, direction);
-            let queue = self.queues[direction].as_mut().unwrap();
+            let (sessions, queues) = self.native.parts_mut();
+            let (source, destination) = Self::session_pair(sessions, direction);
+            let queue = queues[direction].as_mut().unwrap();
             let sequence = self.active.get_mut(&id).unwrap().sequence.as_mut().unwrap();
             open_and_execute(
                 queue,

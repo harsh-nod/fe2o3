@@ -399,7 +399,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             || self.xgmi_diagnostic.is_some()
             || self.xgmi_segments_diagnostic.is_some()
             || self.next_handle != 1
-            || self.queues.iter().any(Option::is_some)
+            || self.native.queues().iter().any(Option::is_some)
             || !self.logical_resource_counts().permits_shutdown()
         {
             return Err(Self::rejected(
@@ -469,11 +469,12 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 .iter()
                 .any(|root| !root.is_vacant())
             || self
-                .queues
+                .native
+                .queues()
                 .iter()
                 .flatten()
                 .any(Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1);
-        let quiescent = self.queues.iter().all(Option::is_none)
+        let quiescent = self.native.queues().iter().all(Option::is_none)
             && self.logical_resource_counts().permits_shutdown();
         (terminal, quiescent)
     }

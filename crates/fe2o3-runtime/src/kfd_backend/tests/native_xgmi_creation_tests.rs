@@ -130,6 +130,14 @@ fn native_xgmi_runtime_wires_persistent_roots_and_guards_teardown() {
         .split("pub struct KfdNativeXgmiRuntimeBackendV1 {")
         .nth(1)
         .unwrap();
+    assert!(backend.contains("native: NativeXgmiCustodyV1,"));
+    let storage = include_str!("../xgmi_native_custody.rs");
+    assert!(
+        storage.contains("NativeCustody<SharedGttMemorySessionV1, Gfx942NativeXgmiSdmaQueueV1>")
+    );
+    assert!(
+        storage.find("sessions: [S; 2]").unwrap() < storage.find("queues: [Option<Q>; 2]").unwrap()
+    );
     assert!(
         backend
             .split("impl fmt::Debug")
@@ -146,8 +154,9 @@ fn native_xgmi_runtime_wires_persistent_roots_and_guards_teardown() {
         .unwrap();
     assert!(
         ensure.find("self.require_live()?").unwrap()
-            < ensure.find("self.queues[direction]").unwrap()
+            < ensure.find("self.native.queues()[direction]").unwrap()
     );
+    assert!(ensure.contains("let (sessions, queues) = self.native.parts_mut()"));
     assert!(ensure.contains("&mut self.queue_creation_roots"));
     assert!(
         ensure.contains("Gfx942NativeXgmiSdmaQueueV1::create(source, destination, route, root)")

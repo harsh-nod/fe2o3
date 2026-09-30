@@ -181,7 +181,8 @@ fn native_xgmi_retirement_runtime_wiring_borrows_slots_and_guards_terminal_roots
     );
     for body in [shutdown, drop] {
         assert!(body.contains("for direction in (0..2).rev()"));
-        assert!(body.contains("&mut self.queues"));
+        assert!(body.contains("let (sessions, queues) = self.native.parts_mut()"));
+        assert!(body.contains("Self::session_pair(sessions, direction)"));
         assert!(body.contains("&mut self.terminal"));
         assert!(body.contains("queue.destroy_and_release(source, destination)"));
         assert!(!body.contains(".take()"));

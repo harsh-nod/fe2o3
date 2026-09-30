@@ -367,8 +367,12 @@ fn xgmi_budget_production_wiring_preserves_defaults_order_and_classified_entry()
         .next()
         .unwrap();
     assert!(usage.contains("backend_device: self.descriptions[index].backend_device"));
-    assert!(usage.contains("device: self.sessions[index].device_backing_usage_v1()"));
-    assert!(usage.contains("host_visible: self.sessions[index].host_visible_backing_usage_v1()"));
+    assert!(usage.contains("device: self.native.sessions()[index].device_backing_usage_v1()"));
+    assert!(
+        usage.contains(
+            "host_visible: self.native.sessions()[index].host_visible_backing_usage_v1()"
+        )
+    );
     assert!(!usage.contains("require_live"));
     let lower = include_str!("../../../../fe2o3-kfd/src/shared_memory.rs");
     let allocation = lower

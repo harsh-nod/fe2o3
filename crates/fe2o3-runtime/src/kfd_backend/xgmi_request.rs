@@ -258,7 +258,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             &mut self.next_handle,
             &mut self.allocations,
             || {
-                self.sessions[index]
+                self.native.sessions_mut()[index]
                     .allocate_gfx942_xgmi_device_memory_classified_v1(byte_len, alignment)
                     .map(|lease| XgmiRuntimeAllocationV1 {
                         device: index,

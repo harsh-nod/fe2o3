@@ -754,8 +754,9 @@ impl KfdNativeXgmiRuntimeBackendV1 {
 
     pub(super) fn batch_quarantine(&mut self, direction: usize) {
         self.terminal = true;
-        if let Some(queue) = self.queues[direction].as_mut() {
-            let (source, destination) = Self::session_pair(&mut self.sessions, direction);
+        let (sessions, queues) = self.native.parts_mut();
+        if let Some(queue) = queues[direction].as_mut() {
+            let (source, destination) = Self::session_pair(sessions, direction);
             queue.quarantine_batch_v1(source, destination);
         }
     }
@@ -917,8 +918,9 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
         timer.end(Phase::Preparation, preparation_start);
         let result = {
-            let sessions = Self::session_pair(&mut self.sessions, direction);
-            let queue = self.queues[direction]
+            let (sessions, queues) = self.native.parts_mut();
+            let sessions = Self::session_pair(sessions, direction);
+            let queue = queues[direction]
                 .as_mut()
                 .unwrap_or_else(|| std::process::abort());
             open_and_execute::<PROFILE, CURRENTNESS>(
