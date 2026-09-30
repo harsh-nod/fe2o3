@@ -94,3 +94,8 @@ jobs:
         run: >-
           python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
           -p 'test_xgmi_peer_series_*.py'
+
+      - name: Retained host diagnostic controls (no GPU or network)
+        run: >-
+          python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
+          -p 'test_xgmi_retained_host_diagnostic*.py'
