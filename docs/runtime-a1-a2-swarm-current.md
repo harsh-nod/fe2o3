@@ -27,6 +27,15 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [shared requested-allocation charge](runtime-request-charge-profile-v1.md)
+is integrated at `ee849c0fc`. Runtime and KFD use the same exact nineteen-coordinate
+constructor. Its signed campaign passes three full three-obligation runs and
+all 21 actual-body logical negatives, with 29 fresh process-group closures.
+The earlier 106-test CPU qualification and strict four-crate static gates are
+bound to unchanged signed Rust; metadata-only compatibility changes do not
+promote old proof campaigns. This establishes request-vector construction,
+not backing residency, admission, aggregate bounds or a milestone exit.
+
 The [lossless KFD test snapshots](runtime-kfd-snapshot-test-fixtures-v1.md)
 are integrated at `273b964d2`. The same CPU creation-unwind matrix measured
 305.88 seconds at baseline and 103.49 seconds with compact snapshots in one
