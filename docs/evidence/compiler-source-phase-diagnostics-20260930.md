@@ -485,3 +485,44 @@ the native attempt deliberately cannot resume the compiler. Existing installed
 inventory, staging, trace, proof-helper backing and retirement components do not
 yet compose into an approved compiler execution with continuous source/code/output
 binding. Packaging success is not that execution guarantee. M1 remains incomplete.
+
+## Context Read and Invocation Checkpoint
+
+The following guarded runs retained unchanged source and tool snapshots. They
+are candidate validation, not production qualification or new kernel coverage.
+
+| Run | Candidate | Result |
+| --- | --- | --- |
+| r136 | `3a7c9dc5c` | Compilation stopped on missing public-field documentation; no tests ran. |
+| r137 | `56568c444` | Actual-source matrix executed all 80 cases; all stopped at the same incomplete global-read census. |
+| r138 | `07b51e95c` | Merged compiler/helper candidate stopped on receiver-field, opaque-ledger `Debug`, and referenced-type pattern errors; no tests ran. |
+| r139 | `e10a5035f` | After those source fixes, rustc/LLVM exhausted the local 12 GiB virtual-memory allowance; the build did not complete and no tests ran. |
+| r140 | `87f5e7635` | Device library: 113 passed. Compile-UI matrix: 172 passed, 28 mismatches; its parent test failed. |
+
+r137 reports root 0, function 0, observed source instances `[0, 1]`, read counts
+`(2, 1, 0)` and store counts `(1, 2, 0)`. Two source reads lack correspondence.
+All 16 positive and 64 negative cases fail before their intended downstream
+checks; none counts as successful negative coverage. The fixture still obtains
+its index through the existing thread API, not context-derived invocation.
+
+r138/r139 integrate the immutable #271 checkpoint
+`0e21d8f6a2e089d24ff0486e76e53d2c138a0932`, original index transport through
+helper calls, and exact aggregate receiver metadata. These changes remain
+unqualified candidates. A failed build is not a passing integration result.
+
+r140 exercises the proposed branded invocation/index API. Its mismatches are
+not assumed to be cosmetic: `context_index_output_escape` reports a missing
+return lifetime before reaching the intended output-escape check. The fixture
+must be corrected and rerun before its expected rejection can count. Compiler
+import and canonical scoped-index lifecycle wiring remain unfinished.
+
+Log SHA-256 values:
+
+- r137: `a9717486e336edc68a21c129e3c5674e38d9f315ad5552fdf8bed5c315814923`
+- r138: `718a90df18990261e4ccb7099256fb0266b624d5c0fc58b9e6993ef04d15c32d`
+- r139: `841d54de199c53b2fd00d3ac2cab2e9eb1cb2cb39fa6c888979e2dbdc58d84fa`
+- r140: `669750a2922c8224e47b91e3df60570b2185a4db6e763c8bba017da2c6116709`
+
+No protected proof, simulator or GPU run occurred in these checks. M0 remains
+complete; M1-M7 remain incomplete; strict production-to-safe-launch coverage
+remains **0/47**.
