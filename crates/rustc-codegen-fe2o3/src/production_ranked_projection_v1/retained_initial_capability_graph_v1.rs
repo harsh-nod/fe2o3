@@ -345,3 +345,7 @@ fn check_unseeded(
 #[cfg(test)]
 #[path = "retained_initial_capability_graph_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "retained_initial_graph_genuine_v1_tests.rs"]
+pub(super) mod genuine;

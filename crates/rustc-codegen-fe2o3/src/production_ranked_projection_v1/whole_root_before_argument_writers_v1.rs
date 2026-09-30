@@ -532,3 +532,6 @@ mod tests;
 
 #[cfg(test)]
 pub(in crate::production_ranked_projection_v1) use genuine::observe_initial_reads as observe_initial_empty_reads_for_test_v1;
+
+#[cfg(test)]
+pub(in crate::production_ranked_projection_v1) use genuine::observe_initial_graph as observe_initial_graph_for_test_v1;

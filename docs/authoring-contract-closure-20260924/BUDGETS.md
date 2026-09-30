@@ -62,3 +62,42 @@ Do not combine incompatible profile maxima into a fictitious single session. Exi
 Performance/compiler/source owners must accept or replace each applicable compiler/action row with a named measured workload. Viewer/tutorial/query owners must accept the actual timing boundary, small/large size classes, viewport and memory definition. Exact selected fixture pins and new measurement receipt hashes belong in the acceptance record. If measurement fails, retain refusal/currentness semantics and revise the proposal explicitly; do not silently increase a safety cap or drop slow/refusing samples.
 
 M0/U0 require agreed generation/action budgets; V0 expressly requires measured UI budgets. Existing historical measurements can be accepted as named baseline evidence only by an explicit owner decision about their applicability. This packet cannot decide that for them.
+
+## 6. Later retained route evidence — 2026-09-26
+
+This dated addendum preserves the proposal and measurements above; it accepts no
+ceiling and changes no implementation limit. The
+[retained route report](https://github.com/harsh-nod/fe2o3-kernels/blob/6d71cfd0fe811da98d06c0c865f5dc2b9414ef88/docs/ui-route-performance-20260926.md)
+and [numerical summary](https://github.com/harsh-nod/fe2o3-kernels/blob/6d71cfd0fe811da98d06c0c865f5dc2b9414ef88/docs/evidence/ui-route-performance-20260926.json)
+record eight cells at measured site
+`36e8e130b07fef92f7a2b1e1f47642f8814775dd`: five calibration and thirty
+measured pairs per cell, across navigation, ordered-program and two real
+historical V22 CPU recordings at desktop and narrow viewports.
+
+Action-to-expected-DOM-plus-two-animation-frames p95 was 348.0–381.6 ms
+for the four navigation/program first opens and 49.2–81.9 ms for their
+warm opens. The four V22 first opens were 298.1–314.7 ms, warm opens
+281.9–282.5 ms and bounded interactions 49.1–49.4 ms. These are not paint,
+isolated parser, debugger execution or GPU measurements. In particular,
+a complete V22 warm open is not the same operation as section 3's proposed
+100 ms bounded page/render target; do not declare either compliance or failure
+by substituting one timing boundary for the other.
+
+The V22 recordings expand to about 3.6 and 3.55 MB, not the full 11 MiB
+import class. Signed CDP used-heap checkpoint deltas, including negative
+deltas, are retained; they are not peak heap or RSS. The summary explicitly
+records `accepted_performance_budgets: false`,
+`isolated_parser_measured: false` and `worst_11mib_class_measured: false`.
+Thus the earlier unmeasured full-class proposal must not be read as absence
+of all V22 route measurements, nor may these measurements qualify that
+full class or a later site build.
+
+The retained outer receipt SHA256 is
+`2d9cce57577ac918a561590ef40e76cd05c83b6bde40c2ae15aa035381acacf8`;
+the campaign report SHA256 is
+`223df7e9d7f377dbd76a5707503abc06f0f70c7fe30fee8d3d908849117a9bff`.
+Existing compiler/query/viewer owners still decide the applicable declared
+workload and budget, citing compatible fixture/build identities and the
+actual timing and memory boundary. This addendum records already available
+evidence; it requests no new harness, adopts no proposed measurement protocol,
+and closes none of M0/V0/U0.

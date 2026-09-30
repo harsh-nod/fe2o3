@@ -542,3 +542,7 @@ pub(in crate::production_ranked_projection_v1) fn observe_initial_reads(
         result
     })
 }
+
+#[path = "whole_root_initial_graph_genuine_v1_tests.rs"]
+mod graph_observer;
+pub(in crate::production_ranked_projection_v1) use graph_observer::observe as observe_initial_graph;
