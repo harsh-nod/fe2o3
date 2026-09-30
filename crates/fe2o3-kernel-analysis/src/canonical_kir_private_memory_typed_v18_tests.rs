@@ -335,10 +335,19 @@ fn typed_private_cfg_joins_exact_store_occurrences_not_equal_written_values() {
             blocks[2].operations.push(write(4));
         }
         with_inventory(&mutant, |inventory, floor| {
-            assert!(matches!(
-                exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
-                Err(Error::Unsupported { .. })
-            ))
+            if both {
+                exercise(inventory, floor, WORK, STORAGE, 1, &[None; 4])
+                    .0
+                    .unwrap();
+            } else {
+                assert!(matches!(
+                    exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
+                    Err(Error::Unsupported {
+                        detail: "Load requires initialized storage on every path",
+                        ..
+                    })
+                ));
+            }
         });
     }
 }
@@ -368,10 +377,9 @@ fn typed_private_loop_fixed_point_and_allocation_reentry_reset_are_mandatory() {
         .operations
         .push(write(4));
     with_inventory(&clobber, |inventory, floor| {
-        assert!(matches!(
-            exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
-            Err(Error::Unsupported { .. })
-        ))
+        exercise(inventory, floor, WORK, STORAGE, 1, &[None; 4])
+            .0
+            .unwrap();
     });
     let reentry = fixture(
         ScalarType::U32,
@@ -402,6 +410,9 @@ fn typed_private_loop_fixed_point_and_allocation_reentry_reset_are_mandatory() {
         ))
     });
 }
+
+#[path = "canonical_kir_private_memory_init_lattice_v33_tests.rs"]
+mod init_lattice_tests;
 
 #[test]
 fn typed_private_volatile_workgroup_and_pointer_escape_remain_closed() {
