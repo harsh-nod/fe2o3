@@ -101,15 +101,20 @@ fn invocation_checked_prefix_v1(
             if *target != header.id || arguments.len() != relation.components.len() {
                 return Err(invocation_entry_error_v1());
             }
-            if !plan.entry_arguments().is_empty() {
+            // Preserve legacy absent rosters, but replay a retained roster even
+            // after all its rows have been removed from a zero-phi callee.
+            if !relation.inputs_retained
+                && (!plan.entry_arguments().is_empty() || !relation.inputs.is_empty())
+            {
+                return Err(invocation_entry_error_v1());
+            }
+            if relation.inputs_retained {
                 invocation_check_inputs_v1(
                     source,
                     &relation.inputs,
                     body.parameters.len(),
                     budget,
                 )?;
-            } else if !relation.inputs.is_empty() {
-                return Err(invocation_entry_error_v1());
             }
             let mut operation = relation.span.first_operation_ordinal as usize;
             let mut component = 0;

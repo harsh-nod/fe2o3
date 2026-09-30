@@ -10,14 +10,23 @@ use crate::production_pipeline::source_owned_v29::target_result::{
 };
 use fe2o3_kernel_ir::{ExplicitLaunchExtent, FormalIndexWidth};
 use fe2o3_lower_mir_kernel::ProductionConditionalMixedOutputHandoffV26 as MixedHandoff;
+use fe2o3_mir_model::semantic_mir_v1::SemanticTerminatorKindV1;
 use std::cell::Cell;
-use std::io::Write as _;
 use std::process::Stdio;
+
+#[path = "production_rustc_driver_mixed_entry_boundary_v27_tests.rs"]
+mod boundary_tests;
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_worklist_tests::mixed_worklist_child";
 const COPY: &str = r#"
     if i >= input.len() { return; }
     *slot = input[i];
+"#;
+const DISJOINT_COPY: &str = r#"
+    let disjoint = thread::index_1d().into_disjoint();
+    let disjoint_i = disjoint.get();
+    if i >= input.len() || disjoint_i >= input.len() { return; }
+    *slot = input[disjoint_i];
 "#;
 const STORE: &str = "*slot = seed;";
 const RMW: &str = r#"
@@ -87,6 +96,7 @@ struct Observation {
     roots: usize,
     instances: usize,
     instances_per_root: [usize; 2],
+    index_reader_calls: [usize; 2],
     accesses_per_root: [[usize; 2]; 2],
     helper_accesses: [usize; 2],
     repeated_helper_access: bool,
@@ -155,6 +165,36 @@ impl Callbacks for MixedCallbacks {
                         assert!(!std::ptr::eq(source.source_ssa(budget)?, &foreign));
                         handoff.check_original_source(source.source_ssa(budget)?, budget)?;
                         handoff.check_original_argument_abi_v26(AbiInput { roots }, budget)?;
+                        let semantic = source.source_semantic(budget)?;
+                        let mut index_reader_calls = [0; 2];
+                        for function in semantic.functions() {
+                            budget.charge_work(1)?;
+                            for block in function.blocks() {
+                                budget.charge_work(1)?;
+                                let callee = match block.terminator().kind() {
+                                    SemanticTerminatorKindV1::Call(call) => call.callee(),
+                                    SemanticTerminatorKindV1::TailCall(call) => call.callee(),
+                                    _ => continue,
+                                };
+                                match &semantic.callables()[callee.index() as usize] {
+                                    SemanticCallableDeclV1::CompilerIntrinsic {
+                                        operation:
+                                            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+                                                ..
+                                            },
+                                        ..
+                                    } => index_reader_calls[0] += 1,
+                                    SemanticCallableDeclV1::CompilerIntrinsic {
+                                        operation:
+                                            SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
+                                                ..
+                                            },
+                                        ..
+                                    } => index_reader_calls[1] += 1,
+                                    _ => {}
+                                }
+                            }
+                        }
                         let root_count = source.root_count(budget)?;
                         assert!((1..=2).contains(&root_count));
                         assert_eq!(roots.len(), root_count);
@@ -286,6 +326,7 @@ impl Callbacks for MixedCallbacks {
                             roots: root_count,
                             instances: instances_per_root.iter().sum(),
                             instances_per_root,
+                            index_reader_calls,
                             accesses_per_root,
                             helper_accesses,
                             repeated_helper_access,
@@ -534,6 +575,7 @@ fn actual_original_mixed_worklist_keeps_shared_store_rmw_and_nested_helper_contr
     run_actual_sources::<Observation>(
         &[
             ("copy", COPY),
+            ("disjoint-copy", DISJOINT_COPY),
             ("store", STORE),
             ("rmw", RMW),
             ("nested", NESTED),
@@ -548,8 +590,13 @@ fn actual_original_mixed_worklist_keeps_shared_store_rmw_and_nested_helper_contr
             assert_eq!(report.policy, 9);
             assert_eq!(report.writes, 1);
             assert_eq!(report.occurrences, report.reads + report.writes);
+            assert_eq!(
+                report.index_reader_calls,
+                [1, usize::from(case == "disjoint-copy")],
+                "retained actual Rust calls must exercise the selected shared index reader"
+            );
             match case {
-                "copy" | "nested" => assert_eq!(report.reads, 1),
+                "copy" | "disjoint-copy" | "nested" => assert_eq!(report.reads, 1),
                 "store" => assert_eq!(report.reads, 0),
                 "rmw" => assert_eq!(report.reads, 2),
                 _ => panic!("unexpected actual mixed case"),
@@ -598,6 +645,7 @@ fn actual_original_mixed_reference_calls_keep_repeated_mutable_and_multiroot_own
             assert!(report.target.starts_with("gfx942") || report.target.starts_with("gfx950"));
             assert_eq!(report.policy, 9);
             assert_eq!(report.roots, root_count);
+            assert_eq!(report.index_reader_calls, [root_count, 0]);
             assert_eq!(
                 (report.reads, report.writes),
                 (root_count * per_root[0], root_count)
@@ -679,6 +727,18 @@ fn mixed_worklist_actual_fixture_has_safe_bounds_disjoint_writes_and_nested_refe
     assert!(source.contains("max_grid = [3, 1, 1]"));
     assert!(!source.contains("unsafe"));
     assert!(CHILD.ends_with("::mixed_worklist_tests::mixed_worklist_child"));
+}
+
+#[test]
+fn mixed_disjoint_index_reader_uses_public_safe_construction_and_a_live_indexed_read() {
+    let source = program(DISJOINT_COPY);
+    assert!(source.contains("let disjoint = thread::index_1d().into_disjoint();"));
+    assert!(source.contains("let disjoint_i = disjoint.get();"));
+    assert!(source.contains("if i >= input.len() || disjoint_i >= input.len() { return; }"));
+    assert!(source.contains("*slot = input[disjoint_i];"));
+    assert!(source.contains("output.get_mut(index)"));
+    assert_eq!(source.matches("#[kernel(typed,").count(), 1);
+    assert!(!source.contains("unsafe") && !source.contains("*mut") && !source.contains("*const"));
 }
 
 #[test]

@@ -5,7 +5,7 @@
 //! proved by replacing them with that interpretation. A generated statement is
 //! not an executed theorem, a signed receipt, or Worker authority.
 
-use std::{fmt, fmt::Write as _, mem::size_of};
+use std::{fmt, mem::size_of};
 
 use fe2o3_kernel_analysis::{
     CanonicalKirInventoryErrorV1, CanonicalKirInventoryV18 as Inventory,
@@ -30,6 +30,14 @@ use crate::{
 mod cfg_v27;
 #[path = "mixed_optimizer_receipt_v26.rs"]
 mod receipt;
+#[path = "mixed_optimizer_relocation_plan_v28.rs"]
+mod relocation_plan_v28;
+pub use relocation_plan_v28::{
+    MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,
+    MixedOptimizerRelocationSubjectV28, PreparedMixedComposedRelocationCfgRefinementV28,
+    PreparedMixedRelocationCfgRefinementV28, PreparedMixedRelocationExpressionsV28,
+    prepare_mixed_relocation_expressions_v28,
+};
 #[path = "mixed_optimizer_semantics_v26.rs"]
 mod semantics;
 pub use cfg_v27::{
@@ -75,6 +83,8 @@ pub enum MixedOptimizerRefinementErrorV26 {
     Source(SourceError),
     Resource(Resource),
     Inventory(CanonicalKirInventoryErrorV1),
+    /// Bounded control-flow analysis failed while generating CFG obligations.
+    Flow(fe2o3_kernel_ir::CanonicalKirControlFlowScopeErrorV1),
     Transition(CanonicalKirTransitionErrorV1),
     Generated(GeneratedVerusProofInputErrorV3),
     Runtime(crate::FunctionalRefinementRuntimeErrorV1),
@@ -99,6 +109,11 @@ impl From<CanonicalKirInventoryErrorV1> for Error {
         Self::Inventory(value)
     }
 }
+impl From<fe2o3_kernel_ir::CanonicalKirControlFlowScopeErrorV1> for Error {
+    fn from(value: fe2o3_kernel_ir::CanonicalKirControlFlowScopeErrorV1) -> Self {
+        Self::Flow(value)
+    }
+}
 impl From<CanonicalKirTransitionErrorV1> for Error {
     fn from(value: CanonicalKirTransitionErrorV1) -> Self {
         Self::Transition(value)
@@ -120,6 +135,7 @@ impl std::error::Error for Error {
             Self::Source(error) => Some(error),
             Self::Resource(error) => Some(error),
             Self::Inventory(error) => Some(error),
+            Self::Flow(error) => Some(error),
             Self::Transition(error) => Some(error),
             Self::Generated(error) => Some(error),
             Self::Runtime(error) => Some(error),

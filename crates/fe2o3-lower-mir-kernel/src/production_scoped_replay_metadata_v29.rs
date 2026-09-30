@@ -273,14 +273,15 @@ fn invocation(
         span,
         arguments,
         components,
+        inputs_retained,
         inputs,
     } = a;
     if let (Some(a), Some(b)) = (subject, b.subject.as_ref()) {
         ledger(a.ledger, b.ledger, budget)?;
     }
     Ok(fixed(
-        (*subject, *layout, *span),
-        (b.subject, b.layout, b.span),
+        (*subject, *layout, *span, *inputs_retained),
+        (b.subject, b.layout, b.span, b.inputs_retained),
         budget,
     )? && fixed_rows(arguments, &b.arguments, budget)?
         && fixed_rows(components, &b.components, budget)?

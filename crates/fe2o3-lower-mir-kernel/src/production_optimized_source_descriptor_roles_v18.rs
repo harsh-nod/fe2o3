@@ -7,6 +7,7 @@ pub(super) enum DescriptorSourceRoleV18 {
     Data,
     Length,
     Address,
+    PointerTransport,
 }
 
 #[derive(Clone, Copy)]

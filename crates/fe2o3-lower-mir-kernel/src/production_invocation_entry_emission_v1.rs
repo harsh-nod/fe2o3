@@ -58,6 +58,7 @@ struct InvocationEntryRelationV1 {
     span: ProductionInvocationEntrySpanV1,
     arguments: Vec<InvocationArgumentRowV1>,
     components: Vec<InvocationComponentRowV1>,
+    inputs_retained: bool,
     inputs: Vec<InvocationInputRowV1>,
 }
 
@@ -432,7 +433,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         }
         let (first_operation_ordinal, operation_count) =
             measured_operation_span(first, target.operations.len(), target.id, None)?;
-        let inputs = self.with_emission_budget_v1(|this, budget| {
+        let (inputs_retained, inputs) = self.with_emission_budget_v1(|this, budget| {
             let cursor = this
                 .execution
                 .as_mut()
@@ -440,8 +441,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             cursor.check_ledger(budget)?;
             cursor.check_source(this.function, plan.ssa)?;
             match cursor.invocation_inputs.take() {
-                Some(inputs) => Ok(inputs),
-                None if plan.entry_arguments().is_empty() => Ok(Vec::new()),
+                Some(inputs) => Ok((true, inputs)),
+                None if plan.entry_arguments().is_empty() => Ok((false, Vec::new())),
                 None => Err(invocation_entry_error_v1()),
             }
         })?;
@@ -462,6 +463,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             },
             arguments,
             components,
+            inputs_retained,
             inputs,
         })
     }

@@ -7,6 +7,7 @@ pub(super) enum CompletedGlobalOperationV26 {
     Data,
     Length,
     Address,
+    PointerTransport,
 }
 
 /// An exact source-bound parameter contract whose concrete allocation and
@@ -536,6 +537,9 @@ where
                                     }
                                     Some(DescriptorSourceRoleV18::Address) => {
                                         CompletedGlobalOperationV26::Address
+                                    }
+                                    Some(DescriptorSourceRoleV18::PointerTransport) => {
+                                        CompletedGlobalOperationV26::PointerTransport
                                     }
                                     None => continue,
                                 };

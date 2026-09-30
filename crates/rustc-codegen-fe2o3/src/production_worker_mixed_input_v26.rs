@@ -1,5 +1,5 @@
 //! Source-bound conditional Worker inputs, before signed/refinement admission.
-use super::super::{Budget, Resource};
+use super::super::{Budget, Resource, TargetOutputHandoffV29};
 use super::{ConditionalMixedTargetLlvmV26, SourceError};
 use fe2o3_kernel_descriptor::{
     CodeObjectVersion, DescriptorWireErrorV3, DeviceDescriptorTableV3, DeviceTargetV1,
@@ -75,7 +75,7 @@ impl PreparedMixedWorkerInputV26<'_, '_, '_, '_, '_, '_> {
     fn custody(&self, budget: &Budget<'_>) -> std::result::Result<(), SourceError> {
         self.native
             .handoff
-            .observe_retained_storage_v18(self.required, budget)
+            .observe_retained_storage(self.required, budget)
     }
     fn check(&self, budget: &Budget<'_>) -> std::result::Result<(), SourceError> {
         let custody = self.custody(budget);
@@ -293,9 +293,7 @@ pub(crate) fn prepare_mixed_worker_input_v26<'native, 'handoff, 'view, 'source, 
     let required = floor
         .checked_add(accepted.get())
         .expect("accepted storage is representable");
-    let custody = native
-        .handoff
-        .observe_retained_storage_v18(required, budget);
+    let custody = native.handoff.observe_retained_storage(required, budget);
     match caught {
         Ok(Ok(contracts)) if custody.is_ok() => Ok(PreparedMixedWorkerInputV26 {
             native,

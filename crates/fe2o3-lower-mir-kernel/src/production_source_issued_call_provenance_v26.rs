@@ -307,9 +307,19 @@ fn source_issued_pointer_walk_quote_v26(
 
 fn source_issued_pointer_walk_v26(
     actual: &SourceIssuedActualV29<'_>,
+    pointer: ValueId,
+    issuer: Option<ValueId>,
+    view: &mut fe2o3_kernel_ir::FunctionControlFlowViewV1<'_, '_, '_>,
+) -> Result<Option<ValueId>, fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1> {
+    source_issued_pointer_walk_visit_v26(actual, pointer, issuer, view, |_| {})
+}
+
+fn source_issued_pointer_walk_visit_v26(
+    actual: &SourceIssuedActualV29<'_>,
     mut pointer: ValueId,
     issuer: Option<ValueId>,
     view: &mut fe2o3_kernel_ir::FunctionControlFlowViewV1<'_, '_, '_>,
+    mut visit: impl FnMut(usize),
 ) -> Result<Option<ValueId>, fe2o3_kernel_ir::FunctionControlFlowScopeErrorV1> {
     for _ in 0..=actual.values.len() {
         let Some(origin) = view.unique_value_origin(pointer)? else {
@@ -390,10 +400,13 @@ fn source_issued_pointer_walk_v26(
         {
             break;
         }
+        visit(index);
         pointer = *value;
     }
     Ok(None)
 }
+
+include!("production_source_issued_pointer_transport_census_v26.rs");
 
 // Classification only, not source or memory authority. The caller must still
 // complete the exact global obligation census and source-root correspondence.

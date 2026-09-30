@@ -470,28 +470,39 @@ pub(super) fn test_shared_entry_region_v18(
                             original.check(budget).unwrap();
                         }
                         SharedEntryTestV18::WorkThenDropPanic => {
-                            struct DropPanic;
-                            impl Drop for DropPanic {
-                                fn drop(&mut self) { std::panic::resume_unwind(Box::new(0x1699_u64)); }
+                            struct DropPanic<'a>(&'a std::cell::Cell<usize>);
+                            impl Drop for DropPanic<'_> {
+                                fn drop(&mut self) {
+                                    self.0.set(self.0.get() + 1);
+                                    std::panic::resume_unwind(Box::new(0x1699_u64));
+                                }
                             }
                             entries.with_shared_entry_region_v18(native, facts, operation, budget, |_, _| Ok(())).unwrap();
                             budget.reserve_storage(size_of::<u64>()).unwrap();
                             let before = budget.storage();
                             budget.charge_work(work_limit - budget.work()).unwrap();
-                            let dropper = DropPanic;
+                            let drops = std::cell::Cell::new(0);
+                            let dropper = DropPanic(&drops);
                             let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 entries.with_shared_entry_region_v18(native, facts, operation, budget, move |_, _| {
                                     let _owned = &dropper;
                                     panic!("authentic owner query work denial must precede callback");
                                 })
                             }));
-                            assert_eq!(*caught.unwrap_err().downcast::<u64>().unwrap(), 0x1699);
+                            let Err(PendingGlobalReadConditionErrorV18::Source(
+                                ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(selected))))
+                                = caught.expect("protected capture destruction preserves typed refusal")
+                                else { panic!("selected shared-entry preparation Work refusal"); };
+                            assert_eq!(drops.get(), 1);
+                            // Four bounded payload-disposal attempts and four
+                            // finish steps precede any source query or capture invocation.
+                            assert_eq!((selected.actual(), selected.limit()), (work_limit + 4 + 4, work_limit));
                             assert_eq!(budget.storage(), before);
                             budget.release_storage(size_of::<u64>()).unwrap();
                             let before = (budget.work(), budget.storage());
                             let Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(first)))
                                 = original.check(budget) else { panic!("selected authentic Work refusal"); };
-                            assert_eq!((first.actual(), first.limit()), (work_limit + 1, work_limit));
+                            assert_eq!(first, selected);
                             assert_eq!((budget.work(), budget.storage()), before);
                             observed.set([1, 0, 0, 0, 0, 0]);
                         }

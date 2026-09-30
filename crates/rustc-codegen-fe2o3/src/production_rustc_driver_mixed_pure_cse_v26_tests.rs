@@ -23,6 +23,10 @@ const NESTED: &str = r#"
     if i >= input.len() { return; }
     *slot = read_outer(&input[i]);
 "#;
+const REPEATED_MUTABLE: &str = r#"
+    write_leaf(slot, seed);
+    write_leaf(slot, seed ^ 1);
+"#;
 
 fn program(body: &str) -> String {
     format!(
@@ -31,6 +35,8 @@ fn program(body: &str) -> String {
 fn read_leaf(value: &u32) -> u32 {{ *value }}
 #[inline(never)]
 fn read_outer(value: &u32) -> u32 {{ read_leaf(value) }}
+#[inline(never)]
+fn write_leaf(value: &mut u32, seed: u32) {{ *value = seed; }}
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [3, 1, 1]))]
 pub fn mixed(input: &[u32], mut output: DisjointSlice<u32>, seed: u32) {{
     let index = thread::index_1d();
@@ -49,6 +55,8 @@ struct Observation {
     cse_changed: bool,
     binary_before: usize,
     binary_after: usize,
+    pointer_casts_before: usize,
+    pointer_casts_after: usize,
     reads: usize,
     writes: usize,
     unused_slices: usize,
@@ -124,6 +132,24 @@ impl Callbacks for PureCseCallbacks {
                                 .count()
                         };
                         let premises = handoff.runtime_premises(budget)?;
+                        let pointer_casts = |module: &fe2o3_kernel_ir::Module| {
+                            module
+                                .functions
+                                .iter()
+                                .filter_map(|function| function.body.as_ref())
+                                .flat_map(|body| &body.blocks)
+                                .flat_map(|block| &block.operations)
+                                .filter(|operation| {
+                                    matches!(
+                                        operation.kind,
+                                        fe2o3_kernel_ir::OperationKind::Cast {
+                                            kind: fe2o3_kernel_ir::CastKind::PointerToGeneric,
+                                            ..
+                                        }
+                                    )
+                                })
+                                .count()
+                        };
                         assert_eq!(premises.len(), 2);
                         let occurrences = handoff.runtime_occurrences(budget)?;
                         let reads = occurrences
@@ -167,6 +193,8 @@ impl Callbacks for PureCseCallbacks {
                                 || output.report().passes()[2].changed(),
                             binary_before: binaries(original.module()),
                             binary_after: binaries(output.owner().module()),
+                            pointer_casts_before: pointer_casts(original.module()),
+                            pointer_casts_after: pointer_casts(output.owner().module()),
                             reads,
                             writes,
                             unused_slices: premises
@@ -319,6 +347,7 @@ fn actual_original_mixed_pure_cse_preserves_memory_contracts_and_observes_real_r
             ("duplicate", DUPLICATE),
             ("store", STORE),
             ("nested", NESTED),
+            ("repeated_mutable", REPEATED_MUTABLE),
         ],
         &[(0, 0)],
         CHILD,
@@ -326,12 +355,28 @@ fn actual_original_mixed_pure_cse_preserves_memory_contracts_and_observes_real_r
         program,
         |_, _, case, report, _| {
             assert_eq!((report.policy, report.historical_policy), (10, 9));
-            assert_eq!(report.writes, 1);
-            assert_eq!(report.reads, usize::from(case != "store"));
-            assert_eq!(report.unused_slices, usize::from(case == "store"));
+            assert_eq!(
+                report.writes,
+                if case == "repeated_mutable" { 2 } else { 1 }
+            );
+            assert_eq!(
+                report.reads,
+                usize::from(case != "store" && case != "repeated_mutable")
+            );
+            assert_eq!(
+                report.unused_slices,
+                usize::from(case == "store" || case == "repeated_mutable")
+            );
             if case == "duplicate" {
                 assert!(report.cse_changed);
                 assert!(report.binary_after < report.binary_before);
+            }
+            if case == "repeated_mutable" {
+                assert!(report.cse_changed);
+                assert_eq!(
+                    (report.pointer_casts_before, report.pointer_casts_after),
+                    (2, 1)
+                );
             }
             assert!(report.foreign_owner_refused && report.incomplete_abi_refused);
             assert!(report.callback_error_preserved);

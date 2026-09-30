@@ -302,3 +302,5 @@ fn issued_global_origin_batches_complete_distinct_actual_roots_with_shared_neste
         assert!(completed.get());
     }
 }
+
+include!("production_source_issued_transport_roles_v26_tests.rs");

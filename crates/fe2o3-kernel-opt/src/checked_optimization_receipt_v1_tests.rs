@@ -437,14 +437,17 @@ fn empty_decode_check_exact_and_one_under_work_are_source_derived() {
 fn empty_decode_check_exact_and_one_under_storage_bound_coexisting_headers() {
     // Empty rows allocate no vector payload. The peak is receipt header+132
     // bytes, two inventory headers, checked-view header, and checker State.
-    // State is two inventory references + candidate +18 Vec headers; all its
-    // fields have pointer alignment on the supported host, with no extra pad.
+    // State has two inventory references, a candidate, 16 index Vec headers,
+    // two byte-mask Vec headers (retained anchors and reachability), and one
+    // literal Vec header. Empty vectors carry no element storage or padding.
     let receipt_storage = size_of::<InertCanonicalKirTransitionReceiptV1>() + 132;
     let inventories = 2 * size_of::<CanonicalKirInventoryV1<'_>>();
     let view = size_of::<CheckedCanonicalKirTransitionV1<'_, '_, '_, '_>>();
     let state = 2 * size_of::<&CanonicalKirInventoryV1<'_>>()
         + size_of::<CanonicalKirTransitionCandidateV1<'_>>()
-        + 18 * size_of::<Vec<usize>>();
+        + size_of::<[Vec<usize>; 16]>()
+        + size_of::<[Vec<u8>; 2]>()
+        + size_of::<Vec<Option<(ScalarType, u128)>>>();
     let peak = receipt_storage + inventories + view + state;
     let input = admit(&Module::new("m"));
     let checked = prepare(&input);

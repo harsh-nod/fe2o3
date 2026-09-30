@@ -333,7 +333,9 @@ pub(super) fn test_global_source_expression_entry_v23(
                 panic!("actual attempt header Storage denial: {error:?}");
             };
             assert_eq!((selected.actual(), selected.limit()), (limit + 1, limit));
-            assert_eq!((budget.work(), budget.storage()), (before.0, padded));
+            // The generic attempt prepays bounded disposal (32) and result
+            // settlement (7) before its first storage reservation.
+            assert_eq!((budget.work(), budget.storage()), (before.0 + 32 + 7, padded));
             budget.release_storage(padding).unwrap();
             assert_eq!(budget.storage(), before.1);
             error

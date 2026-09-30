@@ -381,6 +381,8 @@ fn install_optimized_issued_roles_inner_v18(
     budget.reserve_storage(std::mem::size_of::<Vec<SourceIssuedPointerTransportV26>>())?;
     let mut pointer_transports =
         emission_vec_v1(rows.accesses.len(), budget).map_err(source_emission_error_v18)?;
+    let mut ordinary_transports =
+        emission_vec_v1(rows.accesses.len(), budget).map_err(source_emission_error_v18)?;
     let mut users =
         emission_vec_v1(rows.issuers.len(), budget).map_err(source_emission_error_v18)?;
     budget.charge_work(rows.issuers.len())?;
@@ -655,6 +657,20 @@ fn install_optimized_issued_roles_inner_v18(
             },
             budget,
         )?;
+        budget.charge_work(2)?;
+        if row.pointer != rows.issuers[index].pointer || access.pointer != issuer.physical.pointer {
+            budget.charge_work(4)?;
+            ordinary_transports.push((
+                SourceIssuedPointerTransportV26 {
+                    pointer: row.pointer,
+                    issuer: rows.issuers[index].pointer,
+                },
+                SourceIssuedPointerTransportV26 {
+                    pointer: access.pointer,
+                    issuer: issuer.physical.pointer,
+                },
+            ));
+        }
         users[index].1 = true;
     }
     check_source_issued_pointer_transports_v26(
@@ -695,6 +711,16 @@ fn install_optimized_issued_roles_inner_v18(
             .source
             .missing("issued output root transport or success dominance differs");
     }
+    install_issued_pointer_transport_roles_v26(
+        original,
+        optimized,
+        root,
+        function,
+        &actual,
+        &ordinary_transports,
+        roles,
+        budget,
+    )?;
     for (index, fact) in facts.iter().enumerate() {
         let Some(fact) = fact else {
             continue;
@@ -754,6 +780,16 @@ fn issued_output_headers_v18() -> Result<usize, ArgumentResourceV1> {
         h::<Option<&Option<IssuedRoleOutputV18>>>()?,
         h::<Vec<Option<IssuedRoleOutputV18>>>()?,
         h::<Vec<(bool, bool)>>()?,
+        h::<
+            Vec<(
+                SourceIssuedPointerTransportV26,
+                SourceIssuedPointerTransportV26,
+            )>,
+        >()?,
+        h::<(
+            SourceIssuedPointerTransportV26,
+            SourceIssuedPointerTransportV26,
+        )>()?,
         h::<(bool, bool)>()?,
         size_of::<Result<Vec<(bool, bool)>, ProductionSemanticKirErrorV1>>(),
         size_of::<Result<Vec<Option<IssuedRoleOutputV18>>, ProductionSemanticKirErrorV1>>(),
@@ -848,3 +884,5 @@ fn issued_output_headers_v18() -> Result<usize, ArgumentResourceV1> {
         size_of::<(ValueId, BlockId, usize)>(),
     ])
 }
+
+include!("production_optimized_source_issued_transport_roles_v26.rs");

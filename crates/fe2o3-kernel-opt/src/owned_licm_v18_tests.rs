@@ -534,6 +534,9 @@ fn resource(error: Error) -> Resource {
         | Error::Pair(PairError::Inventory(InventoryError::Resource(r)))
         | Error::Pair(PairError::Loops(LoopError::Resource(r)))
         | Error::AdmissionV18(AdmissionError18::Resource(r))
+        | Error::AdmissionV18(AdmissionError18::Layout(
+            fe2o3_kernel_ir::StorageLayoutErrorV1::Resource(r),
+        ))
         | Error::AdmissionV18(AdmissionError18::Verification(Verification::Resource(r)))
         | Error::AdmissionV18(AdmissionError18::Decode(Decode::Resource(r)))
         | Error::ControlFlow(FlowError::Resource(r))

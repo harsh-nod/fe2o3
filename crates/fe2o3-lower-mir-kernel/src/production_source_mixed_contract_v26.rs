@@ -1,4 +1,4 @@
-// Producers are the retained, nominal source-checked Policy9/Policy10 handoffs.
+// Producers are retained nominal source-checked handoffs, including final LICM.
 // Encoded bytes are descriptive and never replace that owner or its proof.
 mod mixed_source_contract_v26 {
     use super::*;
@@ -11,6 +11,142 @@ mod mixed_source_contract_v26 {
         pub(super) use fe2o3_kernel_descriptor::*;
     }
     use wire::{MixedArgumentV26, MixedOccurrenceV26, MixedScalarV26};
+
+    trait ContractOccurrence {
+        fn premise_index(&self) -> usize;
+        fn original_instance(&self) -> usize;
+        fn original_operation(&self) -> SliceOperation;
+        fn output_operation(&self) -> SliceOperation;
+        fn original_address_formation(&self) -> SliceOperation;
+        fn output_address_formation(&self) -> SliceOperation;
+        fn output_address_index(&self) -> SliceDefinition;
+        fn output_guard_edge(&self) -> fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1;
+        fn output_guard_condition(&self) -> SliceDefinition;
+        fn domain(&self) -> fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26;
+        fn invocation_projection(&self) -> Option<(Axis, ValueId)>;
+        fn memory_access(&self) -> MemoryAccess;
+    }
+    macro_rules! contract_occurrence {
+        ($ty:ty) => {
+            impl ContractOccurrence for $ty {
+                fn premise_index(&self) -> usize {
+                    <$ty>::premise_index(self)
+                }
+                fn original_instance(&self) -> usize {
+                    <$ty>::original_instance(self)
+                }
+                fn original_operation(&self) -> SliceOperation {
+                    <$ty>::original_operation(self)
+                }
+                fn output_operation(&self) -> SliceOperation {
+                    <$ty>::output_operation(self)
+                }
+                fn original_address_formation(&self) -> SliceOperation {
+                    <$ty>::original_address_formation(self)
+                }
+                fn output_address_formation(&self) -> SliceOperation {
+                    <$ty>::output_address_formation(self)
+                }
+                fn output_address_index(&self) -> SliceDefinition {
+                    <$ty>::output_address_index(self)
+                }
+                fn output_guard_edge(&self) -> fe2o3_kernel_ir::CanonicalKirEdgeCoordinateV1 {
+                    <$ty>::output_guard_edge(self)
+                }
+                fn output_guard_condition(&self) -> SliceDefinition {
+                    <$ty>::output_guard_condition(self)
+                }
+                fn domain(&self) -> fe2o3_kernel_ir::CanonicalConditionalSliceDomainV26 {
+                    <$ty>::domain(self)
+                }
+                fn invocation_projection(&self) -> Option<(Axis, ValueId)> {
+                    <$ty>::invocation_projection(self)
+                }
+                fn memory_access(&self) -> MemoryAccess {
+                    <$ty>::memory_access(self)
+                }
+            }
+        };
+    }
+    contract_occurrence!(ProductionMixedRuntimeOccurrenceV26);
+    contract_occurrence!(ProductionMixedLicmRuntimeOccurrenceV28);
+
+    struct ContractParts<'view, 'source, R> {
+        source: &'view ProductionSourceOwnedViewV18<'source>,
+        graph: &'view fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
+        premises: &'view [ProductionMixedSliceRuntimePremiseV26],
+        occurrences: &'view [R],
+        launches: &'view [fe2o3_kernel_ir::ExplicitLaunchExtent],
+        width: fe2o3_kernel_ir::FormalIndexWidth,
+    }
+    // Private to this emitter: serialization cannot confer a new owner authority.
+    trait ContractOwner {
+        type Occurrence: ContractOccurrence;
+        fn parts(
+            &self,
+            budget: &ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<ContractParts<'_, '_, Self::Occurrence>>;
+        fn observe(
+            &self,
+            required: usize,
+            budget: &ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<()>;
+    }
+    macro_rules! contract_prefix_owner {
+        ($ty:ty) => {
+            impl ContractOwner for $ty {
+                type Occurrence = ProductionMixedRuntimeOccurrenceV26;
+                fn parts(
+                    &self,
+                    budget: &ArgumentBudgetV1<'_>,
+                ) -> SourceOwnedResultV18<ContractParts<'_, '_, Self::Occurrence>> {
+                    self.owned.check(budget)?;
+                    Ok(ContractParts {
+                        source: self.owned.source,
+                        graph: self.output(budget)?.owner(),
+                        premises: &self.premises,
+                        occurrences: &self.occurrences,
+                        launches: self.launches,
+                        width: self.width,
+                    })
+                }
+                fn observe(
+                    &self,
+                    required: usize,
+                    budget: &ArgumentBudgetV1<'_>,
+                ) -> SourceOwnedResultV18<()> {
+                    self.observe_retained_storage_v18(required, budget)
+                }
+            }
+        };
+    }
+    contract_prefix_owner!(ProductionConditionalMixedOutputHandoffV26<'_, '_>);
+    contract_prefix_owner!(ProductionConditionalMixedPureCseOutputHandoffV26<'_, '_>);
+    impl ContractOwner for ProductionConditionalMixedLicmOutputHandoffV28<'_, '_, '_, '_> {
+        type Occurrence = ProductionMixedLicmRuntimeOccurrenceV28;
+        fn parts(
+            &self,
+            budget: &ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<ContractParts<'_, '_, Self::Occurrence>> {
+            let source = self.relocation(budget)?.prefix(budget)?.owned.source;
+            let (launches, width) = self.launch_context(budget)?;
+            Ok(ContractParts {
+                source,
+                graph: self.output(budget)?,
+                premises: self.runtime_premises(budget)?,
+                occurrences: self.runtime_occurrences(budget)?,
+                launches,
+                width,
+            })
+        }
+        fn observe(
+            &self,
+            required: usize,
+            budget: &ArgumentBudgetV1<'_>,
+        ) -> SourceOwnedResultV18<()> {
+            self.observe_retained_storage_v28(required, budget)
+        }
+    }
 
     fn mismatch() -> ProductionSourceOwnedViewErrorV18 {
         ProductionSourceOwnedViewErrorV18::Binding(
@@ -140,7 +276,7 @@ mod mixed_source_contract_v26 {
     }
 
     fn occurrence(
-        row: &ProductionMixedRuntimeOccurrenceV26,
+        row: &impl ContractOccurrence,
         argument: u16,
         function: &fe2o3_kernel_ir::Function,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -262,340 +398,348 @@ mod mixed_source_contract_v26 {
         })
     }
 
-    macro_rules! mixed_source_contract_emitter_v26 {
-        ($handoff:ident) => {
-    impl $handoff<'_, '_> {
-        /// Emits the complete selected-root runtime contract from this retained
-        /// fixed-policy output. The ABI is rejoined to the captured original source;
-        /// every generated descriptor field and memory occurrence is replayed.
-        ///
-        /// The returned bytes remain inert. Their digest cannot replace this
-        /// handoff, a versioned Worker proof, or concrete runtime discharge.
-        /// Caller output storage is borrowed and charged for this call only.
-        pub fn emit_mixed_contract_v26(
-            &self,
-            original_root: usize,
-            abi: ProductionKernelArgumentAbiInputV18<'_>,
-            table: &wire::DeviceDescriptorTableV3<'_>,
-            descriptor_kernel: usize,
-            output: &mut [u8],
-            budget: &mut ArgumentBudgetV1<'_>,
-        ) -> SourceOwnedResultV18<usize> {
-            self.owned.check(budget)?;
-            let source = self.owned.source;
-            let floor = budget.storage();
-            source.retain_query(scoped_source_attempt_v29(
-                source.cleanup,
-                budget,
-                floor,
-                |budget| {
-                    let scratch_floor = budget.storage();
-                    let headers = argument_sum_v1(&[
-                        wire::DESCRIPTOR_QUERY_STORAGE_V3,
-                        wire::MIXED_CONTRACT_CODEC_STORAGE_V26,
-                        size_of::<[Vec<usize>; 4]>(),
-                        size_of::<[MixedArgumentV26; 4]>(),
-                        size_of::<[MixedOccurrenceV26; 4]>(),
-                        size_of::<[usize; 64]>(),
-                        output.len(),
-                    ])?;
-                    budget.reserve_storage(headers)?;
-                    budget.charge_work(512)?;
-                    self.check_original_argument_abi_v26(
-                        ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
-                        budget,
-                    )?;
-                    let root = abi.roots.get(original_root).ok_or_else(mismatch)?;
-                    let (_, original_function) = source.root(original_root, budget)?;
-                    let original = source.canonical(budget)?;
-                    let original_function = original
-                        .module()
-                        .functions
-                        .get(original_function)
-                        .ok_or_else(mismatch)?;
-                    let checked = self.output(budget)?;
-                    let graph = checked.owner();
-                    let mut selected = None;
-                    for (index, function) in graph.module().functions.iter().enumerate() {
-                        budget.charge_work(argument_sum_v1(&[
-                            1,
-                            function.id.as_str().len(),
-                            original_function.id.as_str().len(),
-                        ])?)?;
-                        if function.id == original_function.id {
-                            if selected.replace((index, function)).is_some() {
-                                return Err(mismatch());
-                            }
-                        }
-                    }
-                    let (function_index, function) = selected.ok_or_else(mismatch)?;
-                    let launch = *self.launches.get(original_root).ok_or_else(mismatch)?;
-                    let fe2o3_kernel_ir::ExplicitLaunchExtent::Exact { rank, extents } = launch
-                    else {
-                        return Err(mismatch());
-                    };
-                    let width = match self.width {
-                        fe2o3_kernel_ir::FormalIndexWidth::Bits32 => 32,
-                        fe2o3_kernel_ir::FormalIndexWidth::Bits64 => 64,
-                        fe2o3_kernel_ir::FormalIndexWidth::Unknown => return Err(mismatch()),
-                    };
-                    let kernel = table
-                        .kernel(descriptor_kernel, &mut |n| budget.charge_work(n))
-                        .map_err(descriptor_error)?;
-                    let source_launch = source
-                        .source_launch(budget)?
-                        .roots()
-                        .get(original_root)
-                        .ok_or_else(mismatch)?
-                        .source_launch();
-                    let grid = kernel.launch().max_grid();
-                    let block_matches = match (
-                        source_launch.exact_workgroup(),
-                        kernel.launch().block_size(),
-                    ) {
-                        (Some(expected), wire::BlockSizeV1::Exact(actual)) => {
-                            expected == [actual.x(), actual.y(), actual.z()]
-                        }
-                        (None, wire::BlockSizeV1::Any) => true,
-                        _ => false,
-                    };
+    fn emit_contract<H: ContractOwner>(
+        owner: &H,
+        original_root: usize,
+        abi: ProductionKernelArgumentAbiInputV18<'_>,
+        table: &wire::DeviceDescriptorTableV3<'_>,
+        descriptor_kernel: usize,
+        output: &mut [u8],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<usize> {
+        let parts = owner.parts(budget)?;
+        let source = parts.source;
+        let floor = budget.storage();
+        source.retain_query(scoped_source_attempt_v29(
+            source.cleanup,
+            budget,
+            floor,
+            |budget| {
+                let scratch_floor = budget.storage();
+                let headers = argument_sum_v1(&[
+                    wire::DESCRIPTOR_QUERY_STORAGE_V3,
+                    wire::MIXED_CONTRACT_CODEC_STORAGE_V26,
+                    size_of::<[Vec<usize>; 4]>(),
+                    size_of::<[MixedArgumentV26; 4]>(),
+                    size_of::<[MixedOccurrenceV26; 4]>(),
+                    size_of::<[usize; 64]>(),
+                    size_of::<ContractParts<'_, '_, H::Occurrence>>(),
+                    output.len(),
+                ])?;
+                budget.reserve_storage(headers)?;
+                budget.charge_work(512)?;
+                source.require_kernel_argument_abi_v18(
+                    ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
+                    budget,
+                )?;
+                let root = abi.roots.get(original_root).ok_or_else(mismatch)?;
+                let (_, original_function) = source.root(original_root, budget)?;
+                let original = source.canonical(budget)?;
+                let original_function = original
+                    .module()
+                    .functions
+                    .get(original_function)
+                    .ok_or_else(mismatch)?;
+                let graph = parts.graph;
+                let mut selected = None;
+                for (index, function) in graph.module().functions.iter().enumerate() {
                     budget.charge_work(argument_sum_v1(&[
-                        64,
-                        root.export.len(),
-                        kernel.entry_name().len(),
+                        1,
+                        function.id.as_str().len(),
+                        original_function.id.as_str().len(),
                     ])?)?;
-                    if kernel.kernel_id().as_bytes() != root.kernel_binding
-                        || kernel.entry_name() != root.export
-                        || kernel.launch().rank() != rank
-                        || source_launch.rank() != rank
-                        || !block_matches
-                        || source_launch.max_grid() != [grid.x(), grid.y(), grid.z()]
-                        || kernel.abi_layout().explicit_argument_size()
-                            != root.explicit_argument_bytes
-                        || kernel.abi_layout().kernarg_segment_alignment()
-                            != root.kernarg_alignment_bytes
-                    {
-                        return Err(mismatch());
-                    }
-                    let mut selected =
-                        source_reference_emission_vec_v29(wire::MAX_MIXED_ARGUMENTS_V26, budget)
-                            .map_err(source_argument_error_v18)?;
-                    for premise in &self.premises {
-                        budget.charge_work(3)?;
-                        if premise.root() == original_root {
-                            if selected.len() == wire::MAX_MIXED_ARGUMENTS_V26 {
-                                return Err(mismatch());
-                            }
-                            selected.push(premise);
-                        }
-                    }
-                    budget.charge_work(argument_product_v1(
-                        selected.len(),
-                        selected
-                            .len()
-                            .checked_add(1)
-                            .ok_or(ArgumentResourceV1::Arithmetic)?,
-                    )?)?;
-                    selected.sort_unstable_by_key(|p| p.original_argument());
-                    let mut arguments = source_reference_emission_vec_v29(selected.len(), budget)
-                        .map_err(source_argument_error_v18)?;
-                    let mut fields = kernel.arguments();
-                    let mut generated_field = 0usize;
-                    for (source_argument, input) in root.arguments.iter().enumerate() {
-                        budget.charge_work(8)?;
-                        let (source_kind, expected) = match &input.kind {
-                            ProductionKernelArgumentAbiKindV18::Descriptor { source, argument } => {
-                                (*source, argument)
-                            }
-                            ProductionKernelArgumentAbiKindV18::CompilerLaidOutByValue {
-                                ..
-                            } => {
-                                if !matches!(
-                                    source.kernel_argument_by_value_abi_v29(
-                                        original_root,
-                                        source_argument,
-                                        budget
-                                    )?,
-                                    Some(ProductionKernelByValueAbiV29::Ignored(_))
-                                ) {
-                                    return Err(mismatch());
-                                }
-                                continue;
-                            }
-                        };
-                        let generated = fields
-                            .next(&mut |n| budget.charge_work(n))
-                            .map_err(descriptor_error)?
-                            .ok_or_else(mismatch)?;
-                        check_argument(
-                            source_kind,
-                            expected,
-                            &generated,
-                            table,
-                            generated_field,
-                            budget,
-                        )?;
-                        if let Some(premise) = selected
-                            .get(arguments.len())
-                            .filter(|p| p.original_argument() as usize == source_argument)
-                        {
-                            let SliceDefinition::FunctionArgument {
-                                function: owner,
-                                argument: physical_parameter,
-                            } = premise.parameter()
-                            else {
-                                return Err(mismatch());
-                            };
-                            if owner.0 as usize != function_index
-                                || premise.launch() != launch
-                                || premise.index_width() != self.width
-                                || premise.source_identity() != input.semantic_type_identity
-                                || !matches!(
-                                    source_kind,
-                                    wire::SourceTypeDescriptorV3::SharedSlice(_)
-                                        | wire::SourceTypeDescriptorV3::DisjointSlice(_)
-                                )
-                                || generated.component_count() != 2
-                            {
-                                return Err(mismatch());
-                            }
-                            let pointer = generated
-                                .component(0, &mut |n| budget.charge_work(n))
-                                .map_err(descriptor_error)?;
-                            let length = generated
-                                .component(1, &mut |n| budget.charge_work(n))
-                                .map_err(descriptor_error)?;
-                            if pointer.kind != wire::PhysicalAbiComponentKind::GlobalPointer
-                                || length.kind != wire::PhysicalAbiComponentKind::SliceLengthU64
-                            {
-                                return Err(mismatch());
-                            }
-                            let counts = premise.access_counts();
-                            budget.charge_work(256)?;
-                            arguments.push(MixedArgumentV26 {
-                                source_argument: ordinal(source_argument)?,
-                                generated_field: generated_field
-                                    .try_into()
-                                    .map_err(|_| ArgumentResourceV1::Arithmetic)?,
-                                physical_parameter,
-                                semantic_type: premise.source_type().index(),
-                                semantic_type_identity: *premise.source_identity().as_bytes(),
-                                descriptor_type_identity: *generated.source_type().as_bytes(),
-                                device_layout_identity: *generated.device_layout().as_bytes(),
-                                scalar: scalar(premise.scalar()),
-                                pointer_offset: pointer.offset,
-                                length_offset: length.offset,
-                                reads: ordinal(counts[0])?,
-                                writes: ordinal(counts[1])?,
-                                source_exclusive: premise.source_exclusive_contract(),
-                            });
-                        } else if matches!(
-                            source_kind,
-                            wire::SourceTypeDescriptorV3::SharedSlice(_)
-                                | wire::SourceTypeDescriptorV3::DisjointSlice(_)
-                        ) {
-                            // Even an unused slice needs an explicit completed
-                            // source/native zero-count premise, not absence.
+                    if function.id == original_function.id {
+                        if selected.replace((index, function)).is_some() {
                             return Err(mismatch());
                         }
-                        generated_field = generated_field
-                            .checked_add(1)
-                            .ok_or(ArgumentResourceV1::Arithmetic)?;
                     }
-                    if arguments.len() != selected.len()
-                        || generated_field != kernel.argument_count()
-                        || fields
-                            .next(&mut |n| budget.charge_work(n))
-                            .map_err(descriptor_error)?
-                            .is_some()
-                    {
-                        return Err(mismatch());
+                }
+                let (function_index, function) = selected.ok_or_else(mismatch)?;
+                let launch = *parts.launches.get(original_root).ok_or_else(mismatch)?;
+                let fe2o3_kernel_ir::ExplicitLaunchExtent::Exact { rank, extents } = launch else {
+                    return Err(mismatch());
+                };
+                let width = match parts.width {
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits32 => 32,
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits64 => 64,
+                    fe2o3_kernel_ir::FormalIndexWidth::Unknown => return Err(mismatch()),
+                };
+                let kernel = table
+                    .kernel(descriptor_kernel, &mut |n| budget.charge_work(n))
+                    .map_err(descriptor_error)?;
+                let source_launch = source
+                    .source_launch(budget)?
+                    .roots()
+                    .get(original_root)
+                    .ok_or_else(mismatch)?
+                    .source_launch();
+                let grid = kernel.launch().max_grid();
+                let block_matches = match (
+                    source_launch.exact_workgroup(),
+                    kernel.launch().block_size(),
+                ) {
+                    (Some(expected), wire::BlockSizeV1::Exact(actual)) => {
+                        expected == [actual.x(), actual.y(), actual.z()]
                     }
-                    let mut occurrences =
-                        source_reference_emission_vec_v29(wire::MAX_MIXED_OCCURRENCES_V26, budget)
-                            .map_err(source_argument_error_v18)?;
-                    for row in &self.occurrences {
-                        budget.charge_work(3)?;
-                        let premise = self
-                            .premises
-                            .get(row.premise_index())
-                            .ok_or_else(mismatch)?;
-                        if premise.root() != original_root {
+                    (None, wire::BlockSizeV1::Any) => true,
+                    _ => false,
+                };
+                budget.charge_work(argument_sum_v1(&[
+                    64,
+                    root.export.len(),
+                    kernel.entry_name().len(),
+                ])?)?;
+                if kernel.kernel_id().as_bytes() != root.kernel_binding
+                    || kernel.entry_name() != root.export
+                    || kernel.launch().rank() != rank
+                    || source_launch.rank() != rank
+                    || !block_matches
+                    || source_launch.max_grid() != [grid.x(), grid.y(), grid.z()]
+                    || kernel.abi_layout().explicit_argument_size() != root.explicit_argument_bytes
+                    || kernel.abi_layout().kernarg_segment_alignment()
+                        != root.kernarg_alignment_bytes
+                {
+                    return Err(mismatch());
+                }
+                let mut selected =
+                    source_reference_emission_vec_v29(wire::MAX_MIXED_ARGUMENTS_V26, budget)
+                        .map_err(source_argument_error_v18)?;
+                for premise in parts.premises {
+                    budget.charge_work(3)?;
+                    if premise.root() == original_root {
+                        if selected.len() == wire::MAX_MIXED_ARGUMENTS_V26 {
+                            return Err(mismatch());
+                        }
+                        selected.push(premise);
+                    }
+                }
+                budget.charge_work(argument_product_v1(
+                    selected.len(),
+                    selected
+                        .len()
+                        .checked_add(1)
+                        .ok_or(ArgumentResourceV1::Arithmetic)?,
+                )?)?;
+                selected.sort_unstable_by_key(|p| p.original_argument());
+                let mut arguments = source_reference_emission_vec_v29(selected.len(), budget)
+                    .map_err(source_argument_error_v18)?;
+                let mut fields = kernel.arguments();
+                let mut generated_field = 0usize;
+                for (source_argument, input) in root.arguments.iter().enumerate() {
+                    budget.charge_work(8)?;
+                    let (source_kind, expected) = match &input.kind {
+                        ProductionKernelArgumentAbiKindV18::Descriptor { source, argument } => {
+                            (*source, argument)
+                        }
+                        ProductionKernelArgumentAbiKindV18::CompilerLaidOutByValue { .. } => {
+                            if !matches!(
+                                source.kernel_argument_by_value_abi_v29(
+                                    original_root,
+                                    source_argument,
+                                    budget
+                                )?,
+                                Some(ProductionKernelByValueAbiV29::Ignored(_))
+                            ) {
+                                return Err(mismatch());
+                            }
                             continue;
                         }
-                        if occurrences.len() == wire::MAX_MIXED_OCCURRENCES_V26 {
+                    };
+                    let generated = fields
+                        .next(&mut |n| budget.charge_work(n))
+                        .map_err(descriptor_error)?
+                        .ok_or_else(mismatch)?;
+                    check_argument(
+                        source_kind,
+                        expected,
+                        &generated,
+                        table,
+                        generated_field,
+                        budget,
+                    )?;
+                    if let Some(premise) = selected
+                        .get(arguments.len())
+                        .filter(|p| p.original_argument() as usize == source_argument)
+                    {
+                        let SliceDefinition::FunctionArgument {
+                            function: owner,
+                            argument: physical_parameter,
+                        } = premise.parameter()
+                        else {
+                            return Err(mismatch());
+                        };
+                        if owner.0 as usize != function_index
+                            || premise.launch() != launch
+                            || premise.index_width() != parts.width
+                            || premise.source_identity() != input.semantic_type_identity
+                            || !matches!(
+                                source_kind,
+                                wire::SourceTypeDescriptorV3::SharedSlice(_)
+                                    | wire::SourceTypeDescriptorV3::DisjointSlice(_)
+                            )
+                            || generated.component_count() != 2
+                        {
                             return Err(mismatch());
                         }
-                        budget.charge_work(wire::MAX_MIXED_ARGUMENTS_V26)?;
-                        let argument = arguments
-                            .binary_search_by_key(&premise.original_argument(), |a| {
-                                a.source_argument
-                            })
-                            .map_err(|_| mismatch())?;
-                        occurrences.push(occurrence(
-                            row,
-                            argument
+                        let pointer = generated
+                            .component(0, &mut |n| budget.charge_work(n))
+                            .map_err(descriptor_error)?;
+                        let length = generated
+                            .component(1, &mut |n| budget.charge_work(n))
+                            .map_err(descriptor_error)?;
+                        if pointer.kind != wire::PhysicalAbiComponentKind::GlobalPointer
+                            || length.kind != wire::PhysicalAbiComponentKind::SliceLengthU64
+                        {
+                            return Err(mismatch());
+                        }
+                        let counts = premise.access_counts();
+                        budget.charge_work(256)?;
+                        arguments.push(MixedArgumentV26 {
+                            source_argument: ordinal(source_argument)?,
+                            generated_field: generated_field
                                 .try_into()
                                 .map_err(|_| ArgumentResourceV1::Arithmetic)?,
-                            function,
-                            budget,
-                        )?);
+                            physical_parameter,
+                            semantic_type: premise.source_type().index(),
+                            semantic_type_identity: *premise.source_identity().as_bytes(),
+                            descriptor_type_identity: *generated.source_type().as_bytes(),
+                            device_layout_identity: *generated.device_layout().as_bytes(),
+                            scalar: scalar(premise.scalar()),
+                            pointer_offset: pointer.offset,
+                            length_offset: length.offset,
+                            reads: ordinal(counts[0])?,
+                            writes: ordinal(counts[1])?,
+                            source_exclusive: premise.source_exclusive_contract(),
+                        });
+                    } else if matches!(
+                        source_kind,
+                        wire::SourceTypeDescriptorV3::SharedSlice(_)
+                            | wire::SourceTypeDescriptorV3::DisjointSlice(_)
+                    ) {
+                        // Even an unused slice needs an explicit completed
+                        // source/native zero-count premise, not absence.
+                        return Err(mismatch());
                     }
-                    let subjects = wire::MixedContractSubjectsV26 {
-                        kernel_id: *root.kernel_binding,
-                        source_semantic_identity: *source
-                            .source_ssa(budget)?
-                            .source_semantic_sha256(),
-                        original_graph_identity: *original.identity().digest(),
-                        output_graph_identity: *graph.identity().digest(),
-                        descriptor_identity: wire::mixed_descriptor_subject_v26(table, &mut |n| {
-                            budget.charge_work(n)
-                        })
-                        .map_err(codec_error)?,
-                        original_root: ordinal(original_root)?,
-                        output_function: ordinal(function_index)?,
-                        source_rank: rank,
-                        index_width: width,
-                        exact_grid: extents,
-                        source_argument_count: ordinal(root.arguments.len())?,
-                        generated_field_count: ordinal(generated_field)?,
-                        explicit_argument_bytes: root.explicit_argument_bytes,
-                        kernarg_alignment: root.kernarg_alignment_bytes,
-                    };
-                    let input = wire::MixedContractInputV26 {
-                        subjects,
-                        arguments: &arguments,
-                        occurrences: &occurrences,
-                    };
-                    let len = wire::encoded_mixed_contract_v26_len(&input, &mut |n| {
+                    generated_field = generated_field
+                        .checked_add(1)
+                        .ok_or(ArgumentResourceV1::Arithmetic)?;
+                }
+                if arguments.len() != selected.len()
+                    || generated_field != kernel.argument_count()
+                    || fields
+                        .next(&mut |n| budget.charge_work(n))
+                        .map_err(descriptor_error)?
+                        .is_some()
+                {
+                    return Err(mismatch());
+                }
+                let mut occurrences =
+                    source_reference_emission_vec_v29(wire::MAX_MIXED_OCCURRENCES_V26, budget)
+                        .map_err(source_argument_error_v18)?;
+                for row in parts.occurrences {
+                    budget.charge_work(3)?;
+                    let premise = parts
+                        .premises
+                        .get(row.premise_index())
+                        .ok_or_else(mismatch)?;
+                    if premise.root() != original_root {
+                        continue;
+                    }
+                    if occurrences.len() == wire::MAX_MIXED_OCCURRENCES_V26 {
+                        return Err(mismatch());
+                    }
+                    budget.charge_work(wire::MAX_MIXED_ARGUMENTS_V26)?;
+                    let argument = arguments
+                        .binary_search_by_key(&premise.original_argument(), |a| a.source_argument)
+                        .map_err(|_| mismatch())?;
+                    occurrences.push(occurrence(
+                        row,
+                        argument
+                            .try_into()
+                            .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                        function,
+                        budget,
+                    )?);
+                }
+                let subjects = wire::MixedContractSubjectsV26 {
+                    kernel_id: *root.kernel_binding,
+                    source_semantic_identity: *source.source_ssa(budget)?.source_semantic_sha256(),
+                    original_graph_identity: *original.identity().digest(),
+                    output_graph_identity: *graph.identity().digest(),
+                    descriptor_identity: wire::mixed_descriptor_subject_v26(table, &mut |n| {
                         budget.charge_work(n)
                     })
-                    .map_err(codec_error)?;
-                    let output = output.get_mut(..len).ok_or_else(mismatch)?;
-                    self.owned.check(budget)?;
-                    wire::encode_mixed_contract_v26(&input, output, &mut |n| budget.charge_work(n))
+                    .map_err(codec_error)?,
+                    original_root: ordinal(original_root)?,
+                    output_function: ordinal(function_index)?,
+                    source_rank: rank,
+                    index_width: width,
+                    exact_grid: extents,
+                    source_argument_count: ordinal(root.arguments.len())?,
+                    generated_field_count: ordinal(generated_field)?,
+                    explicit_argument_bytes: root.explicit_argument_bytes,
+                    kernarg_alignment: root.kernarg_alignment_bytes,
+                };
+                let input = wire::MixedContractInputV26 {
+                    subjects,
+                    arguments: &arguments,
+                    occurrences: &occurrences,
+                };
+                let len =
+                    wire::encoded_mixed_contract_v26_len(&input, &mut |n| budget.charge_work(n))
                         .map_err(codec_error)?;
-                    drop(input);
-                    drop(occurrences);
-                    drop(arguments);
-                    drop(selected);
-                    drop(fields);
-                    drop(kernel);
-                    self.owned
-                        .observe_retained_storage_v18(scratch_floor, budget)?;
-                    let scratch = budget
-                        .storage()
-                        .checked_sub(scratch_floor)
-                        .ok_or(ArgumentResourceV1::Accounting)?;
-                    budget.release_storage(scratch)?;
-                    Ok(len)
-                },
-            ))
-        }
+                let output = output.get_mut(..len).ok_or_else(mismatch)?;
+                owner.parts(budget)?;
+                wire::encode_mixed_contract_v26(&input, output, &mut |n| budget.charge_work(n))
+                    .map_err(codec_error)?;
+                drop(input);
+                drop(occurrences);
+                drop(arguments);
+                drop(selected);
+                drop(fields);
+                drop(kernel);
+                owner.observe(scratch_floor, budget)?;
+                let scratch = budget
+                    .storage()
+                    .checked_sub(scratch_floor)
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                budget.release_storage(scratch)?;
+                Ok(len)
+            },
+        ))
     }
+    macro_rules! mixed_source_contract_emitter_v26 {
+        ($handoff:ty) => {
+            impl $handoff {
+                /// Emits a complete descriptor-bound runtime contract from the
+                /// genuine retained final graph. Bytes remain inert and cannot
+                /// replace the owner, refinement proof or runtime discharge.
+                pub fn emit_mixed_contract_v26(
+                    &self,
+                    original_root: usize,
+                    abi: ProductionKernelArgumentAbiInputV18<'_>,
+                    table: &wire::DeviceDescriptorTableV3<'_>,
+                    descriptor_kernel: usize,
+                    output: &mut [u8],
+                    budget: &mut ArgumentBudgetV1<'_>,
+                ) -> SourceOwnedResultV18<usize> {
+                    emit_contract(
+                        self,
+                        original_root,
+                        abi,
+                        table,
+                        descriptor_kernel,
+                        output,
+                        budget,
+                    )
+                }
+            }
         };
     }
 
-    mixed_source_contract_emitter_v26!(ProductionConditionalMixedOutputHandoffV26);
-    mixed_source_contract_emitter_v26!(ProductionConditionalMixedPureCseOutputHandoffV26);
+    mixed_source_contract_emitter_v26!(ProductionConditionalMixedOutputHandoffV26<'_, '_>);
+    mixed_source_contract_emitter_v26!(ProductionConditionalMixedPureCseOutputHandoffV26<'_, '_>);
+    mixed_source_contract_emitter_v26!(
+        ProductionConditionalMixedLicmOutputHandoffV28<'_, '_, '_, '_>
+    );
 }

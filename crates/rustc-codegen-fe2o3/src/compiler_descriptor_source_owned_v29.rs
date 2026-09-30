@@ -9,6 +9,9 @@ use fe2o3_lower_mir_kernel::{
 };
 use std::mem::{align_of, size_of};
 
+#[path = "compiler_descriptor_source_mixed_v28.rs"]
+pub(crate) mod mixed_v28;
+
 // One private descriptor component contains exactly these six public field
 // types. Paying each field's size plus alignment bounds all aggregate padding
 // without exposing or relying on the private component's Rust layout.

@@ -754,22 +754,26 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             _ => None,
         };
         let shared_witness = match operation {
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { index_witness, .. }
+            | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { index_witness, .. } => {
+                Some((0, *index_witness))
+            }
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
                 grid_leader,
                 ..
-            } => Some(*grid_leader),
+            } => Some((1, *grid_leader)),
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
                 block_witness,
                 ..
-            } => Some(*block_witness),
+            } => Some((1, *block_witness)),
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
                 tile_witness,
                 ..
-            } => Some(*tile_witness),
+            } => Some((1, *tile_witness)),
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
                 stripe_witness,
                 ..
-            } => Some(*stripe_witness),
+            } => Some((1, *stripe_witness)),
             SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
                 witness,
                 kind:
@@ -778,15 +782,15 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                     | SemanticWriteOnlyDisjointWriteKindV1::Tiled2d { .. }
                     | SemanticWriteOnlyDisjointWriteKindV1::RowStriped2d { .. },
                 ..
-            } => Some(*witness),
+            } => Some((1, *witness)),
             _ => None,
         };
         for (argument, &node) in arguments.iter().enumerate() {
             budget.charge_work(1)?;
             for loan in self.node_loans(node, budget)? {
                 self.check_loan_use(loan, budget)?;
-                if argument == 1
-                    && let Some(witness) = shared_witness
+                if let Some((witness_argument, witness)) = shared_witness
+                    && argument == witness_argument
                 {
                     // The admitted intrinsic reads its capability, not the
                     // allocation payload governed by that capability.

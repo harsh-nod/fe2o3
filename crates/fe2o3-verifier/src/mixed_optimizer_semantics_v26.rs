@@ -30,6 +30,14 @@ mod cfg_graph;
 mod cfg_relation;
 #[path = "mixed_optimizer_congruence_v27.rs"]
 mod congruence_v27;
+#[path = "mixed_optimizer_relocation_cfg_semantics_v28.rs"]
+mod relocation_v28;
+pub(super) use relocation_v28::generate as generate_relocation_cfg_v28;
+#[path = "mixed_optimizer_relocation_composition_v28.rs"]
+mod relocation_composition_v28;
+#[cfg(test)]
+pub(super) use relocation_composition_v28::bridge_negative_controls;
+pub(super) use relocation_composition_v28::generate as generate_composed_relocation_cfg_v28;
 
 const NONE: usize = usize::MAX;
 const PARAMETERS: &str =

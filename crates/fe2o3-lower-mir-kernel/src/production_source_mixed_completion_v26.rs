@@ -393,3 +393,11 @@ mixed_source_completion_v26!(
 );
 
 include!("production_source_mixed_contract_v26.rs");
+
+#[path = "production_source_mixed_licm_v28.rs"]
+mod mixed_licm_v28;
+pub use mixed_licm_v28::{
+    ProductionConditionalMixedLicmOutputHandoffV28, ProductionMixedLicmCompletionErrorV28,
+    ProductionMixedLicmDefinitionProjectionV28, ProductionMixedLicmRelocationErrorV28,
+    ProductionMixedLicmRelocationV28, ProductionMixedLicmRuntimeOccurrenceV28,
+};

@@ -1,0 +1,495 @@
+//! Fixed Rust -> Policy10 -> LICM -> native/composed CFG -> V3 -> Worker input.
+//! Prepared inputs remain inert: this module cannot publish, finalize or launch.
+
+use super::*;
+use crate::compiler_descriptor::source_owned_v29::mixed_v28::{
+    self as descriptor, MixedDescriptorWireV28,
+};
+use fe2o3_kernel_descriptor::DeviceDescriptorTableV3;
+use fe2o3_lower_mir_kernel::{
+    ProductionConditionalMixedLicmOutputHandoffV28 as Native,
+    ProductionMixedLicmRelocationV28 as Relocation,
+};
+use fe2o3_verifier::{
+    PreparedMixedComposedRelocationCfgRefinementV28 as Composed,
+    PreparedMixedRelocationExpressionsV28 as Expressions,
+};
+use target_result::mixed_licm_v28::{
+    ConditionalMixedTargetLlvmV26 as Target, check_and_lower_mixed_target_llvm_v26,
+    worker_input_v26::{PreparedMixedWorkerInputV26 as Worker, prepare_mixed_worker_input_v26},
+};
+
+struct MixedWorker;
+type AdapterCapture<'a, 'bindings, F> = (&'a SourceBindingContextV29<'bindings>, F);
+type Pending<F> = formal_context_v19::PendingConsumerV19<F>;
+type NativeCapture<'a, 'bindings, 'v, 's, 'abi, 'w, F> = (
+    &'v Source<'s>,
+    &'a Native<'a, 'a, 'v, 's>,
+    &'a [AbiRoot<'abi>],
+    &'a SourceBindingContextV29<'bindings>,
+    &'a mut Budget<'w>,
+    &'a mut Pending<F>,
+);
+type ComposedCapture<'a, 'bindings, 'v, 's, 'abi, 'w, F> = (
+    &'v Source<'s>,
+    &'a Native<'v, 'v, 'v, 's>,
+    &'a Composed<'a, 'v, 'v, 'v, 's>,
+    &'a [AbiRoot<'abi>],
+    &'a SourceBindingContextV29<'bindings>,
+    &'a mut Budget<'w>,
+    &'a mut Pending<F>,
+);
+type TargetCapture<'a, 'bindings, 'v, 's, 'abi, 'w, F> = (
+    &'v Source<'s>,
+    &'a Native<'v, 'v, 'v, 's>,
+    &'a Composed<'a, 'v, 'v, 'v, 's>,
+    &'a Target<'a, 'v, 's>,
+    &'a [AbiRoot<'abi>],
+    &'a SourceBindingContextV29<'bindings>,
+    &'a mut Budget<'w>,
+    &'a mut Pending<F>,
+);
+type DescriptorCapture<'a, 'v, 's, 'abi, 'w, F> = (
+    &'a Composed<'a, 'v, 'v, 'v, 's>,
+    &'a Target<'a, 'v, 's>,
+    &'a MixedDescriptorWireV28<'a, 'v, 's>,
+    &'a [AbiRoot<'abi>],
+    &'a mut Budget<'w>,
+    &'a mut Pending<F>,
+);
+type WorkerCapture<'a, 'v, 's, 'w, F> = (
+    &'a Composed<'a, 'v, 'v, 'v, 's>,
+    &'a Worker<'a, 'a, 'v, 's, 'a, 'a>,
+    &'a mut Budget<'w>,
+    &'a mut Pending<F>,
+);
+
+fn frame_headers<T>() -> Result<usize, Resource> {
+    size_of::<T>()
+        .checked_add(align_of::<T>())
+        .and_then(|n| n.checked_add(size_of::<AssertUnwindSafe<T>>()))
+        .ok_or(Resource::Arithmetic)
+}
+
+fn headers<R, F>() -> Result<usize, Resource> {
+    [
+        mixed_licm_v28::headers::<R, AdapterCapture<'_, '_, F>>()?,
+        size_of::<Pending<F>>(),
+        align_of::<Pending<F>>(),
+        frame_headers::<NativeCapture<'_, '_, '_, '_, '_, '_, F>>()?,
+        frame_headers::<ComposedCapture<'_, '_, '_, '_, '_, '_, F>>()?,
+        frame_headers::<TargetCapture<'_, '_, '_, '_, '_, '_, F>>()?,
+        frame_headers::<DescriptorCapture<'_, '_, '_, '_, '_, F>>()?,
+        frame_headers::<WorkerCapture<'_, '_, '_, '_, F>>()?,
+        5 * size_of::<std::thread::Result<Result<R, Error>>>(),
+        5 * size_of::<Result<(), Error>>(),
+        size_of::<
+            Result<
+                Native<'_, '_, '_, '_>,
+                fe2o3_lower_mir_kernel::ProductionMixedLicmCompletionErrorV28,
+            >,
+        >(),
+        size_of::<
+            Result<
+                Expressions<'_, '_, '_, '_, '_>,
+                fe2o3_verifier::MixedOptimizerRelocationErrorV28,
+            >,
+        >(),
+        size_of::<
+            Result<Composed<'_, '_, '_, '_, '_>, fe2o3_verifier::MixedOptimizerRelocationErrorV28>,
+        >(),
+        size_of::<Result<Target<'_, '_, '_>, target_result::ClosedScalarTargetLlvmErrorV29>>(),
+        size_of::<Result<MixedDescriptorWireV28<'_, '_, '_>, Error>>(),
+        size_of::<Result<DeviceDescriptorTableV3<'_>, Error>>(),
+        size_of::<
+            Result<
+                Worker<'_, '_, '_, '_, '_, '_>,
+                target_result::mixed_licm_v28::worker_input_v26::MixedWorkerInputErrorV26,
+            >,
+        >(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |n, part| {
+        n.checked_add(part).ok_or(Resource::Arithmetic)
+    })
+}
+
+fn settled<R, E: Into<Error>>(
+    selected: std::thread::Result<Result<R, Error>>,
+    released: Result<(), E>,
+) -> Result<R, Error> {
+    match selected {
+        Ok(Ok(value)) => match released {
+            Ok(()) => Ok(value),
+            Err(error) => {
+                formal_context_v19::discard(value);
+                Err(error.into())
+            }
+        },
+        Ok(Err(error)) => Err(error),
+        Err(payload) => resume_unwind(payload),
+    }
+}
+
+#[cfg(test)]
+fn check_capture<T, F>(callback: &F) {
+    assert_eq!(std::mem::size_of_val(callback), size_of::<T>());
+    assert_eq!(std::mem::align_of_val(callback), align_of::<T>());
+}
+
+fn consume_final<R, F>(
+    source: &Source<'_>,
+    relocation: &Relocation<'_, '_, '_>,
+    roots: &[AbiRoot<'_>],
+    context: &SourceBindingContextV29<'_>,
+    budget: &mut Budget<'_>,
+    consume: F,
+) -> Result<R, Error>
+where
+    F: for<'n, 'h, 'v, 's, 't, 'wire, 'w> FnOnce(
+        &Worker<'n, 'h, 'v, 's, 't, 'wire>,
+        &mut Budget<'w>,
+    ) -> Result<R, Error>,
+{
+    let mut pending = Pending::new(consume);
+    let native = relocation
+        .complete_native_v28(budget)
+        .map_err(Error::MixedLicmCompletion)?;
+    let capture: NativeCapture<'_, '_, '_, '_, '_, '_, F> =
+        (source, &native, roots, context, &mut *budget, &mut pending);
+    let with_native = move || -> Result<R, Error> {
+        let (source, native, roots, context, budget, pending) = std::convert::identity(capture);
+        native.check_original_source(source.source_ssa(budget)?, budget)?;
+        native.check_original_argument_abi_v26(
+            ProductionKernelArgumentAbiInputV18 { roots },
+            budget,
+        )?;
+        let expressions =
+            fe2o3_verifier::prepare_mixed_relocation_expressions_v28(source, native, budget)
+                .map_err(Error::MixedRelocationExpressions)?;
+        let composed = expressions
+            .prepare_composed_cfg_refinement(budget)
+            .map_err(Error::MixedRelocationExpressions)?;
+        let capture: ComposedCapture<'_, '_, '_, '_, '_, '_, F> = (
+            source,
+            native,
+            &composed,
+            roots,
+            context,
+            &mut *budget,
+            pending,
+        );
+        let with_composed = move || -> Result<R, Error> {
+            let (source, native, composed, roots, context, budget, pending) =
+                std::convert::identity(capture);
+            let target = check_and_lower_mixed_target_llvm_v26(
+                source,
+                native,
+                context.bindings.rustc_target.profile(),
+                budget,
+            )?;
+            let capture: TargetCapture<'_, '_, '_, '_, '_, '_, F> = (
+                source,
+                native,
+                composed,
+                &target,
+                roots,
+                context,
+                &mut *budget,
+                pending,
+            );
+            let with_target = move || -> Result<R, Error> {
+                let (source, native, composed, target, roots, context, budget, pending) =
+                    std::convert::identity(capture);
+                let wire = descriptor::produce(
+                    &context.bindings.typed_descriptor_roots,
+                    source,
+                    native,
+                    context.bindings.rustc_target.profile(),
+                    context
+                        .bindings
+                        .rustc_target
+                        .rustc_layout()
+                        .default_pointer_width_bits(),
+                    budget,
+                )?;
+                let capture: DescriptorCapture<'_, '_, '_, '_, '_, F> =
+                    (composed, target, &wire, roots, &mut *budget, pending);
+                let with_descriptor = move || -> Result<R, Error> {
+                    let (composed, target, wire, roots, budget, pending) =
+                        std::convert::identity(capture);
+                    let table = wire.table(budget)?;
+                    let worker = prepare_mixed_worker_input_v26(
+                        target,
+                        ProductionKernelArgumentAbiInputV18 { roots },
+                        &table,
+                        budget,
+                    )?;
+                    let capture: WorkerCapture<'_, '_, '_, '_, F> =
+                        (composed, &worker, &mut *budget, pending);
+                    let invoke = move || {
+                        let (composed, worker, budget, pending) = std::convert::identity(capture);
+                        // The nominal original/prefix/final request stays owned
+                        // through this callback. Replay checks owners and custody;
+                        // generated obligations are not executed proof evidence.
+                        composed
+                            .replay(budget)
+                            .map_err(Error::MixedRelocationExpressions)?;
+                        pending.take()(worker, budget)
+                    };
+                    #[cfg(test)]
+                    check_capture::<WorkerCapture<'_, '_, '_, '_, F>, _>(&invoke);
+                    let selected = catch_unwind(AssertUnwindSafe(invoke));
+                    let released = worker.discard(budget);
+                    settled(selected, released)
+                };
+                #[cfg(test)]
+                check_capture::<DescriptorCapture<'_, '_, '_, '_, '_, F>, _>(&with_descriptor);
+                let selected = catch_unwind(AssertUnwindSafe(with_descriptor));
+                let released = wire.discard(budget);
+                settled(selected, released)
+            };
+            #[cfg(test)]
+            check_capture::<TargetCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_target);
+            let selected = catch_unwind(AssertUnwindSafe(with_target));
+            let released = target.discard(budget);
+            settled(selected, released)
+        };
+        #[cfg(test)]
+        check_capture::<ComposedCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_composed);
+        let selected = catch_unwind(AssertUnwindSafe(with_composed));
+        let released = composed
+            .discard(budget)
+            .map_err(Error::MixedRelocationExpressions);
+        settled(selected, released)
+    };
+    #[cfg(test)]
+    check_capture::<NativeCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_native);
+    let selected = catch_unwind(AssertUnwindSafe(with_native));
+    let released = native.discard(budget);
+    settled(selected, released)
+}
+
+impl<R, F> SourceHandoffPolicyV29<R, F> for MixedWorker
+where
+    F: for<'n, 'h, 'v, 's, 't, 'wire, 'w> FnOnce(
+        &Worker<'n, 'h, 'v, 's, 't, 'wire>,
+        &mut Budget<'w>,
+    ) -> Result<R, Error>,
+{
+    fn entry_headers() -> Result<usize, Resource> {
+        headers::<R, F>()
+    }
+
+    fn consume<'view, 'source, 'abi, 'work>(
+        source: &'view Source<'source>,
+        roots: &[AbiRoot<'abi>],
+        context: &SourceBindingContextV29<'_>,
+        budget: &mut Budget<'work>,
+        consume: F,
+    ) -> Result<R, Error> {
+        let capture: AdapterCapture<'_, '_, F> = (context, consume);
+        let adapter = move |source: &Source<'_>,
+                            relocation: &Relocation<'_, '_, '_>,
+                            roots: &[AbiRoot<'_>],
+                            target,
+                            budget: &mut Budget<'_>| {
+            let (context, consume) = std::convert::identity(capture);
+            if target != context.bindings.rustc_target.profile() {
+                return Err(Error::Unsupported("original mixed target binding changed"));
+            }
+            consume_final(source, relocation, roots, context, budget, consume)
+        };
+        #[cfg(test)]
+        check_capture::<AdapterCapture<'_, '_, F>, _>(&adapter);
+        <mixed_licm_v28::MixedLicm as SourceHandoffPolicyV29<R, _>>::consume(
+            source, roots, context, budget, adapter,
+        )
+    }
+}
+
+impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    /// Prepare the complete inert mixed Worker input from one original Rust
+    /// transaction. The fixed policy cannot accept replacement descriptors,
+    /// final graphs, targets, optimizer selectors or fabricated proof receipts.
+    /// Its composed original-to-final CFG request remains owned through the
+    /// consumer, without executing Verus or closing any Worker admission gate.
+    pub(crate) fn with_original_source_mixed_worker_input_v28<R, F>(
+        self,
+        consume: F,
+    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error>
+    where
+        F: for<'n, 'h, 'v, 's, 't, 'wire, 'w> FnOnce(
+            &Worker<'n, 'h, 'v, 's, 't, 'wire>,
+            &mut Budget<'w>,
+        ) -> Result<R, Error>,
+    {
+        self.with_source_owned_custody_policy_v29::<MixedWorker, R, F>(
+            ImportProfile::NominalV35,
+            WORK_LIMIT,
+            STORAGE_LIMIT,
+            consume,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_original_source_mixed_worker_test_limits_v28<R, F>(
+        self,
+        work: usize,
+        storage: usize,
+        consume: F,
+    ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error>
+    where
+        F: for<'n, 'h, 'v, 's, 't, 'wire, 'w> FnOnce(
+            &Worker<'n, 'h, 'v, 's, 't, 'wire>,
+            &mut Budget<'w>,
+        ) -> Result<R, Error>,
+    {
+        self.with_source_owned_custody_policy_v29::<MixedWorker, R, F>(
+            ImportProfile::NominalV35,
+            work,
+            storage,
+            consume,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composed_worker_frames_have_an_independent_header_oracle() {
+        type Consumer = for<'n, 'h, 'v, 's, 't, 'wire, 'w> fn(
+            &Worker<'n, 'h, 'v, 's, 't, 'wire>,
+            &mut Budget<'w>,
+        ) -> Result<usize, Error>;
+        type NativeFields<'a> = (&'a (), &'a (), &'a [()], &'a (), &'a mut (), &'a mut ());
+        type ComposedFields<'a> = (
+            &'a (),
+            &'a (),
+            &'a (),
+            &'a [()],
+            &'a (),
+            &'a mut (),
+            &'a mut (),
+        );
+        type TargetFields<'a> = (
+            &'a (),
+            &'a (),
+            &'a (),
+            &'a (),
+            &'a [()],
+            &'a (),
+            &'a mut (),
+            &'a mut (),
+        );
+        type DescriptorFields<'a> = (&'a (), &'a (), &'a (), &'a [()], &'a mut (), &'a mut ());
+        type WorkerFields<'a> = (&'a (), &'a (), &'a mut (), &'a mut ());
+        let frames = [
+            (
+                size_of::<NativeFields<'_>>(),
+                align_of::<NativeFields<'_>>(),
+            ),
+            (
+                size_of::<ComposedFields<'_>>(),
+                align_of::<ComposedFields<'_>>(),
+            ),
+            (
+                size_of::<TargetFields<'_>>(),
+                align_of::<TargetFields<'_>>(),
+            ),
+            (
+                size_of::<DescriptorFields<'_>>(),
+                align_of::<DescriptorFields<'_>>(),
+            ),
+            (
+                size_of::<WorkerFields<'_>>(),
+                align_of::<WorkerFields<'_>>(),
+            ),
+        ];
+        let captures = frames
+            .into_iter()
+            .map(|(size, align)| 2 * size + align)
+            .sum::<usize>();
+        let expected = mixed_licm_v28::headers::<usize, (&(), Consumer)>().unwrap()
+            + size_of::<Pending<Consumer>>()
+            + align_of::<Pending<Consumer>>()
+            + captures
+            + 5 * size_of::<std::thread::Result<Result<usize, Error>>>()
+            + 5 * size_of::<Result<(), Error>>()
+            + size_of::<
+                Result<
+                    Native<'_, '_, '_, '_>,
+                    fe2o3_lower_mir_kernel::ProductionMixedLicmCompletionErrorV28,
+                >,
+            >()
+            + size_of::<
+                Result<
+                    Expressions<'_, '_, '_, '_, '_>,
+                    fe2o3_verifier::MixedOptimizerRelocationErrorV28,
+                >,
+            >()
+            + size_of::<
+                Result<
+                    Composed<'_, '_, '_, '_, '_>,
+                    fe2o3_verifier::MixedOptimizerRelocationErrorV28,
+                >,
+            >()
+            + size_of::<Result<Target<'_, '_, '_>, target_result::ClosedScalarTargetLlvmErrorV29>>(
+            )
+            + size_of::<Result<MixedDescriptorWireV28<'_, '_, '_>, Error>>()
+            + size_of::<Result<DeviceDescriptorTableV3<'_>, Error>>()
+            + size_of::<
+                Result<
+                    Worker<'_, '_, '_, '_, '_, '_>,
+                    target_result::mixed_licm_v28::worker_input_v26::MixedWorkerInputErrorV26,
+                >,
+            >();
+        assert_eq!(headers::<usize, Consumer>().unwrap(), expected);
+    }
+
+    #[test]
+    fn composed_worker_cleanup_refusal_discards_success_once_even_when_drop_panics() {
+        use std::cell::Cell;
+        struct ResultOwner<'a>(&'a Cell<usize>);
+        impl Drop for ResultOwner<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+                std::panic::panic_any(811u32);
+            }
+        }
+        let drops = Cell::new(0);
+        let result = settled(
+            Ok(Ok(ResultOwner(&drops))),
+            Err(Error::MixedRelocationExpressions(
+                fe2o3_verifier::MixedOptimizerRelocationErrorV28::Binding("composed custody"),
+            )),
+        );
+        assert!(matches!(
+            result,
+            Err(Error::MixedRelocationExpressions(
+                fe2o3_verifier::MixedOptimizerRelocationErrorV28::Binding("composed custody")
+            ))
+        ));
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn worker_scope_preserves_selected_errors_and_unwinds_over_cleanup_refusals() {
+        let selected: std::thread::Result<Result<(), Error>> =
+            Ok(Err(Error::Unsupported("consumer")));
+        assert!(matches!(
+            settled(selected, Err(Resource::Accounting)),
+            Err(Error::Unsupported("consumer"))
+        ));
+        let result = catch_unwind(|| {
+            settled::<(), Resource>(Err(Box::new(47usize)), Err(Resource::Accounting))
+        });
+        assert_eq!(*result.unwrap_err().downcast::<usize>().unwrap(), 47);
+        assert!(matches!(
+            settled(Ok(Ok(())), Err(Resource::Accounting)),
+            Err(Error::Resource(Resource::Accounting))
+        ));
+    }
+}

@@ -13,6 +13,34 @@ enum Witness {
     Stripe,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Reader {
+    Thread,
+    Disjoint,
+}
+
+impl Reader {
+    fn witness(self) -> Witness {
+        match self {
+            Self::Thread | Self::Disjoint => Witness::Grid,
+        }
+    }
+
+    fn operation(self) -> SemanticCompilerIntrinsicOperationV1 {
+        match self {
+            Self::Thread => SemanticCompilerIntrinsicOperationV1::ThreadIndexGet {
+                index_witness: WITNESS,
+                raw_index: INDEX,
+            },
+            Self::Disjoint => SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
+                index_witness: WITNESS,
+                raw_index: INDEX,
+                index_space: SemanticDisjointIndexSpaceV1::GridExclusive,
+            },
+        }
+    }
+}
+
 impl Witness {
     fn space(self) -> SemanticDisjointIndexSpaceV1 {
         match self {
@@ -224,6 +252,14 @@ fn witness_abi(
 // An admitted original MIR/SSA component, not authority to manufacture a trusted
 // provider capability in Rust. The actual borrowed-source driver covers that join.
 fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 {
+    witness_owner_with_reader(witness, write, None)
+}
+
+fn witness_owner_with_reader(
+    witness: Witness,
+    write: bool,
+    reader: Option<Reader>,
+) -> ProductionSemanticSsaOwnerV1 {
     let base = owner_with_shape_uncaptured(1, 0);
     let mut types = base.source_semantic().types().to_vec();
     if matches!(witness, Witness::Block) {
@@ -319,7 +355,7 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
     let result = if write { BOOL } else { OPTIONAL };
     // The hostile same-shape identity has a genuine independent source ABI
     // argument, never an unreachable type appended just for a plan mutation.
-    let local_types = [
+    let mut local_types = vec![
         UNIT,
         CARRIER,
         WITNESS,
@@ -328,6 +364,9 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
         result,
         other_witness,
     ];
+    if reader.is_some() {
+        local_types.push(INDEX);
+    }
     let locals = local_types
         .into_iter()
         .enumerate()
@@ -370,7 +409,7 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
             ),
         ))
     }));
-    let blocks = vec![
+    let mut blocks = vec![
         block(
             0,
             vec![
@@ -406,6 +445,46 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
             SemanticTerminatorKindV1::Return,
         ),
     ];
+    let mut callables = vec![
+        SemanticCallableDeclV1::defined(ROOT),
+        intrinsic(
+            21,
+            witness_abi(21, false, &inputs, result, witness, other_witness),
+            witness.operation(write),
+        ),
+    ];
+    if let Some(reader) = reader {
+        assert!(!write);
+        // Use an admitted original call before the allocation-view operation.
+        // Both calls read the same original shared witness loan.
+        let old_entry = blocks.remove(0);
+        let old_exit = blocks.remove(0);
+        let reader_inputs = vec![SHARED];
+        let reader_arguments = vec![SemanticOperandV1::Copy(place(4, SHARED))];
+        blocks.push(block(
+            0,
+            old_entry.statements().to_vec(),
+            call(2, reader_arguments, 7, INDEX, 1),
+        ));
+        let SemanticTerminatorKindV1::Call(view_call) = old_entry.terminator().kind() else {
+            panic!("fixture lost view call");
+        };
+        blocks.push(block(
+            1,
+            vec![],
+            call(1, view_call.arguments().to_vec(), 5, result, 2),
+        ));
+        blocks.push(block(
+            2,
+            old_exit.statements().to_vec(),
+            SemanticTerminatorKindV1::Return,
+        ));
+        callables.push(intrinsic(
+            22,
+            witness_abi(22, false, &reader_inputs, INDEX, witness, other_witness),
+            reader.operation(),
+        ));
+    }
     let function = SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256([20; 32]),
         SemanticFunctionRoleV1::KernelRoot,
@@ -440,14 +519,7 @@ fn witness_owner(witness: Witness, write: bool) -> ProductionSemanticSsaOwnerV1 
         vec![],
         vec![],
         vec![function],
-        vec![
-            SemanticCallableDeclV1::defined(ROOT),
-            intrinsic(
-                21,
-                witness_abi(21, false, &inputs, result, witness, other_witness),
-                witness.operation(write),
-            ),
-        ],
+        callables,
         vec![ROOT],
     )
     .unwrap()
@@ -547,7 +619,24 @@ fn with_witness_builder(
         &mut ArgumentBudgetV1<'_>,
     ),
 ) {
-    let mut owner = witness_owner(Witness::Grid, false);
+    with_intrinsic_builder(None, consume);
+}
+
+fn with_intrinsic_builder(
+    reader: Option<Reader>,
+    consume: impl FnOnce(
+        &mut SourceReferenceBuilderV29<'_, '_, '_>,
+        &SemanticCallableDeclV1,
+        &SemanticDirectCallV1,
+        &mut Vec<usize>,
+        &mut ArgumentBudgetV1<'_>,
+    ),
+) {
+    let mut owner = witness_owner_with_reader(
+        reader.map(Reader::witness).unwrap_or(Witness::Grid),
+        false,
+        reader,
+    );
     let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
     let capture = owner
@@ -574,7 +663,7 @@ fn with_witness_builder(
                 .entry;
             builder.frames[instances.root().index()] = Some(entry);
             let semantic = instances.owner().source_semantic();
-            let callable = &semantic.callables()[1];
+            let callable = &semantic.callables()[if reader.is_some() { 2 } else { 1 }];
             let SemanticTerminatorKindV1::Call(call) =
                 semantic.functions()[0].blocks()[0].terminator().kind()
             else {
@@ -593,7 +682,11 @@ fn with_witness_builder(
                 .position(|row| row.kind == SourceReferenceNodeKindV29::Loan(1))
                 .unwrap();
             let index = builder.plain(INDEX, budget).unwrap();
-            let mut arguments = vec![carrier, witness, index];
+            let mut arguments = if reader.is_some() {
+                vec![witness]
+            } else {
+                vec![carrier, witness, index]
+            };
             // function() restores the outer diagnostic scope. Re-enter this
             // actual call's effect site before testing the private intrinsic API.
             assert!(builder.effect_site.is_none());
@@ -606,7 +699,10 @@ fn with_witness_builder(
             let accepted = builder
                 .intrinsic(callable, &arguments, call, budget)
                 .unwrap();
-            assert_eq!(builder.plan.nodes[accepted].ty, OPTIONAL);
+            assert_eq!(
+                builder.plan.nodes[accepted].ty,
+                if reader.is_some() { INDEX } else { OPTIONAL }
+            );
             builder.effect_ordinal = 0;
             consume(&mut builder, callable, call, &mut arguments, budget);
             completed = true;
@@ -756,6 +852,7 @@ fn measured_witness_plan(
     owner: &ProductionSemanticSsaOwnerV1,
     work_limit: usize,
     storage_limit: usize,
+    expected_reads: usize,
 ) -> (Result<(), ProductionSemanticKirErrorV1>, usize, usize, bool) {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
@@ -770,7 +867,7 @@ fn measured_witness_plan(
                 assert_eq!(
                     plan.loans[1].effects,
                     SourceReferenceEffectsV29 {
-                        referent_reads: 1,
+                        referent_reads: expected_reads,
                         ..Default::default()
                     }
                 );
@@ -800,15 +897,15 @@ fn shared_intrinsic_witness_plan_exact_and_one_short_resources_restore_the_outer
     owner
         .try_capture_occurrences_with_budget_v1(&mut budget)
         .unwrap();
-    let (result, work, peak, completed) = measured_witness_plan(&owner, LIMIT, LIMIT);
+    let (result, work, peak, completed) = measured_witness_plan(&owner, LIMIT, LIMIT, 1);
     result.unwrap();
     assert!(completed);
-    let (result, used, retained, completed) = measured_witness_plan(&owner, work, peak);
+    let (result, used, retained, completed) = measured_witness_plan(&owner, work, peak, 1);
     result.unwrap();
     assert!(completed);
     assert_eq!((used, retained), (work, peak));
     for (work_limit, storage_limit, is_work) in [(work - 1, peak, true), (work, peak - 1, false)] {
-        let (result, _, _, completed) = measured_witness_plan(&owner, work_limit, storage_limit);
+        let (result, _, _, completed) = measured_witness_plan(&owner, work_limit, storage_limit, 1);
         assert!(!completed);
         match result {
             Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
@@ -819,5 +916,160 @@ fn shared_intrinsic_witness_plan_exact_and_one_short_resources_restore_the_outer
             )) if !is_work => assert_eq!(error.limit(), storage_limit),
             result => panic!("wrong witness resource refusal: {result:?}"),
         }
+    }
+}
+
+#[test]
+fn index_witness_readers_keep_exact_read_only_effects_and_resource_limits() {
+    for reader in [Reader::Thread, Reader::Disjoint] {
+        let mut owner = witness_owner_with_reader(reader.witness(), false, Some(reader));
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+        owner
+            .try_capture_occurrences_with_budget_v1(&mut budget)
+            .unwrap();
+        let (result, work, peak, completed) = measured_witness_plan(&owner, LIMIT, LIMIT, 2);
+        result.unwrap();
+        assert!(completed);
+        let (result, used, retained, completed) = measured_witness_plan(&owner, work, peak, 2);
+        result.unwrap();
+        assert!(completed);
+        assert_eq!((used, retained), (work, peak));
+        for (work_limit, storage_limit, is_work) in
+            [(work - 1, peak, true), (work, peak - 1, false)]
+        {
+            let (result, _, _, completed) =
+                measured_witness_plan(&owner, work_limit, storage_limit, 2);
+            assert!(!completed);
+            match result {
+                Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Work(error),
+                )) if is_work => assert_eq!(error.limit(), work_limit),
+                Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Storage(error),
+                )) if !is_work => assert_eq!(error.limit(), storage_limit),
+                result => panic!("wrong index reader resource refusal: {result:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn index_witness_readers_require_exact_shared_loan_identity_and_operand_role() {
+    for reader in [Reader::Thread, Reader::Disjoint] {
+        for mode in 0..7 {
+            with_intrinsic_builder(
+                Some(reader),
+                |builder, callable, call, arguments, budget| {
+                    let node = arguments[0];
+                    let origin = builder.plan.loans[1].origin;
+                    let before = builder.plan.loans[1].effects;
+                    match mode {
+                        0 => builder.plan.loans[1].source_type = BORROW,
+                        1 => builder.plan.loans[1].kind = SemanticBorrowKindV1::Mutable,
+                        2 => builder.plan.origins[origin].ty = INDEX,
+                        3 => builder.plan.nodes[node].ty = BORROW,
+                        4 => {
+                            let first = builder.plan.children.len();
+                            emission_push_v1(&mut builder.plan.children, node, budget).unwrap();
+                            arguments[0] = builder
+                                .node(
+                                    SHARED,
+                                    SourceReferenceNodeKindV29::Aggregate { first, count: 1 },
+                                    budget,
+                                )
+                                .unwrap();
+                        }
+                        5 => {
+                            // The right witness in the wrong argument slot is still invalid.
+                            let scalar = builder.plain(INDEX, budget).unwrap();
+                            arguments.insert(0, scalar);
+                        }
+                        6 => {
+                            let types = builder.plan.instances.owner().source_semantic().types();
+                            assert_eq!(
+                                types[OTHER_WITNESS.index() as usize].shape(),
+                                types[WITNESS.index() as usize].shape()
+                            );
+                            builder.plan.origins[origin].ty = OTHER_WITNESS;
+                        }
+                        _ => unreachable!(),
+                    }
+                    exact_reason(
+                        builder
+                            .intrinsic(callable, arguments, call, budget)
+                            .unwrap_err(),
+                        if mode == 5 {
+                            "source reference intrinsic effect is not represented"
+                        } else {
+                            "source reference shared intrinsic witness differs"
+                        },
+                    );
+                    assert_eq!(builder.plan.loans[1].effects, before);
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn index_witness_readers_reject_dead_or_replaced_original_referents() {
+    for reader in [Reader::Thread, Reader::Disjoint] {
+        for replaced in [false, true] {
+            with_intrinsic_builder(
+                Some(reader),
+                |builder, callable, call, arguments, budget| {
+                    let origin = &builder.plan.origins[builder.plan.loans[1].origin];
+                    let (instance, local) = (origin.instance, origin.local);
+                    let mut state = builder.local(instance, local).unwrap();
+                    if replaced {
+                        state.generation += 1;
+                    } else {
+                        state.node = None;
+                    }
+                    builder.set_local(instance, local, state).unwrap();
+                    let before = builder.plan.loans[1].effects;
+                    exact_reason(
+                        builder
+                            .intrinsic(callable, arguments, call, budget)
+                            .unwrap_err(),
+                        "source reference referent is dead or replaced",
+                    );
+                    assert_eq!(builder.plan.loans[1].effects, before);
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn index_witness_reader_abi_does_not_admit_unknown_intrinsic_effects() {
+    for reader in [Reader::Thread, Reader::Disjoint] {
+        with_intrinsic_builder(
+            Some(reader),
+            |builder, callable, call, arguments, budget| {
+                let SemanticCallableDeclV1::CompilerIntrinsic {
+                    binding,
+                    operation_identity,
+                    ..
+                } = callable
+                else {
+                    unreachable!()
+                };
+                let changed = SemanticCallableDeclV1::CompilerIntrinsic {
+                    binding: binding.clone(),
+                    operation_identity: *operation_identity,
+                    operation: SemanticCompilerIntrinsicOperationV1::ColdPath,
+                };
+                let before = builder.plan.loans[1].effects;
+                exact_reason(
+                    builder
+                        .intrinsic(&changed, arguments, call, budget)
+                        .unwrap_err(),
+                    "source reference intrinsic effect is not represented",
+                );
+                assert_eq!(builder.plan.loans[1].effects, before);
+            },
+        );
     }
 }

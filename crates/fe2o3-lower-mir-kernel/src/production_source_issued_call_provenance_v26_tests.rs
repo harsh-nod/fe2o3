@@ -2,7 +2,7 @@ fn pointer(space: AddressSpace, access: AccessMode) -> Type {
     Type::pointer(Type::Scalar(ScalarType::U32), space, access)
 }
 
-fn transport_graph(fault: u8) -> Function {
+pub(super) fn transport_graph(fault: u8) -> Function {
     let global = pointer(AddressSpace::Global, AccessMode::ReadWrite);
     let generic = pointer(AddressSpace::Generic, AccessMode::ReadWrite);
     let readonly = pointer(AddressSpace::Generic, AccessMode::ReadOnly);

@@ -471,7 +471,9 @@ fn execution_construction_work_failure_disposes_before_owned_header_refund() {
             let source = view.original_source(budget)?;
             let operations = view.input_inventory(budget)?.operations().len();
             assert!(operations > 0);
-            budget.charge_work(OPTIMIZED_SOURCE_WORK_LIMIT_V18 - budget.work() - 1)?;
+            // Admit the initial query and the 32 bounded disposal attempts plus
+            // seven finalizer steps; the original recipe census must refuse.
+            budget.charge_work(OPTIMIZED_SOURCE_WORK_LIMIT_V18 - budget.work() - 1 - (32 + 7))?;
             let floor = budget.storage();
             let owned = ExecutionOwnedCaptureV18 {
                 bytes: [0x48; 2048],

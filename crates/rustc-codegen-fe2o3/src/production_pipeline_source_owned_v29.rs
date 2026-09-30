@@ -51,11 +51,16 @@ pub(crate) enum Error {
     BoundPrivateWorklistHandoff(fe2o3_lower_mir_kernel::ProductionBoundPrivateHandoffErrorV21),
     ConditionalMixedHandoff(fe2o3_lower_mir_kernel::ProductionMixedSourceHandoffErrorV26),
     ConditionalMixedCfg(fe2o3_verifier::MixedOptimizerRefinementErrorV26),
+    MixedLicm(fe2o3_lower_mir_kernel::ProductionMixedLicmRelocationErrorV28),
+    MixedLicmCompletion(fe2o3_lower_mir_kernel::ProductionMixedLicmCompletionErrorV28),
+    MixedDescriptor(crate::compiler_descriptor::nominal_v3::NominalDescriptorErrorV3),
+    MixedRelocationExpressions(fe2o3_verifier::MixedOptimizerRelocationErrorV28),
     TargetLlvm(target_result::ClosedScalarTargetLlvmErrorV29),
     MixedWorkerInput(target_result::mixed_v26::worker_input_v26::MixedWorkerInputErrorV26),
     MixedPureCseWorkerInput(
         target_result::mixed_pure_cse_v26::worker_input_v26::MixedWorkerInputErrorV26,
     ),
+    MixedLicmWorkerInput(target_result::mixed_licm_v28::worker_input_v26::MixedWorkerInputErrorV26),
     FormalReports(Box<formal_context_v19::ReportOptimizationErrorV19>),
     FormalPaths(Box<formal_context_v19::PathOptimizationErrorV20>),
     Resource(Resource),
@@ -79,9 +84,14 @@ impl std::error::Error for Error {
             Self::BoundPrivateWorklistHandoff(error) => Some(error),
             Self::ConditionalMixedHandoff(error) => Some(error),
             Self::ConditionalMixedCfg(error) => Some(error),
+            Self::MixedLicm(error) => Some(error),
+            Self::MixedLicmCompletion(error) => Some(error),
+            Self::MixedDescriptor(error) => Some(error),
+            Self::MixedRelocationExpressions(error) => Some(error),
             Self::TargetLlvm(error) => Some(error),
             Self::MixedWorkerInput(error) => Some(error),
             Self::MixedPureCseWorkerInput(error) => Some(error),
+            Self::MixedLicmWorkerInput(error) => Some(error),
             Self::FormalReports(error) => Some(error.as_ref()),
             Self::FormalPaths(error) => Some(error.as_ref()),
             Self::Resource(error) => Some(error),
@@ -112,6 +122,11 @@ impl From<ProductionClosedScalarHandoffErrorV18> for Error {
 impl From<Resource> for Error {
     fn from(error: Resource) -> Self {
         Self::Resource(error)
+    }
+}
+impl From<fe2o3_lower_mir_kernel::ProductionMixedLicmRelocationErrorV28> for Error {
+    fn from(error: fe2o3_lower_mir_kernel::ProductionMixedLicmRelocationErrorV28) -> Self {
+        Self::MixedLicm(error)
     }
 }
 impl From<ProductionUnqualifiedIntegerHandoffErrorV18> for Error {
@@ -146,6 +161,14 @@ impl From<target_result::mixed_pure_cse_v26::worker_input_v26::MixedWorkerInputE
         error: target_result::mixed_pure_cse_v26::worker_input_v26::MixedWorkerInputErrorV26,
     ) -> Self {
         Self::MixedPureCseWorkerInput(error)
+    }
+}
+
+impl From<target_result::mixed_licm_v28::worker_input_v26::MixedWorkerInputErrorV26> for Error {
+    fn from(
+        error: target_result::mixed_licm_v28::worker_input_v26::MixedWorkerInputErrorV26,
+    ) -> Self {
+        Self::MixedLicmWorkerInput(error)
     }
 }
 
@@ -378,6 +401,15 @@ mod mixed_pure_cse_v26;
 
 #[path = "production_pipeline_source_mixed_cfg_v27.rs"]
 mod mixed_cfg_v27;
+
+#[path = "production_pipeline_source_mixed_licm_v28.rs"]
+mod mixed_licm_v28;
+
+#[path = "production_pipeline_source_mixed_relocation_v28.rs"]
+mod mixed_relocation_v28;
+
+#[path = "production_pipeline_source_mixed_worker_v28.rs"]
+pub(crate) mod mixed_worker_v28;
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// The fixed source profile is selected before any semantic admission.

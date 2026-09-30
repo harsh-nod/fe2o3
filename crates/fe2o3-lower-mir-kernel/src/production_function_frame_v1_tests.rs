@@ -474,6 +474,7 @@ struct UnassembledFrameFields {
     emitted_operations: usize,
     next_value: u32,
     execution_observation: Option<ExecutionArchiveV29>,
+    direct_call_inputs: Option<Vec<InvocationInputRowV1>>,
 }
 
 #[test]

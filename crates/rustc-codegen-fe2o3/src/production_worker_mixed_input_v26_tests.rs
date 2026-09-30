@@ -373,8 +373,100 @@ pub(crate) fn genuine_worker_input_case(
             assert_eq!(contract.subjects().original_root, root as u32);
             assert_eq!(
                 contract.subjects().output_graph_identity,
-                *handoff.output(budget)?.owner().identity().digest()
+                *handoff.owner(budget)?.identity().digest()
             );
+            let premises = handoff.runtime_premises(budget)?;
+            let expected_arguments: Vec<_> =
+                premises.iter().filter(|row| row.root() == root).collect();
+            assert_eq!(contract.argument_count(), expected_arguments.len());
+            for expected in expected_arguments {
+                let mut matched = false;
+                for index in 0..contract.argument_count() {
+                    let actual = contract
+                        .argument(index, &mut |_: usize| Ok::<(), Resource>(()))
+                        .unwrap();
+                    if actual.source_argument == expected.original_argument() {
+                        assert!(!matched);
+                        assert_eq!(
+                            [actual.reads as usize, actual.writes as usize],
+                            expected.access_counts()
+                        );
+                        matched = true;
+                    }
+                }
+                assert!(
+                    matched,
+                    "unused and accessed source arguments must both survive"
+                );
+            }
+            let expected: Vec<_> = handoff
+                .runtime_occurrences(budget)?
+                .iter()
+                .filter(|row| premises[row.premise_index()].root() == root)
+                .collect();
+            assert_eq!(contract.occurrence_count(), expected.len());
+            let operation = |row: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1| {
+                mixed_conditional_v26::MixedOperationV26 {
+                    function: row.block.function.0,
+                    block: row.block.block,
+                    operation: row.operation,
+                }
+            };
+            let definition = |row: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1| {
+                use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as D;
+                use mixed_conditional_v26::MixedDefinitionV26 as W;
+                match row {
+                    D::FunctionArgument { function, argument } => W::FunctionArgument {
+                        function: function.0,
+                        argument,
+                    },
+                    D::BlockArgument { block, argument } => W::BlockArgument {
+                        function: block.function.0,
+                        block: block.block,
+                        argument,
+                    },
+                    D::Result {
+                        operation: at,
+                        result,
+                    } => W::Result {
+                        operation: operation(at),
+                        result,
+                    },
+                }
+            };
+            for (index, expected) in expected.iter().enumerate() {
+                let actual = contract
+                    .occurrence(index, &mut |_: usize| Ok::<(), Resource>(()))
+                    .unwrap();
+                assert_eq!(
+                    actual.original_instance as usize,
+                    expected.original_instance()
+                );
+                assert_eq!(
+                    actual.original_operation,
+                    operation(expected.original_operation())
+                );
+                assert_eq!(
+                    actual.output_operation,
+                    operation(expected.output_operation())
+                );
+                assert_eq!(
+                    actual.original_formation,
+                    operation(expected.original_address_formation())
+                );
+                assert_eq!(
+                    actual.output_formation,
+                    operation(expected.output_address_formation())
+                );
+                assert_eq!(
+                    actual.output_address_index,
+                    definition(expected.output_address_index())
+                );
+                assert_eq!(
+                    actual.output_guard_condition,
+                    definition(expected.output_guard_condition())
+                );
+            }
             assert!(!contract.grants_artifact_or_launch_authority());
         }
         if matches!(mode, Mode::RestoredFloor) {

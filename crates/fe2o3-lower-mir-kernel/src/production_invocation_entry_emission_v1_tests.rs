@@ -864,6 +864,12 @@ fn real_repeated_cyclic_inputs_preserve_scalar_aggregate_and_promoted_reference_
                             assert!(scoped_replay_metadata_v29::matches_invocation_for_test_v1(
                                 original, fresh, budget
                             )?);
+                            assert!(fresh.inputs_retained);
+                            fresh.inputs_retained = false;
+                            assert!(!scoped_replay_metadata_v29::matches_invocation_for_test_v1(
+                                original, fresh, budget
+                            )?);
+                            fresh.inputs_retained = true;
                             let saved = fresh.inputs[0];
                             fresh.inputs[0].first_parameter += 1;
                             assert!(!scoped_replay_metadata_v29::matches_invocation_for_test_v1(

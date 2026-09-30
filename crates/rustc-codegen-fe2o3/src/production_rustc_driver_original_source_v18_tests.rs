@@ -13,6 +13,12 @@ mod mixed_pure_cse_tests;
 #[path = "production_rustc_driver_mixed_cfg_v27_tests.rs"]
 mod mixed_cfg_tests;
 
+#[path = "production_rustc_driver_mixed_licm_v28_tests.rs"]
+mod mixed_licm_tests;
+
+#[path = "production_rustc_driver_mixed_relocation_v28_tests.rs"]
+mod mixed_relocation_tests;
+
 #[path = "production_rustc_driver_array_index_source_v18_tests.rs"]
 mod array_index_tests;
 

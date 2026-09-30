@@ -413,7 +413,7 @@ fn typed_call_results_require_original_result_endpoint_and_schema_without_mintin
 }
 
 fn inspect_no_normal(
-    _source: &ExecutionLifecycleSourceV29<'_>,
+    source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     slots: &OwnedScopedSourceSlotsV29,
@@ -993,6 +993,179 @@ fn inspect_no_normal(
         .sites
         .rows[position] = saved;
     check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
+    let child = original.child().unwrap();
+    assert!(
+        instances
+            .instance(child)
+            .unwrap()
+            .ssa()
+            .plan()
+            .entry_arguments()
+            .is_empty()
+    );
+    let child_output = emitted[child.index()].as_ref().unwrap();
+    let entry = child_output.invocation_entry.as_ref().unwrap();
+    assert!(entry.layout.preheader.is_some());
+    assert!(entry.arguments.is_empty());
+    assert!(entry.components.is_empty());
+    assert!(entry.inputs_retained);
+    assert!(!entry.inputs.is_empty());
+    assert_eq!(
+        entry
+            .inputs
+            .iter()
+            .map(|row| row.parameter_count)
+            .sum::<usize>(),
+        child_output.function.signature.parameters.len()
+    );
+    let inputs = entry.inputs.clone();
+    for fault in 0..3 {
+        let actual = &mut emitted[child.index()]
+            .as_mut()
+            .unwrap()
+            .invocation_entry
+            .as_mut()
+            .unwrap()
+            .inputs;
+        match fault {
+            0 => actual.clear(),
+            1 => actual[0].source_argument += 1,
+            2 => actual[0].parameter_count += 1,
+            _ => unreachable!(),
+        }
+        let child_output = emitted[child.index()].as_ref().unwrap();
+        let raw = invocation_checked_prefix_v1(
+            instances.instance(child).unwrap(),
+            slots.source.root,
+            child_output,
+            budget,
+        );
+        assert!(
+            matches!(
+                raw,
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    function: 0,
+                    block: None,
+                    statement: None,
+                    detail: "invocation entry differs from its original source SSA plan",
+                })
+            ),
+            "raw invocation fault {fault}: {raw:?}"
+        );
+        assert_eq!(budget.storage(), floor);
+        let source_rows = instance_check_source_rows_with_control_v1(
+            instances,
+            child,
+            slots.source.root,
+            child_output,
+            budget,
+        );
+        assert!(
+            matches!(source_rows, Err(InstanceCorrespondenceErrorV1::CallAnchor)),
+            "source-row fault {fault}: {source_rows:?}"
+        );
+        assert_eq!(budget.storage(), floor);
+        let phases = check_scoped_defined_call_phases_v29(instances, emitted, budget);
+        assert!(
+            matches!(
+                phases,
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    function: 0,
+                    block: None,
+                    statement: None,
+                    detail: "execution call parameters differ from their source instance",
+                })
+            ),
+            "enclosing call-phase fault {fault}: {phases:?}"
+        );
+        assert_eq!(budget.storage(), floor);
+        emitted[child.index()]
+            .as_mut()
+            .unwrap()
+            .invocation_entry
+            .as_mut()
+            .unwrap()
+            .inputs = inputs.clone();
+        check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
+        assert_eq!(budget.storage(), floor);
+    }
+    with_scoped_source_test_layouts_v29(
+        source,
+        ProductionSemanticKirLimitsV1::default(),
+        budget,
+        |_, layouts, budget| {
+            source_storage_v29::with_source_storage_root_v29(
+                layouts,
+                instances,
+                budget,
+                |references, _, budget| {
+                    let floor = budget.storage();
+                    let check =
+                        |emitted: &[Option<LoweredFunctionResultV1>],
+                         budget: &mut ArgumentBudgetV1<'_>| {
+                            check_scoped_defined_call_phases_with_references_v29(
+                                instances,
+                                emitted,
+                                Some(references),
+                                budget,
+                            )
+                        };
+                    check(emitted, budget)?;
+                    let prefix = invocation_checked_prefix_v1(
+                        instances.instance(child).unwrap(),
+                        slots.source.root,
+                        emitted[child.index()].as_ref().unwrap(),
+                        budget,
+                    )?;
+                    let entry = emitted[child.index()]
+                        .as_mut()
+                        .unwrap()
+                        .invocation_entry
+                        .as_mut()
+                        .unwrap();
+                    entry.inputs_retained = false;
+                    entry.inputs.clear();
+                    // The descriptive prefix permits the legacy absent roster;
+                    // the original-source call boundary still requires it.
+                    assert_eq!(
+                        invocation_checked_prefix_v1(
+                            instances.instance(child).unwrap(),
+                            slots.source.root,
+                            emitted[child.index()].as_ref().unwrap(),
+                            budget,
+                        )?,
+                        prefix
+                    );
+                    let refused = check(emitted, budget);
+                    let entry = emitted[child.index()]
+                        .as_mut()
+                        .unwrap()
+                        .invocation_entry
+                        .as_mut()
+                        .unwrap();
+                    entry.inputs_retained = true;
+                    entry.inputs = inputs.clone();
+                    assert!(
+                        matches!(
+                            refused,
+                            Err(ProductionSemanticKirErrorV1::Unsupported {
+                                function: 0,
+                                block: None,
+                                statement: None,
+                                detail: "invocation entry differs from its original source SSA plan",
+                            })
+                        ),
+                        "forged absent input roster at original-source boundary: {refused:?}"
+                    );
+                    assert_eq!(budget.storage(), floor);
+                    check(emitted, budget)?;
+                    assert_eq!(budget.storage(), floor);
+                    Ok(())
+                },
+            )
+        },
+    )?;
+    assert_eq!(budget.storage(), floor);
     COMPLETED.set(true);
     Err(unsupported(0, None, None, STOP))
 }

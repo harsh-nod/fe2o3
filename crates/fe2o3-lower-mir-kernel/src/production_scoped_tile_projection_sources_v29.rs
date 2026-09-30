@@ -120,6 +120,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                     span,
                     arguments,
                     components,
+                    inputs_retained: _,
                     inputs,
                 } = invocation;
                 let preheader = layout

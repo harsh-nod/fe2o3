@@ -662,7 +662,10 @@ fn bound_private_reason_attempt_header_one_short_latches_before_inner_work_and_r
                 assert!(!before.analysis().incomplete_reasons().is_empty());
                 native.check_formal_reason_v21(before, 0, budget).unwrap_or_else(|error| panic!("positive reason query failed before header cut: {error:?}; reasons={:?}", before.analysis().incomplete_reasons()));
                 let floor = budget.storage();
-                let header = scoped_source_attempt_header_oracle_v29::<(), ProductionSourceNativeLifecycleErrorV18, [usize; 5]>();
+                // Constructor borrows self, report, original, optimized and
+                // reason. Option preserves a reference niche unlike [usize; 5].
+                type Capture<'a> = (&'a (), &'a (), &'a (), &'a (), &'a usize);
+                let header = scoped_source_attempt_header_oracle_v29::<(), ProductionSourceNativeLifecycleErrorV18, Capture<'_>>();
                 let padding = MODULE_LIMIT - floor - header + 1;
                 budget.reserve_storage(padding).unwrap();
                 let error = native.check_formal_reason_v21(before, 0, budget).unwrap_err();
