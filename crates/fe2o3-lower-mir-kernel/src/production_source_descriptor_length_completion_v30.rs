@@ -88,7 +88,7 @@ fn descriptor_length_source_scalar_v30(
     };
     if lower_scalar_type(types, assignment.value().result_type())
         .map_err(source_emission_error_v18)?
-        != Type::U64
+        != Type::Scalar(ScalarType::U64)
     {
         return original
             .source
