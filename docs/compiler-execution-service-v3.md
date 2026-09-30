@@ -106,13 +106,28 @@ No runtime string or source unit check proves that external administration.
 `NativeCgroupDomainV1::prepare` derives its path from actual proc membership,
 not `%n` or a supplied FD. Prefix traversal retains `NO_XDEV`; only its final
 canonical component may cross the paired mount. Admission requires the same
-cgroup2 filesystem, protected root ownership, this creator's direct PID
-membership, unchanged prefix/final identities and unchanged proc membership.
+cgroup2 filesystem, protected root ownership, and a complete protected
+`cgroup.type` record equal to `domain\n` before checking this creator's direct
+PID membership. A `domain threaded` PID list aggregates its subtree and cannot
+establish that direct membership. `threaded`, `domain invalid`, malformed and
+missing type records refuse before admission or mkdir. Prefix/final identities
+and proc membership must also remain unchanged.
+Actual `/` membership is unsupported: the hierarchy root has no `cgroup.type`,
+and no domain-type observation is manufactured for it. A non-root path resolving
+to a hierarchy-root mount also refuses at the missing type record. Root-path
+parser fixtures still recognize valid proc syntax; they are not domain admission.
 All generated-domain and control-file opens still use `NO_XDEV`. The added
 worst-case preparation quote is 100352 logical work and
 `4096 + 4 * size_of::<Stat>()` scratch; both flow through existing fresh-domain
 and fresh-namespace quotes on the original account. Retained storage and cleanup
 are unchanged. Refusal before mkdir closes only temporary FDs.
+The existing quote also covers the parent-type check: six extra syscalls
+(open, filesystem/descriptor/named metadata, two bounded reads) and one close.
+Combined with the mount-admission delta, this is twelve syscalls and three
+temporary closes plus bounded byte processing, within the existing
+`32 * 1088 + 16 * 4096` allowance. The type and PID-read buffers are sequential;
+the six-buffer/twelve-stat scratch envelope is unchanged. These are conservative
+logical bounds, not measured syscall-time or exact operation-census claims.
 
 Authored source checks reject a broad/wrong-subtree writable path, duplicate
 assignments, a missing capability, and creator/filter regressions. Parser and
@@ -120,13 +135,34 @@ metadata controls are not mount evidence. The ignored
 `native_cgroup::tests::mounts::actual_membership_mount_boundary` uses an exact,
 timed subprocess with a private mount namespace: it checks actual preparation
 through a writable final submount under a read-only root, rejects a prefix
-mount, wrong direct membership and wrong filesystem, and verifies that a later
-control-file submount is still refused. It creates/writes no cgroup and tests no
+mount, an ordinary-domain ancestor without direct PID membership, a hierarchy-root
+alias and wrong filesystem, and verifies that type/procs control-file submounts
+are still refused. It creates/writes no cgroup and tests no
 compiler, mapping, spawn, delegation or service startup. Its setup needs isolated
-root, `CAP_SYS_ADMIN`, a writable unified hierarchy, canonical membership at
-least two components deep with no intervening mounts, stable privileged state
-and an outside custodian. It must run outside the unit's denied-unshare context;
+root, `CAP_SYS_ADMIN`, a writable unified hierarchy, ordinary-domain membership
+and a non-root ordinary-domain ancestor, no intervening mounts, stable privileged
+state and an outside custodian. It must run outside the unit's denied-unshare context;
 the service does not gain `CAP_SYS_ADMIN` for this test.
+
+The separate ignored
+`native_cgroup::tests::mounts::actual_threaded_domain_membership_is_refused`
+performs only reads in an operator-provisioned isolated topology. Its process
+must have actual threaded-leaf membership with a protected non-root threaded-domain
+ancestor, exposed at the resolved final membership submount. Prefix traversal
+must remain mount-free. The test independently checks matching ancestor/final
+inodes, actual `domain threaded\n` bytes and this process's presence in the kernel
+PID list, then requires the exact ordinary-domain refusal from `prepare()` and
+unchanged proc membership. Missing setup fails rather than skipping or earning
+negative credit. Its timed child creates no mounts or cgroups, migrates no process,
+and writes no control files; the operator retains the outside cleanup obligation.
+
+Existing generic fresh-domain process fixtures, including
+`root_exit_does_not_retire_live_descendant_domain` and
+`fresh_user_namespace_preserves_profile_and_aggregate_cleanup`, now require the
+root-credential test process to live in a non-root ordinary domain. Running them
+at actual `/` is intentionally unsupported, not permission to bypass the check.
+The provisioned root-request fixture already requires a non-root `domain\n`
+parent. None of these fixtures has been rerun for this parent-type correction.
 
 The source contract and its mutation checks passed on September 30; the new
 library and ignored mount tests remain unrun. An effective-unit/drop-in

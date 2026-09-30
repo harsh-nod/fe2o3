@@ -129,8 +129,7 @@ fn membership_rejects_ambiguous_escaped_deleted_or_noncanonical_paths() {
 #[test]
 fn membership_split_admits_only_the_final_actual_component() {
     for (path, prefix, leaf) in [
-        (&b"/"[..], &b"/"[..], &b"."[..]),
-        (b"/service", b"/", b"service"),
+        (&b"/service"[..], &b"/"[..], &b"service"[..]),
         (
             b"/system.slice/fe2o3-compiler-execution.service",
             b"/system.slice",
@@ -163,6 +162,52 @@ fn membership_split_admits_only_the_final_actual_component() {
         RESOLVE,
         ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV
     );
+}
+
+#[test]
+fn hierarchy_root_is_parseable_but_not_an_admissible_parent() {
+    // The parser still accepts real proc output; admission cannot infer a
+    // domain type from the hierarchy root, where cgroup.type does not exist.
+    let path = membership_path(b"0::/\n").unwrap();
+    assert_eq!(path, b"/");
+    assert!(matches!(
+        membership_components(path),
+        Err(Error::State(
+            "hierarchy-root cgroup membership is unsupported"
+        ))
+    ));
+}
+
+#[test]
+fn parent_type_requires_one_complete_ordinary_domain_record() {
+    assert!(validate_parent_type(b"domain\n").is_ok());
+    for bytes in [
+        &b"domain threaded\n"[..],
+        b"threaded\n",
+        b"domain invalid\n",
+        b"domain \n",
+        b" domain\n",
+        b"domain\r\n",
+        b"domain\0\n",
+        b"domain\n\0",
+        b"domain\nthreaded\n",
+        b"domain\ndomain\n",
+        b"domain\n\n",
+    ] {
+        assert!(
+            matches!(
+                validate_parent_type(bytes),
+                Err(Error::State("membership cgroup is not an ordinary domain"))
+            ),
+            "accepted {bytes:?}"
+        );
+    }
+    for end in 0..b"domain\n".len() {
+        assert!(validate_parent_type(&b"domain\n"[..end]).is_err());
+    }
+    let mut overlong = [b'x'; READ_LIMIT];
+    overlong[..7].copy_from_slice(b"domain\n");
+    assert!(validate_parent_type(&overlong).is_err());
 }
 
 #[test]
@@ -318,10 +363,13 @@ fn logical_bounds_cover_owner_and_fixed_frames() {
         6 * 4096 + 4 * size_of::<Domain>() + 12 * size_of::<Stat>() + 1024
     );
     assert_eq!(Domain::PREPARE_WORK, 96 * (1024 + 64) + 48 * 4096);
-    assert_eq!(
-        Domain::PREPARE_WORK - (64 * (1024 + 64) + 32 * 4096),
-        100_352
-    );
+    let admission_delta = Domain::PREPARE_WORK - (64 * (1024 + 64) + 32 * 4096);
+    assert_eq!(admission_delta, 100_352);
+    // Six extra mount-admission calls, six parent-type calls, three temporary
+    // closes, and a conservative eight full-buffer passes fit the same delta.
+    assert!(admission_delta >= (6 + 6 + 3) * (1024 + 64) + 8 * 4096);
+    // Both bounded control reads are sequential, not two simultaneous buffers.
+    assert!(Domain::PREPARE_SCRATCH >= 5 * READ_LIMIT + 256 + 8 * size_of::<Stat>());
     assert!(Domain::CREATE_SCRATCH >= 2 * READ_LIMIT);
     assert!(Domain::STEP_SCRATCH >= READ_LIMIT);
     assert!(Domain::CLONE_FD_SCRATCH >= 8 * size_of::<Stat>());

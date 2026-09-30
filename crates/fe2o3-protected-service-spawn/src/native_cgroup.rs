@@ -13,6 +13,8 @@
 //! boundary (the paired unit's writable subtree). All preceding components and
 //! subsequent domain/control opens retain NO_XDEV. This does not admit a unit,
 //! prove delegation or replace the administrator's external-writer exclusion.
+//! The resolved parent must be a non-root ordinary domain before its PID list
+//! can establish direct membership; a threaded domain lists its whole subtree.
 
 use crate::native_spawn::{ProtectedServiceSpawnErrorV2 as Error, Result, io};
 use crate::process_cleanup::CleanupPollV1;
@@ -95,6 +97,8 @@ impl NativeCgroupDomainV1 {
     /// Full fixed owner plus four logical descriptor-retention charges; no heap.
     pub(crate) const STORAGE: usize = size_of::<Self>() + 4 * size_of::<usize>();
     /// Prepay before preparation, including bounded parses and close-only rollback.
+    /// Includes the parent-type open, three metadata calls, two bounded reads
+    /// and close; its buffer does not overlap the subsequent PID-read buffer.
     pub(crate) const PREPARE_WORK: usize = 96 * OPERATION_WORK + 48 * READ_LIMIT;
     /// Preparation frames, fixed read/path buffers and temporary descriptors.
     pub(crate) const PREPARE_SCRATCH: usize =
@@ -416,6 +420,7 @@ fn open_membership_directory(
     validate_fs(&parent, CGROUP2_MAGIC)?;
     let parent_stat = fs::fstat(&parent).map_err(|e| io("stat current cgroup", e))?;
     validate_membership_stat(&root_stat, &parent_stat)?;
+    require_domain_parent(&parent)?;
     require_membership(&parent, origin)?;
 
     // Recheck both names before retaining the final descriptor. As elsewhere,
@@ -451,7 +456,9 @@ fn validate_membership_stat(root: &Stat, actual: &Stat) -> Result<()> {
 fn membership_components(path: &[u8]) -> Result<(&[u8], &[u8])> {
     validate_absolute_path(path)?;
     if path == b"/" {
-        return Ok((b"/", b"."));
+        return Err(Error::State(
+            "hierarchy-root cgroup membership is unsupported",
+        ));
     }
     let last = path
         .iter()
@@ -461,6 +468,21 @@ fn membership_components(path: &[u8]) -> Result<(&[u8], &[u8])> {
         if last == 0 { b"/" } else { &path[..last] },
         &path[last + 1..],
     ))
+}
+
+fn require_domain_parent(parent: &OwnedFd) -> Result<()> {
+    let kind = open_relative(parent, c"cgroup.type", READ_FLAGS)?;
+    validate_control(&kind, parent, c"cgroup.type")?;
+    let mut bytes = [0; READ_LIMIT];
+    let count = read_record(&kind, &mut bytes)?;
+    validate_parent_type(&bytes[..count])
+}
+
+fn validate_parent_type(bytes: &[u8]) -> Result<()> {
+    if bytes != b"domain\n" {
+        return Err(Error::State("membership cgroup is not an ordinary domain"));
+    }
+    Ok(())
 }
 
 fn validate_fs(fd: &OwnedFd, expected: fs::FsWord) -> Result<()> {

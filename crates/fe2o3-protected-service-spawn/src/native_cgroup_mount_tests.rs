@@ -7,6 +7,8 @@ use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+const CHILD: &str = "FE2O3_CGROUP_MOUNT_BOUNDARY_CHILD";
+
 struct Reap(Option<Child>);
 impl Drop for Reap {
     fn drop(&mut self) {
@@ -18,9 +20,8 @@ impl Drop for Reap {
 }
 
 #[test]
-#[ignore = "requires isolated root/outside custodian, CAP_SYS_ADMIN, writable cgroup2, canonical non-root membership with no intervening mounts; never run inside the confined service"]
+#[ignore = "requires isolated root/outside custodian, CAP_SYS_ADMIN, writable cgroup2, ordinary-domain membership and non-root ordinary-domain ancestor with no intervening mounts; never run inside the confined service"]
 fn actual_membership_mount_boundary() {
-    const CHILD: &str = "FE2O3_CGROUP_MOUNT_BOUNDARY_CHILD";
     if let Some(mode) = std::env::var_os(CHILD) {
         exercise(mode.to_str().unwrap());
         return;
@@ -29,51 +30,137 @@ fn actual_membership_mount_boundary() {
         "intended",
         "wrong-parent",
         "wrong-subtree",
+        "hierarchy-root",
         "wrong-filesystem",
     ] {
-        let mut child = Reap(Some(
-            Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "native_cgroup::tests::mounts::actual_membership_mount_boundary",
-                    "--ignored",
-                    "--nocapture",
-                    "--test-threads=1",
-                ])
-                .env(CHILD, mode)
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap(),
-        ));
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            if let Some(status) = child.0.as_mut().unwrap().try_wait().unwrap() {
-                assert!(status.success(), "mount boundary {mode}: {status}");
-                let mut output = String::new();
-                child
-                    .0
-                    .as_mut()
-                    .unwrap()
-                    .stdout
-                    .take()
-                    .unwrap()
-                    .read_to_string(&mut output)
-                    .unwrap();
-                assert!(
-                    output.contains("1 passed"),
-                    "exact child did not execute: {output}"
-                );
-                assert!(
-                    output.contains(&format!("CGROUP-MOUNT-CONTROL:{mode}:reached")),
-                    "child did not reach the boundary assertion: {output}"
-                );
-                child.0.take();
-                break;
-            }
-            assert!(Instant::now() < deadline, "mount boundary {mode} deadline");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        run_child(
+            "native_cgroup::tests::mounts::actual_membership_mount_boundary",
+            mode,
+        );
     }
+}
+
+fn run_child(test: &str, mode: &str) {
+    let mut child = Reap(Some(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                test,
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, mode)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = child.0.as_mut().unwrap().try_wait().unwrap() {
+            assert!(status.success(), "mount boundary {mode}: {status}");
+            let mut output = String::new();
+            child
+                .0
+                .as_mut()
+                .unwrap()
+                .stdout
+                .take()
+                .unwrap()
+                .read_to_string(&mut output)
+                .unwrap();
+            assert!(
+                output.contains("1 passed"),
+                "exact child did not execute: {output}"
+            );
+            assert!(
+                output.contains(&format!("CGROUP-MOUNT-CONTROL:{mode}:reached")),
+                "child did not reach the boundary assertion: {output}"
+            );
+            child.0.take();
+            break;
+        }
+        assert!(Instant::now() < deadline, "mount boundary {mode} deadline");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+#[ignore = "requires operator-provisioned isolated threaded leaf membership, a protected non-root threaded-domain parent exposed at the final membership submount, unchanged prefix mounts, and an outside custodian; reads only"]
+fn actual_threaded_domain_membership_is_refused() {
+    let Some(mode) = std::env::var_os(CHILD) else {
+        run_child(
+            "native_cgroup::tests::mounts::actual_threaded_domain_membership_is_refused",
+            "threaded-domain",
+        );
+        return;
+    };
+    assert_eq!(mode.to_str(), Some("threaded-domain"));
+    assert!(crate::syscall::has_exact_root_identity());
+    let membership = open_proc(c"/proc/self/cgroup").unwrap();
+    let mut bytes = [0; READ_LIMIT];
+    let count = read_record(&membership, &mut bytes).unwrap();
+    let path = membership_path(&bytes[..count]).unwrap();
+    let (prefix, leaf) = membership_components(path).unwrap();
+    assert_ne!(
+        prefix, b"/",
+        "a non-root threaded-domain ancestor is required"
+    );
+    let root = root();
+    validate_fs(&root, CGROUP2_MAGIC).unwrap();
+    let root_stat = fs::fstat(&root).unwrap();
+    validate_root_stat(&root_stat, true).unwrap();
+    let mut relative = [0; READ_LIMIT];
+    let prefix_relative = relative_path(prefix, &mut relative).unwrap();
+    let ancestor = open_relative(&root, prefix_relative, READ_FLAGS | OFlags::DIRECTORY).unwrap();
+    let ancestor_stat = fs::fstat(&ancestor).unwrap();
+    validate_membership_stat(&root_stat, &ancestor_stat).unwrap();
+    let leaf = CString::new(leaf).unwrap();
+    let actual = fs::openat2(
+        &ancestor,
+        &leaf,
+        READ_FLAGS | OFlags::DIRECTORY,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+    )
+    .unwrap();
+    let actual_stat = fs::fstat(&actual).unwrap();
+    validate_fs(&actual, CGROUP2_MAGIC).unwrap();
+    validate_membership_stat(&root_stat, &actual_stat).unwrap();
+    assert!(
+        same_directory(Identity::of(&ancestor_stat), &actual_stat, &ancestor_stat,),
+        "operator fixture must expose the real threaded ancestor, not the direct leaf"
+    );
+    let mut full_relative = [0; READ_LIMIT];
+    let full_relative = relative_path(path, &mut full_relative).unwrap();
+    assert!(
+        matches!(
+            open_relative(&root, full_relative, READ_FLAGS | OFlags::DIRECTORY),
+            Err(Error::Io {
+                source: Errno::XDEV,
+                ..
+            })
+        ),
+        "operator fixture must already contain the final-component submount"
+    );
+
+    // These are kernel reads from the operator's existing topology, not parser
+    // fixtures. No mount, migration, cgroup creation or control write occurs.
+    let kind = open_relative(&actual, c"cgroup.type", READ_FLAGS).unwrap();
+    validate_control(&kind, &actual, c"cgroup.type").unwrap();
+    let mut kind_bytes = [0; READ_LIMIT];
+    let count = read_record(&kind, &mut kind_bytes).unwrap();
+    assert_eq!(&kind_bytes[..count], b"domain threaded\n");
+    require_membership(&actual, rustix::process::getpid())
+        .expect("the threaded-domain PID list must genuinely contain this process");
+    assert!(matches!(
+        NativeCgroupDomainV1::prepare(),
+        Err(Error::State("membership cgroup is not an ordinary domain"))
+    ));
+    let mut current = [0; READ_LIMIT];
+    let count = read_record(&membership, &mut current).unwrap();
+    assert_eq!(membership_path(&current[..count]).unwrap(), path);
+    println!("CGROUP-MOUNT-CONTROL:threaded-domain:reached");
 }
 
 fn mount(source: Option<&CStr>, target: &CStr, flags: libc::c_ulong) {
@@ -134,8 +221,14 @@ fn exercise(mode: &str) {
     );
     let mut wrong_subtree_empty = false;
     if mode == "wrong-subtree" {
-        let procs = open_relative(&original, c"cgroup.procs", READ_FLAGS).unwrap();
-        validate_control(&procs, &original, c"cgroup.procs").unwrap();
+        let mut prefix_buffer = [0; READ_LIMIT];
+        let prefix_relative = relative_path(prefix, &mut prefix_buffer).unwrap();
+        let subtree =
+            open_relative(&original, prefix_relative, READ_FLAGS | OFlags::DIRECTORY).unwrap();
+        require_domain_parent(&subtree)
+            .expect("wrong-subtree must reach ordinary-domain PID check");
+        let procs = open_relative(&subtree, c"cgroup.procs", READ_FLAGS).unwrap();
+        validate_control(&procs, &subtree, c"cgroup.procs").unwrap();
         let mut root_procs = [0; READ_LIMIT];
         let count = rustix::io::pread(&procs, &mut root_procs[..], 0).unwrap();
         assert!(
@@ -152,6 +245,18 @@ fn exercise(mode: &str) {
             );
         }
     }
+    if mode == "hierarchy-root" {
+        assert!(
+            matches!(
+                open_relative(&original, c"cgroup.type", READ_FLAGS),
+                Err(Error::Io {
+                    source: Errno::NOENT,
+                    ..
+                })
+            ),
+            "the real hierarchy root supplies no domain-type record"
+        );
+    }
     drop(original);
 
     // SAFETY: this exact-test subprocess creates no children. Unsharing before
@@ -162,7 +267,8 @@ fn exercise(mode: &str) {
     match mode {
         "intended" => mount(Some(&target), &target, libc::MS_BIND),
         "wrong-parent" => mount(Some(&prefix_target), &prefix_target, libc::MS_BIND),
-        "wrong-subtree" => mount(Some(c"/sys/fs/cgroup"), &target, libc::MS_BIND),
+        "wrong-subtree" => mount(Some(&prefix_target), &target, libc::MS_BIND),
+        "hierarchy-root" => mount(Some(c"/sys/fs/cgroup"), &target, libc::MS_BIND),
         "wrong-filesystem" => mount(Some(c"/proc"), &target, libc::MS_BIND),
         _ => panic!("unknown exact-test child mode"),
     }
@@ -205,7 +311,16 @@ fn exercise(mode: &str) {
             assert_eq!(domain.phase, Phase::Prepared);
             assert_eq!(domain.parent_identity, Identity::of(&expected));
             drop(domain); // Preparation created no domain or cleanup obligation.
-            // A control-file submount is still forbidden after admission.
+            // Both parent-type admission and later control opens retain NO_XDEV.
+            let kind = CString::new(format!("{}/cgroup.type", target.to_str().unwrap())).unwrap();
+            mount(Some(&kind), &kind, libc::MS_BIND);
+            assert!(matches!(
+                open_membership_directory(&root, path, pid),
+                Err(Error::Io {
+                    operation: "open bounded cgroup component",
+                    source: Errno::XDEV,
+                })
+            ));
             let procs = CString::new(format!("{}/cgroup.procs", target.to_str().unwrap())).unwrap();
             mount(Some(&procs), &procs, libc::MS_BIND);
             assert!(matches!(
@@ -224,8 +339,8 @@ fn exercise(mode: &str) {
             })
         )),
         "wrong-subtree" => {
-            // The root mount has the right filesystem/owner but not this PID's
-            // direct membership. Empty cgroup.procs also refuses at that read.
+            // The ordinary-domain ancestor passes type admission, but not this
+            // PID's direct membership. Empty cgroup.procs refuses at that read.
             match result {
                 Err(Error::State(message)) => assert_eq!(
                     message,
@@ -239,6 +354,13 @@ fn exercise(mode: &str) {
                 Ok(_) => panic!("wrong-subtree was admitted"),
             }
         }
+        "hierarchy-root" => assert!(matches!(
+            result,
+            Err(Error::Io {
+                operation: "open bounded cgroup component",
+                source: Errno::NOENT,
+            })
+        )),
         "wrong-filesystem" => assert!(matches!(
             result,
             Err(Error::State("unexpected control filesystem"))
