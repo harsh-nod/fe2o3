@@ -1,5 +1,6 @@
 //! Observations over the original constructed engine, not a replacement backend.
 
+use super::mapping_snapshot_bytes::MappingBytesV1;
 use super::preparation::PreparationMemoryFixtureV1;
 use super::*;
 use crate::shared_memory::allocation::PendingAllocationStageV1;
@@ -443,7 +444,7 @@ impl CoherentInitializationV1 for Initializer<'_> {
 struct MappingSnapshot {
     address: u64,
     offset: usize,
-    bytes: Vec<u8>,
+    bytes: MappingBytesV1,
     active: bool,
     writable: bool,
     readbacks: usize,
@@ -453,7 +454,7 @@ fn mapping_snapshot(mapping: &FakeMapping) -> MappingSnapshot {
     MappingSnapshot {
         address: mapping.address,
         offset: mapping.byte_offset,
-        bytes: mapping.bytes.clone(),
+        bytes: MappingBytesV1::capture(&mapping.bytes),
         active: mapping.active,
         writable: mapping.writable,
         readbacks: mapping.readback_calls.get(),

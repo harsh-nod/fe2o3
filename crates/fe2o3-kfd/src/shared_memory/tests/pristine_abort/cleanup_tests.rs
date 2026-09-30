@@ -1,3 +1,4 @@
+use super::super::mapping_snapshot_bytes::MappingBytesV1;
 use super::*;
 use control_cleanup::{CleanupStageV1 as Stage, ControlCleanupObservationV1};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -15,40 +16,12 @@ mod split;
 // Completed controls, unmap progress, partial calls, and the active native state.
 pub(crate) type ControlReleasePrefixV1 = (usize, bool, usize, Option<(bool, usize, bool, bool)>);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum MappingBytesV1 {
-    Zeroes(usize),
-    Dense(Vec<u8>),
-}
-
-impl MappingBytesV1 {
-    fn capture(bytes: &[u8]) -> Self {
-        const ZERO_PAGE: [u8; 4096] = [0; 4096];
-        // Compare every byte without cloning large zero-filled context-save mappings.
-        if bytes
-            .chunks(ZERO_PAGE.len())
-            .all(|chunk| chunk == &ZERO_PAGE[..chunk.len()])
-        {
-            Self::Zeroes(bytes.len())
-        } else {
-            Self::Dense(bytes.to_vec())
-        }
-    }
-
-    fn len(&self) -> usize {
-        match self {
-            Self::Zeroes(len) => *len,
-            Self::Dense(bytes) => bytes.len(),
-        }
-    }
-}
-
 #[test]
 fn cleanup_mapping_snapshot_zero_encoding_preserves_every_byte_and_length() {
     for len in [0, 1, 4095, 4096, 4097, 8193] {
         let mut bytes = vec![0; len];
         let zero = MappingBytesV1::capture(&bytes);
-        assert_eq!(zero, MappingBytesV1::Zeroes(len));
+        assert_eq!(zero.to_dense(), bytes);
         assert_eq!(zero.len(), len);
         for index in [0, 4095, 4096, len.saturating_sub(1)] {
             if index >= len {
@@ -56,7 +29,7 @@ fn cleanup_mapping_snapshot_zero_encoding_preserves_every_byte_and_length() {
             }
             bytes[index] = 0x5a;
             let changed = MappingBytesV1::capture(&bytes);
-            assert_eq!(changed, MappingBytesV1::Dense(bytes.clone()));
+            assert_eq!(changed.to_dense(), bytes);
             assert_eq!(changed.len(), len);
             assert_ne!(changed, zero);
             bytes[index] = 0;

@@ -7204,13 +7204,14 @@ mod tests {
     mod host_backing;
     pub(super) mod live_coherent_insertion;
     pub(super) mod live_insertion;
+    mod mapping_snapshot_bytes;
     mod native_backing;
     pub(super) mod preparation;
     mod primary_construction;
-    mod retained_pair_operational;
     pub(super) mod primary_projection;
     pub(super) mod pristine_abort;
     pub(super) mod queue_construction;
+    mod retained_pair_operational;
     mod sdma_single;
     mod transitions;
     mod xgmi_backing;
