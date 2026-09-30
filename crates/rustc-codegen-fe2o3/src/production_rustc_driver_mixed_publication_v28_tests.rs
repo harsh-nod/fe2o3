@@ -50,6 +50,26 @@ fn storage_refusal(error: &Error) -> StorageLimit {
     panic!("typed publication storage refusal required: {error:?}");
 }
 
+fn work_refusal(error: &Error) -> fe2o3_kernel_ir::CanonicalKernelIrWorkLimitV1 {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(cause) = current {
+        if let Some(Resource::Work(limit)) = cause.downcast_ref::<Resource>() {
+            return *limit;
+        }
+        if let Some(CanonicalGuardedGlobalReadErrorV1::Resource(
+            FormalGuardedMemoryResourceErrorV1::Work(limit),
+        )) = cause.downcast_ref::<CanonicalGuardedGlobalReadErrorV1>()
+        {
+            return *limit;
+        }
+        if let Some(limit) = cause.downcast_ref::<fe2o3_kernel_ir::CanonicalKernelIrWorkLimitV1>() {
+            return *limit;
+        }
+        current = cause.source();
+    }
+    panic!("typed composed execution work refusal required: {error:?}");
+}
+
 fn observe(
     candidate: PreparedMixedPublicationV28<'_, '_, '_>,
     budget: &mut Budget<'_>,
@@ -129,6 +149,35 @@ fn observe(
     })
 }
 
+type ExecutionConsumer = for<'a, 'v, 's, 'w> fn(
+    PreparedMixedPublicationV28<'a, 'v, 's>,
+    &mut Budget<'w>,
+) -> Result<(), Error>;
+
+fn observe_execution_preparation(
+    candidate: PreparedMixedPublicationV28<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
+    let floor = budget.storage();
+    let subject = candidate.refinement_subject(budget)?;
+    let prepared = candidate.prepare_execution_for_test(budget)?;
+    assert!(!prepared.authenticates_executed_proof());
+    let witness = prepared
+        .prefix_witness(budget)
+        .map_err(Error::MixedRelocationExpressions)?;
+    assert!(witness.len() > 352);
+    assert_eq!(
+        <[u8; 32]>::from(sha2::Sha256::digest(witness)),
+        subject.expressions().prefix_execution_identity(),
+    );
+    prepared
+        .discard(budget)
+        .map_err(Error::MixedRelocationExpressions)?;
+    assert_eq!(budget.storage(), floor);
+    assert!(!candidate.grants_publication_or_artifact_authority());
+    Ok(())
+}
+
 #[derive(Default)]
 struct PublicationCallbacks {
     result: Option<Result<PublicationObservation, String>>,
@@ -142,6 +191,82 @@ impl Callbacks for PublicationCallbacks {
                     crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
                 )
             };
+            // This executes preparation only. No runtime is fabricated or run,
+            // and no executed/refinement/publication owner is constructed.
+            let run_preparation = |work_limit, storage_limit| {
+                let mut work = Work::new(work_limit);
+                let mut budget = Budget::new(&mut work, storage_limit);
+                let result = transaction()?.with_original_source_mixed_publication_on_account_v28(
+                    &mut budget,
+                    observe_execution_preparation as ExecutionConsumer,
+                );
+                Ok::<_, String>((result, budget.work(), budget.peak_storage()))
+            };
+            let (measured, execution_work, execution_storage) =
+                run_preparation(500_000_000, 20_000_000)?;
+            measured.map_err(|error| format!("composed execution preparation: {error:?}"))?;
+            let (exact, exact_work, exact_storage) =
+                run_preparation(execution_work, execution_storage)?;
+            exact.map_err(|error| format!("exact composed execution preparation: {error:?}"))?;
+            assert_eq!(
+                (exact_work, exact_storage),
+                (execution_work, execution_storage)
+            );
+            let (short_work, _, _) = run_preparation(execution_work - 1, execution_storage)?;
+            let error = match short_work {
+                Err(error) => error,
+                Ok(_) => panic!("one-short composed execution work admitted"),
+            };
+            assert_eq!(work_refusal(&error).limit(), execution_work - 1);
+            let (short_storage, _, _) = run_preparation(execution_work, execution_storage - 1)?;
+            let error = match short_storage {
+                Err(error) => error,
+                Ok(_) => panic!("one-short composed execution storage admitted"),
+            };
+            assert_eq!(storage_refusal(&error).limit(), execution_storage - 1);
+            let sticky = transaction()?.with_original_source_mixed_publication_test_limits_v28(
+                500_000_000,
+                20_000_000,
+                |candidate, budget| -> Result<(), Error> {
+                    let source = candidate.source(budget)?;
+                    let floor = budget.storage();
+                    let pending = candidate.prepare_execution_for_test(budget)?;
+                    assert!(budget.storage() > floor);
+                    let refused = budget.charge_work(500_000_001).unwrap_err();
+                    let expected = match &refused {
+                        Resource::Work(limit) => *limit,
+                        error => panic!("expected the original work refusal: {error:?}"),
+                    };
+                    let selected = source.retain_query_resource_error_v18(refused);
+                    for error in [
+                        pending.prefix_witness(budget).unwrap_err(),
+                        pending.discard(budget).unwrap_err(),
+                    ] {
+                        match error {
+                            fe2o3_verifier::MixedOptimizerRelocationErrorV28::Source(
+                                ProductionSourceOwnedViewErrorV18::Resource(Resource::Work(limit)),
+                            ) => {
+                                assert_eq!(limit.actual(), expected.actual());
+                                assert_eq!(limit.limit(), expected.limit());
+                            }
+                            error => {
+                                panic!("original sticky work refusal must stay selected: {error:?}")
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        budget.storage(),
+                        floor,
+                        "intact same-ledger preparation credit must settle after a query refusal"
+                    );
+                    Err(Error::Source(selected))
+                },
+            );
+            let error = match sticky {
+                Err(error) => error,
+                Ok(_) => panic!("sticky composed execution refusal lost"),
+            };
+            assert_eq!(work_refusal(&error).limit(), 500_000_000);
             let measured = transaction()?
                 .with_original_source_mixed_publication_test_limits_v28(
                     500_000_000,

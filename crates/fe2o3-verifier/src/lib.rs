@@ -46,11 +46,12 @@ mod conditional_contract_request_v2;
 mod conditional_ranked_formulas_v1;
 mod mixed_optimizer_refinement_v26;
 pub use mixed_optimizer_refinement_v26::{
-    ExecutedMixedOptimizerBlockSimulationV26, ExecutedMixedPureCseCfgRefinementV27,
-    ExecutedMixedWorklistCfgRefinementV27, MixedOptimizerCfgSubjectV27,
-    MixedOptimizerRefinementErrorV26, MixedOptimizerRefinementSubjectV26,
-    MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,
-    MixedOptimizerRelocationSubjectV28, PreparedMixedComposedRelocationCfgRefinementV28,
+    ExecutedMixedComposedRefinementV29, ExecutedMixedOptimizerBlockSimulationV26,
+    ExecutedMixedPureCseCfgRefinementV27, ExecutedMixedWorklistCfgRefinementV27,
+    MixedOptimizerCfgSubjectV27, MixedOptimizerRefinementErrorV26,
+    MixedOptimizerRefinementSubjectV26, MixedOptimizerRelocationCfgSubjectV28,
+    MixedOptimizerRelocationErrorV28, MixedOptimizerRelocationSubjectV28,
+    PreparedMixedComposedExecutionV29, PreparedMixedComposedRelocationCfgRefinementV28,
     PreparedMixedFixedpointComposedRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationExpressionsV29, PreparedMixedOptimizerRefinementV26,

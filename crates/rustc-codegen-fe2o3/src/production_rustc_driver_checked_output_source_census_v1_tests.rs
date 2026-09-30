@@ -4,6 +4,12 @@ use std::io::Read as _;
 
 const MAX_JSON_BYTES: u64 = 4 * 1024 * 1024;
 
+fn census_target(cpu: &str) -> Result<&'static str, SourceFailure> {
+    fe2o3_amd_target::ProductionAmdTargetProfileV1::from_cpu(cpu)
+        .map(|profile| profile.device_target())
+        .ok_or_else(|| fail(SourceStage::Manifest, "unknown census target profile"))
+}
+
 pub(super) struct Pending {
     request: PathBuf,
     path: PathBuf,
@@ -111,7 +117,7 @@ impl Pending {
             args,
             cwd,
             4,
-            &fixture.target,
+            census_target(&fixture.target)?,
             &self.run_id,
             success,
         )
@@ -154,6 +160,49 @@ impl Pending {
             "censusSha256": digest(&serde_json::to_vec(&census).map_err(|e| fail(SourceStage::Observation, e))?),
             "census": census,
         }))
+    }
+}
+
+#[test]
+fn census_target_resolves_exact_profiles_and_refuses_non_cpu_spellings() {
+    for (cpu, expected) in [("gfx942", "gfx942:xnack-"), ("gfx950", "gfx950:xnack-")] {
+        assert_eq!(census_target(cpu).unwrap(), expected);
+    }
+    for cpu in ["", "gfx90a", "GFX942", "gfx942 ", "gfx942:xnack-", "gfx950:xnack+"] {
+        let error = census_target(cpu).unwrap_err();
+        assert_eq!(error.stage, SourceStage::Manifest);
+    }
+}
+
+#[test]
+fn census_header_keeps_exact_target_features_after_profile_resolution() {
+    let args = vec!["rustc".to_owned()];
+    let cwd = Path::new("/tutorial-census-profile-test");
+    let run_id = "census-target-profile-test";
+    for cpu in ["gfx942", "gfx950"] {
+        let expected = census_target(cpu).unwrap();
+        let mut report = serde_json::json!({
+            "schema": "fe2o3-diagnostic-source-census-v1",
+            "diagnosticOnly": true, "qualified": false,
+            "authenticatesCompilerExecution": false, "extractionSucceeded": true,
+            "arguments": args, "workingDirectory": cwd,
+            "extractionMode": {"kind": "fixed-checked-output", "policy": 4},
+            "runId": run_id,
+            "selection": {"status": "available", "value": {"target": expected}},
+        });
+        fixed_census_observation::check_header(&report, &args, cwd, 4, expected, run_id, true)
+            .unwrap();
+        for wrong in ["gfx942", "gfx950", "gfx942:xnack+", "gfx950:xnack+", "gfx90a:xnack-"] {
+            report["selection"]["value"]["target"] = wrong.into();
+            assert!(fixed_census_observation::check_header(
+                &report, &args, cwd, 4, expected, run_id, true,
+            ).is_err());
+        }
+        let other = if cpu == "gfx942" { "gfx950:xnack-" } else { "gfx942:xnack-" };
+        report["selection"]["value"]["target"] = other.into();
+        assert!(fixed_census_observation::check_header(
+            &report, &args, cwd, 4, expected, run_id, true,
+        ).is_err());
     }
 }
 

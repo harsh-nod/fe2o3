@@ -33,8 +33,9 @@ mod receipt;
 #[path = "mixed_optimizer_relocation_plan_v28.rs"]
 mod relocation_plan_v28;
 pub use relocation_plan_v28::{
-    MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,
-    MixedOptimizerRelocationSubjectV28, PreparedMixedComposedRelocationCfgRefinementV28,
+    ExecutedMixedComposedRefinementV29, MixedOptimizerRelocationCfgSubjectV28,
+    MixedOptimizerRelocationErrorV28, MixedOptimizerRelocationSubjectV28,
+    PreparedMixedComposedExecutionV29, PreparedMixedComposedRelocationCfgRefinementV28,
     PreparedMixedFixedpointComposedRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationExpressionsV29, PreparedMixedRelocationCfgRefinementV28,

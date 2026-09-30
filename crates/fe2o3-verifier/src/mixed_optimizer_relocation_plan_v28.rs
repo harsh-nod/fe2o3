@@ -24,8 +24,9 @@ mod binding;
 #[path = "mixed_optimizer_relocation_plan_check_v28.rs"]
 mod check;
 pub use binding::{
-    MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,
-    MixedOptimizerRelocationSubjectV28, PreparedMixedComposedRelocationCfgRefinementV28,
+    ExecutedMixedComposedRefinementV29, MixedOptimizerRelocationCfgSubjectV28,
+    MixedOptimizerRelocationErrorV28, MixedOptimizerRelocationSubjectV28,
+    PreparedMixedComposedExecutionV29, PreparedMixedComposedRelocationCfgRefinementV28,
     PreparedMixedFixedpointComposedRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationExpressionsV29, PreparedMixedRelocationCfgRefinementV28,

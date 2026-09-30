@@ -11,6 +11,10 @@ use super::super::super::{Inventory, SOURCE_LIMIT, Writer, semantics};
 use super::*;
 use crate::CanonicalGeneratedVerusProofInputV3;
 
+#[path = "mixed_optimizer_composed_receipt_v29.rs"]
+mod composed_receipt;
+pub use composed_receipt::{ExecutedMixedComposedRefinementV29, PreparedMixedComposedExecutionV29};
+
 const DOMAIN: &[u8] = b"FE2O3/V18/POLICY10-PREFIX/LICM-EXPRESSION-CFG/V28\0";
 const FIXEDPOINT_DOMAIN: &[u8] = b"FE2O3/V18/POLICY11-PREFIX/LICM-EXPRESSION-CFG/V29\0";
 const FIXEDPOINT_COMPOSED_DOMAIN: &[u8] =

@@ -30,7 +30,8 @@ use std::{
 #[path = "mixed_optimizer_relocation_cfg_refinement_v28.rs"]
 mod cfg;
 pub use cfg::{
-    MixedOptimizerRelocationCfgSubjectV28, PreparedMixedComposedRelocationCfgRefinementV28,
+    ExecutedMixedComposedRefinementV29, MixedOptimizerRelocationCfgSubjectV28,
+    PreparedMixedComposedExecutionV29, PreparedMixedComposedRelocationCfgRefinementV28,
     PreparedMixedFixedpointComposedRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationCfgRefinementV29, PreparedMixedRelocationCfgRefinementV28,
 };

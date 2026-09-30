@@ -9,6 +9,9 @@ use crate::protected_rustc_invocation::{
 use fe2o3_artifact_transaction::BuildAttempt;
 use fe2o3_verifier::MixedOptimizerRelocationCfgSubjectV28 as Subject;
 
+#[path = "production_pipeline_source_mixed_publication_execution_v29.rs"]
+mod execution;
+
 /// These producer/consumer joins have no admitted mixed implementation yet.
 /// They cannot be closed by caller flags, graph hashes or existing V12 receipts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
