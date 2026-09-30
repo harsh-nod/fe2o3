@@ -4,6 +4,7 @@ include!("production_source_aggregate_errors_v30.rs");
 include!("production_source_aggregate_stages_v30.rs");
 include!("production_source_aggregate_memory_chain_v31.rs");
 include!("production_source_aggregate_memory_visit_v31.rs");
+include!("production_source_aggregate_initial_callback_v30.rs");
 include!("production_source_pending_native_v30.rs");
 include!("production_source_aggregate_completion_v30.rs");
 
@@ -378,67 +379,5 @@ fn with_aggregate_initial_source_v30<T>(
         &mut ArgumentBudgetV1<'work>,
     ) -> Result<T, ProductionAggregateSourceErrorV30>,
 ) -> Result<T, ProductionAggregateSourceErrorV30> {
-    use ProductionAggregateSourceErrorV30 as Error;
-    use fe2o3_kernel_analysis::{
-        CanonicalKirInventoryV18 as Inventory, check_canonical_kir_transition_v18,
-    };
-    let floor = budget.storage();
-    scoped_source_attempt_v29(source.cleanup, budget, floor, |budget| {
-        let result = (|| {
-            source.check_query_v18(budget)?;
-            budget.charge_work(32)?;
-            let scalar = chain
-                .rounds()
-                .first()
-                .ok_or_else(|| {
-                    source
-                        .missing::<()>("nonempty actual Policy12 chain")
-                        .unwrap_err()
-                })?
-                .scalar();
-            let original = source.canonical(budget)?;
-            budget.charge_work(original.canonical_bytes().len())?;
-            if scalar.input_audit_bytes() != original.canonical_bytes() {
-                return Err(source
-                    .missing::<()>("Policy12 initial scalar source differs")
-                    .unwrap_err()
-                    .into());
-            }
-            let (input, input_storage) =
-                Inventory::derive_v18(original, budget).map_err(Error::Inventory)?;
-            budget.reserve_storage(input_storage.retained_storage())?;
-            let (output, output_storage) =
-                Inventory::derive_v18(scalar.owner(), budget).map_err(Error::Inventory)?;
-            budget.reserve_storage(output_storage.retained_storage())?;
-            let (checked, checked_storage) = check_canonical_kir_transition_v18(
-                &input,
-                &output,
-                scalar.occurrences().candidate(),
-                budget,
-            )
-            .map_err(Error::Transition)?;
-            budget.reserve_storage(checked_storage.retained_storage())?;
-            let result =
-                source.with_ranked_correspondence_v18(&input, budget, |original, budget| {
-                    original.with_optimized_correspondence_v18(
-                        &checked,
-                        budget,
-                        |optimized, budget| {
-                            consume(original, optimized, budget)
-                                .inspect_err(|error| source.deny_aggregate_accounting_v30(error))
-                        },
-                    )
-                })?;
-            drop(checked);
-            drop(output);
-            drop(input);
-            budget.release_storage(argument_sum_v1(&[
-                input_storage.retained_storage(),
-                output_storage.retained_storage(),
-                checked_storage.retained_storage(),
-            ])?)?;
-            Ok(result)
-        })();
-        source.retain_aggregate_result_v30(result)
-    })
+    with_aggregate_initial_callback_v30(source, chain, budget, consume)
 }

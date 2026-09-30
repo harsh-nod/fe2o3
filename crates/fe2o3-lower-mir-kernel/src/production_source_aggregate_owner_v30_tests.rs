@@ -60,6 +60,8 @@ fn aggregate_initial_source_nested_binding_keeps_exact_error_and_settles_credit(
                     ProductionSourceOwnedViewErrorV18::Binding("exact nested aggregate binding")
                 ))
             ));
+            assert_eq!(budget.storage(), retained + 11);
+            budget.release_storage(11)?;
             assert_eq!(budget.storage(), retained);
             assert!(!source.cleanup.is_denied());
             assert!(matches!(
@@ -535,6 +537,8 @@ fn aggregate_initial_source_nested_nonaccounting_refusal_settles_exact_credit() 
                 },
             );
             assert!(!source.cleanup.is_denied());
+            assert_eq!(budget.storage(), owned_floor + 11);
+            budget.release_storage(11)?;
             assert_eq!(budget.storage(), owned_floor);
             assert!(matches!(
                 &result,
@@ -560,3 +564,5 @@ fn aggregate_initial_source_nested_nonaccounting_refusal_settles_exact_credit() 
         ))
     ));
 }
+
+include!("production_source_aggregate_initial_callback_v30_tests.rs");
