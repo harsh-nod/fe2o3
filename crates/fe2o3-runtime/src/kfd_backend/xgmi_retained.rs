@@ -10,12 +10,17 @@ use fe2o3_kfd::{
     Gfx942XgmiRetainedPairWaitFailureV1,
 };
 
-pub(super) enum BatchPhase<R, T, S, W> {
-    Prepared(Vec<R>),
-    Pending(Vec<T>),
-    Ready,
-    SubmitFailure(S),
-    WaitFailure(W),
+macro_rules! retained_pair_routing_rust_items {
+    ($($declarations:tt)*) => { $($declarations)* };
+}
+include!("xgmi_retained/routing_declarations.rs");
+include!("xgmi_retained/routing_bodies.rs");
+retained_pair_routing_declarations!(retained_pair_routing_rust_items, pub(super));
+
+macro_rules! retained_pair_routing_rust_expr {
+    ($body:expr) => {
+        $body
+    };
 }
 
 type Phase = BatchPhase<
@@ -35,13 +40,12 @@ fn publish_once<R, T, S, W>(
     phase: BatchPhase<R, T, S, W>,
     publish: impl FnOnce(Vec<R>) -> Result<Vec<T>, S>,
 ) -> BatchPhase<R, T, S, W> {
-    match phase {
-        BatchPhase::Prepared(requests) => match publish(requests) {
-            Ok(tickets) => BatchPhase::Pending(tickets),
-            Err(failure) => BatchPhase::SubmitFailure(failure),
-        },
-        other => other,
-    }
+    retained_pair_publish_once_body!(
+        retained_pair_routing_rust_expr,
+        phase,
+        requests,
+        publish(requests)
+    )
 }
 
 trait Work {
@@ -66,18 +70,16 @@ type WorkPhase<W> = BatchPhase<
     <W as Work>::SubmitFailure,
     <W as Work>::WaitFailure,
 >;
-enum Advanced<P, C, E> {
-    Unchanged(P),
-    Waited(Result<C, E>),
-}
 type WorkAdvance<W> = Advanced<WorkPhase<W>, <W as Work>::Completed, <W as Work>::WaitFailure>;
 
 fn advance<W: Work>(phase: WorkPhase<W>, deadline: Instant, work: &mut W) -> WorkAdvance<W> {
-    let phase = publish_once(phase, |requests| work.submit(requests));
-    match phase {
-        BatchPhase::Pending(tickets) => Advanced::Waited(work.wait(tickets, deadline)),
-        other => Advanced::Unchanged(other),
-    }
+    retained_pair_advance_body!(
+        retained_pair_routing_rust_expr,
+        publish_once(phase, |requests| work.submit(requests)),
+        work,
+        deadline,
+        tickets,
+    )
 }
 
 struct NativeWork<'a> {

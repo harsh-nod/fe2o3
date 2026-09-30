@@ -125,6 +125,154 @@ fn retained_native_pending_retries_keep_exact_tickets_deadline_and_single_public
 }
 
 #[test]
+fn retained_native_composed_advance_routes_every_phase_and_owned_result_exactly() {
+    type Payload = Vec<Box<u64>>;
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct Trace {
+        vector: *const Box<u64>,
+        capacity: usize,
+        elements: Vec<*const u64>,
+    }
+    impl Trace {
+        fn of(payload: &Payload) -> Self {
+            Self {
+                vector: payload.as_ptr(),
+                capacity: payload.capacity(),
+                elements: payload.iter().map(|item| &**item as *const u64).collect(),
+            }
+        }
+    }
+    struct Returned {
+        payload: Payload,
+        marker: Box<u64>,
+    }
+    struct Script {
+        submit_ok: bool,
+        wait_ok: bool,
+        submit_marker: Option<Box<u64>>,
+        wait_marker: Option<Box<u64>>,
+        submits: Vec<Trace>,
+        waits: Vec<(Trace, Instant)>,
+    }
+    impl Work for Script {
+        type Request = Box<u64>;
+        type Ticket = Box<u64>;
+        type SubmitFailure = Returned;
+        type WaitFailure = Returned;
+        type Completed = Returned;
+
+        fn submit(&mut self, requests: Payload) -> Result<Payload, Returned> {
+            self.submits.push(Trace::of(&requests));
+            if self.submit_ok {
+                Ok(requests)
+            } else {
+                Err(Returned {
+                    payload: requests,
+                    marker: self.submit_marker.take().unwrap(),
+                })
+            }
+        }
+
+        fn wait(&mut self, tickets: Payload, deadline: Instant) -> Result<Returned, Returned> {
+            self.waits.push((Trace::of(&tickets), deadline));
+            let returned = Returned {
+                payload: tickets,
+                marker: self.wait_marker.take().unwrap(),
+            };
+            if self.wait_ok {
+                Ok(returned)
+            } else {
+                Err(returned)
+            }
+        }
+    }
+
+    let deadline = Instant::now();
+    for count in [0, 1, 2, 63] {
+        for initial in 0..5 {
+            for submit_ok in [false, true] {
+                for wait_ok in [false, true] {
+                    let payload: Payload = (0..count).map(Box::new).collect();
+                    let expected = Trace::of(&payload);
+                    let original_marker = Box::new(101);
+                    let original_address = &*original_marker as *const u64;
+                    let mut script = Script {
+                        submit_ok,
+                        wait_ok,
+                        submit_marker: Some(Box::new(202)),
+                        wait_marker: Some(Box::new(303)),
+                        submits: Vec::new(),
+                        waits: Vec::new(),
+                    };
+                    let submit_address = &**script.submit_marker.as_ref().unwrap() as *const u64;
+                    let wait_address = &**script.wait_marker.as_ref().unwrap() as *const u64;
+                    let phase: WorkPhase<Script> = match initial {
+                        0 => BatchPhase::Prepared(payload),
+                        1 => BatchPhase::Pending(payload),
+                        2 => BatchPhase::Ready,
+                        3 => BatchPhase::SubmitFailure(Returned {
+                            payload,
+                            marker: original_marker,
+                        }),
+                        _ => BatchPhase::WaitFailure(Returned {
+                            payload,
+                            marker: original_marker,
+                        }),
+                    };
+                    let output = advance(phase, deadline, &mut script);
+                    let expected_submit = initial == 0;
+                    let expected_wait = initial == 1 || (initial == 0 && submit_ok);
+                    assert_eq!(script.submits.len(), usize::from(expected_submit));
+                    assert_eq!(script.waits.len(), usize::from(expected_wait));
+                    if expected_submit {
+                        assert_eq!(script.submits[0], expected);
+                    }
+                    if expected_wait {
+                        assert_eq!(script.waits[0].0, expected);
+                        assert_eq!(script.waits[0].1, deadline);
+                    }
+                    let (returned, marker) = match output {
+                        Advanced::Waited(Ok(value)) => {
+                            assert!(expected_wait && wait_ok);
+                            (Some(value), wait_address)
+                        }
+                        Advanced::Waited(Err(value)) => {
+                            assert!(expected_wait && !wait_ok);
+                            (Some(value), wait_address)
+                        }
+                        Advanced::Unchanged(BatchPhase::SubmitFailure(value)) => {
+                            assert!(initial == 3 || (initial == 0 && !submit_ok));
+                            (
+                                Some(value),
+                                if initial == 3 {
+                                    original_address
+                                } else {
+                                    submit_address
+                                },
+                            )
+                        }
+                        Advanced::Unchanged(BatchPhase::WaitFailure(value)) => {
+                            assert_eq!(initial, 4);
+                            (Some(value), original_address)
+                        }
+                        Advanced::Unchanged(BatchPhase::Ready) => {
+                            assert_eq!(initial, 2);
+                            (None, original_address)
+                        }
+                        _ => panic!("routing returned an unexpected phase"),
+                    };
+                    if let Some(returned) = returned {
+                        assert_eq!(Trace::of(&returned.payload), expected);
+                        assert_eq!(&*returned.marker as *const u64, marker);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn retained_native_finish_admission_accepts_only_ready_never_pending_or_terminal() {
     let phases: [TestPhase; 5] = [
         BatchPhase::Prepared(vec![Box::new(1)]),
