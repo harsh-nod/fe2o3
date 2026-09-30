@@ -3,8 +3,15 @@
 use super::*;
 
 include!("read_resolution_body.rs");
+include!("read_query_bodies.rs");
 #[cfg(test)]
 include!("read_resolution_baseline.rs");
+#[cfg(test)]
+include!("read_query_baseline.rs");
+
+#[cfg(test)]
+#[path = "read_query_tests.rs"]
+mod query_tests;
 
 macro_rules! queued_read_rust_expr {
     ($body:block) => {
@@ -12,34 +19,18 @@ macro_rules! queued_read_rust_expr {
     };
 }
 
-/// An exact queued-producer binding, without a speculative epoch or lineage.
-/// The adapter must authenticate producer dependencies and consumer quiescence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContextQueuedProducerReadV1 {
-    pub allocation: ContextAllocationWriteV1,
-    pub byte_offset: u64,
-    pub byte_len: u64,
-    pub producer: ContextWriterReferenceV1,
+macro_rules! context_queued_read_declarations_v1 {
+    ($($items:tt)*) => { $($items)* };
 }
 
-/// Descriptive identity; dropping this value does not release the lease.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ContextQueuedProducerReadReferenceV1 {
-    pub slot: usize,
-    pub incarnation: u64,
-    pub consumer: ContextWriterKeyV1,
-}
+include!("read_declarations.rs");
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Reservation {
-    reference: ContextQueuedProducerReadReferenceV1,
-    request: ContextQueuedProducerReadV1,
-    status: ContextProducerReadStatusV1,
-    version: Option<(u64, u64)>,
-    previous: Option<usize>,
-    next: Option<usize>,
+fn queued_read_reference_same_v1(
+    left: ContextQueuedProducerReadReferenceV1,
+    right: ContextQueuedProducerReadReferenceV1,
+) -> bool {
+    queued_read_reference_same_body_v1!(left, right)
 }
-
 impl ContextQueuedWriterJournalV1 {
     pub fn retained_queued_read_count(&self) -> usize {
         self.queued_reads.len() - self.free_reads.len()
@@ -102,87 +93,32 @@ impl ContextQueuedWriterJournalV1 {
     }
 
     fn read_entry(&self, slot: usize) -> Result<Reservation, Error> {
-        self.queued_reads
-            .get(slot)
-            .copied()
-            .flatten()
-            .ok_or(Error::InvalidReference)
+        queued_read_entry_body_v1!(self, slot)
     }
 
     fn validate_read_links(&self, entry: Reservation) -> Result<(), Error> {
-        if entry.status != ContextProducerReadStatusV1::Pending {
-            return if entry.previous.is_none() && entry.next.is_none() {
-                Ok(())
-            } else {
-                Err(Error::InvalidState)
-            };
-        }
-        let root = self.root(entry.request.producer)?;
-        if root.read_count == 0 || root.read_count > self.queued_reads.len() {
-            return Err(Error::InvalidState);
-        }
-        if let Some(previous) = entry.previous {
-            let previous = self.read_entry(previous)?;
-            if previous.request.producer != entry.request.producer
-                || previous.status != ContextProducerReadStatusV1::Pending
-                || previous.next != Some(entry.reference.slot)
-            {
-                return Err(Error::InvalidState);
-            }
-        } else if root.read_head != Some(entry.reference.slot) {
-            return Err(Error::InvalidState);
-        }
-        if let Some(next) = entry.next {
-            let next = self.read_entry(next)?;
-            if next.request.producer != entry.request.producer
-                || next.status != ContextProducerReadStatusV1::Pending
-                || next.previous != Some(entry.reference.slot)
-            {
-                return Err(Error::InvalidState);
-            }
-        }
-        Ok(())
+        queued_read_links_body_v1!(self, entry)
     }
 
     fn inspect_queued_read(
         &self,
         reference: ContextQueuedProducerReadReferenceV1,
     ) -> Result<Reservation, Error> {
-        self.ensure_usable()?;
-        let entry = self.read_entry(reference.slot)?;
-        if entry.reference != reference {
-            return Err(Error::InvalidReference);
-        }
-        let state = self.destination(entry.request.allocation)?;
-        if self.read_counts[entry.request.allocation.allocation.slot] == 0 {
-            return Err(Error::InvalidState);
-        }
-        self.validate_read_links(entry)?;
-        if entry.status == ContextProducerReadStatusV1::Success {
-            if entry.version != Some((state.attempt_epoch, state.content_lineage))
-                || state.pending_writer.is_some()
-                || state.attempt_epoch != state.content_lineage
-            {
-                return Err(Error::InvalidState);
-            }
-        } else if entry.version.is_some() {
-            return Err(Error::InvalidState);
-        }
-        Ok(entry)
+        queued_read_inspect_body_v1!(self, reference)
     }
 
     pub fn lookup_queued_producer_read(
         &self,
         reference: ContextQueuedProducerReadReferenceV1,
     ) -> Result<ContextQueuedProducerReadV1, Error> {
-        Ok(self.inspect_queued_read(reference)?.request)
+        queued_read_lookup_body_v1!(self, reference)
     }
 
     pub fn queued_producer_read_status(
         &self,
         reference: ContextQueuedProducerReadReferenceV1,
     ) -> Result<ContextProducerReadStatusV1, Error> {
-        Ok(self.inspect_queued_read(reference)?.status)
+        queued_read_status_body_v1!(self, reference)
     }
 
     /// Complete all preflights before either owner commits. All three families

@@ -163,11 +163,7 @@ impl ContextQueuedWriterJournalV1 {
     }
 
     pub(super) fn ensure_usable(&self) -> Result<(), Error> {
-        if self.disposal_terminal {
-            Err(Error::InvalidState)
-        } else {
-            Ok(())
-        }
+        queued_ensure_usable_body_v1!(self)
     }
 
     /// Preflights exact bipartite closure without assuming any native effect has

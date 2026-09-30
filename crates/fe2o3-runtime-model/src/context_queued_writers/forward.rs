@@ -203,14 +203,13 @@ impl ContextQueuedWriterJournalV1 {
         &self,
         reference: ContextProducerReadReferenceV1,
     ) -> Result<ContextProducerReadV1, Error> {
-        self.inner.lookup_producer_read(reference)
+        queued_active_lookup_body_v1!(self, reference)
     }
     pub fn producer_read_status(
         &self,
         reference: ContextProducerReadReferenceV1,
     ) -> Result<ContextProducerReadStatusV1, Error> {
-        self.ensure_usable()?;
-        self.inner.producer_read_status(reference)
+        queued_active_status_body_v1!(self, reference)
     }
     pub fn release_reads(
         &mut self,
