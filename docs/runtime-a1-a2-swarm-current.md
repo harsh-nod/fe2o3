@@ -61,7 +61,15 @@ reports new native process controls and an 80-case Rust source matrix, but the
 strict production/proof/safe-GPU chain remains 0/47 and compiler M1-M7 remain
 incomplete. Those results do not grant protected runtime launch authority.
 
-The [merged KFD regression attempt](evidence/dev-kfd-merged-timeout-2026-09-30/README.md)
+The [retained KFD CPU regression](evidence/dev-kfd-retained-regression-2026-09-30/README.md)
+now passes all 1,824 tests with two test threads, zero failures, ignores or
+filtering. The exact retained executable from `12782867c` is executed afresh,
+not rebuilt; all terminal names match its separate listing. Source/tool/namespace
+continuity and the owned process-group closure pass. Libtest reports 819.97
+seconds, not a performance comparison. This does not qualify the later
+host-diagnostic candidate, native execution or a milestone exit.
+
+The earlier [merged KFD regression attempt](evidence/dev-kfd-merged-timeout-2026-09-30/README.md)
 at `12782867c` remains incomplete. It announces 1,824 tests and records 716
 completed successes before its 1,800-second command deadline, with no final
 suite footer. The command includes a 3 minute 21 second build and uses one test
@@ -82,7 +90,7 @@ regression receipts, not an independently authenticated qualification campaign,
 an all-workspace result, native execution or performance acceptance. The older
 [1,893-test success](evidence/dev-runtime-merged-2026-09-30/README.md) and rejected
 restricted-environment runs below remain separate histories. This run does not
-qualify the incomplete KFD suite.
+qualify the KFD suite; its separate retained-executable result is above.
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
 runs sixteen explicit commands covering the newer model, runtime, accounting,
