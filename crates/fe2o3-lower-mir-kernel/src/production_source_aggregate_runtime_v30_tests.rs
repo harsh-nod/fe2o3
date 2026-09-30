@@ -68,7 +68,11 @@ fn with_aggregate_global_runtime_v30(
             budget,
         )
     });
-    assert_eq!(budget.storage(), MODULE_FLOOR);
+    assert_eq!(
+        budget.storage(),
+        MODULE_FLOOR,
+        "external runtime looping={looping} result={result:?}"
+    );
     result
 }
 
@@ -82,61 +86,76 @@ fn aggregate_runtime_rejoins_genuine_external_occurrences_after_every_actual_sta
                 ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
                 budget,
             )?;
-            let completed = chain.complete_native_v30(
-                abi,
-                &launches,
-                fe2o3_kernel_ir::FormalIndexWidth::Bits64,
-                budget,
-            )?;
-            let owner = completed.output(budget)?.owner();
-            let (inventory, credit) =
-                fe2o3_kernel_analysis::CanonicalKirInventoryV18::derive_v18(owner, budget)
-                    .map_err(ProductionAggregateSourceErrorV30::Inventory)?;
-            budget.reserve_storage(credit.retained_storage())?;
-            let occurrences = completed.runtime_occurrences(budget)?;
-            assert!(!occurrences.is_empty());
-            assert!(occurrences.iter().any(|row| row.domain().writing()));
-            assert!(occurrences.iter().any(|row| !row.domain().writing()));
-            assert!(
-                occurrences
-                    .iter()
-                    .any(|row| row.original_operation() != row.output_operation()
-                        || row.original_address_formation() != row.output_address_formation())
-            );
-            for occurrence in occurrences {
-                let at = aggregate_operation_index_v30(
-                    &inventory,
-                    occurrence.output_operation(),
+            let result = (|| {
+                let completed = chain.complete_native_v30(
+                    abi,
+                    &launches,
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits64,
                     budget,
                 )?;
-                let actual = inventory.operations()[at].operation;
-                assert!(matches!(
-                    actual.kind,
-                    OperationKind::Load { .. } | OperationKind::Store { .. }
-                ));
-                assert_eq!(
-                    occurrence.domain().writing(),
-                    matches!(actual.kind, OperationKind::Store { .. })
-                );
-                assert!(occurrence.premise_index() < completed.runtime_premises(budget)?.len());
-            }
-            drop(inventory);
-            budget.release_storage(credit.retained_storage())?;
-            assert_eq!(
-                completed
-                    .native_histories(budget)?
-                    .iter()
-                    .filter(|row| row.is_some())
-                    .count(),
-                owner
-                    .module()
-                    .functions
-                    .iter()
-                    .filter(|function| function.body.is_some())
-                    .count()
-            );
-            completed.discard(budget)?;
-            chain.discard(budget)?;
+                let observed = (|| {
+                    let owner = completed.output(budget)?.owner();
+                    let (inventory, credit) =
+                        fe2o3_kernel_analysis::CanonicalKirInventoryV18::derive_v18(owner, budget)
+                            .map_err(ProductionAggregateSourceErrorV30::Inventory)?;
+                    budget.reserve_storage(credit.retained_storage())?;
+                    let checked = (|| {
+                        let occurrences = completed.runtime_occurrences(budget)?;
+                        assert!(!occurrences.is_empty());
+                        assert!(occurrences.iter().any(|row| row.domain().writing()));
+                        assert!(occurrences.iter().any(|row| !row.domain().writing()));
+                        assert!(occurrences.iter().any(|row| row.original_operation()
+                            != row.output_operation()
+                            || row.original_address_formation() != row.output_address_formation()));
+                        for occurrence in occurrences {
+                            let at = aggregate_operation_index_v30(
+                                &inventory,
+                                occurrence.output_operation(),
+                                budget,
+                            )?;
+                            let actual = inventory.operations()[at].operation;
+                            assert!(matches!(
+                                actual.kind,
+                                OperationKind::Load { .. } | OperationKind::Store { .. }
+                            ));
+                            assert_eq!(
+                                occurrence.domain().writing(),
+                                matches!(actual.kind, OperationKind::Store { .. })
+                            );
+                            assert!(
+                                occurrence.premise_index()
+                                    < completed.runtime_premises(budget)?.len()
+                            );
+                        }
+                        Ok::<_, ProductionAggregateSourceErrorV30>(())
+                    })();
+                    drop(inventory);
+                    let released = budget.release_storage(credit.retained_storage());
+                    checked?;
+                    released?;
+                    assert_eq!(
+                        completed
+                            .native_histories(budget)?
+                            .iter()
+                            .filter(|row| row.is_some())
+                            .count(),
+                        owner
+                            .module()
+                            .functions
+                            .iter()
+                            .filter(|function| function.body.is_some())
+                            .count()
+                    );
+                    Ok::<_, ProductionAggregateSourceErrorV30>(())
+                })();
+                let released = completed.discard(budget);
+                observed?;
+                released?;
+                Ok::<_, ProductionAggregateSourceErrorV30>(())
+            })();
+            let released = chain.discard(budget);
+            result?;
+            released?;
             assert_eq!(budget.storage(), floor);
             Ok(())
         })
@@ -153,35 +172,44 @@ fn aggregate_runtime_final_consumer_rejects_incomplete_foreign_and_missing_occur
                 ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
                 budget,
             )?;
-            let baseline = chain.complete_native_v30(
-                ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
-                &launches,
-                fe2o3_kernel_ir::FormalIndexWidth::Bits64,
-                budget,
-            )?;
-            assert!(!baseline.runtime_occurrences(budget)?.is_empty());
-            baseline.discard(budget)?;
-            let error = match chain.complete_native_inner_v30(
-                abi,
-                &launches,
-                fe2o3_kernel_ir::FormalIndexWidth::Bits64,
-                budget,
-                Some(fault),
-            ) {
-                Err(error) => error,
-                Ok(_) => panic!("mutated final aggregate state admitted"),
-            };
-            let expected = match fault {
-                1 | 2 => "aggregate final source role owner or census",
-                3 => "aggregate complete external chain census",
-                4 | 5 => "aggregate final external definition lacks complete source transport",
-                _ => unreachable!(),
-            };
-            assert!(
-                matches!(&error, ProductionAggregateSourceErrorV30::Source(ProductionSourceOwnedViewErrorV18::Binding(message)) if *message == expected)
-            );
-            let _ = chain.discard(budget);
-            Err(error)
+            let result = (|| {
+                let baseline = chain.complete_native_v30(
+                    ProductionKernelArgumentAbiInputV18 { roots: abi.roots },
+                    &launches,
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits64,
+                    budget,
+                )?;
+                let observed = baseline.runtime_occurrences(budget).map(|rows| {
+                    assert!(!rows.is_empty());
+                });
+                let released = baseline.discard(budget);
+                observed?;
+                released?;
+                let error = match chain.complete_native_inner_v30(
+                    abi,
+                    &launches,
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits64,
+                    budget,
+                    Some(fault),
+                ) {
+                    Err(error) => error,
+                    Ok(_) => panic!("mutated final aggregate state admitted"),
+                };
+                let expected = match fault {
+                    1 | 2 => "aggregate final source role owner or census",
+                    3 => "aggregate complete external chain census",
+                    4 | 5 => "aggregate final external definition lacks complete source transport",
+                    _ => unreachable!(),
+                };
+                assert!(
+                    matches!(&error, ProductionAggregateSourceErrorV30::Source(ProductionSourceOwnedViewErrorV18::Binding(message)) if *message == expected),
+                    "aggregate fault={fault} expected={expected:?} actual={error:?}"
+                );
+                Err::<(), _>(error)
+            })();
+            let released = chain.discard(budget);
+            result?;
+            released.map_err(Into::into)
         });
         let expected = match fault {
             1 | 2 => "aggregate final source role owner or census",
@@ -190,7 +218,8 @@ fn aggregate_runtime_final_consumer_rejects_incomplete_foreign_and_missing_occur
             _ => unreachable!(),
         };
         assert!(
-            matches!(result, Err(ProductionAggregateSourceErrorV30::Source(ProductionSourceOwnedViewErrorV18::Binding(message))) if message == expected)
+            matches!(&result, Err(ProductionAggregateSourceErrorV30::Source(ProductionSourceOwnedViewErrorV18::Binding(message))) if *message == expected),
+            "aggregate fault={fault} expected={expected:?} result={result:?}"
         );
     }
 }
