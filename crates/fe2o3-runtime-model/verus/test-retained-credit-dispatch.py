@@ -61,6 +61,11 @@ finally:
 cases = check.mutations(sources)
 need(len(cases) == check.MUTANT_COUNT == 25, "exact twenty-five actual-body mutants constructed")
 need({path for path, _, _ in cases.values()} == set(check.BODIES.values()), "all five actual gates covered")
+device_path, device_body, device_selector = cases["device-ignored"]
+need(device_path == check.BODIES["runtime"] and device_selector == check.SELECTORS["runtime"]
+     and device_body == sources[device_path].replace("$this.device == $device", "({ let _ = $device; true })")
+     and "({let_=$device;true})&&match" in check.compact(device_body),
+     "ignored-device Boolean block is parenthesized before the unchanged conjunction")
 leaf = types.SimpleNamespace(LOGICAL_ERRORS={"postcondition not satisfied", "precondition not satisfied"})
 for name, (selected, body, selector) in cases.items():
     need(selected in check.FILES and body != sources[selected], "nonvacuous included body mutation")

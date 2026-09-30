@@ -179,7 +179,7 @@ def mutations(sources):
     add("lookup-bytes-zero", "context", "request_charge($byte_len)", "request_charge({ let _ = $byte_len; 0 })")
     add("lookup-bytes-max", "context", "request_charge($byte_len)", "request_charge({ let _ = $byte_len; u64::MAX })")
     add("device-inverted", "runtime", "$this.device == $device", "$this.device != $device")
-    add("device-ignored", "runtime", "$this.device == $device", "{ let _ = $device; true }")
+    add("device-ignored", "runtime", "$this.device == $device", "({ let _ = $device; true })")
     add("device-generation-ignored", "runtime", "$this.device == $device", "$this.device.get() == $device.get()")
     add("composed-shape-ignored", "runtime", "$expected == request_charge(bytes)", "true")
     add("runtime-mixed-variant-accepted", "runtime", "_ => false,", "_ => true,")
