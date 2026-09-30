@@ -213,6 +213,53 @@ shared library that could alias the backend. Two pure census controls were
 added. Their rerun is separate from r85. Neither correction changes production
 admission, installed input files, or `RuntimeEnforcementUnavailable`.
 
+### Restored-Environment Library Validation
+
+After host and local socket access returned, `r88-native-integrated-libraries`
+ran all four affected library suites at
+`e9f7ea24a0a1f491560def4fb10534a208978544`, using the isolated primary target.
+Source/tool snapshots were stable. This replaces the earlier covered socket
+refusals, not the unrun protected or native execution gates.
+
+| Library | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| Compiler execution coordinator | 278 | 0 | 11 |
+| Compiler execution deployment | 87 | 0 | 0 |
+| Compiler execution protocol | 119 | 0 | 0 |
+| Protected service spawn | 265 | 0 | 11 |
+
+Both new inode-multiplicity census controls passed. The five installed-runtime
+composition tests remain ignored, not executed. The log SHA-256 is
+`4ee6c52f7e91181130031fb160e13856c30931f9ef43776531ee773aff180b42`.
+The source-hygiene delta against `edd71e676` also passed. There is still no
+protected compiler, proof or GPU completion claim.
+
+### Native Clone And Exec Validation
+
+`compiler-restrictions-r91` executed all six native compiler-spawn tests on
+MI350-2 in the existing pinned isolated image
+`sha256:fd5370f370708f6a02cec6d44818a4295609e5bc68aa42455e53f141168a9d5f`.
+Each test ran in its own process, with network disabled, read-only input mounts,
+bounded CPU/memory/process counts and only the required diagnostic capabilities.
+All six passed: exact argv/environment/cwd/FD transfer and terminal status;
+child-channel/gate behavior; actual filter-install refusal; mapping controls
+and denials; pre-clone underfunding/unwind custody; and thread/fork/exec inheritance.
+
+The initial r89 attempt incorrectly combined all six in one process: two passed,
+while four stopped at cleanup-service admission. The service's process-wide
+ownership restriction was preserved; the runner was corrected to use fresh
+processes rather than resetting that authority. Both attempts reached terminal
+container state, and their exact labeled containers and private scratch were
+removed and checked absent. No shared installation or GPU was modified.
+
+The test executable came from r88 and had SHA-256
+`d3c193d7ae09a9f2a01847149f88adbe17223176a49b8ab66e07a73c6e70d5aa`.
+The static diagnostic helper retained the source/executable hashes below.
+The passing stdout SHA-256 is
+`407e51b4d48a8cefb7c3a551ba8122f279120a7ae3bdde3556a36e333b3ac7de`.
+These are real native process-mechanics tests, not execution of approved rustc,
+protected proofs, loader/source namespace enforcement or GPU qualification.
+
 | Run | Log SHA-256 |
 | --- | --- |
 | r64 | `101bf3ca27d2092f8ee49dd626d1781e90c1355d7ce5bc89162721d0bede27b7` |
@@ -231,10 +278,10 @@ The same-source C diagnostic compiled with
 `3289363bad1c152741f37db47ac0dd2f8a221f82fba80701aa393de28d0d5483`;
 the executable SHA-256 is
 `f3c325efc396b343d7655ac31c9b85d2defc96e5d777b6190235791c56c7b1e8`.
-The four new native restriction tests and two existing native compiler tests
-have **not run** on this candidate. MI350 preflight found Docker and the pinned
-isolated image, but SSH subsequently failed DNS resolution after the permission
-transition. No remote test container or scratch directory was created.
+The initial native test attempt was blocked by SSH DNS resolution before any
+remote container or scratch was created. The subsequent restored-access r91
+execution is recorded above; the installed-runtime composition gate remains
+unrun.
 
 Local reports are in the sibling
 `fe2o3-issue272-production-next-evidence-20260921` directory. Key log SHA-256:

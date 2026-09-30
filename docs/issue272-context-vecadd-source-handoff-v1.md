@@ -402,3 +402,15 @@ log SHA-256:
 `0683ad8914b3e4d659a2ccf637122849a46b9fc2d7ca06e9e3263c42e9e2ac76`.
 This does not replace the failed r84 actual-source matrix or qualify the primary
 worktree's different dependency set. The actual-source rerun is a separate gate.
+
+`r87-actual-context-nominal-schema-custody` then completed the same 80 fresh
+source sessions at that revision. The schema refusal was eliminated, but every
+session stopped before its consumer with `source reference intrinsic effect is
+not represented`. Source/tool snapshots were stable and temporary dependency
+trees were removed. Log SHA-256:
+`03d4a1e2ec65efb6b4da0eebb78e7963b11c39075d4c966e5558f5a5f9799620`.
+The existing #271 owner's index-witness/reference-effect repair is the next
+dependency; it is not duplicated or bypassed here. The
+[handoff](https://github.com/harsh-nod/fe2o3/issues/271#issuecomment-5903321856)
+requests an immutable validated dependency before integration. No intended
+positive or negative consumer, proof, simulator or GPU result is credited.
