@@ -18,6 +18,9 @@ use std::{fmt, mem::size_of};
 
 #[path = "canonical_kir_aggregate_ssa_census_v18.rs"]
 mod census;
+#[path = "canonical_kir_aggregate_memory_inventory_v31.rs"]
+mod memory_inventory_v31;
+pub use memory_inventory_v31::*;
 #[path = "canonical_kir_aggregate_occurrences_v30.rs"]
 mod occurrences;
 #[path = "canonical_kir_aggregate_ssa_pair_v18.rs"]
