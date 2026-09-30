@@ -315,6 +315,174 @@ fn distributed_successful_decode_is_canonical_after_each_single_byte_mutation() 
     }
 }
 
+fn replace_digest(
+    mut c: UntrustedDistributedOperationCoordinatesV1,
+    field: usize,
+    bytes: [u8; 32],
+) -> UntrustedDistributedOperationCoordinatesV1 {
+    let value = IdentityDigestV1::from_untrusted_bytes(bytes);
+    match field {
+        0 => c.runtime_instance = DistributedRuntimeInstanceIdV1::from_untrusted_digest(value),
+        1 => c.participant = DistributedParticipantIdV1::from_untrusted_digest(value),
+        2 => c.coordinator = DistributedParticipantIdV1::from_untrusted_digest(value),
+        3 => c.membership = DistributedMembershipIdV1::from_untrusted_digest(value),
+        4 => c.run = DistributedRunIdV1::from_untrusted_digest(value),
+        5 => c.operation = DistributedOperationIdV1::from_untrusted_digest(value),
+        6 => c.artifact = RuntimeArtifactIdV1::from_untrusted_digest(value),
+        7 => c.execution_plan = DistributedExecutionPlanIdV1::from_untrusted_digest(value),
+        8 => c.placement_plan = DistributedPlacementPlanIdV1::from_untrusted_digest(value),
+        9 => c.target = DistributedTargetDescriptionIdV1::from_untrusted_digest(value),
+        10 => c.runtime_model = RuntimeModelIdV1::from_untrusted_digest(value),
+        _ => unreachable!(),
+    }
+    c
+}
+
+#[test]
+fn distributed_construction_accepts_each_full_digest_single_bit_without_substitution() {
+    let mut cases = 0;
+    for field in 0..11 {
+        for byte in 0..32 {
+            for bit in 0..8 {
+                let mut payload = [0; 32];
+                payload[byte] = 1 << bit;
+                let c = replace_digest(coordinates(), field, payload);
+                let value =
+                    ModelDistributedOperationBindingV1::from_untrusted_coordinates(c).unwrap();
+                assert_eq!(value.coordinates(), c);
+                assert_eq!(value.authority_domain(), AuthorityDomainV1::ModelOnly);
+                assert_eq!(
+                    ModelDistributedOperationBindingV1::decode_untrusted_description(
+                        &value.canonical_description()
+                    ),
+                    Ok(value),
+                );
+                cases += 1;
+            }
+        }
+    }
+    assert_eq!(cases, 2816);
+}
+
+#[test]
+fn distributed_construction_zero_identity_precedes_every_zero_integer() {
+    for identity in 0..11 {
+        for integer in [2, 4, 6, 9] {
+            let c = replace_digest(
+                change_coordinate(coordinates(), integer, 0),
+                identity,
+                [0; 32],
+            );
+            assert_eq!(
+                ModelDistributedOperationBindingV1::from_untrusted_coordinates(c),
+                Err(E::ZeroIdentity),
+            );
+        }
+    }
+    for mask in 1..16 {
+        let mut c = coordinates();
+        for (bit, field) in [2, 4, 6, 9].into_iter().enumerate() {
+            if mask & (1 << bit) != 0 {
+                c = change_coordinate(c, field, 0);
+            }
+        }
+        assert_eq!(
+            ModelDistributedOperationBindingV1::from_untrusted_coordinates(c),
+            Err(E::ZeroEpochOrAttempt),
+        );
+    }
+}
+
+#[test]
+fn distributed_construction_receipt_preserves_inputs_without_lifecycle_validation() {
+    let malformed = ModelDistributedOperationBindingV1 {
+        coordinates: change_coordinate(coordinates(), 0, 0),
+    };
+    for value in [binding(), malformed] {
+        for sequence in [0, 1, 2, u64::MAX] {
+            for outcome in OUTCOMES {
+                let result =
+                    UntrustedDistributedPublicationReceiptV1::new(value, sequence, outcome);
+                if sequence == 0 {
+                    assert_eq!(result, Err(E::ZeroSequence));
+                } else {
+                    let result = result.unwrap();
+                    assert_eq!(result.binding(), value);
+                    assert_eq!(result.sequence(), sequence);
+                    assert_eq!(result.reported_outcome(), outcome);
+                }
+            }
+        }
+    }
+    let completed =
+        UntrustedDistributedPublicationReceiptV1::new(binding(), 1, P::Completed).unwrap();
+    let mut record = ModelDistributedPublicationRecordV1::new(binding());
+    assert_eq!(
+        record.record_untrusted_receipt(completed),
+        Err(E::InvalidTransition)
+    );
+    assert_eq!(record.last_receipt(), None);
+}
+
+#[test]
+fn distributed_construction_trailer_matrix_and_nested_decode_precedence() {
+    let original = receipt(1, P::Published).canonical_description();
+    for tag in 0..=u8::MAX {
+        for reserved_bit in 0..25 {
+            let mut trailer = [tag, 0, 0, 0];
+            if reserved_bit != 0 {
+                trailer[1 + (reserved_bit - 1) / 8] = 1 << ((reserved_bit - 1) % 8);
+            }
+            let expected = if reserved_bit != 0 {
+                Err(E::NonzeroReserved)
+            } else if (1..=6).contains(&tag) {
+                Ok(OUTCOMES[usize::from(tag - 1)])
+            } else {
+                Err(E::InvalidOutcome)
+            };
+            assert_eq!(decode_outcome_trailer(trailer), expected);
+            let mut wire = original;
+            let offset = wire.len() - 4;
+            wire[offset..].copy_from_slice(&trailer);
+            assert_eq!(
+                UntrustedDistributedPublicationReceiptV1::decode_untrusted_description(&wire)
+                    .map(|value| value.reported_outcome()),
+                expected,
+            );
+        }
+    }
+    let mut wire = original;
+    let sequence = wire.len() - 12;
+    wire[sequence..sequence + 8].fill(0);
+    let trailer = wire.len() - 4;
+    wire[trailer] = 0;
+    wire[trailer + 1] = 1;
+    assert_eq!(
+        UntrustedDistributedPublicationReceiptV1::decode_untrusted_description(&wire),
+        Err(E::NonzeroReserved)
+    );
+    wire[trailer + 1] = 0;
+    assert_eq!(
+        UntrustedDistributedPublicationReceiptV1::decode_untrusted_description(&wire),
+        Err(E::InvalidOutcome)
+    );
+    wire[trailer] = 2;
+    assert_eq!(
+        UntrustedDistributedPublicationReceiptV1::decode_untrusted_description(&wire),
+        Err(E::ZeroSequence)
+    );
+    let first_digest = DISTRIBUTED_PUBLICATION_RECEIPT_DOMAIN_V1.len()
+        + 4
+        + DISTRIBUTED_OPERATION_DESCRIPTION_DOMAIN_V1.len()
+        + 4;
+    wire[first_digest..first_digest + 32].fill(0);
+    wire[trailer + 1] = 1;
+    assert_eq!(
+        UntrustedDistributedPublicationReceiptV1::decode_untrusted_description(&wire),
+        Err(E::ZeroIdentity)
+    );
+}
+
 fn expected(state: Option<(u64, P)>, interrupted: bool, sequence: u64, outcome: P) -> Result<D, E> {
     if let Some((last_sequence, last_outcome)) = state {
         if sequence == last_sequence {

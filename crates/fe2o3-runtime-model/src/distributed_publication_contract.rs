@@ -14,6 +14,8 @@ include!("distributed_publication_contract/declarations.rs");
 
 #[macro_use]
 mod classifier_body;
+#[macro_use]
+mod construction_body;
 #[cfg(test)]
 mod tests;
 
@@ -61,35 +63,7 @@ impl ModelDistributedOperationBindingV1 {
     pub fn from_untrusted_coordinates(
         coordinates: UntrustedDistributedOperationCoordinatesV1,
     ) -> Result<Self, DistributedPublicationContractErrorV1> {
-        let c = coordinates;
-        for digest in [
-            c.runtime_instance.digest(),
-            c.participant.digest(),
-            c.coordinator.digest(),
-            c.membership.digest(),
-            c.run.digest(),
-            c.operation.digest(),
-            c.artifact.digest(),
-            c.execution_plan.digest(),
-            c.placement_plan.digest(),
-            c.target.digest(),
-            c.runtime_model.digest(),
-        ] {
-            if digest.as_bytes().iter().all(|byte| *byte == 0) {
-                return Err(DistributedPublicationContractErrorV1::ZeroIdentity);
-            }
-        }
-        if [
-            c.participant_incarnation,
-            c.coordinator_epoch,
-            c.membership_epoch,
-            c.attempt,
-        ]
-        .contains(&0)
-        {
-            return Err(DistributedPublicationContractErrorV1::ZeroEpochOrAttempt);
-        }
-        Ok(Self { coordinates })
+        distributed_binding_constructor_body_v1!(coordinates)
     }
 
     pub const fn authority_domain(self) -> AuthorityDomainV1 {
@@ -160,13 +134,7 @@ impl UntrustedDistributedPublicationReceiptV1 {
         sequence: u64,
         outcome: ReportedDistributedPublicationV1,
     ) -> Result<Self, DistributedPublicationContractErrorV1> {
-        if sequence == 0 {
-            return Err(DistributedPublicationContractErrorV1::ZeroSequence);
-        }
-        Ok(Self {
-            binding,
-            description: ReceiptDescription { sequence, outcome },
-        })
+        distributed_receipt_constructor_body_v1!(binding, sequence, outcome)
     }
     pub const fn binding(self) -> ModelDistributedOperationBindingV1 {
         self.binding
@@ -199,20 +167,7 @@ impl UntrustedDistributedPublicationReceiptV1 {
             r.take(DISTRIBUTED_OPERATION_DESCRIPTION_BYTES_V1)?,
         )?;
         let sequence = r.u64()?;
-        let [tag, a, b, c] = r.fixed()?;
-        if [a, b, c] != [0; 3] {
-            return Err(DistributedPublicationContractErrorV1::NonzeroReserved);
-        }
-        use ReportedDistributedPublicationV1 as P;
-        let outcome = match tag {
-            1 => P::DefinitelyNotPublished,
-            2 => P::Published,
-            3 => P::Completed,
-            4 => P::FailedBeforePublication,
-            5 => P::FailedMayStillExecute,
-            6 => P::ParticipantLostWithUnknownPublication,
-            _ => return Err(DistributedPublicationContractErrorV1::InvalidOutcome),
-        };
+        let outcome = decode_outcome_trailer(r.fixed()?)?;
         r.finish()?;
         Self::new(binding, sequence, outcome)
     }
@@ -262,6 +217,12 @@ fn classify_receipt(
     receipt: &UntrustedDistributedPublicationReceiptV1,
 ) -> Result<ModelDistributedReceiptDispositionV1, DistributedPublicationContractErrorV1> {
     distributed_receipt_classifier_body_v1!(record, receipt)
+}
+
+fn decode_outcome_trailer(
+    bytes: [u8; 4],
+) -> Result<ReportedDistributedPublicationV1, DistributedPublicationContractErrorV1> {
+    distributed_outcome_trailer_body_v1!(bytes)
 }
 
 struct Writer<'a> {

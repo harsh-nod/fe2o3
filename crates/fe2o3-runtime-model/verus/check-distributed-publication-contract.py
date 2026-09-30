@@ -25,8 +25,8 @@ PROOF = V / 'distributed_publication_contract_v1.rs'
 FILES = [PROOF, DECLARATIONS, BODY]
 BASE = V / 'check-compute-pipeline-publication.py'
 BASE_SHA = '1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e'
-SOURCE_FILES = 298
-SOURCE_TREE_SHA = 'dcbff2a7abd85d7968e6167d3a57d1d1b0ac07214bf2ca17b6c97abfeed0e15e'
+SOURCE_FILES = 299
+SOURCE_TREE_SHA = '38d8499e6aed5d061932bbc3fae3b7fdc5d7d6afa1e9170e6d2b46c1bbe7a77a'
 PROOF_SHA = '57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853'
 IDENTITY_SHA = '4df48a80f5bff5ff82481358ee320819de5afc38eee8e7520c50732326fc3564'
 # Measured by the unfiltered development discovery, including 19 Clone derives.
