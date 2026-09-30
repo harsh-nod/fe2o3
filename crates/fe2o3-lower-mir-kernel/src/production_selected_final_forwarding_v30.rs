@@ -366,8 +366,8 @@ pub(super) fn headers() -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
         h::<ForwardingV30>()?,
         h::<OriginWorkV1<usize>>()?,
-        size_of::<Result<OriginWorkV1<usize>, OriginWorkErrorV1>>()?,
-        size_of::<Result<Vec<OriginStateV1<usize>>, OriginWorkErrorV1>>()?,
+        size_of::<Result<OriginWorkV1<usize>, OriginWorkErrorV1>>(),
+        size_of::<Result<Vec<OriginStateV1<usize>>, OriginWorkErrorV1>>(),
         argument_product_v1(3, size_of::<Result<(), OriginWorkErrorV1>>())?,
         h::<Result<usize, usize>>()?,
         h::<Vec<bool>>()?,
