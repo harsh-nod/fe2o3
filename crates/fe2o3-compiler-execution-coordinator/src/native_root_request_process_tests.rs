@@ -1,25 +1,25 @@
 //! Opt-in consuming-path tests, not Cargo authorship or compiler execution.
-//! Requires the existing isolated native-root fixture environment PLUS an
-//! independently installed immutable compiler policy/runtime whose V3 profile
-//! matches that fixture's real issuer/anchor configuration. Never installs or
-//! rewrites approval. A missing/mismatched prerequisite is a failing test, not a
-//! negative-control pass. No compiler or proof-helper process is launched.
+//! Requires FE2O3_RUN_PROVISIONED_ROOT_REQUEST=isolated-disposable-root, private
+//! /tmp and /run/fe2o3, actual fixed V3 provisioning records/keys/five images, and
+//! independently installed immutable matching compiler approval/runtime. Never
+//! provisions or rewrites those inputs. No fixed test keys, image substitutions,
+//! compiler exec fixture, or synthetic Prepared producer is used by this matrix.
+//! Missing/mismatched prerequisites fail, never count as negative-control passes.
+//! No compiler or proof-helper process is launched. This is not activation-ABI,
+//! service-manager, Cargo-authorship, or executable-enforcement qualification.
 use super::*;
 use crate::compiler_invocation_backing::CompilerInvocationBacking as Backing;
 use crate::compiler_output_directory::CompilerOutputDirectory as Output;
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_closure_capability::{
-    ApprovedCompilerPolicyV2 as Approval, CompilerExecutionPolicyCapabilityV3 as PolicyCap,
-    RustcInvocationCapabilityV1 as Capture,
+    ApprovedCompilerPolicyV2 as Approval, RustcInvocationCapabilityV1 as Capture,
 };
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ROOT_INTAKE_BYTES_V4 as N,
     COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1 as SOCKET,
     CompilerExecutionRootIntakeRecordV4 as Record, CompilerExecutionRootIntakeRoleV4 as Role,
 };
-use fe2o3_compiler_execution_supervisor::ProvisionedProtectedIssuerServiceInputsV2 as Inputs;
 use fe2o3_protected_service_spawn::launch_io::{self, MessageSender};
-use fe2o3_protected_static_executable::ProtectedStaticExecutableV2 as Image;
 use fe2o3_rustc_invocation::{
     CompileEnvironmentV2, InvocationDigestV3, RustcInvocationDescriptorV2,
     RustcInvocationDescriptorV3, RustcUnitV2,
@@ -34,14 +34,9 @@ use std::{
     time::Instant,
 };
 
-// These helpers construct Prepared through the actual native anchor, lifecycle,
-// trust and preparation APIs. They never manufacture compiler approval/runtime.
-mod fixtures {
-    include!("native_root_issuer_process_fixtures_tests.rs");
-}
-mod preparation {
-    include!("native_root_issuer_process_preparation_tests.rs");
-}
+// Separate from the unchanged synthetic native-root issuer fixtures.
+#[path = "native_root_request_provisioned_fixture_tests.rs"]
+mod fixtures;
 
 const WORK: usize = 1 << 60;
 const STORAGE: usize = 64 * 1024 * 1024 * 1024;
@@ -126,6 +121,11 @@ fn complete_root_request_consuming_matrix() {
             .env(CASE_ENV, case)
             .output()
             .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("ROOT_REQUEST_PROVISIONED"),
+            "{case}: must admit actual provisioned owners before any credited control: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         // Credit only the phase actually reached, never an earlier refusal.
         let marker = match case {
             "received-work" | "received-storage" => "ROOT_REQUEST_RECEIVED_REFUSED",
@@ -159,7 +159,6 @@ fn complete_root_request_case() {
         .strip_prefix("mask")
         .map_or(7, |s| s.parse::<u8>().unwrap());
     assert!(mask < 8);
-    let mut f = fixtures::Fixture::new(false);
     let mut work = Work::new(WORK);
     let mut displaced_work = Work::new(WORK);
     let mut b = Budget::new(&mut work, STORAGE);
@@ -172,7 +171,7 @@ fn complete_root_request_case() {
     // an assertion/unwind cannot return while the creator is still armed.
     let mut creator = unsafe { CreatorScope::enter(pool) };
     // SAFETY: preparation borrows only this creator's original live cleanup pool.
-    let prepared = preparation::prepare(&mut f, unsafe { creator.cleanup_for_launch() }, &mut b);
+    let (f, prepared) = fixtures::prepare(unsafe { creator.cleanup_for_launch() }, &mut b);
     b.reserve_storage(Receiver::STORAGE + RootCompilerRequest::ENVELOPE)
         .unwrap();
     let mut native = Native {
@@ -716,6 +715,10 @@ fn finish(
     }
     f.assert_unlocked();
     drop(f);
+    assert!(
+        matches!(disk::symlink_metadata(SOCKET), Err(e) if e.kind() == std::io::ErrorKind::NotFound),
+        "owned listener pathname must retire after the original cleanup pool"
+    );
     b.release_storage(retained).unwrap();
     assert_eq!(b.storage(), 0);
     eprintln!("ROOT_REQUEST_DRAINED case={case}");
