@@ -276,7 +276,7 @@ class SourceQueryTests(unittest.TestCase):
 
 class CampaignControls(unittest.TestCase):
     def harness(self, root, *, bad_query=False, bad_workload=False, disk_error=False,
-                receipt_error=False, interrupt=False, source_error=False, build_error=False):
+                receipt_error=False, interrupt=False, source_error=False, build_error=False, busy_observation=None):
         hot, _, _ = native.load_helpers()
         output = root / "campaign"
         args = types.SimpleNamespace(output=output, commit="1" * 40, devices=copy.deepcopy(PHYSICAL))
@@ -327,6 +327,8 @@ class CampaignControls(unittest.TestCase):
                     "stdout_sha256": hot.sha(folder / "stdout"), "stderr_sha256": hot.sha(folder / "stderr")})
                 if build_error and name == "build-kfd":
                     raise RuntimeError("synthetic build failure")
+                if name == busy_observation:
+                    raise RuntimeError("synthetic nonzero physical observation")
                 if interrupt and name == "d01-t01-kfd":
                     hot.B.interrupted(signal.SIGTERM, None)
                 return folder
@@ -341,6 +343,12 @@ class CampaignControls(unittest.TestCase):
                 raise RuntimeError("synthetic opening source failure")
             return {"source": "2" * 64}
 
+        monotonic = [1_000_000_000]
+        def query_settle(seconds):
+            self.assertEqual(seconds, 2)
+            called.append("fixed-query-settle")
+            monotonic[0] += 2_000_000_000
+
         handlers = {sig: signal.getsignal(sig) for sig in hot.B.MANAGED}
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(hot.B, "Recorder", FakeRecorder))
@@ -352,6 +360,8 @@ class CampaignControls(unittest.TestCase):
             stack.enter_context(mock.patch.object(native, "source_snapshot", side_effect=source_snapshot))
             stack.enter_context(mock.patch.object(native, "tool_snapshot", return_value={"tool": "3" * 64}))
             stack.enter_context(mock.patch.object(native.resource, "setrlimit"))
+            stack.enter_context(mock.patch.object(native.time, "sleep", side_effect=query_settle))
+            stack.enter_context(mock.patch.object(native.time, "monotonic_ns", side_effect=lambda: monotonic[0]))
             # Any unintended process execution or historical PID probe is a test failure.
             stack.enter_context(mock.patch.object(hot.B.subprocess, "Popen", side_effect=AssertionError("process launched")))
             stack.enter_context(mock.patch.object(hot.B.os, "killpg", side_effect=AssertionError("historical PID probe")))
@@ -379,6 +389,47 @@ class CampaignControls(unittest.TestCase):
             self.assertEqual(len(json.loads((output / "replay.json").read_text())["trials"]), 18)
             self.assertTrue(all("admission-after-" + backend in called for backend in ("kfd", "hsa", "hip")))
             self.assertFalse((output / "admission-after-status.json").exists())
+
+    def test_every_complete_query_set_has_one_fixed_wait_after_all_three_closed_queries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output, called, error = self.harness(Path(temporary))
+            self.assertIsNone(error)
+            waits = [index for index, name in enumerate(called) if name == "fixed-query-settle"]
+            self.assertEqual(len(waits), 20)
+            for index in waits:
+                prefix = called[index - 1].removesuffix("-hip")
+                self.assertEqual(called[index - 3:index], [prefix + "-" + backend for backend in ("kfd", "hsa", "hip")])
+                settled = json.loads((output / (prefix + "-settle.json")).read_bytes())
+                self.assertEqual(settled["fixed_seconds"], 2)
+                self.assertEqual(settled["finished_monotonic_ns"] - settled["started_monotonic_ns"], 2_000_000_000)
+                self.assertTrue(settled["outside_timed_workloads"])
+                self.assertFalse(settled["polling"])
+                self.assertFalse(settled["idle_admission"])
+                self.assertTrue(called[index + 1].endswith("-gpu1"))
+            replay = json.loads((output / "replay.json").read_bytes())
+            expected = campaign.replay_campaign(receipts(), environment_after=environment(), **inputs())
+            self.assertEqual(set(replay), set(expected))
+            self.assertEqual(replay["schema"], expected["schema"])
+            self.assertEqual(replay["claim"], expected["claim"])
+            self.assertEqual(json.loads((output / "plan.json").read_bytes())["trials"],
+                             campaign.trial_specs(**inputs())["trials"])
+            for actual, wanted in zip(replay["trials"], expected["trials"]):
+                self.assertEqual(set(actual), set(wanted))
+                for key in ("name", "fields", "stdout_sha256"):
+                    self.assertEqual(actual[key], wanted[key])
+
+    def test_fixed_query_wait_never_retries_or_admits_a_nonzero_physical_observation(self):
+        for phase in ("admission-before-gpu1", "d01-t01-kfd-query-before-gpu1", "d01-t01-kfd-before-gpu1"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                output, called, error = self.harness(Path(temporary), busy_observation=phase)
+                self.assertIsNotNone(error)
+                self.assertEqual(called.count(phase), 1)
+                self.assertFalse(set(called) & {row["name"] for row in receipts()})
+                self.assertFalse(json.loads((output / "finished.json").read_bytes())["native_execution"])
+                self.assertFalse((output / "replay.json").exists())
+                for edge in ("settled", "delayed"):
+                    for index in (1, 2):
+                        self.assertIn(f"campaign-close-{edge}-gpu{index}", called)
 
     def test_prebuild_failure_explicitly_skips_api_admission_but_keeps_physical_postflights(self):
         for options in ({"source_error": True}, {"build_error": True}):

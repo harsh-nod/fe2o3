@@ -13,6 +13,7 @@ import shutil
 import signal
 import stat
 import sys
+import time
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -23,6 +24,7 @@ SOURCE_ROOTS = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "cr
                 "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py",
                 "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/.gitattributes")
 CONTROLS = {"copy_bytes": 1048576, "warmups": 2, "samples": 10}
+QUERY_SETTLE_SECONDS = 2
 
 
 def load_helpers():
@@ -250,7 +252,15 @@ def run_campaign(args, hot, planner, observations):
             folder = rec.run(label + "-" + backend, command, 60, env=env)
             hot.need(not (folder / "stderr").read_bytes(), "empty API query stderr")
             raw[backend] = (folder / "stdout").read_bytes()
-        return observations.join_admission(physical[0], raw, inventory_sha256=physical[1])
+        admission = observations.join_admission(physical[0], raw, inventory_sha256=physical[1])
+        started = time.monotonic_ns()
+        time.sleep(QUERY_SETTLE_SECONDS)
+        save(label + "-settle", {"schema": "fe2o3.native-query-settle.v1",
+            "closed_query_stages": [label + "-" + backend for backend in ("kfd", "hsa", "hip")],
+            "fixed_seconds": QUERY_SETTLE_SECONDS, "started_monotonic_ns": started,
+            "finished_monotonic_ns": time.monotonic_ns(), "outside_timed_workloads": True,
+            "polling": False, "idle_admission": False, "exclusive_reservation": False})
+        return admission
 
     def host(label, edge):
         command = ["/usr/bin/python3", "-I", "-B", str(HERE / "xgmi_peer_series_host.py"),

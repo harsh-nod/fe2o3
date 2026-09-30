@@ -114,6 +114,26 @@ trial's query must agree on physical UIDs/BDFs, KFD GPU IDs, routes, boot ID,
 topology generation, and filtered device ordering. Each workload is preceded
 by another physical idle observation after its query processes have exited.
 
+Every complete, validated KFD/HSA/HIP query set is followed by one fixed two-second
+settling interval before the next physical observation. This applies to opening,
+per-trial and closing queries. The runner records the closed query-stage roster,
+requested interval and monotonic start/finish times separately from timed
+workloads. The wait is preconditioning, not an idle observation or reservation;
+it never polls or retries until idle. Every subsequent physical observation still
+requires exactly zero GPU/memory activity and the unchanged PID, memory and
+identity checks. A nonzero observation rejects the attempt.
+
+An earlier native attempt at signed commit
+`29599a237901cb27ee90cd34d7f7a533dd90d424` compiled all three benchmarks and
+passed opening host and API identity checks, but the first per-trial physical
+observation saw GPU 1 at 3% GPU activity and rejected the run. Later reads were
+zero and no selected-device PID was reported. These observations establish
+neither external activity nor API initialization as the cause. No timed trial
+ran, no performance result was accepted, and the exact private remote directory
+was removed only after raw archive readback and fresh closure checks. The failed
+attempt is retained as a rejection, not retroactively accepted by the settling
+change. Observations remain nonexclusive sequential point checks.
+
 ## Closure And Cleanup
 
 Each invocation uses the synchronous repository-owned recorder and its own new
