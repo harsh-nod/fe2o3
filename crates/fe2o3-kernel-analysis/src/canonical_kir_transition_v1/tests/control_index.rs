@@ -203,16 +203,16 @@ fn empty_and_return_only_control_indexes_have_independent_exact_boundaries() {
             |a, _| Rows::identity(a),
             |a, b, rows, floor| {
                 checked_view(a, b, rows, floor, |checked, setup| {
-                    // State: two inventory references, nine slice headers, eighteen
-                    // Vec headers = 74 words. Return-only payload: eight words and
+                    // State: two inventory references, nine slice headers, nineteen
+                    // Vec headers = 77 words. Return-only payload: nine words and
                     // one reachability byte. No observed successful budget is used.
                     let word = size_of::<usize>();
                     let header = size_of::<ControlIndex<'_, '_, '_>>();
                     let block_payload =
                         usize::from(nonempty) * size_of::<CanonicalKirBlockControlV1>();
                     let retained = header + block_payload;
-                    let peak = retained + 74 * word + usize::from(nonempty) * (8 * word + 1);
-                    let exact_work = if nonempty { 42 } else { 7 };
+                    let peak = retained + 77 * word + usize::from(nonempty) * (9 * word + 1);
+                    let exact_work = if nonempty { 44 } else { 7 };
                     let borrowed = setup.storage() + 19;
                     for (work_under, storage_under) in [(0, 0), (1, 0), (0, 1)] {
                         let mut work =
@@ -248,7 +248,7 @@ fn empty_and_return_only_control_indexes_have_independent_exact_boundaries() {
                                         Err(Error::Resource(Resource::Storage(_)))
                                     ));
                                     assert_eq!(budget.failed_storage(), Some(borrowed + peak));
-                                    assert_eq!(budget.work(), 7 + if nonempty { 11 } else { 2 });
+                                    assert_eq!(budget.work(), 7 + if nonempty { 12 } else { 2 });
                                 }
                                 _ => unreachable!(),
                             }

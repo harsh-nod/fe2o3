@@ -13,6 +13,7 @@ struct ExecutionLifecycleSourceV29<'a> {
     owner: &'a ProductionSemanticSsaOwnerV1,
     launch: &'a crate::ProductionSourceLaunchRosterV1,
     input: ProductionExecutionSourceInputV29<'a>,
+    kernel_argument_abi: Option<&'a kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
 }
 
@@ -27,15 +28,31 @@ impl<'a> ExecutionLifecycleSourceV29<'a> {
         input: ProductionExecutionSourceInputV29<'a>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
-        crate::with_checked_execution_source_v29(owner, launch, input, budget, |_, _| Ok(()))
-            .map_err(|error| match error {
-                crate::ProductionContextRootErrorV29::Resource(error) => error.into(),
-                _ => execution_lifecycle_error_v29(),
-            })?;
+        Self::with_kernel_arguments(owner, launch, input, None, budget)
+    }
+
+    fn with_kernel_arguments(
+        owner: &'a ProductionSemanticSsaOwnerV1,
+        launch: &'a crate::ProductionSourceLaunchRosterV1,
+        input: ProductionExecutionSourceInputV29<'a>,
+        kernel_argument_abi: Option<&'a kernel_argument_abi_v18::CapturedKernelArgumentAbiV18>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        if let Some(profile) = kernel_argument_abi {
+            profile.check(owner, budget)?;
+        }
+        crate::production_execution_source_input_v29::check_source_owned_census_v18(
+            owner, launch, input, budget,
+        )
+        .map_err(|error| match error {
+            crate::ProductionContextRootErrorV29::Resource(error) => error.into(),
+            _ => execution_lifecycle_error_v29(),
+        })?;
         Ok(Self {
             owner,
             launch,
             input,
+            kernel_argument_abi,
             ledger: budget.work_ledger_identity_v1(),
         })
     }
@@ -43,13 +60,112 @@ impl<'a> ExecutionLifecycleSourceV29<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredLifecycleSourceV29 {
-    Issuance { root: usize },
-    Derive { event: usize },
-    Return { event: usize },
+    Issuance {
+        root: usize,
+    },
+    Derive {
+        event: usize,
+    },
+    Return {
+        event: usize,
+    },
+    Intrinsic {
+        callee: fe2o3_mir_model::semantic_mir_v1::SemanticCallableIdV1,
+    },
+}
+
+// Shared original-event classification for emission and retained-source recipes.
+// This is source agreement only; backend receipt authentication remains separate.
+fn expected_lifecycle_source_event_v29(
+    source: &ExecutionLifecycleSourceV29<'_>,
+    function: &SemanticFunctionDeclV1,
+    function_id: SemanticFunctionIdV1,
+    source_root: SemanticFunctionIdV1,
+    provider: bool,
+    block: SemanticBlockIdV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Option<DeferredLifecycleSourceV29>, ProductionSemanticKirErrorV1> {
+    budget.charge_work(4)?;
+    let body = function
+        .blocks()
+        .get(block.index() as usize)
+        .ok_or_else(execution_lifecycle_error_v29)?;
+    let expected = match body.terminator().kind() {
+        SemanticTerminatorKindV1::Call(call) => {
+            let declaration = source
+                .owner
+                .source_semantic()
+                .callables()
+                .get(call.callee().index() as usize)
+                .ok_or_else(execution_lifecycle_error_v29)?;
+            match declaration {
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::Execution(operation),
+                    ..
+                } if is_execution_tile_operation_v29(*operation) => {
+                    return Ok(Some(DeferredLifecycleSourceV29::Intrinsic {
+                        callee: call.callee(),
+                    }));
+                }
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation:
+                        SemanticCompilerIntrinsicOperationV1::Execution(
+                            SemanticExecutionOperationV29::ContextIssue { .. },
+                        ),
+                    ..
+                } => {
+                    budget.charge_work(source.input.roots.len())?;
+                    let root = source
+                        .input
+                        .roots
+                        .iter()
+                        .position(|root| root.root == function_id && root.issuance.block == block)
+                        .ok_or_else(execution_lifecycle_error_v29)?;
+                    if function_id != source_root {
+                        return Err(execution_lifecycle_error_v29());
+                    }
+                    return Ok(Some(DeferredLifecycleSourceV29::Issuance { root }));
+                }
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation:
+                        SemanticCompilerIntrinsicOperationV1::Execution(
+                            SemanticExecutionOperationV29::WorkgroupDerive { .. },
+                        ),
+                    ..
+                } if provider => ProductionScopeEventKindV29::Call {
+                    callee: call.callee(),
+                    kind: ProductionScopeCallKindV29::Derive,
+                },
+                _ => return Ok(None),
+            }
+        }
+        SemanticTerminatorKindV1::Return if provider => ProductionScopeEventKindV29::Return,
+        _ => return Ok(None),
+    };
+    budget.charge_work(source.input.events.len())?;
+    let event = source
+        .input
+        .events
+        .iter()
+        .position(|event| {
+            event.function == function_id
+                && event.block == block
+                && event.statement_count == body.statements().len()
+                && event.kind == expected
+        })
+        .ok_or_else(execution_lifecycle_error_v29)?;
+    Ok(Some(
+        if matches!(expected, ProductionScopeEventKindV29::Return) {
+            DeferredLifecycleSourceV29::Return { event }
+        } else {
+            DeferredLifecycleSourceV29::Derive { event }
+        },
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredLifecycleKindV29 {
+    Tile(DeferredTileEventV29),
     Issue {
         result: SemanticExecutionIdentityV29,
     },
@@ -179,6 +295,10 @@ impl<'a> ExecutionLifecycleProducerV29<'a> {
         let row = instances
             .instance(instance)
             .ok_or_else(execution_lifecycle_error_v29)?;
+        budget.charge_work(1)?;
+        if instances.instance_reachable(instance) != Some(true) {
+            return Err(execution_lifecycle_error_v29());
+        }
         let provider = matches!(
             source.input.classes.get(row.function().index() as usize),
             Some(ProductionScopeCallableCandidateV29::Provider { .. })
@@ -205,7 +325,7 @@ impl<'a> ExecutionLifecycleProducerV29<'a> {
         };
         let mut derives = 0;
         for index in 0..producer.function.blocks().len() {
-            budget.charge_work(1)?;
+            budget.charge_work(2)?;
             let block = SemanticBlockIdV1::from_index(
                 u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?,
             );
@@ -213,6 +333,9 @@ impl<'a> ExecutionLifecycleProducerV29<'a> {
                 .ssa
                 .plan()
                 .is_reachable(SsaBlockIdV1::new(block.index()))
+                && instances
+                    .block_reachable(instance, block)
+                    .ok_or_else(execution_lifecycle_error_v29)?
                 && let Some(event) = producer.expected_event(block, budget)?
             {
                 producer.expected_rows = argument_sum_v1(&[producer.expected_rows, 1])?;
@@ -235,87 +358,20 @@ impl<'a> ExecutionLifecycleProducerV29<'a> {
         block: SemanticBlockIdV1,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<Option<DeferredLifecycleSourceV29>, ProductionSemanticKirErrorV1> {
-        budget.charge_work(4)?;
-        let body = self
-            .function
-            .blocks()
-            .get(block.index() as usize)
-            .ok_or_else(execution_lifecycle_error_v29)?;
-        let expected = match body.terminator().kind() {
-            SemanticTerminatorKindV1::Call(call) => {
-                let declaration = self
-                    .source
-                    .owner
-                    .source_semantic()
-                    .callables()
-                    .get(call.callee().index() as usize)
-                    .ok_or_else(execution_lifecycle_error_v29)?;
-                match declaration {
-                    SemanticCallableDeclV1::CompilerIntrinsic {
-                        operation:
-                            SemanticCompilerIntrinsicOperationV1::Execution(
-                                SemanticExecutionOperationV29::ContextIssue { .. },
-                            ),
-                        ..
-                    } => {
-                        budget.charge_work(self.source.input.roots.len())?;
-                        let root = self
-                            .source
-                            .input
-                            .roots
-                            .iter()
-                            .position(|root| {
-                                root.root == self.pending.function && root.issuance.block == block
-                            })
-                            .ok_or_else(execution_lifecycle_error_v29)?;
-                        if self.pending.function != self.pending.source.root {
-                            return Err(execution_lifecycle_error_v29());
-                        }
-                        return Ok(Some(DeferredLifecycleSourceV29::Issuance { root }));
-                    }
-                    SemanticCallableDeclV1::CompilerIntrinsic {
-                        operation:
-                            SemanticCompilerIntrinsicOperationV1::Execution(
-                                SemanticExecutionOperationV29::WorkgroupDerive { .. },
-                            ),
-                        ..
-                    } if self.provider => ProductionScopeEventKindV29::Call {
-                        callee: call.callee(),
-                        kind: ProductionScopeCallKindV29::Derive,
-                    },
-                    _ => return Ok(None),
-                }
-            }
-            SemanticTerminatorKindV1::Return if self.provider => {
-                ProductionScopeEventKindV29::Return
-            }
-            _ => return Ok(None),
-        };
-        budget.charge_work(self.source.input.events.len())?;
-        let event = self
-            .source
-            .input
-            .events
-            .iter()
-            .position(|event| {
-                event.function == self.pending.function
-                    && event.block == block
-                    && event.statement_count == body.statements().len()
-                    && event.kind == expected
-            })
-            .ok_or_else(execution_lifecycle_error_v29)?;
-        Ok(Some(
-            if matches!(expected, ProductionScopeEventKindV29::Return) {
-                DeferredLifecycleSourceV29::Return { event }
-            } else {
-                DeferredLifecycleSourceV29::Derive { event }
-            },
-        ))
+        expected_lifecycle_source_event_v29(
+            self.source,
+            self.function,
+            self.pending.function,
+            self.pending.source.root,
+            self.provider,
+            block,
+            budget,
+        )
     }
 
     fn check_lowering(
         &self,
-        lowering: &mut SemanticFunctionLoweringV1<'_>,
+        lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         let cursor = lowering
             .execution
@@ -341,7 +397,7 @@ impl<'a> ExecutionLifecycleProducerV29<'a> {
 
     fn prepare_event(
         &self,
-        lowering: &mut SemanticFunctionLoweringV1<'_>,
+        lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
         block: SemanticBlockIdV1,
     ) -> Result<DeferredLifecycleSourceV29, ProductionSemanticKirErrorV1> {
         self.check_lowering(lowering)?;
@@ -455,6 +511,14 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
                     binding: found, operation, context: input, workgroup: output
                 }) if *found == binding.identity() && operation == operation_identity
                     && input == context && output == workgroup),
+            SemanticCompilerIntrinsicOperationV1::Execution(operation)
+                if is_execution_tile_operation_v29(*operation) =>
+            {
+                matches!(
+                    self.source.input.classes.get(callable.index() as usize),
+                    Some(ProductionScopeCallableCandidateV29::Ordinary)
+                )
+            }
             _ => false,
         };
         if !valid {
@@ -465,7 +529,7 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
 
     fn produce(
         &mut self,
-        lowering: &mut SemanticFunctionLoweringV1<'_>,
+        lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
         block: SemanticBlockIdV1,
         call: &SemanticDirectCallV1,
         operation: SemanticExecutionOperationV29,
@@ -507,6 +571,9 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
             || matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_))
         {
             return Err(execution_lifecycle_error_v29());
+        }
+        if is_execution_tile_operation_v29(operation) {
+            return self.produce_tile_v29(lowering, source, block, call, operation, operations);
         }
         let occurrence = ProductionCallOccurrenceV1 {
             caller: self.pending.instance,
@@ -598,7 +665,7 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
 
     fn normal_return(
         &mut self,
-        lowering: &mut SemanticFunctionLoweringV1<'_>,
+        lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
         block: SemanticBlockIdV1,
         operations: &[Operation],
     ) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -625,7 +692,7 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
 
     fn finish(
         &mut self,
-        lowering: &mut SemanticFunctionLoweringV1<'_>,
+        lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
     ) -> Result<PendingLifecycleEventsV29, ProductionSemanticKirErrorV1> {
         self.check_lowering(lowering)?;
         let budget = lowering
@@ -645,6 +712,18 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
         )?;
         for row in &self.pending.rows {
             let value = match row.kind {
+                DeferredLifecycleKindV29::Tile(event) => {
+                    if event.producer
+                        != (ProductionCallOccurrenceV1 {
+                            caller: self.pending.instance,
+                            block: row.block,
+                        })
+                        || event.result_range()?.end > lowering.next_value
+                    {
+                        return Err(execution_lifecycle_error_v29());
+                    }
+                    continue;
+                }
                 DeferredLifecycleKindV29::Issue { result }
                 | DeferredLifecycleKindV29::Derive { result, .. } => result,
                 DeferredLifecycleKindV29::End { workgroup } => workgroup,

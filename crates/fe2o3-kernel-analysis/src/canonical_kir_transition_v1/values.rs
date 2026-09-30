@@ -73,7 +73,7 @@ pub(super) fn literal(value: &Constant) -> Literal {
     Literal { ty, bits }
 }
 
-impl State<'_, '_, '_, '_> {
+impl<O> State<'_, '_, '_, '_, O> {
     pub(super) fn solve_values(&mut self, budget: &mut Budget<'_>) -> Result<()> {
         let input = self.input;
         let output = self.output;

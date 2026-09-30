@@ -1,3 +1,5 @@
+const CLEANUP_TILE_LIMIT_V29: usize = 100_000_000;
+
 #[derive(Default)]
 struct CleanupObservationV29 {
     denied: std::cell::Cell<bool>,
@@ -218,4 +220,437 @@ fn source_cleanup_real_source_replay_preserves_original_boxed_panic() {
             }
         }
     }
+}
+
+fn cleanup_real_source_callback_v29<'work>(
+    source: &ScopedSourceInputsV29,
+    cleanup: &ScopedSourceCleanupV29,
+    budget: &mut ArgumentBudgetV1<'work>,
+    callback: impl FnOnce(&mut ArgumentBudgetV1<'work>) -> Result<(), ProductionSemanticKirErrorV1>,
+) -> Result<(), ScopedModuleErrorV29> {
+    source.input.with_source_with_cleanup(
+        &source.owner,
+        &source.launch,
+        cleanup,
+        budget,
+        |view, budget| {
+            with_scoped_source_layouts_v29(
+                view,
+                ProductionSemanticKirLimitsV1::default(),
+                cleanup,
+                budget,
+                |demands, layouts, budget| {
+                    let before = budget.storage();
+                    let roots = scoped_module_roots_v29(
+                        view,
+                        demands,
+                        layouts,
+                        ProductionSemanticKirLimitsV1::default(),
+                        budget,
+                    )?;
+                    let candidate = scoped_module_candidate_v29(
+                        view,
+                        roots,
+                        ProductionSemanticKirLimitsV1::default(),
+                        budget,
+                    )?;
+                    let scratch = budget.storage() - before;
+                    drop(candidate);
+                    callback(budget)?;
+                    Ok(scratch)
+                },
+                |scratch, layouts, demands, budget| {
+                    layouts.release(budget)?;
+                    demands.discard(budget)?;
+                    budget.release_storage(scratch)?;
+                    Ok(())
+                },
+            )
+            .map_err(ScopedModuleErrorV29::from)
+        },
+    )
+}
+
+#[test]
+fn source_cleanup_foreign_ledger_preserves_source_error_and_raw_panic() {
+    for panic in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        foreign.reserve_storage(97).unwrap();
+        let source = owning_source_fixture(ModuleFixture::Ordinary, true, &mut budget).unwrap();
+        let floor = budget.storage();
+        let original = budget.work_ledger_identity_v1();
+        let other = foreign.work_ledger_identity_v1();
+        let original_storage = std::cell::Cell::new(0);
+        let denied = std::cell::Cell::new(false);
+        let (payload, address, drops) = cleanup_panic_v29(321);
+        let mut payload = Some(payload);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_scoped_source_cleanup_v29(&mut budget, floor, |cleanup, budget| {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cleanup_real_source_callback_v29(&source, cleanup, budget, |budget| {
+                        let selected = unsupported(0, None, None, "selected source cleanup error");
+                        original_storage.set(budget.storage());
+                        std::mem::swap(budget, &mut foreign);
+                        if panic {
+                            drop(selected);
+                            std::panic::resume_unwind(payload.take().unwrap());
+                        }
+                        Err(selected)
+                    })
+                }));
+                denied.set(cleanup.is_denied());
+                match result {
+                    Ok(result) => result,
+                    Err(payload) => std::panic::resume_unwind(payload),
+                }
+            })
+        }));
+        assert!(denied.get());
+        assert_eq!(budget.storage(), 97);
+        assert_eq!(foreign.storage(), original_storage.get());
+        assert!(budget.work_ledger_identity_v1() == other);
+        assert!(foreign.work_ledger_identity_v1() == original);
+        if panic {
+            require_cleanup_panic_v29(result.unwrap_err(), address, 321, &drops);
+        } else {
+            require_cleanup_source_error_v29(result.unwrap());
+            drop(payload);
+            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+}
+
+#[test]
+fn source_cleanup_corrupted_success_cannot_escape_as_a_valid_source_result() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    let source = owning_source_fixture(ModuleFixture::Ordinary, true, &mut budget).unwrap();
+    let floor = budget.storage();
+    with_scoped_source_cleanup_v29(&mut budget, floor, |cleanup, budget| {
+        cleanup_real_source_callback_v29(&source, cleanup, budget, |_| Ok(()))
+    })
+    .unwrap();
+    assert_eq!(budget.storage(), floor);
+    let result = with_scoped_source_cleanup_v29(&mut budget, floor, |cleanup, budget| {
+        let result = cleanup_real_source_callback_v29(&source, cleanup, budget, |budget| {
+            budget.release_storage(budget.storage() - (floor + 1))?;
+            Ok(())
+        });
+        assert!(cleanup.is_denied());
+        result
+    });
+    assert!(matches!(
+        result,
+        Err(ScopedModuleErrorV29::Source(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Accounting
+            )
+        ))
+    ));
+    assert_eq!(budget.storage(), floor + 1);
+}
+
+#[test]
+fn source_cleanup_header_is_charged_once_and_obeys_independent_exact_limits() {
+    struct State {
+        stage: std::cell::Cell<usize>,
+        floors: [usize; 3],
+    }
+    fn run(
+        state: &State,
+        cleanup: &ScopedSourceCleanupV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ScopedModuleErrorV29> {
+        state.stage.set(1);
+        assert_eq!(budget.storage(), state.floors[0]);
+        let outer = move |budget: &mut ArgumentBudgetV1<'_>| {
+            state.stage.set(2);
+            assert_eq!(budget.storage(), state.floors[1]);
+            let inner = move |budget: &mut ArgumentBudgetV1<'_>| {
+                state.stage.set(3);
+                assert_eq!(budget.storage(), state.floors[2]);
+                budget.charge_work(5)?;
+                Ok::<(), ScopedModuleErrorV29>(())
+            };
+            assert_eq!(std::mem::size_of_val(&inner), size_of::<&State>());
+            let floor = budget.storage();
+            scoped_source_attempt_v29(cleanup, budget, floor, inner)
+        };
+        assert_eq!(
+            std::mem::size_of_val(&outer),
+            size_of::<(&State, &ScopedSourceCleanupV29)>()
+        );
+        let floor = budget.storage();
+        scoped_source_attempt_v29(cleanup, budget, floor, outer)
+    }
+    let header = size_of::<ScopedSourceCleanupBoundaryV29>()
+        + size_of::<std::thread::Result<Result<(), ScopedModuleErrorV29>>>();
+    let callback =
+        header + cleanup_callback_header_oracle_v1766::<(), ScopedModuleErrorV29, &State>();
+    let outer = callback
+        + cleanup_attempt_header_oracle_v1766::<
+            (),
+            ScopedModuleErrorV29,
+            (&State, &ScopedSourceCleanupV29),
+        >();
+    let complete =
+        outer + cleanup_attempt_header_oracle_v1766::<(), ScopedModuleErrorV29, &State>();
+    for (allowance, work_allowance, stage, denied) in [
+        (header - 1, 5, 0, Some(header)),
+        (callback - 1, 5, 0, Some(callback)),
+        (outer - 1, 5, 1, Some(outer)),
+        (complete - 1, 5, 2, Some(complete)),
+        (complete, 5, 3, None),
+        (complete, 4, 3, None),
+    ] {
+        // One boundary and two nested constructor-attempt disposal preflights.
+        let disposal_work = 32 + 2 + 1 + 4;
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_allowance + 3 * disposal_work);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_FLOOR + allowance);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let state = State {
+            stage: std::cell::Cell::new(0),
+            floors: [callback, outer, complete].map(|bytes| MODULE_FLOOR + bytes),
+        };
+        let state = &state;
+        let consume = move |cleanup: &ScopedSourceCleanupV29, budget: &mut ArgumentBudgetV1<'_>| {
+            run(state, cleanup, budget)
+        };
+        assert_eq!(std::mem::size_of_val(&consume), size_of::<&State>());
+        let result = with_scoped_source_cleanup_v29::<(), ScopedModuleErrorV29>(
+            &mut budget,
+            MODULE_FLOOR,
+            consume,
+        );
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+        assert_eq!(state.stage.get(), stage);
+        if let Some(denied) = denied {
+            assert!(matches!(
+                result,
+                Err(ScopedModuleErrorV29::Source(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Storage(error)
+                    )
+                )) if error.actual() == MODULE_FLOOR + denied
+                    && error.limit() == MODULE_FLOOR + allowance
+            ));
+            assert_eq!(budget.failed_storage(), Some(MODULE_FLOOR + denied));
+            assert_eq!(
+                budget.work(),
+                if allowance < header {
+                    0
+                } else {
+                    (stage + 1) * disposal_work
+                }
+            );
+        } else if work_allowance < 5 {
+            assert!(matches!(
+                result,
+                Err(ScopedModuleErrorV29::Source(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Work(_)
+                    )
+                ))
+            ));
+            assert_eq!(budget.work(), 3 * disposal_work);
+            assert_eq!(budget.failed_work(), Some(3 * disposal_work + 5));
+            assert_eq!(budget.failed_storage(), None);
+        } else {
+            result.unwrap();
+            assert_eq!(budget.peak_storage(), MODULE_FLOOR + complete);
+            assert_eq!(budget.work(), 5 + 3 * disposal_work);
+        }
+    }
+}
+
+fn cleanup_callback_header_oracle_v1766<T, E, F>() -> usize {
+    type Capture<'a, 'w, F> = (
+        &'a mut Option<F>,
+        &'a ScopedSourceCleanupV29,
+        &'a mut ArgumentBudgetV1<'w>,
+        &'a Result<(), ArgumentResourceV1>,
+    );
+    size_of::<F>()
+        + std::mem::align_of::<F>()
+        + size_of::<Option<F>>()
+        + std::mem::align_of::<Option<F>>()
+        + size_of::<Capture<'_, '_, F>>()
+        + size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>()
+        + size_of::<(F, &ScopedSourceCleanupV29, &mut ArgumentBudgetV1<'_>)>()
+        + size_of::<T>()
+        + size_of::<E>()
+        + size_of::<Result<T, E>>()
+        + size_of::<Result<(), ArgumentResourceV1>>()
+        + size_of::<Result<usize, ArgumentResourceV1>>()
+        + size_of::<Box<dyn std::any::Any + Send>>()
+        + 2 * size_of::<usize>()
+        + source_owned_finish_header_oracle_v26::<T, E>()
+}
+
+fn cleanup_attempt_header_oracle_v1766<T, E, F>() -> usize {
+    type Frame<'a, 'w, F> = (
+        &'a ScopedSourceCleanupV29,
+        &'a mut ArgumentBudgetV1<'w>,
+        usize,
+        F,
+    );
+    type Capture<'a, 'w, F> = (
+        &'a mut Option<F>,
+        &'a mut ArgumentBudgetV1<'w>,
+        &'a Result<(), ArgumentResourceV1>,
+        &'a mut Option<usize>,
+        &'a usize,
+    );
+    size_of::<F>()
+        + std::mem::align_of::<F>()
+        + size_of::<Option<F>>()
+        + std::mem::align_of::<Option<F>>()
+        + size_of::<Frame<'_, '_, F>>()
+        + size_of::<Capture<'_, '_, F>>()
+        + size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_, F>>>()
+        + size_of::<std::thread::Result<Result<T, E>>>()
+        + size_of::<Result<T, E>>()
+        + size_of::<T>()
+        + size_of::<E>()
+        + size_of::<Box<dyn std::any::Any + Send>>()
+        + size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>()
+        + 8 * size_of::<usize>()
+        + size_of::<Option<usize>>()
+        + size_of::<bool>()
+        + size_of::<Result<usize, ArgumentResourceV1>>()
+        + size_of::<Result<(), ArgumentResourceV1>>()
+        + source_owned_finish_header_oracle_v26::<T, E>()
+}
+
+include!("production_source_callback_ingress_v29_tests.rs");
+
+#[test]
+fn source_cleanup_new_settlement_preflight_preserves_refusal_through_uncalled_capture_drop() {
+    struct Capture<'a>(&'a std::cell::Cell<bool>);
+    impl Capture<'_> {
+        fn invoked(&self) {
+            panic!("preflight refusal invoked its callback");
+        }
+    }
+    impl Drop for Capture<'_> {
+        fn drop(&mut self) {
+            self.0.set(true);
+            panic!("uncalled cleanup callback destructor");
+        }
+    }
+    let dropped = std::cell::Cell::new(false);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(32 + 2 + 1 + 4 - 1);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let boundary =
+        ScopedSourceCleanupBoundaryV29::new::<(), ArgumentResourceV1>(MODULE_FLOOR, &mut budget)
+            .unwrap();
+    let capture = Capture(&dropped);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        boundary.run(&mut budget, move |_, _| {
+            capture.invoked();
+            Ok::<_, ArgumentResourceV1>(())
+        })
+    }));
+    assert!(dropped.get());
+    assert!(matches!(caught, Ok(Err(ArgumentResourceV1::Work(_)))));
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
+#[test]
+fn source_cleanup_header_cannot_cover_one_byte_missing_incoming_reservation() {
+    for replay in [false, true] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        let source = owning_source_fixture(ModuleFixture::Ordinary, true, &mut budget).unwrap();
+        let mut donor = Some(source);
+        let owner = if replay {
+            Some(
+                SourceOwnedScopedModuleV29::try_new(
+                    &mut donor,
+                    ProductionSemanticKirLimitsV1::default(),
+                    &mut budget,
+                )
+                .unwrap(),
+            )
+        } else {
+            None
+        };
+        let required = if let Some(owner) = &owner {
+            owner.retained_storage + owner.capture.preexisting_storage()
+        } else {
+            let source = donor.as_ref().unwrap();
+            source.input.retained_storage
+                + source
+                    .owner
+                    .occurrence_storage()
+                    .unwrap()
+                    .retained_storage()
+        };
+        budget
+            .release_storage(budget.storage() - (required - 1))
+            .unwrap();
+        let storage = budget.storage();
+        let work = budget.work();
+        let result = if let Some(owner) = &owner {
+            owner.replay(&mut budget)
+        } else {
+            SourceOwnedScopedModuleV29::try_new(
+                &mut donor,
+                ProductionSemanticKirLimitsV1::default(),
+                &mut budget,
+            )
+            .map(|value| drop(value))
+        };
+        assert!(matches!(
+            result,
+            Err(ScopedModuleErrorV29::Source(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Accounting
+                )
+            ))
+        ));
+        assert_eq!(budget.storage(), storage);
+        assert_eq!(budget.work(), work);
+        assert!(budget.failed_storage().is_none());
+        assert_eq!(donor.is_some(), !replay);
+    }
+}
+
+#[test]
+fn source_cleanup_header_refusal_keeps_the_original_constructor_adoption_contract() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    let source = owning_source_fixture(ModuleFixture::Ordinary, true, &mut budget).unwrap();
+    let inherited = source.input.retained_storage;
+    let header = size_of::<ScopedSourceCleanupBoundaryV29>()
+        + size_of::<std::thread::Result<Result<SourceOwnedScopedModuleV29, ScopedModuleErrorV29>>>(
+        );
+    budget
+        .reserve_storage(MODULE_LIMIT - budget.storage() - (header - 1))
+        .unwrap();
+    let entry = budget.storage();
+    let before_work = budget.work();
+    let mut donor = Some(source);
+    let result = SourceOwnedScopedModuleV29::try_new(
+        &mut donor,
+        ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
+    );
+    assert!(matches!(
+        result,
+        Err(ScopedModuleErrorV29::Source(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(_)
+            )
+        ))
+    ));
+    assert!(donor.is_none());
+    assert_eq!(budget.storage(), entry - inherited);
+    assert_eq!(budget.work(), before_work);
+    assert!(budget.failed_storage().is_some());
 }

@@ -342,8 +342,32 @@ pub fn optimize_native_neutral_kernel_ir_v1<'input>(
 mod checked_neutral_optimization_v1;
 #[path = "neutral_integer_continuation_v1.rs"]
 mod integer_continuation;
+#[path = "neutral_integer_continuation_v18.rs"]
+mod integer_continuation_v18;
+#[path = "neutral_integer_worklist_v18.rs"]
+mod integer_worklist_v18;
+pub use integer_worklist_v18::{
+    CheckedNeutralKernelIrOwnerIntegerWorklistV18, KirNeutralOptimizationOutputIntegerWorklistV18,
+    optimize_neutral_kernel_ir_integer_worklist_v18,
+};
+
+#[path = "neutral_mixed_pure_cse_v18.rs"]
+mod mixed_pure_cse_v18;
+pub use mixed_pure_cse_v18::{
+    CheckedNeutralKernelIrOwnerMixedPureCseV18, KirNeutralOptimizationOutputMixedPureCseV18,
+    optimize_neutral_kernel_ir_mixed_pure_cse_v18,
+};
+
+#[path = "neutral_mixed_fixedpoint_v18.rs"]
+mod mixed_fixedpoint_v18;
+pub use mixed_fixedpoint_v18::{
+    CheckedNeutralKernelIrOwnerMixedFixedpointV18, KirNeutralOptimizationOutputMixedFixedpointV18,
+    optimize_neutral_kernel_ir_mixed_fixedpoint_v18,
+};
 #[path = "neutral_optimization_policy3_v1.rs"]
 mod policy3;
+#[path = "neutral_optimization_v18.rs"]
+pub(crate) mod storage_v18;
 pub use checked_neutral_optimization_v1::{
     CheckedNeutralKernelIrOwnerV1, KirCheckedNeutralOptimizationErrorV1,
     KirCheckedNeutralOptimizationStorageV1, KirNeutralOwnedOriginStorageV1,
@@ -353,9 +377,18 @@ pub use integer_continuation::{
     KirNeutralOptimizationOutputIntegerContinuationV1,
     optimize_native_neutral_kernel_ir_integer_continuation_v1,
 };
+pub use integer_continuation_v18::{
+    CheckedNeutralKernelIrOwnerIntegerContinuationV18,
+    KirNeutralOptimizationOutputIntegerContinuationV18,
+    optimize_neutral_kernel_ir_integer_continuation_v18,
+};
 pub use policy3::{
     CheckedNeutralKernelIrOwnerPolicy3V1, KirNeutralOptimizationOutputPolicy3V1,
     optimize_native_neutral_kernel_ir_policy3_v1,
+};
+pub use storage_v18::{
+    CheckedNeutralKernelIrOwnerV18, KirNeutralOptimizationErrorV18,
+    KirNeutralOptimizationOutputV18, optimize_neutral_kernel_ir_v18,
 };
 
 #[cfg(test)]

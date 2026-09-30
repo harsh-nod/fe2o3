@@ -227,11 +227,12 @@ pub(crate) fn run_after_progress_with_bounds_v1(
     }
 }
 
-pub(crate) fn require_with_scoped_bounds_v1(
+pub(crate) fn require_with_prepared_progress_v2(
     input: crate::production_analysis::pliron_pass_contract::ScopedVerifiedProgressInputV1<'_>,
     analyses: &mut PlironAnalysisManagerV1,
     prepared: effect::PreparedV1<'_>,
     bounds: &own::BoundsSourceV1<'_>,
+    graph: Option<&crate::production_analysis::pliron_progress::PreparedProgressGraphV2<'_>>,
     observations: (
         SemanticObserverV1<'_, '_, '_>,
         AdditionalObservationV1<'_, '_, '_>,
@@ -243,8 +244,8 @@ pub(crate) fn require_with_scoped_bounds_v1(
     let (observer, additional) = observations;
     let run = || {
         let scoped =
-            crate::production_analysis::pliron_progress::run_pliron_progress_with_scoped_observation_v1(
-                input, observer,
+            crate::production_analysis::pliron_progress::run_pliron_progress_with_prepared_graph_v2(
+                input, graph, observer,
             )?;
         let report = run_after_progress_with_bounds_v1(
             scoped.context,

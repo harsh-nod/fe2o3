@@ -29,6 +29,7 @@ use pliron::{
 };
 
 mod attributes;
+mod folding;
 mod interfaces;
 mod key_validation;
 pub use attributes::{SwitchCaseBitsAttrV3, SwitchKeyKindAttrV3, SwitchSuccessorOffsetsAttrV3};

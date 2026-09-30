@@ -1,4 +1,50 @@
-impl<'i, 'g> CanonicalKirLoopsV1<'i, 'g> {
+macro_rules! seed_loop_flow {
+    ($name:ident, $owner:ty, $scope:ident) => {
+        fn $name(
+            inventory: &Inventory<'_, $owner>,
+            incidence: &Incidence,
+            scratch: &mut Scratch,
+            budget: &mut Budget<'_>,
+        ) -> Result<()> {
+            // All output slots touched by the scoped CFG are already prepaid.
+            for function in inventory.functions() {
+                budget.charge_work(2)?;
+                if function.function.body.is_none() {
+                    continue;
+                }
+                $scope(
+                    inventory.owner(),
+                    function.coordinate,
+                    Default::default(),
+                    budget,
+                    |cfg, budget| {
+                        for index in function.blocks.clone() {
+                            budget.charge_work(1)?;
+                            scratch.reachable[index] =
+                                cfg.is_reachable(inventory.blocks()[index].coordinate, budget)?;
+                        }
+                        for index in function.edges.clone() {
+                            budget.charge_work(2)?;
+                            let edge = &inventory.edges()[index];
+                            let dominated =
+                                cfg.dominates(edge.target, edge.coordinate.source, budget)?;
+                            scratch.backedges[index] = dominated;
+                            if dominated {
+                                scratch.headers[incidence.targets[index]] = true;
+                            }
+                        }
+                        Ok::<_, Error>(())
+                    },
+                )?;
+            }
+            Ok(())
+        }
+    };
+}
+seed_loop_flow!(seed_flow_v12, Owner12, with_canonical_kir_control_flow_v1);
+seed_loop_flow!(seed_flow_v18, Owner18, with_canonical_kir_control_flow_v18);
+
+impl<'i, 'g, O> CanonicalKirLoopsV1<'i, 'g, O> {
     fn rows(&self) -> Result<usize> {
         self.members
             .len()
@@ -15,9 +61,10 @@ impl<'i, 'g> CanonicalKirLoopsV1<'i, 'g> {
         )
     }
     fn build(
-        inventory: &'i Inventory<'g>,
+        inventory: &'i Inventory<'g, O>,
         limits: CanonicalKirLoopLimitsV1,
         budget: &mut Budget<'_>,
+        seed: fn(&Inventory<'_, O>, &Incidence, &mut Scratch, &mut Budget<'_>) -> Result<()>,
     ) -> Result<Self> {
         input_limits(inventory, limits, budget)?;
         budget.reserve_storage(size_of::<Self>())?;
@@ -31,37 +78,7 @@ impl<'i, 'g> CanonicalKirLoopsV1<'i, 'g> {
         };
         let incidence = Incidence::build(inventory, budget)?;
         let mut scratch = Scratch::new(inventory.blocks().len(), inventory.edges().len(), budget)?;
-        // All output slots touched by the scoped CFG are already prepaid.
-        for function in inventory.functions() {
-            budget.charge_work(2)?;
-            if function.function.body.is_none() {
-                continue;
-            }
-            with_canonical_kir_control_flow_v1(
-                inventory.owner(),
-                function.coordinate,
-                Default::default(),
-                budget,
-                |cfg, budget| {
-                    for index in function.blocks.clone() {
-                        budget.charge_work(1)?;
-                        scratch.reachable[index] =
-                            cfg.is_reachable(inventory.blocks()[index].coordinate, budget)?;
-                    }
-                    for index in function.edges.clone() {
-                        budget.charge_work(2)?;
-                        let edge = &inventory.edges()[index];
-                        let dominated =
-                            cfg.dominates(edge.target, edge.coordinate.source, budget)?;
-                        scratch.backedges[index] = dominated;
-                        if dominated {
-                            scratch.headers[incidence.targets[index]] = true;
-                        }
-                    }
-                    Ok::<_, Error>(())
-                },
-            )?;
-        }
+        seed(inventory, &incidence, &mut scratch, budget)?;
         for header in 0..inventory.blocks().len() {
             budget.charge_work(1)?;
             if !scratch.headers[header] {
@@ -269,8 +286,8 @@ fn discover_members(
     Ok(())
 }
 
-fn discover_recurrence(
-    inventory: &Inventory<'_>,
+fn discover_recurrence<O>(
+    inventory: &Inventory<'_, O>,
     header: usize,
     argument: usize,
     initial_edge: usize,

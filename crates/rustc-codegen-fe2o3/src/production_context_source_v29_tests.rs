@@ -23,6 +23,9 @@ const REPORT_BYTES: usize = 2 * 1024 * 1024;
 #[path = "production_pending_context_source_v29_tests.rs"]
 mod pending_source_tests;
 
+#[path = "production_rustc_driver_source_owned_v29_tests.rs"]
+mod source_owned_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct SourceObservation {
     source: [u8; 32],

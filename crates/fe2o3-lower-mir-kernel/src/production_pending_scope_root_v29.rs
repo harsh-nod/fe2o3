@@ -1,15 +1,130 @@
 // A pending expansion, not a verified graph or a source/lifecycle receipt.
 // Original sidecars stay instance-qualified; coordinates describe the expansion.
 include!("production_scoped_defined_calls_v29.rs");
+
+// Only a locator into this exact borrowed roster. Original source/control and
+// each sidecar's own typed receipts remain the admission authorities.
+struct PendingActiveInstanceIndexV1 {
+    rows: Vec<Option<usize>>,
+    storage: usize,
+}
+
+impl PendingActiveInstanceIndexV1 {
+    fn check_source_plan(
+        &self,
+        instances: &ExecutionInstancesV29<'_>,
+        sidecars: &[PendingInstanceSidecarsV29],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let count = instances.instances().len();
+        budget.charge_work(argument_sum_v1(&[count, sidecars.len(), 2])?)?;
+        if self.rows.len() != count {
+            return Err(execution_call_error_v29());
+        }
+        let mut previous = None;
+        for (ordinal, sidecar) in sidecars.iter().enumerate() {
+            let id = sidecar
+                .source_call_instance
+                .ok_or_else(execution_call_error_v29)?;
+            if instances.id_at(id.index()) != Some(id)
+                || instances.instance_reachable(id) != Some(true)
+                || previous.is_some_and(|value| value >= id.index())
+                || self.rows.get(id.index()) != Some(&Some(ordinal))
+            {
+                return Err(execution_call_error_v29());
+            }
+            previous = Some(id.index());
+        }
+        for (original, row) in self.rows.iter().enumerate() {
+            let id = instances
+                .id_at(original)
+                .ok_or_else(execution_call_error_v29)?;
+            if instances.instance_reachable(id) != Some(row.is_some()) {
+                return Err(execution_call_error_v29());
+            }
+            if let Some(ordinal) = row {
+                if sidecars
+                    .get(*ordinal)
+                    .and_then(|sidecar| sidecar.source_call_instance)
+                    != Some(id)
+                {
+                    return Err(execution_call_error_v29());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn sidecar_ordinal(
+        &self,
+        original: usize,
+        expected_original_count: usize,
+        sidecars: &[PendingInstanceSidecarsV29],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<usize>, ProductionSemanticKirErrorV1> {
+        budget.charge_work(8)?;
+        if self.rows.len() != expected_original_count || sidecars.len() > self.rows.len() {
+            return Err(execution_call_error_v29());
+        }
+        let selected = *self
+            .rows
+            .get(original)
+            .ok_or_else(execution_call_error_v29)?;
+        if let Some(ordinal) = selected {
+            let sidecar = sidecars.get(ordinal).ok_or_else(execution_call_error_v29)?;
+            if sidecar.source_call_instance.map(|id| id.index()) != Some(original) {
+                return Err(execution_call_error_v29());
+            }
+        }
+        Ok(selected)
+    }
+}
+
+fn pending_active_instance_index_v1(
+    instances: &ExecutionInstancesV29<'_>,
+    sidecars: &[PendingInstanceSidecarsV29],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<PendingActiveInstanceIndexV1, ProductionSemanticKirErrorV1> {
+    let count = instances.instances().len();
+    budget.charge_work(argument_sum_v1(&[count, sidecars.len(), 2])?)?;
+    let headers = argument_sum_v1(&[
+        std::mem::size_of::<PendingActiveInstanceIndexV1>(),
+        std::mem::size_of::<Result<PendingActiveInstanceIndexV1, ProductionSemanticKirErrorV1>>(),
+    ])?;
+    budget.reserve_storage(headers)?;
+    let mut rows = emission_vec_v1(count, budget)?;
+    rows.resize(count, None);
+    for (ordinal, sidecar) in sidecars.iter().enumerate() {
+        let id = sidecar
+            .source_call_instance
+            .ok_or_else(execution_call_error_v29)?;
+        if rows
+            .get_mut(id.index())
+            .ok_or_else(execution_call_error_v29)?
+            .replace(ordinal)
+            .is_some()
+        {
+            return Err(execution_call_error_v29());
+        }
+    }
+    let storage = argument_sum_v1(&[
+        headers,
+        argument_product_v1(rows.capacity(), std::mem::size_of::<Option<usize>>())?,
+    ])?;
+    let result = PendingActiveInstanceIndexV1 { rows, storage };
+    result.check_source_plan(instances, sidecars, budget)?;
+    Ok(result)
+}
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped source materialization remains gated")
 )]
 struct PendingInstanceSidecarsV29 {
     next_value: u32,
-    #[cfg(test)]
-    execution_observation: Option<ExecutionTestObservationV29>,
+    execution_observation: Option<ExecutionArchiveV29>,
+    direct_call_inputs: Option<Vec<InvocationInputRowV1>>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
+    invocation_entry: Option<InvocationEntryRelationV1>,
     scoped_slot_origins: Option<Vec<ScopedSlotOriginV29>>,
     scoped_initialization: Option<ScopedRetainedInitializationV29>,
     scoped_memory_anchors: Option<ScopedMemoryAnchorsV29>,
@@ -37,9 +152,10 @@ impl PendingInstanceSidecarsV29 {
         // here until its retention contract is explicitly handled.
         let LoweredFunctionResultV1 {
             next_value,
-            #[cfg(test)]
             execution_observation,
+            direct_call_inputs,
             source_call_instance,
+            invocation_entry,
             scoped_slot_origins,
             scoped_initialization,
             scoped_memory_anchors,
@@ -65,9 +181,10 @@ impl PendingInstanceSidecarsV29 {
             function,
             Self {
                 next_value,
-                #[cfg(test)]
                 execution_observation,
+                direct_call_inputs,
                 source_call_instance,
+                invocation_entry,
                 scoped_slot_origins,
                 scoped_initialization,
                 scoped_memory_anchors,
@@ -99,7 +216,9 @@ impl PendingInstanceSidecarsV29 {
 struct PendingScopedRootEmissionV29 {
     function: Function,
     sidecars: InstanceRowsV1<PendingInstanceSidecarsV29>,
+    active_instances: PendingActiveInstanceIndexV1,
     coordinates: OwnedInstanceCoordinatesV1,
+    rvalue_results: Option<OwnedSourceRvaluesV30>,
     // Removed-call anchor ordinals remain pre-relocation tombstones; source
     // spans compose this witness instead of treating them as live operations.
     slot_relocation: Option<scoped_slot_relocation_v29::RelocationV29>,
@@ -141,12 +260,23 @@ fn pending_scope_preflight_v29(
         emitted.len(),
         limits.max_functions,
     )?;
-    let mut blocks = argument_product_v1(emitted.len() - 1, 2)?;
+    let mut active = 0_usize;
+    let mut blocks = 0_usize;
     let mut operations = 0;
     let mut statements = 0;
     let mut next_block = 0;
     for (index, row) in emitted.iter().enumerate() {
         budget.charge_work(4)?;
+        let id = instances
+            .id_at(index)
+            .ok_or_else(execution_call_error_v29)?;
+        if instances.instance_reachable(id) == Some(false) {
+            if row.is_some() {
+                return Err(execution_call_error_v29());
+            }
+            continue;
+        }
+        active = argument_sum_v1(&[active, 1])?;
         let row = row.as_ref().ok_or_else(execution_call_error_v29)?;
         if row.source_call_instance != instances.id_at(index) {
             return Err(execution_call_error_v29());
@@ -178,9 +308,14 @@ fn pending_scope_preflight_v29(
                     .ok_or_else(execution_call_error_v29)?,
             )
             .ok_or_else(execution_call_error_v29)?;
-        for block in source.declaration().blocks() {
+        for (index, block) in source.declaration().blocks().iter().enumerate() {
             budget.charge_work(1)?;
-            statements = argument_sum_v1(&[statements, block.statements().len()])?;
+            let block_id = SemanticBlockIdV1::from_index(
+                u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+            );
+            if instances.block_reachable(id, block_id) == Some(true) {
+                statements = argument_sum_v1(&[statements, block.statements().len()])?;
+            }
         }
         let body = row
             .function
@@ -200,6 +335,11 @@ fn pending_scope_preflight_v29(
             );
         }
     }
+    let generated = argument_product_v1(
+        active.checked_sub(1).ok_or_else(execution_call_error_v29)?,
+        2,
+    )?;
+    blocks = argument_sum_v1(&[blocks, generated])?;
     enforce_limit(
         ProductionSemanticKirResourceV1::Blocks,
         blocks,
@@ -215,8 +355,7 @@ fn pending_scope_preflight_v29(
         operations,
         limits.max_operations,
     )?;
-    let generated = u32::try_from(argument_product_v1(emitted.len() - 1, 2)?)
-        .map_err(|_| ArgumentResourceV1::Arithmetic)?;
+    let generated = u32::try_from(generated).map_err(|_| ArgumentResourceV1::Arithmetic)?;
     next_block
         .checked_add(generated)
         .ok_or(ArgumentResourceV1::Arithmetic)?;
@@ -274,7 +413,7 @@ fn assemble_pending_scoped_root_v29(
     limits: ProductionSemanticKirLimitsV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<PendingScopedRootEmissionV29, ProductionSemanticKirErrorV1> {
-    assemble_pending_scoped_root_inner_v29(instances, emitted, limits, None, budget)
+    assemble_pending_scoped_root_inner_v29(instances, emitted, limits, None, None, budget)
 }
 
 fn assemble_pending_scoped_root_inner_v29(
@@ -282,123 +421,10 @@ fn assemble_pending_scoped_root_inner_v29(
     emitted: &mut [Option<LoweredFunctionResultV1>],
     limits: ProductionSemanticKirLimitsV1,
     frame: Option<&scoped_slot_relocation_v29::FramePermitV29<'_, '_>>,
+    references: Option<&SourceReferencePlanV29<'_, '_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<PendingScopedRootEmissionV29, ProductionSemanticKirErrorV1> {
-    let floor = budget.storage();
-    let mut next_block = pending_scope_preflight_v29(instances, emitted, limits, budget)?;
-    check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
-    let result = with_production_instance_correspondence_v1(instances, budget, |map, budget| {
-        // Validate every shared-emitter result before taking any caller slot.
-        for (index, row) in emitted.iter().enumerate() {
-            map.append_lowered(
-                instances
-                    .id_at(index)
-                    .ok_or(InstanceCorrespondenceErrorV1::Source)?,
-                row.as_ref().ok_or(InstanceCorrespondenceErrorV1::Source)?,
-                budget,
-            )?;
-        }
-        let mut sidecars = InstanceRowsV1::new();
-        let mut functions = InstanceRowsV1::new();
-        let mut retained = 0;
-        let mut scratch = 0;
-        sidecars.reserve(emitted.len(), budget, &mut retained)?;
-        functions.reserve(emitted.len(), budget, &mut scratch)?;
-        budget.charge_work(emitted.len())?;
-        for row in emitted.iter_mut() {
-            let (function, metadata) = PendingInstanceSidecarsV29::split(
-                row.take().ok_or(InstanceCorrespondenceErrorV1::Source)?,
-            );
-            functions.rows.push(Some(function));
-            sidecars.rows.push(metadata);
-        }
-        for index in (1..functions.rows.len()).rev() {
-            budget.charge_work(4)?;
-            let instance = instances
-                .id_at(index)
-                .ok_or(InstanceCorrespondenceErrorV1::Source)?;
-            let call = instances
-                .incoming(instance)
-                .ok_or(InstanceCorrespondenceErrorV1::Source)?;
-            let caller = call.occurrence().caller.index();
-            if caller >= index {
-                return Err(InstanceCorrespondenceErrorV1::Source);
-            }
-            let caller_function = functions.rows[caller]
-                .take()
-                .ok_or(InstanceCorrespondenceErrorV1::Source)?;
-            let callee_function = functions.rows[index]
-                .take()
-                .ok_or(InstanceCorrespondenceErrorV1::Source)?;
-            let entry = BlockId(next_block);
-            let continuation = BlockId(next_block + 1);
-            let mut expanded = match frame {
-                Some(frame) => map.splice_with_scoped_frame_v29(
-                    call,
-                    caller_function,
-                    callee_function,
-                    entry,
-                    continuation,
-                    Some(frame),
-                    budget,
-                ),
-                None => map.splice(
-                    call,
-                    caller_function,
-                    callee_function,
-                    entry,
-                    continuation,
-                    budget,
-                ),
-            }?;
-            next_block += 2;
-            merge_pending_scope_capabilities_v29(
-                &mut expanded.caller.required_capabilities,
-                &mut expanded.callee_required_capabilities,
-                budget,
-            )?;
-            functions.rows[caller] = Some(expanded.caller);
-        }
-        let function = functions.rows[0]
-            .take()
-            .ok_or(InstanceCorrespondenceErrorV1::Source)?;
-        drop(functions);
-        budget.release_storage(scratch)?;
-        let coordinates = map.take_owned_coordinates_v1(&function, budget)?;
-        // Calculate all fallible accounting before moving the coordinate owner.
-        let additional_storage_bytes = budget
-            .storage()
-            .checked_sub(floor)
-            .ok_or(ArgumentResourceV1::Accounting)?;
-        Ok::<_, InstanceCorrespondenceErrorV1>(PendingScopedRootEmissionV29 {
-            function,
-            sidecars,
-            coordinates,
-            slot_relocation: None,
-            additional_storage_bytes,
-        })
-    });
-    match result {
-        Ok(pending) => {
-            if let Err(error) = replay_pending_instance_asserts_v1(&pending, instances, budget) {
-                drop(pending);
-                let extra = budget
-                    .storage()
-                    .checked_sub(floor)
-                    .ok_or(ArgumentResourceV1::Accounting)?;
-                budget.release_storage(extra)?;
-                return Err(error);
-            }
-            Ok(pending)
-        }
-        Err(error) => {
-            // Map cleanup and all failed payload drops precede this refund.
-            let extra = budget
-                .storage()
-                .checked_sub(floor)
-                .ok_or(ArgumentResourceV1::Accounting)?;
-            budget.release_storage(extra)?;
-            Err(pending_scope_correspondence_error_v29(error))
-        }
-    }
+    scoped_raw_admission_v29::assemble_original_zero_raw_v29(
+        instances, emitted, limits, frame, references, budget,
+    )
 }

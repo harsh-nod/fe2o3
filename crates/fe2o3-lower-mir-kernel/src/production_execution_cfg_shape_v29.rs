@@ -34,26 +34,51 @@ fn execution_cfg_nominal_count_v29(
     ty: SemanticTypeIdV1,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<usize, ProductionSemanticKirErrorV1> {
+    execution_cfg_transport_count_v29(types, ty, false, budget)
+}
+
+// This selects original ABI transport, not a memory region or execution
+// capability. Unprofiled shared slices retain their Generic representation.
+fn execution_cfg_return_transport_count_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
+    execution_cfg_transport_count_v29(types, ty, true, budget)
+}
+
+fn execution_cfg_transport_count_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    shared_slices: bool,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<usize, ProductionSemanticKirErrorV1> {
     fn count(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
+        shared_slices: bool,
         nodes: &mut usize,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<usize, ProductionSemanticKirErrorV1> {
         execution_cfg_charge_node_v29(nodes, budget)?;
-        if execution_cfg_nominal_kind_v29(types, ty)?.is_some() {
+        if execution_cfg_nominal_kind_v29(types, ty)?.is_some()
+            || (shared_slices && shared_slice_leaf_v1(types, ty))
+        {
             return Ok(1);
         }
         match types[ty.index() as usize].shape() {
             SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
                 let mut total = 0;
                 for field in fields.fields() {
-                    total = argument_sum_v1(&[total, count(types, *field, nodes, budget)?])?;
+                    total = argument_sum_v1(&[
+                        total,
+                        count(types, *field, shared_slices, nodes, budget)?,
+                    ])?;
                 }
                 Ok(total)
             }
             SemanticTypeShapeV1::Array { element, length } => {
-                let leaf_count = count(types, *element, nodes, budget)?;
+                let leaf_count = count(types, *element, shared_slices, nodes, budget)?;
                 if leaf_count == 0 {
                     return Ok(0);
                 }
@@ -67,7 +92,7 @@ fn execution_cfg_nominal_count_v29(
             SemanticTypeShapeV1::Enum { variants, .. } => {
                 for variant in variants {
                     for field in variant.fields().fields() {
-                        if count(types, *field, nodes, budget)? != 0 {
+                        if count(types, *field, shared_slices, nodes, budget)? != 0 {
                             return Err(execution_cfg_error_v29());
                         }
                     }
@@ -77,7 +102,7 @@ fn execution_cfg_nominal_count_v29(
             _ => Ok(0),
         }
     }
-    count(types, ty, &mut 0, budget)
+    count(types, ty, shared_slices, &mut 0, budget)
 }
 
 fn execution_cfg_leaf_v29(
@@ -174,9 +199,57 @@ fn execution_cfg_memory_type_v29(
     }
 }
 
+// The route owner selects representation independently of canonical CFG rebuilding.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ExecutionCfgRepresentationV29 {
+    #[default]
+    LegacyAbi,
+    OriginalSource,
+}
+
+#[cfg(test)]
+mod representation_default_tests_v29 {
+    use super::*;
+
+    #[test]
+    fn default_ssa_plan_does_not_select_original_source_admission() {
+        assert_eq!(
+            SemanticControlFlowSsaPlanV1::default().representation,
+            ExecutionCfgRepresentationV29::LegacyAbi
+        );
+    }
+}
+
 fn execution_cfg_ordinary_type_v29(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Option<Type>, ProductionSemanticKirErrorV1> {
+    execution_cfg_ordinary_type_with_representation_v29(
+        types,
+        ty,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+        budget,
+    )
+}
+
+fn source_execution_cfg_ordinary_type_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Option<Type>, ProductionSemanticKirErrorV1> {
+    execution_cfg_ordinary_type_with_representation_v29(
+        types,
+        ty,
+        ExecutionCfgRepresentationV29::OriginalSource,
+        budget,
+    )
+}
+
+fn execution_cfg_ordinary_type_with_representation_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    representation: ExecutionCfgRepresentationV29,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<Option<Type>, ProductionSemanticKirErrorV1> {
     budget.charge_work(2)?;
@@ -194,7 +267,14 @@ fn execution_cfg_ordinary_type_v29(
                 SemanticMutabilityV1::Immutable => AccessMode::ReadOnly,
                 SemanticMutabilityV1::Mutable => AccessMode::ReadWrite,
             };
-            let address_space = lower_address_space(pointer.address_space())?;
+            let address_space = match representation {
+                ExecutionCfgRepresentationV29::LegacyAbi => {
+                    lower_address_space(pointer.address_space())?
+                }
+                ExecutionCfgRepresentationV29::OriginalSource => {
+                    source_address_space_v18(pointer.address_space())?
+                }
+            };
             let element = match pointer.metadata() {
                 SemanticPointerMetadataV1::None => {
                     execution_cfg_memory_type_v29(types, pointer.pointee(), budget)?
@@ -230,9 +310,37 @@ fn execution_cfg_types_v29(
     ty: SemanticTypeIdV1,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
+    execution_cfg_types_with_representation_v29(
+        types,
+        ty,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+        budget,
+    )
+}
+
+fn source_execution_cfg_types_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
+    execution_cfg_types_with_representation_v29(
+        types,
+        ty,
+        ExecutionCfgRepresentationV29::OriginalSource,
+        budget,
+    )
+}
+
+fn execution_cfg_types_with_representation_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    representation: ExecutionCfgRepresentationV29,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
     fn append(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
+        representation: ExecutionCfgRepresentationV29,
         output: &mut Vec<Type>,
         nodes: &mut usize,
         budget: &mut dyn SemanticEmissionBudgetV1,
@@ -246,18 +354,21 @@ fn execution_cfg_types_v29(
                 append(
                     types,
                     fields.map_or(element, |fields| fields[index]),
+                    representation,
                     output,
                     nodes,
                     budget,
                 )?;
             }
-        } else if let Some(ty) = execution_cfg_ordinary_type_v29(types, ty, budget)? {
+        } else if let Some(ty) =
+            execution_cfg_ordinary_type_with_representation_v29(types, ty, representation, budget)?
+        {
             emission_push_v1(output, ty, budget)?;
         }
         Ok(())
     }
     let mut output = Vec::new();
-    append(types, ty, &mut output, &mut 0, budget)?;
+    append(types, ty, representation, &mut output, &mut 0, budget)?;
     Ok(output)
 }
 
@@ -384,10 +495,34 @@ fn clone_execution_cfg_binding_v29(
 ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
     execution_cfg_charge_node_v29(nodes, budget)?;
     Ok(match binding {
+        SemanticValueBindingV1::SourceReference(_)
+        | SemanticValueBindingV1::SourceInactive(_)
+        | SemanticValueBindingV1::Enum { .. }
+        | SemanticValueBindingV1::DynamicLds { .. }
+        | SemanticValueBindingV1::MatrixFragment { .. }
+        | SemanticValueBindingV1::AccumulatorFragment { .. }
+        | SemanticValueBindingV1::WorkgroupPipeline { .. }
+        | SemanticValueBindingV1::OptionPointer { .. } => {
+            emission_clone_binding_v1(binding, budget)?
+        }
+        // Copy existing producer identities and availability without admitting a
+        // new producer, observation, merge, or ordinary SSA representation.
         SemanticValueBindingV1::Unit
         | SemanticValueBindingV1::Execution(_)
         | SemanticValueBindingV1::ExecutionBorrow(_)
-        | SemanticValueBindingV1::MovedExecution => binding.clone(),
+        | SemanticValueBindingV1::MovedExecution
+        | SemanticValueBindingV1::MathContext
+        | SemanticValueBindingV1::CollectiveContext
+        | SemanticValueBindingV1::WorkgroupLdsScope
+        | SemanticValueBindingV1::MatrixContext
+        | SemanticValueBindingV1::WaveLane { .. }
+        | SemanticValueBindingV1::Gfx950LdsTransposeTile { .. }
+        | SemanticValueBindingV1::IndexWitness { .. }
+        | SemanticValueBindingV1::OptionIndexWitness { .. }
+        | SemanticValueBindingV1::GridLeader { .. }
+        | SemanticValueBindingV1::ComponentWitness { .. }
+        | SemanticValueBindingV1::OptionComponentWitness { .. }
+        | SemanticValueBindingV1::OptionGridLeader { .. } => binding.clone(),
         SemanticValueBindingV1::Aggregate(fields) => {
             let mut output = emission_vec_v1(fields.len(), budget)?;
             for field in fields {
@@ -399,13 +534,58 @@ fn clone_execution_cfg_binding_v29(
             id: *id,
             ty: execution_cfg_clone_type_inner_v29(ty, nodes, budget)?,
         },
-        _ => return Err(execution_cfg_error_v29()),
+        SemanticValueBindingV1::Unmaterialized | SemanticValueBindingV1::ExecutionReferent(_) => {
+            return Err(execution_cfg_error_v29());
+        }
     })
 }
 
 fn rebuild_execution_cfg_binding_v29(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
+    canonical: bool,
+    leaves: &mut std::slice::Iter<'_, Option<ExecutionCfgLeafV29>>,
+    values: &mut std::slice::Iter<'_, ValueDef>,
+    nodes: &mut usize,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+    rebuild_execution_cfg_binding_with_representation_v29(
+        types,
+        ty,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+        canonical,
+        leaves,
+        values,
+        nodes,
+        budget,
+    )
+}
+
+fn rebuild_source_execution_cfg_binding_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    canonical: bool,
+    leaves: &mut std::slice::Iter<'_, Option<ExecutionCfgLeafV29>>,
+    values: &mut std::slice::Iter<'_, ValueDef>,
+    nodes: &mut usize,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+    rebuild_execution_cfg_binding_with_representation_v29(
+        types,
+        ty,
+        ExecutionCfgRepresentationV29::OriginalSource,
+        canonical,
+        leaves,
+        values,
+        nodes,
+        budget,
+    )
+}
+
+fn rebuild_execution_cfg_binding_with_representation_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    representation: ExecutionCfgRepresentationV29,
     canonical: bool,
     leaves: &mut std::slice::Iter<'_, Option<ExecutionCfgLeafV29>>,
     values: &mut std::slice::Iter<'_, ValueDef>,
@@ -431,9 +611,10 @@ fn rebuild_execution_cfg_binding_v29(
     if let Some((count, fields, element)) = execution_cfg_fields_v29(types, ty)? {
         let mut output = emission_vec_v1(count, budget)?;
         for index in 0..count {
-            output.push(rebuild_execution_cfg_binding_v29(
+            output.push(rebuild_execution_cfg_binding_with_representation_v29(
                 types,
                 fields.map_or(element, |fields| fields[index]),
+                representation,
                 canonical,
                 leaves,
                 values,
@@ -457,8 +638,9 @@ fn rebuild_execution_cfg_binding_v29(
     }
     let value = values.next().ok_or_else(execution_cfg_error_v29)?;
     let output_type = if canonical {
-        let expected = execution_cfg_ordinary_type_v29(types, ty, budget)?
-            .ok_or_else(execution_cfg_error_v29)?;
+        let expected =
+            execution_cfg_ordinary_type_with_representation_v29(types, ty, representation, budget)?
+                .ok_or_else(execution_cfg_error_v29)?;
         if value.ty != expected {
             return Err(execution_cfg_error_v29());
         }
@@ -470,6 +652,11 @@ fn rebuild_execution_cfg_binding_v29(
         id: value.id,
         ty: output_type,
     })
+}
+
+#[cfg(test)]
+mod source_cfg_shape_tests {
+    include!("production_execution_cfg_source_shape_v29_tests.rs");
 }
 
 #[cfg(test)]

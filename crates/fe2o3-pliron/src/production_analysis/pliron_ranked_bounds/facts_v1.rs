@@ -38,6 +38,16 @@ struct PredecessorEdge {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RankedOperationKind {
     NativeData,
+    PrivateAllocate,
+    PrivateAddress,
+    PrivateRead,
+    PrivateWrite,
+    PrivateCall,
+    ConditionalGlobalIndexV26,
+    ConditionalGlobalReadV26,
+    ConditionalGlobalWriteV26,
+    TerminalCall,
+    TerminalEnd,
     RankedView,
     IndexConstant,
     IndexUnsignedCast,
@@ -58,6 +68,7 @@ enum RankedOperationKind {
     IndexEqualBranch,
     IndexEqualBranchArgs,
     BooleanBranchArgs,
+    NativeSwitch,
     AnalysisSplit,
     Branch,
     BranchArgs,
@@ -91,11 +102,13 @@ impl RankedOperationKind {
                 | Self::IndexEqualBranch
                 | Self::IndexEqualBranchArgs
                 | Self::BooleanBranchArgs
+                | Self::NativeSwitch
                 | Self::AnalysisSplit
                 | Self::Branch
                 | Self::BranchArgs
                 | Self::Return
                 | Self::Trap
+                | Self::TerminalEnd
         )
     }
 }
@@ -152,8 +165,23 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         .is_some()
     {
         Some(RankedOperationKind::BooleanBranchArgs)
+    } else if operation
+        .downcast_ref::<dialect_gpu::switch_v3::SwitchOpV3>()
+        .is_some()
+    {
+        Some(RankedOperationKind::NativeSwitch)
     } else if operation.downcast_ref::<AnalysisSplitOp>().is_some() {
         Some(RankedOperationKind::AnalysisSplit)
+    } else if operation
+        .downcast_ref::<dialect_gpu::optimization_v1::BranchOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::BranchArgs)
+    } else if operation
+        .downcast_ref::<dialect_gpu::optimization_v1::ReturnOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::Return)
     } else if operation.downcast_ref::<BranchOp>().is_some() {
         Some(RankedOperationKind::Branch)
     } else if operation.downcast_ref::<BranchArgsOp>().is_some() {
@@ -416,4 +444,37 @@ impl FactSet {
             *word &= source_word;
         }
     }
+}
+
+fn canonical_private_operation_kind_v1(
+    input: &impl crate::kir_bridge_v1::NativePrivateInputV1,
+    context: &Context,
+    operation: pliron::context::Ptr<Operation>,
+) -> Option<RankedOperationKind> {
+    use crate::production_analysis::canonical_ranked_checks_v1::private::PrivateOperationKindV1 as Kind;
+    Some(match input.operation(context, operation)? {
+        Kind::ConditionalGlobalIndexV26 if input.supports_conditional_globals_v26() => {
+            RankedOperationKind::ConditionalGlobalIndexV26
+        }
+        Kind::ConditionalGlobalReadV26 if input.supports_conditional_globals_v26() => {
+            RankedOperationKind::ConditionalGlobalReadV26
+        }
+        Kind::ConditionalGlobalWriteV26 if input.supports_conditional_globals_v26() => {
+            RankedOperationKind::ConditionalGlobalWriteV26
+        }
+        Kind::ConditionalGlobalIndexV26
+        | Kind::ConditionalGlobalReadV26
+        | Kind::ConditionalGlobalWriteV26 => return None,
+        Kind::Allocate => RankedOperationKind::PrivateAllocate,
+        Kind::Address => RankedOperationKind::PrivateAddress,
+        Kind::Read => RankedOperationKind::PrivateRead,
+        Kind::Write => RankedOperationKind::PrivateWrite,
+        Kind::Call => RankedOperationKind::PrivateCall,
+        Kind::TrapCall => RankedOperationKind::TerminalCall,
+        Kind::TrapEnd | Kind::UnreachableV18 => RankedOperationKind::TerminalEnd,
+        Kind::LifecycleV18 => RankedOperationKind::NativeData,
+        Kind::Scalar => {
+            return ranked_operation_kind(Operation::get_op_dyn(operation, context).as_ref());
+        }
+    })
 }

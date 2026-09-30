@@ -151,7 +151,7 @@ fn op(id: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(id), ty), kind)
 }
 
-fn fixture(switch: Option<Type>) -> Module {
+pub(super) fn fixture(switch: Option<Type>) -> Module {
     let pointer = Type::pointer(
         Type::Scalar(ScalarType::U32),
         AddressSpace::Global,

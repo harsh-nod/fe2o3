@@ -71,6 +71,36 @@ mod source_storage_demands_v29 {
         roots: Vec<RootDemandRangeV29>,
     }
 
+    #[derive(Clone, Copy)]
+    pub(super) struct RootStorageDemandsV29<'a, 'source> {
+        source: &'a SourceStorageDemandsV29<'source>,
+        ordinal: usize,
+    }
+
+    impl<'a, 'source> RootStorageDemandsV29<'a, 'source> {
+        pub(super) fn requests(
+            self,
+            instances: &ExecutionInstancesV29<'source>,
+            budget: &mut Budget<'_>,
+        ) -> Result<(&'a [DemandV29], &'a [ComponentStepV29]), Error> {
+            self.source.check(instances.owner(), budget)?;
+            budget.charge_work(3)?;
+            let root = self.source.roots.get(self.ordinal).ok_or_else(error)?;
+            if instances
+                .instance(instances.root())
+                .map(|instance| instance.function())
+                != Some(root.root)
+            {
+                return Err(error());
+            }
+            let (requests, paths) =
+                self.source
+                    .root_requests(instances.owner(), self.ordinal, budget)?;
+            source_reference_check_storage_demands_v29(instances, requests, paths, budget)?;
+            Ok((requests, paths))
+        }
+    }
+
     impl<'source> SourceStorageDemandsV29<'source> {
         pub(super) fn collect(
             owner: &'source ProductionSemanticSsaOwnerV1,
@@ -169,6 +199,19 @@ mod source_storage_demands_v29 {
             }
             let requests = self.requests.get(root.requests.clone()).ok_or_else(error)?;
             Ok((requests, &self.paths))
+        }
+
+        pub(super) fn root_lens<'a>(
+            &'a self,
+            owner: &ProductionSemanticSsaOwnerV1,
+            ordinal: usize,
+            budget: &mut Budget<'_>,
+        ) -> Result<RootStorageDemandsV29<'a, 'source>, Error> {
+            self.root_requests(owner, ordinal, budget)?;
+            Ok(RootStorageDemandsV29 {
+                source: self,
+                ordinal,
+            })
         }
 
         fn build(&mut self, budget: &mut Budget<'_>) -> Result<(), Error> {

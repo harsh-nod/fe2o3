@@ -1,4 +1,6 @@
 // Producer-owned physical coordinates and source invalidation occurrences.
+include!("production_scoped_memory_payloads_v29.rs");
+include!("production_source_object_payloads_v29.rs");
 
 #[derive(Clone, Copy)]
 struct ScopedMemorySpanV29 {
@@ -73,7 +75,7 @@ fn check_scoped_memory_anchors_v29(
         || slots.iter().any(|slot| slot.instance != instance.instance)
         || slots
             .windows(2)
-            .any(|pair| pair[0].origin.local >= pair[1].origin.local)
+            .any(|pair| pair[0].origin.identity >= pair[1].origin.identity)
     {
         return Err(scoped_memory_error_v29());
     }
@@ -82,11 +84,14 @@ fn check_scoped_memory_anchors_v29(
         .occurrences(instance.instance)
         .ok_or_else(scoped_memory_error_v29)?;
     let mut expected = emission_vec_v1(occurrences.events().len(), budget)?;
+    let mut failure_reads = emission_vec_v1(occurrences.events().len(), budget)?;
     for event in occurrences.events() {
-        budget.charge_work(scoped_initialization_search_work_v29(slots.len()))?;
         let local = event.event().variable().get();
         budget.charge_work(4)?;
-        let candidate = slots.binary_search_by_key(&local, |slot| slot.origin.local);
+        let (legacy, objects) = source_address_local_slot_ranges_v29(slots, local, budget)?;
+        let candidate = legacy
+            .or_else(|| (!objects.is_empty()).then_some(objects.start))
+            .ok_or(());
         let expectation = match candidate {
             Ok(index) => {
                 let ty = instances
@@ -129,6 +134,11 @@ fn check_scoped_memory_anchors_v29(
             return Err(scoped_memory_error_v29());
         }
         expected.push(expectation);
+        failure_reads.push(
+            event.is_reachable()
+                && event.role() == ExecutionEventV29::BaseUse
+                && matches!(event.operand(), ExecutionOperandV29::AssertMessage(_)),
+        );
     }
     let count = argument_sum_v1(&[
         lowered.statement_operation_spans.len(),
@@ -186,6 +196,14 @@ fn check_scoped_memory_anchors_v29(
         .ok_or_else(scoped_memory_error_v29)?;
     // Producer order follows the original emitted blocks, not sorted BlockId.
     let mut next = 0;
+    let mut next_object = 0;
+    let mut object_components = if anchors.object_components.is_empty() {
+        Vec::new()
+    } else {
+        emission_vec_v1(anchors.object_components.len(), budget)?
+    };
+    budget.charge_work(anchors.object_components.len())?;
+    object_components.resize(anchors.object_components.len(), false);
     for block in &body.blocks {
         budget.charge_work(argument_sum_v1(&[1, block.operations.len()])?)?;
         for position in 0..=block.operations.len() {
@@ -196,13 +214,51 @@ fn check_scoped_memory_anchors_v29(
                 };
                 if row.block != block.id
                     || row.position != position
-                    || !matches!(row.kind, ScopedMemoryAnchorKindV29::Kill { .. })
+                    || !matches!(
+                        row.kind,
+                        ScopedMemoryAnchorKindV29::Kill { .. }
+                            | ScopedMemoryAnchorKindV29::FailureRead { .. }
+                    )
                 {
                     break;
                 }
                 next = argument_sum_v1(&[next, 1])?;
             }
-            if let Some(pointer) = block
+            if let Some(operation) = block
+                .operations
+                .get(position)
+                .filter(|operation| matches!(operation.kind, OperationKind::Storage(_)))
+            {
+                budget.charge_work(4)?;
+                let row = anchors.rows.get(next).ok_or_else(scoped_object_error_v29)?;
+                if row.block != block.id
+                    || row.position != position
+                    || row.kind != ScopedMemoryAnchorKindV29::Object(next_object)
+                {
+                    return Err(scoped_object_error_v29());
+                }
+                let payload = anchors.object_payload(row, budget)?;
+                payload.check_operation(operation, budget)?;
+                anchors.check_object_source(
+                    source.declaration(),
+                    &occurrences,
+                    next,
+                    row,
+                    payload,
+                    budget,
+                )?;
+                payload.role.visit_paths(|path| {
+                    budget.charge_work(path.count)?;
+                    let end = argument_sum_v1(&[path.first, path.count])?;
+                    object_components
+                        .get_mut(path.first..end)
+                        .ok_or_else(scoped_object_error_v29)?
+                        .fill(true);
+                    Ok(())
+                })?;
+                next_object = argument_sum_v1(&[next_object, 1])?;
+                next = argument_sum_v1(&[next, 1])?;
+            } else if let Some(pointer) = block
                 .operations
                 .get(position)
                 .and_then(|operation| scoped_memory_pointer_v29(&operation.kind))
@@ -211,7 +267,7 @@ fn check_scoped_memory_anchors_v29(
                 let row = anchors.rows.get(next).ok_or_else(scoped_memory_error_v29)?;
                 if row.block != block.id
                     || row.position != position
-                    || row.kind != (ScopedMemoryAnchorKindV29::Access { pointer })
+                    || !matches!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer: actual, .. } if actual == pointer)
                 {
                     return Err(scoped_memory_error_v29());
                 }
@@ -221,12 +277,53 @@ fn check_scoped_memory_anchors_v29(
                     &block.operations[position].kind,
                     budget,
                 )?;
+                check_scoped_payload_v29(
+                    source.declaration(),
+                    &occurrences,
+                    row,
+                    &block.operations[position],
+                    budget,
+                )?;
+                if let ScopedMemoryAnchorKindV29::Access {
+                    payload:
+                        Some(ScopedMemoryPayloadV29::Store {
+                            value,
+                            source:
+                                ScopedMemoryStoreSourceV29::Operand {
+                                    site,
+                                    role,
+                                    ty,
+                                    source:
+                                        ScopedMemoryOperandSourceV29::Memory { occurrence, access },
+                                },
+                        }),
+                    ..
+                } = row.kind
+                {
+                    check_scoped_payload_memory_v29(
+                        source.declaration(),
+                        &anchors.rows,
+                        next,
+                        row,
+                        value,
+                        site,
+                        role,
+                        ty,
+                        occurrence,
+                        access,
+                        budget,
+                    )?;
+                }
                 next = argument_sum_v1(&[next, 1])?;
             }
         }
     }
-    if next != anchors.rows.len() {
+    if next != anchors.rows.len() || next_object != anchors.objects.len() {
         return Err(scoped_memory_error_v29());
+    }
+    budget.charge_work(object_components.len())?;
+    if object_components.iter().any(|seen| !*seen) {
+        return Err(scoped_object_error_v29());
     }
     for row in &anchors.rows {
         budget.charge_work(3)?;
@@ -240,7 +337,10 @@ fn check_scoped_memory_anchors_v29(
                 .binary_search_by_key(&key, |span| span.site)
                 .map_err(|_| scoped_memory_error_v29())?;
             let span = spans[index];
-            let is_access = matches!(row.kind, ScopedMemoryAnchorKindV29::Access { .. });
+            let is_access = matches!(
+                row.kind,
+                ScopedMemoryAnchorKindV29::Access { .. } | ScopedMemoryAnchorKindV29::Object(_)
+            );
             if row.block != anchors.placement.block(key.0)?
                 || row.block != span.block
                 || row.position < span.start
@@ -269,9 +369,23 @@ fn check_scoped_memory_anchors_v29(
                 return Err(scoped_memory_error_v29());
             }
         }
+        if let ScopedMemoryAnchorKindV29::FailureRead { event, .. } = row.kind {
+            checked_scoped_failure_read_v29(source.declaration(), &occurrences, row, budget)?;
+            let needed = failure_reads
+                .get_mut(event)
+                .ok_or_else(scoped_memory_error_v29)?;
+            if !*needed {
+                return Err(scoped_memory_error_v29());
+            }
+            *needed = false;
+        }
     }
     budget.charge_work(expected.len())?;
     if expected.iter().any(Option::is_some) {
+        return Err(scoped_memory_error_v29());
+    }
+    budget.charge_work(failure_reads.len())?;
+    if failure_reads.iter().any(|needed| *needed) {
         return Err(scoped_memory_error_v29());
     }
     Ok(())
@@ -366,8 +480,14 @@ impl ScopedMemoryKillV29 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScopedMemoryAnchorKindV29 {
+    Object(usize),
     Access {
         pointer: ValueId,
+        payload: Option<ScopedMemoryPayloadV29>,
+    },
+    FailureRead {
+        event: usize,
+        local: u32,
     },
     Kill {
         event: usize,
@@ -379,7 +499,7 @@ enum ScopedMemoryAnchorKindV29 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ScopedMemoryAnchorV29 {
     block: BlockId,
-    // Access: original operation ordinal. Kill: gap before this operation.
+    // Access: original operation ordinal. Other rows: gap before this operation.
     position: usize,
     source: Option<ScopedMemoryFrameV29>,
     kind: ScopedMemoryAnchorKindV29,
@@ -389,14 +509,31 @@ struct ScopedMemoryAnchorsV29 {
     subject: ScopedInitializationSubjectV29,
     placement: SemanticEmissionPlacementV1,
     rows: Vec<ScopedMemoryAnchorV29>,
+    objects: Vec<ScopedObjectPayloadV29>,
+    object_components: Vec<ScopedObjectComponentV29>,
+    zero_objects: Vec<ScopedZeroObjectV29>,
 }
 
 impl ScopedMemoryAnchorsV29 {
     fn retained_storage(&self) -> Result<usize, ProductionSemanticKirErrorV1> {
-        Ok(argument_product_v1(
-            self.rows.capacity(),
-            std::mem::size_of::<ScopedMemoryAnchorV29>(),
-        )?)
+        Ok(argument_sum_v1(&[
+            argument_product_v1(
+                self.rows.capacity(),
+                std::mem::size_of::<ScopedMemoryAnchorV29>(),
+            )?,
+            argument_product_v1(
+                self.objects.capacity(),
+                std::mem::size_of::<ScopedObjectPayloadV29>(),
+            )?,
+            argument_product_v1(
+                self.object_components.capacity(),
+                std::mem::size_of::<ScopedObjectComponentV29>(),
+            )?,
+            argument_product_v1(
+                self.zero_objects.capacity(),
+                std::mem::size_of::<ScopedZeroObjectV29>(),
+            )?,
+        ])?)
     }
 }
 
@@ -404,6 +541,12 @@ struct ScopedMemoryRecorderV29 {
     anchors: ScopedMemoryAnchorsV29,
     block: Option<BlockId>,
     frame: Option<ScopedMemoryFrameV29>,
+    read_payload: Option<(ScopedMemoryReadV29, bool)>,
+    index_payload: Option<ScopedMemoryIndexReadV29>,
+    store_payload: Option<(ValueId, ScopedMemoryStoreSourceV29)>,
+    object_role: Option<ScopedObjectRoleV29>,
+    // An ephemeral lookup hint, never an origin or read-from certificate.
+    last_load: Option<usize>,
 }
 
 impl ScopedMemoryRecorderV29 {
@@ -413,9 +556,17 @@ impl ScopedMemoryRecorderV29 {
                 subject: ScopedInitializationSubjectV29::from_cursor(cursor),
                 placement,
                 rows: Vec::new(),
+                objects: Vec::new(),
+                object_components: Vec::new(),
+                zero_objects: Vec::new(),
             },
             block: None,
             frame: None,
+            read_payload: None,
+            index_payload: None,
+            store_payload: None,
+            object_role: None,
+            last_load: None,
         }
     }
 }
@@ -427,6 +578,69 @@ fn scoped_memory_error_v29() -> ProductionSemanticKirErrorV1 {
         None,
         "scoped memory anchors differ from their source instance",
     )
+}
+
+fn checked_scoped_failure_read_v29<'a>(
+    function: &'a SemanticFunctionDeclV1,
+    occurrences: &ProductionSemanticSsaFunctionOccurrencesV1<'_>,
+    row: &ScopedMemoryAnchorV29,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<&'a SemanticPlaceV1, ProductionSemanticKirErrorV1> {
+    budget.charge_work(12)?;
+    if !occurrences
+        .owner()
+        .source_semantic()
+        .functions()
+        .get(occurrences.function().index() as usize)
+        .is_some_and(|original| std::ptr::eq(original, function))
+    {
+        return Err(scoped_memory_error_v29());
+    }
+    let ScopedMemoryAnchorKindV29::FailureRead { event, local } = row.kind else {
+        return Err(scoped_memory_error_v29());
+    };
+    let frame = row.source.ok_or_else(scoped_memory_error_v29)?;
+    let (
+        ExecutionSiteV29::Terminator { block },
+        Some(ScopedMemoryRoleV29::Operand(role @ ExecutionOperandV29::AssertMessage(_))),
+    ) = (frame.site, frame.role)
+    else {
+        return Err(scoped_memory_error_v29());
+    };
+    let Some(SemanticTerminatorKindV1::Assert { unwind, .. }) = function
+        .blocks()
+        .get(block.get() as usize)
+        .map(|block| block.terminator().kind())
+    else {
+        return Err(scoped_memory_error_v29());
+    };
+    if matches!(unwind, SemanticUnwindActionV1::Cleanup(_)) {
+        return Err(scoped_memory_error_v29());
+    }
+    let boundary = occurrences
+        .terminal_failure_start(block)
+        .ok_or_else(scoped_memory_error_v29)?;
+    let original = occurrences
+        .events()
+        .get(event)
+        .ok_or_else(scoped_memory_error_v29)?;
+    let Some(SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) =
+        scoped_source_operand_v29(function, frame.site, role)
+    else {
+        return Err(scoped_memory_error_v29());
+    };
+    if original.site() != frame.site
+        || original.operand() != role
+        || original.role() != ExecutionEventV29::BaseUse
+        || !original.is_reachable()
+        || (original.ordinal() as usize) < boundary
+        || original.event()
+            != fe2o3_mir_model::SsaEventV1::Use(fe2o3_mir_model::SsaVariableIdV1::new(local))
+        || place.local().index() != local
+    {
+        return Err(scoped_memory_error_v29());
+    }
+    Ok(place)
 }
 
 fn scoped_memory_pointer_v29(kind: &OperationKind) -> Option<ValueId> {
@@ -586,7 +800,8 @@ fn scoped_source_place_v29(
             ExecutionOperandV29::Destination => Some(assignment.destination()),
             ExecutionOperandV29::RvaluePlace => match assignment.value().kind() {
                 SemanticRvalueKindV1::Borrow { place, .. }
-                | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
+                | SemanticRvalueKindV1::AddressOf { place, .. }
+                | SemanticRvalueKindV1::Length(place) => Some(place),
                 SemanticRvalueKindV1::Load(load) => Some(load.source()),
                 _ => None,
             },
@@ -676,7 +891,148 @@ fn scoped_expected_kill_v29(
     Some((local, cause))
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+// Classify a discarded source move only. The recorder still authenticates the
+// original operand/event; this lookup grants no generation or pointer authority.
+fn scoped_discarded_move_cause_v29(
+    slots: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotV1>,
+    types: &[SemanticTypeDeclV1],
+    place: &SemanticPlaceV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Option<ScopedMemoryKillV29>, ProductionSemanticKirErrorV1> {
+    charge_execution_cfg_lookup_v29(slots.len(), budget)?;
+    charge_execution_cfg_lookup_v29(slots.len(), budget)?;
+    budget.charge_work(8)?;
+    let local = place.local().index();
+    let legacy = slots.get(&ScopedAllocationIdentityV29::LegacyLocal(local));
+    let first = ScopedAllocationIdentityV29::OriginalObject {
+        local,
+        generation: 0,
+    };
+    let last = ScopedAllocationIdentityV29::OriginalObject {
+        local,
+        generation: u32::MAX,
+    };
+    let object = slots.range(first..=last).next().map(|(_, slot)| slot);
+    let (slot, array) = match (legacy, object) {
+        (Some(_), Some(_)) => return Err(scoped_memory_error_v29()),
+        (Some(slot), None) => (slot, slot.storage.scalar_array()?.2.is_some()),
+        (None, Some(slot)) => {
+            if !matches!(slot.storage, SemanticRetainedStorageV29::Object { .. }) {
+                return Err(scoped_memory_error_v29());
+            }
+            let ty = types
+                .get(slot.semantic_type.index() as usize)
+                .ok_or_else(scoped_memory_error_v29)?;
+            (
+                slot,
+                matches!(ty.shape(), SemanticTypeShapeV1::Array { .. }),
+            )
+        }
+        (None, None) => return Ok(None),
+    };
+    if place.projections().is_empty() && slot.semantic_type != place.ty() {
+        return Err(scoped_memory_error_v29());
+    }
+    Ok(retained_move_invalidates_local_v1(place, array).then_some(
+        if place.projections().is_empty() {
+            ScopedMemoryKillV29::Move
+        } else {
+            ScopedMemoryKillV29::ProjectedArrayMove
+        },
+    ))
+}
+
+impl SemanticFunctionLoweringV1<'_, '_> {
+    fn record_scoped_failure_operand_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        role: ExecutionOperandV29,
+        operand: &SemanticOperandV1,
+        position: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
+            return Ok(());
+        };
+        if self.scoped_memory.is_none() {
+            return Ok(());
+        }
+        let site = execution_site_v29(block, None);
+        self.with_emission_budget_v1(|this, budget| {
+            budget.charge_work(5)?;
+            let cursor = this
+                .execution
+                .as_ref()
+                .ok_or_else(scoped_memory_error_v29)?;
+            cursor.check_ledger(budget)?;
+            if !scoped_source_operand_v29(this.function, site, role)
+                .is_some_and(|source| std::ptr::eq(source, operand))
+            {
+                return Err(scoped_memory_error_v29());
+            }
+            let key = unit_local_source_key_v1(site, role, Some(ExecutionEventV29::BaseUse));
+            budget.charge_work(argument_product_v1(
+                8,
+                scoped_initialization_search_work_v29(cursor.index.len()),
+            )?)?;
+            let index = cursor
+                .index
+                .binary_search_by_key(&key, |row| row.key)
+                .map_err(|_| scoped_memory_error_v29())?;
+            let event = cursor.index[index].index;
+            if !cursor.claimed[event] {
+                return Err(scoped_memory_error_v29());
+            }
+            let recorder = this
+                .scoped_memory
+                .as_mut()
+                .ok_or_else(scoped_memory_error_v29)?;
+            let row = ScopedMemoryAnchorV29 {
+                block: recorder.block.ok_or_else(scoped_memory_error_v29)?,
+                position,
+                source: Some(ScopedMemoryFrameV29::operand(site, Some(role))),
+                kind: ScopedMemoryAnchorKindV29::FailureRead {
+                    event,
+                    local: place.local().index(),
+                },
+            };
+            let source =
+                checked_scoped_failure_read_v29(this.function, &cursor.occurrences, &row, budget)?;
+            if !std::ptr::eq(source, place) {
+                return Err(scoped_memory_error_v29());
+            }
+            if let Some(references) = cursor.references {
+                references.claim_cell_failure_read(
+                    SourceReferenceSiteV29 {
+                        instance: cursor.instance,
+                        block,
+                        statement: None,
+                    },
+                    place,
+                    row,
+                    budget,
+                )?;
+            }
+            emission_push_v1(&mut recorder.anchors.rows, row, budget)
+        })?;
+        if matches!(operand, SemanticOperandV1::Move(_)) {
+            let cause = self.with_emission_budget_v1(|this, budget| {
+                scoped_discarded_move_cause_v29(
+                    &this.retained_local_slots,
+                    this.types,
+                    place,
+                    budget,
+                )
+            })?;
+            if let Some(cause) = cause {
+                self.with_scoped_memory_frame_v29(
+                    ScopedMemoryFrameV29::operand(site, Some(role)),
+                    |this| this.record_scoped_memory_kill_v29(place.local(), cause, position),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn with_scoped_call_memory_frame_v29<T>(
         &mut self,
         block: SemanticBlockIdV1,
@@ -706,7 +1062,7 @@ impl SemanticFunctionLoweringV1<'_> {
         } else {
             ScopedMemoryRoleV29::Operand(ExecutionOperandV29::CallDestinationAddress)
         };
-        self.with_scoped_memory_frame_v29(
+        self.with_scoped_source_memory_frame_v29(
             ScopedMemoryFrameV29 {
                 site,
                 role: Some(role),
@@ -748,18 +1104,13 @@ impl SemanticFunctionLoweringV1<'_> {
             let SemanticOperandV1::Move(place) = operand else {
                 return Ok(None);
             };
-            let Some(slot) = this.retained_local_slots.get(&place.local().index()) else {
-                return Ok(None);
-            };
-            if !retained_move_invalidates_local_v1(place, slot.array.is_some()) {
-                return Ok(None);
-            }
-            let cause = if place.projections().is_empty() {
-                ScopedMemoryKillV29::Move
-            } else {
-                ScopedMemoryKillV29::ProjectedArrayMove
-            };
-            Ok(Some((place.local(), cause)))
+            Ok(scoped_discarded_move_cause_v29(
+                &this.retained_local_slots,
+                this.types,
+                place,
+                budget,
+            )?
+            .map(|cause| (place.local(), cause)))
         })?;
         let Some((local, cause)) = invalidation else {
             return Ok(());
@@ -779,6 +1130,42 @@ impl SemanticFunctionLoweringV1<'_> {
         frame: ScopedMemoryFrameV29,
         body: impl FnOnce(&mut Self) -> Result<T, ProductionSemanticKirErrorV1>,
     ) -> Result<T, ProductionSemanticKirErrorV1> {
+        self.with_scoped_memory_frame_read_v29(frame, None, body)
+    }
+
+    fn with_scoped_source_memory_frame_v29<T>(
+        &mut self,
+        frame: ScopedMemoryFrameV29,
+        body: impl FnOnce(&mut Self) -> Result<T, ProductionSemanticKirErrorV1>,
+    ) -> Result<T, ProductionSemanticKirErrorV1> {
+        let read = self.prepare_scoped_read_source_v29(frame)?;
+        self.with_scoped_memory_frame_read_v29(frame, read, body)
+    }
+
+    fn with_scoped_memory_frame_read_v29<T>(
+        &mut self,
+        frame: ScopedMemoryFrameV29,
+        read: Option<ScopedMemoryReadV29>,
+        body: impl FnOnce(&mut Self) -> Result<T, ProductionSemanticKirErrorV1>,
+    ) -> Result<T, ProductionSemanticKirErrorV1> {
+        let header = argument_sum_v1(&[
+            std::mem::size_of::<Option<ScopedMemoryFrameV29>>(),
+            argument_product_v1(
+                2,
+                std::mem::size_of::<Option<(ScopedMemoryReadV29, bool)>>(),
+            )?,
+        ])?;
+        self.with_scoped_payload_header_v29(header, |this| {
+            this.with_scoped_memory_frame_read_inner_v29(frame, read, body)
+        })
+    }
+
+    fn with_scoped_memory_frame_read_inner_v29<T>(
+        &mut self,
+        frame: ScopedMemoryFrameV29,
+        read: Option<ScopedMemoryReadV29>,
+        body: impl FnOnce(&mut Self) -> Result<T, ProductionSemanticKirErrorV1>,
+    ) -> Result<T, ProductionSemanticKirErrorV1> {
         if self.scoped_memory.is_none() {
             return body(self);
         }
@@ -788,12 +1175,23 @@ impl SemanticFunctionLoweringV1<'_> {
             .as_mut()
             .ok_or_else(scoped_memory_error_v29)?;
         let previous = recorder.frame.replace(frame);
+        let previous_read =
+            std::mem::replace(&mut recorder.read_payload, read.map(|read| (read, false)));
+        recorder.last_load = None;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
-        self.scoped_memory
-            .as_mut()
-            .ok_or_else(scoped_memory_error_v29)?
-            .frame = previous;
+        let restored = if let Some(recorder) = self.scoped_memory.as_mut() {
+            recorder.frame = previous;
+            recorder.read_payload = previous_read;
+            if !matches!(result, Ok(Ok(_))) {
+                recorder.last_load = None;
+            }
+            true
+        } else {
+            self.deny_scoped_payload_restoration_v29();
+            false
+        };
         match result {
+            Ok(Ok(_)) if !restored => Err(scoped_memory_error_v29()),
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
         }
@@ -803,14 +1201,19 @@ impl SemanticFunctionLoweringV1<'_> {
         &mut self,
         position: usize,
         kind: &OperationKind,
+        results: &[ValueDef],
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if let OperationKind::Storage(operation) = *kind {
+            // Typed operations never inherit the legacy unrecorded scalar path.
+            return self.record_scoped_object_v29(position, operation, results);
+        }
         let Some(pointer) = scoped_memory_pointer_v29(kind) else {
             return Ok(());
         };
         if self.scoped_memory.is_none() {
             return Ok(());
         }
-        self.with_emission_budget_v1(|this, budget| {
+        self.with_scoped_payload_header_v29(std::mem::size_of::<Result<Option<ScopedMemoryPayloadV29>, ProductionSemanticKirErrorV1>>(), |this| this.with_emission_budget_v1(|this, budget| {
             let recorder = this
                 .scoped_memory
                 .as_mut()
@@ -818,14 +1221,20 @@ impl SemanticFunctionLoweringV1<'_> {
             if recorder.anchors.subject.ledger != budget.work_ledger_identity_v1() {
                 return Err(ArgumentResourceV1::Accounting.into());
             }
+            let payload = scoped_recorded_payload_v29(recorder, this.types, this.function, kind, results, budget)?;
             let row = ScopedMemoryAnchorV29 {
                 block: recorder.block.ok_or_else(scoped_memory_error_v29)?,
                 position,
                 source: recorder.frame,
-                kind: ScopedMemoryAnchorKindV29::Access { pointer },
+                kind: ScopedMemoryAnchorKindV29::Access { pointer, payload },
             };
-            emission_push_v1(&mut recorder.anchors.rows, row, budget)
-        })
+            let ordinal = recorder.anchors.rows.len();
+            emission_push_v1(&mut recorder.anchors.rows, row, budget)?;
+            if matches!(payload, Some(ScopedMemoryPayloadV29::Load { .. })) {
+                recorder.last_load = Some(ordinal);
+            }
+            Ok(())
+        }))
     }
 
     fn record_scoped_memory_kill_v29(
@@ -841,7 +1250,24 @@ impl SemanticFunctionLoweringV1<'_> {
             budget.charge_work(scoped_initialization_search_work_v29(
                 this.retained_local_slots.len(),
             ))?;
-            let Some(slot) = this.retained_local_slots.get(&local.index()) else {
+            let first_object = ScopedAllocationIdentityV29::OriginalObject {
+                local: local.index(),
+                generation: 0,
+            };
+            let last_object = ScopedAllocationIdentityV29::OriginalObject {
+                local: local.index(),
+                generation: u32::MAX,
+            };
+            let slot = this
+                .retained_local_slots
+                .get(&ScopedAllocationIdentityV29::LegacyLocal(local.index()))
+                .or_else(|| {
+                    this.retained_local_slots
+                        .range(first_object..=last_object)
+                        .next()
+                        .map(|(_, slot)| slot)
+                });
+            let Some(slot) = slot else {
                 return Ok(());
             };
             let recorder = this
@@ -868,7 +1294,16 @@ impl SemanticFunctionLoweringV1<'_> {
                 .map_err(|_| scoped_memory_error_v29())?;
             let event_index = cursor.index[index].index;
             let event = &cursor.occurrences.events()[event_index];
-            if scoped_expected_kill_v29(cursor.function, event, slot.array.is_some())
+            let array = match slot.storage {
+                SemanticRetainedStorageV29::ScalarArray { ref array, .. } => array.is_some(),
+                SemanticRetainedStorageV29::Object { .. } => matches!(
+                    this.types
+                        .get(slot.semantic_type.index() as usize)
+                        .map(SemanticTypeDeclV1::shape),
+                    Some(SemanticTypeShapeV1::Array { .. })
+                ),
+            };
+            if scoped_expected_kill_v29(cursor.function, event, array)
                 != Some((local.index(), cause))
             {
                 return Err(scoped_memory_error_v29());

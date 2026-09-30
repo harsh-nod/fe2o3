@@ -507,6 +507,7 @@ impl SubgroupTile<'_, 64> {
     }
 }
 
+#[rustc_diagnostic_item = "fe2o3_device_gfx942_wave64_inclusive_scan_helper_v1"]
 unsafe fn wave64_inclusive_scan<T: Gfx942CollectiveElement>(
     rank: u32,
     context: &Gfx942Collectives,

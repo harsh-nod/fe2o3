@@ -1,4 +1,4 @@
-impl CanonicalKirLoopsV1<'_, '_> {
+impl<O> CanonicalKirLoopsV1<'_, '_, O> {
     fn replay_inner(
         &self,
         limits: CanonicalKirLoopLimitsV1,
@@ -260,8 +260,8 @@ fn replay_edge(rows: &[Edge], cursor: &mut usize, actual: Edge) -> Result<()> {
     Ok(())
 }
 
-fn replay_reachability(
-    inventory: &Inventory<'_>,
+fn replay_reachability<O>(
+    inventory: &Inventory<'_, O>,
     graph: &Incidence,
     blocks: Range<usize>,
     removed: Option<usize>,
@@ -302,8 +302,8 @@ fn replay_reachability(
 
 // This checker does not call the producer's recurrence matcher. It starts with
 // actual edge bindings and independently re-reads result/operand/literal types.
-fn replay_recurrence(
-    inventory: &Inventory<'_>,
+fn replay_recurrence<O>(
+    inventory: &Inventory<'_, O>,
     header: usize,
     argument: usize,
     initial_edge: usize,

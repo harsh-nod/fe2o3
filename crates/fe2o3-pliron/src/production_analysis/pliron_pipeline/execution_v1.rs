@@ -50,7 +50,21 @@ fn run_shared_production_checks_inner_v1<'a>(
         ProductionAnalysisResourcePhaseV1::StructuralIdentity,
         0,
         |observer| {
-            let provider = LivePlironStructuralIdentityProviderV1::new(context, function);
+            let provider = match family {
+                PipelineFamilyV1::CanonicalPrivate(input) => {
+                    LivePlironStructuralIdentityProviderV1::canonical_private(input)
+                }
+                PipelineFamilyV1::CanonicalMixedV26(input) => {
+                    LivePlironStructuralIdentityProviderV1::canonical_mixed_v26(input)
+                }
+                PipelineFamilyV1::CanonicalPrivateV18(input) => {
+                    LivePlironStructuralIdentityProviderV1::canonical_private_v18(input)
+                }
+                PipelineFamilyV1::LifecycleV18(input) => {
+                    LivePlironStructuralIdentityProviderV1::lifecycle_v18(input)
+                }
+                _ => LivePlironStructuralIdentityProviderV1::new(context, function),
+            };
             let preservation = begin_observed_pass_session_v1(provider, resource_limits, observer)
                 .map_err(|error| {
                     if target_contract.is_some()
@@ -407,7 +421,11 @@ fn run_shared_production_checks_inner_v1<'a>(
             )
         };
     let (ownership, ownership_upper_bound) = match family {
-        PipelineFamilyV1::Ordinary => {
+        PipelineFamilyV1::Ordinary
+        | PipelineFamilyV1::LifecycleV18(_)
+        | PipelineFamilyV1::CanonicalPrivate(_)
+        | PipelineFamilyV1::CanonicalPrivateV18(_)
+        | PipelineFamilyV1::CanonicalMixedV26(_) => {
             let (report, bound) = run_preflight_and_record_production_stage_v1(
                 (context, function),
                 &mut analyses,
@@ -555,6 +573,23 @@ fn run_shared_production_checks_inner_v1<'a>(
             Ok((bound, None))
         },
     )?;
+    let (progress_graph, progress_graph_bound) = with_invocation_phase_v1(
+        receipt.as_deref_mut(),
+        ProductionAnalysisResourcePhaseV1::Progress,
+        0,
+        |observer| {
+            use crate::production_analysis::pliron_progress::{
+                PreparedProgressGraphV2, preflight_progress_graph_resource_upper_bound_v2,
+            };
+            let phase = ProductionAnalysisResourcePhaseV1::Progress;
+            let limits = observed_remaining_resource_limits_v1(&analyses, phase, observer)?;
+            let bound = preflight_progress_graph_resource_upper_bound_v2(input_census, limits)
+                .map_err(|error| observed_pipeline_resource_error_v1(observer, error))?;
+            retain_cache_with_observation_v1(&mut analyses, phase, bound, observer)?;
+            let graph = PreparedProgressGraphV2::new(context, function, observer);
+            Ok(((graph, bound), Some(bound)))
+        },
+    )?;
     let (barriers, _) = run_preflight_and_record_production_stage_v1(
         (context, function),
         &mut analyses,
@@ -569,6 +604,7 @@ fn run_shared_production_checks_inner_v1<'a>(
                     &input_census,
                     trace_admission,
                     pipeline_protocol_upper_bound,
+                    Some(&progress_graph),
                     observer,
                 )?;
                 Ok(PreparedProductionStageV1 {
@@ -587,7 +623,13 @@ fn run_shared_production_checks_inner_v1<'a>(
                 limits,
                 |input| {
                     with_scoped_producer_observation_v1(producer, |observer| {
-                        require_observed_barrier_v1(input, analyses, progress, observer)
+                        require_observed_barrier_v1(
+                            input,
+                            analyses,
+                            progress,
+                            Some(&progress_graph),
+                            observer,
+                        )
                     })
                 },
                 checkpoint,
@@ -682,15 +724,20 @@ fn run_shared_production_checks_inner_v1<'a>(
     let workgroup = workgroup.map_err(ProductionPlironPreloweringErrorV2::Workgroup)?;
     let prepare_semantic =
         |analyses: &mut PlironAnalysisManagerV1, observer: PipelineObservationV1<'_, '_, '_>| {
-            family.prepare_semantic_stage_v1(
+            family.prepare_semantic_with_graph_v2(
                 analyses,
                 input_census,
                 ownership_upper_bound,
+                Some(&progress_graph),
                 observer,
             )
         };
     let semantics = match family {
-        PipelineFamilyV1::Ordinary => {
+        PipelineFamilyV1::Ordinary
+        | PipelineFamilyV1::LifecycleV18(_)
+        | PipelineFamilyV1::CanonicalPrivate(_)
+        | PipelineFamilyV1::CanonicalPrivateV18(_)
+        | PipelineFamilyV1::CanonicalMixedV26(_) => {
             let (report, _) = run_preflight_and_record_production_stage_v1(
                 (context, function),
                 &mut analyses,
@@ -705,8 +752,13 @@ fn run_shared_production_checks_inner_v1<'a>(
                         limits,
                         |input| {
                             with_scoped_producer_observation_v1(producer, |observer| {
-                                require_observed_semantic_v1(input, analyses, observer)
-                                    .map(|result| result.map_err(Box::new))
+                                require_observed_semantic_v1(
+                                    input,
+                                    analyses,
+                                    Some(&progress_graph),
+                                    observer,
+                                )
+                                .map(|result| result.map_err(Box::new))
                             })
                         },
                         checkpoint,
@@ -749,13 +801,14 @@ fn run_shared_production_checks_inner_v1<'a>(
                             with_scoped_producer_observation_v1(producer, |observer| {
                                 let (query, admitted) = additional.unzip();
                                 with_scoped_producer_observation_v1(query, |query| {
-                                    conditional_semantic::require_with_scoped_bounds_v1(
+                                    conditional_semantic::require_with_prepared_progress_v2(
                                         input,
                                         analyses,
                                         prepared,
                                         &conditional_ownership::BoundsSourceV1::SameInvocation(
                                             bounds,
                                         ),
+                                        Some(&progress_graph),
                                         (observer, query.zip(admitted)),
                                     )
                                 })
@@ -869,6 +922,111 @@ fn run_shared_production_checks_inner_v1<'a>(
             };
             PipelineReportsV1::Ordinary(report)
         }
+        ValidationFamilyV1::CanonicalPrivate(validation) => {
+            let (report_validation, coverage) = with_invocation_phase_v1(
+                receipt.as_deref_mut(),
+                ProductionAnalysisResourcePhaseV1::ReportValidation,
+                0,
+                |observer| {
+                    let (validation, coverage, bound) =
+                        validation.finish(&preservation, &mut analyses, observer)?;
+                    Ok(((validation, coverage), observer.map(|_| bound)))
+                },
+            )?;
+            let (Some(bounds), Some(ownership), Some(semantics)) = (bounds, ownership, semantics)
+            else {
+                return Err(PipelineErrorV1::CanonicalPrivateInput);
+            };
+            PipelineReportsV1::CanonicalPrivate(
+                canonical_private_v1::CanonicalPrivatePipelineReportV1 {
+                    report: ProductionPlironPreloweringReportV2 {
+                        target_contract,
+                        tensor_layout,
+                        bounds,
+                        atomics,
+                        race,
+                        ownership,
+                        barriers,
+                        pipeline_protocol,
+                        workgroup,
+                        semantics,
+                        preservation,
+                        report_validation,
+                    },
+                    coverage,
+                },
+            )
+        }
+        ValidationFamilyV1::CanonicalPrivateV18(validation) => {
+            let (report_validation, coverage) = with_invocation_phase_v1(
+                receipt.as_deref_mut(),
+                ProductionAnalysisResourcePhaseV1::ReportValidation,
+                0,
+                |observer| {
+                    let (validation, coverage, bound) =
+                        validation.finish(&preservation, &mut analyses, observer)?;
+                    Ok(((validation, coverage), observer.map(|_| bound)))
+                },
+            )?;
+            let (Some(bounds), Some(ownership), Some(semantics)) = (bounds, ownership, semantics)
+            else {
+                return Err(PipelineErrorV1::CanonicalPrivateInput);
+            };
+            PipelineReportsV1::CanonicalPrivate(
+                canonical_private_v1::CanonicalPrivatePipelineReportV1 {
+                    report: ProductionPlironPreloweringReportV2 {
+                        target_contract,
+                        tensor_layout,
+                        bounds,
+                        atomics,
+                        race,
+                        ownership,
+                        barriers,
+                        pipeline_protocol,
+                        workgroup,
+                        semantics,
+                        preservation,
+                        report_validation,
+                    },
+                    coverage,
+                },
+            )
+        }
+        ValidationFamilyV1::CanonicalMixedV26(validation) => {
+            let (report_validation, coverage) = with_invocation_phase_v1(
+                receipt.as_deref_mut(),
+                ProductionAnalysisResourcePhaseV1::ReportValidation,
+                0,
+                |observer| {
+                    let (validation, coverage, bound) =
+                        validation.finish(&preservation, &mut analyses, observer)?;
+                    Ok(((validation, coverage), observer.map(|_| bound)))
+                },
+            )?;
+            let (Some(bounds), Some(ownership), Some(semantics)) = (bounds, ownership, semantics)
+            else {
+                return Err(PipelineErrorV1::CanonicalPrivateInput);
+            };
+            PipelineReportsV1::CanonicalMixedV26(
+                canonical_private_v1::CanonicalMixedPipelineReportV26 {
+                    report: ProductionPlironPreloweringReportV2 {
+                        target_contract,
+                        tensor_layout,
+                        bounds,
+                        atomics,
+                        race,
+                        ownership,
+                        barriers,
+                        pipeline_protocol,
+                        workgroup,
+                        semantics,
+                        preservation,
+                        report_validation,
+                    },
+                    coverage,
+                },
+            )
+        }
         ValidationFamilyV1::Conditional(validation) => {
             if bounds.is_some() || ownership.is_some() || semantics.is_some() {
                 return Err(PipelineErrorV1::ConditionalInput);
@@ -899,7 +1057,7 @@ fn run_shared_production_checks_inner_v1<'a>(
             })
         }
     };
-    let resource_upper_bound = finish_exclusive_analysis_caches_with_observation_v1(
+    let resource_upper_bound = finish_exclusive_analysis_caches_with_progress_v2(
         analyses,
         ExclusiveAnalysisCacheReservationsV1 {
             sparse: sparse_upper_bound,
@@ -910,6 +1068,7 @@ fn run_shared_production_checks_inner_v1<'a>(
             simt: simt_protocol_upper_bound,
             memory_order: memory_order_admission.upper_bound(),
         },
+        Some((progress_graph, progress_graph_bound)),
         receipt,
     )
     .map_err(resource_upper_bound_error_v1)?;
@@ -920,6 +1079,18 @@ fn run_shared_production_checks_inner_v1<'a>(
                 resource_upper_bound,
             })
         }
+        PipelineReportsV1::CanonicalPrivate(report) => PipelineOutcomeV1::CanonicalPrivate(
+            canonical_private_v1::CanonicalPrivatePipelineOutcomeV1 {
+                report,
+                resource_upper_bound,
+            },
+        ),
+        PipelineReportsV1::CanonicalMixedV26(report) => PipelineOutcomeV1::CanonicalMixedV26(
+            canonical_private_v1::CanonicalMixedPipelineOutcomeV26 {
+                report,
+                resource_upper_bound,
+            },
+        ),
         PipelineReportsV1::Conditional(report) => {
             PipelineOutcomeV1::Conditional(ConditionalPipelineOutcomeV1 {
                 report,

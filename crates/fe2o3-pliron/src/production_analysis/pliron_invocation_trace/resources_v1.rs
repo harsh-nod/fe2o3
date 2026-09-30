@@ -33,6 +33,37 @@ pub(crate) fn preflight_execution_layout_resource_upper_bound_with_observation_v
 
 const TRACE_BLOCK_STATE_CENSUS_TEMPORARY_V1: usize = 3;
 
+/// Native launch cardinality enters the same legacy scheduler preflight. The
+/// native byte ledger separately pays correspondence, fold scratch and events.
+pub(crate) fn preflight_native_trace_v1(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    census: ProductionAnalysisInputCensusV1,
+    geometry: native_input_v1::NativeTraceGeometryV1,
+    limits: ProductionAnalysisResourceLimitsV1,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    let invocations = geometry
+        .global_extents
+        .into_iter()
+        .try_fold(1_u64, u64::checked_mul)
+        .filter(|v| *v <= MAX_PLIRON_RACE_INVOCATIONS_V1)
+        .and_then(|v| usize::try_from(v).ok())
+        .ok_or_else(trace_resource_overflow_v1)?;
+    let block_state =
+        collect_trace_block_state_census_observed_v1(context, inventory, census, limits, None)?;
+    Ok(
+        invocation_trace_resource_upper_bound_for_block_state_observed_v1(
+            census,
+            block_state,
+            invocations,
+            3,
+            limits,
+            None,
+        )?
+        .upper_bound(),
+    )
+}
+
 struct InvocationTraceBlockStateCensusV1 {
     max_block_arguments: usize,
     work: usize,

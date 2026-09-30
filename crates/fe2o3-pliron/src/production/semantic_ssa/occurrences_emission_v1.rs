@@ -66,6 +66,25 @@ impl Meter<'_, '_> {
     }
 }
 
+impl super::super::holder_availability_v1::Meter for Meter<'_, '_> {
+    type Error = CaptureError;
+    fn work(&mut self, units: usize) -> CaptureResult<()> {
+        self.work(units)
+    }
+    fn reserve(&mut self, bytes: usize) -> CaptureResult<()> {
+        self.reserve(bytes)
+    }
+    fn release(&mut self, bytes: usize) -> CaptureResult<()> {
+        let retained = self
+            .retained
+            .checked_sub(bytes)
+            .ok_or(Resource::Accounting)?;
+        self.budget.release_storage(bytes)?;
+        self.retained = retained;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
 struct Counts {
     blocks: usize,
@@ -145,16 +164,30 @@ impl ReplayDriver for CaptureDriver<'_, '_> {
 
     fn input(
         &mut self,
+        _function_id: SemanticFunctionIdV1,
         function: &SemanticFunctionDeclV1,
         types: Option<&[SemanticTypeDeclV1]>,
         callables: &[SemanticCallableDeclV1],
         transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
-    ) -> CaptureResult<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize)> {
+        limits: ProductionSemanticSsaLimitsV1,
+    ) -> CaptureResult<(
+        SsaConstructionInputV1,
+        Vec<SsaVariableIdV1>,
+        usize,
+        Option<SemanticSsaAuxiliaryResourcesV1>,
+    )> {
         self.meter.work(2)?;
         if self.current.is_some() || self.functions.len() >= self.expected_functions {
             return Err(Resource::Accounting.into());
         }
         let id = SemanticFunctionIdV1::from_index(checked_u32(self.functions.len())?);
+        // Four observer headers plus four adapter temporary boundary slots
+        // remain charged until capture exit; prior slack supplies no credit.
+        self.meter.reserve(
+            8_usize
+                .checked_mul(std::mem::size_of::<Option<usize>>())
+                .ok_or(Resource::Arithmetic)?,
+        )?;
         let mut count = Observer::new(&mut self.meter, id, None);
         let prepared = prepared::prepare_semantic_ssa_adapter_with_observer_v1(
             function,
@@ -167,10 +200,22 @@ impl ReplayDriver for CaptureDriver<'_, '_> {
             .emit_blocks(&mut CountBlocks::default(), &mut count)
             .map_err(flatten)?;
         let block_counts = count.finish()?;
+        let mut holder = if prepared.field_update_count() == 0 {
+            None
+        } else {
+            let mut account = super::super::holder_availability_v1::Account::new(id, limits);
+            let markers = account.markers(
+                prepared.field_update_count(),
+                prepared.field_update_recording_work(),
+                &mut self.meter,
+            )?;
+            Some((account, markers))
+        };
         let mut rows = FunctionRows::allocate(id, block_counts, &mut self.meter)?;
-        let entries = {
+        let mut entries = {
             let mut fill = Observer::new(&mut self.meter, id, Some(&mut rows));
-            let entries = prepared.into_entries(&mut fill)?;
+            let entries = prepared
+                .into_entries_recording(&mut fill, holder.as_mut().map(|(_, markers)| markers))?;
             let actual = fill.finish()?;
             self.meter.require(7, id, None, || actual == block_counts)?;
             entries
@@ -181,15 +226,22 @@ impl ReplayDriver for CaptureDriver<'_, '_> {
             .map_err(flatten)?;
         let entry_counts = count.finish()?;
         rows.entries = self.meter.array(entry_counts.entries)?;
-        let input = {
+        let values = {
             let mut fill = Observer::new(&mut self.meter, id, Some(&mut rows));
-            let input = entries.finish(&mut fill)?;
+            let values = entries.entry_values(&mut fill)?;
             let actual = fill.finish()?;
             self.meter.require(7, id, None, || actual == entry_counts)?;
-            input
+            values
         };
+        let holder_resources = if let Some((mut account, markers)) = holder {
+            entries.refine_holders(&values, &markers, &mut account, &mut self.meter)?;
+            Some(account.finish(markers, &mut self.meter)?)
+        } else {
+            None
+        };
+        let (input, implicit, work) = entries.finish_prebuilt(values);
         self.current = Some(rows);
-        Ok(input)
+        Ok((input, implicit, work, holder_resources))
     }
 
     fn join(
@@ -296,6 +348,7 @@ struct Observer<'m, 'b, 'w, 'r> {
     counts: Counts,
     block_events: usize,
     block_successors: usize,
+    block_failure_start: Option<usize>,
     expected_elisions: Option<usize>,
 }
 
@@ -312,6 +365,7 @@ impl<'m, 'b, 'w, 'r> Observer<'m, 'b, 'w, 'r> {
             counts: Counts::default(),
             block_events: 0,
             block_successors: 0,
+            block_failure_start: None,
             expected_elisions: None,
         }
     }
@@ -327,6 +381,21 @@ impl<'m, 'b, 'w, 'r> Observer<'m, 'b, 'w, 'r> {
 
 impl grammar::SemanticSsaEmissionObserverV1 for Observer<'_, '_, '_, '_> {
     type Error = CaptureError;
+
+    fn terminal_failure_begin(
+        &mut self,
+        site: grammar::SemanticSsaEmissionSiteV1,
+        ordinal: usize,
+    ) -> CaptureResult<()> {
+        self.meter.require(3, self.function, None, || {
+            matches!(site, grammar::SemanticSsaEmissionSiteV1::Terminator { block }
+                if block == self.counts.blocks)
+                && self.block_failure_start.is_none()
+                && self.counts.events.checked_sub(self.block_events) == Some(ordinal)
+        })?;
+        self.block_failure_start = Some(ordinal);
+        Ok(())
+    }
 
     fn block_pass_begin(&mut self, elisions: usize) -> CaptureResult<()> {
         let work = elisions
@@ -554,11 +623,13 @@ impl grammar::SemanticSsaEmissionObserverV1 for Observer<'_, '_, '_, '_> {
                     block: SsaBlockIdV1::new(checked_u32(block)?),
                     events: self.block_events..self.counts.events,
                     successors: self.block_successors..self.counts.successors,
+                    terminal_failure_start: self.block_failure_start,
                 },
             )?;
         }
         self.block_events = self.counts.events;
         self.block_successors = self.counts.successors;
+        self.block_failure_start = None;
         Ok(())
     }
 

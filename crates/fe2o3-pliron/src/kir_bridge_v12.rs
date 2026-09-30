@@ -13,157 +13,26 @@ pub const KIR_PLIRON_BRIDGE_V12_IDENTITY_DOMAIN_V1: &[u8] =
 mod native_profile_v1;
 pub(crate) use native_profile_v1::{NativeBridgeWitnessV1, import_native_neutral_v1};
 
-#[derive(Clone, Copy)]
-enum KirBridgeTypeProfileV12 {
-    Legacy,
-    V12,
-}
+#[path = "kir_bridge_canonical_ranked_v1.rs"]
+pub(crate) mod canonical_ranked_v1;
 
-impl KirBridgeTypeProfileV12 {
-    fn preflight_type(self, ty: &Type) -> Result<(), KirBridgeErrorV1> {
-        match self {
-            Self::Legacy => preflight_type(ty),
-            Self::V12 => match ty {
-                Type::Execution(_) | Type::StorageObject(_) => {
-                    Err(KirBridgeErrorV1::UnsupportedType)
-                }
-                Type::Vector(vector) => vector
-                    .validate()
-                    .map_err(|_| KirBridgeErrorV1::UnsupportedType),
-                Type::Pointer(pointer) => self.preflight_type(&pointer.pointee),
-                Type::Slice(slice) => self.preflight_type(&slice.element),
-                Type::Unit | Type::Scalar(_) => Ok(()),
-            },
-        }
-    }
+include!("kir_bridge_type_profile_v1.rs");
 
-    fn preflight_operation(
-        self,
-        operation: &KirOperation,
-        coordinate: KirBridgeCoordinateV1,
-    ) -> Result<(), KirBridgeErrorV1> {
-        if matches!(self, Self::V12) {
-            match &operation.kind {
-                OperationKind::VerificationContract(_) | OperationKind::VectorLayoutConvert(_) => {
-                    return Ok(());
-                }
-                OperationKind::VectorLoad(load) => {
-                    return load
-                        .access
-                        .vector
-                        .validate()
-                        .map_err(|_| KirBridgeErrorV1::UnsupportedType);
-                }
-                OperationKind::VectorStore(store) => {
-                    return store
-                        .access
-                        .vector
-                        .validate()
-                        .map_err(|_| KirBridgeErrorV1::UnsupportedType);
-                }
-                _ => {}
-            }
-        }
-        preflight_operation(operation, coordinate)
-    }
+#[path = "kir_bridge_storage_v18.rs"]
+mod storage_v18;
 
-    fn to_pliron(self, context: &Context, ty: &Type) -> Result<TypeHandle, KirBridgeErrorV1> {
-        if matches!(self, Self::Legacy) {
-            return type_to_pliron(context, ty);
-        }
-        Ok(match ty {
-            Type::Execution(_) | Type::StorageObject(_) => {
-                return Err(KirBridgeErrorV1::UnsupportedType);
-            }
-            Type::Vector(vector) => {
-                vector
-                    .validate()
-                    .map_err(|_| KirBridgeErrorV1::UnsupportedType)?;
-                PlironFixedVectorTypeV12::try_get(
-                    context,
-                    type_to_pliron(context, &Type::Scalar(vector.element))?,
-                    vector.lanes,
-                    match vector.layout {
-                        fe2o3_kernel_ir::VectorLayoutV12::Contiguous => {
-                            dialect_gpu::vector_v12::VectorLayoutAttrV12::CONTIGUOUS
-                        }
-                        fe2o3_kernel_ir::VectorLayoutV12::Interleaved { factor } => {
-                            dialect_gpu::vector_v12::VectorLayoutAttrV12::interleaved(factor)
-                        }
-                    },
-                )
-                .ok_or(KirBridgeErrorV1::UnsupportedType)?
-                .into()
-            }
-            Type::Pointer(pointer) => PlironPointerType::get(
-                context,
-                self.to_pliron(context, &pointer.pointee)?,
-                address_space_to_pliron(pointer.address_space)?,
-                access_mode_to_pliron(pointer.access),
-            )
-            .into(),
-            Type::Slice(slice) => PlironSliceType::get(
-                context,
-                self.to_pliron(context, &slice.element)?,
-                address_space_to_pliron(slice.address_space)?,
-                access_mode_to_pliron(slice.access),
-            )
-            .into(),
-            Type::Unit | Type::Scalar(_) => type_to_pliron(context, ty)?,
-        })
-    }
-
-    fn decode_type(self, context: &Context, ty: TypeHandle) -> Result<Type, KirBridgeErrorV1> {
-        if matches!(self, Self::Legacy) {
-            return type_from_pliron(context, ty);
-        }
-        self.decode_type_depth(context, ty, 0)
-    }
-
-    fn decode_type_depth(
-        self,
-        context: &Context,
-        ty: TypeHandle,
-        depth: usize,
-    ) -> Result<Type, KirBridgeErrorV1> {
-        if depth > fe2o3_kernel_ir::MAX_TYPE_DEPTH_V1 {
-            return Err(KirBridgeErrorV1::UnsupportedType);
-        }
-        let raw = ty.deref(context);
-        if let Some(vector) = raw.downcast_ref::<PlironFixedVectorTypeV12>() {
-            let Type::Scalar(element) = type_from_pliron(context, vector.element())? else {
-                return Err(KirBridgeErrorV1::UnsupportedType);
-            };
-            let descriptor = fe2o3_kernel_ir::FixedVectorTypeV12::new(
-                element,
-                vector.lanes(),
-                match vector.layout().interleave_factor() {
-                    None => fe2o3_kernel_ir::VectorLayoutV12::Contiguous,
-                    Some(factor) => fe2o3_kernel_ir::VectorLayoutV12::Interleaved { factor },
-                },
-            );
-            descriptor
-                .validate()
-                .map_err(|_| KirBridgeErrorV1::UnsupportedType)?;
-            return Ok(Type::Vector(descriptor));
-        }
-        if let Some(pointer) = raw.downcast_ref::<PlironPointerType>() {
-            return Ok(Type::pointer(
-                self.decode_type_depth(context, pointer.pointee(), depth + 1)?,
-                address_space_from_pliron(pointer.address_space()),
-                access_mode_from_pliron(pointer.access()),
-            ));
-        }
-        if let Some(slice) = raw.downcast_ref::<PlironSliceType>() {
-            return Ok(Type::slice(
-                self.decode_type_depth(context, slice.element(), depth + 1)?,
-                address_space_from_pliron(slice.address_space()),
-                access_mode_from_pliron(slice.access()),
-            ));
-        }
-        type_from_pliron(context, ty)
-    }
-}
+#[path = "kir_bridge_v18.rs"]
+mod bridge_v18;
+include!("kir_bridge_lifecycle_identity_v18.rs");
+include!("kir_bridge_native_private_input_v1.rs");
+pub(crate) use bridge_v18::{BOUNDED_PAYLOAD_CLEANUP_ATTEMPTS_V1, discard_bounded_payload_v1};
+pub(crate) use bridge_v18::{
+    ExecutedV18Parts, optimize_integer_v18_graph, optimize_integer_worklist_v18_graph,
+    optimize_mixed_fixedpoint_v18_graph, optimize_mixed_pure_cse_v18_graph, optimize_v18_graph,
+};
+pub use bridge_v18::{
+    KirBridgeErrorV18, KirBridgeReportV18, KirBridgeStorageV18, KirPlironGraphV18,
+};
 
 /// Transfer reservation for a V12 bridge owner or extracted output and report.
 ///
@@ -202,7 +71,16 @@ impl fmt::Display for KirBridgeErrorV12 {
         }
     }
 }
-impl Error for KirBridgeErrorV12 {}
+impl Error for KirBridgeErrorV12 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Bridge(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Canonical(error) => Some(error),
+            Self::SessionSetup => None,
+        }
+    }
+}
 impl From<KirBridgeErrorV1> for KirBridgeErrorV12 {
     fn from(error: KirBridgeErrorV1) -> Self {
         Self::Bridge(error)
@@ -661,7 +539,13 @@ fn module_metadata_v12(source: &Module) -> Result<Module, KirBridgeErrorV1> {
     if !source.storage_layouts.is_empty() {
         return Err(KirBridgeErrorV1::UnsupportedType);
     }
-    Ok(Module {
+    Ok(module_metadata_without_storage(source))
+}
+
+// The V18 caller copies and authenticates its table separately. This helper
+// copies only the common metadata; it cannot admit or substitute a storage table.
+fn module_metadata_without_storage(source: &Module) -> Module {
+    Module {
         storage_layouts: Vec::new(),
         id: source.id.clone(),
         kernels: source.kernels.clone(),
@@ -681,7 +565,7 @@ fn module_metadata_v12(source: &Module) -> Result<Module, KirBridgeErrorV1> {
                 body: None,
             })
             .collect(),
-    })
+    }
 }
 
 // Exact extraction admits no lost/reassigned source value origin or changed
@@ -839,6 +723,11 @@ impl KirPlironGraphV12<'_> {
                 crate::fixed_policy_v3::FixedPolicy::Checked3
                 | crate::fixed_policy_v3::FixedPolicy::Integer6 => {
                     CaptureV12::new_for_policy(limits, &roster, policy)
+                }
+                crate::fixed_policy_v3::FixedPolicy::IntegerWorklist9
+                | crate::fixed_policy_v3::FixedPolicy::MixedPureCse10
+                | crate::fixed_policy_v3::FixedPolicy::MixedFixedpoint11 => {
+                    Err(crate::KirOptimizationMapErrorV12::Passes)
                 }
             }
         }));
@@ -1040,8 +929,7 @@ impl KirPlironGraphV12<'_> {
         self.optimization_roster_metered_v1::<false, _>(limit, &mut |_| Ok(()))
     }
 
-    // Legacy calls instantiate the no-op meter above. Neutral execution meters
-    // its additional physical roster traversal without changing target reports.
+    // Both typed bridge owners share the same physical roster traversal.
     fn optimization_roster_metered_v1<const METER: bool, F>(
         &self,
         limit: usize,
@@ -1050,135 +938,23 @@ impl KirPlironGraphV12<'_> {
     where
         F: FnMut(usize) -> Result<(), crate::KirOptimizationMapErrorV12> + ?Sized,
     {
-        use crate::kir_optimization_map_v12::{LiveKeyV12 as Key, LiveRosterV12};
-        use crate::{KirOptimizationEndpointV12 as Endpoint, KirOptimizationMapErrorV12 as E};
-        if METER {
-            meter(
-                self.source
-                    .module()
-                    .functions
-                    .len()
-                    .checked_mul(4)
-                    .and_then(|n| n.checked_add(4))
-                    .ok_or(E::Arithmetic)?,
-            )?;
-        }
-        let context = &self.session.context;
-        let root = self.session.operations[&self.root.identity];
-        if !Operation::is_op::<ModuleOp>(root, context) || root.deref(context).num_regions() != 1 {
-            return Err(E::Coverage);
-        }
-        let region = root.deref(context).get_region(0);
-        let raw_region = region.deref(context);
-        let mut root_blocks = raw_region.iter(context);
-        let root_block = root_blocks.next().ok_or(E::Coverage)?;
-        if root_blocks.next().is_some() {
-            return Err(E::Coverage);
-        }
-        let raw_root_block = root_block.deref(context);
-        let live_functions = index_live_functions(
-            raw_root_block.iter(context),
+        optimization_roster_metered_v1::<METER, F>(
+            &self.session.context,
+            self.session.operations[&self.root.identity],
             self.source.module(),
             &self.origins,
+            limit,
+            meter,
         )
-        .map_err(|_| E::Coverage)?;
-        let mut roster = LiveRosterV12::new();
-        roster.try_reserve_exact(limit).map_err(|_| E::Allocation)?;
-        let mut push = |key, endpoint| {
-            if roster.len() == limit {
-                return Err(E::Limit);
-            }
-            roster.push((key, endpoint));
-            Ok(())
-        };
-        let index = |n: usize| u32::try_from(n).map_err(|_| E::Arithmetic);
-        for (function_index, source) in self.source.module().functions.iter().enumerate() {
-            if METER {
-                meter(1)?;
-            }
-            let Some(body) = &source.body else { continue };
-            let function = index(function_index)?;
-            let live_function = live_functions[function_index].ok_or(E::Coverage)?;
-            if !Operation::is_op::<FuncOp>(live_function, context)
-                || live_function.deref(context).num_regions() != 1
-            {
-                return Err(E::Coverage);
-            }
-            let region = live_function.deref(context).get_region(0);
-            let raw_region = region.deref(context);
-            for (block_index, live_block) in raw_region.iter(context).enumerate() {
-                if METER {
-                    meter(1)?;
-                }
-                let block = index(block_index)?;
-                let raw_block = live_block.deref(context);
-                let offset = if block_index == 0 {
-                    body.parameters.len()
-                } else {
-                    0
-                };
-                if raw_block.get_num_arguments() < offset {
-                    return Err(E::Coverage);
-                }
-                for (argument, value) in raw_block.arguments().enumerate() {
-                    if METER {
-                        meter(1)?;
-                    }
-                    let endpoint = if argument < offset {
-                        Endpoint::FunctionArgument {
-                            function,
-                            argument: index(argument)?,
-                        }
-                    } else {
-                        Endpoint::BlockArgument {
-                            function,
-                            block,
-                            argument: index(argument - offset)?,
-                        }
-                    };
-                    push(Key::Value(value), endpoint)?;
-                }
-                let mut operations = raw_block.iter(context).peekable();
-                let mut operation_index = 0;
-                while let Some(op) = operations.next() {
-                    if METER {
-                        meter(1)?;
-                    }
-                    let coordinate = if operations.peek().is_some() {
-                        KirBridgeCoordinateV1::Operation {
-                            function,
-                            block,
-                            operation: index(operation_index)?,
-                        }
-                    } else {
-                        KirBridgeCoordinateV1::Terminator { function, block }
-                    };
-                    if op.deref(context).num_regions() != 0 {
-                        return Err(E::UnsupportedMutation);
-                    }
-                    push(Key::Operation(op), Endpoint::Operation(coordinate))?;
-                    for (result, value) in op.deref(context).results().enumerate() {
-                        if METER {
-                            meter(1)?;
-                        }
-                        push(
-                            Key::Value(value),
-                            Endpoint::Result {
-                                operation: coordinate,
-                                result: index(result)?,
-                            },
-                        )?;
-                    }
-                    operation_index += 1;
-                }
-                if operation_index == 0 {
-                    return Err(E::Coverage);
-                }
-            }
-        }
-        Ok(roster)
     }
 }
 
 include!("kir_bridge_v12_capture_v1.rs");
+include!("kir_bridge_live_roster_v1.rs");
 include!("kir_bridge_commutative_owner_v1.rs");
+
+#[path = "kir_bridge_canonical_trace_v1.rs"]
+pub(crate) mod canonical_trace_v1;
+
+pub(crate) use bridge_v18::NativeCanonicalMixedAdmissionV26;
+pub(crate) use bridge_v18::NativeCanonicalPrivateAdmissionV18;

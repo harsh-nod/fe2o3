@@ -16,6 +16,8 @@ pub fn indexed(input: Slices<'_>, i: usize) -> u32 {
 pub fn metadata(a: &[u32]) -> usize { a.len() }
 pub fn plain(a: &[u32], i: usize) -> u32 { a[i] }
 pub fn constructor(input: Slices<'_>, i: usize) -> u32 { input.0[i] }
+pub struct GenericSlice<'a, T>(&'a [T]);
+pub fn generic_constructor<T: Copy>(input: GenericSlice<'_, T>, i: usize) -> T { input.0[i] }
 "#;
 
 fn derive<'a, 'tcx>(
@@ -241,7 +243,23 @@ impl Callbacks for MetadataCallbacks {
         reject("mismatched pointer pointee", &changed);
         changed.local_decls[first.slice].ty =
             Ty::new_ref(tcx, tcx.lifetimes.re_erased, other_pointee, Mutability::Not);
-        reject("matching but unsupported element type", &changed);
+        assert_eq!(
+            derive(tcx, instance, &changed).pairs,
+            plan.pairs,
+            "matching slice element types do not change metadata semantics"
+        );
+
+        let mut changed = body.clone();
+        let unsized_pointee = Ty::new_slice(tcx, Ty::new_slice(tcx, tcx.types.u32));
+        changed.local_decls[first.temporary].ty =
+            Ty::new_ptr(tcx, unsized_pointee, Mutability::Not);
+        changed.local_decls[first.slice].ty = Ty::new_ref(
+            tcx,
+            tcx.lifetimes.re_erased,
+            unsized_pointee,
+            Mutability::Not,
+        );
+        reject("unsized slice element", &changed);
 
         let mut changed = body.clone();
         let length = assignment_mut(&mut changed, consumer).0.as_local().unwrap();
@@ -322,6 +340,50 @@ impl Callbacks for MetadataCallbacks {
                 .is_empty()
         );
         construction_tests::check(tcx, Instance::mono(tcx, find("constructor")));
+        let generic = find("generic_constructor");
+        for element in [
+            tcx.types.bool,
+            tcx.types.u8,
+            tcx.types.u16,
+            tcx.types.u32,
+            tcx.types.u64,
+            tcx.types.usize,
+            tcx.types.i8,
+            tcx.types.i16,
+            tcx.types.i32,
+            tcx.types.i64,
+            tcx.types.isize,
+            tcx.types.f32,
+            tcx.types.f64,
+            tcx.types.unit,
+            Ty::new_tup(tcx, &[tcx.types.u64, tcx.types.bool]),
+        ] {
+            let instance = Instance::new_raw(generic, tcx.mk_args(&[element.into()]));
+            let body = tcx.instance_mir(instance.def);
+            assert_eq!(
+                derive(tcx, instance, body).pairs.len(),
+                1,
+                "element {element}"
+            );
+            let mut work = 0;
+            SliceMetadataPlanV1::derive(tcx, instance, body, |amount| {
+                work += amount;
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+            for limit in [0, work - 1, work] {
+                let mut spent = 0;
+                let result = SliceMetadataPlanV1::derive(tcx, instance, body, |amount| {
+                    spent += amount;
+                    if spent > limit { Err(()) } else { Ok(()) }
+                });
+                assert_eq!(result.is_ok(), limit == work, "element {element}");
+                if limit < work {
+                    assert!(matches!(result, Err(SliceMetadataErrorV1::Resource(()))));
+                }
+            }
+            construction_tests::check(tcx, instance);
+        }
         self.completed = true;
         Compilation::Stop
     }

@@ -47,6 +47,44 @@ fn conditional(contract: u8, premise: u8) -> Gfx942RuntimeInvocationBindingV1 {
     }
 }
 
+#[test]
+fn mixed_family_is_not_interchangeable_with_single_output_or_ordinary_authority() {
+    let mixed = |contract, premise| Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 {
+        contract_identity: [contract; 32],
+        premise_identity: [premise; 32],
+    };
+    for (retained, prepared) in [
+        (Gfx942RuntimeInvocationBindingV1::OrdinaryV1, mixed(3, 4)),
+        (mixed(3, 4), Gfx942RuntimeInvocationBindingV1::OrdinaryV1),
+        (conditional(3, 4), mixed(3, 4)),
+        (mixed(3, 4), conditional(3, 4)),
+        (mixed(3, 4), mixed(4, 3)),
+    ] {
+        let authority = BindingComparisonFixture {
+            binding: retained,
+            callbacks: Cell::new(0),
+            stale: true,
+        };
+        assert!(matches!(
+            check(&authority, prepared),
+            Err(Gfx942AuthorizedRuntimeExecutionErrorV1::InvocationFamilyMismatch)
+        ));
+        assert_eq!(authority.callbacks.get(), 0);
+    }
+    let authority = BindingComparisonFixture {
+        binding: mixed(3, 4),
+        callbacks: Cell::new(0),
+        stale: true,
+    };
+    assert!(matches!(
+        check(&authority, mixed(3, 4)),
+        Err(
+            Gfx942AuthorizedRuntimeExecutionErrorV1::CurrentnessBeforeDispatch("stale publication")
+        )
+    ));
+    assert_eq!(authority.callbacks.get(), 1);
+}
+
 fn check(
     authority: &BindingComparisonFixture,
     prepared: Gfx942RuntimeInvocationBindingV1,

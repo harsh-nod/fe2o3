@@ -5,6 +5,7 @@
     allow(dead_code, reason = "Scoped source admission remains gated")
 )]
 mod source_storage_v29 {
+    use super::production_call_instances_v1::ProductionCallInstancePlanV1;
     use super::*;
     use fe2o3_kernel_ir::{
         FixedVectorTypeV12, StorageFieldV1, StorageLayoutIdV1, StorageLayoutKindV1,
@@ -35,6 +36,7 @@ mod source_storage_v29 {
         persistent: Cell<usize>,
         schema_allocation: Cell<bool>,
         failure: SourceStorageFailureCellV29,
+        root: Cell<Option<SourceStorageRootCustodyV29>>,
     }
 
     impl Lease {
@@ -47,6 +49,7 @@ mod source_storage_v29 {
                 persistent: Cell::new(0),
                 schema_allocation: Cell::new(false),
                 failure: SourceStorageFailureCellV29::new(),
+                root: Cell::new(None),
             }
         }
 
@@ -58,9 +61,12 @@ mod source_storage_v29 {
 
         fn custody(&self, budget: &Budget<'_>) -> Result<(), Error> {
             let expected = self.floor.checked_add(self.owned.get());
+            let root = self.root.get().map(|root| root.required(self.owned.get()));
             if self.ledger != budget.work_ledger_identity_v1()
                 || self.slot != budget as *const Budget<'_> as usize
                 || expected.is_none_or(|floor| budget.storage() < floor)
+                || root
+                    .is_some_and(|required| required.is_none_or(|floor| budget.storage() < floor))
             {
                 let error = Error::from(ArgumentResourceV1::Accounting);
                 self.record(&error);
@@ -599,8 +605,20 @@ mod source_storage_v29 {
             }))
         }
 
+        #[cfg(test)]
+        pub(super) fn mutate_row_for_test_v29(
+            &self,
+            row: StorageLayoutIdV1,
+            mutate: impl FnOnce(&mut StorageLayoutV1),
+        ) {
+            mutate(&mut self.physical.borrow_mut().rows[row.0 as usize]);
+        }
+
         pub(super) fn release(self, budget: &mut Budget<'_>) -> Result<(), Error> {
             self.lease.custody(budget)?;
+            if self.lease.root.get().is_some() {
+                return Err(ArgumentResourceV1::Accounting.into());
+            }
             let owned = self.lease.owned.get();
             let Self {
                 owner: _,
@@ -622,9 +640,14 @@ mod source_storage_v29 {
     include!("production_source_storage_original_graph_v29.rs");
     include!("production_source_storage_original_closure_v29.rs");
     include!("production_source_storage_table_custody_v29.rs");
+    include!("production_source_storage_root_custody_v29.rs");
+    include!("production_source_storage_root_arena_v29.rs");
     include!("production_source_storage_rows_transfer_v29.rs");
     include!("production_source_storage_rows_v29.rs");
     include!("production_source_storage_enum_v29.rs");
+    include!("production_source_storage_state_v29.rs");
+    include!("production_source_storage_selectors_v29.rs");
+    include!("production_source_storage_origins_v29.rs");
 
     #[cfg(test)]
     mod limits_tests {
@@ -640,5 +663,60 @@ mod source_storage_v29 {
     mod rows_transfer_tests {
         use super::*;
         include!("production_source_storage_rows_transfer_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod state_tests {
+        use super::*;
+        include!("production_source_storage_state_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod origin_tests {
+        use super::*;
+        include!("production_source_storage_origins_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod resource_tests {
+        use super::*;
+        include!("production_source_storage_resources_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod logical_resource_tests {
+        use super::*;
+        include!("production_source_storage_logical_resources_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod root_custody_tests {
+        use super::*;
+        include!("production_source_storage_root_custody_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod root_arena_tests {
+        use super::*;
+        include!("production_source_storage_root_arena_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod snapshot_index_tests {
+        use super::*;
+        include!("production_source_storage_snapshot_index_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod selector_tests {
+        use super::*;
+        include!("production_source_storage_selectors_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod selector_resource_tests {
+        use super::*;
+        include!("production_source_storage_selector_resources_v29_tests.rs");
+    }
+    #[cfg(test)]
+    mod representation_tests {
+        use super::*;
+        include!("production_source_storage_representation_v29_tests.rs");
+    }
+    #[cfg(fe2o3_source_storage_root_custody_ui)]
+    mod root_custody_ui {
+        use super::*;
+        include!("production_source_storage_root_custody_v29_ui.rs");
     }
 }

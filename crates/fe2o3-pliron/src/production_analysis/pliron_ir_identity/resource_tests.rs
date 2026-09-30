@@ -98,6 +98,49 @@ mod resource_tests {
     }
 
     #[test]
+    fn v18_storage_identity_capture_accounts_for_leaf_nodes_and_exact_resource_limits() {
+        use dialect_gpu::storage_types_v18::{
+            StorageObjectTypeV18, StorageOrdinalAttrV18, StorageTableKeyAttrV18,
+        };
+        for width in [1, 17, 129] {
+            let mut context = Context::new();
+            register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
+            dialect_gpu::register_dialect(&mut context).unwrap();
+            let object = StorageObjectTypeV18::get(
+                &context,
+                StorageTableKeyAttrV18::new([u8::MAX; 32], u64::MAX),
+                StorageOrdinalAttrV18(u32::MAX),
+            )
+            .into();
+            let pointer = dialect_gpu::optimization_v1::PointerType::get(
+                &context,
+                object,
+                dialect_gpu::AddressSpaceAttr::Private,
+                dialect_gpu::optimization_v1::AccessModeAttr::ReadWrite,
+            )
+            .into();
+            let signature = FunctionType::get(&context, vec![pointer; width], vec![]);
+            let function = FuncOp::new(
+                &mut context,
+                "v18_identity_resource".try_into().unwrap(),
+                signature,
+            );
+            ReturnOp::new(&mut context)
+                .get_operation()
+                .insert_at_back(function.get_entry_block(&context), &context);
+            let census = prescan(&context, &function).unwrap();
+            // Signature attribute and explicit signature query each contain
+            // one root plus pointer/leaf pairs; entry arguments add one more
+            // pair apiece. The fixed-field table key is not a type node.
+            assert_eq!(census.type_nodes, 2 + 6 * width);
+            assert_eq!(census.block_arguments, width);
+            assert_eq!(census.values, width);
+            assert_eq!(census.operands, 0);
+            assert_real_capture_exact_and_one_under_v1(&context, &function);
+        }
+    }
+
+    #[test]
     fn capture_bound_has_an_independent_exact_sum_and_one_under_rejects() {
         let census = ProductionAnalysisInputCensusV1 {
             blocks: 2,

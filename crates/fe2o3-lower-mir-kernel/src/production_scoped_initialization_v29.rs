@@ -49,7 +49,7 @@ fn capture_scoped_initialization_v29(
     subject: ScopedInitializationSubjectV29,
     function: &SemanticFunctionDeclV1,
     ssa: &ProductionSemanticSsaFunctionPlanV1,
-    slots: &BTreeMap<u32, SemanticRetainedLocalSlotV1>,
+    slots: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotV1>,
     entries: &BTreeMap<u32, BTreeSet<u32>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<ScopedRetainedInitializationV29, ProductionSemanticKirErrorV1> {
@@ -59,9 +59,24 @@ fn capture_scoped_initialization_v29(
     scoped_slot_attempt_v29(budget, |budget| {
         let floor = budget.storage();
         let rpo = ssa.plan().reverse_postorder();
+        budget.charge_work(argument_product_v1(slots.len(), 2)?)?;
+        let mut has_scalar = false;
+        for (identity, slot) in slots {
+            match (identity, &slot.storage) {
+                (
+                    ScopedAllocationIdentityV29::LegacyLocal(_),
+                    SemanticRetainedStorageV29::ScalarArray { .. },
+                ) => has_scalar = true,
+                (
+                    ScopedAllocationIdentityV29::OriginalObject { .. },
+                    SemanticRetainedStorageV29::Object { .. },
+                ) => {}
+                _ => return Err(scoped_initialization_error_v29()),
+            }
+        }
         budget.charge_work(argument_sum_v1(&[entries.len(), 3])?)?;
         if rpo.first().map(|block| block.get()) != Some(function.entry().index())
-            || if slots.is_empty() {
+            || if !has_scalar {
                 !entries.is_empty()
             } else {
                 entries.len() != rpo.len()
@@ -77,15 +92,16 @@ fn capture_scoped_initialization_v29(
         for block in rpo {
             budget.charge_work(scoped_initialization_search_work_v29(entries.len()))?;
             let start = initialized_locals.len();
-            if !slots.is_empty() {
+            if has_scalar {
                 let locals = entries
                     .get(&block.get())
                     .ok_or_else(scoped_initialization_error_v29)?;
                 for &local in locals {
                     budget.charge_work(scoped_initialization_search_work_v29(slots.len()))?;
-                    if !slots.contains_key(&local) {
-                        return Err(scoped_initialization_error_v29());
-                    }
+                    let slot = slots
+                        .get(&ScopedAllocationIdentityV29::LegacyLocal(local))
+                        .ok_or_else(scoped_initialization_error_v29)?;
+                    slot.storage.scalar_array()?;
                     initialized_locals.push(local);
                 }
             }
@@ -144,7 +160,7 @@ impl ScopedRetainedInitializationV29 {
         budget.charge_work(origins.len())?;
         if origins
             .windows(2)
-            .any(|pair| pair[0].local >= pair[1].local)
+            .any(|pair| pair[0].identity >= pair[1].identity)
         {
             return Err(scoped_initialization_error_v29());
         }
@@ -174,11 +190,15 @@ impl ScopedRetainedInitializationV29 {
             let mut previous = None;
             for &local in locals {
                 budget.charge_work(scoped_initialization_search_work_v29(origins.len()))?;
-                if previous.is_some_and(|prior| prior >= local)
-                    || origins
-                        .binary_search_by_key(&local, |origin| origin.local)
-                        .is_err()
-                {
+                let origin = origins
+                    .binary_search_by_key(
+                        &ScopedAllocationIdentityV29::LegacyLocal(local),
+                        |origin| origin.identity,
+                    )
+                    .ok()
+                    .and_then(|index| origins.get(index))
+                    .ok_or_else(scoped_initialization_error_v29)?;
+                if previous.is_some_and(|prior| prior >= local) || origin.legacy_local()? != local {
                     return Err(scoped_initialization_error_v29());
                 }
                 previous = Some(local);

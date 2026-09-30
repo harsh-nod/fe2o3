@@ -294,7 +294,10 @@ pub fn analyze_control_flow_with_limits(
     analyze_control_flow_shared_v1(
         function,
         limits,
-        &mut ControlFlowResourcesV1 { budget: None },
+        &mut ControlFlowResourcesV1 {
+            budget: None,
+            storage: ControlFlowStorageV2::LegacyRows,
+        },
     )
     .map_err(|error| match error {
         MeteredControlFlowErrorV1::ControlFlow(error) => error,
@@ -305,12 +308,17 @@ pub fn analyze_control_flow_with_limits(
 }
 
 include!("control_flow_resources_v1.rs");
+include!("control_flow_bytes_v2.rs");
 include!("control_flow_build_v1.rs");
 include!("control_flow_analysis_v1.rs");
 
 #[path = "canonical_control_flow_scope_v1.rs"]
 mod canonical_scope_v1;
 pub use canonical_scope_v1::*;
+
+#[path = "function_control_flow_scope_v1.rs"]
+mod function_scope_v1;
+pub use function_scope_v1::*;
 
 fn for_each_terminator_edge<E>(
     terminator: &Terminator,
@@ -511,6 +519,7 @@ mod tests {
     use super::*;
 
     include!("control_flow_metered_tests.rs");
+    include!("control_flow_bytes_v2_tests.rs");
     include!("control_flow_entry_dominators_01_tests.rs");
 
     #[test]

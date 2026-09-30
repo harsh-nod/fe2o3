@@ -115,6 +115,89 @@ mod resource_upper_bound_tests {
     }
 
     #[test]
+    fn worklist_query_envelope_admits_large_cfg_without_raising_hard_caps() {
+        // A general structural envelope, not a certificate or a particular
+        // source kernel. Maximal local arity may equal the global inventory.
+        let census = ProductionAnalysisInputCensusV1 {
+            blocks: 512,
+            successors: 1_024,
+            operations: 2_048,
+            operands: 4_096,
+            results: 2_048,
+            block_arguments: 2_048,
+            attributes: 2_048,
+            ..Default::default()
+        };
+        // Independent arithmetic: structural=15,873, charged=30,209,
+        // dominators=206,159,216,640, loops=6,039,797,760,
+        // Q=1,024*1,026; payload work=73,165,455,360;
+        // entry work=70,506,300,620,800;
+        // scalar sites=1,084,257,280, each costing 131,624.
+        const WORK: usize = 213_505_945_406_981;
+        let entry_fields = (std::mem::size_of::<Option<pliron::value::Value>>()
+            + std::mem::size_of::<Option<usize>>()
+            + std::mem::size_of::<pliron::value::Value>()
+            + 2 * std::mem::size_of::<pliron::r#type::TypeHandle>())
+        .div_ceil(std::mem::size_of::<usize>());
+        let scratch = 192 + 128_usize.div_ceil(usize::BITS as usize);
+        let expected = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+            ProductionAnalysisResourcePhaseV1::Progress,
+            WORK,
+            1_729_024,
+            345_609 + entry_fields + scratch,
+        )
+        .unwrap();
+        let hard = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
+        assert_eq!(
+            preflight_scoped_progress_resource_upper_bound_v1(census, hard),
+            Ok(expected)
+        );
+        assert_eq!(
+            preflight_scoped_progress_resource_upper_bound_v1(
+                census,
+                ProductionAnalysisResourceLimitsV1::new(WORK, expected.peak_storage_upper_bound()),
+            ),
+            Ok(expected)
+        );
+        for (work, storage, resource) in [
+            (
+                WORK - 1,
+                expected.peak_storage_upper_bound(),
+                "work upper bound",
+            ),
+            (
+                WORK,
+                expected.peak_storage_upper_bound() - 1,
+                "peak storage upper bound",
+            ),
+        ] {
+            assert_eq!(
+                preflight_scoped_progress_resource_upper_bound_v1(
+                    census,
+                    ProductionAnalysisResourceLimitsV1::new(work, storage),
+                ),
+                Err(progress_resource_error_v1(resource))
+            );
+        }
+        // Old repeated-sweep Q alone generated this scalar cost; the
+        // unchanged hard ceiling refuses it even without other phases.
+        let repeated_queries = 1_024_usize * (2 + 512 * 1_024);
+        let repeated_scalar =
+            (8 * (512 + 1_024) + 1_024 + (8 + 1_024) * repeated_queries) * 131_624;
+        let repeated = ProductionAnalysisResourceUpperBoundV1::checked_phase(
+            ProductionAnalysisResourcePhaseV1::Progress,
+            repeated_scalar,
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            hard.require(ProductionAnalysisResourcePhaseV1::Progress, repeated),
+            Err(progress_resource_error_v1("work upper bound"))
+        );
+    }
+
+    #[test]
     fn late_same_block_use_has_an_exact_precharged_verifier_boundary() {
         const CONSTANTS: usize = 64;
         const OPERATIONS: usize = CONSTANTS + 2;
@@ -177,10 +260,11 @@ mod resource_upper_bound_tests {
         // Preflight conservatively admits one possible region per operation
         // plus the function region: structural=268, verifier scan=132,
         // charged=412, dominators=2, and loop analysis=69.
-        const EXACT_WORK: usize = 1_555;
+        // Native normalization: 8 sites * (552 + 32*65 UID work).
+        const EXACT_WORK: usize = 1_555 + 8 * (552 + 32 * 65);
         // One 1,040-item possible diagnostic, one retained block, and the
         // explicitly separated inventory/verifier/CFG temporary owners.
-        const EXACT_PEAK_STORAGE: usize = 1_862;
+        const EXACT_PEAK_STORAGE: usize = 1_862 + 192 + 128_usize.div_ceil(usize::BITS as usize);
         let exact = preflight_progress_resource_upper_bound_v1(
             census,
             ProductionAnalysisResourceLimitsV1::new(EXACT_WORK, EXACT_PEAK_STORAGE),

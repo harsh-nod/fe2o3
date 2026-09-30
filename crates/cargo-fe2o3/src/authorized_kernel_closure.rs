@@ -211,9 +211,10 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "18abd61218886753068c38294931388e53e90f17b85cd8660b83ec93280bc824",
 )];
 // The complete workspace tree includes nested fixture lockfiles and the
-// reviewed nullary typed-kernel source and fixture changes in c65aebe0d.
+// reviewed nullary typed-kernel changes in c65aebe0d and the standalone fixture
+// lock reconciliation in e70740b18 (fe2o3-kernel-descriptor dependency).
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "7486446880845fec8c9d9db54c0fb4239b4561357414c7c1d10d6b92a10092a5";
+    "337a78a6b1515c28ade525a30cb5b069d77d13436b767d3299822634df6221d4";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
@@ -1558,6 +1559,7 @@ mod tests {
 
         for substituted_digest in [
             [0_u8; 32],
+            decode_digest("7486446880845fec8c9d9db54c0fb4239b4561357414c7c1d10d6b92a10092a5"),
             decode_digest("65aa1e5e26c40735f10562a847d46dcff5835cb43ad9355002d8a83c93eb38e2"),
             decode_digest("52bc00864c6a96e00ce68a40af13402ce492bc2e99127c74ab062ccae80fbbfa"),
             external_macro_digest,
@@ -1677,6 +1679,24 @@ mod tests {
         .unwrap();
         let lock_drift = canonical_tree_digest(directory.path(), None).unwrap();
         assert_ne!(lock_drift, source_drift);
+        let pinned_before_lock = hex(&source_drift);
+        validate_expected_tree(
+            &source_drift,
+            &pinned_before_lock,
+            directory.path(),
+            "fixture",
+        )
+        .unwrap();
+        assert!(
+            validate_expected_tree(
+                &lock_drift,
+                &pinned_before_lock,
+                directory.path(),
+                "fixture",
+            )
+            .unwrap_err()
+            .contains("reviewed fixture closure content changed")
+        );
     }
 
     #[test]

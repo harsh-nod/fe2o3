@@ -44,6 +44,7 @@ fn with_prepared_ranked_root_recipe_v1<'s, T, F: ProjectedAssertionFactsV1>(
         singletons,
         borrows,
         None,
+        None,
         induction_scope,
         continue_with_recipe,
     )
@@ -61,6 +62,7 @@ fn with_prepared_ranked_root_recipe_with_shared_reads_v1<'s, T, F: ProjectedAsse
     singletons: &[u8],
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
+    scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
     induction_scope: &mut multi_entry_induction_v1::Scope,
     continue_with_recipe: impl FnOnce(
         PreparedRankedRootRecipeV1<'s>,
@@ -141,6 +143,7 @@ fn with_prepared_ranked_root_recipe_with_shared_reads_v1<'s, T, F: ProjectedAsse
                 &mut entry_operations,
                 &mut next_value,
                 &mut discarded_ir,
+                scalar_ssa,
                 Some(&mut multi_entry_induction_v1::Context {
                     scope: induction_scope,
                     facts: scope.facts(),

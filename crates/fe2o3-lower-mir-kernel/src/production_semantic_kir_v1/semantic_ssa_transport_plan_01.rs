@@ -1,3 +1,33 @@
+include!("semantic_ssa_prepared_input_transport_v1.rs");
+
+fn original_compiler_carrier_v29(
+    local: SemanticLocalIdV1,
+    compiler_issued_bindings: &BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
+    origins: &mut SemanticCapabilityOriginResolverV1<'_>,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Option<(SemanticTypeIdV1, SemanticPromotedBindingV1)>, ProductionSemanticKirErrorV1> {
+    budget.charge_work(2)?;
+    let ty = origins
+        .function
+        .locals()
+        .get(local.index() as usize)
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+        .ty();
+    charge_execution_cfg_lookup_v29(compiler_issued_bindings.len(), budget)?;
+    let binding = match compiler_issued_bindings.get(&ty).copied() {
+        Some(binding) => Some(binding),
+        None => origins.resolve_with_budget_v29(local, &mut Some(budget))?,
+    };
+    // The ordinary transport resolver also follows transparent borrow aliases
+    // to prepare ABI/SSA components. That is not compiler-carrier provenance:
+    // source references retain their Loan/Address path, and value-alias origins
+    // are already memoized by the original capability resolver above.
+    Ok(binding
+        .filter(|binding| !matches!(binding, SemanticPromotedBindingV1::Ordinary))
+        .map(|binding| (ty, binding)))
+}
+
+#[cfg(test)]
 fn promoted_transport_descriptor_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -7,9 +37,43 @@ fn promoted_transport_descriptor_v1(
     capability_origins: &mut SemanticCapabilityOriginResolverV1<'_>,
     direct_parameters: &BTreeMap<u32, Type>,
 ) -> Result<(SemanticTypeIdV1, SemanticPromotedTransportV1), ProductionSemanticKirErrorV1> {
+    promoted_transport_descriptor_with_inputs_v1(
+        types,
+        function,
+        local,
+        compiler_issued_bindings,
+        shared_promoted,
+        capability_origins,
+        direct_parameters,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn promoted_transport_descriptor_with_inputs_v1<'work>(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    local: u32,
+    compiler_issued_bindings: &BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
+    shared_promoted: &BTreeSet<u32>,
+    capability_origins: &mut SemanticCapabilityOriginResolverV1<'_>,
+    direct_parameters: &BTreeMap<u32, Type>,
+    prepared: Option<&PreparedInputTransportV1<'_, '_>>,
+    mut budget: Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
+) -> Result<(SemanticTypeIdV1, SemanticPromotedTransportV1), ProductionSemanticKirErrorV1> {
     let mut current = local;
+    if let Some(budget) = budget.as_deref_mut() {
+        budget.reserve_storage(std::mem::size_of::<BTreeSet<u32>>())?;
+    }
     let mut visited = BTreeSet::new();
     loop {
+        if let Some(budget) = budget.as_deref_mut() {
+            budget.charge_work(6)?;
+            reserve_execution_cfg_map_entry_v29::<u32, ()>(visited.len(), budget)?;
+            charge_execution_cfg_lookup_v29(compiler_issued_bindings.len(), budget)?;
+            charge_execution_cfg_lookup_v29(direct_parameters.len(), budget)?;
+        }
         capability_origins.charge_work(1)?;
         if !visited.insert(current) || visited.len() > MAX_SSA_VALUE_COMPONENTS_V1 {
             return Err(unsupported(
@@ -29,7 +93,9 @@ fn promoted_transport_descriptor_v1(
                 SemanticPromotedTransportV1::Semantic(binding),
             ));
         }
-        if let Some(binding) = capability_origins.resolve(SemanticLocalIdV1::from_index(current))? {
+        if let Some(binding) = capability_origins
+            .resolve_with_budget_v29(SemanticLocalIdV1::from_index(current), &mut budget)?
+        {
             return Ok((
                 declaration.ty(),
                 SemanticPromotedTransportV1::Semantic(binding),
@@ -43,7 +109,29 @@ fn promoted_transport_descriptor_v1(
                 },
             ));
         }
+        if declaration.role().is_entry_argument()
+            && let Some(prepared) = prepared
+            && let Some(ty) = prepared.ordinary(
+                current,
+                budget
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?
+        {
+            if !std::ptr::eq(prepared.cursor.function, function) || ty != declaration.ty() {
+                return Err(invocation_entry_error_v1());
+            }
+            return Ok((
+                ty,
+                SemanticPromotedTransportV1::Semantic(SemanticPromotedBindingV1::Ordinary),
+            ));
+        }
 
+        if let Some(budget) = budget.as_deref_mut() {
+            charge_execution_cfg_lookup_v29(capability_origins.invalidated_locals.len(), budget)?;
+            charge_execution_cfg_lookup_v29(capability_origins.definitions.len(), budget)?;
+            charge_execution_cfg_lookup_v29(shared_promoted.len(), budget)?;
+        }
         let Some(definition) =
             capability_origins.transparent_definition(SemanticLocalIdV1::from_index(current))
         else {
@@ -129,6 +217,8 @@ impl SemanticControlFlowSsaPlanV1 {
             None,
             None,
             None,
+            None,
+            None,
         )
     }
 
@@ -142,8 +232,10 @@ impl SemanticControlFlowSsaPlanV1 {
         max_analysis_storage: usize,
         mut emission_work: Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
         execution: Option<&ExecutionAvailabilityV29<'_>>,
+        prepared: Option<&PreparedInputTransportV1<'_, '_>>,
         lifecycle: Option<&dyn ExecutionLifecycleConsumerV29>,
         nominal_parameters: Option<&[PlannedParameterLocalBindingV1]>,
+        backing: Option<SourceFunctionBackingViewV29<'_>>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let SemanticSsaTransportInputV1 {
             types,
@@ -151,10 +243,25 @@ impl SemanticControlFlowSsaPlanV1 {
             function,
             semantic_function,
         } = input;
+        let representation = if execution.is_some_and(|cursor| cursor.references.is_some()) {
+            ExecutionCfgRepresentationV29::OriginalSource
+        } else {
+            ExecutionCfgRepresentationV29::LegacyAbi
+        };
         if semantic_ssa.function() != semantic_function
             || semantic_ssa.function_identity() != function.identity()
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        if let Some(prepared) = prepared {
+            prepared.check(
+                execution.ok_or_else(execution_availability_error_v29)?,
+                function,
+                semantic_ssa,
+                emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?;
         }
         let mut compiler_issued_bindings = compiler_issued_ssa_bindings_v1(
             types,
@@ -201,16 +308,88 @@ impl SemanticControlFlowSsaPlanV1 {
             .iter()
             .map(|variable| variable.get())
             .collect::<BTreeSet<_>>();
-        let private_slot_candidates =
-            private_slot_candidate_locals_v1(function, &shared_promoted, &retained_cross_edge);
+        let private_slot_candidates = private_slot_candidate_locals_v1(
+            function,
+            &shared_promoted,
+            &retained_cross_edge,
+            representation,
+        );
         let mut retained_local_slots = BTreeMap::new();
+        if let Some(backing) = backing {
+            let budget = emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            let cursor = execution.ok_or_else(scoped_object_allocation_error_v29)?;
+            backing.check(
+                cursor.references.map(|references| references.plan),
+                Some(cursor.instance),
+                budget,
+            )?;
+            backing.visit_object_allocations(
+                &private_slot_candidates,
+                budget,
+                |identity, slot, budget| {
+                    reserve_execution_cfg_map_entry_v29::<
+                        ScopedAllocationIdentityV29,
+                        SemanticRetainedLocalSlotPlanV1,
+                    >(retained_local_slots.len(), budget)?;
+                    if retained_local_slots.insert(identity, slot).is_some() {
+                        return Err(scoped_object_allocation_error_v29());
+                    }
+                    Ok(())
+                },
+            )?;
+        }
         let mut has_retained_arrays = false;
         let mut unsupported_retained_locals = Vec::new();
         for local in private_slot_candidates {
+            if let Some(budget) = emission_work.as_deref_mut() {
+                charge_execution_cfg_lookup_v29(retained_local_slots.len(), budget)?;
+            }
+            let objects = ScopedAllocationIdentityV29::OriginalObject {
+                local,
+                generation: 0,
+            }..=ScopedAllocationIdentityV29::OriginalObject {
+                local,
+                generation: u32::MAX,
+            };
+            if retained_local_slots.range(objects).next().is_some() {
+                continue;
+            }
+            if let Some(cursor) = execution
+                && let Some(prepared) = prepared
+                && cursor.retained_installed_slot_omission_v1(
+                    local,
+                    prepared,
+                    emission_work
+                        .as_deref_mut()
+                        .ok_or(ArgumentResourceV1::Accounting)?,
+                )?
+            {
+                continue;
+            }
+            if let Some(cursor) = execution
+                && let Some(references) = cursor.references
+                && source_reference_existing_value_local_v29(
+                    references.plan,
+                    cursor.instance,
+                    local,
+                    emission_work
+                        .as_deref_mut()
+                        .ok_or(ArgumentResourceV1::Accounting)?,
+                )?
+            {
+                continue;
+            }
             let declaration = function
                 .locals()
                 .get(local as usize)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let representation = if execution.and_then(|cursor| cursor.references).is_some() {
+                ExecutionCfgRepresentationV29::OriginalSource
+            } else {
+                ExecutionCfgRepresentationV29::LegacyAbi
+            };
             let slot = if matches!(
                 types[declaration.ty().index() as usize].shape(),
                 SemanticTypeShapeV1::Array { .. }
@@ -223,29 +402,52 @@ impl SemanticControlFlowSsaPlanV1 {
                         "retained by-value array arguments require source-effect-bound entry scatter",
                     ));
                 }
-                retained_array_slot_plan_v1(types, declaration.ty(), max_analysis_work).map_err(
-                    |error| match error {
-                        ProductionSemanticKirErrorV1::Unsupported { detail, .. } => {
-                            unsupported(semantic_function.index(), None, None, detail)
-                        }
-                        error => error,
-                    },
-                )?
+                retained_array_slot_plan_with_representation_v29(
+                    types,
+                    declaration.ty(),
+                    max_analysis_work,
+                    representation,
+                )
+                .map_err(|error| match error {
+                    ProductionSemanticKirErrorV1::Unsupported { detail, .. } => {
+                        unsupported(semantic_function.index(), None, None, detail)
+                    }
+                    error => error,
+                })?
             } else if let Some((kernel_type, alignment)) =
-                retained_local_slot_type_v1(types, declaration.ty())
+                retained_local_slot_type_with_representation_v29(
+                    types,
+                    declaration.ty(),
+                    representation,
+                )
             {
                 SemanticRetainedLocalSlotPlanV1 {
                     semantic_type: declaration.ty(),
-                    kernel_type,
-                    alignment,
-                    array: None,
+                    storage: SemanticRetainedStorageV29::ScalarArray {
+                        kernel_type,
+                        alignment,
+                        array: None,
+                    },
                 }
             } else {
                 unsupported_retained_locals.push((local, declaration.ty().index()));
                 continue;
             };
-            has_retained_arrays |= slot.array.is_some();
-            retained_local_slots.insert(local, slot);
+            if let Some(backing) = backing {
+                let budget = emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                if backing.array_schema(local, budget)?.is_some()
+                    && !matches!(
+                        slot.storage,
+                        SemanticRetainedStorageV29::ScalarArray { array: Some(_), .. }
+                    )
+                {
+                    return Err(scoped_object_allocation_error_v29());
+                }
+            }
+            has_retained_arrays |= slot.storage.scalar_array()?.2.is_some();
+            retained_local_slots.insert(ScopedAllocationIdentityV29::LegacyLocal(local), slot);
         }
         if !unsupported_retained_locals.is_empty() {
             const MAX_RETAINED_LOCAL_DIAGNOSTICS_V1: usize = 32;
@@ -298,23 +500,8 @@ impl SemanticControlFlowSsaPlanV1 {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
         }
-        let entry = function.entry().index();
-        if shared
-            .transport_variables(SsaBlockIdV1::new(entry))
-            .is_some_and(|variables| !variables.is_empty())
-        {
-            return Err(unsupported(
-                semantic_function.index(),
-                Some(entry),
-                None,
-                "cyclic entry SSA requires a synthetic Kernel IR preheader",
-            ));
-        }
         let mut transported = BTreeSet::new();
         for block in shared.reverse_postorder() {
-            if block.get() == entry {
-                continue;
-            }
             let variables = shared
                 .transport_variables(*block)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
@@ -325,7 +512,19 @@ impl SemanticControlFlowSsaPlanV1 {
                 transported.insert(variable.get());
             }
         }
-        let mut capability_origins = SemanticCapabilityOriginResolverV1::new(
+        let source_borrows = match (execution, emission_work.as_deref_mut()) {
+            (Some(cursor), Some(budget)) if cursor.references.is_some() => {
+                budget.reserve_storage(std::mem::size_of::<
+                    Option<(
+                        &ExecutionAvailabilityV29<'_>,
+                        &mut dyn SemanticEmissionBudgetV1,
+                    )>,
+                >())?;
+                Some((cursor, budget))
+            }
+            _ => None,
+        };
+        let mut capability_origins = SemanticCapabilityOriginResolverV1::new_with_source_v29(
             types,
             callables,
             function,
@@ -333,19 +532,111 @@ impl SemanticControlFlowSsaPlanV1 {
             &shared_promoted,
             max_analysis_work,
             max_analysis_storage,
+            source_borrows,
         )?;
+        let capability_storage = if let Some(cursor) = execution {
+            let budget = emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            Some(CapabilityOriginStorageV29::new(
+                &mut capability_origins,
+                cursor,
+                budget,
+            )?)
+        } else {
+            None
+        };
+        if let Some(cursor) = execution {
+            let budget = emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            cursor.check_ledger(budget)?;
+            budget.reserve_storage(argument_sum_v1(&[
+                std::mem::size_of::<ExecutionCfgCarriersV29>(),
+                execution_cfg_carrier_index_headers_v29()?,
+            ])?)?;
+        }
+        let mut cfg_carriers = ExecutionCfgCarriersV29::default();
+        if let Some(cursor) = execution {
+            let budget = emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            cfg_carriers.source_owner = Some(std::ptr::from_ref(function).addr());
+            cfg_carriers.instance = Some(cursor.instance);
+            cfg_carriers.ledger = Some(budget.work_ledger_identity_v1());
+            if let Some(references) = cursor.references {
+                references.check(budget)?;
+                cfg_carriers.source_plan = Some(std::ptr::from_ref(references.plan).addr());
+            }
+            // Resolve each tracked original local once, including values that
+            // are defined and used in one block. CFG restoration independently
+            // requires the exact Plain source node in cfg_carriers.at().
+            for local in 0..function.locals().len() {
+                budget.charge_work(2)?;
+                charge_execution_cfg_lookup_v29(shared_promoted.len(), budget)?;
+                let local_index =
+                    u32::try_from(local).map_err(|_| ArgumentResourceV1::Arithmetic)?;
+                if cursor.cfg.nominal_locals[local] != 0 || !shared_promoted.contains(&local_index)
+                {
+                    continue;
+                }
+                let local = local_index;
+                let Some((transport_type, binding)) = original_compiler_carrier_v29(
+                    SemanticLocalIdV1::from_index(local),
+                    &compiler_issued_bindings,
+                    &mut capability_origins,
+                    budget,
+                )?
+                else {
+                    continue;
+                };
+                // A shared borrow of an original scalar witness also checks
+                // its complete SSA holder, although the holder has no pointer.
+                // Other non-reference capabilities retain their existing path.
+                if !cursor.cfg.reference_locals[local as usize]
+                    && !matches!(binding, SemanticPromotedBindingV1::IndexWitness { .. })
+                {
+                    continue;
+                }
+                let representation = if cursor.references.is_some() {
+                    ExecutionCfgRepresentationV29::OriginalSource
+                } else {
+                    ExecutionCfgRepresentationV29::LegacyAbi
+                };
+                let kernel_types = binding.transport_types_with_allocation_v29(
+                    types,
+                    transport_type,
+                    &mut CompilerCarrierAllocationV29::paid_with_representation(
+                        budget,
+                        representation,
+                    )?,
+                )?;
+                cfg_carriers.append(
+                    local,
+                    ExecutionCfgCarrierV29 {
+                        source_type: function.locals()[local as usize].ty(),
+                        transport_type,
+                        binding,
+                        kernel_types: kernel_types.into_boxed_slice(),
+                    },
+                    budget,
+                )?;
+            }
+        }
         let mut promoted = BTreeMap::new();
         for local in transported {
             let declaration = function
                 .locals()
                 .get(local as usize)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-            let nominal =
-                execution.is_some_and(|cursor| cursor.cfg.nominal_locals[local as usize] != 0);
+            let reference =
+                execution.is_some_and(|cursor| cursor.cfg.reference_locals[local as usize]);
+            let nominal = reference
+                || execution.is_some_and(|cursor| cursor.cfg.nominal_locals[local as usize] != 0);
             let (transport_semantic_type, binding) = if nominal {
                 (declaration.ty(), SemanticPromotedTransportV1::Execution)
             } else {
-                promoted_transport_descriptor_v1(
+                promoted_transport_descriptor_with_inputs_v1(
                     types,
                     function,
                     local,
@@ -353,7 +644,14 @@ impl SemanticControlFlowSsaPlanV1 {
                     &shared_promoted,
                     &mut capability_origins,
                     direct_parameters,
+                    prepared,
+                    emission_work.as_deref_mut(),
                 )?
+            };
+            let representation = if execution.is_some_and(|cursor| cursor.references.is_some()) {
+                ExecutionCfgRepresentationV29::OriginalSource
+            } else {
+                ExecutionCfgRepresentationV29::LegacyAbi
             };
             let kernel_types = if nominal {
                 let budget = emission_work
@@ -364,9 +662,27 @@ impl SemanticControlFlowSsaPlanV1 {
                     promoted.len(),
                     budget,
                 )?;
-                execution_cfg_types_v29(types, transport_semantic_type, budget)?
+                if reference {
+                    if let Some(carrier) = cfg_carriers.lookup(local, budget)? {
+                        carrier.types(budget)?
+                    } else {
+                        source_reference_cfg_local_types_v29(execution.unwrap(), local, budget)?
+                    }
+                } else {
+                    execution_cfg_types_with_representation_v29(
+                        types,
+                        transport_semantic_type,
+                        representation,
+                        budget,
+                    )?
+                }
             } else {
-                binding.transport_types(types, transport_semantic_type, direct_parameters)?
+                binding.transport_types_with_representation_v29(
+                    types,
+                    transport_semantic_type,
+                    direct_parameters,
+                    representation,
+                )?
             };
             let ordinary_empty = kernel_types.is_empty()
                 && matches!(
@@ -412,10 +728,20 @@ impl SemanticControlFlowSsaPlanV1 {
                 },
             );
         }
+        if let Some(storage) = capability_storage {
+            storage.finish(
+                capability_origins,
+                emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?;
+        } else {
+            drop(capability_origins);
+        }
         let mut live_in = BTreeMap::new();
         for block in 0..function.blocks().len() as u32 {
             let block_id = SsaBlockIdV1::new(block);
-            let locals = if block == entry || !shared.is_reachable(block_id) {
+            let locals = if !shared.is_reachable(block_id) {
                 Vec::new()
             } else {
                 shared
@@ -494,14 +820,18 @@ impl SemanticControlFlowSsaPlanV1 {
             .iter()
             .map(|block| block.get())
             .collect::<BTreeSet<_>>();
-        let retained_initialized_at_entry = retained_local_initialization_entries_v1(
-            function,
-            &retained_local_slots,
-            &reachable,
-            max_analysis_work,
-            max_analysis_storage,
-        )?;
+        let retained_initialized_at_entry =
+            retained_local_initialization_entries_with_representation_v29(
+                function,
+                &retained_local_slots,
+                &reachable,
+                max_analysis_work,
+                max_analysis_storage,
+                representation,
+            )?;
         Ok(Self {
+            representation,
+            cfg_carriers,
             has_retained_arrays,
             compiler_issued_bindings,
             implicit_entry_locals,
@@ -528,14 +858,14 @@ impl SemanticControlFlowSsaPlanV1 {
         block: u32,
         local: u32,
     ) -> Option<SsaValueV1> {
-        if block == function.entry().index() {
-            return self.entry_definitions.get(&local).copied();
-        }
         if self.live_in(block).contains(&local) {
             return Some(SsaValueV1::BlockArgument {
                 block: SsaBlockIdV1::new(block),
                 variable: fe2o3_mir_model::SsaVariableIdV1::new(local),
             });
+        }
+        if block == function.entry().index() {
+            return self.entry_definitions.get(&local).copied();
         }
         self.block_entry_values.get(&(block, local)).copied()
     }

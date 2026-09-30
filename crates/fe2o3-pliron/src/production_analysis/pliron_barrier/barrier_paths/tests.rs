@@ -139,7 +139,7 @@ fn repeated_switch_slots_and_typed_payloads_reach_the_same_barrier() {
         (128, false, K::LegacyU64, (0..17).collect()),
     ] {
         let count = keys.len() + 1;
-        let (context, function, _) = fixture(width, signed, kind, keys, None, false);
+        let (context, function, switch) = fixture(width, signed, kind, keys.clone(), None, false);
         let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
         let nodes = build_barrier_cfg_v1(&context, &inventory).ok().unwrap();
         assert_eq!(nodes[0].successors, vec![1; count]);
@@ -147,11 +147,41 @@ fn repeated_switch_slots_and_typed_payloads_reach_the_same_barrier() {
             summary(&context, &function),
             BarrierPathSummaryV1::Unique
         ));
-        // The private path algorithm is not whole-pipeline native admission.
+        // Native switch identities now encode these verified edge payloads.
+        // A structural snapshot still grants no whole-pipeline authority.
+        let identity = crate::derive_pliron_ir_structural_identity_v1(&context, &function).unwrap();
+        assert_eq!(identity.block_count(), 2);
+        assert_eq!(identity.operation_count(), 3);
+        assert_eq!(identity.value_count(), 5);
+        assert!(!identity.grants_operational_semantics_or_refinement_authority());
+        assert_eq!(
+            identity,
+            crate::derive_pliron_ir_structural_identity_v1(&context, &function).unwrap()
+        );
+        let (other_context, other_function, _) = fixture(width, signed, kind, keys, None, false);
+        let reconstructed =
+            crate::derive_pliron_ir_structural_identity_v1(&other_context, &other_function)
+                .unwrap();
+        assert!(identity.exactly_matches(&reconstructed));
+
+        // Alter a valid typed payload without changing any successor or barrier.
+        // The identity must notice the value change, not merely count edges.
+        let first_payload = switch.successor_operand_range(&context, 0).unwrap().start;
+        let entry = function.get_entry_block(&context);
+        let replacement = entry.deref(&context).get_argument(2);
+        Operation::replace_operand(switch.get_operation(), &context, first_payload, replacement);
+        verify_operation(function.get_operation(), &context).unwrap();
+        let changed = crate::derive_pliron_ir_structural_identity_v1(&context, &function).unwrap();
+        assert!(!identity.exactly_matches(&changed));
         assert!(matches!(
-            crate::derive_pliron_ir_structural_identity_v1(&context, &function),
-            Err(crate::PlironIrIdentityErrorV1::UnsupportedOperation { .. })
+            summary(&context, &function),
+            BarrierPathSummaryV1::Unique
         ));
+        let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
+        assert_eq!(
+            build_barrier_cfg_v1(&context, &inventory).ok().unwrap()[0].successors,
+            vec![1; count]
+        );
     }
 }
 

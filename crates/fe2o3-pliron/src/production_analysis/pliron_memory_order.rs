@@ -332,6 +332,7 @@ pub enum PlironMemoryOrderIssueV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironMemoryOrderFailureV1 {
+    NativeObligations,
     UnresolvedAddress {
         location: PlironMemoryLocationV1,
     },
@@ -603,6 +604,11 @@ fn analyze_workgroup(
                                 .or_default()
                                 .push(id);
                         }
+                    }
+                    PlironTraceEventV1::NativeSubject { .. }
+                    | PlironTraceEventV1::NativeBarrier { .. }
+                    | PlironTraceEventV1::NativeFence { .. } => {
+                        return Err(PlironMemoryOrderFailureV1::NativeObligations);
                     }
                     PlironTraceEventV1::Barrier { .. }
                     | PlironTraceEventV1::Fence { .. }

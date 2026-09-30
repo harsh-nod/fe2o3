@@ -1,7 +1,7 @@
 #[derive(Clone, Copy)]
 struct IncomingEdgeV1 {
     source: usize,
-    initial: Option<u64>,
+    ordinal: usize,
 }
 
 struct RootGraphV1 {
@@ -27,13 +27,17 @@ fn build_root_graph(
             )));
         };
         let operation = Operation::get_op_dyn(terminator, context);
-        let initial = operation
-            .downcast_ref::<BranchArgsOp>()
-            .and_then(|branch| branch.arguments(context).first().copied())
-            .and_then(|value| index_constant(context, value));
-        let is_unconditional = operation.downcast_ref::<BranchOp>().is_some()
-            || operation.downcast_ref::<BranchArgsOp>().is_some();
-        for successor in operation.get_operation().deref(context).successors() {
+        let control = ControlViewV1::observe(context, terminator).map_err(|_| {
+            structural_rejection(format!(
+                "block {source} has unsupported or malformed control edges"
+            ))
+        })?;
+        let is_unconditional = progress_unconditional_v1(context, &operation);
+        for ordinal in 0..control.successor_count() {
+            let edge = control.edge(ordinal).map_err(|_| {
+                structural_rejection(format!("block {source} has malformed successor arguments"))
+            })?;
+            let successor = edge.target();
             let Some(target) = block_indices.get(&successor).copied() else {
                 return Err(structural_rejection(format!(
                     "block {source} has a successor outside the function after structural verification"
@@ -41,7 +45,7 @@ fn build_root_graph(
             };
             edges[source].push(target);
             predecessors[target].push(source);
-            incoming[target].push(IncomingEdgeV1 { source, initial });
+            incoming[target].push(IncomingEdgeV1 { source, ordinal });
             if is_unconditional {
                 unconditional_edges[source].push(target);
             }
@@ -85,23 +89,26 @@ fn canonical_positive_induction_loop(
             continue;
         };
         let terminator = Operation::get_op_dyn(terminator, context);
-        let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() else {
+        let Some(guard) = progress_header_view_v1(context, &terminator, operation_blocks) else {
             continue;
         };
         if header_block.get_num_arguments() != 1
-            || branch.lhs(context) != header_block.get_argument(0)
-            || branch.true_arguments(context).as_slice() != [branch.lhs(context)]
+            || guard.induction != header_block.get_argument(0)
+            || successor_arguments(context, &terminator, guard.body_ordinal).as_deref()
+                != Some(&[guard.induction])
         {
             continue;
         }
-        let successors = branch
+        let successors = terminator
             .get_operation()
             .deref(context)
             .successors()
             .collect::<Vec<_>>();
-        let [body, exit] = successors.as_slice() else {
+        if successors.len() != 2 {
             continue;
-        };
+        }
+        let body = &successors[guard.body_ordinal];
+        let exit = &successors[guard.exit_ordinal];
         let (Some(body_index), Some(exit_index)) = (
             block_indices.get(body).copied(),
             block_indices.get(exit).copied(),
@@ -126,7 +133,8 @@ fn canonical_positive_induction_loop(
                 "the loop header does not have exactly one external entry and one internal recurrence",
             );
         }
-        if external_header_predecessors.len() > 1
+        if (external_header_predecessors.len() > 1
+            || guard.domain != NativeProgressDomainV1::LegacyIndex)
             && progress_multi_entry_initial_v1(
                 context,
                 blocks,
@@ -144,14 +152,31 @@ fn canonical_positive_induction_loop(
                 "the loop entries do not share one outside dominating typed induction seed",
             );
         }
-        if branch
-            .rhs(context)
-            .defining_op()
-            .and_then(|definition| operation_blocks.get(&definition))
-            .is_some_and(|block| component_members.contains(block))
+        if !progress_external_bound_v1(
+            context,
+            guard.bound,
+            guard.domain,
+            block_indices,
+            operation_blocks,
+            dominators,
+            component_members,
+            *header_index,
+        ) || (guard.domain != NativeProgressDomainV1::LegacyIndex
+            && external_header_predecessors.iter().any(|entry| {
+                !progress_external_bound_v1(
+                    context,
+                    guard.bound,
+                    guard.domain,
+                    block_indices,
+                    operation_blocks,
+                    dominators,
+                    component_members,
+                    *entry,
+                )
+            }))
         {
             return CanonicalLoopResultV1::Incomplete(
-                "the loop bound depends on a value defined inside the cycle",
+                "the loop bound is not an outside dominating invariant value",
             );
         }
         let latch_index = internal_header_predecessors[0];
@@ -237,12 +262,54 @@ fn canonical_positive_induction_loop(
                 "the unique loop latch does not carry an authenticated induction update",
             );
         };
+        if guard.domain != NativeProgressDomainV1::LegacyIndex {
+            let Some(step) =
+                progress_induction_offset_v1(context, next, latch_induction, guard.domain)
+            else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "the native recurrence needs an exact nonnegative constant Add value fitting the current u64 certificate step",
+                );
+            };
+            if step == 0 {
+                return native_zero_step_result_v1(
+                    context,
+                    blocks,
+                    block_indices,
+                    component_members,
+                    &incoming[*header_index],
+                    *header_index,
+                    latch_index,
+                    0,
+                    guard,
+                    "the native induction step is zero",
+                );
+            }
+            if guard.domain == NativeProgressDomainV1::IndexUnknown && step > 1 {
+                return CanonicalLoopResultV1::Incomplete(
+                    "a native Index non-unit step needs retained source/target width custody",
+                );
+            }
+            if !progress_step_has_no_wrap_v1(context, guard, step) {
+                return CanonicalLoopResultV1::Incomplete(
+                    "the native induction update lacks an exact finite-width no-wrap bound",
+                );
+            }
+            return CanonicalLoopResultV1::Proved(PlironProgressCertificateV1 {
+                header: *header_index,
+                body: body_index,
+                exit: exit_index,
+                induction: guard.induction.id(context).into(),
+                bound: guard.bound.id(context).into(),
+                step,
+            });
+        }
         if next == latch_induction {
             return zero_step_result(
                 context,
+                blocks,
                 component_members,
                 &incoming[*header_index],
-                branch.rhs(context),
+                guard.bound,
                 "the induction variable is unchanged on the backedge",
             );
         }
@@ -273,9 +340,10 @@ fn canonical_positive_induction_loop(
             Some(0) => {
                 return zero_step_result(
                     context,
+                    blocks,
                     component_members,
                     &incoming[*header_index],
-                    branch.rhs(context),
+                    guard.bound,
                     "the induction step is zero",
                 );
             }
@@ -283,8 +351,8 @@ fn canonical_positive_induction_loop(
             None => return CanonicalLoopResultV1::Incomplete("the induction step is malformed"),
         };
         if step > 1 {
-            let upper_bound = index_constant(context, branch.rhs(context))
-                .or_else(|| unsigned_cast_upper_bound(context, branch.rhs(context)));
+            let upper_bound = index_constant(context, guard.bound)
+                .or_else(|| unsigned_cast_upper_bound(context, guard.bound));
             let Some(bound) = upper_bound else {
                 return CanonicalLoopResultV1::Incomplete(
                     "a symbolic bound with a non-unit step needs a no-wrap range proof",
@@ -300,8 +368,8 @@ fn canonical_positive_induction_loop(
             header: *header_index,
             body: body_index,
             exit: exit_index,
-            induction: branch.lhs(context).id(context).into(),
-            bound: branch.rhs(context).id(context).into(),
+            induction: guard.induction.id(context).into(),
+            bound: guard.bound.id(context).into(),
             step,
         });
     }
@@ -371,55 +439,17 @@ fn successor_arguments(
     terminator: &OpBox,
     ordinal: usize,
 ) -> Option<Vec<pliron::value::Value>> {
-    if terminator
-        .downcast_ref::<dialect_gpu::optimization_v1::CondBranchOp>()
-        .is_some()
-    {
-        let raw = terminator.get_operation().deref(context);
-        if ordinal >= 2 || raw.get_num_successors() != 2 {
-            return None;
-        }
-        let first = raw.get_successor(0).deref(context).get_num_arguments();
-        let second = raw.get_successor(1).deref(context).get_num_arguments();
-        if raw.get_num_operands() != 1 + first + second {
-            return None;
-        }
-        let (start, count) = if ordinal == 0 {
-            (1, first)
-        } else {
-            (1 + first, second)
-        };
-        return Some(
-            (start..start + count)
-                .map(|index| raw.get_operand(index))
-                .collect(),
-        );
-    }
-    if let Some(branch) = terminator.downcast_ref::<BranchArgsOp>() {
-        return (ordinal == 0).then(|| branch.arguments(context));
-    }
-    if let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() {
-        return match ordinal {
-            0 => Some(branch.true_arguments(context)),
-            1 => Some(branch.false_arguments(context)),
-            _ => None,
-        };
-    }
-    if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchArgsOp>() {
-        return match ordinal {
-            0 => Some(branch.true_arguments(context)),
-            1 => Some(branch.false_arguments(context)),
-            _ => None,
-        };
-    }
-    if let Some(branch) = terminator.downcast_ref::<AnalysisSplitOp>() {
-        return match ordinal {
-            0 => Some(branch.first_arguments(context)),
-            1 => Some(branch.second_arguments(context)),
-            _ => None,
-        };
-    }
-    None
+    let control = ControlViewV1::observe(context, terminator.get_operation()).ok()?;
+    let edge = control.edge(ordinal).ok()?;
+    Some(
+        (0..edge.argument_count())
+            .map(|index| {
+                edge.argument_at(index)
+                    .expect("authenticated in-range edge argument")
+                    .0
+            })
+            .collect(),
+    )
 }
 
 fn acyclic_after_removing_backedge(
@@ -466,6 +496,7 @@ fn acyclic_after_removing_backedge(
 
 fn zero_step_result(
     context: &Context,
+    blocks: &[Ptr<BasicBlock>],
     component_members: &HashSet<usize>,
     incoming: &[IncomingEdgeV1],
     bound: pliron::value::Value,
@@ -483,7 +514,18 @@ fn zero_step_result(
             continue;
         }
         saw_predecessor = true;
-        let Some(initial) = edge.initial else {
+        let initial = blocks[edge.source]
+            .deref(context)
+            .get_terminator(context)
+            .and_then(|pointer| {
+                let operation = Operation::get_op_dyn(pointer, context);
+                operation
+                    .downcast_ref::<BranchArgsOp>()
+                    .and_then(|branch| (edge.ordinal == 0).then(|| branch.arguments(context)))
+                    .and_then(|arguments| arguments.first().copied())
+                    .and_then(|value| index_constant(context, value))
+            });
+        let Some(initial) = initial else {
             saw_unknown = true;
             continue;
         };

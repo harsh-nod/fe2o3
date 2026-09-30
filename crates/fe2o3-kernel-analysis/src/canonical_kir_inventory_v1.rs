@@ -37,7 +37,14 @@ impl fmt::Display for CanonicalKirInventoryErrorV1 {
         }
     }
 }
-impl Error for CanonicalKirInventoryErrorV1 {}
+impl Error for CanonicalKirInventoryErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::InconsistentOwner => None,
+        }
+    }
+}
 type Result<T> = std::result::Result<T, CanonicalKirInventoryErrorV1>;
 
 // The census admits all vector payloads. A counting defect must reject before
@@ -936,7 +943,7 @@ fn find_function(
 
 /// Fallible in-place heapsort permits charging each comparison/swap before it
 /// occurs, rather than assuming an implementation-specific std sorting bound.
-fn heap_sort<T>(
+pub(crate) fn heap_sort<T>(
     values: &mut [T],
     budget: &mut Budget<'_>,
     mut compare: impl FnMut(&T, &T, &mut Budget<'_>) -> Result<Ordering>,

@@ -14,7 +14,11 @@ include!("conditional_bounds_resource_v1_tests.rs");
 #[derive(Clone, Copy)]
 enum PipelineFamilyV1<'a> {
     Ordinary,
+    LifecycleV18(&'a crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'a>),
     Conditional(&'a ConditionalPipelineSubjectV1<'a>),
+    CanonicalMixedV26(&'a crate::kir_bridge_v1::NativeCanonicalMixedAdmissionV26<'a>),
+    CanonicalPrivateV18(&'a crate::kir_bridge_v1::NativeCanonicalPrivateAdmissionV18<'a>),
+    CanonicalPrivate(&'a crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<'a>),
 }
 
 #[allow(
@@ -24,6 +28,19 @@ enum PipelineFamilyV1<'a> {
 enum ValidationFamilyV1<'a> {
     Ordinary(ProductionAnalysisReportValidationSessionV1<'a>),
     Conditional(conditional_validation::SessionV1<'a>),
+    CanonicalPrivate(canonical_private_v1::SessionV1<'a>),
+    CanonicalMixedV26(
+        canonical_private_v1::SessionV1<
+            'a,
+            crate::kir_bridge_v1::NativeCanonicalMixedAdmissionV26<'a>,
+        >,
+    ),
+    CanonicalPrivateV18(
+        canonical_private_v1::SessionV1<
+            'a,
+            crate::kir_bridge_v1::NativeCanonicalPrivateAdmissionV18<'a>,
+        >,
+    ),
 }
 
 // Constructed only by the closed dispatcher from its own preservation session
@@ -97,6 +114,7 @@ pub(crate) enum PipelineErrorV1 {
     ConditionalSemantic(conditional_semantic::ErrorV1),
     ConditionalPreparation(conditional_ownership::FailureV1),
     ConditionalInput,
+    CanonicalPrivateInput,
 }
 
 impl fmt::Display for PipelineErrorV1 {
@@ -117,6 +135,9 @@ impl fmt::Display for PipelineErrorV1 {
             }
             Self::ConditionalPreparation(error) => {
                 write!(formatter, "conditional preparation: {error:?}")
+            }
+            Self::CanonicalPrivateInput => {
+                formatter.write_str("canonical private coverage, epoch or checkpoint mismatch")
             }
             Self::ConditionalInput => {
                 formatter.write_str("conditional input custody or identity mismatch")
@@ -150,6 +171,8 @@ impl From<ProductionAnalysisResourceLimitV1> for PipelineErrorV1 {
 enum PipelineOutcomeV1 {
     Ordinary(ProductionPlironPreloweringOutcomeV1),
     Conditional(ConditionalPipelineOutcomeV1),
+    CanonicalPrivate(canonical_private_v1::CanonicalPrivatePipelineOutcomeV1),
+    CanonicalMixedV26(canonical_private_v1::CanonicalMixedPipelineOutcomeV26),
 }
 
 #[allow(
@@ -159,6 +182,8 @@ enum PipelineOutcomeV1 {
 enum PipelineReportsV1 {
     Ordinary(ProductionPlironPreloweringReportV2),
     Conditional(ConditionalPipelineReportV1),
+    CanonicalPrivate(canonical_private_v1::CanonicalPrivatePipelineReportV1),
+    CanonicalMixedV26(canonical_private_v1::CanonicalMixedPipelineReportV26),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -227,6 +252,14 @@ impl PipelineFamilyV1<'_> {
         analyses: &mut PlironAnalysisManagerV1,
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<Option<ProductionAnalysisResourceUpperBoundV1>, PipelineErrorV1> {
+        if let Self::LifecycleV18(input) = self
+            && !input.authenticate(context, function)
+        {
+            return Err(ProductionPlironPreloweringErrorV2::ReportValidation(
+                ProductionAnalysisReportValidationErrorV1::PreservationManifestInconsistent,
+            )
+            .into());
+        }
         let Self::Conditional(input) = self else {
             return Ok(None);
         };
@@ -300,7 +333,11 @@ impl PipelineFamilyV1<'_> {
         PipelineErrorV1,
     > {
         match self {
-            Self::Ordinary => Ok((None, None)),
+            Self::Ordinary
+            | Self::LifecycleV18(_)
+            | Self::CanonicalPrivate(_)
+            | Self::CanonicalPrivateV18(_)
+            | Self::CanonicalMixedV26(_) => Ok((None, None)),
             Self::Conditional(input) => conditional_ownership::prepare_rows_with_observation_v1(
                 input.context(),
                 input.function(),
@@ -343,7 +380,11 @@ impl PipelineFamilyV1<'_> {
             census,
             local,
             match self {
-                Self::Ordinary => dependencies.0,
+                Self::Ordinary
+                | Self::LifecycleV18(_)
+                | Self::CanonicalPrivate(_)
+                | Self::CanonicalPrivateV18(_)
+                | Self::CanonicalMixedV26(_) => dependencies.0,
                 Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::default(),
             },
             dependencies.1,
@@ -372,7 +413,11 @@ impl PipelineFamilyV1<'_> {
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<ProductionAnalysisResourceUpperBoundV1, PipelineErrorV1> {
         Ok(match self {
-            Self::Ordinary => bound,
+            Self::Ordinary
+            | Self::LifecycleV18(_)
+            | Self::CanonicalPrivate(_)
+            | Self::CanonicalPrivateV18(_)
+            | Self::CanonicalMixedV26(_) => bound,
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::checked_phase(
                 phase,
                 bound.work_upper_bound(),
@@ -387,11 +432,24 @@ impl PipelineFamilyV1<'_> {
         clippy::result_large_err,
         reason = "preserve inline error custody without an unadmitted error-path allocation"
     )]
+    #[cfg(test)]
     fn prepare_semantic_stage_v1(
         self,
         analyses: &mut PlironAnalysisManagerV1,
         census: ProductionAnalysisInputCensusV1,
         ownership: ProductionAnalysisResourceUpperBoundV1,
+        observer: PipelineObservationV1<'_, '_, '_>,
+    ) -> Result<PreparedProductionStageV1<()>, PipelineErrorV1> {
+        self.prepare_semantic_with_graph_v2(analyses, census, ownership, None, observer)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn prepare_semantic_with_graph_v2(
+        self,
+        analyses: &mut PlironAnalysisManagerV1,
+        census: ProductionAnalysisInputCensusV1,
+        ownership: ProductionAnalysisResourceUpperBoundV1,
+        graph: Option<&crate::production_analysis::pliron_progress::PreparedProgressGraphV2<'_>>,
         observer: PipelineObservationV1<'_, '_, '_>,
     ) -> Result<PreparedProductionStageV1<()>, PipelineErrorV1> {
         use ProductionAnalysisResourcePhaseV1 as Phase;
@@ -402,7 +460,11 @@ impl PipelineFamilyV1<'_> {
         )
         .map_err(resource_error)?;
         let effect = match self {
-            Self::Ordinary => {
+            Self::Ordinary
+            | Self::LifecycleV18(_)
+            | Self::CanonicalPrivate(_)
+            | Self::CanonicalPrivateV18(_)
+            | Self::CanonicalMixedV26(_) => {
                 compose_effect_refinement_resource_upper_bound_v1(census, effect_local, ownership)
             }
             Self::Conditional(_) => effect_local
@@ -414,10 +476,12 @@ impl PipelineFamilyV1<'_> {
             observed_remaining_resource_limits_v1(analyses, Phase::SemanticRefinement, observer)?,
         )
         .map_err(resource_error)?;
-        let progress = preflight_scoped_progress_resource_upper_bound_v1(
-            census,
-            observed_remaining_resource_limits_v1(analyses, Phase::Progress, observer)?,
-        )
+        let progress_limits =
+            observed_remaining_resource_limits_v1(analyses, Phase::Progress, observer)?;
+        let progress = match graph {
+            Some(graph) => graph.continuation_bound(census, progress_limits),
+            None => preflight_scoped_progress_resource_upper_bound_v1(census, progress_limits),
+        }
         .map_err(resource_error)?;
         let bound = semantic
             .checked_with_nested_sequence_retain(&[progress, effect], Phase::SemanticRefinement)
@@ -537,7 +601,9 @@ pub(crate) fn run_conditional_production_checks_with_observation_v1(
         None,
     )? {
         PipelineOutcomeV1::Conditional(outcome) => Ok(outcome),
-        PipelineOutcomeV1::Ordinary(_) => Err(PipelineErrorV1::ConditionalInput),
+        PipelineOutcomeV1::Ordinary(_)
+        | PipelineOutcomeV1::CanonicalPrivate(_)
+        | PipelineOutcomeV1::CanonicalMixedV26(_) => Err(PipelineErrorV1::ConditionalInput),
     }
 }
 
@@ -670,7 +736,49 @@ impl<'a> ValidationFamilyV1<'a> {
         let (context, function) = endpoint;
         let (analyses, observer) = observed_analyses;
         match family {
-            PipelineFamilyV1::Ordinary => {
+            PipelineFamilyV1::CanonicalPrivate(input) => {
+                let session = canonical_private_v1::SessionV1::begin(
+                    input,
+                    endpoint,
+                    atomic_target,
+                    preservation,
+                    census,
+                    limits,
+                    analyses,
+                    observer,
+                )?;
+                let transfer = observer.map(|_| session.setup());
+                Ok((Self::CanonicalPrivate(session), transfer))
+            }
+            PipelineFamilyV1::CanonicalPrivateV18(input) => {
+                let session = canonical_private_v1::SessionV1::begin(
+                    input,
+                    endpoint,
+                    atomic_target,
+                    preservation,
+                    census,
+                    limits,
+                    analyses,
+                    observer,
+                )?;
+                let transfer = observer.map(|_| session.setup());
+                Ok((Self::CanonicalPrivateV18(session), transfer))
+            }
+            PipelineFamilyV1::CanonicalMixedV26(input) => {
+                let session = canonical_private_v1::SessionV1::begin_mixed_v26(
+                    input,
+                    endpoint,
+                    atomic_target,
+                    preservation,
+                    census,
+                    limits,
+                    analyses,
+                    observer,
+                )?;
+                let transfer = observer.map(|_| session.setup());
+                Ok((Self::CanonicalMixedV26(session), transfer))
+            }
+            PipelineFamilyV1::Ordinary | PipelineFamilyV1::LifecycleV18(_) => {
                 let session = begin_observed_report_validation_v1(
                     context,
                     function,
@@ -705,6 +813,9 @@ impl<'a> ValidationFamilyV1<'a> {
         match self {
             Self::Ordinary(session) => session.setup_resource_upper_bound_v1(),
             Self::Conditional(_) => ProductionAnalysisResourceUpperBoundV1::default(),
+            Self::CanonicalPrivate(session) => session.setup(),
+            Self::CanonicalPrivateV18(session) => session.setup(),
+            Self::CanonicalMixedV26(session) => session.setup(),
         }
     }
 
@@ -760,6 +871,30 @@ impl<'a> ValidationFamilyV1<'a> {
                     .map_err(resource_error)?;
                 Ok(observer.map(|_| bound))
             }
+            Self::CanonicalPrivate(session) => session.record(
+                (context, function),
+                checkpoint,
+                report,
+                stage,
+                analyses,
+                observer,
+            ),
+            Self::CanonicalPrivateV18(session) => session.record(
+                (context, function),
+                checkpoint,
+                report,
+                stage,
+                analyses,
+                observer,
+            ),
+            Self::CanonicalMixedV26(session) => session.record(
+                (context, function),
+                checkpoint,
+                report,
+                stage,
+                analyses,
+                observer,
+            ),
             Self::Conditional(session) => session
                 .record_ordinary_with_observation_v1(
                     checkpoint,

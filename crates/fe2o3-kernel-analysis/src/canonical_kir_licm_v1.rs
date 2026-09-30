@@ -10,7 +10,7 @@ use fe2o3_kernel_ir::{
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirControlFlowScopeErrorV1 as FlowError,
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirOperationCoordinateV1 as Site,
     OperationKind, ScalarType, Type, UnaryOp, VerifiedCanonicalKernelIrModuleV12 as Owner,
-    with_canonical_kir_control_flow_v1,
+    VerifiedCanonicalKernelIrModuleV18 as Owner18,
 };
 use std::{fmt, mem::size_of};
 
@@ -123,18 +123,21 @@ impl CanonicalKirLicmStorageV1 {
 ///     let _ = pair.origins();
 /// }
 /// ```
-pub struct CheckedCanonicalKirLicmV1<'a> {
-    input: &'a Owner,
-    output: &'a Owner,
+pub struct CheckedCanonicalKirLicmV1<'a, O = Owner> {
+    input: &'a O,
+    output: &'a O,
     origins: &'a [Row],
 }
-impl<'a> CheckedCanonicalKirLicmV1<'a> {
+/// Actual storage/execution-capable endpoints, never erased to the legacy wire.
+pub type CheckedCanonicalKirLicmV18<'a> = CheckedCanonicalKirLicmV1<'a, Owner18>;
+
+impl<'a, O> CheckedCanonicalKirLicmV1<'a, O> {
     /// Exact connected input, not a digest reconstruction.
-    pub const fn input(&self) -> &'a Owner {
+    pub const fn input(&self) -> &'a O {
         self.input
     }
     /// Exact freshly admitted output checked by the relation.
-    pub const fn output(&self) -> &'a Owner {
+    pub const fn output(&self) -> &'a O {
         self.output
     }
     /// Complete original-order operation lineage.
@@ -170,31 +173,47 @@ pub fn check_canonical_kir_licm_v1<'a>(
     resources::scoped(budget, |meter| check(input, output, origins, limits, meter))
 }
 
-fn check<'a>(
-    input: &'a Owner,
-    output: &'a Owner,
+/// Checks the same closed total-scalar motion grammar on two actual V18 owners.
+/// Full storage layouts, execution operations, memory/call order, signatures,
+/// blocks and edge occurrences must remain identical. This is a motion relation,
+/// not source lowering, initialization, memory safety or launch authority.
+pub fn check_canonical_kir_licm_v18<'a>(
+    input: &'a Owner18,
+    output: &'a Owner18,
+    origins: &'a [Row],
+    limits: Limits,
+    budget: &mut Budget<'_>,
+) -> Result<(CheckedCanonicalKirLicmV18<'a>, CanonicalKirLicmStorageV1)> {
+    resources::scoped(budget, |meter| check(input, output, origins, limits, meter))
+}
+
+#[path = "canonical_kir_licm_profiles.rs"]
+mod profiles;
+use profiles::Profile;
+
+fn check<'a, O: Profile>(
+    input: &'a O,
+    output: &'a O,
     rows: &'a [Row],
     limits: Limits,
     meter: &mut Meter<'_, '_>,
-) -> Result<(CheckedCanonicalKirLicmV1<'a>, CanonicalKirLicmStorageV1)> {
-    let witness = size_of::<CheckedCanonicalKirLicmV1<'_>>();
+) -> Result<(CheckedCanonicalKirLicmV1<'a, O>, CanonicalKirLicmStorageV1)> {
+    let witness = size_of::<CheckedCanonicalKirLicmV1<'_, O>>();
     meter.reserve(witness)?;
-    let (a, a_size) = meter.derive(|b| Ok(Inventory::derive(input, b)?))?;
+    let (a, a_size) = meter.derive(|b| input.inventory(b))?;
     meter.reserve(a_size.retained_storage())?;
-    let (b, b_size) = meter.derive(|b| Ok(Inventory::derive(output, b)?))?;
+    let (b, b_size) = meter.derive(|b| output.inventory(b))?;
     meter.reserve(b_size.retained_storage())?;
-    let (loops, loops_size) = meter.derive(|b| Ok(Loops::derive(&a, limits, b)?))?;
+    let (loops, loops_size) = meter.derive(|b| O::loops(&a, limits, b))?;
     meter.reserve(loops_size.retained_storage())?;
     meter.derive(|b| Ok(loops.replay(&a, limits, b)?))?;
     meter.work(
         input
-            .canonical()
-            .canonical_bytes()
-            .len()
-            .checked_add(output.canonical().canonical_bytes().len())
+            .wire_len()
+            .checked_add(output.wire_len())
             .ok_or(Resource::Arithmetic)?,
     )?;
-    headers(input.module(), output.module())?;
+    input.headers(output)?;
     if rows.len() != a.operations().len() || rows.len() != b.operations().len() {
         return Err(Error::Mismatch("complete operation cardinality"));
     }
@@ -283,136 +302,118 @@ fn check<'a>(
             continue;
         }
         meter.derive(|budget| {
-            with_canonical_kir_control_flow_v1(
-                input,
-                function.coordinate,
-                Default::default(),
-                budget,
-                |flow, budget| {
-                    for loop_index in 0..loops.loop_count() {
-                        let fact = loops.natural_loop(loop_index, budget)?;
-                        if fact.header().function != function.coordinate {
-                            continue;
-                        }
-                        let Some(edge) = fact.unconditional_preheader() else {
+            input.with_flow(function.coordinate, budget, |flow, budget| {
+                for loop_index in 0..loops.loop_count() {
+                    let fact = loops.natural_loop(loop_index, budget)?;
+                    if fact.header().function != function.coordinate {
+                        continue;
+                    }
+                    let Some(edge) = fact.unconditional_preheader() else {
+                        continue;
+                    };
+                    if !fact.is_single_entry() {
+                        continue;
+                    }
+                    budget.charge_work(a.blocks().len())?;
+                    members.fill(false);
+                    for member in loops.members(loop_index, budget)? {
+                        budget.charge_work(3)?;
+                        members[block_index(&a, *member)?] = true;
+                    }
+                    let preheader = edge.source;
+                    if members[block_index(&a, preheader)?] {
+                        return Err(Error::Mismatch("preheader outside loop"));
+                    }
+                    for at in function.operations.clone() {
+                        budget.charge_work(3)?;
+                        let row = &rows[at];
+                        let Some(h) = row.hoist.filter(|h| h.header == fact.header()) else {
                             continue;
                         };
-                        if !fact.is_single_entry() {
-                            continue;
+                        if checked[at]
+                            || row.output.block != preheader
+                            || !members[block_index(&a, row.input.block)?]
+                            || !total_scalar(&a, at, budget)?
+                        {
+                            return Err(Error::Mismatch(
+                                "eligible total operation and exact loop/preheader",
+                            ));
                         }
-                        budget.charge_work(a.blocks().len())?;
-                        members.fill(false);
-                        for member in loops.members(loop_index, budget)? {
-                            budget.charge_work(3)?;
-                            members[block_index(&a, *member)?] = true;
-                        }
-                        let preheader = edge.source;
-                        if members[block_index(&a, preheader)?] {
-                            return Err(Error::Mismatch("preheader outside loop"));
-                        }
-                        for at in function.operations.clone() {
-                            budget.charge_work(3)?;
-                            let row = &rows[at];
-                            let Some(h) = row.hoist.filter(|h| h.header == fact.header()) else {
-                                continue;
-                            };
-                            if checked[at]
-                                || row.output.block != preheader
-                                || !members[block_index(&a, row.input.block)?]
-                                || !total_scalar(&a, at, budget)?
-                            {
-                                return Err(Error::Mismatch(
-                                    "eligible total operation and exact loop/preheader",
-                                ));
-                            }
-                            for use_at in a.operations()[at].operands.clone() {
-                                budget.charge_work(5)?;
-                                let definition = &a.definitions()[a.uses()[use_at].definition];
-                                let (original_block, definition_op) = match definition.coordinate {
-                                    Definition::FunctionArgument { function: f, .. }
-                                        if f == function.coordinate =>
-                                    {
-                                        continue;
-                                    }
-                                    Definition::BlockArgument { block, .. } => (block, None),
-                                    Definition::Result { operation, .. } => {
-                                        (operation.block, Some(operation_index(&a, operation)?))
-                                    }
-                                    _ => return Err(Error::Mismatch("operand function")),
-                                };
-                                if members[block_index(&a, original_block)?]
-                                    || !flow.dominates(original_block, preheader, budget)?
-                                {
-                                    let Some(producer) = definition_op.map(|i| &rows[i]) else {
-                                        return Err(Error::Mismatch("loop-carried operand"));
-                                    };
-                                    let Some(previous) = producer.hoist else {
-                                        return Err(Error::Mismatch("unhoisted loop operand"));
-                                    };
-                                    if previous.sequence >= h.sequence
-                                        || members[block_index(&a, producer.output.block)?]
-                                        || !flow.dominates(
-                                            producer.output.block,
-                                            preheader,
-                                            budget,
-                                        )?
-                                    {
-                                        return Err(Error::Mismatch("earlier invariant hoist"));
-                                    }
-                                }
-                            }
-                            checked[at] = true;
-                        }
-                    }
-                    Ok(())
-                },
-            )
-        })?;
-        // Query the actual final graph, not just an unchanged-CFG assertion.
-        meter.derive(|budget| {
-            with_canonical_kir_control_flow_v1(
-                output,
-                function.coordinate,
-                Default::default(),
-                budget,
-                |flow, budget| {
-                    for at in function.operations.clone() {
-                        budget.charge_work(2)?;
-                        let row = &rows[at];
-                        if row.hoist.is_none() {
-                            continue;
-                        }
-                        let final_at = operation_index(&b, row.output)?;
-                        for use_at in b.operations()[final_at].operands.clone() {
-                            budget.charge_work(4)?;
-                            let definition = &b.definitions()[b.uses()[use_at].definition];
-                            let block = match definition.coordinate {
+                        for use_at in a.operations()[at].operands.clone() {
+                            budget.charge_work(5)?;
+                            let definition = &a.definitions()[a.uses()[use_at].definition];
+                            let (original_block, definition_op) = match definition.coordinate {
                                 Definition::FunctionArgument { function: f, .. }
                                     if f == function.coordinate =>
                                 {
                                     continue;
                                 }
-                                Definition::BlockArgument { block, .. } => block,
+                                Definition::BlockArgument { block, .. } => (block, None),
                                 Definition::Result { operation, .. } => {
-                                    if operation.block == row.output.block
-                                        && operation.operation >= row.output.operation
-                                    {
-                                        return Err(Error::Mismatch(
-                                            "final same-block operand order",
-                                        ));
-                                    }
-                                    operation.block
+                                    (operation.block, Some(operation_index(&a, operation)?))
                                 }
-                                _ => return Err(Error::Mismatch("final operand function")),
+                                _ => return Err(Error::Mismatch("operand function")),
                             };
-                            if !flow.dominates(block, row.output.block, budget)? {
-                                return Err(Error::Mismatch("final operand dominance"));
+                            if members[block_index(&a, original_block)?]
+                                || !flow.dominates(original_block, preheader, budget)?
+                            {
+                                let Some(producer) = definition_op.map(|i| &rows[i]) else {
+                                    return Err(Error::Mismatch("loop-carried operand"));
+                                };
+                                let Some(previous) = producer.hoist else {
+                                    return Err(Error::Mismatch("unhoisted loop operand"));
+                                };
+                                if previous.sequence >= h.sequence
+                                    || members[block_index(&a, producer.output.block)?]
+                                    || !flow.dominates(producer.output.block, preheader, budget)?
+                                {
+                                    return Err(Error::Mismatch("earlier invariant hoist"));
+                                }
                             }
                         }
+                        checked[at] = true;
                     }
-                    Ok(())
-                },
-            )
+                }
+                Ok(())
+            })
+        })?;
+        // Query the actual final graph, not just an unchanged-CFG assertion.
+        meter.derive(|budget| {
+            output.with_flow(function.coordinate, budget, |flow, budget| {
+                for at in function.operations.clone() {
+                    budget.charge_work(2)?;
+                    let row = &rows[at];
+                    if row.hoist.is_none() {
+                        continue;
+                    }
+                    let final_at = operation_index(&b, row.output)?;
+                    for use_at in b.operations()[final_at].operands.clone() {
+                        budget.charge_work(4)?;
+                        let definition = &b.definitions()[b.uses()[use_at].definition];
+                        let block = match definition.coordinate {
+                            Definition::FunctionArgument { function: f, .. }
+                                if f == function.coordinate =>
+                            {
+                                continue;
+                            }
+                            Definition::BlockArgument { block, .. } => block,
+                            Definition::Result { operation, .. } => {
+                                if operation.block == row.output.block
+                                    && operation.operation >= row.output.operation
+                                {
+                                    return Err(Error::Mismatch("final same-block operand order"));
+                                }
+                                operation.block
+                            }
+                            _ => return Err(Error::Mismatch("final operand function")),
+                        };
+                        if !flow.dominates(block, row.output.block, budget)? {
+                            return Err(Error::Mismatch("final operand dominance"));
+                        }
+                    }
+                }
+                Ok(())
+            })
         })?;
     }
     for (row, checked) in rows.iter().zip(&checked) {
@@ -421,7 +422,7 @@ fn check<'a>(
             return Err(Error::Mismatch("complete checked movement roster"));
         }
     }
-    let (final_loops, final_size) = meter.derive(|bgt| Ok(Loops::derive(&b, limits, bgt)?))?;
+    let (final_loops, final_size) = meter.derive(|bgt| O::loops(&b, limits, bgt))?;
     meter.reserve(final_size.retained_storage())?;
     meter.derive(|bgt| Ok(final_loops.replay(&b, limits, bgt)?))?;
     drop(final_loops);
@@ -467,7 +468,7 @@ fn scalar(ty: &Type) -> bool {
         )
     )
 }
-fn total_scalar(a: &Inventory<'_>, at: usize, budget: &mut Budget<'_>) -> Result<bool> {
+fn total_scalar<O>(a: &Inventory<'_, O>, at: usize, budget: &mut Budget<'_>) -> Result<bool> {
     budget.charge_work(4)?;
     let row = &a.operations()[at];
     let operation = row.operation;
@@ -501,7 +502,7 @@ fn total_scalar(a: &Inventory<'_>, at: usize, budget: &mut Budget<'_>) -> Result
     }
     Ok(true)
 }
-fn block_index(a: &Inventory<'_>, block: Block) -> Result<usize> {
+fn block_index<O>(a: &Inventory<'_, O>, block: Block) -> Result<usize> {
     let function = a
         .functions()
         .get(block.function.0 as usize)
@@ -513,7 +514,7 @@ fn block_index(a: &Inventory<'_>, block: Block) -> Result<usize> {
         .filter(|at| *at < function.blocks.end && a.blocks()[*at].coordinate == block)
         .ok_or(Error::Mismatch("block coordinate"))
 }
-fn operation_index(a: &Inventory<'_>, site: Site) -> Result<usize> {
+fn operation_index<O>(a: &Inventory<'_, O>, site: Site) -> Result<usize> {
     let block = &a.blocks()[block_index(a, site.block)?];
     block
         .operations
@@ -522,10 +523,6 @@ fn operation_index(a: &Inventory<'_>, site: Site) -> Result<usize> {
         .filter(|at| *at < block.operations.end && a.operations()[*at].coordinate == site)
         .ok_or(Error::Mismatch("operation coordinate"))
 }
-fn headers(a: &fe2o3_kernel_ir::Module, b: &fe2o3_kernel_ir::Module) -> Result<()> {
-    crate::canonical_kir_same_cfg_payload_v1::check(a, b).map_err(Error::Mismatch)
-}
-
 #[cfg(test)]
 #[path = "canonical_kir_licm_v1_tests.rs"]
 mod tests;

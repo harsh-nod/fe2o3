@@ -473,20 +473,20 @@ mod saturating_integer_v1_tests {
             operation,
             scalar: ty,
             overflow: ProductionOverflowContractV2::Wrapping,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
+            lhs: NormalizedScalarNodeV18::legacy(lhs),
+            rhs: NormalizedScalarNodeV18::legacy(rhs),
         };
         let less = |lhs, rhs| E::Compare {
             operation: ProductionSemanticComparisonV2::LessThan,
             operand_scalar: ty,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
+            lhs: NormalizedScalarNodeV18::legacy(lhs),
+            rhs: NormalizedScalarNodeV18::legacy(rhs),
         };
         let select = |condition, when_true, when_false| E::Select {
             scalar: ty,
-            condition: Box::new(condition),
-            when_true: Box::new(when_true),
-            when_false: Box::new(when_false),
+            condition: NormalizedScalarNodeV18::legacy(condition),
+            when_true: NormalizedScalarNodeV18::legacy(when_true),
+            when_false: NormalizedScalarNodeV18::legacy(when_false),
         };
         let raw = binary(
             match op {

@@ -3431,6 +3431,7 @@ fn match_ranked_root_bindings_v1(
         .map_err(source_launch_projection_error_v1)
 }
 
+mod pipeline_scalar_ssa_v1;
 mod shared_value_reads_projection_v1;
 
 fn project_and_verify_ranked_root_ssa_v1(
@@ -3457,6 +3458,10 @@ fn project_and_verify_ranked_root_ssa_v1(
                 reference_bindings,
                 facts,
                 Some(reads),
+                Some(pipeline_scalar_ssa_v1::Source {
+                    owner,
+                    function: selection.body(),
+                }),
             )
         },
     )
@@ -3481,6 +3486,7 @@ fn project_and_verify_ranked_root_v1(
         reference_bindings,
         assertion_facts,
         None,
+        None,
     )
 }
 
@@ -3493,6 +3499,7 @@ fn project_and_verify_ranked_root_with_shared_reads_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
+    scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let function = semantic
         .functions()
@@ -3522,6 +3529,7 @@ fn project_and_verify_ranked_root_with_shared_reads_v1(
                         singletons,
                         borrows,
                         shared_reads,
+                        scalar_ssa,
                     )
                 },
             )
@@ -3541,6 +3549,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
     singletons: &[u8],
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
+    scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     multi_entry_induction_v1::with_scope(assertion_facts, |scope, facts| {
         project_and_verify_ranked_root_with_induction_scope_v1(
@@ -3554,6 +3563,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
             singletons,
             borrows,
             shared_reads,
+            scalar_ssa,
             scope,
         )
     })
@@ -3573,6 +3583,7 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
     singletons: &[u8],
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
+    scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
     induction_scope: &mut multi_entry_induction_v1::Scope,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     with_prepared_ranked_root_recipe_with_shared_reads_v1(
@@ -3586,6 +3597,7 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         singletons,
         borrows,
         shared_reads,
+        scalar_ssa,
         induction_scope,
         |recipe, assertion_facts| {
             verify_prepared_ranked_root_recipe_v1(
@@ -7598,6 +7610,7 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
     ranked_ir: &mut String,
+    scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
     mut multi: Option<&mut multi_entry_induction_v1::Context<'_, '_>>,
 ) -> Result<IntrinsicProjectionV1, ProductionRankedProjectionErrorV1> {
     reject_retired_production_intrinsics_v1(callables)?;
@@ -8675,7 +8688,7 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
         &mut uniform_inductions,
         operations,
         next_value,
-        multi,
+        multi.as_deref_mut(),
     )?;
     project_induction_body_predicates_v1(
         types,
@@ -8723,6 +8736,8 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
         &uniform_inductions,
         operations,
         next_value,
+        scalar_ssa,
+        multi.as_mut().map(|context| &mut *context.facts),
     )?;
 
     let checked_reference_origins = checked_reference_origins(
@@ -8794,7 +8809,7 @@ struct PendingWorkgroupPipelineV1 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn project_workgroup_pipeline_effects_v1(
+fn project_workgroup_pipeline_effects_v1<'facts>(
     callables: &[SemanticCallableDeclV1],
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -8804,6 +8819,8 @@ fn project_workgroup_pipeline_effects_v1(
     uniform_inductions: &[ProjectedUniformInductionV1],
     entry_operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
+    scalar_ssa: Option<pipeline_scalar_ssa_v1::Source<'_>>,
+    facts: Option<&mut (dyn ProjectedAssertionFactsV1 + 'facts)>,
 ) -> Result<Vec<Option<ProjectedPipelineEffectV1>>, ProductionRankedProjectionErrorV1> {
     let mut pending = Vec::<PendingWorkgroupPipelineV1>::new();
     let mut owners = vec![None; function.locals().len()];
@@ -8849,6 +8866,42 @@ fn project_workgroup_pipeline_effects_v1(
     if pending.is_empty() {
         return Ok(vec![None; function.blocks().len()]);
     }
+    pipeline_scalar_ssa_v1::with_pipeline_index(scalar_ssa, types, function, facts, |scalar_ssa| {
+        project_workgroup_pipeline_pending_v1(
+            callables,
+            types,
+            function,
+            index_values,
+            runtime_index_arguments,
+            next_runtime_argument,
+            uniform_inductions,
+            entry_operations,
+            next_value,
+            pending,
+            owners,
+            scalar_ssa,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_workgroup_pipeline_pending_v1<'facts>(
+    callables: &[SemanticCallableDeclV1],
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    index_values: &[Option<ProjectedDisjointIndexV1>],
+    runtime_index_arguments: &mut [Option<u32>],
+    next_runtime_argument: &mut usize,
+    uniform_inductions: &[ProjectedUniformInductionV1],
+    entry_operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    mut pending: Vec<PendingWorkgroupPipelineV1>,
+    mut owners: Vec<Option<usize>>,
+    scalar_ssa: Option<(
+        &pipeline_scalar_ssa_v1::Index<'_>,
+        &mut (dyn ProjectedAssertionFactsV1 + 'facts),
+    )>,
+) -> Result<Vec<Option<ProjectedPipelineEffectV1>>, ProductionRankedProjectionErrorV1> {
     let scalar_assertion_proofs = SemanticAssertProofsV1::new(types, function)?;
     propagate_workgroup_pipeline_aliases_v1(function, &mut owners)?;
 
@@ -8945,6 +8998,7 @@ fn project_workgroup_pipeline_effects_v1(
         entry_operations,
         next_value,
         assertion_proofs: scalar_assertion_proofs,
+        scalar_ssa,
         work: 0,
     };
     let mut effects = vec![None; function.blocks().len()];
@@ -9137,7 +9191,7 @@ fn pipeline_scalar_multiple_definitions_v1(
     )
 }
 
-struct PipelineScalarProjectorV1<'a> {
+struct PipelineScalarProjectorV1<'a, 'index, 'source, 'borrow, 'facts> {
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
     index_values: &'a [Option<ProjectedDisjointIndexV1>],
@@ -9147,10 +9201,25 @@ struct PipelineScalarProjectorV1<'a> {
     entry_operations: &'a mut Vec<ProductionRankedOperationV1>,
     next_value: &'a mut u32,
     assertion_proofs: SemanticAssertProofsV1<'a>,
+    scalar_ssa: Option<(
+        &'index pipeline_scalar_ssa_v1::Index<'source>,
+        &'borrow mut (dyn ProjectedAssertionFactsV1 + 'facts),
+    )>,
     work: usize,
 }
 
-impl PipelineScalarProjectorV1<'_> {
+impl PipelineScalarProjectorV1<'_, '_, '_, '_, '_> {
+    fn assignment_visit_key(
+        &mut self,
+        local: usize,
+        definition: ScalarAssignmentSiteV1,
+    ) -> Result<usize, ProductionRankedProjectionErrorV1> {
+        match self.scalar_ssa.as_mut() {
+            Some((index, facts)) => index.visit_key(self.function, definition, &mut **facts),
+            None => Ok(local),
+        }
+    }
+
     fn project_root(
         &mut self,
         block: usize,
@@ -9276,51 +9345,77 @@ impl PipelineScalarProjectorV1<'_> {
         if let Some(index) = self.index_values.get(local).copied().flatten() {
             return Ok(ProjectedPipelineScalarV1::Value(index.value));
         }
-        match self.assertion_proofs.definition_counts.get(local).copied() {
-            Some(0) => {
-                let SemanticLocalRoleV1::Argument(origin) = declaration.role() else {
-                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a pipeline scalar temporary has no retained definition",
+        let definition = if let Some((index, facts)) = self.scalar_ssa.as_mut() {
+            match index.resolve_projected(
+                self.function,
+                local,
+                use_site,
+                self.uniform_inductions,
+                &self.assertion_proofs,
+                &mut self.work,
+                &mut **facts,
+            )? {
+                pipeline_scalar_ssa_v1::Resolution::LiveOut(value) => {
+                    return self.constant(value);
+                }
+                pipeline_scalar_ssa_v1::Resolution::Origin(
+                    pipeline_scalar_ssa_v1::Origin::Argument { argument, .. },
+                ) => {
+                    return self.argument(argument as usize);
+                }
+                pipeline_scalar_ssa_v1::Resolution::Origin(
+                    pipeline_scalar_ssa_v1::Origin::Assignment { site, .. },
+                ) => site,
+            }
+        } else {
+            match self.assertion_proofs.definition_counts.get(local).copied() {
+                Some(0) => {
+                    let SemanticLocalRoleV1::Argument(origin) = declaration.role() else {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a pipeline scalar temporary has no retained definition",
+                        ));
+                    };
+                    return self.argument(origin as usize);
+                }
+                Some(1) => {}
+                Some(definitions_capped) => {
+                    return Err(pipeline_scalar_multiple_definitions_v1(
+                        local,
+                        use_site,
+                        definitions_capped,
+                        trace_pipeline_scalar_rejection_v1,
                     ));
-                };
-                return self.argument(origin as usize);
+                }
+                None => {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a pipeline scalar definition is outside the semantic local table",
+                    ));
+                }
             }
-            Some(1) => {}
-            Some(definitions_capped) => {
-                return Err(pipeline_scalar_multiple_definitions_v1(
-                    local,
-                    use_site,
-                    definitions_capped,
-                    trace_pipeline_scalar_rejection_v1,
+            let Some(definition) = self
+                .assertion_proofs
+                .assignments
+                .get(local)
+                .copied()
+                .flatten()
+            else {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline scalar has no exact assignment definition",
+                ));
+            };
+            if !self.assertion_proofs.assignment_dominates_use(
+                definition,
+                use_site.block,
+                use_site.statement,
+            )? {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline scalar definition does not dominate its exact use",
                 ));
             }
-            None => {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a pipeline scalar definition is outside the semantic local table",
-                ));
-            }
-        }
-        let Some(definition) = self
-            .assertion_proofs
-            .assignments
-            .get(local)
-            .copied()
-            .flatten()
-        else {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a pipeline scalar has no exact assignment definition",
-            ));
+            definition
         };
-        if !self.assertion_proofs.assignment_dominates_use(
-            definition,
-            use_site.block,
-            use_site.statement,
-        )? {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a pipeline scalar definition does not dominate its exact use",
-            ));
-        }
-        if !visiting.insert(local) {
+        let identity = self.assignment_visit_key(local, definition)?;
+        if !visiting.insert(identity) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a pipeline scalar expression is cyclic",
             ));
@@ -9329,13 +9424,13 @@ impl PipelineScalarProjectorV1<'_> {
             .kind()
             .clone();
         let SemanticStatementKindV1::Assign(assignment) = statement else {
-            visiting.remove(&local);
+            visiting.remove(&identity);
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "an indexed pipeline scalar assignment changed semantic kind",
             ));
         };
         let result = self.project_rvalue(assignment.value(), definition, visiting);
-        visiting.remove(&local);
+        visiting.remove(&identity);
         result
     }
 
@@ -9424,7 +9519,8 @@ impl PipelineScalarProjectorV1<'_> {
                 ));
             }
         };
-        if !visiting.insert(authenticated.local) {
+        let identity = self.assignment_visit_key(authenticated.local, authenticated.definition)?;
+        if !visiting.insert(identity) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a checked pipeline scalar expression is cyclic",
             ));
@@ -9437,7 +9533,7 @@ impl PipelineScalarProjectorV1<'_> {
                 .map(|right| (left, right)),
             Err(error) => Err(error),
         };
-        visiting.remove(&authenticated.local);
+        visiting.remove(&identity);
         let (left, right) = right?;
         if !self
             .assertion_proofs
@@ -24110,6 +24206,10 @@ mod cold_compile_error_tests;
 
 #[cfg(test)]
 mod tests {
+    mod pipeline_scalar_ssa_tests {
+        use super::*;
+        include!("production_ranked_projection_v1/pipeline_scalar_ssa_v1_tests.rs");
+    }
     include!("production_ranked_projection_v1/assertion_analyzer_resource_v1_tests.rs");
     include!("production_ranked_projection_v1/assertion_analyzer_parity_v1_tests.rs");
     include!("production_ranked_projection_v1/multi_entry_induction_fixture_v1_tests.rs");
@@ -29997,6 +30097,7 @@ mod tests {
             entry_operations: &mut operations,
             next_value: &mut next_value,
             assertion_proofs: SemanticAssertProofsV1::new(&types, &function).unwrap(),
+            scalar_ssa: None,
             work: 0,
         };
         assert_incomplete(
@@ -37170,6 +37271,7 @@ mod tests {
             entry_operations: &mut operations,
             next_value: &mut next_value,
             assertion_proofs: SemanticAssertProofsV1::new(types, function)?,
+            scalar_ssa: None,
             work: 0,
         };
         projector.project_root(block, operand)

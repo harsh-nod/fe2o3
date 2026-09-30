@@ -556,6 +556,17 @@ fn gpu_aggregate_front_and_end_indices_are_distinct_v2() {
 #[test]
 fn gpu_aggregate_malformed_literals_and_projections_reject_v2() {
     let types = aggregate_types_v2();
+    assert_eq!(
+        SemanticProjectionV1::new(
+            SemanticProjectionKindV1::ConstantIndex {
+                offset: 0,
+                minimum_length: 4,
+                from_end: true,
+            },
+            SCALAR_TYPE,
+        ),
+        Err(fe2o3_mir_model::semantic_mir_v1::SemanticMirErrorV1::InvalidProjectionShape)
+    );
     for value in [
         SemanticRvalueKindV1::aggregate(SemanticAggregateKindV1::Array, vec![constant(11)])
             .unwrap(),
@@ -591,14 +602,6 @@ fn gpu_aggregate_malformed_literals_and_projections_reject_v2() {
                 offset: 0,
                 minimum_length: 5,
                 from_end: false,
-            },
-            SCALAR_TYPE,
-        ),
-        (
-            SemanticProjectionKindV1::ConstantIndex {
-                offset: 0,
-                minimum_length: 4,
-                from_end: true,
             },
             SCALAR_TYPE,
         ),

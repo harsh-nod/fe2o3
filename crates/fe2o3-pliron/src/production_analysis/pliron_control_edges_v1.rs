@@ -8,7 +8,10 @@
 use std::{cell::Ref, ops::Range};
 
 use dialect_gpu::{
-    optimization_v1::{BranchOp as GpuBranchOp, CondBranchOp, ReturnOp as GpuReturnOp},
+    optimization_v1::{
+        BranchOp as GpuBranchOp, CondBranchOp, PreservedTerminatorKindAttr, PreservedTerminatorOp,
+        ReturnOp as GpuReturnOp,
+    },
     switch_v3::{
         MAX_SWITCH_CASES_V3, MAX_SWITCH_EDGE_ARGUMENTS_V3, SwitchOpV3, SwitchSuccessorOffsetsAttrV3,
     },
@@ -149,6 +152,21 @@ impl<'ctx> ControlViewV1<'ctx> {
                 .ok_or(ControlErrorV1::Shape)?
                 .count() as usize;
             Self::binary_layout(context, &raw, controls, false)?
+        } else if let Some(end) = Operation::get_op::<PreservedTerminatorOp>(pointer, context) {
+            // Edge shape only: Bounds/native admission remains certificate-gated.
+            // Borrow two fixed schema fields; never copy the segment vector.
+            if end.kind(context) != Some(PreservedTerminatorKindAttr::Unreachable)
+                || raw.get_num_operands() != 0
+                || raw.get_num_successors() != 0
+                || raw.attributes.0.len() != 2
+                || !raw
+                    .attributes
+                    .get::<OperandSegmentSizesAttr>(&ATTR_KEY_OPERAND_SEGMENT_SIZES)
+                    .is_some_and(|sizes| sizes.0.is_empty())
+            {
+                return Err(ControlErrorV1::Shape);
+            }
+            LayoutV1::Exit
         } else if Operation::get_op::<ReturnOp>(pointer, context).is_some()
             || Operation::get_op::<TrapOp>(pointer, context).is_some()
             || Operation::get_op::<GpuReturnOp>(pointer, context).is_some()

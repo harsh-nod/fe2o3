@@ -59,7 +59,8 @@ fn transition_pending_prefix(p: &Complete, replay: bool) -> (usize, usize) {
         input.edges().len(),
         input.edges().len(),
         input.edges().len(),
-        input.blocks().len(),
+        input.blocks().len(), // selected_edges
+        input.blocks().len(), // reachable is filled before pending is reserved
     ];
     for count in fill_counts {
         budget.charge_work(count).unwrap();

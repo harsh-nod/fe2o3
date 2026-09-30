@@ -165,8 +165,10 @@ fn scoped_module_assertion_subject_refuses_local_index_and_conflicting_insertion
                                 functions: &module.functions,
                                 function_ordinal: root.function_ordinal,
                                 sidecars: &root.sidecars,
+                                active_instances: &root.active_instances,
                                 coordinates: &root.coordinates,
                                 slot_relocation: root.slot_relocation.as_ref(),
+                                terminal_failures: root.terminal_failures.as_ref(),
                                 insertions: if matches!(fault, 1 | 2) {
                                     &insertions
                                 } else {

@@ -48,6 +48,51 @@ fn endpoint_census(module: &Module, budget: &mut Budget<'_>) -> Result<(usize, u
 }
 
 impl ReplayCensusV12 {
+    // V18 pays suffix traversal separately against this same live caller ledger.
+    // Keep the inherited 128-unit convention for structural/endpoint/hash rows.
+    pub(super) fn base_work(self) -> Result<usize> {
+        let order = self
+            .nodes
+            .max(self.input_endpoints)
+            .max(self.output_endpoints);
+        let log = (usize::BITS - order.leading_zeros()) as usize;
+        let sorting = mul(
+            add(
+                mul(2, self.nodes)?,
+                add(self.input_endpoints, self.output_endpoints)?,
+            )?,
+            add(log, 1)?,
+        )?;
+        mul(
+            128,
+            add(
+                add(
+                    add(add(add(1, self.functions)?, self.blocks)?, self.nodes)?,
+                    self.events,
+                )?,
+                sorting,
+            )?,
+        )
+    }
+
+    pub(super) fn base_finish_work(self, roster: usize) -> Result<usize> {
+        add(
+            mul(2, self.base_work()?)?,
+            mul(128, mul(roster, add(self.nodes, 1)?)?)?,
+        )
+    }
+
+    pub(super) fn actual_scratch(self, targets: usize) -> Result<usize> {
+        CaptureLimitsV12 {
+            nodes: self
+                .nodes
+                .max(self.input_endpoints)
+                .max(self.output_endpoints),
+            events: self.events,
+            targets,
+        }
+        .storage()
+    }
     pub(super) fn derive(
         nodes: &[Node],
         events: &[Event],

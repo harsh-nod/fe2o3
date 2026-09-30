@@ -31,6 +31,8 @@ pub(super) fn ty(mut a: &Type, mut b: &Type, budget: &mut Budget<'_>) -> Result<
             (Type::Unit, Type::Unit) => return Ok(true),
             (Type::Scalar(x), Type::Scalar(y)) => return Ok(x == y),
             (Type::Vector(x), Type::Vector(y)) => return Ok(x == y),
+            (Type::StorageObject(x), Type::StorageObject(y)) => return Ok(x == y),
+            (Type::Execution(x), Type::Execution(y)) => return Ok(x == y),
             _ => return Ok(false),
         }
     }
@@ -93,6 +95,8 @@ pub(super) fn operation(
     use OperationKind as K;
     budget.charge_work(1)?;
     Ok(match (a, b) {
+        (K::Storage(a), K::Storage(b)) => storage(a, b),
+        (K::Execution(a), K::Execution(b)) => execution(a, b),
         (
             K::VerificationContract(VerificationContractOperationV12::WorkgroupPipelineEvent {
                 contract: ac,
@@ -200,6 +204,112 @@ pub(super) fn operation(
         (K::InlineAssembly(a), K::InlineAssembly(b)) => assembly(a, b, budget)?,
         _ => false,
     })
+}
+
+// Actual SSA operands are checked by the complete occurrence relation. These
+// comparisons cover every other payload field; neither kind becomes pure.
+fn storage(
+    a: &fe2o3_kernel_ir::StorageOperationV1,
+    b: &fe2o3_kernel_ir::StorageOperationV1,
+) -> bool {
+    use fe2o3_kernel_ir::{StorageOperationV1 as S, StorageProjectionV1 as P};
+    match (a, b) {
+        (S::Project { step: a, .. }, S::Project { step: b, .. }) => match (a, b) {
+            (P::Field(a), P::Field(b)) => a == b,
+            (P::ArrayIndex(_), P::ArrayIndex(_)) => true,
+            (
+                P::Variant {
+                    index: a,
+                    access: aa,
+                },
+                P::Variant {
+                    index: b,
+                    access: ba,
+                },
+            ) => a == b && aa == ba,
+            (P::VariantForWrite { index: a }, P::VariantForWrite { index: b }) => a == b,
+            _ => false,
+        },
+        (S::ReadValue { access: a, .. }, S::ReadValue { access: b, .. })
+        | (S::ReadDiscriminant { access: a, .. }, S::ReadDiscriminant { access: b, .. })
+        | (S::WriteValue { access: a, .. }, S::WriteValue { access: b, .. }) => a == b,
+        (
+            S::CopyObject {
+                source_access: a,
+                destination_access: ad,
+                overlap: ao,
+                ..
+            },
+            S::CopyObject {
+                source_access: b,
+                destination_access: bd,
+                overlap: bo,
+                ..
+            },
+        ) => a == b && ad == bd && ao == bo,
+        (
+            S::SetDiscriminant {
+                variant: a,
+                access: aa,
+                ..
+            },
+            S::SetDiscriminant {
+                variant: b,
+                access: ba,
+                ..
+            },
+        ) => a == b && aa == ba,
+        _ => false,
+    }
+}
+
+fn execution(
+    a: &fe2o3_kernel_ir::ExecutionOperationV15,
+    b: &fe2o3_kernel_ir::ExecutionOperationV15,
+) -> bool {
+    use fe2o3_kernel_ir::ExecutionOperationV15 as E;
+    match (a, b) {
+        (E::ContextIssue, E::ContextIssue)
+        | (E::WorkgroupDerive { .. }, E::WorkgroupDerive { .. }) => true,
+        (E::ScopeEnd { discarded: a, .. }, E::ScopeEnd { discarded: b, .. }) => a.len() == b.len(),
+        (
+            E::MaskedTileLoadU32 {
+                lanes: a,
+                elements: ae,
+                ..
+            },
+            E::MaskedTileLoadU32 {
+                lanes: b,
+                elements: be,
+                ..
+            },
+        )
+        | (
+            E::TileIntoFragmentU32 {
+                lanes: a,
+                elements: ae,
+                ..
+            },
+            E::TileIntoFragmentU32 {
+                lanes: b,
+                elements: be,
+                ..
+            },
+        )
+        | (
+            E::FragmentIntoPartsU32 {
+                lanes: a,
+                elements: ae,
+                ..
+            },
+            E::FragmentIntoPartsU32 {
+                lanes: b,
+                elements: be,
+                ..
+            },
+        ) => a == b && ae == be,
+        _ => false,
+    }
 }
 
 fn semantics(a: &BarrierSemantics, b: &BarrierSemantics, budget: &mut Budget<'_>) -> Result<bool> {
@@ -410,6 +520,8 @@ pub(super) fn pure(kind: &OperationKind) -> bool {
             }
             | OperationKind::Cast {
                 kind: CastKind::RestrictPointerAccess
+                    | CastKind::PointerToGeneric
+                    | CastKind::SliceToGeneric
                     | CastKind::Truncate
                     | CastKind::ZeroExtend
                     | CastKind::SignExtend

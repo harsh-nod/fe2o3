@@ -1,0 +1,19 @@
+CASE: trapping-arithmetic
+CHECK-BEFORE: module policy10-golden kernels=0 layouts=0
+CHECK-BEFORE: f0 f params=[v0:U32,v1:U32] results=[U32,U32,U32,U32]
+CHECK-BEFORE: f0:b0 block-id=90 params=[]
+CHECK-BEFORE: f0:b0:o0 [v10:U32] Add v0,v1
+CHECK-BEFORE: f0:b0:o1 [v11:U32] Add v0,v1
+CHECK-BEFORE: f0:b0:o2 [v12:U32] Divide v0,v1
+CHECK-BEFORE: f0:b0:o3 [v13:U32] Divide v0,v1
+CHECK-BEFORE: f0:b0:term Return [v10,v11,v12,v13]
+CHECK-AFTER: module policy10-golden kernels=0 layouts=0
+CHECK-AFTER: f0 f params=[v0:U32,v1:U32] results=[U32,U32,U32,U32]
+CHECK-AFTER: f0:b0 block-id=90 params=[]
+CHECK-AFTER: f0:b0:o0 [v10:U32] Add v0,v1
+CHECK-AFTER: f0:b0:o1 [v11:U32] Add v0,v1
+CHECK-AFTER: f0:b0:o2 [v12:U32] Divide v0,v1
+CHECK-AFTER: f0:b0:o3 [v13:U32] Divide v0,v1
+CHECK-AFTER: f0:b0:term Return [v10,v11,v12,v13]
+CHECK-REMARK: policy=10 schema=18 passes=integer-neutral-worklist,local-pure-cse,dominance-pure-cse,dce
+CHECK-REMARK: changed=false independently-checked=true authority=false

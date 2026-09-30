@@ -7,15 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, ExecutionLayoutOp, FenceOp, HierarchyAttr,
-    MemoryOrderAttr, MemoryScopeAttr,
-};
+use dialect_gpu::{BarrierOp, ExecutionDomainAttr, ExecutionLayoutOp, FenceOp, HierarchyAttr};
 use dialect_kernel::{
-    AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp,
-    BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
-    RankedAccessOp, RankedViewOp, ReturnOp, TensorLayoutOp, TrapOp,
+    AllocationEffectOp, BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp, ReturnOp,
+    TensorLayoutOp, TrapOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -165,6 +162,12 @@ fn checked_trace_product_v1(
 
 include!("pliron_invocation_trace/resources_v1.rs");
 
+pub(crate) mod native_control_v1;
+pub(crate) mod native_events_v1;
+pub(crate) mod native_input_v1;
+pub(crate) mod native_resources_v1;
+pub(crate) mod native_values_v1;
+
 fn charge_trace_work_v1(total: &mut usize, amount: usize) -> Result<(), PlironTraceFailureV1> {
     *total = total
         .checked_add(amount)
@@ -181,49 +184,8 @@ pub(crate) struct PlironTraceLocationV1 {
     pub(crate) operation: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PlironTraceEventV1 {
-    Barrier {
-        location: PlironTraceLocationV1,
-        execution_scope: HierarchyAttr,
-        memory_scope: MemoryScopeAttr,
-        address_space: AddressSpaceAttr,
-        order: MemoryOrderAttr,
-    },
-    Fence {
-        location: PlironTraceLocationV1,
-        memory_scope: MemoryScopeAttr,
-        address_space: AddressSpaceAttr,
-        order: MemoryOrderAttr,
-    },
-    TensorInstruction {
-        location: PlironTraceLocationV1,
-        subgroup_width: u16,
-        claimed_active_lanes: u32,
-    },
-    Trap {
-        location: PlironTraceLocationV1,
-    },
-    Memory {
-        location: PlironTraceLocationV1,
-        view: Value,
-        memory_space: MemorySpaceAttr,
-        access: AccessKindAttr,
-        atomic_ordering: Option<AtomicOrderingAttr>,
-        atomic_scope: Option<AtomicScopeAttr>,
-        indices: Vec<Option<u64>>,
-        allocation_origin: u64,
-        noalias_class: u64,
-        view_signature: (u32, Vec<u64>),
-    },
-    CollectiveAllocation {
-        location: PlironTraceLocationV1,
-        access: AccessKindAttr,
-        memory_space: MemorySpaceAttr,
-        allocation_origin: u64,
-        noalias_class: u64,
-    },
-}
+mod events_v1;
+pub(crate) use events_v1::PlironTraceEventV1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlironInvocationTraceV1 {
@@ -237,6 +199,12 @@ pub(crate) struct PlironInvocationTraceV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlironTraceFailureV1 {
+    Native {
+        block: usize,
+        operation: usize,
+        reason: native_input_v1::NativeTraceRefusalV1,
+    },
+    NativeResource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     Sparse(SparseIndexFailureV1),
     DynamicLaunch {
         dimension: usize,
@@ -370,6 +338,16 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
     sparse: &crate::SparseIndexAnalysisV1,
     layout: Option<PlironExecutionLayoutV1>,
 ) -> Result<Vec<PlironInvocationTraceV1>, PlironTraceFailureV1> {
+    trace_pliron_invocations_scoped_v1(context, inventory, Some(sparse), layout, None)
+}
+
+pub(crate) fn trace_pliron_invocations_scoped_v1(
+    context: &Context,
+    inventory: &BoundedPlironFunctionInventoryV1,
+    sparse: Option<&crate::SparseIndexAnalysisV1>,
+    layout: Option<PlironExecutionLayoutV1>,
+    mut native: Option<&mut native_values_v1::NativeTraceStateV1<'_, '_, '_, '_>>,
+) -> Result<Vec<PlironInvocationTraceV1>, PlironTraceFailureV1> {
     let needs_scoped_layout = inventory.operations().iter().any(|site| {
         let operation = Operation::get_op_dyn(site.pointer(), context);
         operation.downcast_ref::<BarrierOp>().is_some()
@@ -385,7 +363,10 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
     if needs_scoped_layout && layout.is_none() {
         return Err(PlironTraceFailureV1::MissingExecutionLayout);
     }
-    let launch_extents = if let Some(layout) = layout {
+    let launch_extents = if let Some(native) = native.as_deref() {
+        native.input.geometry.global_extents.to_vec()
+    } else if let Some(layout) = layout {
+        let sparse = sparse.expect("ranked scheduler has sparse input");
         for dimension in 0..sparse.launch_extents().len().max(3) {
             if let Some(declared) = sparse.declared_launch_extent(dimension) {
                 let Some(layout_extent) = layout.global_extents.get(dimension).copied() else {
@@ -398,7 +379,10 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
         }
         layout.global_extents.to_vec()
     } else {
-        sparse.launch_extents().to_vec()
+        sparse
+            .expect("ranked scheduler has sparse input")
+            .launch_extents()
+            .to_vec()
     };
     if let Some(dimension) = launch_extents.iter().position(|extent| *extent == 0) {
         return Err(PlironTraceFailureV1::DynamicLaunch { dimension });
@@ -450,6 +434,13 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
     let mut total_steps = 0_usize;
     let mut total_evaluation_visits = 0_usize;
     for linear in 0..invocation_count {
+        if let Some(native) = native.as_deref_mut() {
+            native.environment.clear();
+            native
+                .budget
+                .charge_work(launch_extents.len() + 1)
+                .map_err(native_input_v1::native_resource)?;
+        }
         let invocation = decode_invocation(linear, &launch_extents);
         let mut events = Vec::new();
         let mut block_index = 0_usize;
@@ -461,14 +452,18 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 .get(block_index)
                 .copied()
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
-            let block_state = (0..block.deref(context).get_num_arguments())
+            let block_state = (0..if native.is_some() {
+                0
+            } else {
+                block.deref(context).get_num_arguments()
+            })
                 .map(|argument| {
                     environment
                         .get(&block.deref(context).get_argument(argument))
                         .copied()
                 })
                 .collect::<Vec<_>>();
-            if !visited.insert((block_index, block_state)) {
+            if native.is_none() && !visited.insert((block_index, block_state)) {
                 return Err(PlironTraceFailureV1::CyclicControlFlow { block: block_index });
             }
             let terminator = block
@@ -487,7 +482,16 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     terminator_index = Some(operation_index);
                     continue;
                 }
+                if let Some(native) = native.as_deref_mut() {
+                    if let Some(event) =
+                        native.event(context, operation, &mut total_evaluation_visits)?
+                    {
+                        native.push_event(&mut events, event)?;
+                    }
+                    continue;
+                }
                 let operation = Operation::get_op_dyn(operation, context);
+                let sparse = sparse.expect("ranked scheduler has sparse input");
                 if let Some(barrier) = operation.downcast_ref::<BarrierOp>() {
                     let (
                         Some(execution_scope),
@@ -651,7 +655,23 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 }
             }
 
+            if let Some(native) = native.as_deref_mut() {
+                match native.control(
+                    context,
+                    terminator,
+                    block_index,
+                    &mut events,
+                    &mut total_evaluation_visits,
+                )? {
+                    Some(next) => {
+                        block_index = next;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
             let terminator = Operation::get_op_dyn(terminator, context);
+            let sparse = sparse.expect("ranked scheduler has sparse input");
             if terminator.downcast_ref::<ReturnOp>().is_some() {
                 break;
             }
@@ -804,7 +824,9 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
             )?;
             block_index = next_block;
         }
-        let (grid, workgroup, subgroup, lane) = if let Some(layout) = layout {
+        let (grid, workgroup, subgroup, lane) = if let Some(native) = native.as_deref() {
+            native.scoped_identity(&invocation, linear)?
+        } else if let Some(layout) = layout {
             let (workgroup, subgroup, lane) = layout
                 .scoped_identity(&invocation)
                 .ok_or(PlironTraceFailureV1::InvalidExecutionLayout)?;

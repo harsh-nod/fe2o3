@@ -110,6 +110,393 @@ struct PrivateArrayInitializerContextV1<'a> {
     function: &'a SemanticFunctionDeclV1,
 }
 
+fn source_private_array_error_v18(
+    error: PrivateArrayRelationErrorV1<ProductionSourceOwnedViewErrorV18>,
+) -> ProductionSourceOwnedViewErrorV18 {
+    match error {
+        PrivateArrayRelationErrorV1::Work(error) => error,
+        PrivateArrayRelationErrorV1::InvalidSource(detail)
+        | PrivateArrayRelationErrorV1::Incomplete(detail)
+        | PrivateArrayRelationErrorV1::Mismatch(detail) => {
+            ProductionSourceOwnedViewErrorV18::Binding(detail)
+        }
+    }
+}
+
+impl ProductionSourceCorrespondenceV18<'_> {
+    fn private_array_attachment_key(
+        root: usize,
+        instance: usize,
+        row: usize,
+        field: TileAttachmentFieldV29,
+    ) -> TileAttachmentKeyV29 {
+        TileAttachmentKeyV29 {
+            root,
+            family: TileAttachmentFamilyV29::PrivateArray,
+            instance,
+            row,
+            field,
+            component: 0,
+            part: 0,
+        }
+    }
+
+    fn private_array_mapped_location(
+        &self,
+        key: TileAttachmentKeyV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<PrivateArrayPhysicalLocationV1> {
+        let [row] = self.attachment_range(key, budget)? else {
+            return self
+                .source
+                .missing("private array point is not one actual operation");
+        };
+        let TileAttachmentLocationV29::Origin(TileScalarSourceV29::Operation(point)) = row.location
+        else {
+            return self
+                .source
+                .missing("private array point has no actual operation");
+        };
+        self.private_array_physical_point(key.root, point, budget)
+    }
+
+    fn private_array_physical_point(
+        &self,
+        root: usize,
+        point: TileScalarPointV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<PrivateArrayPhysicalLocationV1> {
+        budget.charge_work(4)?;
+        let row = self.source.root_row(root)?;
+        if point.function != row.function_ordinal {
+            return self
+                .source
+                .missing("private array point changed physical root");
+        }
+        let body = self
+            .inventory
+            .functions()
+            .get(point.function)
+            .and_then(|row| row.function.body.as_ref())
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "private array body",
+            ))?;
+        let block = body
+            .blocks
+            .get(point.block)
+            .filter(|block| point.operation < block.operations.len())
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "private array operation",
+            ))?;
+        Ok(PrivateArrayPhysicalLocationV1 {
+            block_ordinal: point.block,
+            block: block.id,
+            operation: point.operation,
+        })
+    }
+
+    fn private_array_source_range(
+        &self,
+        key: TileAttachmentKeyV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<(PrivateArrayPhysicalLocationV1, usize)> {
+        let rows = self.attachment_range(key, budget)?;
+        let mut first: Option<PrivateArrayPhysicalLocationV1> = None;
+        let mut end = 0;
+        for row in rows {
+            budget.charge_work(2)?;
+            let TileAttachmentLocationV29::Origin(TileScalarSourceV29::Operation(point)) =
+                row.location
+            else {
+                return self
+                    .source
+                    .missing("private initializer range contains non-operation output");
+            };
+            let location = self.private_array_physical_point(key.root, point, budget)?;
+            if let Some(start) = first {
+                if location.block != start.block
+                    || location.block_ordinal != start.block_ordinal
+                    || location.operation != end
+                {
+                    return self
+                        .source
+                        .missing("private initializer range is not its contiguous source recipe");
+                }
+            } else {
+                first = Some(location);
+            }
+            end = location
+                .operation
+                .checked_add(1)
+                .ok_or(ArgumentResourceV1::Arithmetic)?;
+        }
+        Ok((
+            first.ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "empty private initializer range",
+            ))?,
+            end,
+        ))
+    }
+
+    /// Checks a retained literal-array initializer in its exact source instance.
+    /// Each relocated address and written value uses the existing independent
+    /// private-array relation. A count is descriptive, not execution authority.
+    pub fn private_array_initializer_count(
+        &self,
+        root: usize,
+        instance: usize,
+        block: SemanticBlockIdV1,
+        statement: u32,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<u64>> {
+        self.retain_query((|| {
+            self.query(budget)?;
+            budget.charge_work(12)?;
+            let function_id = self.source.instance(root, instance, budget)?.0;
+            let root_row = self.source.root_row(root)?;
+            let owner = &self.source.owner.inner.source.owner;
+            let semantic = owner.source_semantic();
+            let function = semantic
+                .functions()
+                .get(function_id.index() as usize)
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "private initializer source function",
+                ))?;
+            let source = function
+                .blocks()
+                .get(block.index() as usize)
+                .and_then(|block| block.statements().get(statement as usize))
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "private initializer source occurrence",
+                ))?;
+            let SemanticStatementKindV1::Assign(assignment) = source.kind() else {
+                return self
+                    .source
+                    .missing("private initializer is not an assignment");
+            };
+            let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+                return self
+                    .source
+                    .missing("private initializer is not an array aggregate");
+            };
+            let place = assignment.destination();
+            let local = function
+                .locals()
+                .get(place.local().index() as usize)
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "private initializer source local",
+                ))?;
+            if !place.projections().is_empty()
+                || local.role().is_entry_argument()
+                || place.ty() != local.ty()
+                || assignment.value().result_type() != local.ty()
+                || aggregate.kind() != &SemanticAggregateKindV1::Array
+            {
+                return self
+                    .source
+                    .missing("private initializer is not one whole nonargument array");
+            }
+            let plan = owner.plan_for_function(function_id).ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("private initializer SSA plan"),
+            )?;
+            let promoted = private_array_binary_search_v1(
+                plan.plan().promoted_variables(),
+                |value| [value.get() as usize],
+                [place.local().index() as usize],
+                &mut SourceCorrespondenceWorkV18(budget),
+            )?
+            .is_ok();
+            let arrays = &self.source.sidecar(root, instance, budget)?.private_arrays;
+            budget.charge_work(arrays.slots.len())?;
+            let mut slots = arrays
+                .slots
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| slot.local == place.local().index());
+            let Some((slot_index, selected_slot)) = slots.next() else {
+                return if promoted {
+                    Ok(None)
+                } else {
+                    self.source
+                        .missing("retained private initializer has no source slot")
+                };
+            };
+            if slots.next().is_some() {
+                return self.source.missing("ambiguous private initializer slot");
+            }
+            if promoted {
+                return self
+                    .source
+                    .missing("retained private initializer contradicts source promotion");
+            }
+            let mut slot = *selected_slot;
+            let facts = private_retained_array_facts_v1(
+                semantic.types(),
+                local.ty(),
+                self.source.owner.inner.limits.max_operations,
+                &mut SourceCorrespondenceWorkV18(budget),
+            )?
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "private initializer fixed layout",
+            ))?;
+            if slot.owner != root_row.coordinates.root
+                || slot.function != function_id
+                || slot.semantic_type != local.ty()
+                || slot.length != facts.length
+                || slot.element_type != facts.element_type
+                || slot.element_facts != facts.element
+                || u64::try_from(aggregate.operands().len()).ok() != Some(facts.length)
+                || !matches!(
+                    facts.element.element,
+                    PrivateRetainedElementFactsV1::Scalar(_)
+                )
+            {
+                return self
+                    .source
+                    .missing("private initializer source layout or component count changed");
+            }
+            use TileAttachmentFieldV29 as Field;
+            let key = |row, field| Self::private_array_attachment_key(root, instance, row, field);
+            slot.count_location = self.private_array_mapped_location(
+                key(slot_index, Field::ArrayCountLocation),
+                budget,
+            )?;
+            slot.alloca_location = self
+                .private_array_mapped_location(key(slot_index, Field::ArrayAllocation), budget)?;
+            // Instance sidecars retain emission order, not the legacy merged
+            // correspondence's sorted order. Do not binary-search raw rows.
+            budget.charge_work(arrays.effects.len())?;
+            let effects = arrays.effects.iter().enumerate().filter(|(_, row)| {
+                row.semantic_block == block.index() && row.semantic_statement == statement
+            });
+            let body = self
+                .inventory
+                .functions()
+                .get(root_row.function_ordinal)
+                .and_then(|row| row.function.body.as_ref())
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "private initializer physical body",
+                ))?;
+            budget.charge_work(1)?;
+            let allocation_block = body
+                .blocks
+                .first()
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "private initializer allocation entry",
+                ))?
+                .id;
+            let mut span = None;
+            let mut previous = None;
+            let mut count = 0usize;
+            for (component, (effect_index, original)) in effects.enumerate() {
+                budget.charge_work(12)?;
+                let row = arrays
+                    .slots
+                    .len()
+                    .checked_add(effect_index)
+                    .ok_or(ArgumentResourceV1::Arithmetic)?;
+                let mut effect = *original;
+                if effect.owner != root_row.coordinates.root
+                    || effect.function != function_id
+                    || effect.local != place.local().index()
+                    || effect.semantic_block != block.index()
+                    || effect.semantic_statement != statement
+                {
+                    return self
+                        .source
+                        .missing("private initializer source instance differs");
+                }
+                let raw_span = (effect.source_first_operation, effect.source_end_operation);
+                let (first, end) = match span {
+                    Some((expected, first, end)) if expected == raw_span => (first, end),
+                    Some(_) => {
+                        return self.source.missing(
+                            "private initializer components name different source ranges",
+                        );
+                    }
+                    None => {
+                        let (first, end) = self.private_array_source_range(
+                            key(row, Field::ArraySourceRange),
+                            budget,
+                        )?;
+                        span = Some((raw_span, first, end));
+                        (first, end)
+                    }
+                };
+                effect.source_first_operation = first.operation;
+                effect.source_end_operation = end;
+                effect.gep_location =
+                    self.private_array_mapped_location(key(row, Field::ArrayGepLocation), budget)?;
+                effect.memory_location = self
+                    .private_array_mapped_location(key(row, Field::ArrayMemoryLocation), budget)?;
+                effect.offset_location = effect
+                    .offset_location
+                    .map(|_| {
+                        self.private_array_mapped_location(
+                            key(row, Field::ArrayOffsetLocation),
+                            budget,
+                        )
+                    })
+                    .transpose()?;
+                let PrivateArrayIndexV1::InitializerElement {
+                    component: actual,
+                    value: PrivateArrayInitializerValueV1::LiteralScalar { value, .. },
+                } = effect.original_index
+                else {
+                    return self
+                        .source
+                        .missing("private initializer is not a literal component");
+                };
+                if actual as usize != component
+                    || effect.memory_location.block != first.block
+                    || previous.is_some_and(|prior| prior >= effect.memory_location.operation)
+                {
+                    return self
+                        .source
+                        .missing("private initializer components are not exact and ordered");
+                }
+                effect.original_index = PrivateArrayIndexV1::InitializerElement {
+                    component: actual,
+                    value: PrivateArrayInitializerValueV1::LiteralScalar {
+                        value,
+                        definition: self.private_array_mapped_location(
+                            key(row, Field::ArrayLiteralDefinition),
+                            budget,
+                        )?,
+                    },
+                };
+                let actual = private_array_exact_physical_relation_v1(
+                    semantic.types(),
+                    function,
+                    body,
+                    root_row.coordinates.root,
+                    function_id,
+                    &slot,
+                    &effect,
+                    PrivateArrayPhysicalBlocksV1 {
+                        allocation: allocation_block,
+                        access: first.block,
+                    },
+                    self.source.owner.inner.limits.max_operations,
+                    &mut SourceCorrespondenceWorkV18(budget),
+                )
+                .map_err(source_private_array_error_v18)?;
+                if actual != component as u64 {
+                    return self
+                        .source
+                        .missing("private initializer normalized component differs");
+                }
+                previous = Some(effect.memory_location.operation);
+                count = count.checked_add(1).ok_or(ArgumentResourceV1::Arithmetic)?;
+            }
+            if u64::try_from(count).ok() != Some(facts.length) {
+                return self.source.missing("private initializer effect census");
+            }
+            Ok(Some(facts.length))
+        })())
+    }
+}
+
 impl ProductionPreRankedKirOwnerV1 {
     fn private_array_initializer_context_v1<'a>(
         &'a self,

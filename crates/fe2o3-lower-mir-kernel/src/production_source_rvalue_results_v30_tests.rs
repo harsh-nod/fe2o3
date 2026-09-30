@@ -1,0 +1,236 @@
+use super::*;
+
+fn probe(
+    allowance: Option<(usize, usize)>,
+    bad_site: bool,
+) -> (SourceOwnedResultV18<()>, usize, usize) {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    let prepared = prepared_source_fixture(ModuleFixture::Ordinary, false, &mut budget);
+    let adopted = prepared.adopted_storage();
+    budget
+        .reserve_storage(budget.peak_storage() + 1 - budget.storage())
+        .unwrap();
+    if let Some((work, storage)) = allowance {
+        budget
+            .charge_work(MODULE_LIMIT - budget.work() - work)
+            .unwrap();
+        budget
+            .reserve_storage(MODULE_LIMIT - budget.storage() - storage)
+            .unwrap();
+    }
+    let floor = budget.storage();
+    let before = budget.work();
+    let result: SourceOwnedResultV18<()> = prepared.with_checked_source_v18(&mut budget, |source, budget| {
+        source.with_analysis_v18(budget, |scope| scope.with_inventory_v1(|inventory, budget| {
+            source.with_ranked_correspondence_v18(inventory, budget, |relation, budget| {
+                for root in 0..source.root_count(budget)? {
+                    let owner = source.root_row(root)?;
+                    let retained = owner.rvalue_results.as_ref().expect("mandatory retained source roster");
+                    assert_eq!(retained.rows.len(), 1);
+                    assert!(retained.storage >= size_of::<SourceRvalueRowV30>());
+                    let row = retained.rows[0];
+                    assert_eq!((row.instance, row.block, row.statement), (0, 0, 0));
+                    let definition = relation.assignment_scalar_definition_v30(
+                        root, row.instance, SemanticBlockIdV1::from_index(row.block),
+                        if bad_site { u32::MAX } else { row.statement }, budget,
+                    )?.expect("the original assignment copies its scalar argument");
+                    let actual = &inventory.definitions()[definition];
+                    assert!(matches!(actual.coordinate,
+                        fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::FunctionArgument { function, argument: 0 }
+                        if function.0 as usize == owner.function_ordinal));
+                    assert_eq!(actual.ty, &Type::Scalar(ScalarType::U32));
+                }
+                Ok(())
+            })
+        }))
+    });
+    assert_eq!(budget.storage(), floor - adopted);
+    (
+        result,
+        budget.work() - before,
+        budget.peak_storage() - floor,
+    )
+}
+
+#[test]
+fn retained_source_rvalues_join_every_actual_scalar_assignment_to_original_inventory() {
+    probe(None, false).0.unwrap();
+}
+
+#[test]
+fn retained_source_rvalues_missing_original_site_is_a_sticky_refusal() {
+    assert!(matches!(
+        probe(None, true).0,
+        Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "original assignment result site differs"
+        ))
+    ));
+}
+
+#[test]
+fn retained_source_rvalue_capture_and_query_have_exact_and_one_short_resources() {
+    let (result, work, storage) = probe(None, false);
+    result.unwrap();
+    let exact = probe(Some((work, storage)), false);
+    exact.0.unwrap();
+    assert_eq!((exact.1, exact.2), (work, storage));
+    let short_work = probe(Some((work - 1, storage)), false).0.unwrap_err();
+    assert!(matches!(
+        entrance_resource(short_work),
+        ArgumentResourceV1::Work(_)
+    ));
+    let short_storage = probe(Some((work, storage - 1)), false).0.unwrap_err();
+    assert!(matches!(
+        entrance_resource(short_storage),
+        ArgumentResourceV1::Storage(_)
+    ));
+}
+
+#[test]
+fn retained_source_rvalue_replay_detects_type_endpoint_omission_and_source_changes() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    let prepared = prepared_source_fixture(ModuleFixture::Ordinary, false, &mut budget);
+    prepared
+        .with_checked_source_v18(&mut budget, |source, budget| {
+            let original = source.root_row(0)?.rvalue_results.as_ref().unwrap();
+            for fault in 0..5 {
+                let mut altered = OwnedSourceRvaluesV30 {
+                    source: original.source,
+                    ledger: original.ledger,
+                    rows: original.rows.clone(),
+                    storage: original.storage,
+                };
+                match fault {
+                    0 => {}
+                    1 => altered.rows[0].ty = SemanticTypeIdV1::from_index(u32::MAX),
+                    2 => altered.rows[0].endpoint = SourceRvalueEndpointV30::Unmodeled,
+                    3 => {
+                        altered.rows.pop();
+                    }
+                    4 => altered.source.semantic[0] ^= 1,
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    original.matches_replay_v30(&altered, budget).map_err(|_| {
+                        ProductionSourceOwnedViewErrorV18::Binding("test replay failed")
+                    })?,
+                    fault == 0
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
+#[test]
+fn retained_rvalue_projection_never_flattens_an_unmodeled_whole_binding() {
+    let scalar = SemanticValueBindingV1::Value {
+        id: ValueId(7),
+        ty: Type::Scalar(ScalarType::U32),
+    };
+    assert_eq!(
+        source_rvalue_endpoint_v30(&scalar),
+        SourceRvalueEndpointV30::Scalar {
+            value: ValueId(7),
+            scalar: ScalarType::U32,
+        }
+    );
+    assert_eq!(
+        source_rvalue_endpoint_v30(&SemanticValueBindingV1::Unit),
+        SourceRvalueEndpointV30::Unit
+    );
+    assert_eq!(
+        source_rvalue_endpoint_v30(&SemanticValueBindingV1::Aggregate(vec![scalar])),
+        SourceRvalueEndpointV30::Unmodeled
+    );
+    assert_eq!(
+        source_rvalue_endpoint_v30(&SemanticValueBindingV1::Unmaterialized),
+        SourceRvalueEndpointV30::Unmodeled
+    );
+}
+
+#[test]
+fn retained_rvalue_header_oracle_covers_capture_and_query_envelopes() {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    let expected = h::<OwnedSourceRvaluesV30>()
+        + h::<Vec<SourceRvalueRowV30>>()
+        + h::<SourceRvalueRowV30>()
+        + h::<SourceRvalueEndpointV30>()
+        + h::<&ExecutionArchiveV29>()
+        + h::<&ExecutionInstancesV29<'_>>()
+        + h::<&SourceReferencePlanV29<'_, '_>>()
+        + h::<&mut PendingScopedRootEmissionV29>()
+        + h::<&mut ArgumentBudgetV1<'_>>()
+        + h::<&ProductionSourceCorrespondenceV18<'_>>()
+        + h::<&SemanticValueBindingV1>()
+        + h::<&ScopedModuleRootV29>()
+        + h::<&OwnedSourceRvaluesV30>()
+        + h::<&SourceRvalueRowV30>()
+        + h::<&SemanticFunctionDeclV1>()
+        + h::<&fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1>()
+        + h::<&fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1<'_>>()
+        + h::<Option<usize>>()
+        + h::<Type>()
+        + h::<(usize, u32, u32)>()
+        + h::<ExecutionCallSourceV29>()
+        + h::<ExecutionSiteV29>()
+        + h::<std::slice::Iter<'_, SourceRvalueRowV30>>()
+        + 8 * h::<usize>()
+        + h::<()>();
+    assert_eq!(source_rvalue_headers_v30().unwrap(), expected);
+}
+
+#[test]
+fn retained_rvalue_query_rejects_funded_foreign_ledger_before_any_charge() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    let prepared = prepared_source_fixture(ModuleFixture::Ordinary, false, &mut budget);
+    let at_refusal = std::cell::Cell::new(None);
+    let result: SourceOwnedResultV18<()> =
+        prepared.with_checked_source_v18(&mut budget, |source, budget| {
+            source.with_analysis_v18(budget, |scope| {
+                scope.with_inventory_v1(|inventory, budget| {
+                    source.with_ranked_correspondence_v18(inventory, budget, |relation, budget| {
+                        let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+                        let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, MODULE_LIMIT);
+                        foreign.reserve_storage(budget.storage())?;
+                        let before = (foreign.work(), foreign.storage(), foreign.peak_storage());
+                        assert!(matches!(
+                            relation.assignment_scalar_definition_v30(
+                                0,
+                                0,
+                                SemanticBlockIdV1::from_index(0),
+                                0,
+                                &mut foreign
+                            ),
+                            Err(ProductionSourceOwnedViewErrorV18::Resource(
+                                ArgumentResourceV1::Accounting
+                            ))
+                        ));
+                        assert_eq!(
+                            (foreign.work(), foreign.storage(), foreign.peak_storage()),
+                            before
+                        );
+                        at_refusal.set(Some(budget.storage()));
+                        Err(ProductionSourceOwnedViewErrorV18::Resource(
+                            ArgumentResourceV1::Accounting,
+                        ))
+                    })
+                })
+            })
+        });
+    assert!(matches!(
+        result,
+        Err(ProductionSourceOwnedViewErrorV18::Resource(
+            ArgumentResourceV1::Accounting
+        ))
+    ));
+    assert_eq!(Some(budget.storage()), at_refusal.get());
+}

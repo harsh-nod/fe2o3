@@ -12,11 +12,81 @@ use fe2o3_kernel_descriptor::{
     SourceTypeRecordV3,
 };
 
+// Closed to this generated argument module. Both descriptor families reuse the
+// complete logical/physical join below; their proof/contract owners stay distinct.
+pub(in crate::generated_kfd_arguments) trait AbiTableV26 {
+    fn source_type(
+        &self,
+        id: fe2o3_kernel_descriptor::RustTypeIdentity,
+        pay: &mut impl FnMut(usize) -> std::result::Result<(), Resource>,
+    ) -> Result<SourceTypeRecordV3>;
+    fn device_layout(
+        &self,
+        id: fe2o3_kernel_descriptor::DeviceLayoutIdentity,
+        pay: &mut impl FnMut(usize) -> std::result::Result<(), Resource>,
+    ) -> Result<DeviceLayoutRecordV1>;
+}
+macro_rules! table {
+    ($name:ident) => {
+        impl AbiTableV26 for fe2o3_kernel_descriptor::$name<'_> {
+            fn source_type(
+                &self,
+                id: fe2o3_kernel_descriptor::RustTypeIdentity,
+                pay: &mut impl FnMut(usize) -> std::result::Result<(), Resource>,
+            ) -> Result<SourceTypeRecordV3> {
+                Ok(fe2o3_kernel_descriptor::$name::source_type(self, id, pay)?)
+            }
+            fn device_layout(
+                &self,
+                id: fe2o3_kernel_descriptor::DeviceLayoutIdentity,
+                pay: &mut impl FnMut(usize) -> std::result::Result<(), Resource>,
+            ) -> Result<DeviceLayoutRecordV1> {
+                Ok(fe2o3_kernel_descriptor::$name::device_layout(
+                    self, id, pay,
+                )?)
+            }
+        }
+    };
+}
+table!(DeviceDescriptorTableV3);
+table!(DeviceDescriptorTableV4);
+
+pub(in crate::generated_kfd_arguments) trait AbiKernelV26 {
+    fn kernel_id(&self) -> KernelId;
+    fn abi_layout(&self) -> fe2o3_kernel_descriptor::KernelAbiLayoutV1;
+    fn argument_count(&self) -> usize;
+    fn component_count(&self) -> usize;
+    fn arguments(&self) -> ArgumentCursorV3<'_, '_>;
+}
+macro_rules! kernel {
+    ($name:ident) => {
+        impl AbiKernelV26 for fe2o3_kernel_descriptor::$name<'_, '_> {
+            fn kernel_id(&self) -> KernelId {
+                fe2o3_kernel_descriptor::$name::kernel_id(self)
+            }
+            fn abi_layout(&self) -> fe2o3_kernel_descriptor::KernelAbiLayoutV1 {
+                fe2o3_kernel_descriptor::$name::abi_layout(self)
+            }
+            fn argument_count(&self) -> usize {
+                fe2o3_kernel_descriptor::$name::argument_count(self)
+            }
+            fn component_count(&self) -> usize {
+                fe2o3_kernel_descriptor::$name::component_count(self)
+            }
+            fn arguments(&self) -> ArgumentCursorV3<'_, '_> {
+                fe2o3_kernel_descriptor::$name::arguments(self)
+            }
+        }
+    };
+}
+kernel!(KernelDescriptorRefV3);
+kernel!(KernelDescriptorRefV4);
+
 // Canonical legacy type/layout hashing has at most two physical components here.
 // 4096 covers simultaneous framed encodings, vector growth and hash temporaries;
 // nominal pointer-sized scalars and raw pointers are rejected before encoding.
 const TYPE_IDENTITY_SCRATCH: usize = 4096;
-pub(super) const ABI_SCRATCH_STORAGE: usize = TYPE_IDENTITY_SCRATCH
+pub(in crate::generated_kfd_arguments) const ABI_SCRATCH_STORAGE: usize = TYPE_IDENTITY_SCRATCH
     + size_of::<ArgumentCursorV3<'static, 'static>>()
     + size_of::<LogicalArgumentRefV3<'static, 'static>>()
     + size_of::<SourceTypeRecordV3>()
@@ -24,13 +94,14 @@ pub(super) const ABI_SCRATCH_STORAGE: usize = TYPE_IDENTITY_SCRATCH
     + size_of::<DeviceLayoutDescriptorV1>()
     + size_of::<PhysicalComponentV3>()
     + size_of::<RustLayoutEvidenceV1>()
-    + 2 * size_of::<RustPhysicalComponentV1>();
+    + 2 * size_of::<RustPhysicalComponentV1>()
+    + 128;
 
-pub(super) fn validate(
+pub(in crate::generated_kfd_arguments) fn validate(
     plan: &GeneratedArgumentPackingPlanV1,
     observation: &GeneratedKfdPackingObservationV1,
-    table: &DeviceDescriptorTableV4<'_>,
-    kernel: &KernelDescriptorRefV4<'_, '_>,
+    table: &impl AbiTableV26,
+    kernel: &impl AbiKernelV26,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     budget.charge_work(64)?;

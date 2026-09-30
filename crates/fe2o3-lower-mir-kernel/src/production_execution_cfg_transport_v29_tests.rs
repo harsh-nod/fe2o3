@@ -223,7 +223,10 @@ fn captured_call_result_edge_is_exact_and_claimed_once() {
                 None,
                 Some(SemanticValueBindingV1::Execution(seed.clone())),
             ];
-            let archive = BTreeMap::from([(definition, SemanticValueBindingV1::Execution(seed))]);
+            let archive = SemanticSsaBindingsV1::from([(
+                definition,
+                SemanticValueBindingV1::Execution(seed),
+            )]);
             cursor.begin_block(block, budget)?;
             assert!(
                 cursor
@@ -323,8 +326,10 @@ fn nominal_cfg_construction_and_edge_queries_have_exact_resource_boundaries() {
                         None,
                         None,
                     ];
-                    let archive =
-                        BTreeMap::from([(definition, SemanticValueBindingV1::Execution(seed))]);
+                    let archive = SemanticSsaBindingsV1::from([(
+                        definition,
+                        SemanticValueBindingV1::Execution(seed),
+                    )]);
                     cursor.begin_block(block, budget)?;
                     cursor.transport_edge(block, 0, target, &held, &archive, budget)?;
                     cursor.transport_edge(
@@ -368,7 +373,7 @@ fn nominal_cfg_construction_and_edge_queries_have_exact_resource_boundaries() {
                             0,
                             SemanticBlockIdV1::from_index(1),
                             &[],
-                            &BTreeMap::new(),
+                            &SemanticSsaBindingsV1::default(),
                             &mut foreign
                         )
                         .is_err()
@@ -704,7 +709,8 @@ fn populated_diamond_join_still_requires_both_predecessors() {
             .unwrap();
             let mut held = vec![None; 7];
             held[4] = Some(SemanticValueBindingV1::Execution(seed.clone()));
-            let archive = BTreeMap::from([(value, SemanticValueBindingV1::Execution(seed))]);
+            let archive =
+                SemanticSsaBindingsV1::from([(value, SemanticValueBindingV1::Execution(seed))]);
             cursor.begin_block(block, budget)?;
             cursor.use_place(
                 execution_site_v29(block, Some(0)),

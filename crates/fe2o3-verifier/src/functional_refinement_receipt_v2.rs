@@ -1517,7 +1517,7 @@ fn claim_specific_numerical_proof_required() -> FunctionalRefinementVerusExecuti
     }
 }
 
-fn validate_proved_output(
+pub(crate) fn validate_proved_output(
     observed: &FunctionalRefinementRuntimeProcessOutputV1,
 ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
     let prefix = b"verification results:: ";

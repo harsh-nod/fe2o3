@@ -1,4 +1,6 @@
 use super::*;
+#[path = "owned_licm_v18_tests.rs"]
+mod storage_v18_tests;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, CastKind,
     CheckedBinaryOperator, ComparePredicate, Constant, Function, Kernel, LaunchDomain,

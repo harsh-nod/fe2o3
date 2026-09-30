@@ -28,6 +28,36 @@ pub(crate) const POLICY3_MAX_PASSES: usize = 256;
 pub(crate) const POLICY3_GRAPH_CAP: usize = 32_768;
 pub(crate) const POLICY3_SESSION_WORK_CAP: usize = 25_268_224;
 
+pub(crate) const POLICY9_PASSES: [PassKind; 2] = [
+    PassKind::IntegerNeutralWorklistCanonicalization,
+    PassKind::DeadCodeElimination,
+];
+
+// The first mixed general-optimization policy preserves the complete CFG.
+// Existing CSE implementations admit only total, effect-free operation keys.
+pub(crate) const POLICY10_PASSES: [PassKind; 4] = [
+    PassKind::IntegerNeutralWorklistCanonicalization,
+    PassKind::LocalPureCommonSubexpressionElimination,
+    PassKind::DominancePureCommonSubexpressionElimination,
+    PassKind::DeadCodeElimination,
+];
+
+pub(crate) const POLICY11_PASSES: [PassKind; 5] = [
+    PassKind::SelectSameValueCanonicalization,
+    PassKind::IntegerNeutralWorklistCanonicalization,
+    PassKind::LocalPureCommonSubexpressionElimination,
+    PassKind::DominancePureCommonSubexpressionElimination,
+    PassKind::DeadCodeElimination,
+];
+pub(crate) const POLICY11_MAX_ROUNDS: usize = 32;
+
+#[derive(Clone, Copy)]
+pub(crate) struct FixedpointRoundResourcesV18 {
+    pub(crate) work: usize,
+    pub(crate) occurrence_work: usize,
+    pub(crate) presentation_limit: usize,
+}
+
 /// This selector is private to the common execution/capture implementation.
 /// External report contents never construct it or choose a roster.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +65,9 @@ pub(crate) enum FixedPolicy {
     Historical2,
     Checked3,
     Integer6,
+    IntegerWorklist9,
+    MixedPureCse10,
+    MixedFixedpoint11,
 }
 
 impl FixedPolicy {
@@ -43,6 +76,9 @@ impl FixedPolicy {
             Self::Historical2 => &KIR_PLIRON_PRODUCTION_PASSES_V12,
             Self::Checked3 => &POLICY3_PASSES,
             Self::Integer6 => &crate::fixed_integer_continuation_v1::INTEGER_CONTINUATION_PASSES,
+            Self::IntegerWorklist9 => &POLICY9_PASSES,
+            Self::MixedPureCse10 => &POLICY10_PASSES,
+            Self::MixedFixedpoint11 => &POLICY11_PASSES,
         }
     }
 
@@ -51,7 +87,29 @@ impl FixedPolicy {
             Self::Historical2 => b"FE2O3/KIR-OPTIMIZATION-MAP/V12/POLICY-2/OBSERVED-V1\0",
             Self::Checked3 => b"FE2O3/KIR-OPTIMIZATION-MAP/V12/POLICY-3/OBSERVED-V1\0",
             Self::Integer6 => b"FE2O3/KIR-OPTIMIZATION-MAP/V12/POLICY-6/INTEGER-CONTINUATION-V1\0",
+            Self::IntegerWorklist9 => {
+                b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-9/INTEGER-WORKLIST-V1\0"
+            }
+            Self::MixedPureCse10 => b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-10/MIXED-PURE-CSE-V1\0",
+            Self::MixedFixedpoint11 => {
+                b"FE2O3/KIR-OPTIMIZATION-MAP/V18/POLICY-11/MIXED-FIXEDPOINT-V1\0"
+            }
         }
+    }
+
+    pub(crate) const fn max_passes(self) -> usize {
+        match self {
+            Self::MixedFixedpoint11 => POLICY11_PASSES.len() * POLICY11_MAX_ROUNDS,
+            _ => self.passes().len(),
+        }
+    }
+
+    pub(crate) fn pass_at(self, index: usize) -> Option<PassKind> {
+        (index < self.max_passes()).then(|| self.passes()[index % self.passes().len()])
+    }
+
+    pub(crate) fn complete_pass_count(self, count: usize) -> bool {
+        count != 0 && count <= self.max_passes() && count % self.passes().len() == 0
     }
 }
 
@@ -88,6 +146,30 @@ impl<'budget, 'work> CseLedger<'budget, 'work> {
 
     pub(crate) fn failure(&self) -> Option<Resource> {
         self.first_failure
+    }
+
+    // The enclosing candidate transaction owns this retained reservation and
+    // drops all captures/reports before restoring its floor, including failure.
+    pub(crate) fn admit_fixedpoint_round(
+        &mut self,
+        work: usize,
+        retained: usize,
+    ) -> Result<(), Resource> {
+        if let Some(error) = self.failure() {
+            return Err(error);
+        }
+        self.budget
+            .charge_work(work)
+            .map_err(|error| self.remember(error))?;
+        self.budget
+            .reserve_storage(retained)
+            .map_err(|error| self.remember(error))
+    }
+
+    pub(crate) fn release_fixedpoint_scratch(&mut self, bytes: usize) -> Result<(), Resource> {
+        self.budget
+            .release_storage(bytes)
+            .map_err(|error| self.remember(error))
     }
 
     pub(crate) fn record_integer_error(
@@ -393,11 +475,6 @@ impl Policy3ExecutionWitnessV1 {
         execution: ExecutionProfileV1,
         budget: &mut Budget<'_>,
     ) -> Result<Self, Resource> {
-        let ExecutionProfileV1 {
-            resources: profile,
-            registered_nodes,
-            cse_work,
-        } = execution;
         // Count/terminal/endpoint checks plus both eight-row roster traversals.
         budget.charge_work(4 + 2 * POLICY3_PASSES.len())?;
         if report.passes().len() != POLICY3_PASSES.len()
@@ -428,42 +505,7 @@ impl Policy3ExecutionWitnessV1 {
             writer.raw(owner.canonical().identity().digest());
             writer.u64(owner.canonical().identity().canonical_length());
         }
-        for value in [
-            registered_nodes,
-            profile.work(),
-            profile.persistent_storage(),
-            profile.temporary_storage(),
-            POLICY3_PASSES.len(),
-            cse_work,
-            POLICY3_CANONICAL_CAP,
-            POLICY3_CANONICAL_CAP,
-            POLICY3_MAX_PASSES,
-            POLICY3_GRAPH_CAP,
-            POLICY3_SESSION_WORK_CAP,
-            report.initial_graph_work(),
-            report.final_graph_work(),
-            report.invalidated_handle_count(),
-            report.work_units(),
-        ] {
-            writer.usize(value)?;
-        }
-        let final_graph = report.final_graph_identity();
-        writer.raw(&final_graph.canonical_digest());
-        writer.u64(final_graph.epoch().sequence());
-        writer.usize(final_graph.tree_work())?;
-        writer.usize(final_graph.operation_count())?;
-        writer.raw(map.digest());
-        for pass in report.passes() {
-            writer.raw(&[pass_tag(pass.pass()), u8::from(pass.changed())]);
-            writer.u16(0);
-            writer.usize(pass.input_graph_work())?;
-            writer.usize(pass.output_graph_work())?;
-            writer.usize(pass.work_units())?;
-            writer.u64(pass.input_epoch().sequence());
-            writer.u64(pass.output_epoch().sequence());
-            writer.usize(pass.invalidated_analysis_count())?;
-            writer.usize(pass.preserved_analysis_count())?;
-        }
+        write_execution_tail(&mut writer, report, map.digest(), execution)?;
         assert_eq!(writer.cursor, POLICY3_EXECUTION_RECORD_BYTES_V1);
         Ok(Self { canonical })
     }
@@ -478,11 +520,12 @@ pub(crate) fn pass_tag(pass: PassKind) -> u8 {
         PassKind::SimplifyControlFlow => 5,
         PassKind::DominancePureCommonSubexpressionElimination => 6,
         PassKind::IntegerNeutralCanonicalization => 7,
+        PassKind::IntegerNeutralWorklistCanonicalization => 8,
     }
 }
 
 struct RecordWriter<'a> {
-    bytes: &'a mut [u8; POLICY3_EXECUTION_RECORD_BYTES_V1],
+    bytes: &'a mut [u8],
     cursor: usize,
 }
 
@@ -506,3 +549,74 @@ impl RecordWriter<'_> {
         Ok(())
     }
 }
+
+fn write_execution_tail(
+    writer: &mut RecordWriter<'_>,
+    report: &PlironOptimizationReportV1,
+    map_digest: &[u8; 32],
+    execution: ExecutionProfileV1,
+) -> Result<(), Resource> {
+    write_execution_tail_for_pass_count(writer, report, map_digest, execution, POLICY3_PASSES.len())
+}
+
+fn write_execution_tail_for_pass_count(
+    writer: &mut RecordWriter<'_>,
+    report: &PlironOptimizationReportV1,
+    map_digest: &[u8; 32],
+    execution: ExecutionProfileV1,
+    pass_count: usize,
+) -> Result<(), Resource> {
+    let ExecutionProfileV1 {
+        resources: profile,
+        registered_nodes,
+        cse_work,
+    } = execution;
+    for value in [
+        registered_nodes,
+        profile.work(),
+        profile.persistent_storage(),
+        profile.temporary_storage(),
+        pass_count,
+        cse_work,
+        POLICY3_CANONICAL_CAP,
+        POLICY3_CANONICAL_CAP,
+        POLICY3_MAX_PASSES,
+        POLICY3_GRAPH_CAP,
+        POLICY3_SESSION_WORK_CAP,
+        report.initial_graph_work(),
+        report.final_graph_work(),
+        report.invalidated_handle_count(),
+        report.work_units(),
+    ] {
+        writer.usize(value)?;
+    }
+    let final_graph = report.final_graph_identity();
+    writer.raw(&final_graph.canonical_digest());
+    writer.u64(final_graph.epoch().sequence());
+    writer.usize(final_graph.tree_work())?;
+    writer.usize(final_graph.operation_count())?;
+    writer.raw(map_digest);
+    for pass in report.passes() {
+        writer.raw(&[pass_tag(pass.pass()), u8::from(pass.changed())]);
+        writer.u16(0);
+        writer.usize(pass.input_graph_work())?;
+        writer.usize(pass.output_graph_work())?;
+        writer.usize(pass.work_units())?;
+        writer.u64(pass.input_epoch().sequence());
+        writer.u64(pass.output_epoch().sequence());
+        writer.usize(pass.invalidated_analysis_count())?;
+        writer.usize(pass.preserved_analysis_count())?;
+    }
+    Ok(())
+}
+
+#[path = "fixed_policy_v18.rs"]
+mod storage_v18;
+pub(crate) use storage_v18::validate_fixedpoint_report;
+pub use storage_v18::{
+    INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V18, INTEGER_WORKLIST_EXECUTION_RECORD_BYTES_V18,
+    IntegerContinuationExecutionWitnessV18, IntegerWorklistExecutionWitnessV18,
+    MIXED_PURE_CSE_EXECUTION_RECORD_BYTES_V18, MixedFixedpointExecutionWitnessV18,
+    MixedPureCseExecutionWitnessV18, POLICY3_EXECUTION_RECORD_BYTES_V18,
+    Policy3ExecutionWitnessV18,
+};

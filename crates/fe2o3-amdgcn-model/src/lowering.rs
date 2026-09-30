@@ -50,6 +50,10 @@ pub use ordered_program_v17::lower_canonical_v17_compiler_module_to_gfx942_xnack
 mod ordered_program_composition_v1;
 pub use ordered_program_composition_v1::*;
 
+#[path = "lowering/physical_launch_v2.rs"]
+mod physical_launch_v2;
+pub use physical_launch_v2::*;
+
 include!("lowering_native_v12.rs");
 
 use crate::{
@@ -871,7 +875,7 @@ fn validate_semantic_anchor_identity_v1(
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v9(&owner) == expected),
         11 => VerifiedCanonicalKernelIrV11::from_module(module.clone())
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v11(&owner) == expected),
-        12 => false,
+        12 | 18 => false,
         _ => unreachable!("semantic anchor identities have a closed version constructor"),
     };
     if !matches {
@@ -1117,6 +1121,27 @@ fn lower_compiler_module_with_ordered_context(
     require_kernel: bool,
     ordered_owner: Option<OrderedModuleOwner<'_>>,
 ) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_physical_context_v2(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        ordered_owner,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_compiler_module_with_physical_context_v2(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
+    physical: Option<&CompilerPhysicalLaunchV2<'_>>,
+) -> Result<String, LoweringErrors> {
     if require_kernel && module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -1128,6 +1153,8 @@ fn lower_compiler_module_with_ordered_context(
     // Join before omitting only the redundant raw-module verification pass.
     if let Some(OrderedModuleOwner::CompositionV1(owner)) = ordered_owner {
         ordered_program_composition_v1::validate_owner_context(module, target, owner)?;
+    } else if let Some(input @ SemanticAnchorInputV1::NativeV18(_)) = semantic_anchor_identity {
+        input.validate(module)?;
     } else {
         verify_module(module).map_err(LoweringErrors::verification)?;
     }
@@ -1143,10 +1170,24 @@ fn lower_compiler_module_with_ordered_context(
         Some(OrderedModuleOwner::CompositionV1(owner)) => {
             v12_preflight::reject_unsupported_v17_module(owner.canonical())?;
         }
-        None => reject_unsupported_v12_module(module)?,
+        None => match semantic_anchor_identity {
+            Some(input @ SemanticAnchorInputV1::NativeV18(owner)) => {
+                input.validate(module)?;
+                v12_preflight::reject_unsupported_v18_module(owner)?;
+            }
+            _ => reject_unsupported_v12_module(module)?,
+        },
     }
 
-    if let Some(exact_target) = target.exact_target_binding() {
+    // V18 source KIR is target-neutral. Its typed selection is inert emission
+    // input; all declared capabilities are still validated below. Historical
+    // and V12 entries retain their required exact-target capability rows.
+    if let Some(exact_target) = target.exact_target_binding()
+        && !matches!(
+            semantic_anchor_identity,
+            Some(SemanticAnchorInputV1::NativeV18(_))
+        )
+    {
         for kernel in &module.kernels {
             let entry = kernel_entry_function(module, kernel)?;
             require_exact_kernel_binding(module, kernel, entry, exact_target)?;
@@ -1185,6 +1226,9 @@ fn lower_compiler_module_with_ordered_context(
     }
 
     let launch_policy_map = validate_launch_policies(module, &kernels, launch_policies)?;
+    if let Some(physical) = physical {
+        physical.check(module, target)?;
+    }
 
     let mut entries = BTreeMap::<FunctionId, &Kernel>::new();
     let mut emitted_symbols = BTreeMap::<String, String>::new();
@@ -1397,7 +1441,13 @@ fn lower_compiler_module_with_ordered_context(
             Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
             _ => None,
         };
-        preflight_function(&mut lowerer)?;
+        preflight_function_with_physical_context_v2(
+            &mut lowerer,
+            physical
+                .map(|physical| physical.entry(kernel))
+                .transpose()?
+                .flatten(),
+        )?;
         kernel_lowerers.push(lowerer);
     }
 
@@ -1972,8 +2022,15 @@ fn component_names(helpers: &[&Function], component: &[usize]) -> String {
 }
 
 fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+    preflight_function_with_physical_context_v2(lowerer, None)
+}
+
+fn preflight_function_with_physical_context_v2(
+    lowerer: &mut FunctionLowerer<'_>,
+    physical: Option<&fe2o3_kernel_analysis::UniformityPhysicalLaunchV2<'_>>,
+) -> Result<(), LoweringErrors> {
     validate_reducible_cfg(lowerer)?;
-    validate_convergent_cfg(lowerer)?;
+    validate_convergent_cfg(lowerer, physical)?;
     lowerer.validate_parameters()?;
     let body = lowerer.body("function body is missing during preflight")?;
     for block in &body.blocks {
@@ -2002,7 +2059,19 @@ fn validate_reducible_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringE
     ))
 }
 
-fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+fn validate_convergent_cfg(
+    lowerer: &FunctionLowerer<'_>,
+    physical: Option<&fe2o3_kernel_analysis::UniformityPhysicalLaunchV2<'_>>,
+) -> Result<(), LoweringErrors> {
+    if let Some(physical) = physical
+        && (!std::ptr::eq(physical.module(), lowerer.module)
+            || !std::ptr::eq(physical.function(), lowerer.function)
+            || !lowerer
+                .kernel
+                .is_some_and(|kernel| std::ptr::eq(kernel, physical.kernel())))
+    {
+        return Err(physical_launch_v2::invalid(lowerer.module));
+    }
     let body = lowerer.body("function body is missing during convergent CFG validation")?;
     let convergent_operations = body
         .blocks
@@ -2028,7 +2097,10 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         return Ok(());
     }
 
-    let report = fe2o3_kernel_analysis::analyze_kernel_entry(lowerer.module, lowerer.function);
+    let report = match physical {
+        Some(physical) => physical.analyze(),
+        None => fe2o3_kernel_analysis::analyze_kernel_entry(lowerer.module, lowerer.function),
+    };
     if let Some(diagnostic) = report.diagnostics().iter().find(|diagnostic| {
         matches!(
             diagnostic,
@@ -9572,6 +9644,23 @@ fn llvm_width(scalar: ScalarType) -> u16 {
     scalar.bit_width().unwrap_or(64)
 }
 
+/// Returns the mathematical `Index` width used by this AMD lowering contract.
+///
+/// This reads the same scalar spelling/width helpers as the emitter. It is not
+/// device-pointer width, launch authority, or attestation of executable bytes.
+/// Callers must separately bind the genuine source and retained target profile.
+pub fn production_logical_index_width_v19() -> fe2o3_kernel_ir::FormalIndexWidth {
+    use fe2o3_kernel_ir::FormalIndexWidth;
+    match (
+        llvm_scalar(ScalarType::Index),
+        llvm_width(ScalarType::Index),
+    ) {
+        ("i32", 32) => FormalIndexWidth::Bits32,
+        ("i64", 64) => FormalIndexWidth::Bits64,
+        _ => FormalIndexWidth::Unknown,
+    }
+}
+
 fn constant_value(constant: &Constant) -> Option<String> {
     match constant {
         Constant::Bool(value) => Some(value.to_string()),
@@ -9722,6 +9811,64 @@ fn cast_opcode(kind: CastKind, from: &Type) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_formal_index_width_uses_actual_scalar_and_global_id_lowering() {
+        assert_eq!(
+            production_logical_index_width_v19(),
+            fe2o3_kernel_ir::FormalIndexWidth::Bits64
+        );
+        assert_eq!(llvm_scalar(ScalarType::Index), "i64");
+        assert_eq!(llvm_width(ScalarType::Index), 64);
+        let module = Module::new("formal_index_width");
+        let mut block = BasicBlock::new(BlockId(0));
+        block.terminator = Some(Terminator::Return { values: Vec::new() });
+        let function = Function::kernel_entry(
+            "entry",
+            fe2o3_kernel_ir::Signature::new(Vec::new(), Vec::new()),
+            Vec::new(),
+            vec![block],
+        );
+        let symbols = BTreeMap::new();
+        for target in [
+            LoweringTarget::Gfx942XnackMinusV1,
+            LoweringTarget::Gfx950XnackMinusV1,
+        ] {
+            for group in [1, 64, 1024] {
+                let mut kernel = Kernel::new(
+                    "entry",
+                    "entry",
+                    LaunchDomain::D1 {
+                        x: LaunchExtent::Dynamic,
+                    },
+                );
+                let workgroup = WorkgroupSize::new(group, 1, 1);
+                kernel.workgroup_size = Some(workgroup);
+                let lowerer = FunctionLowerer::compiler_module_kernel(
+                    &module,
+                    &kernel,
+                    &function,
+                    workgroup,
+                    Some(WaveWidth::Wave64),
+                    &symbols,
+                    target,
+                    None,
+                    SemanticAnchorEmissionV1::Disabled,
+                )
+                .unwrap();
+                let mut output = String::new();
+                lowerer
+                    .emit_logical_global_id(&mut output, "%index")
+                    .unwrap();
+                assert_eq!(
+                    output,
+                    format!(
+                        "  %index.local.i32 = call i32 @llvm.amdgcn.workitem.id.x()\n  %index.group.i32 = call i32 @llvm.amdgcn.workgroup.id.x()\n  %index.local = zext i32 %index.local.i32 to i64\n  %index.group = zext i32 %index.group.i32 to i64\n  %index.base = mul i64 %index.group, {group}\n  %index = add i64 %index.base, %index.local\n"
+                    )
+                );
+            }
+        }
+    }
 
     #[test]
     fn semantic_anchor_manifest_limits_have_exact_boundaries() {

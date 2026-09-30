@@ -20,8 +20,15 @@ impl From<CanonicalKernelIrVerificationResourceErrorV1> for MeteredControlFlowEr
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ControlFlowStorageV2 {
+    LegacyRows,
+    TypedBytes,
+}
+
 struct ControlFlowResourcesV1<'budget, 'work> {
     budget: Option<&'budget mut CanonicalKernelIrVerificationResourceBudgetV1<'work>>,
+    storage: ControlFlowStorageV2,
 }
 
 impl ControlFlowResourcesV1<'_, '_> {
@@ -40,6 +47,9 @@ impl ControlFlowResourcesV1<'_, '_> {
         let Some(budget) = self.budget.as_deref_mut() else {
             return Ok(Vec::with_capacity(capacity));
         };
+        if self.storage == ControlFlowStorageV2::TypedBytes {
+            return allocate_control_flow_bytes_v2(capacity, budget).map_err(Into::into);
+        }
         let cells = capacity
             .checked_mul(row_cells)
             .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
@@ -83,11 +93,18 @@ impl ControlFlowResourcesV1<'_, '_> {
         logical_capacity: usize,
         row_cells: usize,
     ) -> Result<(), MeteredControlFlowErrorV1> {
+        let actual_bytes = (self.storage == ControlFlowStorageV2::TypedBytes)
+            .then(|| control_flow_vector_bytes_v2(&values))
+            .transpose()?;
         drop(values);
         if let Some(budget) = self.budget.as_deref_mut() {
-            let cells = logical_capacity
-                .checked_mul(row_cells)
-                .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+            let cells = if let Some(bytes) = actual_bytes {
+                bytes
+            } else {
+                logical_capacity
+                    .checked_mul(row_cells)
+                    .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?
+            };
             budget.release_storage(cells)?;
         }
         Ok(())
@@ -98,6 +115,20 @@ impl ControlFlowResourcesV1<'_, '_> {
         rows: Vec<Vec<usize>>,
         entries: usize,
     ) -> Result<(), MeteredControlFlowErrorV1> {
+        if self.storage == ControlFlowStorageV2::TypedBytes {
+            self.charge(rows.len())?;
+            let mut bytes = control_flow_vector_bytes_v2(&rows)?;
+            for row in &rows {
+                bytes = bytes
+                    .checked_add(control_flow_vector_bytes_v2(row)?)
+                    .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+            }
+            drop(rows);
+            if let Some(budget) = self.budget.as_deref_mut() {
+                budget.release_storage(bytes)?;
+            }
+            return Ok(());
+        }
         let count = rows.len();
         drop(rows);
         if let Some(budget) = self.budget.as_deref_mut() {
@@ -114,12 +145,23 @@ impl ControlFlowResourcesV1<'_, '_> {
         positions: &mut [(BlockId, usize)],
     ) -> Result<(), MeteredControlFlowErrorV1> {
         if let Some(budget) = self.budget.as_deref_mut() {
-            crate::verification_index_v1::verification_radix_sort_u32_by_key_v1(
-                positions,
-                2,
-                budget,
-                |row| row.0.0,
-            )?;
+            match self.storage {
+                ControlFlowStorageV2::LegacyRows => {
+                    crate::verification_index_v1::verification_radix_sort_u32_by_key_v1(
+                        positions,
+                        2,
+                        budget,
+                        |row| row.0.0,
+                    )?;
+                }
+                ControlFlowStorageV2::TypedBytes => {
+                    crate::verification_index_v1::verification_radix_sort_u32_bytes_v2(
+                        positions,
+                        budget,
+                        |row| row.0.0,
+                    )?;
+                }
+            }
         } else {
             // The ordinal tie-breaker matches the stable metered radix sort.
             positions.sort_unstable();
@@ -188,6 +230,7 @@ impl MeteredIndexedControlFlowV1 {
     ) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
         let mut resources = ControlFlowResourcesV1 {
             budget: Some(budget),
+            storage: ControlFlowStorageV2::LegacyRows,
         };
         let result = (|| {
             let definition = resources.block_position(&self.flow.block_positions, definition)?;
@@ -230,6 +273,7 @@ pub(crate) fn analyze_control_flow_with_verification_budget_v1(
         limits,
         &mut ControlFlowResourcesV1 {
             budget: Some(budget),
+            storage: ControlFlowStorageV2::LegacyRows,
         },
     );
     match result {

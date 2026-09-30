@@ -121,7 +121,8 @@ fn ablation_sources_keep_the_production_export_and_exact_stage_shapes() {
     for (feature, source) in variants {
         assert!(source.contains(feature));
         assert!(source.contains("gfx950_gpt_oss_120b_decode_megakernel_v1"));
-        assert!(source.contains("launch(required = [256, 1, 1]"));
+        let compact = source.split_whitespace().collect::<String>();
+        assert!(compact.contains("launch(required=[256,1,1]"));
         assert!(source.contains("max_grid = [4, 1, 1]"));
         assert!(source.contains("let lane_index = global_index % crate::WAVE_SIZE"));
         assert!(source.contains("let item_index = global_index / crate::WAVE_SIZE"));
@@ -146,6 +147,12 @@ fn ablation_sources_keep_the_production_export_and_exact_stage_shapes() {
 fn pipelined_attention_source_has_two_real_double_buffered_lds_pipelines() {
     let source = include_str!("../src/kernel_pipelined_attention.rs");
     assert!(source.contains("kernel-gpt-oss-decode-pipelined-attention"));
+    // Each lane retains one eight-byte fragment in each of two double buffers.
+    let fragment_bytes = core::mem::size_of::<fe2o3_device::Bf16MfmaAFragment<'_>>()
+        + core::mem::size_of::<fe2o3_device::Bf16MfmaBFragment<'_>>();
+    let shared_bytes = 2 * WORKGROUP_SIZE * fragment_bytes;
+    assert_eq!(shared_bytes, 8192);
+    assert!(source.contains(&format!("static_shared_memory_bytes = {shared_bytes}")));
     assert!(source.contains("WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 256, 1>"));
     assert!(source.contains("WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 256, 1>"));
     assert!(source.contains("let pipeline_lane = global_index % crate::WORKGROUP_SIZE"));

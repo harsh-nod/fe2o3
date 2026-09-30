@@ -17,7 +17,8 @@ const START: usize = 1 + 1;
 const INPUT: usize = 2 + 1;
 const FINISH: usize = 3;
 const JOIN_FIXED: usize = 1 + 1 + 1 + 3 + 1 + 1 + 1;
-const JOIN_BLOCK: usize = 1 + 7 + 2 + 1 + 1;
+// The three comparisons join event count, successor count and failure boundary.
+const JOIN_BLOCK: usize = 1 + 7 + 3 + 1 + 1;
 const JOIN_EDGE: usize = 1 + 7 + 1 + 1 + 1;
 const JOIN_EVENT: usize = 1 + 4 + 1 + 3 + 1;
 const JOIN_UNRESOLVED_EVENT: usize = 1 + 4 + 1 + 1;
@@ -94,6 +95,7 @@ const EDGE_WORK: usize = ROOT_END
 struct Layout {
     header: usize,
     function: usize,
+    boundary_headers: usize,
     block: usize,
     event: usize,
     constant: usize,
@@ -106,6 +108,7 @@ impl Layout {
     fn sparse(self) -> usize {
         self.header
             + self.function
+            + self.boundary_headers
             + 3 * self.block
             + 13 * self.event
             + 4 * self.constant
@@ -115,6 +118,7 @@ impl Layout {
     fn edges(self) -> usize {
         self.header
             + 2 * self.function
+            + 2 * self.boundary_headers
             + 5 * self.block
             + 5 * self.event
             + 6 * self.constant
@@ -131,14 +135,18 @@ fn layout() -> Layout {
     assert_eq!(size_of::<ProductionSemanticSsaOccurrenceStorageV1>(), word);
     let aligned = |bytes: usize, alignment: usize| bytes.div_ceil(alignment) * alignment;
     // Independently check the three private layouts against their actual
-    // fields, not a production storage formula. Other rows are public types.
+    // fields, including the optional terminal-failure boundary, not a
+    // production storage formula. Other rows are public types.
     let header = vector + word;
     let function = aligned(
         size_of::<SemanticFunctionIdV1>() + 7 * vector,
         align_of::<Vec<u8>>(),
     );
+    // Four observer passes and their four adapter boundary slots are charged
+    // once per function, before count/fill buffers, even with no Assert tail.
+    let boundary_headers = (4 + 4) * size_of::<Option<usize>>();
     let block = aligned(
-        size_of::<SsaBlockIdV1>() + 2 * size_of::<Range<usize>>(),
+        size_of::<SsaBlockIdV1>() + 2 * size_of::<Range<usize>>() + size_of::<Option<usize>>(),
         align_of::<Range<usize>>(),
     );
     assert_eq!(
@@ -148,6 +156,7 @@ fn layout() -> Layout {
     Layout {
         header,
         function,
+        boundary_headers,
         block,
         event: size_of::<ProductionSemanticSsaEventOccurrenceV1>(),
         constant: size_of::<ProductionSemanticSsaConstantOccurrenceV1>(),
@@ -202,10 +211,10 @@ fn initial_budget(work: &mut Work, storage_limit: usize) -> Budget<'_> {
 fn payload_capture_exact_work_and_storage_follow_actual_source_phases() {
     let sizes = layout();
     assert_eq!((SPARSE_GRAMMAR, ROOT_GRAMMAR), (37, 26));
-    assert_eq!((SPARSE_COUNT, SPARSE_FILL, SPARSE_JOIN), (110, 117, 182));
-    assert_eq!((ROOT_COUNT, ROOT_FILL, ROOT_JOIN), (99, 116, 199));
-    assert_eq!((ROOT_END, HELPER_JOIN), (454, 39));
-    assert_eq!((SPARSE_WORK, EDGE_WORK), (459, 576));
+    assert_eq!((SPARSE_COUNT, SPARSE_FILL, SPARSE_JOIN), (110, 117, 185));
+    assert_eq!((ROOT_COUNT, ROOT_FILL, ROOT_JOIN), (99, 116, 203));
+    assert_eq!((ROOT_END, HELPER_JOIN), (458, 40));
+    assert_eq!((SPARSE_WORK, EDGE_WORK), (462, 581));
     for edges in [false, true] {
         // Source, classification, replay and planner allocations retain their
         // inherited scope. This ledger covers only the new capture storage/work.
@@ -284,20 +293,29 @@ fn payload_capture_one_under_final_work_publishes_no_partial_rows() {
 #[test]
 fn payload_capture_denies_each_new_nonempty_row_allocation_before_fill() {
     let s = layout();
-    let sparse_before_events = s.header + s.function + 3 * s.block;
+    let sparse_outer = s.header + s.function;
+    let sparse_boundary = sparse_outer + s.boundary_headers;
+    let sparse_before_events = sparse_boundary + 3 * s.block;
     let sparse_events = sparse_before_events + 13 * s.event;
     let sparse_constants = sparse_events + 4 * s.constant;
-    let root_before_definitions =
-        s.header + 2 * s.function + 4 * s.block + 5 * s.event + 6 * s.constant + 7 * s.successor;
+    let root_before_definitions = s.header
+        + 2 * s.function
+        + s.boundary_headers
+        + 4 * s.block
+        + 5 * s.event
+        + 6 * s.constant
+        + 7 * s.successor;
     let root_definitions = root_before_definitions + 2 * s.edge_definition;
+    let helper_boundary = root_definitions + s.boundary_headers;
     let sparse_event_work = START + INPUT + SPARSE_COUNT + 2;
     let sparse_constant_work = sparse_event_work + 1;
     let edge_definition_work = START + INPUT + ROOT_COUNT + ROOT_ARRAYS;
     let helper_entry_work =
         ROOT_END + INPUT + HELPER_COUNT + 1 + HELPER_FILL + HELPER_ENTRY_COUNT + 1;
     assert_eq!((sparse_event_work, sparse_constant_work), (117, 118));
-    assert_eq!((edge_definition_work, helper_entry_work), (109, 507));
+    assert_eq!((edge_definition_work, helper_entry_work), (109, 511));
     for (edges, accepted, prior, attempted) in [
+        (false, START + 2, sparse_outer, sparse_boundary),
         (
             false,
             sparse_event_work,
@@ -311,6 +329,7 @@ fn payload_capture_denies_each_new_nonempty_row_allocation_before_fill() {
             root_before_definitions,
             root_definitions,
         ),
+        (true, ROOT_END + 2, root_definitions, helper_boundary),
         (true, helper_entry_work, s.edges() - 3 * s.entry, s.edges()),
     ] {
         let mut owner = fixture(edges);
@@ -345,13 +364,13 @@ fn payload_capture_join_denial_restores_floor_and_preserves_first_failures() {
     let mut owner = fixture(false);
     let identity = owner.identity();
     // After count/fill274, take/function/block-count3 and the first block's
-    // visit/ranges/lengths/reachability11 precede D1's unpromoted join7.
-    // D2's visit/input/advance/resolved-key checks9 end at304; its one-unit
-    // resolution write is denied at305. The earlier D1 row was already joined.
+    // visit/ranges/lengths/failure-boundary/reachability12 precede D1's join7.
+    // D2's visit/input/advance/resolved-key checks9 end at305; its one-unit
+    // resolution write is denied at306. The earlier D1 row was already joined.
     let accepted =
-        SPARSE_PREJOIN + (1 + 1 + 1) + (1 + 7 + 2 + 1) + JOIN_UNRESOLVED_EVENT + (1 + 4 + 1 + 3);
+        SPARSE_PREJOIN + (1 + 1 + 1) + (1 + 7 + 3 + 1) + JOIN_UNRESOLVED_EVENT + (1 + 4 + 1 + 3);
     let attempted = accepted + 1;
-    assert_eq!((SPARSE_PREJOIN, accepted, attempted), (274, 304, 305));
+    assert_eq!((SPARSE_PREJOIN, accepted, attempted), (274, 305, 306));
     let work_limit = PREFIX + accepted;
     let storage_limit = FLOOR + retained;
     let mut work = Work::new(work_limit);

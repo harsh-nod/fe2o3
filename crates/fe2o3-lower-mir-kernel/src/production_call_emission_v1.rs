@@ -1,3 +1,5 @@
+include!("production_source_reference_call_transport_v26.rs");
+
 struct DefinedCallArgumentSignatureV1<'a, 'scope> {
     projection: DefinedCallProjectionV29<'scope>,
     semantic_types: &'a [SemanticTypeIdV1],
@@ -11,13 +13,14 @@ struct PreparedDefinedCallArgumentsV1<'scope> {
     execution: Option<PreparedExecutionCallOriginV29<'scope>>,
 }
 
-impl<'a> SemanticFunctionLoweringV1<'a> {
+impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
     fn lower_return(
         &mut self,
         block: SemanticBlockIdV1,
         operations: &mut Vec<Operation>,
     ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
         let (values, components) = self.prepare_return_values_v1(block, operations)?;
+        self.observe_execution_return_v1(block, &values)?;
         self.finish_execution_lifecycle_return_v29(block, operations)?;
         self.record_call_return_v1(block, SemanticKirCallReturnKindV1::Return { components })?;
         Ok(Terminator::Return { values })
@@ -42,8 +45,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 )
             })?;
         if self
-            .retained_local_slots
-            .contains_key(&(return_local as u32))
+            .legacy_retained_slot_v29(SemanticLocalIdV1::from_index(return_local as u32))?
+            .is_some()
             && !matches!(
                 self.types[self.function.locals()[return_local].ty().index() as usize].shape(),
                 SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
@@ -56,7 +59,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "aggregate helper return requires a whole SSA local",
             ));
         }
-        let inputs = if self.result_types.is_empty() {
+        self.consume_execution_return_source_v1(block, return_local)?;
+        let inputs = if let Some(inputs) = self.source_reference_return_inputs_v29(return_local)? {
+            inputs
+        } else if self.result_types.is_empty() {
             Vec::new()
         } else {
             self.locals
@@ -111,6 +117,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     (value, Some(ordinal))
                 } else if actual == expected {
                     (input, None)
+                } else if source_descriptor_widening_v29(&actual, &expected) {
+                    self.check_descriptor_return_v29(
+                        block,
+                        return_local,
+                        slot,
+                        input,
+                        &actual,
+                        &expected,
+                    )?;
+                    let ordinal = call_operation_ordinal_v1(operations, block)?;
+                    let value = self.emit_id(
+                        operations,
+                        expected.clone(),
+                        OperationKind::Cast {
+                            kind: CastKind::SliceToGeneric,
+                            value: input,
+                            to: expected,
+                        },
+                    )?;
+                    (value, Some(ordinal))
                 } else {
                     return Err(unsupported(
                         self.semantic_function.index(),
@@ -188,7 +214,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 operations,
             )?);
         }
-        if execution.is_some() {
+        if let Some(origin) = execution.as_ref() {
+            let references = self.execution.as_ref().and_then(|cursor| cursor.references);
             let budget = self
                 .emission_work
                 .as_deref_mut()
@@ -198,13 +225,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .zip(signature.semantic_types)
                 .enumerate()
             {
-                execution_call_argument_shape_v29(
+                if let Some(references) = references {
+                    if source_reference_call_argument_shape_v29(
+                        references,
+                        origin,
+                        u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                        binding,
+                        budget,
+                    )? {
+                        continue;
+                    }
+                }
+                execution_call_argument_shape_with_representation_v29(
                     self.types,
                     *ty,
                     index as u32,
                     binding,
                     signature.projections,
                     &signature.parameter_types,
+                    if references.is_some() {
+                        ExecutionCfgRepresentationV29::OriginalSource
+                    } else {
+                        ExecutionCfgRepresentationV29::LegacyAbi
+                    },
                     budget,
                 )?;
             }
@@ -272,11 +315,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 let SemanticValueBindingV1::Value { id, ty } = binding else {
                     return Err(execution_call_error_v29());
                 };
-                if ty != &expected {
+                if ty == &expected {
+                    arguments.push(*id);
+                    continue;
+                }
+                if !source_descriptor_widening_v29(ty, &expected) {
                     return Err(execution_call_error_v29());
                 }
-                arguments.push(*id);
-                continue;
             }
             let (value, actual) = match projection.component {
                 None => binding.value().map_err(failure)?,
@@ -292,7 +337,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                                 .as_deref_mut()
                                 .ok_or(ArgumentResourceV1::Accounting)?;
                             let mut physical = Vec::new();
-                            execution_cfg_values_v29(binding, &mut physical, &mut 0, budget)?;
+                            if let Some(references) =
+                                self.execution.as_ref().and_then(|cursor| cursor.references)
+                            {
+                                source_reference_values_v29(
+                                    references,
+                                    binding,
+                                    &mut physical,
+                                    &mut 0,
+                                    budget,
+                                )?;
+                            } else {
+                                execution_cfg_values_v29(binding, &mut physical, &mut 0, budget)?;
+                            }
                             let mut values = emission_vec_v1(physical.len(), budget)?;
                             budget.charge_work(physical.len())?;
                             values.extend(physical.into_iter().map(|value| (value.id, value.ty)));
@@ -326,6 +383,34 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .0
             } else if actual == expected {
                 value
+            } else if matches!((&actual, &expected), (Type::Pointer(_), Type::Pointer(_))) {
+                let origin = execution.as_ref().ok_or_else(execution_call_error_v29)?;
+                self.check_reference_call_argument_v26(
+                    block, call, origin, parameter, projection, binding, value, &actual, &expected,
+                )?;
+                self.emit_id(
+                    operations,
+                    expected.clone(),
+                    OperationKind::Cast {
+                        kind: CastKind::PointerToGeneric,
+                        value,
+                        to: expected,
+                    },
+                )?
+            } else if source_descriptor_widening_v29(&actual, &expected) {
+                let origin = execution.as_ref().ok_or_else(execution_call_error_v29)?;
+                self.check_descriptor_call_argument_v29(
+                    block, call, origin, parameter, projection, binding, value, &actual, &expected,
+                )?;
+                self.emit_id(
+                    operations,
+                    expected.clone(),
+                    OperationKind::Cast {
+                        kind: CastKind::SliceToGeneric,
+                        value,
+                        to: expected,
+                    },
+                )?
             } else {
                 return Err(
                     ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
@@ -357,146 +442,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         callee: SemanticFunctionIdV1,
         operations: &mut Vec<Operation>,
     ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
-        if !matches!(call.unwind(), SemanticUnwindActionV1::Unreachable) {
-            return Err(unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "defined scalar call does not have an unreachable unwind edge",
-            ));
-        }
-        let scoped = self.execution_calls.is_some();
-        if scoped && self.execution.is_none() {
-            return Err(execution_call_error_v29());
-        }
-        if !scoped && self.execution.is_some() {
-            // Ordinary diagnostic cursors track source instances without roles.
-            // No capability-bearing type may take the ordinary argument route.
-            match self.with_emission_budget_v1(|this, budget| {
-                require_execution_free_types_v29(this.types, budget)
-            }) {
-                Err(ProductionSemanticKirErrorV1::Unsupported { .. }) => {
-                    return Err(execution_call_error_v29());
-                }
-                result => result?,
-            }
-        }
-        let ordinary_target = if scoped {
-            None
-        } else {
-            Some(
-                self.defined_function_ids
-                    .get(&callee)
-                    .cloned()
-                    .ok_or_else(|| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            "defined call target is outside the lowered helper closure",
-                        )
-                    })?,
-            )
-        };
-        let signature = self
-            .defined_function_signatures
-            .get(&callee)
-            .ok_or_else(|| {
-                unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    "defined call target has no exact KIR signature",
-                )
-            })?;
-        let signature = if scoped {
-            clone_execution_function_signature_v29(
-                signature,
-                self.emission_work
-                    .as_deref_mut()
-                    .ok_or(ArgumentResourceV1::Accounting)?,
-            )?
-        } else {
-            signature.clone()
-        };
-        if call.arguments().len() != signature.parameter_semantic_types.len()
-            || signature.call_arguments.len() != signature.parameter_types.len()
-        {
-            return Err(unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "defined call argument or result arity changed",
-            ));
-        }
-        let destination = call.destination().ok_or_else(|| {
-            unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "returning defined call has no continuation destination",
-            )
-        })?;
-        if destination.place().ty() != signature.result_semantic_type {
-            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-        }
-        let aggregate = !matches!(
-            self.types[signature.result_semantic_type.index() as usize].shape(),
-            SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
-        );
-        if aggregate
-            && (!destination.place().projections().is_empty()
-                || self
-                    .retained_local_slots
-                    .contains_key(&destination.place().local().index()))
-        {
-            return Err(unsupported(
-                self.semantic_function.index(),
-                Some(block.index()),
-                None,
-                "aggregate helper result requires a whole SSA destination",
-            ));
-        }
-        let prepared_destination = match call.destination() {
-            Some(destination) if !destination.place().projections().is_empty() => {
-                self.prepare_call_destination_v1(block, destination.place(), operations)?
-            }
-            _ => PreparedSemanticCallDestinationV1::Unprojected,
-        };
-        let destination_witness = match &prepared_destination {
-            PreparedSemanticCallDestinationV1::Memory {
-                pointer, access, ..
-            } => SemanticKirCallDestinationV1::Projected {
-                pointer: *pointer,
-                access: *access,
-            },
-            PreparedSemanticCallDestinationV1::Unprojected => {
-                match call.destination().and_then(|destination| {
-                    self.retained_local_slots
-                        .get(&destination.place().local().index())
-                }) {
-                    Some(slot) => SemanticKirCallDestinationV1::Retained {
-                        pointer: slot.pointer,
-                        access: MemoryAccess::new(AddressSpace::Private, slot.alignment),
-                    },
-                    None => SemanticKirCallDestinationV1::Local,
-                }
-            }
-        };
-        let arguments_first = call_operation_ordinal_v1(operations, block)?;
-        let (callee_id, arguments) = if scoped {
+        let mut prefix = self.prepare_defined_call_prefix_v1(block, call, callee, operations)?;
+        let parameters = std::mem::take(&mut prefix.signature.parameter_types);
+        let (callee_id, arguments, nominal) = if self.execution_calls.is_some() {
             self.prepare_execution_defined_call_v29(
                 block,
                 call,
                 callee,
-                &signature.parameter_semantic_types,
-                &signature.call_arguments,
-                signature.parameter_types,
+                &prefix.signature.parameter_semantic_types,
+                &prefix.signature.call_arguments,
+                parameters,
                 operations,
             )?
         } else {
-            let callee_id =
-                ordinary_target.expect("ordinary target checked before call preparation");
+            let callee_id = prefix
+                .ordinary_target
+                .take()
+                .ok_or_else(execution_call_error_v29)?;
             let PreparedDefinedCallArgumentsV1 {
                 arguments,
                 source_bindings,
@@ -507,60 +469,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 callee,
                 DefinedCallArgumentSignatureV1 {
                     projection: DefinedCallProjectionV29::Ordinary,
-                    semantic_types: &signature.parameter_semantic_types,
-                    projections: &signature.call_arguments,
-                    parameter_types: signature.parameter_types,
+                    semantic_types: &prefix.signature.parameter_semantic_types,
+                    projections: &prefix.signature.call_arguments,
+                    parameter_types: parameters,
                 },
                 operations,
             )?;
-            if signature.bf16_nominal {
+            if prefix.signature.bf16_nominal {
                 bf16_check_call_bindings_v1(&source_bindings)?;
             }
-            (callee_id, arguments)
+            (callee_id, arguments, Vec::new())
         };
-        let call_operation = call_operation_ordinal_v1(operations, block)?;
-        let results = self.emit_results(
-            operations,
-            signature.result_types,
-            OperationKind::Call {
-                callee: callee_id,
-                arguments,
-            },
+        let (terminator, consumed_credit) = self.finish_defined_call_prefix_v1(
+            call, prefix, callee_id, arguments, nominal, operations,
         )?;
-        let binding =
-            binding_from_value_defs(self.types, signature.result_semantic_type, &results)?;
-        let watch = matches!(destination_witness, SemanticKirCallDestinationV1::Local)
-            .then_some((destination.place().local(), results.as_slice()));
-        self.finish_call_destination_v1(
-            block,
-            destination.place(),
-            prepared_destination,
-            binding,
-            None,
-            operations,
-        )?;
-        let destination_end = call_operation_ordinal_v1(operations, block)?;
-        let (arguments, transport) = self.edge_arguments_with_result_v1(
-            block,
-            0,
-            destination.edge().target(),
-            operations,
-            watch,
-        )?;
-        let terminator = Terminator::Branch {
-            target: self.kernel_block_id_v1(destination.edge().target())?,
-            arguments,
-        };
-        self.record_call_return_v1(
-            block,
-            SemanticKirCallReturnKindV1::Call {
-                arguments_first,
-                call_operation,
-                destination_end,
-                destination: destination_witness,
-                transport,
-            },
-        )?;
+        if consumed_credit != 0 {
+            self.emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?
+                .release_storage(consumed_credit)?;
+        }
         Ok(terminator)
     }
 }

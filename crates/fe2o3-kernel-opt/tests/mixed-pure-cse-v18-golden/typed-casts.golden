@@ -1,0 +1,16 @@
+CASE: typed-casts
+CHECK-BEFORE: module policy10-golden kernels=0 layouts=0
+CHECK-BEFORE: f0 f params=[v0:U32] results=[I32,F32]
+CHECK-BEFORE: f0:b0 block-id=90 params=[]
+CHECK-BEFORE: f0:b0:o0 [v10:I32] Bitcast v0 to I32
+CHECK-BEFORE: f0:b0:o1 [v11:I32] Bitcast v0 to I32
+CHECK-BEFORE: f0:b0:o2 [v12:F32] Bitcast v0 to F32
+CHECK-BEFORE: f0:b0:term Return [v11,v12]
+CHECK-AFTER: module policy10-golden kernels=0 layouts=0
+CHECK-AFTER: f0 f params=[v0:U32] results=[I32,F32]
+CHECK-AFTER: f0:b0 block-id=90 params=[]
+CHECK-AFTER: f0:b0:o0 [v10:I32] Bitcast v0 to I32
+CHECK-AFTER: f0:b0:o1 [v12:F32] Bitcast v0 to F32
+CHECK-AFTER: f0:b0:term Return [v10,v12]
+CHECK-REMARK: policy=10 schema=18 passes=integer-neutral-worklist,local-pure-cse,dominance-pure-cse,dce
+CHECK-REMARK: changed=true independently-checked=true authority=false

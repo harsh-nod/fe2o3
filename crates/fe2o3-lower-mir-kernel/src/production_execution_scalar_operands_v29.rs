@@ -22,7 +22,7 @@ fn execution_assert_operand_v29(
     }
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn lower_rvalue_operand_v29(
         &mut self,
         block: SemanticBlockIdV1,
@@ -47,6 +47,9 @@ impl SemanticFunctionLoweringV1<'_> {
         operand: &SemanticOperandV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if role != ExecutionOperandV29::AssertCondition {
+            return Err(scoped_memory_error_v29());
+        }
         let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
             return Ok(());
         };
@@ -66,8 +69,8 @@ impl SemanticFunctionLoweringV1<'_> {
             }
             Ok(())
         })?;
-        // A folded condition or discarded panic payload still has source move
-        // effects. Only logical scalar fields can be read without emitting a
+        // A folded condition still has common-path source move effects.
+        // Only logical scalar fields can be read without emitting a
         // memory access or granting a nominal capability another consumer.
         if place
             .projections()
@@ -101,13 +104,22 @@ impl SemanticFunctionLoweringV1<'_> {
         message: &SemanticAssertMessageV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.execution.is_none() {
+            return Ok(());
+        }
+        self.with_emission_budget_v1(|this, budget| {
+            this.execution
+                .as_mut()
+                .ok_or_else(execution_availability_error_v29)?
+                .consume_failure_tail(block, message, budget)
+        })?;
         for index in 0..2 {
             if let Some(operand) = execution_assert_operand_v29(message, index) {
-                self.consume_execution_assert_operand_v29(
+                self.record_scoped_failure_operand_v29(
                     block,
                     ExecutionOperandV29::AssertMessage(index),
                     operand,
-                    operations,
+                    operations.len(),
                 )?;
             }
         }

@@ -1176,3 +1176,9 @@ mod tests {
         ));
     }
 }
+
+#[path = "semantic_option_metered_v18.rs"]
+mod metered_v18;
+pub use metered_v18::{
+    SemanticOptionDominanceMeteredErrorV18, semantic_option_producers_with_meter_v18,
+};

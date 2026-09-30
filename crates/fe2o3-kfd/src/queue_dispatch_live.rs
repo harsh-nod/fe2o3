@@ -19,6 +19,7 @@ use super::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
     KfdTargetRuntimeDebugQueueV1, QueueExceptionWaitObservationV1,
 };
+use crate::MixedConditionalDispatchPremisesV26;
 use crate::conditional_dispatch_v1::{ConditionalDispatchPremisesV1, require_same_mapping_v1};
 use crate::queue_linux::LinuxKfdRuntimeEnabledV1;
 use crate::shared_memory::{
@@ -186,6 +187,7 @@ pub struct Gfx942KfdDispatchRequestV1 {
     group_segment_size: u32,
     timeout_milliseconds: u32,
     conditional_premises: Option<ConditionalDispatchPremisesV1>,
+    mixed_conditional_premises: Option<MixedConditionalDispatchPremisesV26>,
 }
 
 impl fmt::Debug for Gfx942KfdDispatchRequestV1 {
@@ -203,6 +205,10 @@ impl fmt::Debug for Gfx942KfdDispatchRequestV1 {
             .field("group_segment_size", &self.group_segment_size)
             .field("timeout_milliseconds", &self.timeout_milliseconds)
             .field("conditional_premises", &self.conditional_premises)
+            .field(
+                "mixed_conditional_premises",
+                &self.mixed_conditional_premises,
+            )
             .finish()
     }
 }
@@ -212,6 +218,10 @@ impl Gfx942KfdDispatchRequestV1 {
     /// or replaced and never authenticates the executable or descriptor.
     pub fn conditional_premises_v1(&self) -> Option<&ConditionalDispatchPremisesV1> {
         self.conditional_premises.as_ref()
+    }
+
+    pub fn mixed_conditional_premises_v26(&self) -> Option<&MixedConditionalDispatchPremisesV26> {
+        self.mixed_conditional_premises.as_ref()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -251,6 +261,7 @@ impl Gfx942KfdDispatchRequestV1 {
             group_segment_size,
             timeout_milliseconds,
             conditional_premises: None,
+            mixed_conditional_premises: None,
         })
     }
 
@@ -261,7 +272,7 @@ impl Gfx942KfdDispatchRequestV1 {
         mut self,
         premises: ConditionalDispatchPremisesV1,
     ) -> Result<Self, Gfx942KfdDispatchRequestErrorV1> {
-        if self.conditional_premises.is_some() {
+        if self.conditional_premises.is_some() || self.mixed_conditional_premises.is_some() {
             return Err(Gfx942KfdDispatchRequestErrorV1::ConditionalPremise(
                 crate::ConditionalDispatchErrorV1::Binding,
             ));
@@ -275,6 +286,29 @@ impl Gfx942KfdDispatchRequestV1 {
             )
             .map_err(Gfx942KfdDispatchRequestErrorV1::ConditionalPremise)?;
         self.conditional_premises = Some(premises);
+        Ok(self)
+    }
+
+    /// Consumes the request and retains the complete inert mixed obligations.
+    /// This does not authenticate source proofs or executable authority.
+    pub fn with_mixed_conditional_premises_v26(
+        mut self,
+        premises: MixedConditionalDispatchPremisesV26,
+    ) -> Result<Self, Gfx942KfdDispatchRequestErrorV1> {
+        if self.conditional_premises.is_some() || self.mixed_conditional_premises.is_some() {
+            return Err(Gfx942KfdDispatchRequestErrorV1::ConditionalPremise(
+                crate::ConditionalDispatchErrorV1::Binding,
+            ));
+        }
+        premises
+            .check_request(
+                &self.kernarg_template,
+                &self.pointer_fixups,
+                self.buffers.iter().map(|buffer| buffer.bytes.len()),
+                self.geometry,
+            )
+            .map_err(Gfx942KfdDispatchRequestErrorV1::ConditionalPremise)?;
+        self.mixed_conditional_premises = Some(premises);
         Ok(self)
     }
 }
@@ -858,6 +892,11 @@ fn prepare_dispatch_resources(
             ComputeAqlQueueSessionErrorV1::Contract("conditional live invocation premise")
         })?;
     }
+    if let Some(premises) = &request.mixed_conditional_premises {
+        premises.check_live(&buffer_facts).map_err(|_| {
+            ComputeAqlQueueSessionErrorV1::Contract("mixed conditional live invocation premise")
+        })?;
+    }
     memory.with_bytes_mut(&mut kernarg, |bytes| {
         patch_kernarg_pointers(bytes, &request.pointer_fixups, &buffer_facts)
     })??;
@@ -867,7 +906,7 @@ fn prepare_dispatch_resources(
     let executable_facts = memory.mapped_resource_facts(&executable)?;
     let kernarg_facts = memory.mapped_resource_facts(&kernarg)?;
     let signal_facts = memory.mapped_resource_facts(&signal)?;
-    if request.conditional_premises.is_some() {
+    if request.conditional_premises.is_some() || request.mixed_conditional_premises.is_some() {
         for (token, before) in mapped_buffers.iter().zip(&buffer_facts) {
             let now = memory.mapped_resource_facts(token)?;
             require_same_mapping_v1(before, &now).map_err(|_| {

@@ -1,6 +1,9 @@
 use super::adapter::semantic_edge_role_v1;
 use super::*;
 
+#[path = "storage_projection_classifier_v1_tests.rs"]
+mod storage_projection_classifier_v1_tests;
+
 #[path = "adapter_emission_v1_tests.rs"]
 mod adapter_emission_v1_tests;
 
@@ -792,6 +795,12 @@ fn plan_test_function(
         ProductionSemanticSsaLimitsV1::default(),
     )
 }
+
+#[path = "static_deinitialize_v1_tests.rs"]
+mod static_deinitialize_tests;
+
+#[path = "projected_dereference_move_v1_tests.rs"]
+mod projected_dereference_move_tests;
 
 #[test]
 fn every_semantic_edge_role_has_a_distinct_nonzero_planner_role() {
