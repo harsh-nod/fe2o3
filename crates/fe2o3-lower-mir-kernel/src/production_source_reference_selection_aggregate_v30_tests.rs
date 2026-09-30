@@ -5,7 +5,16 @@ fn selected_aggregate_owner_v30() -> ProductionSemanticSsaOwnerV1 {
     let pointer = SemanticTypeIdV1::from_index(types.len() as u32);
     types.push(declaration(
         201,
-        SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+            )),
+            false,
+        )
+        .unwrap(),
         SemanticTypeShapeV1::Pointer(
             SemanticPointerTypeV1::new_with_kind(
                 U32,
@@ -68,6 +77,32 @@ fn selected_aggregate_owner_v30() -> ProductionSemanticSsaOwnerV1 {
         vec![semantic.functions()[0].clone(), helper],
         semantic.callables().to_vec(),
     )
+}
+
+#[test]
+fn selected_aggregate_fixture_requires_exact_raw_pointer_backend_layout() {
+    let owner = selected_aggregate_owner_v30();
+    let semantic = owner.source_semantic();
+    let mut types = semantic.types().to_vec();
+    let pointer = types.last().unwrap();
+    assert!(matches!(pointer.shape(), SemanticTypeShapeV1::Pointer(_)));
+    let malformed = declaration(
+        201,
+        SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+        pointer.shape().clone(),
+    );
+    *types.last_mut().unwrap() = malformed;
+    let result = InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        semantic.functions().to_vec(),
+        semantic.callables().to_vec(),
+        vec![ROOT],
+    );
+    assert!(matches!(result, Err(SemanticMirErrorV1::InvalidTypeLayout)));
 }
 
 fn selected_aggregate_arguments_v30(
