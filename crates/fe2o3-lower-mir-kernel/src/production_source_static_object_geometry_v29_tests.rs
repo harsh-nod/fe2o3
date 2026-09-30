@@ -268,9 +268,31 @@ fn optimized_project_equations_reject_displaced_duplicate_and_missing_subobjects
 #[test]
 fn typed_project_checks_stale_unused_base_at_its_execution_point() {
     let (mut function, slots, _) = scalar_field_equations_v29(false);
-    function.body.as_mut().unwrap().blocks[0]
-        .operations
-        .truncate(3);
+    let operations = &mut function.body.as_mut().unwrap().blocks[0].operations;
+    let root = operations[0].clone();
+    let mut project = operations[1].clone();
+    let alias = ValueId(999);
+    let OperationKind::Storage(ScopedObjectOperationV29::Project { base, .. }) = &mut project.kind
+    else {
+        unreachable!()
+    };
+    *base = alias;
+    *operations = vec![
+        root.clone(),
+        Operation::effect_free(
+            ValueDef::new(ValueId(40), Type::BOOL),
+            OperationKind::Constant(Constant::Bool(true)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(alias, root.results[0].ty.clone()),
+            OperationKind::Select {
+                condition: ValueId(40),
+                true_value: A,
+                false_value: A,
+            },
+        ),
+        project,
+    ];
     let layouts = scalar_field_layouts_v29();
     for state in [None, Some(false), Some(true)] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
@@ -280,7 +302,7 @@ fn typed_project_checks_stale_unused_base_at_its_execution_point() {
             .into_iter()
             .map(|live| SourceAddressLifetimeV29 {
                 block: BlockId(77),
-                gap: 1,
+                gap: 3,
                 sequence: 0,
                 slot: 0,
                 live,
@@ -310,10 +332,110 @@ fn typed_project_checks_stale_unused_base_at_its_execution_point() {
         });
         match state {
             None => result.unwrap(),
-            Some(_) => unsupported(result),
+            Some(_) => assert!(matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "physical raw access crosses a storage activation or unresolved alias",
+                    ..
+                })
+            )),
         }
         assert_eq!(budget.storage(), FLOOR);
     }
+}
+
+#[test]
+fn typed_project_check_census_has_independent_capacity_and_overflow_boundaries() {
+    // Three memory accesses and two zero-footprint Projects each require a
+    // base-alias and object check; four failure points require one each.
+    assert_eq!(source_address_currentness_check_count_v34(3, 2, 4), Ok(14));
+    assert_eq!(source_address_currentness_check_count_v34(0, 2, 0), Ok(4));
+    assert_eq!(source_address_currentness_check_count_v34(0, 0, 0), Ok(0));
+    let largest_pairs = usize::MAX / 2;
+    assert_eq!(
+        source_address_currentness_check_count_v34(0, largest_pairs, 1),
+        Ok(usize::MAX)
+    );
+    for (accesses, projects, failures) in [
+        (usize::MAX, 0, 0),
+        (0, usize::MAX, 0),
+        (0, largest_pairs, 2),
+        (largest_pairs, 1, 0),
+    ] {
+        assert_eq!(
+            source_address_currentness_check_count_v34(accesses, projects, failures),
+            Err(ArgumentResourceV1::Arithmetic)
+        );
+    }
+    // Only four paid usize rows are needed for the two-Project census, with
+    // no hidden sentinel. The bounded allocator's exact/one-short boundary is
+    // independent of a successful run's observed peak.
+    let bytes = 4 * std::mem::size_of::<usize>();
+    for storage in [bytes, bytes - 1] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage);
+        let result = emission_vec_v1::<usize>(
+            source_address_currentness_check_count_v34(0, 2, 0).unwrap(),
+            &mut budget,
+        );
+        if storage == bytes {
+            assert_eq!(result.unwrap().capacity(), 4);
+            assert_eq!(budget.storage(), bytes);
+        } else {
+            assert!(matches!(
+                result,
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Storage(_)
+                    )
+                )
+            ));
+            assert_eq!(budget.storage(), 0);
+        }
+    }
+}
+
+#[test]
+fn typed_project_backing_reuse_is_current_after_explicit_reactivation() {
+    let (mut function, slots, _) = scalar_field_equations_v29(false);
+    function.body.as_mut().unwrap().blocks[0]
+        .operations
+        .truncate(3);
+    let layouts = scalar_field_layouts_v29();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+    budget.reserve_storage(FLOOR).unwrap();
+    with_canonical_call_scratch_v1(&mut budget, |budget| {
+        let graph = SourceAddressMemoryV29::prepare_with_layouts(
+            &function,
+            &slots,
+            None,
+            &[],
+            &layouts,
+            budget,
+        )?
+        .solve(&slots, &[], &[], budget)?;
+        assert_eq!(graph.projections.len(), 2);
+        check_source_address_currentness_v29(
+            &function,
+            &graph,
+            &slots,
+            &[],
+            &[],
+            &[true],
+            &[SourceAddressLifetimeV29 {
+                block: BlockId(77),
+                gap: 1,
+                sequence: 0,
+                slot: 0,
+                live: true,
+            }],
+            &[],
+            budget,
+        )
+    })
+    .unwrap();
+    assert_eq!(budget.storage(), FLOOR);
 }
 
 #[test]

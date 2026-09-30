@@ -654,6 +654,18 @@ fn source_address_currentness_headers_v29() -> Result<usize, ArgumentResourceV1>
     ])
 }
 
+fn source_address_currentness_check_count_v34(
+    accesses: usize,
+    projects: usize,
+    failures: usize,
+) -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        argument_product_v1(accesses, 2)?,
+        argument_product_v1(projects, 2)?,
+        failures,
+    ])
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_source_address_currentness_transport_v29(
     function: &Function,
@@ -872,7 +884,13 @@ fn check_source_address_currentness_transport_v29(
             .seed_next(seed, budget)
             .map_err(source_address_equation_error_v29)?;
     }
-    let capacity = argument_sum_v1(&[argument_product_v1(accesses.len(), 2)?, failures.len()])?;
+    // Zero-footprint Projects still check both the base alias and its live
+    // object. Their complete actual graph census must own both check rows.
+    let capacity = source_address_currentness_check_count_v34(
+        accesses.len(),
+        graph.projections.len(),
+        failures.len(),
+    )?;
     let mut checks = emission_vec_v1(capacity, budget)?;
     currentness.equations(
         accesses,
