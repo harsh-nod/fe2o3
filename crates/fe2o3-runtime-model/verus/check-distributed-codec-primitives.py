@@ -30,7 +30,7 @@ SOURCE_TREE_SHA = 'e49f3ace340708e3dc33d72d73efc308062cf50c881c8ead2fde2a71ef071
 PROOF_SHA = '2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6'
 BODY_SHA = '222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c'
 FIXTURES = V / 'fixtures/distributed_codec_primitives_v1_diagnostics.json'
-FIXTURES_SHA = '26e2667bf66d55a8606b431278acd9f5cd309249eecef5b942886a83cd54fb84'
+FIXTURES_SHA = '76b5f83c062142a5e5f4f887dc1dd188dad5bc88b2ec11acfefb2bd49de5bf40'
 UNCHANGED = {
     CONSTRUCTION: 'b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790',
     CLASSIFIER: '57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853',
@@ -248,6 +248,12 @@ def negative_context(root, focus):
     need(proof[function[0]:function[1]].count(call) == 1, 'one exact selected proof invocation')
     invocation_start = proof.index(call, function[0], function[1])
     invocation_end = proof.index(b'\n', invocation_start)
+    argument = None
+    if kind in ('u16_le', 'u64_le'):
+        need(proof[invocation_start:invocation_end] == call + b'verus_exec_expr, value)',
+             'exact selected encoder invocation with final value argument')
+        argument = (invocation_end - 1 - len(b'value'), invocation_end - 1)
+        need(proof[argument[0]:argument[1]] == b'value', 'exact final encoder argument interval')
     syntax = body[macro[0]:macro[1]]
     need(syntax.count(b'$syntax!({') == syntax.count(b'})') == 1, 'one shared executable expression frame')
     expression = (macro[0] + syntax.index(b'$syntax!({') + len(b'$syntax!('),
@@ -257,7 +263,7 @@ def negative_context(root, focus):
             'function': function, 'contract': (ensures, body_start), 'body': (body_start, function[1]),
             'signature': (function[0], signature_end), 'macro': macro, 'expression': expression,
             'definition': (macro[0], macro[0] + len(('macro_rules! ' + MACROS[kind]).encode())),
-            'invocation': (invocation_start, invocation_end)}
+            'invocation': (invocation_start, invocation_end), 'argument': argument}
 
 
 def contained(inner, outer):
@@ -376,8 +382,9 @@ def bounded_negative(classifier, root, focus, status, stdout, stderr, verifier):
             need(len(row['spans']) == 1 and row['spans'][0]['is_primary'] is True and row['spans'][0]['label'] is None,
                  'one primary per bounded encoding recommendation')
             path, region = family_span(row['spans'][0], context)
-            need(path == BODY, 'recommendation belongs to actual selected encoding macro, not unrelated proof')
-            observed_ranges.append(region)
+            need(path == BODY or (path == PROOF and region == context['argument']),
+                 'recommendation belongs to selected encoding macro or its exact final value argument')
+            observed_ranges.append((path, region))
         need(len(observed_ranges) == len(set(observed_ranges)), 'distinct recommendation spans, not duplicated notes')
         notes = types.SimpleNamespace(LOGICAL_ERRORS={POSTCONDITION},
             SELECTION_NOTES={ROOT_NOTE} | ({RANGE_NOTE} if range_count else set()))

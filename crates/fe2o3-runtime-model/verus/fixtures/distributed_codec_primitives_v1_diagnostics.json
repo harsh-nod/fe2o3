@@ -823,6 +823,302 @@
         }
       }
     },
+    "u16-encode-high-substituted": {
+      "diagnostics": [
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "verifying root module (selected functions)",
+          "rendered": "note: verifying root module (selected functions)\n\n",
+          "spans": []
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+          "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:85:1\n   |\n85 | fn u16_le(value: u16) -> (result: [u8; 2])\n   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n",
+          "spans": [
+            {
+              "byte_end": 3473,
+              "byte_start": 3432,
+              "column_end": 42,
+              "column_start": 1,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 85,
+              "line_start": 85,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 42,
+                  "highlight_start": 1,
+                  "text": "fn u16_le(value: u16) -> (result: [u8; 2])"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "error",
+          "message": "postcondition not satisfied",
+          "rendered": "error: postcondition not satisfied\n  --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:86:13\n   |\n86 |     ensures result == little_u16(value),\n   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs:62:18\n   |\n62 |         $syntax!({ [$value as u8, ($value >> 0) as u8] })\n   |                  --------------------------------------- at the end of the function body\n\n",
+          "spans": [
+            {
+              "byte_end": 2063,
+              "byte_start": 2024,
+              "column_end": 57,
+              "column_start": 18,
+              "expansion": {
+                "def_site_span": {
+                  "byte_end": 1965,
+                  "byte_start": 1920,
+                  "column_end": 46,
+                  "column_start": 1,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 60,
+                  "line_start": 60,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 46,
+                      "highlight_start": 1,
+                      "text": "macro_rules! distributed_codec_u16_le_body_v1 {"
+                    }
+                  ]
+                },
+                "macro_decl_name": "distributed_codec_u16_le_body_v1!",
+                "span": {
+                  "byte_end": 3579,
+                  "byte_start": 3522,
+                  "column_end": 62,
+                  "column_start": 5,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 88,
+                  "line_start": 88,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 62,
+                      "highlight_start": 5,
+                      "text": "    distributed_codec_u16_le_body_v1!(verus_exec_expr, value)"
+                    }
+                  ]
+                }
+              },
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+              "is_primary": false,
+              "label": "at the end of the function body",
+              "line_end": 62,
+              "line_start": 62,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 57,
+                  "highlight_start": 18,
+                  "text": "        $syntax!({ [$value as u8, ($value >> 0) as u8] })"
+                }
+              ]
+            },
+            {
+              "byte_end": 3514,
+              "byte_start": 3487,
+              "column_end": 40,
+              "column_start": 13,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": "failed this postcondition",
+              "line_end": 86,
+              "line_start": 86,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 40,
+                  "highlight_start": 13,
+                  "text": "    ensures result == little_u16(value),"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+          "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n  --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:88:56\n   |\n88 |     distributed_codec_u16_le_body_v1!(verus_exec_expr, value)\n   |                                                        ^^^^^\n\n",
+          "spans": [
+            {
+              "byte_end": 3578,
+              "byte_start": 3573,
+              "column_end": 61,
+              "column_start": 56,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 88,
+              "line_start": 88,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 61,
+                  "highlight_start": 56,
+                  "text": "    distributed_codec_u16_le_body_v1!(verus_exec_expr, value)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+          "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n  --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs:62:21\n   |\n62 |         $syntax!({ [$value as u8, ($value >> 0) as u8] })\n   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^\n   |\n  ::: @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:88:5\n   |\n88 |     distributed_codec_u16_le_body_v1!(verus_exec_expr, value)\n   |     --------------------------------------------------------- in this macro invocation\n   |\n   = note: this note originates in the macro `distributed_codec_u16_le_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n",
+          "spans": [
+            {
+              "byte_end": 2053,
+              "byte_start": 2027,
+              "column_end": 47,
+              "column_start": 21,
+              "expansion": {
+                "def_site_span": {
+                  "byte_end": 1965,
+                  "byte_start": 1920,
+                  "column_end": 46,
+                  "column_start": 1,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 60,
+                  "line_start": 60,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 46,
+                      "highlight_start": 1,
+                      "text": "macro_rules! distributed_codec_u16_le_body_v1 {"
+                    }
+                  ]
+                },
+                "macro_decl_name": "distributed_codec_u16_le_body_v1!",
+                "span": {
+                  "byte_end": 3579,
+                  "byte_start": 3522,
+                  "column_end": 62,
+                  "column_start": 5,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 88,
+                  "line_start": 88,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 62,
+                      "highlight_start": 5,
+                      "text": "    distributed_codec_u16_le_body_v1!(verus_exec_expr, value)"
+                    }
+                  ]
+                }
+              },
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 62,
+              "line_start": 62,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 47,
+                  "highlight_start": 21,
+                  "text": "        $syntax!({ [$value as u8, ($value >> 0) as u8] })"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "error",
+          "message": "aborting due to 1 previous error",
+          "rendered": "error: aborting due to 1 previous error\n\n",
+          "spans": []
+        }
+      ],
+      "family": "u16_le",
+      "mutated_body_sha256": "0fa649be3f10e1002054582500c3e31ecdd7b1f559992dde1c628e13ae48156e",
+      "original_stderr_sha256": "852a6d08aa1fff5344fd5b6e1e366c666f24c33272d2305693e264d68858d506",
+      "original_stdout_sha256": "2a564f52f552cba2da9829e4ac73669edf02dc9794740e302e215310e449874f",
+      "provenance": {
+        "original_disposition": "rejected-bounded-classification",
+        "original_negative_qualified": false,
+        "owned_record_sha256": "0636cb718de66cf489f4e6e546d86bdde29ceec7951f44dc820b90e754396e4b",
+        "packet": "signed-primitive-campaign-attempt-1",
+        "packet_pins": {
+          "closing-inputs.json": "1c24dcf098d193900a853682cea32c9fcad652ca17829b624dddf3adf2bc71a3",
+          "fresh-process-closure.json": "21e86880b3e5d143b4cceaf2c6ce4707c1fce72f84c1aed2dfa10167ab0b5cfb",
+          "inputs.json": "ea4c9f5480cefe6ee3043ba61c44f82cbe14521148ca6d1b8fe78dc2d3da21e3",
+          "raw-archive-index.json": "7a76ea072147db91c820a10183002fdeffb885b75cad697f32227f0b4ad4aa8d",
+          "results.json": "ebd3b582cea1a13d5b9fdd808522b8ceda23710b2a4905db9889c3f1b2fa0344"
+        },
+        "replay_only": true,
+        "stage": "18-u16-encode-high-substituted",
+        "stage_result_sha256": "b8f977e31f8a4e3ca8c4e634a2ab71308ce4d268b1ce8c4f5c5aaf0c212ce070"
+      },
+      "selector": "*u16_le",
+      "status": 1,
+      "stdout_projection": {
+        "verification-results": {
+          "encountered-error": true,
+          "encountered-vir-error": false,
+          "errors": 1,
+          "is-verifying-entire-crate": false,
+          "verified": 0
+        },
+        "verus": {
+          "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+          "platform": {
+            "arch": "x86_64",
+            "os": "linux"
+          },
+          "profile": "release",
+          "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+          "version": "0.2026.08.09.92f466f"
+        }
+      }
+    },
     "u16-encode-low-substituted": {
       "diagnostics": [
         {
@@ -1752,7 +2048,724 @@
           "version": "0.2026.08.09.92f466f"
         }
       }
+    },
+    "u64-encode-byte-1-substituted": {
+      "diagnostics": [
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "verifying root module (selected functions)",
+          "rendered": "note: verifying root module (selected functions)\n\n",
+          "spans": []
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+          "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:97:1\n   |\n97 | fn u64_le(value: u64) -> (result: [u8; 8])\n   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n",
+          "spans": [
+            {
+              "byte_end": 3784,
+              "byte_start": 3743,
+              "column_end": 42,
+              "column_start": 1,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 97,
+              "line_start": 97,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 42,
+                  "highlight_start": 1,
+                  "text": "fn u64_le(value: u64) -> (result: [u8; 8])"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "error",
+          "message": "postcondition not satisfied",
+          "rendered": "error: postcondition not satisfied\n  --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:98:13\n   |\n98 |       ensures result == little_u64(value),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs:74:18\n   |\n74 |           $syntax!({\n   |  __________________-\n75 | |             [\n76 | |                 $value as u8,\n77 | |                 ($value >> 0) as u8,\n...  |\n85 | |         })\n   | |_________- at the end of the function body\n\n",
+          "spans": [
+            {
+              "byte_end": 2684,
+              "byte_start": 2350,
+              "column_end": 10,
+              "column_start": 18,
+              "expansion": {
+                "def_site_span": {
+                  "byte_end": 2291,
+                  "byte_start": 2246,
+                  "column_end": 46,
+                  "column_start": 1,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 72,
+                  "line_start": 72,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 46,
+                      "highlight_start": 1,
+                      "text": "macro_rules! distributed_codec_u64_le_body_v1 {"
+                    }
+                  ]
+                },
+                "macro_decl_name": "distributed_codec_u64_le_body_v1!",
+                "span": {
+                  "byte_end": 3890,
+                  "byte_start": 3833,
+                  "column_end": 62,
+                  "column_start": 5,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 100,
+                  "line_start": 100,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 62,
+                      "highlight_start": 5,
+                      "text": "    distributed_codec_u64_le_body_v1!(verus_exec_expr, value)"
+                    }
+                  ]
+                }
+              },
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+              "is_primary": false,
+              "label": "at the end of the function body",
+              "line_end": 85,
+              "line_start": 74,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 19,
+                  "highlight_start": 18,
+                  "text": "        $syntax!({"
+                },
+                {
+                  "highlight_end": 14,
+                  "highlight_start": 1,
+                  "text": "            ["
+                },
+                {
+                  "highlight_end": 30,
+                  "highlight_start": 1,
+                  "text": "                $value as u8,"
+                },
+                {
+                  "highlight_end": 37,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 0) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 16) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 24) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 32) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 40) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 48) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 56) as u8,"
+                },
+                {
+                  "highlight_end": 14,
+                  "highlight_start": 1,
+                  "text": "            ]"
+                },
+                {
+                  "highlight_end": 10,
+                  "highlight_start": 1,
+                  "text": "        })"
+                }
+              ]
+            },
+            {
+              "byte_end": 3825,
+              "byte_start": 3798,
+              "column_end": 40,
+              "column_start": 13,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": "failed this postcondition",
+              "line_end": 98,
+              "line_start": 98,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 40,
+                  "highlight_start": 13,
+                  "text": "    ensures result == little_u64(value),"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+          "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n   --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:100:56\n    |\n100 |     distributed_codec_u64_le_body_v1!(verus_exec_expr, value)\n    |                                                        ^^^^^\n\n",
+          "spans": [
+            {
+              "byte_end": 3889,
+              "byte_start": 3884,
+              "column_end": 61,
+              "column_start": 56,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 100,
+              "line_start": 100,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 61,
+                  "highlight_start": 56,
+                  "text": "    distributed_codec_u64_le_body_v1!(verus_exec_expr, value)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+          "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n   --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs:76:17\n    |\n 76 | /                 $value as u8,\n 77 | |                 ($value >> 0) as u8,\n    | |____________________________^\n    |\n   ::: @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:100:5\n    |\n100 |       distributed_codec_u64_le_body_v1!(verus_exec_expr, value)\n    |       --------------------------------------------------------- in this macro invocation\n    |\n    = note: this note originates in the macro `distributed_codec_u64_le_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n",
+          "spans": [
+            {
+              "byte_end": 2424,
+              "byte_start": 2382,
+              "column_end": 29,
+              "column_start": 17,
+              "expansion": {
+                "def_site_span": {
+                  "byte_end": 2291,
+                  "byte_start": 2246,
+                  "column_end": 46,
+                  "column_start": 1,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 72,
+                  "line_start": 72,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 46,
+                      "highlight_start": 1,
+                      "text": "macro_rules! distributed_codec_u64_le_body_v1 {"
+                    }
+                  ]
+                },
+                "macro_decl_name": "distributed_codec_u64_le_body_v1!",
+                "span": {
+                  "byte_end": 3890,
+                  "byte_start": 3833,
+                  "column_end": 62,
+                  "column_start": 5,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 100,
+                  "line_start": 100,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 62,
+                      "highlight_start": 5,
+                      "text": "    distributed_codec_u64_le_body_v1!(verus_exec_expr, value)"
+                    }
+                  ]
+                }
+              },
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 77,
+              "line_start": 76,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 30,
+                  "highlight_start": 17,
+                  "text": "                $value as u8,"
+                },
+                {
+                  "highlight_end": 29,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 0) as u8,"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "error",
+          "message": "aborting due to 1 previous error",
+          "rendered": "error: aborting due to 1 previous error\n\n",
+          "spans": []
+        }
+      ],
+      "family": "u64_le",
+      "mutated_body_sha256": "22d3a82f38bbf654465e132c0a299dec2e94b787e17031a467b6e73958334399",
+      "original_stderr_sha256": "7dc01d6340e389d91cef14895b156c61ccf9f61d418fbfd8d8c9e3216157b585",
+      "original_stdout_sha256": "af5a82e18dc52e04089f5df01f01539f45c967db5d77aeb43763b545bd472cbb",
+      "provenance": {
+        "original_disposition": "observation-only",
+        "original_negative_qualified": false,
+        "owned_record_sha256": "a0de07cd4e0f8a285dc5556604256ba79b0711332003d3e5985919a4e3ed8874",
+        "packet": "u64-shape-observation-attempt-1",
+        "packet_pins": {
+          "closing-inputs.json": "0bf7f2c723a6589c652e27e6c8021b538dede4e107e0fd0f8f32d50eb1484c15",
+          "fresh-process-closure.json": "7102b9d800db0b277e49e42250b86abebe93de0128585ee0d28e72c41497cfb4",
+          "inputs.json": "3fb3272b0c8c3728214b225e85c5d8702d0a70ba54dbdf44f0c5b4f63526db46",
+          "raw-archive-index.json": "8c82fa763cf17fcea80973560ac5cc46465ebfc37d2f766bc4ddc7c35066dc57",
+          "results.json": "32502551f9e02318ec6b726d4130e711b5b6c30229158918eaf0dae6a87abbac"
+        },
+        "replay_only": true,
+        "stage": "04-u64-encode-byte-1-substituted",
+        "stage_result_sha256": "c6201a9f7bc2c99b5bcaedff71dfc12f8291de0cc5337db1b138a9719b9b3209"
+      },
+      "selector": "*u64_le",
+      "status": 1,
+      "stdout_projection": {
+        "verification-results": {
+          "encountered-error": true,
+          "encountered-vir-error": false,
+          "errors": 1,
+          "is-verifying-entire-crate": false,
+          "verified": 0
+        },
+        "verus": {
+          "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+          "platform": {
+            "arch": "x86_64",
+            "os": "linux"
+          },
+          "profile": "release",
+          "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+          "version": "0.2026.08.09.92f466f"
+        }
+      }
+    },
+    "u64-encode-byte-7-substituted": {
+      "diagnostics": [
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "verifying root module (selected functions)",
+          "rendered": "note: verifying root module (selected functions)\n\n",
+          "spans": []
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function",
+          "rendered": "note: function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function\n  --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:97:1\n   |\n97 | fn u64_le(value: u64) -> (result: [u8; 8])\n   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n",
+          "spans": [
+            {
+              "byte_end": 3784,
+              "byte_start": 3743,
+              "column_end": 42,
+              "column_start": 1,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 97,
+              "line_start": 97,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 42,
+                  "highlight_start": 1,
+                  "text": "fn u64_le(value: u64) -> (result: [u8; 8])"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "error",
+          "message": "postcondition not satisfied",
+          "rendered": "error: postcondition not satisfied\n  --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:98:13\n   |\n98 |       ensures result == little_u64(value),\n   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition\n   |\n  ::: @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs:74:18\n   |\n74 |           $syntax!({\n   |  __________________-\n75 | |             [\n76 | |                 $value as u8,\n77 | |                 ($value >> 8) as u8,\n...  |\n85 | |         })\n   | |_________- at the end of the function body\n\n",
+          "spans": [
+            {
+              "byte_end": 2684,
+              "byte_start": 2350,
+              "column_end": 10,
+              "column_start": 18,
+              "expansion": {
+                "def_site_span": {
+                  "byte_end": 2291,
+                  "byte_start": 2246,
+                  "column_end": 46,
+                  "column_start": 1,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 72,
+                  "line_start": 72,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 46,
+                      "highlight_start": 1,
+                      "text": "macro_rules! distributed_codec_u64_le_body_v1 {"
+                    }
+                  ]
+                },
+                "macro_decl_name": "distributed_codec_u64_le_body_v1!",
+                "span": {
+                  "byte_end": 3890,
+                  "byte_start": 3833,
+                  "column_end": 62,
+                  "column_start": 5,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 100,
+                  "line_start": 100,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 62,
+                      "highlight_start": 5,
+                      "text": "    distributed_codec_u64_le_body_v1!(verus_exec_expr, value)"
+                    }
+                  ]
+                }
+              },
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+              "is_primary": false,
+              "label": "at the end of the function body",
+              "line_end": 85,
+              "line_start": 74,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 19,
+                  "highlight_start": 18,
+                  "text": "        $syntax!({"
+                },
+                {
+                  "highlight_end": 14,
+                  "highlight_start": 1,
+                  "text": "            ["
+                },
+                {
+                  "highlight_end": 30,
+                  "highlight_start": 1,
+                  "text": "                $value as u8,"
+                },
+                {
+                  "highlight_end": 37,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 8) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 16) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 24) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 32) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 40) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 48) as u8,"
+                },
+                {
+                  "highlight_end": 38,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 48) as u8,"
+                },
+                {
+                  "highlight_end": 14,
+                  "highlight_start": 1,
+                  "text": "            ]"
+                },
+                {
+                  "highlight_end": 10,
+                  "highlight_start": 1,
+                  "text": "        })"
+                }
+              ]
+            },
+            {
+              "byte_end": 3825,
+              "byte_start": 3798,
+              "column_end": 40,
+              "column_start": 13,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": "failed this postcondition",
+              "line_end": 98,
+              "line_start": 98,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 40,
+                  "highlight_start": 13,
+                  "text": "    ensures result == little_u64(value),"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+          "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n   --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:100:56\n    |\n100 |     distributed_codec_u64_le_body_v1!(verus_exec_expr, value)\n    |                                                        ^^^^^\n\n",
+          "spans": [
+            {
+              "byte_end": 3889,
+              "byte_start": 3884,
+              "column_end": 61,
+              "column_start": 56,
+              "expansion": null,
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 100,
+              "line_start": 100,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 61,
+                  "highlight_start": 56,
+                  "text": "    distributed_codec_u64_le_body_v1!(verus_exec_expr, value)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "note",
+          "message": "recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)",
+          "rendered": "note: recommendation not met: value may be out of range of the target type (use `#[verifier::truncate]` on the cast to silence this warning)\n   --> @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs:76:17\n    |\n 76 | /                 $value as u8,\n 77 | |                 ($value >> 8) as u8,\n    | |____________________________^\n    |\n   ::: @SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs:100:5\n    |\n100 |       distributed_codec_u64_le_body_v1!(verus_exec_expr, value)\n    |       --------------------------------------------------------- in this macro invocation\n    |\n    = note: this note originates in the macro `distributed_codec_u64_le_body_v1` (in Nightly builds, run with -Z macro-backtrace for more info)\n\n",
+          "spans": [
+            {
+              "byte_end": 2424,
+              "byte_start": 2382,
+              "column_end": 29,
+              "column_start": 17,
+              "expansion": {
+                "def_site_span": {
+                  "byte_end": 2291,
+                  "byte_start": 2246,
+                  "column_end": 46,
+                  "column_start": 1,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 72,
+                  "line_start": 72,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 46,
+                      "highlight_start": 1,
+                      "text": "macro_rules! distributed_codec_u64_le_body_v1 {"
+                    }
+                  ]
+                },
+                "macro_decl_name": "distributed_codec_u64_le_body_v1!",
+                "span": {
+                  "byte_end": 3890,
+                  "byte_start": 3833,
+                  "column_end": 62,
+                  "column_start": 5,
+                  "expansion": null,
+                  "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs",
+                  "is_primary": false,
+                  "label": null,
+                  "line_end": 100,
+                  "line_start": 100,
+                  "suggested_replacement": null,
+                  "suggestion_applicability": null,
+                  "text": [
+                    {
+                      "highlight_end": 62,
+                      "highlight_start": 5,
+                      "text": "    distributed_codec_u64_le_body_v1!(verus_exec_expr, value)"
+                    }
+                  ]
+                }
+              },
+              "file_name": "@SOURCE_ROOT@/crates/fe2o3-runtime-model/verus/../src/distributed_publication_contract/codec_primitives_body.rs",
+              "is_primary": true,
+              "label": null,
+              "line_end": 77,
+              "line_start": 76,
+              "suggested_replacement": null,
+              "suggestion_applicability": null,
+              "text": [
+                {
+                  "highlight_end": 30,
+                  "highlight_start": 17,
+                  "text": "                $value as u8,"
+                },
+                {
+                  "highlight_end": 29,
+                  "highlight_start": 1,
+                  "text": "                ($value >> 8) as u8,"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "$message_type": "diagnostic",
+          "children": [],
+          "code": null,
+          "level": "error",
+          "message": "aborting due to 1 previous error",
+          "rendered": "error: aborting due to 1 previous error\n\n",
+          "spans": []
+        }
+      ],
+      "family": "u64_le",
+      "mutated_body_sha256": "8a327e6df17f34e43381aad41c3fd4353ba33697108ca6404be57c3c30a47b1d",
+      "original_stderr_sha256": "e29defed61da0b87517d735fe4449d13393b364e3a6a38466aa4ccd1e7f2728e",
+      "original_stdout_sha256": "74fefc233d56ea257077ce98117f628f0cfdb72800fd07cbd9ca7e70c0af1436",
+      "provenance": {
+        "original_disposition": "observation-only",
+        "original_negative_qualified": false,
+        "owned_record_sha256": "0313a3f2bd41c4208a983fc86015506c08a60304a2c76805687733a121b121ec",
+        "packet": "u64-shape-observation-attempt-1",
+        "packet_pins": {
+          "closing-inputs.json": "0bf7f2c723a6589c652e27e6c8021b538dede4e107e0fd0f8f32d50eb1484c15",
+          "fresh-process-closure.json": "7102b9d800db0b277e49e42250b86abebe93de0128585ee0d28e72c41497cfb4",
+          "inputs.json": "3fb3272b0c8c3728214b225e85c5d8702d0a70ba54dbdf44f0c5b4f63526db46",
+          "raw-archive-index.json": "8c82fa763cf17fcea80973560ac5cc46465ebfc37d2f766bc4ddc7c35066dc57",
+          "results.json": "32502551f9e02318ec6b726d4130e711b5b6c30229158918eaf0dae6a87abbac"
+        },
+        "replay_only": true,
+        "stage": "05-u64-encode-byte-7-substituted",
+        "stage_result_sha256": "3a82f9b1023906e9c876cf32a92226a6ea805de191706e155f07b622bd3614aa"
+      },
+      "selector": "*u64_le",
+      "status": 1,
+      "stdout_projection": {
+        "verification-results": {
+          "encountered-error": true,
+          "encountered-vir-error": false,
+          "errors": 1,
+          "is-verifying-entire-crate": false,
+          "verified": 0
+        },
+        "verus": {
+          "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+          "platform": {
+            "arch": "x86_64",
+            "os": "linux"
+          },
+          "profile": "release",
+          "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+          "version": "0.2026.08.09.92f466f"
+        }
+      }
     }
+  },
+  "extension_provenance": {
+    "new_solver_or_test_commands_executed": false,
+    "original_fixture_sha256": "26e2667bf66d55a8606b431278acd9f5cd309249eecef5b942886a83cd54fb84",
+    "scope": "three actual diagnostic replays; prior signed rejection and observation-only dispositions remain unchanged"
   },
   "normalization": "only source-root substitution in diagnostics; stdout retains actual verus and verification-results fields, omitting unrelated function-detail/timing fields",
   "original_audit_sha256": "865a41bb8f0de0247a0bc06c9ace900d4aafd8ed6f90458b06cc8410ad6fdd9f",

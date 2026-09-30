@@ -37,11 +37,27 @@ def materialized(value, root, placeholder):
     return value
 
 
+def interval_span(template, data, start, end):
+    assert data.isascii() and 0 <= start < end <= len(data)
+    span = copy.deepcopy(template)
+    first, last = data[:start].count(b'\n') + 1, data[:end].count(b'\n') + 1
+    begin, finish = start - data.rfind(b'\n', 0, start), end - data.rfind(b'\n', 0, end)
+    lines = data.splitlines()
+    span.update(byte_start=start, byte_end=end, line_start=first, line_end=last,
+                column_start=begin, column_end=finish)
+    span['text'] = [{'text': lines[index - 1].decode(),
+                     'highlight_start': begin if index == first else 1,
+                     'highlight_end': finish if index == last else len(lines[index - 1]) + 1}
+                    for index in range(first, last + 1)]
+    return span
+
+
 def replay_controls(source, mutations):
     fixture_bytes = (c.ROOT / c.FIXTURES).read_bytes()
     assert hashlib.sha256(fixture_bytes).hexdigest() == c.FIXTURES_SHA
     fixture = json.loads(fixture_bytes)
-    assert fixture['schema'] == 1 and len(fixture['cases']) == 8
+    assert fixture['schema'] == 1 and len(fixture['cases']) == 11
+    assert {row['family'] for row in fixture['cases'].values()} == set(c.KINDS)
     assert fixture['proof_inputs'] == {str(path): c.sha(source[path]) for path in c.FILES}
     assert b'/home/' not in fixture_bytes and b'codex-tmp' not in fixture_bytes
     classifier = c.bridge().inherited_controller().inherited()
@@ -150,6 +166,42 @@ def replay_controls(source, mutations):
                 changed[range_indices[1]] = copy.deepcopy(changed[range_indices[0]])
                 assert not accepts(changed)
                 for index in range_indices:
+                    if rows[index]['spans'][0]['expansion'] is None:
+                        context = c.negative_context(root, focus)
+                        argument = rows[index]['spans'][0]
+                        assert c.family_span(argument, context) == (c.PROOF, context['argument'])
+                        proof = source[c.PROOF].encode()
+                        start, end = context['argument']
+                        parameter = proof.index(b'value', *context['signature'])
+                        contract = proof.index(b'value', *context['contract'])
+                        other_argument = proof.index(b'verus_exec_expr', *context['invocation'])
+                        other_kind = 'u64_le' if record['family'] == 'u16_le' else 'u16_le'
+                        other_call = proof.index((c.MACROS[other_kind] + '!(').encode())
+                        other_end = proof.index(b'\n', other_call)
+                        invalid_intervals = [context['invocation'], (start - 1, end), (start, end + 1),
+                            (start + 1, end), (parameter, parameter + len(b'value')),
+                            (contract, contract + len(b'value')),
+                            (other_argument, other_argument + len(b'verus_exec_expr')),
+                            (other_end - 1 - len(b'value'), other_end - 1)]
+                        for left, right in invalid_intervals:
+                            changed = copy.deepcopy(rows)
+                            span = interval_span(argument, proof, left, right)
+                            assert c.source_span(span, context) == (c.PROOF, (left, right))
+                            changed[index]['spans'] = [span]
+                            assert not accepts(changed)
+                        for field, value in (('expansion', {}), ('is_primary', False), ('label', ''),
+                                             ('suggested_replacement', 'value')):
+                            changed = copy.deepcopy(rows)
+                            changed[index]['spans'][0][field] = value
+                            assert not accepts(changed)
+                        changed = copy.deepcopy(rows)
+                        changed[index]['spans'][0]['text'][0]['text'] += ' '
+                        assert not accepts(changed)
+                        changed = copy.deepcopy(rows)
+                        other_index = next(i for i in range_indices if i != index)
+                        changed[other_index] = copy.deepcopy(changed[index])
+                        assert not accepts(changed)
+                        continue
                     for edit in ('macro', 'definition', 'invocation', 'nested', 'alias', 'nonprimary', 'false_text'):
                         changed = copy.deepcopy(rows)
                         span = changed[index]['spans'][0]
@@ -314,7 +366,7 @@ def main():
         refused(c.campaign)
     c.EXPECTED_VERIFIED = 54
     replay_controls(source, cases)
-    print('PASS: codec primitive source calibration (12 groups; 8 actual diagnostic fixtures replayed; 31 mutants constructed; no verifier execution)')
+    print('PASS: codec primitive source calibration (13 groups; 11 actual diagnostic fixtures replayed; 31 mutants constructed; no verifier execution)')
 
 
 main()

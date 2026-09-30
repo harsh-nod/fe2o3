@@ -10,6 +10,12 @@ unfiltered proof discovery accepted 54 obligations with zero errors and empty
 stderr, including generic fixed arrays and inherited construction/classifier
 units. This is not yet signed mutation qualification or a milestone exit.
 
+The first signed mutation campaign was rejected when a high-byte encoding
+mutation produced a range recommendation at the exact proof macro argument
+instead of in the shared macro body. Its real postcondition failure did not
+override the stricter diagnostic-source policy. The rejected packet remains
+unchanged; an argument-location replay fixture does not retroactively qualify it.
+
 Earlier frontend and 51/3 logical failures remain preserved. A later discovery
 reported aggregate 54/0 but was rejected for five unexpected failure-worded
 notes. Inspection of the pinned verifier source showed that error-enumeration
@@ -66,7 +72,9 @@ sequential reads, zero/fixed-size arrays, exact Writer frames and canaries,
 invalid Writer panic equivalence, exhaustive `u16` values, `u64` bit/boundary and
 nonuniform patterns, and actual Reader/Writer header/digest wrappers. The entire
 model test suite and scoped formatting have passed for the current native bytes.
-Strict Clippy, no-default compilation and final signed qualification remain open.
+Strict all-feature/all-target Clippy and no-default library compilation also
+passed for these same native bytes. Those CPU/static results are explicitly reused
+across diagnostic-policy metadata changes; final signed qualification remains open.
 
 The source guard binds all model Rust files and the exact seven-file proof
 closure. Light controls construct 31 distinct, focused actual-body mutations
@@ -87,9 +95,19 @@ enumeration notes; only the two encoding families also require exactly two
 distinct, source-bound range recommendations. Auxiliary notes alone, frontend
 errors, unknown or duplicate diagnostics, and notes on a full positive are
 rejected. This is a bounded primitive policy, not a global diagnostic allowlist.
+An encoder recommendation may originate only in its authenticated macro
+expression or the exact final `value` argument of its unique proof invocation.
+The latter requires the precise interval, source text and coordinates with no
+expansion; arbitrary proof-body, declaration or other-argument spans are rejected.
+At most one of the two distinct recommendations can use that argument interval.
 
-Portable fixtures retain all eight actual diagnostic streams with source-root
-placeholders and original provenance hashes. Source-only controls replay those
+Portable fixtures retain eleven actual diagnostic streams with source-root
+placeholders and original provenance hashes: the eight initial family captures,
+the rejected u16 high-byte stream, and two observation-only u64 shifted-byte
+captures. Both u64 captures measured the same direct argument and macro-expression
+recommendation origins, between two additional full 54/0 positives. Their original
+observation-only status and the signed campaign rejection remain unchanged.
+Source-only controls replay those
 fixtures and reject malformed results, wrong families, coordinates, expansions
 and multiplicities. Replay is classifier calibration, not fresh verifier
 evidence. Signed qualification still requires three new unfiltered 54/0 positives
