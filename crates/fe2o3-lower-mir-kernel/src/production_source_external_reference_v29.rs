@@ -22,6 +22,18 @@ struct SourceExternalReferenceBorrowV29 {
     origin: SourceExternalReferenceOriginV29,
 }
 
+#[cfg(test)]
+type SourceExternalMetadataAuditV30 =
+    for<'a, 'source, 'work> fn(
+        &mut SourceReferencePlanV29<'a, 'source>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>;
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_EXTERNAL_METADATA_AUDIT_V30: std::cell::Cell<Option<SourceExternalMetadataAuditV30>> = const { std::cell::Cell::new(None) };
+}
+
 fn source_external_reference_error_v29() -> ProductionSemanticKirErrorV1 {
     source_reference_error_v29("external reference borrow differs from its original checked origin")
 }
@@ -213,20 +225,134 @@ fn source_external_descriptor_origin_v29(
     if row.element != source.ty() {
         return Err(source_external_reference_error_v29());
     }
-    // This fact was derived by the common C1 descriptor transfer from the
-    // authenticated root ABI, including exact helper argument edges.
-    plan.descriptor_value_space(
-        instance,
-        row.holder_occurrence,
-        source,
-        0,
-        row.pointer_type,
-        budget,
-    )?;
+    // The original selector exists before C1's worklist visits every arm.
+    // Physical descriptor facts are mandatory at completed-plan admission and
+    // at every borrowed receipt read, not guessed during structural discovery.
     Ok(Some(SourceExternalReferenceOriginV29::Descriptor {
         instance,
         descriptor,
     }))
+}
+
+fn source_external_metadata_headers_v30() -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        source_reference_emission_headers_v29::<SourceExternalReferenceOriginV29>()?,
+        source_reference_emission_headers_v29::<&SemanticPlaceV1>()?,
+        source_reference_emission_headers_v29::<AddressSpace>()?,
+        source_reference_emission_headers_v29::<&SourceReferenceDescriptorV29>()?,
+        source_reference_emission_headers_v29::<&SemanticFunctionDeclV1>()?,
+        source_reference_emission_headers_v29::<SourceReferenceSelectionSubjectV29>()?,
+        source_reference_emission_headers_v29::<&SourceReferenceSelectionNodeV29>()?,
+        source_reference_emission_headers_v29::<Option<&SemanticPlaceV1>>()?,
+        source_reference_emission_headers_v29::<()>()?,
+    ])
+}
+
+fn check_source_external_origin_metadata_v30(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    origin: SourceExternalReferenceOriginV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    plan.check_owner(plan.instances, budget)?;
+    let capture = SourceExternalMetadataCaptureV30 { plan, origin };
+    with_canonical_call_scratch_v1(budget, move |budget| capture.check(budget))
+}
+
+struct SourceExternalMetadataCaptureV30<'a, 'owner, 'source> {
+    plan: &'a SourceReferencePlanV29<'owner, 'source>,
+    origin: SourceExternalReferenceOriginV29,
+}
+
+impl SourceExternalMetadataCaptureV30<'_, '_, '_> {
+    fn check(self, budget: &mut ArgumentBudgetV1<'_>) -> Result<(), ProductionSemanticKirErrorV1> {
+        budget.reserve_storage(argument_sum_v1(&[
+            source_external_metadata_headers_v30()?,
+            source_reference_selection_call_headers_v29::<()>(&self)?,
+        ])?)?;
+        let plan = self.plan;
+        match self.origin {
+            SourceExternalReferenceOriginV29::Issued { .. } => Ok(()),
+            SourceExternalReferenceOriginV29::Descriptor {
+                instance,
+                descriptor,
+            } => check_source_external_descriptor_metadata_v30(plan, instance, descriptor, budget),
+            SourceExternalReferenceOriginV29::Selected(subject) => {
+                let function = plan
+                    .instances
+                    .instance(subject.instance)
+                    .ok_or_else(source_external_reference_error_v29)?
+                    .declaration();
+                let source =
+                    source_reference_selector_place_v29(function, subject.site, subject.role)
+                        .filter(|source| std::ptr::from_ref(*source) as usize == subject.source)
+                        .ok_or_else(source_external_reference_error_v29)?;
+                with_source_reference_selection_v29(
+                    plan,
+                    subject.instance,
+                    subject.site,
+                    subject.role,
+                    source,
+                    budget,
+                    |graph, budget| {
+                        for node in &graph.nodes {
+                            budget.charge_work(1)?;
+                            if let SourceReferenceSelectionStepV29::Leaf(
+                                SourceExternalReferenceOriginV29::Descriptor {
+                                    instance,
+                                    descriptor,
+                                },
+                            ) = node.step
+                            {
+                                check_source_external_descriptor_metadata_v30(
+                                    plan, instance, descriptor, budget,
+                                )?;
+                            }
+                        }
+                        Ok(())
+                    },
+                )
+            }
+        }
+    }
+}
+
+fn check_source_external_descriptor_metadata_v30(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    instance: ProductionCallInstanceIdV1,
+    descriptor: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.charge_work(2)?;
+    let row = plan
+        .descriptors
+        .get(descriptor)
+        .ok_or_else(source_descriptor_error_v29)?;
+    if row.instance != instance || row.projection == 0 {
+        return Err(source_descriptor_error_v29());
+    }
+    let source = row.check(plan.instances, budget)?;
+    plan.descriptor_value_space(
+        instance,
+        row.holder_occurrence,
+        source,
+        row.projection - 1,
+        row.pointer_type,
+        budget,
+    )?;
+    Ok(())
+}
+
+fn check_source_external_metadata_complete_v30(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    for row in &plan.external_borrows {
+        budget.charge_work(1)?;
+        if !matches!(row.origin, SourceExternalReferenceOriginV29::Issued { .. }) {
+            check_source_external_origin_metadata_v30(plan, row.origin, budget)?;
+        }
+    }
+    Ok(())
 }
 
 fn source_external_reference_origin_v29(
@@ -856,6 +982,11 @@ fn source_external_reference_borrow_rows_v29(
         return Err(source_external_reference_error_v29());
     }
     let origin = source_external_reference_origin_v29(plan, site, source, budget)?;
+    if let Some(origin) = origin
+        && !matches!(origin, SourceExternalReferenceOriginV29::Issued { .. })
+    {
+        check_source_external_origin_metadata_v30(plan, origin, budget)?;
+    }
     match (retained, origin) {
         (None, None) => Ok(None),
         (Some((index, row)), Some(origin))

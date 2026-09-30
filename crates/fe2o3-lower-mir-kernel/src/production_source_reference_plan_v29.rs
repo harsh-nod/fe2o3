@@ -770,6 +770,11 @@ impl<'a, 'root, 'source> SourceReferenceBuilderV29<'a, 'root, 'source> {
                 ));
             }
         }
+        #[cfg(test)]
+        if let Some(audit) = SOURCE_EXTERNAL_METADATA_AUDIT_V30.get() {
+            audit(&mut self.plan, budget)?;
+        }
+        check_source_external_metadata_complete_v30(&self.plan, budget)?;
         self.finish_effects(budget)?;
         if self.plan.storage == SourceReferenceStorageV29::ScalarCells {
             self.plan_scalar_cells(budget)?;
