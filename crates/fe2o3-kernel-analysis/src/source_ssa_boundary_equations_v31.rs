@@ -325,7 +325,7 @@ impl Boundaries {
     ) -> Result<Option<Value>> {
         out.work(logarithm(arguments.len()))?;
         Ok(arguments
-            .binary_search_by_key(&variable, SsaArgumentV1::variable)
+            .binary_search_by_key(&variable, |argument| argument.variable())
             .ok()
             .map(|at| arguments[at].value()))
     }
