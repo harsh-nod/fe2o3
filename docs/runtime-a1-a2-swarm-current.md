@@ -37,8 +37,56 @@ generated CPU binaries are omitted. The retained-pair source is also integrated
 locally after its separate 81-case CPU/static and 29-negative conditional
 post-catch campaigns; its broader evidence packet remains local. These are
 component qualifications, not a new combined full-runtime or native result.
-Owned-storage extraction and the Context fold are separate development slices;
-the retained runtime facade, protected execution and all A0-A7 exits remain open.
+Owned-storage extraction is integrated locally at `1764f2a11`, with an exact
+component-byte binding to signed candidate `b0ffccf4f`. Its signed storage and
+post-catch campaigns pass three complete runs each (eight and 14 overlapping
+obligations respectively), and reject all 21 and 29 logical mutants. The storage
+proof starts after the operation returns; quarantine, terminal observations and
+pinned vstd contracts retain their documented trust boundaries. It does not prove
+automatic Drop, native custody validity or the runtime facade. The broader KFD
+library attempt timed out after 1800 seconds without a final test summary and
+remains incomplete; its partial output is not a passing suite.
+
+Inert retained-pair accounting observations are integrated at `2fe70397e`.
+Combined storage/accounting development checks pass 17 owned and 19 borrowed CPU
+tests, four selected doctests, warning-free no-default compilation, strict Clippy
+and scoped formatting. All 6411 selected inputs are bound to that signed commit.
+CPU execution preceded signing; the unchanged proof closures reuse the separate
+signed `b0ffccf4f` campaigns, not a merged-tree solver run. Endpoint observations
+are independently sampled, not a coherent aggregate-memory ceiling.
+
+Native XGMI custody storage is integrated at `d30b348c3`. Exact candidate-byte
+development checks pass 197 selected CPU tests, all 53 runtime doctests, two
+source-only integration tests and scoped static gates. The initial 24 focused
+cases overlap the 197. The rejected obsolete-warning recorder remains preserved;
+the succeeding recorder requires zero production warnings. This storage change
+does not yet expose a retained RuntimeContext mode.
+
+The [ordered producer-input fold](runtime-producer-input-fold-v1.md) is integrated
+at `14e4253eb`. Its signed component campaign passes three full 13-obligation
+`--no-cheating` runs and all 22 logical negatives; broader candidate checks pass
+136 selected CPU tests, 53 doctests and scoped static gates. That candidate's
+no-default check retains its two explicit baseline warnings. The merged source
+guard incorporates only the separately reviewed custody delta and passes its
+lightweight calibration. The theorem covers the actual shared fold over ordered
+validation receipts, not the per-input validator, live credit ledger or native
+authority. No combined full-runtime, native or performance acceptance follows
+from these separate component results. Evidence remains local and publication
+is blocked by DNS failures; protected execution and all A0-A7 exits remain open.
+
+A fresh local Unix `SOCK_SEQPACKET` capability probe also returns `EPERM` for
+`SO_DOMAIN`, `SO_TYPE`, `getpeername`, `SO_PEERCRED` and setting/reading
+`SO_PASSCRED`. This confirms current environment restrictions relevant to the
+telemetry failures below, not the precise syscall of a historical run. Production
+socket validation and the tests remain enabled and unchanged.
+
+The fresh merged all-feature runtime library run at `14e4253eb` completes with
+1863 passed, three failed, 32 ignored and zero filtered out (exit 101). All three
+failures are the telemetry cases listed below, returning `InspectSocket/EPERM`
+at `authorized_execution.rs:1317`; no other test fails. This is a direct local
+regression result, not a passing full-runtime qualification packet. Native tests
+remain ignored, and the restricted telemetry cases still require an unrestricted
+qualification environment.
 
 The [binder, producer preflight and retained-payload packet](evidence/dev-binder-producer-payload-2026-09-30/README.md)
 passes the available CPU/static/bounded host-proof gates at 6,407 unchanged

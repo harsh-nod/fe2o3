@@ -1,9 +1,11 @@
 # Producer Input Fold Refinement
 
-Status: unsigned development refinement. Six focused CPU groups passed, and a
-full unfiltered `--no-cheating` proof discovery measured 13 verified obligations
-with zero errors. The logical mutation campaign has not run. This is not signed
-source, native hardware, full-runtime, milestone, or performance acceptance.
+Status: integrated conditional component refinement at `14e4253eb`, from signed
+candidate `205a6a03e`. The candidate's signed campaign passes three full
+`--no-cheating` runs of 13 obligations and all 22 logical negatives. Its broader
+checks pass 136 selected CPU tests and 53 doctests. This is not native hardware,
+full-runtime, milestone, or performance acceptance; the merged-source guard
+calibration is not a merged-source solver rerun.
 
 ## Shared Production Body
 
@@ -71,33 +73,47 @@ The positive stderr contained only 13 permitted `--multiple-errors=0` informatio
 notes. Earlier rejected frontend and SMT attempts remain retained; they are not
 accepted positives. This is not historical-group or host-wide absence evidence.
 
-## Mutation Preparation
+## Signed Campaign
 
-`check-producer-input-fold.py` pins the accepted proof bytes and all 317 runtime
-Rust files, including the actual adapter and unchanged native validation helper.
+`check-producer-input-fold.py` pins the accepted proof bytes and the complete
+runtime Rust roster, including the actual adapter and native validation helper.
+The signed candidate had 317 runtime Rust files. Integration refreshes only the
+roster count/hash to 319 for the separately reviewed 13-path XGMI custody change;
+the proof, shared macros, adapter and focused tests are unchanged.
 The executable proof closure is only the proof plus shared macro file. That file
 also contains the native per-input macro, which the proof does not expand.
 
-The 22 proposed mutations change only the production fold macro: substituting or
+The 22 executed mutations change only the production fold macro: substituting or
 swallowing its first error; stopping at `Unknown`; forgetting prior aggregate
 statuses or weakening precedence; incorrect initial aggregate/input/family
 cursors; swapped family arguments; missing, cross-wired or weakened final count
 checks; promoted final-count failure; duplicate validation; and stopping after
 the first success. Every candidate selects only `Observations::reconcile`.
 
-The calibration constructs these exact candidates and checks source guards,
-unchanged native-helper bytes, controller flags and synthetic classifier refusal.
-It does not establish that any candidate fails logically. Rust/VIR errors,
-warnings, timeouts and unexpected selection diagnostics must not be counted as
-logical negatives. The opaque owner is not directly mutable by the controller;
-no disconnected owner mutation or native accounting authority is invented.
+All 30 signed campaign phases pass: the three complete positive runs, all 22
+strict logical negatives and their source/tool/release checks. Each selected
+negative reports one verified obligation and one logical error, not a frontend
+rejection. All 6291 selected signed inputs remain unchanged. The calibration
+alone only constructs candidates and checks guards/classifiers; it does not
+establish logical rejection. The opaque owner is not directly mutable by the
+controller; no disconnected owner mutation or accounting authority is invented.
 
 The inherited campaign controller retains its original `--no-cheating`, bounded
 timeouts, signer/source binding, full positives before/relocated/after and strict
-logical-negative classifier. Its normal entrypoint requires clean signed source;
-this unsigned worktree is preparation only until a separately reviewed execution
-path or signed candidate is available.
+logical-negative classifier. Its normal entrypoint requires clean signed source.
+The signed component campaign used that entrypoint. Its managed child-group
+closure receipts are not an independent historical PID census or host-wide
+absence claim. The broader CPU recorder separately closed its own 17 fresh
+groups in its unchanged live namespace.
 
-Remaining gates include the measured logical mutation campaign, broader existing
-producer-input preflight/producer-launch regressions, scoped static checks and
-source-bound integration. The full native-helper refinement remains separate.
+Broader candidate checks cover seven disjoint CPU groups: fold, preflight,
+producer launch, directed peer, peer custody, allocation admission and version
+journal (136 total). All 53 doctests, strict Clippy, formatting and whitespace
+checks pass. The candidate's no-default compilation retains exactly two known
+baseline warnings; it is not warning-free. The original six focused cases are
+included in the 136 and are not additive.
+
+The full native-helper and live-ledger refinements remain open. See the
+[current milestone snapshot](runtime-a1-a2-swarm-current.md) for integration and
+broader qualification limits. Raw campaign evidence remains local and has not
+yet been published as a release packet.
