@@ -563,3 +563,66 @@ reconciles immutable #271 checkpoint
 `7bc097b0b3b32ae542d8549d3d04b824f6a424ed`; its regressions require a new run.
 The r141 build used a bounded 16 GiB host virtual-memory allowance. This changes
 only the local Rust build envelope, not any production work/storage/proof cap.
+
+## Reconciled Compiler Execution Results
+
+r144 completed at `857d7079a6699968cef7af47a1bc18278a3be0b0` with unchanged
+source/tools. Its lowerer selection executed **499 passing and 18 failing tests**:
+
+- Three aggregate-runtime cases still stop at the inherited unsupported
+  private-entry SSA block argument.
+- Four context-read controls panic before their intended checks because the
+  ABI test helper omits F32 slice descriptors. They do not yet validate the
+  context-read repair.
+- Eight index-call controls and three native-helper receiver controls stop at
+  `execution availability during defined child request`. Their intended
+  callbacks and substitutions are not reached; no negative credit is granted.
+
+The shared SSA-boundary selection passed one test and failed nine during fixture
+construction: edge-role zero is invalid. `f00040b7f` changes only fixture role
+values to nonzero values, preserving zero-based edge ordinals and the production
+rejection. r145 then passed all ten boundary tests.
+
+r144 selected zero tests in `dialect-amdgcn`, so it supplies no native-layout
+coverage. r145 explicitly selected `fe2o3-amdgcn-model`: ten tests passed and one
+failed because it incorrectly expected only the printed owner SHA to change.
+The owner also binds the emitted pseudoprobe GUID and function hash.
+
+`8be686cbed5e6b5c3ec704d34ff9cd2fc2c191e9` corrects that test: unchanged
+executable KIR is compared structurally, while the exact owner and both probe
+identifiers must change and appear in their emitted records. No production
+lowering check is relaxed. r146 passed **all ten SSA-boundary and eleven native
+target-lowering tests**, with zero failures/ignored and unchanged source/tools.
+These are CPU-side compiler tests, not GPU execution or complete refinement.
+
+Log SHA-256 values:
+
+- r144: `9a1ed41d08c9d45026ad635086746b0fb21e58261375e2bc666329a2a0ab3824`
+- r145: `029c1930a7e2f36560e764465ea0ce186ddf03c7a03ba5accce5db74929c3401`
+- r146: `f50d061a7a5ab38ab36e16752768e6939ffc3f7fc798d531094002ffbf0c6465`
+
+The lowerer failures still require their own fixes and reruns. No milestone,
+protected-runtime, simulator or safe-launch coverage advances from these results.
+
+## Actual Rust Data-Root Boundary
+
+r147 rebuilt the actual-source backend at
+`8be686cbed5e6b5c3ec704d34ff9cd2fc2c191e9` and finished at
+`2026-09-30T09:57:01.886Z`. All 80 cases failed before their required consumer
+with `pending global native changed exact data root`. This includes all 16
+positive cases and all 64 negative cases. The negative cases do not count as
+successful rejections at their intended boundaries.
+
+The matrix covers gfx942/gfx950, backend optimization 0/3, MIR optimization 0/2,
+five modes and two fresh sessions per combination. The fixture still uses the
+legacy ThreadIndex body with a logical context argument; it does not exercise
+the new `ctx.invocation()` source API. No finalizer, protected proof, simulator
+or hardware launch was reached. M1 remains incomplete and the strict count
+remains **0/47**.
+
+Source and tool inventories were unchanged throughout the run. Source snapshot:
+`5f706214465676dc08a11f14a10c170c81f64fdd7f5417928b4af25bba01a7a6`.
+Log SHA-256:
+`6c8ee1768a80e4ff3414045dda36f5a15d7caa71726532ba2fa19266e22f5989`.
+The next repair must preserve the exact original data-root binding; removing or
+weakening the identity check would not satisfy this gate.
