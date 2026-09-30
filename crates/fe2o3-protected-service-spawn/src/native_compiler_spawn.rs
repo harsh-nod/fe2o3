@@ -49,8 +49,10 @@ impl Stage {
     /// Before profile-ready/exec the child installs a fixed inherited memory
     /// restriction filter. It denies explicit writable/anonymous EXEC mappings
     /// and adding/restoring EXEC with mprotect, plus selected direct memory-writer
-    /// primitives. File-backed RX, source/output paths, descendants and external
-    /// writers and inherited/exec-established personality are not authenticated:
+    /// primitives. A private exact-child proc observation rejects inherited
+    /// READ_IMPLIES_EXEC after credential drop, without changing personality.
+    /// File-backed RX, source/output paths, descendants, external writers and
+    /// personality established by exec are not authenticated:
     /// this is NOT complete W^X enforcement or a runtime guard.
     /// Non-compiler service stages do not install this filter.
     ///
@@ -62,6 +64,11 @@ impl Stage {
     /// the root coordinator's environment or standard streams. Revalidate the
     /// actual final staged objects and bytes before clone. This does not establish
     /// PT_INTERP, DSO/input path resolution, deployment or compiler authority.
+    /// Keep the child's procfs view and private descriptor table free of foreign
+    /// mutation. The child opens its own proc inode after any mapping gate and
+    /// before profile drop, then reads/closes it after drop and before READY.
+    /// A denied syscall query is not substituted for this observation; kernel or
+    /// LSM refusal is terminal, including under inherited LockPersonality.
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn stage_compiler(
         executable: &File,

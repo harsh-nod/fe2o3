@@ -128,6 +128,9 @@ temporary closes plus bounded byte processing, within the existing
 `32 * 1088 + 16 * 4096` allowance. The type and PID-read buffers are sequential;
 the six-buffer/twelve-stat scratch envelope is unchanged. These are conservative
 logical bounds, not measured syscall-time or exact operation-census claims.
+The helper plus compiler launch envelope therefore gained 200704 work and,
+on x86-64, 9344 scratch from this preparation change. Monitoring does not repeat
+this preparation allowance, and it is not a hidden global budget-limit increase.
 
 Authored source checks reject a broad/wrong-subtree writable path, duplicate
 assignments, a missing capability, and creator/filter regressions. Parser and
@@ -135,14 +138,19 @@ metadata controls are not mount evidence. The ignored
 `native_cgroup::tests::mounts::actual_membership_mount_boundary` uses an exact,
 timed subprocess with a private mount namespace: it checks actual preparation
 through a writable final submount under a read-only root, rejects a prefix
-mount, an ordinary-domain ancestor without direct PID membership, a hierarchy-root
-alias and wrong filesystem, and verifies that type/procs control-file submounts
+mount, an ordinary-domain ancestor without direct PID membership and wrong
+filesystem, and verifies that type/procs control-file submounts
 are still refused. It creates/writes no cgroup and tests no
 compiler, mapping, spawn, delegation or service startup. Its setup needs isolated
 root, `CAP_SYS_ADMIN`, a writable unified hierarchy, ordinary-domain membership
 and a non-root ordinary-domain ancestor, no intervening mounts, stable privileged
 state and an outside custodian. It must run outside the unit's denied-unshare context;
 the service does not gain `CAP_SYS_ADMIN` for this test.
+
+Separate controls cover physical-hierarchy and namespace-root substitution.
+The former requires an actual root without `cgroup.type`; the latter checks an
+ordinary-domain namespace root and refuses at direct PID membership. A private
+namespace root does not establish the physical-root control's prerequisite.
 
 The separate ignored
 `native_cgroup::tests::mounts::actual_threaded_domain_membership_is_refused`
@@ -165,9 +173,11 @@ The provisioned root-request fixture already requires a non-root `domain\n`
 parent. None of these fixtures has been rerun for this parent-type correction.
 
 The source contract and its mutation checks passed on September 30. The complete
-coordinator/spawn library rerun passed 562 tests, with 35 native tests ignored;
-see [the admission checkpoint](evidence/native-invocation-runtime-20260928.md#ordinary-domain-admission).
-The ignored mount tests remain unrun. An effective-unit/drop-in
+coordinator/spawn library rerun passed 567 tests, with 46 tests ignored.
+Eight selected mapped-child/mount controls subsequently passed on MI350; the
+physical-root and threaded-domain controls remain unrun. See
+[the native observation checkpoint](evidence/native-invocation-runtime-20260928.md#exact-child-observation-on-mi350).
+An effective-unit/drop-in
 inspection and a genuine paired service run are still required: creator
 clone3 and UID-0 map, root/sibling write denial versus owned-subtree creation,
 mapped-helper/compiler namespace denials and legal thread/fork controls, and
@@ -177,15 +187,96 @@ The V2 coordinator/supervisor/issuer chain also needs its own regression run;
 a generic-stage fixture does not establish that chain. All existing approval,
 proof and runtime-enforcement gates remain closed.
 
-A separate paired blocker remains unchanged: v255 `LockPersonality=yes` denies
-any `personality` argument other than the selected personality, including the
-read-only `0xffffffff` query. The compiler child's
-`native_compiler_restrictions::install` requires that actual query to exclude
-inherited `READ_IMPLIES_EXEC` and correctly refuses on error. Therefore this
-unit still cannot qualify that compiler pre-exec path. Do not clear the bit,
-invent a successful observation, or drop the existing unit restriction to
-obtain a positive. An invariant-preserving paired resolution and reached
-query-denial/positive controls are required separately.
+### Locked Exact-Child Personality Observation
+
+The unit still sets `LockPersonality=yes`. Systemd v255 denies personality
+arguments other than the selected native personality, including the syscall's
+read-only `0xffffffff` query. The candidate now replaces that query with one
+explicit kernel proc observation; it does not interpret `EPERM` as a value,
+clear `READ_IMPLIES_EXEC`, or open an unlocked startup interval.
+
+Only the actual compiler child acquires the observation. After its real mapping
+gate, before credentials/dumpability change, it opens `/proc` with `openat2`,
+requires genuine procfs and protected root-owned inode metadata, and reads the
+kernel's `thread-self` link into a fixed 32-byte stack buffer. The canonical
+`<pid>/task/<tid>` must match raw calling-task `getpid/gettid`; this direct child
+must also be its thread-group leader. Numeric task and personality opens are
+relative to the retained root/task directories with `BENEATH`, `NO_SYMLINKS`
+and `NO_XDEV`, on the same procfs device. The directories are closed immediately.
+The sole private personality FD is neither supplied by the caller nor exported.
+The kernel's [thread-self implementation](https://github.com/torvalds/linux/blob/v6.18/fs/proc/thread_self.c)
+names the calling task in that procfs mount's PID namespace. A mismatching view
+refuses; this is not independent namespace-inode attestation.
+
+The actual clone record uses PIDFD/CLEAR_SIGHAND, optional INTO_CGROUP, and
+NEWUSER only for the typed mapping route: no NEWPID, NEWNS, THREAD or FILES.
+That route rejects a pending parent PID transition and revalidates unchanged
+child PID namespaces before releasing its gate. Both UID and GID maps contain
+`0 0 1`, plus identity rows for the admitted child and peer. Thus parent-root
+proc ownership remains visible as inner UID/GID zero when the child opens it;
+the later profile drop uses those same mapped nonzero IDs. The isolated MI350
+mapped-child control executed this sequence and checked the actual mapping rows;
+it does not establish the installed service's deployment provenance.
+
+After profile drop, the same child rechecks its PID/TID, preads exactly eight
+lowercase hex digits and a newline, and separately checks EOF at offset nine.
+It refuses short/extra/malformed bytes, syscall or close errors, and bit 22
+(`READ_IMPLIES_EXEC`), without modifying personality. The FD closes before the
+unchanged compiler filter, READY, or exec, and explicitly closes on intervening
+profile/channel failures. Acquisition and consumption have separate terminal
+status stages (15 and 16); filter installation retains stage 13. No partial
+observation can satisfy the consumer.
+
+Both child mapping-gate FDs close before acquisition. No common closefrom or
+descriptor remap runs between acquisition and consumption: profile setup changes
+credentials/capabilities only, and channel setup closes only its distinct owned
+sockets/control FD. Common `close_range(CLOEXEC)`, stdio closes and final dup3
+run later, after READY and gate release, with the observation already closed.
+
+This relies on Linux's [proc personality reader and retained PID inode](https://github.com/torvalds/linux/blob/v6.18/fs/proc/base.c)
+and [same-thread-group ptrace access rule](https://github.com/torvalds/linux/blob/v6.18/kernel/ptrace.c).
+Acquisition occurs before proc ownership becomes inaccessible after the
+credential/nondumpability transition; consumption still invokes the kernel
+reader's current access check. No cap, root read, parent snapshot or alternate
+reader replaces a failed post-drop read. The deployed kernel/LSM must actually
+permit this exact sequence, or launch remains refused. Foreign descriptor,
+mount and task mutation remain excluded by the existing unsafe caller contract,
+not proved by these checks. Exec-established personality is still outside this
+pre-exec observation's claim.
+
+The original parent prepays all work/scratch before clone. Observation work is
+`19 * 1088 + (32 + 10 + 1) * 64 + 256 = 23680`: four identity syscalls, three
+opens, three fstatfs, three fstat, one readlink, two preads and three closes,
+including refusal cleanup without retry. Replacing the old single query raises
+compiler child work by 22592, to 30848 for observation plus filter installation.
+Scratch adds `6 * sizeof(stat) + 2 * sizeof(statfs) + 2 * 24 + 2 * 12 + 64 + 20
++ 1024`, or 2284 bytes on x86-64; this is a conservative logical frame quote,
+not generated stack/RSS. Existing coordinator compiler-setup work already bounds
+the complete 46144 extra work for cwd, observation/filter and child channel;
+its two spawn scratch quotes gain 4568 bytes. No retained owner,
+cleanup account, retry budget, process limit or runtime gate changes.
+
+Authored parser/quote units are not kernel evidence. Ignored isolated controls
+cover an inherited native-ABI equivalent of the unit personality lock, a truly
+mapped compiler child, one-short original work/storage, actual dirty inheritance,
+and kernel-denied record/EOF reads reaching stage 16 with no READY/exec. Positive
+controls inspect the actual gated child's FDs to check closure before READY,
+PID-namespace continuity, and actual UID/GID mapping rows on the mapped route,
+then execute the existing static diagnostic, including unchanged blanket
+personality denial and legal fork/exec. The locked positive also reuses actual
+child-channel transfer and backpressure controls, not a synthetic FD substitute.
+Exact-test subprocesses have a timeout, direct-child kill/wait custody, bounded
+log reads and reached markers; the
+outside custodian still owns whole-tree retirement. Six unmapped controls and
+six mapped controls passed in isolated MI350 containers; the latter were rerun
+with two passing mount controls after correcting the physical-root fixture
+assumption. Other ignored controls remain unexecuted. These tests require
+isolated root, real procfs/clone3/seccomp, the
+static `-pthread` diagnostic, and `CAP_SYS_PTRACE` for positive inspection. The
+locked child-channel control also requires `pidfd_getfd`. The mapped positive
+additionally requires writable cgroup v2, user namespaces and
+`CAP_SETFCAP`. Neither these fixtures nor a successful post-drop read would
+qualify the actual systemd unit, approved compiler/runtime, proof or launch gate.
 
 ## Versioned Offline Installation
 

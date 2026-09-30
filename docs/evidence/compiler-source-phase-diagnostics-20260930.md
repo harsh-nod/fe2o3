@@ -789,3 +789,40 @@ Source/tool inventories remained unchanged. Log SHA-256:
 `a772c60576ae53ce9ded8ffc371a10b91d4fc19c58b944c3796bfa0b2909dd6c`.
 The candidate is buildable, but its regression suite and actual Rust production
 path are not qualified. Protected proof, simulator and hardware remain unrun.
+
+## Actual Rust Source Matrix
+
+r178 completed the explicit ignored
+`actual_source_owned_v40_policy10_context_nominal_vecadd` test at the unchanged
+`bbe2aa74539a3f9d7d95a0f989a98aa0b36d6845` candidate. All **80 child cases**
+passed: gfx942/gfx950, optimization 0/3, MIR optimization 0/2, five modes and
+two fresh processes per combination. The positive and four exact refusals
+(frozen owner, equal-but-foreign owner, incomplete ABI and consumer refusal)
+reached their required boundaries. Repeated observations matched exactly.
+
+The earlier r172 attempt spent 14 minutes building the compiler, recorded the
+40 gfx942 cases, and hit its 20-minute timeout before completing gfx950. The
+initial status count of 39 missed the first record appended to libtest's test
+name line. r172 is still an incomplete run, not a matrix pass. r178 reused the
+compiler build with the same time/resource limits and completed in about six
+minutes. Its fresh dependency/child scratch was removed; the timed-out run's
+owned scratch was removed after its processes were confirmed absent.
+
+This is genuine Rust using the existing `ThreadIndex` plus logical context,
+not the new scoped `ctx.invocation()` path. It checks source-owned dataflow,
+nominal metadata, unchanged physical ABI and exact consumer/owner refusal.
+Every observation explicitly retains `runtime_discharged = false`,
+`ranked_complete = false` and `launch_authority = false`. The 13 broader r168
+regression failures remain separate repair work. No protected proof, simulator,
+LLVM-to-machine refinement or GPU launch is credited by this matrix.
+
+Source/tool inventories remained unchanged, with source snapshot
+`9154cd9a80e2e7f55cdc2bbcbab52a5e623b1261fad01804c6dcefc8ace71693`.
+Log SHA-256:
+
+- r172: `19a0c93c5e4625ea80022cbcb87c3f05da7d3b24481b825a215990651da7d61c`
+- r178: `bc05735eca3795e5c5ddaa94382ff9cd71d78677c26344e9f799162032212d96`
+
+The compiler candidate remains under integration, not published as qualified
+production capability coverage. M1-M7 remain incomplete and the strict
+production-to-required-proof-to-safe-GPU count remains **0/47**.

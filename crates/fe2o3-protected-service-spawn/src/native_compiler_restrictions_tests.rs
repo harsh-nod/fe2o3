@@ -80,8 +80,8 @@ fn compiler_filter_preserves_data_and_file_rx_but_denies_exec_transitions() {
 
 #[test]
 fn compiler_filter_denies_personality_query_as_well_as_mutation() {
-    // The child-local read must precede installation; no query exception is added.
-    for personality in [0, READ_IMPLIES_EXEC as u64, u64::from(u32::MAX)] {
+    // The exact-child proc read/close precedes installation; no syscall exception.
+    for personality in [0, 0x0040_0000, u64::from(u32::MAX)] {
         assert_eq!(evaluate(ARCH, 135, [personality, 0, 0, 0, 0, 0]), KILL);
     }
 }
@@ -91,7 +91,16 @@ fn compiler_filter_is_fixed_forward_only_and_fully_quoted() {
     assert_eq!(size_of::<Instruction>(), 8);
     assert_eq!(size_of::<Program>(), 16);
     assert_eq!(INSTRUCTIONS, 57);
-    assert_eq!(SCRATCH, 728);
+    assert_eq!(
+        SCRATCH,
+        728 + 6 * size_of::<libc::stat>()
+            + 2 * size_of::<libc::statfs>()
+            + 2 * 24
+            + 2 * 12
+            + 2 * 32
+            + 2 * 10
+            + 1024
+    );
     for (pc, i) in FILTER.iter().enumerate() {
         if matches!(i.code, JEQ | JGE | JSET) {
             assert!(pc + 1 + usize::from(i.yes) < FILTER.len());
