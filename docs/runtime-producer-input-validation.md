@@ -3,7 +3,8 @@
 This component connects the runtime's actual per-input validation body to a
 typed observation specification. Fresh affected CPU tests, full unfiltered
 validator verification, selector observation, and native static gates pass.
-The complete logical-negative campaigns remain pending. This is not an
+Signed candidate `10013c06a14e876fde141c769b5baf8bc42b3203` also passes the
+complete validator and fold campaigns, integrated at `624101b57`. This is not an
 end-to-end proof of concrete Context, journal, or allocation-credit behavior.
 
 ## Implementation
@@ -92,6 +93,8 @@ measurements without presenting local paths as public artifact links.
 | Full validator verification | 42 verified, 0 errors | Complete unfiltered proof root with no cheating |
 | Selector observation | All 8 stages passed | Two full42 positives bracketed three selected mutation observations |
 | Native static gate | All 5 stages passed | Scoped formatting, fresh no-default library build, strict Clippy, and whitespace checks, with base-signature and continuity checks |
+| Signed validator campaign | Three full 42/0 runs and 38 logical negatives passed | Before, exact relocation, and after; all actual-body mutation families checked |
+| Signed fold campaign | Three full 13/0 runs and 22 logical negatives passed | Fresh qualification against the changed shared-body file |
 
 The 42 count is the verifier-reported obligation total, including derived
 equality, order, and helper obligations. It is not 42 independent runtime
@@ -125,6 +128,7 @@ Boolean `true` and ordinary canonical output paths inside the dedicated target.
 | `cpu-discovery-attempt-4/results.json` | `61c2306cbf32b937a46179faa71678069a06776ade6e953b2117e8dbd79149ab` |
 | `selection-capture-attempt-1/results.json` | `ca7404c668db666a2ce56090280782469150c48a53c734579a1a3afa707a1cf6` |
 | `static-gate-attempt-2/results.json` | `f182f131bcb9cdddc90666520c41e7d12c32574b40f78b9fa570f39d69dddeb6` |
+| `signed-campaign-attempt-1/results.json` | `e24ed41fee1739549c53c34975b36ea941a8a13912030b1e72783c296da5da26` |
 
 Each recorder retained source/tool/raw-input continuity and closed all process
 groups it created in its unchanged PID namespace: ten CPU/discovery groups,
@@ -133,24 +137,35 @@ statement, not a claim that the host had no other work. The accepted native
 bodies, proof contracts, CPU tests, and retained CPU executable were unchanged
 across the count/selector/checker metadata updates.
 
-## Remaining Qualification
+## Signed Campaign
 
-The validator campaign still requires full42 before, exact relocation full42,
-all 38 logical-negative controls, full42 after, and release checks on the signed
-candidate. The controls comprise 28 validation-body mutations, five dependency
+All 74 signed campaign stages pass, including verifier-release checks, source
+and classifier controls, and the complete positive/negative rosters above. All
+74 fresh process groups close in the same PID namespace; source, tools, generated
+inputs, raw records, and retained CPU executable retain their recorded identities.
+The campaign does not execute CPU tests afresh: the earlier CPU/static evidence
+is bound to unchanged signed production and test bytes.
+
+The validator controls comprise 28 validation-body mutations, five dependency
 scan mutations, and five source-pair scan mutations. Source-only controls check
 the complete roster and enforce each mutation's intended macro region.
-Constructing a mutant does not establish that verification rejects it.
+Each of the 60 validator/fold negatives exits with an actual logical error whose
+primary diagnostic spans join its selected source family. None is accepted on
+a compiler/frontend failure, warning, timeout, or unknown selector note.
 
 The older fold checker now ends its mutation interval at the first scan helper,
 with explicit guards on the current shared body and unchanged 2003-byte fold
 prefix. Both scan helpers and the validator are excluded from fold mutations.
-A guard refresh alone is not requalification: fresh full13 before, relocation
-full13, all 22 logical-negative controls, full13 after, and release checks remain
-required on the signed candidate.
+A guard refresh alone is not requalification; the fresh full13/22 campaign above
+provides that separate signed-candidate result.
 
-Compiler errors, malformed diagnostics, unknown selection notes, warnings,
-timeouts, and incomplete campaigns cannot count as qualified logical negatives.
+Integration preserves the native bodies, tests and both executable proof
+closures exactly. Complete-runtime guard rosters include four later runtime
+files: 327 runtime inputs, or 332 with the validator's five model schemas.
+The retained-routing and retained-dispatch guards receive only reviewed source
+tree bindings; their proof closures and counts remain unchanged. These metadata
+updates and passing source controls are not new merged-tree solver runs or
+fresh qualification of the older routing/dispatch proofs.
 
 ## Next Composition Boundary
 

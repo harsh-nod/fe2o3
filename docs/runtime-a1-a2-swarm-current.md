@@ -6,7 +6,7 @@ Local qualification snapshot: 2026-09-30 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
 refreshed on this date: the issue remains Open, with 31 comments and its latest
 update at 17:41:21 UTC. Both repository branch refs were confirmed at
-`12782867c81e7d0a4de328355618e84f5feb25c8`. GitHub and MI300X SSH access have
+`44c9266dfef479804cc222c3c9a528e42a788841`. GitHub and MI300X SSH access have
 recovered; this does not itself qualify a new hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
@@ -28,6 +28,24 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [actual producer-input validator](runtime-producer-input-validation.md)
+is integrated at `624101b57`. Signed candidate `10013c06a` passes all 74 campaign
+stages: three complete 42/0 validator runs, all 38 validator/scan logical
+negatives, three complete 13/0 fold runs, and all 22 fold logical negatives.
+Relocated runs, strict diagnostic-family joins and all 74 fresh process-group
+closures pass. The earlier 112 affected CPU tests and warning-free static gates
+are bound to unchanged signed production/test bytes, not rerun by this campaign.
+Integration preserves both proof closures, refreshes four reviewed source guards,
+and adds the validator's source controls to CI. The receipt-fold/validator
+composition and six actual journal/live/credit observer refinements remain open;
+no native freshness, composed Context theorem or milestone exit follows. The
+signed campaign's broader evidence packet remains local.
+
+The [compiler-owner update at 18:32:44 UTC](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5917328644)
+reports new native process controls and an 80-case Rust source matrix, but the
+strict production/proof/safe-GPU chain remains 0/47 and compiler M1-M7 remain
+incomplete. Those results do not grant protected runtime launch authority.
 
 The [merged KFD regression attempt](evidence/dev-kfd-merged-timeout-2026-09-30/README.md)
 at `12782867c` remains incomplete. It announces 1,824 tests and records 716
@@ -52,7 +70,7 @@ an all-workspace result, native execution or performance acceptance. The older
 rejected restricted-environment runs below remain historical failures.
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
-runs fourteen explicit commands covering the newer model, runtime, accounting and
+runs fifteen explicit commands covering the newer model, runtime, accounting and
 KFD source/classifier controls. Those commands pass locally; workflow YAML and
 command inventory checks also pass. The resource-domain command selects its six
 source-only controls, not its three subprocess lifecycle tests. This adds drift
