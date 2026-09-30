@@ -327,3 +327,29 @@ The r79 log SHA-256 is
 Source/tool snapshots remained unchanged. The harness checked empty compiler
 output directories and removed its dependency trees and parent scratch on
 failure. No positive continuation, protected proof or GPU run is credited.
+
+### Generic Macro Admission Correction
+
+The three-file correction `54585b104` uses the existing generic signature and
+launch model after removing any logical context from the physical signature.
+It no longer selects the legacy three-argument vecadd validator for context-free
+entries. The four historical exact-profile helper functions are test-only;
+there is no new production selector or change to compiler/evidence authority.
+Independent review found no blocking issue.
+
+The source-consumer candidate's `r81-generic-macro-admission` passed all 76 macro
+library tests. The new regression covers both context forms, two names, 64/256
+thread blocks and finite grid bounds. Invalid block size, inconsistent dimensions,
+non-rank-one grid, missing required dimensions and unsupported occupancy still
+reject through the generic model. The preceding r80 run passed 75 tests and
+failed one new negative fixture at parser setup; adding its required `max`
+declaration restored the intended occupancy rejection test without changing
+production parsing.
+
+The passing source snapshot SHA-256 is
+`3841adc5b0ad4e259b7315aa93db675f14f3f8ee98d5ea272b6adccc4d3b66c9`;
+the log SHA-256 is
+`f8e6023fa3b0dbb0456ebf5e331fa6764a2a926d074307724dfad600ed58e317`.
+This result predates primary-worktree revalidation and the actual-source rerun.
+The logical `_ctx` fixture still covers issuance/ABI only, not context-derived
+indexing or complete typed global-memory capabilities.
