@@ -4,7 +4,7 @@ use crate::{
     PreparedCompilerExecutionSupervisorV3 as Prepared,
     native_activation::{Activation, TerminationSignals},
     native_inherited::{self as root, CompilerExecutionRootDeploymentErrorV2 as Failure, Result},
-    native_v3::root_intake::Receiver,
+    native_v3::root_intake::{Receiver, RootCompilerRequest},
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
@@ -33,7 +33,8 @@ pub(crate) const FRAME: usize =
 /// lease. Reaching the monitoring limit cancels the service and returns a refusal
 /// even if cleanup succeeds. No V1/V2 fallback or runtime family selector exists.
 /// The paired binary selects this original-root listener. One bounded authenticated
-/// inert intake may end only in RuntimeEnforcementUnavailable; it cannot start a
+/// intake consumes its whole original request into fixed-origin compiler backing
+/// before the same RuntimeEnforcementUnavailable refusal; it cannot start a
 /// compiler or return RootSession/Ready authority. Installed/native qualification
 /// and the runtime/source enforcement required for compiler launch remain separate.
 ///
@@ -78,6 +79,7 @@ pub unsafe fn run_inherited_compiler_execution_coordinator_v3() -> Result<()> {
             Ok(Native {
                 prepared: None,
                 intake: None,
+                request: None,
                 activation: None,
                 signals: None,
                 // SAFETY: this unsafe entry owns the dedicated process, original
@@ -180,6 +182,7 @@ struct Native {
     // Cancel foreground custody before the armed creator scope can fail-stop.
     prepared: Option<Prepared>,
     intake: Option<Receiver>,
+    request: Option<RootCompilerRequest>,
     activation: Option<Activation>,
     signals: Option<TerminationSignals>,
     creator: CreatorScope,
@@ -208,7 +211,10 @@ impl Runtime for Native {
         // refuses. Cancellation drops it into the original independently funded pool.
         self.prepared = Some(prepared);
         b.reserve_storage(growth.additional_storage())?;
-        b.reserve_storage(Receiver::STORAGE)?;
+        b.reserve_storage(root::sum(&[
+            Receiver::STORAGE,
+            RootCompilerRequest::ENVELOPE,
+        ])?)?;
         self.intake = Some(Receiver::empty());
         self.intake
             .as_ref()
@@ -232,6 +238,9 @@ impl Runtime for Native {
     }
 
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        if let Some(request) = &self.request {
+            return request.continuity(b);
+        }
         Ok(self
             .prepared
             .as_ref()
@@ -240,7 +249,11 @@ impl Runtime for Native {
     }
 
     fn intake(&mut self, b: &mut Budget<'_>) -> Result<bool> {
-        self.intake
+        if let Some(request) = &mut self.request {
+            return request.step(b);
+        }
+        let complete = self
+            .intake
             .as_mut()
             .ok_or_else(|| root::invalid("intake", "missing receiver"))?
             .step(
@@ -248,7 +261,24 @@ impl Runtime for Native {
                     .as_mut()
                     .ok_or_else(|| root::invalid("intake", "missing preparation"))?,
                 b,
-            )
+            )?;
+        if complete {
+            // Move the whole request before admission, consuming preparation,
+            // returned-growth charging, or any other fallible continuation.
+            self.request = Some(RootCompilerRequest::install(
+                self.prepared
+                    .take()
+                    .expect("complete intake retains Prepared"),
+                self.intake
+                    .take()
+                    .expect("complete intake retains Receiver"),
+                b,
+            ));
+            #[cfg(test)]
+            self.drain_received_budget_for_test(b);
+            return self.request.as_mut().unwrap().step(b);
+        }
+        Ok(false)
     }
 
     fn cancel(&mut self) {
@@ -256,6 +286,9 @@ impl Runtime for Native {
         // deferred slot. The pool retains actual child/domain + canonical guard,
         // not the complete Prepared. Intake FDs stay owned through drain.
         drop(self.prepared.take());
+        if let Some(request) = &mut self.request {
+            request.cancel();
+        }
     }
 
     fn pump(&mut self) -> Result<()> {

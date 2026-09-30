@@ -45,14 +45,20 @@ impl InheritedCompilerExecutionDeploymentV3 {
         turns: usize,
         cleanup_turns: usize,
     ) -> Result<root::CompilerExecutionStartupQuotaV2> {
-        use crate::native_v3::root_intake::Receiver;
+        use crate::native_v3::root_intake::{Receiver, RootCompilerRequest};
         let mut quota = Self::startup_quota(turns, cleanup_turns)?;
         let continuity = Prepared::maximum_revalidation_quota()?;
+        let request = RootCompilerRequest::preparation_quota()?;
+        let refusal = RootCompilerRequest::refusal_quota()?;
         quota.request_work = root::sum(&[
             quota.request_work,
             root::LOCAL_WORK,
             Inputs::WORK,
-            root::repeated(turns, root::sum(&[Receiver::TURN_WORK, continuity.work()])?)?,
+            request.work(),
+            root::repeated(
+                turns,
+                root::sum(&[Receiver::TURN_WORK, continuity.work(), refusal.work()])?,
+            )?,
         ])?;
         quota.request_storage = root::sum(&[
             quota.request_storage,
@@ -62,6 +68,9 @@ impl InheritedCompilerExecutionDeploymentV3 {
             Prepared::maximum_retained_storage()?,
             Receiver::STORAGE,
             Receiver::SCRATCH,
+            RootCompilerRequest::ENVELOPE,
+            request.scratch(),
+            refusal.scratch(),
             continuity.scratch(),
         ])?;
         Ok(quota)
