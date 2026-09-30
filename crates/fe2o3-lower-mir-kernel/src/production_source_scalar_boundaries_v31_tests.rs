@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_issued_presence_v31_tests.rs"]
+mod issued_presence;
+
 #[path = "production_source_scalar_boundary_normalization_v31_tests.rs"]
 mod normalization;
 
@@ -675,6 +678,7 @@ fn source_scalar_boundaries_reject_missing_optimized_parameter_and_control_trans
                                     reads: leaves.reads,
                                     wrapping: leaves.wrapping,
                                     boundaries: &boundaries,
+                                    presences: leaves.presences,
                                     slot: leaves.slot,
                                     ledger: leaves.ledger,
                                     floor: leaves.floor,

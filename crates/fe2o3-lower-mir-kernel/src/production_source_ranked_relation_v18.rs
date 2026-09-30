@@ -176,6 +176,7 @@ struct SourceScalarLeavesV18<'relation, 'source> {
     lookup: Vec<SourceScalarLeafLookupV18>,
     wrapping: Vec<SourceWrappingValueV23>,
     boundaries: SourceScalarBoundariesV31,
+    presences: SourceIssuedPresencesV31,
     floor: usize,
     ordinary_values: bool,
 }
@@ -208,6 +209,16 @@ impl SemanticExpressionLeavesV18 for SourceExpressionLeavesV18<'_, '_, '_, '_, '
                 self.leaves.query(budget)?;
                 let relation = self.leaves.relation;
                 if symbol < PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2 {
+                    if !self.leaves.presences.rows.is_empty()
+                        && self.leaves.presence_symbol_v31(symbol, budget)?.is_some()
+                    {
+                        if scalar != ProductionSemanticScalarTypeV2::Bool {
+                            return relation
+                                .source
+                                .missing("issued presence symbol type differs");
+                        }
+                        return Ok(NormalizedScalarExpressionV1::Symbol { symbol, scalar });
+                    }
                     if let Some(row) = self
                         .leaves
                         .boundary_find_v31([2, symbol as usize, 0, 0], budget)?
@@ -1681,6 +1692,7 @@ fn assign_source_leaf_symbols_v18(
 include!("production_source_leaf_lookup_work_v18.rs");
 include!("production_source_wrapping_value_v23.rs");
 include!("production_source_scalar_boundaries_v31.rs");
+include!("production_source_issued_presence_v31.rs");
 
 impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
     fn observe_custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
@@ -1860,7 +1872,10 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
             let wrapping = if ordinary_values {
                 source_wrapping_values_v23(relation, root, budget)?
             } else { Vec::new() };
-            let leaves = Self { relation, root, rows, lookup, wrapping, boundaries,
+            let presences = if matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22) {
+                source_issued_presences_v31(relation, root, &rows, &boundaries, budget)?
+            } else { SourceIssuedPresencesV31::empty() };
+            let leaves = Self { relation, root, rows, lookup, wrapping, boundaries, presences,
                 floor: budget.storage(), ordinary_values };
             leaves.check_boundary_equations_v31(budget)?;
             Ok(leaves)
@@ -2039,6 +2054,16 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                     .relation
                     .source
                     .missing("scalar leaf substituted physical root");
+            }
+            if let Some(row) = if self.presences.rows.is_empty() {
+                None
+            } else {
+                self.presence_value_v31(value, budget)?
+            } {
+                return Ok(Some(NormalizedScalarExpressionV1::Symbol {
+                    symbol: row.symbol,
+                    scalar: ProductionSemanticScalarTypeV2::Bool,
+                }));
             }
             if let Some(row) = self.boundary_find_v31([1, value.0 as usize, 0, 0], budget)? {
                 return Ok(Some(NormalizedScalarExpressionV1::Symbol {

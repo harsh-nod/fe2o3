@@ -4,6 +4,7 @@
 include!("production_optimized_source_issued_role_queries_v18_tests.rs");
 
 include!("production_optimized_source_issued_metadata_v18.rs");
+include!("production_optimized_source_issued_presence_v31.rs");
 
 struct IssuedRoleOutputV18 {
     input: [SliceOperation; 4],

@@ -27,7 +27,10 @@ fn original_private_expression_headers_v22() -> Result<usize, ArgumentResourceV1
         12 * size_of::<usize>(),
         8 * size_of::<&()>(),
     ])?;
-    argument_product_v1(MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1, frame)
+    argument_sum_v1(&[
+        argument_product_v1(MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1, frame)?,
+        issued_discriminant_query_headers_v31()?,
+    ])
 }
 
 fn private_binary_v22(operation: SemanticBinaryOpV1) -> Option<ProductionSemanticBinaryOpV2> {
@@ -446,6 +449,24 @@ impl OriginalEntryIndexV20<'_, '_> {
                     statement,
                 };
                 match value.kind() {
+                    SemanticRvalueKindV1::Discriminant(place)
+                        if !leaves.leaves.presences.rows.is_empty() =>
+                    {
+                        self.issued_discriminant_v31(
+                            leaves,
+                            instance,
+                            function_id,
+                            function,
+                            site,
+                            value,
+                            place,
+                            ty,
+                            scalar,
+                            next,
+                            remaining,
+                            budget,
+                        )
+                    }
                     SemanticRvalueKindV1::Load(load)
                         if load.volatility() == SemanticVolatilityV1::NonVolatile =>
                     {

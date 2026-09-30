@@ -110,6 +110,7 @@ fn source_scalar_normalization_refuses_unenrolled_phi_and_keeps_single_origin_fa
                                     reads: leaves.reads,
                                     wrapping: leaves.wrapping,
                                     boundaries: &boundaries,
+                                    presences: leaves.presences,
                                     slot: leaves.slot,
                                     ledger: leaves.ledger,
                                     floor: leaves.floor,

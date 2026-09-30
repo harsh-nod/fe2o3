@@ -34,6 +34,7 @@ pub struct ProductionOptimizedSourceScalarLeavesV18<'scope> {
     reads: &'scope [OptimizedSourceScalarReadV18],
     wrapping: &'scope [SourceWrappingValueV23],
     boundaries: &'scope OptimizedSourceScalarBoundariesV31,
+    presences: &'scope [OptimizedIssuedPresenceV31],
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     floor: usize,
@@ -249,7 +250,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
             #[cfg(test)]
             test_optimized_scalar_attempt_header_v18(budget);
             let floor = budget.storage();
-            let (reads, wrapping, boundaries, function, retained) = self.retain_query(
+            let (reads, wrapping, boundaries, presences, function, retained) = self.retain_query(
                 scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
                     let floor = budget.storage();
                     self.retain_query((|| {
@@ -259,6 +260,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                             size_of::<Vec<SourceWrappingValueV23>>(),
                             size_of::<SourceWrappingValueV23>(),
                             optimized_source_boundary_headers_v31()?,
+                            slice_view_v1::optimized_presence_headers_v31()?,
                             size_of::<std::thread::Result<Result<T, E>>>(),
                             source_reference_cleanup_headers_v29()?,
                         ])?)?;
@@ -270,11 +272,17 @@ impl ProductionSourceCorrespondenceV18<'_> {
                             optimized_source_wrapping_values_v23(original, optimized, budget)?;
                         let boundaries =
                             optimized_source_scalar_boundaries_v31(original, optimized, budget)?;
+                        let presences = slice_view_v1::optimized_issued_presences_v31(
+                            original.leaves,
+                            optimized,
+                            function,
+                            budget,
+                        )?;
                         let retained = budget
                             .storage()
                             .checked_sub(floor)
                             .ok_or(ArgumentResourceV1::Accounting)?;
-                        Ok((reads, wrapping, boundaries, function, retained))
+                        Ok((reads, wrapping, boundaries, presences, function, retained))
                     })())
                 }),
             )?;
@@ -285,12 +293,14 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 reads: &reads,
                 wrapping: &wrapping,
                 boundaries: &boundaries,
+                presences: &presences,
                 slot: std::ptr::from_ref(budget) as usize,
                 ledger: budget.work_ledger_identity_v1(),
                 floor: budget.storage(),
             };
-            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                original
+            let run = || {
+                leaves
+                    .original
                     .leaves
                     .check_boundary_actual_v31(Some(&leaves), budget)?;
                 consume
@@ -298,7 +308,16 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     .expect("optimized leaf consumer is invoked once")(
                     &leaves, budget
                 )
-            }));
+            };
+            assert_eq!(
+                std::mem::size_of_val(&run),
+                size_of::<OptimizedScalarCatchFrameV31<'_>>()
+            );
+            assert_eq!(
+                std::mem::align_of_val(&run),
+                std::mem::align_of::<OptimizedScalarCatchFrameV31<'_>>()
+            );
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
             drop(consume);
             let prior = self.source.guard.first.get();
             let postflight = if matches!(&caught, Ok(Ok(_))) {
@@ -310,6 +329,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
             drop(reads);
             drop(wrapping);
             drop(boundaries);
+            drop(presences);
             let released = if self.source.cleanup.is_denied() {
                 Err(ArgumentResourceV1::Accounting)
             } else {
@@ -517,6 +537,16 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                 return relation
                     .source
                     .missing("optimized scalar read foreign output function");
+            }
+            if let Some(row) = if self.presences.is_empty() {
+                None
+            } else {
+                self.presence_value_v31(value, budget)?
+            } {
+                return Ok(Some(NormalizedScalarExpressionV1::Symbol {
+                    symbol: row.symbol,
+                    scalar: ProductionSemanticScalarTypeV2::Bool,
+                }));
             }
             if let Some(row) = self.boundary_value_v31(value, budget)? {
                 return Ok(Some(NormalizedScalarExpressionV1::Symbol {

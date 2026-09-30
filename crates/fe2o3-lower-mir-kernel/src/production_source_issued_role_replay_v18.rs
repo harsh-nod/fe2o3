@@ -58,6 +58,56 @@ pub(super) fn checked_issued_source_rows_v18<'a>(
 
 // A separate original-owner query for the ordered conditional relation. This
 // does not pass through or weaken the singleton final-consumer gate above.
+// Presence names authenticate only the issuer predicate, never an access or
+// selected-reference completion. Replay still checks the entire original roster.
+pub(super) fn checked_source_issuers_v31<'view>(
+    original: &'view ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<&'view [PendingSourceIssuedIssuerV29]> {
+    original.query(budget)?;
+    let result = SourceIssuerQueryV31 {
+        original,
+        root,
+        budget,
+    }
+    .read();
+    original.retain_query(result)
+}
+
+struct SourceIssuerQueryV31<'view, 'source, 'budget, 'work> {
+    original: &'view ProductionSourceCorrespondenceV18<'source>,
+    root: usize,
+    budget: &'budget mut ArgumentBudgetV1<'work>,
+}
+
+impl<'view> SourceIssuerQueryV31<'view, '_, '_, '_> {
+    fn read(self) -> SourceOwnedResultV18<&'view [PendingSourceIssuedIssuerV29]> {
+        let Self {
+            original,
+            root,
+            budget,
+        } = self;
+        let owner = original.source.root_row(root)?;
+        let Some(pending) = owner.source_slots.pending_memory.as_ref() else {
+            return Ok(&[][..]);
+        };
+        check_immutable_issued_roles_v18(original, root, &pending.issued, budget)?;
+        Ok(pending.issued.issuers.as_slice())
+    }
+}
+
+pub(super) fn source_issuer_query_headers_v31() -> Result<usize, ArgumentResourceV1> {
+    argument_sum_v1(&[
+        size_of::<SourceIssuerQueryV31<'_, '_, '_, '_>>(),
+        argument_product_v1(
+            2,
+            size_of::<SourceOwnedResultV18<&[PendingSourceIssuedIssuerV29]>>(),
+        )?,
+        argument_product_v1(2, size_of::<&()>())?,
+    ])
+}
+
 struct SelectedSourceRowsFrameV30<'view, 'source, 'budget, 'work> {
     original: &'view ProductionSourceCorrespondenceV18<'source>,
     root: usize,
