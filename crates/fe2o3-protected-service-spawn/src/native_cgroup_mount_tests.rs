@@ -30,7 +30,6 @@ fn actual_membership_mount_boundary() {
         "intended",
         "wrong-parent",
         "wrong-subtree",
-        "hierarchy-root",
         "wrong-filesystem",
     ] {
         run_child(
@@ -38,6 +37,34 @@ fn actual_membership_mount_boundary() {
             mode,
         );
     }
+}
+
+#[test]
+#[ignore = "requires isolated root, CAP_SYS_ADMIN, writable physical cgroup2 root and an outside custodian; reads only"]
+fn actual_physical_hierarchy_root_is_refused() {
+    if let Some(mode) = std::env::var_os(CHILD) {
+        assert_eq!(mode.to_str(), Some("hierarchy-root"));
+        exercise("hierarchy-root");
+        return;
+    }
+    run_child(
+        "native_cgroup::tests::mounts::actual_physical_hierarchy_root_is_refused",
+        "hierarchy-root",
+    );
+}
+
+#[test]
+#[ignore = "requires isolated root, CAP_SYS_ADMIN, writable ordinary-domain cgroup namespace root, nested membership and an outside custodian; reads only"]
+fn actual_namespace_root_substitution_is_refused() {
+    if let Some(mode) = std::env::var_os(CHILD) {
+        assert_eq!(mode.to_str(), Some("namespace-root"));
+        exercise("namespace-root");
+        return;
+    }
+    run_child(
+        "native_cgroup::tests::mounts::actual_namespace_root_substitution_is_refused",
+        "namespace-root",
+    );
 }
 
 fn run_child(test: &str, mode: &str) {
@@ -194,6 +221,32 @@ fn root() -> OwnedFd {
     .unwrap()
 }
 
+fn ordinary_domain_without_process(directory: &OwnedFd, pid: rustix::process::Pid) -> bool {
+    require_domain_parent(directory).expect("control must reach ordinary-domain PID check");
+    let procs = open_relative(directory, c"cgroup.procs", READ_FLAGS).unwrap();
+    validate_control(&procs, directory, c"cgroup.procs").unwrap();
+    let mut bytes = [0; READ_LIMIT];
+    let count = rustix::io::pread(&procs, &mut bytes[..], 0).unwrap();
+    assert!(
+        count < READ_LIMIT,
+        "control must not refuse an overlong read"
+    );
+    let mut tail = [0; 1];
+    assert_eq!(
+        rustix::io::pread(&procs, &mut tail[..], count as u64).unwrap(),
+        0
+    );
+    if count != 0 {
+        assert!(
+            record_lines(&bytes[..count])
+                .unwrap()
+                .split(|b| *b == b'\n')
+                .all(|row| decimal(row).unwrap() != pid.as_raw_pid() as u32)
+        );
+    }
+    count == 0
+}
+
 #[allow(unsafe_code)]
 fn exercise(mode: &str) {
     assert!(crate::syscall::has_exact_root_identity());
@@ -221,31 +274,16 @@ fn exercise(mode: &str) {
             .f_flag
             .contains(fs::StatVfsMountFlags::RDONLY)
     );
-    let mut wrong_subtree_empty = false;
+    let mut wrong_domain_empty = false;
     if mode == "wrong-subtree" {
         let mut prefix_buffer = [0; READ_LIMIT];
         let prefix_relative = relative_path(prefix, &mut prefix_buffer).unwrap();
         let subtree =
             open_relative(&original, prefix_relative, READ_FLAGS | OFlags::DIRECTORY).unwrap();
-        require_domain_parent(&subtree)
-            .expect("wrong-subtree must reach ordinary-domain PID check");
-        let procs = open_relative(&subtree, c"cgroup.procs", READ_FLAGS).unwrap();
-        validate_control(&procs, &subtree, c"cgroup.procs").unwrap();
-        let mut root_procs = [0; READ_LIMIT];
-        let count = rustix::io::pread(&procs, &mut root_procs[..], 0).unwrap();
-        assert!(
-            count < READ_LIMIT,
-            "wrong-subtree control must not be an overlong-read refusal"
-        );
-        wrong_subtree_empty = count == 0;
-        if !wrong_subtree_empty {
-            assert!(
-                record_lines(&root_procs[..count])
-                    .unwrap()
-                    .split(|b| *b == b'\n')
-                    .all(|row| decimal(row).unwrap() != pid.as_raw_pid() as u32)
-            );
-        }
+        wrong_domain_empty = ordinary_domain_without_process(&subtree, pid);
+    }
+    if mode == "namespace-root" {
+        wrong_domain_empty = ordinary_domain_without_process(&original, pid);
     }
     if mode == "hierarchy-root" {
         assert!(
@@ -270,7 +308,9 @@ fn exercise(mode: &str) {
         "intended" => mount(Some(&target), &target, libc::MS_BIND),
         "wrong-parent" => mount(Some(&prefix_target), &prefix_target, libc::MS_BIND),
         "wrong-subtree" => mount(Some(&prefix_target), &target, libc::MS_BIND),
-        "hierarchy-root" => mount(Some(c"/sys/fs/cgroup"), &target, libc::MS_BIND),
+        "hierarchy-root" | "namespace-root" => {
+            mount(Some(c"/sys/fs/cgroup"), &target, libc::MS_BIND)
+        }
         "wrong-filesystem" => mount(Some(c"/proc"), &target, libc::MS_BIND),
         _ => panic!("unknown exact-test child mode"),
     }
@@ -340,20 +380,20 @@ fn exercise(mode: &str) {
                 source: Errno::XDEV
             })
         )),
-        "wrong-subtree" => {
+        "wrong-subtree" | "namespace-root" => {
             // The ordinary-domain ancestor passes type admission, but not this
             // PID's direct membership. Empty cgroup.procs refuses at that read.
             match result {
                 Err(Error::State(message)) => assert_eq!(
                     message,
-                    if wrong_subtree_empty {
+                    if wrong_domain_empty {
                         "control record is empty or exceeds its bound"
                     } else {
                         "resolved cgroup does not contain this process"
                     }
                 ),
-                Err(error) => panic!("wrong-subtree did not reach membership refusal: {error}"),
-                Ok(_) => panic!("wrong-subtree was admitted"),
+                Err(error) => panic!("{mode} did not reach membership refusal: {error}"),
+                Ok(_) => panic!("{mode} was admitted"),
             }
         }
         "hierarchy-root" => assert!(matches!(
