@@ -12,8 +12,10 @@ use crate::compiler_invocation_staging::{
 use crate::compiler_output_directory::{CompilerOutputDirectory as Output, Error as OutputError};
 use fe2o3_build_authority::COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1 as MAX_RUNTIME_ENTRIES;
 use fe2o3_compiler_closure_capability::{
+    CompilerExecutionCapabilityErrorV2 as CaptureError,
     RetainedCompilerRuntimeErrorV1 as RuntimeError,
     RetainedCompilerRuntimeInventoryTransferV1 as Sources, RetainedCompilerRuntimeV1 as Runtime,
+    RustcInvocationCapabilityV1 as Capture,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -30,13 +32,13 @@ use fe2o3_rustc_invocation::{
 use std::{fmt, fs::File, mem::size_of};
 
 const ENTRY: usize = 8;
-const MEASURE_WORK: usize =
-    ENTRY + 8 * (MAX_RUSTC_ARGUMENTS_V2 + 2 * MAX_COMPILE_ENVIRONMENT_ENTRIES_V2 + 1);
+const MEASURE_WORK: usize = ENTRY + 32;
 type Result<T> = std::result::Result<T, CompilerInvocationBackingError>;
 
 #[derive(Debug)]
 pub(crate) enum CompilerInvocationBackingError {
     Resource(Resource),
+    Capture(CaptureError),
     Runtime(RuntimeError),
     Staging(StagingError),
     Output(OutputError),
@@ -55,6 +57,12 @@ impl From<RuntimeError> for CompilerInvocationBackingError {
     }
 }
 
+impl From<CaptureError> for CompilerInvocationBackingError {
+    fn from(error: CaptureError) -> Self {
+        Self::Capture(error)
+    }
+}
+
 impl From<StagingError> for CompilerInvocationBackingError {
     fn from(error: StagingError) -> Self {
         Self::Staging(error)
@@ -70,6 +78,7 @@ impl fmt::Display for CompilerInvocationBackingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Resource(error) => error.fmt(f),
+            Self::Capture(error) => error.fmt(f),
             Self::Runtime(error) => error.fmt(f),
             Self::Staging(error) => error.fmt(f),
             Self::Output(error) => error.fmt(f),
@@ -82,6 +91,7 @@ impl std::error::Error for CompilerInvocationBackingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Resource(error) => Some(error),
+            Self::Capture(error) => Some(error),
             Self::Runtime(error) => Some(error),
             Self::Staging(error) => Some(error),
             Self::Output(error) => Some(error),
@@ -90,7 +100,7 @@ impl std::error::Error for CompilerInvocationBackingError {
     }
 }
 
-/// Unreserved GROWTH over the consumed runtime and exact descriptor reservations.
+/// Unreserved GROWTH over the consumed runtime, sealed capture and output owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CompilerInvocationBackingCharge {
     additional: usize,
@@ -115,7 +125,7 @@ impl CompilerInvocationBackingCharge {
 /// flags and content through staging; every final duplicate needs validation.
 pub(crate) struct CompilerInvocationBacking {
     runtime: Runtime,
-    descriptor: Descriptor,
+    capture: Capture,
     output: Output,
     invocation: Invocation,
     sources: Sources,
@@ -125,31 +135,36 @@ pub(crate) struct CompilerInvocationBacking {
 impl CompilerInvocationBacking {
     const ENVELOPE: usize = size_of::<(Self, CompilerInvocationBackingCharge)>()
         - size_of::<Runtime>()
-        - size_of::<Descriptor>()
+        - size_of::<Capture>()
         - size_of::<Output>()
         - size_of::<Invocation>()
         - size_of::<Sources>();
     /// Scalar bookkeeping and bounded retirement of inventory AND transfer set
-    /// on consuming error. Both can contain the manifest's maximum entry count.
-    /// Measurement, runtime and invocation operations additionally charge their
-    /// own work on the same Budget. This is not a complete launch work quota.
-    pub(crate) const LOCAL_WORK: usize = ENTRY + (2 * MAX_RUNTIME_ENTRIES + 32) * 1088;
+    /// on consuming error, plus the sealed capture and staged invocation strings.
+    /// Measurement, native revalidation, runtime and staging operations charge
+    /// their own work on the same Budget. This is not a complete launch work quota.
+    pub(crate) const LOCAL_WORK: usize = ENTRY
+        + (2 * MAX_RUNTIME_ENTRIES + 32) * 1088
+        + 8 * (2 * MAX_RUSTC_ARGUMENTS_V2 + 3 * MAX_COMPILE_ENVIRONMENT_ENTRIES_V2 + 2);
     /// Local frames only; nested scratch and all overlapping backing are separate.
     pub(crate) const FRAME_STORAGE: usize =
         4 * size_of::<(Self, CompilerInvocationBackingCharge)>()
             + 8 * size_of::<CompilerInvocationBackingError>()
             + 4096;
 
-    /// Consumes the original runtime and exact descriptor from prepared capture.
+    /// Consumes the original runtime and received sealed invocation capability.
     /// All three FULL source reservations, including the received output owner,
-    /// must remain prepaid on the runtime's original Budget. Preserve those
+    /// must remain prepaid on the runtime's original Budget. The invocation's
+    /// native owner includes its original FD reservation plus admission growth;
+    /// decoded descriptor storage alone is insufficient. Preserve those source
     /// reservations and reserve returned GROWTH before
     /// retaining the result. On failure the consumed inputs drop, but caller-owned
     /// reservations remain unchanged and must be retired by the caller. Work and
-    /// denial history are never refunded. No descriptor clone/encode is performed.
+    /// denial history are never refunded. No capability or descriptor is cloned,
+    /// decoded or re-encoded here. Sealed custody does not prove cargo authorship.
     pub(crate) fn prepare(
         runtime: Runtime,
-        descriptor: Descriptor,
+        capture: Capture,
         output: Output,
         b: &mut Budget<'_>,
     ) -> Result<(Self, CompilerInvocationBackingCharge)> {
@@ -160,15 +175,17 @@ impl CompilerInvocationBacking {
                 .required_retained_storage()
                 .checked_add(Output::STORAGE)
                 .ok_or(Resource::Arithmetic)?,
-            &descriptor,
+            &capture,
             b,
         )?;
         b.with_prepaid_scope(input, 0, 0, Self::FRAME_STORAGE, |b| {
+            capture.revalidate_native(b)?;
+            let descriptor = capture.descriptor();
             // This checks the complete closure and the runtime's own account,
             // approval and fixed origins before any new backing is retained.
             runtime.require_compiler(*descriptor.compiler_closure(), b)?;
             output.revalidate(descriptor.artifact_output_directory(), b)?;
-            let (invocation, invocation_charge) = Invocation::stage(&descriptor, b)?;
+            let (invocation, invocation_charge) = Invocation::stage(descriptor, b)?;
             b.reserve_storage(invocation_charge.additional_storage())?;
             let (sources, sources_charge) = runtime.try_clone_inventory_for_staging(b)?;
             b.reserve_storage(sources_charge.full_storage())?;
@@ -180,7 +197,7 @@ impl CompilerInvocationBacking {
             b.reserve_storage(Self::ENVELOPE)?;
             let owner = Self {
                 runtime,
-                descriptor,
+                capture,
                 output,
                 invocation,
                 sources,
@@ -200,7 +217,7 @@ impl CompilerInvocationBacking {
 
     /// Exact retained coordination data, not evidence of cargo authorship or exec.
     pub(crate) const fn descriptor(&self) -> &Descriptor {
-        &self.descriptor
+        self.capture.descriptor()
     }
 
     /// Exact inert C strings; the owning native stage funds its pointer tables.
@@ -259,7 +276,7 @@ impl CompilerInvocationBacking {
             .ok_or_else(|| Resource::Arithmetic.into())
     }
 
-    /// Recheck the full closure, original account, inventory and retained transfers.
+    /// Recheck the original sealed capture, full closure, account and inventory.
     pub(crate) fn revalidate(&self, b: &mut Budget<'_>) -> Result<()> {
         b.with_prepaid_scope(
             self.retained,
@@ -305,12 +322,13 @@ impl CompilerInvocationBacking {
     }
 
     fn check(&self, b: &mut Budget<'_>) -> Result<()> {
+        self.capture.revalidate_native(b)?;
         self.output
-            .revalidate(self.descriptor.artifact_output_directory(), b)?;
+            .revalidate(self.descriptor().artifact_output_directory(), b)?;
         // These existing entrypoints enforce ledger identity AND Budget address.
         // A fresh budget cannot recreate the runtime's account association.
         self.runtime
-            .require_compiler(*self.descriptor.compiler_closure(), b)?;
+            .require_compiler(*self.descriptor().compiler_closure(), b)?;
         self.runtime
             .validate_inventory_transfer(self.inventory_sources(), b)?;
         Ok(())
@@ -318,8 +336,9 @@ impl CompilerInvocationBacking {
 }
 
 // Scalar inputs here are accounting only; they cannot manufacture Backing.
-fn measure_inputs(runtime: usize, descriptor: &Descriptor, b: &mut Budget<'_>) -> Result<usize> {
+fn measure_inputs(runtime: usize, capture: &Capture, b: &mut Budget<'_>) -> Result<usize> {
     b.charge_work(ENTRY)?;
+    let descriptor = capture.descriptor();
     let arguments = descriptor.rustc().argv().len();
     if arguments == 0
         || arguments > MAX_RUSTC_ARGUMENTS_V2
@@ -332,15 +351,15 @@ fn measure_inputs(runtime: usize, descriptor: &Descriptor, b: &mut Budget<'_>) -
         0,
         MEASURE_WORK - ENTRY,
         CompilerInvocationBacking::FRAME_STORAGE,
-        |_| {
-            descriptor
-                .retained_storage_bytes()
-                .and_then(|n| n.checked_add(runtime))
-                .ok_or(Resource::Arithmetic)
+        |_| -> Result<usize> {
+            capture
+                .native_retained_storage()?
+                .checked_add(runtime)
+                .ok_or_else(|| Resource::Arithmetic.into())
         },
     )?;
     // Check after the measurement scope restores entry storage: its scratch must
-    // not mask a missing original descriptor or runtime reservation.
+    // not mask a missing original invocation FD, decoded owner or runtime.
     if b.storage() < input {
         return Err(Resource::Accounting.into());
     }

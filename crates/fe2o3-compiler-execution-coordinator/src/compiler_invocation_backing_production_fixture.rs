@@ -4,7 +4,11 @@ use fe2o3_build_authority::COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1 as MAX_ENTRI
 use fe2o3_compiler_closure_capability::{
     ApprovedCompilerPolicyV2 as Approval, COMPILER_RUNTIME_ROOT_V1 as ROOT,
 };
-use std::{fs, os::fd::AsFd, os::unix::fs::MetadataExt};
+use std::{
+    fs,
+    os::fd::{AsFd, AsRawFd, RawFd},
+    os::unix::fs::MetadataExt,
+};
 
 // Finite logical test limits, not physical allocations or production cap changes.
 // The schema permits 4 GiB of runtime bytes; multiple retained copies coexist.
@@ -39,7 +43,7 @@ pub(super) fn history(b: &Budget<'_>) -> (usize, usize, Option<usize>, Option<us
 
 pub(super) struct Inputs {
     runtime: Runtime,
-    descriptor: Descriptor,
+    capture: Capture,
     output: Output,
     pub(super) storage: usize,
 }
@@ -48,7 +52,7 @@ impl Inputs {
         self,
         b: &mut Budget<'_>,
     ) -> Result<(CompilerInvocationBacking, CompilerInvocationBackingCharge)> {
-        CompilerInvocationBacking::prepare(self.runtime, self.descriptor, self.output, b)
+        CompilerInvocationBacking::prepare(self.runtime, self.capture, self.output, b)
     }
 }
 
@@ -117,6 +121,10 @@ impl Census {
 
 pub(super) struct Witness {
     counts: Census,
+    invocation: File,
+    received_fd: RawFd,
+    argv0: *const u8,
+    cwd: *const u8,
     output: File,
     _directory: tempfile::TempDir,
 }
@@ -124,11 +132,61 @@ impl Witness {
     pub(super) fn assert_live(&self) {
         self.counts.check(true, references); // Original runtime plus complete transfers.
         assert_eq!(references(identity(&self.output.metadata().unwrap())), 2);
+        let invocation = identity(&self.invocation.metadata().unwrap());
+        assert_eq!(references(invocation), 2);
+        assert_eq!(
+            identity(&fs::metadata(format!("/proc/self/fd/{}", self.received_fd)).unwrap()),
+            invocation
+        );
+    }
+
+    pub(super) fn assert_capture_retained(&self, owner: &CompilerInvocationBacking) {
+        self.assert_live();
+        let descriptor = owner.descriptor();
+        assert!(std::ptr::eq(descriptor, owner.capture.descriptor()));
+        assert_eq!(
+            descriptor.rustc().argv().next().unwrap().as_ptr(),
+            self.argv0
+        );
+        assert_eq!(descriptor.rustc().working_directory().as_ptr(), self.cwd);
+        let staged = owner.invocation();
+        assert_eq!(staged.arguments().len(), descriptor.rustc().argv().len());
+        for (actual, expected) in staged.arguments().iter().zip(descriptor.rustc().argv()) {
+            assert_eq!(actual.as_bytes(), expected.as_bytes());
+        }
+        assert_eq!(
+            staged.environment().len(),
+            descriptor.compile_environment().entries().len()
+        );
+        for (actual, expected) in staged
+            .environment()
+            .iter()
+            .zip(descriptor.compile_environment().entries())
+        {
+            assert_eq!(
+                actual.as_bytes(),
+                format!("{}={}", expected.key(), expected.value()).as_bytes()
+            );
+        }
+        assert_eq!(
+            staged.working_directory().to_bytes(),
+            descriptor.rustc().working_directory().as_bytes()
+        );
+    }
+
+    pub(super) fn invocation_mode(&self, mode: rustix::fs::Mode) {
+        // Only this fixture-created sealed memfd changes; installed code and
+        // policy remain untouched. This alias observes the retained real inode.
+        rustix::fs::fchmod(&self.invocation, mode).unwrap();
     }
 
     pub(super) fn assert_dropped(&self) {
         self.counts.check(false, references); // Neither originals nor transfers survive.
         assert_eq!(references(identity(&self.output.metadata().unwrap())), 1);
+        assert_eq!(
+            references(identity(&self.invocation.metadata().unwrap())),
+            1
+        );
     }
 }
 
@@ -163,9 +221,27 @@ pub(super) fn admit(b: &mut Budget<'_>, wrong_closure: bool) -> (Inputs, Witness
         let metadata = fs::metadata(std::path::Path::new(ROOT).join(entry.path)).unwrap();
         counts.record(identity(&metadata), references);
     }
-    let descriptor = descriptor(&runtime, wrong_closure);
-    let descriptor_storage = descriptor.retained_storage_bytes().unwrap();
-    b.reserve_storage(descriptor_storage).unwrap();
+    // Inert local fixture, not authenticated cargo capture. Only admission of
+    // the installed policy/runtime above carries approval. Hand the preparation
+    // path an actual natively received sealed owner, never a plain descriptor.
+    let source = Capture::create(descriptor(&runtime, wrong_closure)).unwrap();
+    let source_storage = source.native_retained_storage().unwrap();
+    b.reserve_storage(source_storage).unwrap();
+    let (received, file_charge) = source.try_clone_for_transfer_native(b).unwrap();
+    b.reserve_storage(file_charge.additional_storage()).unwrap();
+    let received_fd = received.as_raw_fd();
+    let invocation = received.try_clone().unwrap(); // Diagnostic alias funded by HARNESS.
+    let (capture, growth) = Capture::from_file_native(received, b).unwrap();
+    b.reserve_storage(growth.additional_storage()).unwrap();
+    let capture_storage = capture.native_retained_storage().unwrap();
+    assert_eq!(
+        capture_storage,
+        file_charge.additional_storage() + growth.additional_storage()
+    );
+    drop(source);
+    b.release_storage(source_storage).unwrap();
+    let argv0 = capture.descriptor().rustc().argv().next().unwrap().as_ptr();
+    let cwd = capture.descriptor().rustc().working_directory().as_ptr();
     let directory = tempfile::tempdir().unwrap();
     let output = File::open(directory.path()).unwrap();
     assert_eq!(references(identity(&output.metadata().unwrap())), 1);
@@ -177,17 +253,21 @@ pub(super) fn admit(b: &mut Budget<'_>, wrong_closure: bool) -> (Inputs, Witness
     )
     .unwrap();
     b.reserve_storage(Output::STORAGE).unwrap();
-    let storage = runtime.required_retained_storage() + descriptor_storage + Output::STORAGE;
+    let storage = runtime.required_retained_storage() + capture_storage + Output::STORAGE;
     assert_eq!(b.storage(), floor + storage);
     (
         Inputs {
             runtime,
-            descriptor,
+            capture,
             output: retained_output,
             storage,
         },
         Witness {
             counts,
+            invocation,
+            received_fd,
+            argv0,
+            cwd,
             output,
             _directory: directory,
         },
