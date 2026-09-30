@@ -59,12 +59,12 @@ fn source_index_reader_argument_v35(
     if !place.projections().is_empty() {
         return Err(source_index_witness_error_v29());
     }
-    let events = instances
+    let occurrences = instances
         .owner()
         .occurrences_v1()
         .and_then(|rows| rows.function(function))
-        .ok_or_else(source_index_witness_error_v29)?
-        .events();
+        .ok_or_else(source_index_witness_error_v29)?;
+    let events = occurrences.events();
     let key = [block, u32::MAX];
     let (mut lo, mut hi) = (0, events.len());
     while lo < hi {
