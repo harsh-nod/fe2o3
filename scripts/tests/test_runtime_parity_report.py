@@ -605,6 +605,14 @@ class CheckParityTests(unittest.TestCase):
         )
         self.assertEqual(output[-1], "parity_status=pass")
 
+    def test_retained_facade_requires_separate_parity_qualification(self) -> None:
+        schema = "fe2o3.xgmi-peer-retained-facade-benchmark.v1"
+        rows = [f"backend=kfd schema={schema} surface=runtime-facade"]
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "unsupported schema"):
+            CHECK_PARITY.check_rows(rows, schema, 1.0, 1.0)
+        with self.assertRaisesRegex(CHECK_PARITY.CheckError, "no rows found"):
+            CHECK_PARITY.check_rows(rows, "fe2o3.xgmi-peer-benchmark.v1", 1.0, 1.0)
+
     def test_accepts_xgmi_schema(self) -> None:
         rows = []
         for backend in ("kfd", "hsa", "hip"):

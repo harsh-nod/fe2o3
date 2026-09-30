@@ -11,10 +11,13 @@ use fe2o3_runtime::{
     RuntimeStreamIdV1, RuntimeSubmissionV1,
 };
 
+#[path = "gfx942_runtime_xgmi_peer_benchmark/retained.rs"]
+mod retained;
+
 const CANARY_BYTES: usize = 32;
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_DEPTH: usize = 32;
-const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch|--aggregate-peer-batch-hot-only|--aggregate-peer-batch-hot-diagnose|--aggregate-peer-batch-hot-currentness-diagnose]";
+const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch|--aggregate-peer-batch-hot-only|--aggregate-peer-batch-hot-diagnose|--aggregate-peer-batch-hot-currentness-diagnose|--retained-peer-batch-reviewed-mi300x]";
 
 type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 type XgmiContextV1 = RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>;
@@ -33,6 +36,7 @@ enum ProgressModeV1 {
     AggregatePeerBatchHotOnly,
     AggregatePeerBatchHotDiagnostic,
     AggregatePeerBatchHotCurrentnessDiagnostic,
+    RetainedPeerBatch,
 }
 
 fn facade_error(error: impl Debug) -> Box<dyn Error> {
@@ -78,6 +82,7 @@ fn progress_mode(args: &[String]) -> BenchmarkResult<ProgressModeV1> {
         }
         "--diagnose-xgmi" => Err("--diagnose-xgmi requires the hardware-diagnostic feature".into()),
         "--aggregate-peer-batch" => Ok(ProgressModeV1::AggregatePeerBatch),
+        "--retained-peer-batch-reviewed-mi300x" => Ok(ProgressModeV1::RetainedPeerBatch),
         "--aggregate-peer-batch-hot-only" => Ok(ProgressModeV1::AggregatePeerBatchHotOnly),
         "--aggregate-peer-batch-hot-diagnose" if cfg!(feature = "hardware-diagnostic") => {
             Ok(ProgressModeV1::AggregatePeerBatchHotDiagnostic)
@@ -99,7 +104,8 @@ fn valid_depth(mode: ProgressModeV1, depth: usize) -> bool {
     let maximum = match mode {
         ProgressModeV1::Ordinary
         | ProgressModeV1::Diagnostic
-        | ProgressModeV1::AggregatePeerBatchHotOnly => MAX_DEPTH,
+        | ProgressModeV1::AggregatePeerBatchHotOnly
+        | ProgressModeV1::RetainedPeerBatch => MAX_DEPTH,
         ProgressModeV1::AggregatePeerBatch => MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1,
         ProgressModeV1::AggregatePeerBatchHotDiagnostic
         | ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic => 1,
@@ -123,11 +129,13 @@ fn includes_remap_phase(mode: ProgressModeV1) -> bool {
         ProgressModeV1::AggregatePeerBatchHotOnly
             | ProgressModeV1::AggregatePeerBatchHotDiagnostic
             | ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic
+            | ProgressModeV1::RetainedPeerBatch
     )
 }
 
 fn report_schema(mode: ProgressModeV1) -> &'static str {
     match mode {
+        ProgressModeV1::RetainedPeerBatch => retained::SCHEMA,
         ProgressModeV1::AggregatePeerBatch => "fe2o3.xgmi-peer-aggregate-benchmark.v1",
         ProgressModeV1::AggregatePeerBatchHotOnly
         | ProgressModeV1::AggregatePeerBatchHotDiagnostic
@@ -253,6 +261,22 @@ fn report_measurement(
     mut forward_ns: Vec<u128>,
     mut reverse_ns: Vec<u128>,
 ) -> BenchmarkResult<()> {
+    if mode == ProgressModeV1::RetainedPeerBatch {
+        let row = retained::measurement_row(
+            unique_ids,
+            copy_bytes,
+            depth,
+            warmups,
+            samples,
+            measurement,
+            mapping_lifetime,
+            prime_batches,
+            forward_ns,
+            reverse_ns,
+        )?;
+        println!("{row}");
+        return Ok(());
+    }
     forward_ns.sort_unstable();
     reverse_ns.sort_unstable();
     let forward_p50 = percentile(&forward_ns, 1, 2).ok_or("missing forward p50")?;
@@ -422,10 +446,10 @@ fn run_direction(
     context: &mut XgmiContextV1,
     resources: &DirectionResourcesV1,
     copy_bytes: u64,
-    aggregate: bool,
+    mode: ProgressModeV1,
 ) -> BenchmarkResult<u128> {
-    if aggregate {
-        return run_direction_aggregate(context, resources, copy_bytes);
+    if is_aggregate_mode(mode) || mode == ProgressModeV1::RetainedPeerBatch {
+        return run_direction_batch(context, resources, copy_bytes, mode);
     }
     let mut submissions: Vec<RuntimeSubmissionV1<RuntimePeerCopyV1>> =
         Vec::with_capacity(resources.sources.len());
@@ -472,10 +496,11 @@ fn run_direction(
     Ok(elapsed)
 }
 
-fn run_direction_aggregate(
+fn run_direction_batch(
     context: &mut XgmiContextV1,
     resources: &DirectionResourcesV1,
     copy_bytes: u64,
+    mode: ProgressModeV1,
 ) -> BenchmarkResult<u128> {
     let mut submissions: Vec<RuntimeSubmissionV1<RuntimePeerCopyV1>> =
         Vec::with_capacity(resources.sources.len());
@@ -505,11 +530,15 @@ fn run_direction_aggregate(
         );
     }
     aggregate_submissions.extend(submissions.iter_mut());
-    let status = context
-        .wait_peer_copy_batch(&mut aggregate_submissions, COMPLETION_TIMEOUT)
-        .map_err(facade_error)?;
-    if status != RuntimePeerCopyBatchPollV1::Succeeded {
-        return Err(format!("XGMI peer-copy aggregate did not succeed: {status:?}").into());
+    if mode == ProgressModeV1::RetainedPeerBatch {
+        retained::complete(context, &mut aggregate_submissions)?;
+    } else {
+        let status = context
+            .wait_peer_copy_batch(&mut aggregate_submissions, COMPLETION_TIMEOUT)
+            .map_err(facade_error)?;
+        if status != RuntimePeerCopyBatchPollV1::Succeeded {
+            return Err(format!("XGMI peer-copy aggregate did not succeed: {status:?}").into());
+        }
     }
     let elapsed = start.elapsed().as_nanos();
     drop(aggregate_submissions);
@@ -577,7 +606,6 @@ fn main() -> BenchmarkResult<()> {
     let aggregate_diagnostic = mode == ProgressModeV1::AggregatePeerBatchHotDiagnostic;
     #[cfg(feature = "hardware-diagnostic")]
     let currentness_diagnostic = mode == ProgressModeV1::AggregatePeerBatchHotCurrentnessDiagnostic;
-    let aggregate = is_aggregate_mode(mode);
     let unique_ids = [parse_unique_id(&args[0])?, parse_unique_id(&args[1])?];
     let copy_bytes: usize = args[2].parse()?;
     let depth: usize = args[3].parse()?;
@@ -592,6 +620,10 @@ fn main() -> BenchmarkResult<()> {
         return Err("XGMI benchmark controls are out of range".into());
     }
     let rounds = warmups.checked_add(samples).ok_or("round count overflow")?;
+    let hot_pattern_round = rounds.checked_add(1).ok_or("hot pattern round overflow")?;
+    if mode == ProgressModeV1::RetainedPeerBatch {
+        retained::scope_count(warmups, samples)?;
+    }
     #[cfg(feature = "hardware-diagnostic")]
     let diagnostic_submissions = if diagnostic {
         Some(diagnostic_submission_count(rounds, depth)?)
@@ -652,14 +684,14 @@ fn main() -> BenchmarkResult<()> {
         let mut reverse_ns = Vec::with_capacity(samples);
         for round in 0..rounds {
             prepare_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
-            let elapsed = run_direction(&mut context, &forward, copy_bytes as u64, aggregate)?;
+            let elapsed = run_direction(&mut context, &forward, copy_bytes as u64, mode)?;
             validate_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
             if round >= warmups {
                 forward_ns.push(elapsed);
             }
 
             prepare_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
-            let elapsed = run_direction(&mut context, &reverse, copy_bytes as u64, aggregate)?;
+            let elapsed = run_direction(&mut context, &reverse, copy_bytes as u64, mode)?;
             validate_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
             if round >= warmups {
                 reverse_ns.push(elapsed);
@@ -673,7 +705,6 @@ fn main() -> BenchmarkResult<()> {
     // Establish one mapped, completed batch in each direction, then time only
     // repetitions with no intervening host access. Final readback validates the
     // exact payload and canaries after the entire persistent-hot sequence.
-    let hot_pattern_round = rounds.checked_add(1).ok_or("hot pattern round overflow")?;
     prepare_direction(
         &mut context,
         &forward,
@@ -692,13 +723,13 @@ fn main() -> BenchmarkResult<()> {
         0x71,
         0x5a,
     )?;
-    let _ = run_direction(&mut context, &forward, copy_bytes as u64, aggregate)?;
-    let _ = run_direction(&mut context, &reverse, copy_bytes as u64, aggregate)?;
+    let _ = run_direction(&mut context, &forward, copy_bytes as u64, mode)?;
+    let _ = run_direction(&mut context, &reverse, copy_bytes as u64, mode)?;
     let mut hot_forward_ns = Vec::with_capacity(samples);
     let mut hot_reverse_ns = Vec::with_capacity(samples);
     for round in 0..rounds {
-        let forward_elapsed = run_direction(&mut context, &forward, copy_bytes as u64, aggregate)?;
-        let reverse_elapsed = run_direction(&mut context, &reverse, copy_bytes as u64, aggregate)?;
+        let forward_elapsed = run_direction(&mut context, &forward, copy_bytes as u64, mode)?;
+        let reverse_elapsed = run_direction(&mut context, &reverse, copy_bytes as u64, mode)?;
         if round >= warmups {
             hot_forward_ns.push(forward_elapsed);
             hot_reverse_ns.push(reverse_elapsed);

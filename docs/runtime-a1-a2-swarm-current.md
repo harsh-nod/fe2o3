@@ -27,6 +27,38 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The direct merged all-feature runtime regression at `3e4dd6f58` executes all
+1921 library tests with no filter: 1886 pass, the same three telemetry
+`InspectSocket/EPERM` cases fail, and 32 existing native tests remain ignored.
+It exits 101 after a complete footer, not a timeout. This is not a passing
+full-runtime qualification packet; production socket checks remain unchanged.
+The retained facade benchmark separately passes all 18 no-default and 19
+all-feature unit tests; its separate report schema is rejected by the ordinary
+parity checker under the 29-test Python regression. These are CPU-only results,
+not native facade execution or matched HIP/HSA measurements. All 76 accounting
+library tests and strict all-feature/all-target Clippy for runtime, KFD and
+accounting pass on the merged tree, along with scoped benchmark formatting.
+
+The [retained Context facade](runtime-retained-xgmi-pair-v1.md#runtime-context-facade)
+is integrated at `304042041`. Exact signed-candidate bytes bind 582 distinct
+runtime CPU tests, 31 retained-pair KFD tests, 55 doctests, two source-only
+integration tests and scoped static gates. Entry retains the actual owners;
+the first wait publishes once, and only explicit successful finish commits
+logical success. Unfinished drop quarantines; forget leaves a persistent
+reservation. This is ordinary-lifetime opt-in behavior, not full-fresh authority,
+native facade execution or a facade proof. The complete-tree fold/storage guards
+include only the reviewed source delta; their proof closures and expected
+counts are unchanged. Lightweight controls pass without new solver claims.
+
+The [actual post-lock domain observer](runtime-domain-retained-observation-v1.md)
+is integrated through `8b87713bb` and `a30ff758e`. Its signed campaign passes
+three full twenty-one-obligation runs and all fifteen logical negatives, with
+twenty-five accepted stages and fresh process-group closures. Separate CPU
+qualification passes 76 tests and is byte-bound to the signed Rust sources.
+The proof covers stored poison, actual bounded ancestry, slot and leaf identity,
+and the retained record predicate. Account locking, freshness, custody and native
+authority remain outside it. No A0-A7 exit is closed by these component results.
+
 The [queued producer-query packet](evidence/dev-queued-query-2026-09-30/README.md)
 qualifies the actual outer/child read-only query bodies and a missing-read-count
 refusal fix. Model 1095/0 with 19 unchanged manual benchmark ignores, 29 doctests,
@@ -61,7 +93,8 @@ development checks pass 197 selected CPU tests, all 53 runtime doctests, two
 source-only integration tests and scoped static gates. The initial 24 focused
 cases overlap the 197. The rejected obsolete-warning recorder remains preserved;
 the succeeding recorder requires zero production warnings. This storage change
-does not yet expose a retained RuntimeContext mode.
+was the storage foundation for the separately qualified retained RuntimeContext
+facade above; it did not itself qualify that later facade.
 
 The [ordered producer-input fold](runtime-producer-input-fold-v1.md) is integrated
 at `14e4253eb`. Its signed component campaign passes three full 13-obligation
@@ -105,7 +138,7 @@ A fresh local Unix `SOCK_SEQPACKET` capability probe also returns `EPERM` for
 telemetry failures below, not the precise syscall of a historical run. Production
 socket validation and the tests remain enabled and unchanged.
 
-The fresh merged all-feature runtime library run at `14e4253eb` completes with
+The earlier merged all-feature runtime library run at `14e4253eb` completed with
 1863 passed, three failed, 32 ignored and zero filtered out (exit 101). All three
 failures are the telemetry cases listed below, returning `InspectSocket/EPERM`
 at `authorized_execution.rs:1317`; no other test fails. This is a direct local
@@ -130,8 +163,10 @@ unchanged. The no-default production check also retains two dead-code warnings.
 Twenty-one audit controls and fresh archive replay pass, with historical closure
 receipts distinguished from same-recorder PID-namespace observations. No new
 native execution, performance improvement, aggregate-memory ceiling, protected
-authority or A0-A7 exit is claimed. The complete Context reconciliation fold,
-retained-pair facade and all broader acceptance gates remain open.
+authority or A0-A7 exit is claimed. At that packet's snapshot the complete
+Context reconciliation fold and retained-pair facade remained open. The later
+component work above advances both; per-input authority and all broader
+acceptance gates remain open.
 
 The [dispatch preflight and repeated async-owner qualification](evidence/dev-preflight-repeat-owner-2026-09-29/README.md)
 source-refines actual retained-fact preflight checks with exact first refusal or

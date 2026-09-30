@@ -55,7 +55,9 @@ does not claim a fresh R75 solver campaign.
 This predicate does not establish Arc identity, successful locking, lock poison
 handling, domain ancestry, ledger conservation, token ownership, session
 liveness or freshness between observations. A matching record alone is not
-Context allocation authority or an authenticated producer input. The next
-refinement is the actual domain post-lock observation over checked ancestry,
-slot and leaf identity. The enclosing account and runtime checks remain enabled
-and keep their separate proof status.
+Context allocation authority or an authenticated producer input. The separate
+[domain post-lock observation](runtime-domain-retained-observation-v1.md) now
+refines actual ancestry, checked slot, leaf identity and this predicate over
+borrowed locked-state fields. It does not prove account locking or cross-call
+freshness. The enclosing account and runtime checks remain enabled and keep
+their separate proof status.

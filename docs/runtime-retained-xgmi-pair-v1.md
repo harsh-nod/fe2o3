@@ -81,6 +81,67 @@ historical facade/full-fresh labels. Operational-fence attribution belongs in a
 separate timing population. Matched HIP/HSA comparisons require new qualification
 and measurement; no gain or parity is implied by this design.
 
+## Runtime Context Facade
+
+`RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>::begin_retained_peer_copy_batch_v1`
+borrows the Context and the complete mutable pending ordinary peer-copy roster.
+This first profile accepts 1..=63 scalar, disjoint copies in one direction. It
+excludes other pending work, events, callbacks, dependencies, directed copies,
+segmented copies and generated launches. Idle streams may remain present.
+It is a concrete backend API, not a generic provider or new native authority.
+
+Entry prepares and retains the actual queue/session owners and fixes an absolute
+deadline that includes preparation. It does not publish packets. The first
+`wait` publishes once and waits against that deadline; later waits observe the
+same tickets without republishing or extending the deadline. A fenced timeout
+returns `Pending` while retaining custody. `ReadyToFinish` is distinct from
+ordinary submission success. Consuming `finish` restores the native owners and
+then commits logical Context completion. Finishing while pending is a terminal
+refusal, not cancellation.
+
+Dropping an unfinished facade quarantines the Context and backend. Forgetting it
+leaves a persistent Context reservation that blocks ordinary work and cleanup.
+Lossless timeout recovery preserves the entire failure on an unexpected custody
+variant. These safeguards do not create an administrative-reset guarantee or a
+full-fresh completion witness. CPU storage/driver/Context fixtures and source
+wiring tests are not execution of this public facade on two live GPUs.
+
+Signed facade candidate `b1ad04dc7`, integrated at `304042041`, is bound to
+accepted pre-signing development checks: 582 distinct runtime CPU tests, all
+31 retained-pair KFD tests, all 55 runtime doctests and two source-only
+integration tests. Strict all-feature/all-target runtime Clippy, warning-free
+no-default compilation and scoped static checks pass. Runtime test execution
+uses `cpu-runtime-fixtures,hardware-diagnostic`; all-feature static analysis is
+not all-feature execution. The KFD executable is explicitly cache-qualified.
+All 6446 selected candidate inputs match signed source, and all eighteen fresh
+same-namespace process groups close. Rejected earlier attempts remain preserved.
+These local records are not a signed-source rerun, full-runtime acceptance or
+a formal proof of this facade. Refreshed complete-tree proof guards preserve
+their unchanged executable proof closures and do not extend those theorems to
+the facade.
+
+The runtime peer benchmark accepts the separate
+`--retained-peer-batch-reviewed-mi300x` flag. Its retained mode permits depths
+1..=32, nonzero samples and at most 10000 warmup plus sample rounds, checked before
+device opening. It emits `fe2o3.xgmi-peer-retained-facade-benchmark.v1`, never an
+ordinary/full-fresh or native-series row. Headline timing includes facade enqueue,
+scope entry, first publication/wait, consuming finish and logical settlement.
+Handle release is outside timing and labeled accordingly. There is one scope per
+batch, not one scope spanning the full sample series.
+
+Both directions have a prime batch and alternate during the hot sequence, with
+no intervening host read/write. Final readback checks source and destination
+payloads and canaries; reused payload bytes do not independently prove fresh
+work at every iteration. Rows include the complete sorted sample populations,
+explicit profile/policy/environment-assumption labels and appear only after
+successful validation and explicit native teardown. The existing parity checker
+rejects this new schema. Merged-tree benchmark unit tests pass 18/18 with no
+default features and 19/19 with all features; all 29 parity-report tests and
+strict all-feature/all-target Clippy pass. These are local development results,
+not hardware qualification. A reviewed native runner, observed driver/environment
+binding and matched HIP/HSA qualification remain required; no measured speedup
+or hardware acceptance is claimed.
+
 ## Directional-Series Benchmark
 
 The native KFD example accepts the explicit
@@ -113,7 +174,8 @@ policy digest and environment-assumption label. KFD's numeric GPU IDs and
 directional engine IDs must also match independent trial inputs. The old hot
 parser rejects these rows, and the new parser rejects old rows. A matching row
 does not authenticate a driver or create native evidence. The runtime-facade
-retained lease remains a separate integration gap; these are native API results.
+integration above has a separate end-to-end timing surface; native-series rows
+cannot qualify its performance.
 
 `xgmi_peer_series_campaign.py` is a pure plan/replay module, not a native runner.
 It fixes depths 1/16/32 and the backend order KFD, HSA, HIP, HIP, HSA, KFD at each
