@@ -98,7 +98,7 @@ pub(super) fn checkpoint(
                 "compiler exec gate must remain closed"
             );
         }
-        if phase == "compiler-trace" {
+        if matches!(phase, "compiler-channel" | "compiler-trace") {
             let status =
                 std::fs::read_to_string(format!("/proc/{}/status", pid.as_raw_pid())).unwrap();
             let tracer: u32 = status
@@ -108,15 +108,23 @@ pub(super) fn checkpoint(
                 .trim()
                 .parse()
                 .unwrap();
-            let current = std::fs::read_link("/proc/thread-self").unwrap();
-            let tid: u32 = current
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .parse()
-                .unwrap();
-            assert_eq!(tracer, tid, "original creator must own the actual trace");
+            if phase == "compiler-channel" {
+                assert_eq!(tracer, 0, "channel checkpoint must precede trace seizure");
+                eprintln!(
+                    "ROOT_REQUEST_COMPILER_CHANNEL_PRETRACE_GATE_CLOSED pid={} tracer={tracer}",
+                    pid.as_raw_pid()
+                );
+            } else {
+                let current = std::fs::read_link("/proc/thread-self").unwrap();
+                let tid: u32 = current
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(tracer, tid, "original creator must own the actual trace");
+            }
         }
         // Accepted work persists even though the following operation refuses.
         b.charge_work(1).unwrap();

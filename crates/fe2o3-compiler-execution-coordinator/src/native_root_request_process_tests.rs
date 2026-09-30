@@ -83,7 +83,12 @@ fn test_name(name: &str) -> String {
 
 fn postclone_case(case: &str) -> Option<(&'static str, &'static str)> {
     let case = case.strip_prefix("postclone-")?;
-    for phase in ["helper-ready", "compiler-profile", "compiler-trace"] {
+    for phase in [
+        "helper-ready",
+        "compiler-profile",
+        "compiler-channel",
+        "compiler-trace",
+    ] {
         if let Some(action) = case.strip_prefix(phase) {
             return match action {
                 "-work" => Some((phase, "work")),
@@ -94,6 +99,26 @@ fn postclone_case(case: &str) -> Option<(&'static str, &'static str)> {
         }
     }
     None
+}
+
+#[test]
+fn postclone_channel_case_requires_exact_phase_and_action() {
+    for action in ["work", "storage", "unwind"] {
+        assert_eq!(
+            postclone_case(&format!("postclone-compiler-channel-{action}")),
+            Some(("compiler-channel", action))
+        );
+    }
+    for case in [
+        "compiler-channel-work",
+        "postclone-compiler-channel",
+        "postclone-compiler-channelwork",
+        "postclone-compiler-channel-work-extra",
+        "postclone-compiler-channel-ready",
+        "postclone-compiler-channel-trace-work",
+    ] {
+        assert_eq!(postclone_case(case), None, "{case}");
+    }
 }
 
 fn require_output(output: std::process::Output, marker: &str) {
@@ -140,6 +165,9 @@ fn complete_root_request_consuming_matrix() {
         "postclone-compiler-profile-work",
         "postclone-compiler-profile-storage",
         "postclone-compiler-profile-unwind",
+        "postclone-compiler-channel-work",
+        "postclone-compiler-channel-storage",
+        "postclone-compiler-channel-unwind",
         "postclone-compiler-trace-work",
         "postclone-compiler-trace-storage",
         "postclone-compiler-trace-unwind",
@@ -191,6 +219,17 @@ fn complete_root_request_consuming_matrix() {
             if phase != "helper-ready" {
                 assert!(
                     String::from_utf8_lossy(&output.stderr).contains("ROOT_REQUEST_HELPER_EXEC")
+                );
+            }
+            if phase == "compiler-channel" {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    stderr.contains("ROOT_REQUEST_COMPILER_CHANNEL_PRETRACE_GATE_CLOSED"),
+                    "{case}: actual untraced channel must be reached behind the closed gate: {stderr}"
+                );
+                assert!(
+                    !stderr.contains("ROOT_REQUEST_COMPILER_CHANNEL_GATE_CLOSED"),
+                    "{case}: pre-trace denial must not complete the compiler attempt"
                 );
             }
             if action != "unwind" {

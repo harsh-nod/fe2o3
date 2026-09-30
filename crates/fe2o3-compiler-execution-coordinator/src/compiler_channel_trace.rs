@@ -1,5 +1,7 @@
 //! Consuming original-child/channel join. This owner is not compiler admission.
 use super::*;
+#[cfg(test)]
+use crate::native_v3::root_intake::RootCompilerRequest;
 use fe2o3_protected_service_spawn::{
     RetainedDependencyV2 as Dependency, RetainedResourceAccessErrorV2 as AccessError,
     cleanup_bridge::CleanupPollV1 as CleanupPoll,
@@ -72,6 +74,8 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
                 CompilerChildChannel::receive(&child, receiver, credentials, deadline, b)?;
             b.release_storage(native::FILE_STORAGE)?;
             b.reserve_storage(charge)?;
+            #[cfg(test)]
+            RootCompilerRequest::postclone_checkpoint_for_test("compiler-channel", child.pid(), b)?;
             let growth = child
                 .root_trace_storage()?
                 .checked_sub(child.retained_storage())
