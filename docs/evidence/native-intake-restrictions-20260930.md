@@ -1,6 +1,6 @@
 # Native Intake And Compiler Restrictions Candidate
 
-This is an **unpublished, partially validated prerequisite**, not protected
+This is a **partially validated prerequisite checkpoint**, not protected
 compiler execution or a deployable default. M0 remains complete; M1-M7 remain
 incomplete and the strict production-to-safe-GPU matrix remains **0/47**.
 
@@ -179,6 +179,14 @@ SHA-256 is
 `44fa8a2622d8efa654a0ff1917e7dfcef942271a8b5181dab3d5185694de5e0c`.
 This does not replace the 27 coordinator socket failures or unrun isolated
 native-exec, protected-proof and GPU checks.
+
+`r75-isolated-native-binaries` checked every coordinator and deployment binary
+at `fb2cca4f8351877cbdff7df3cab0f5dd4276f0fb`, with locked/offline dependencies
+and stable source/tool snapshots. The command passed; its log SHA-256 is
+`1a5d955dc1bb5e7d6bc4135139d11e2ec693ab04fa3661c560fcec014ddc8315`.
+This is compilation, not installation, root execution or deployment approval.
+The nine M0 consistency tests and source-hygiene delta against `edd71e676`
+also passed after the ACL correction.
 
 | Run | Log SHA-256 |
 | --- | --- |
