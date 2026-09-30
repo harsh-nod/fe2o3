@@ -179,7 +179,7 @@ All three runs retained unchanged source/tool inventories. Log SHA-256:
 - r167: `8444c28cb45dfd5b8cd89682b8cc8c7ee966110410ba45a1077905f03f376703`
 
 At that checkpoint the frontend candidate incorporated this owner, but its combined execution
-tests, Pliron bridge and actual source-scope emission remain unfinished. No
+tests, Pliron bridge and actual source-scope emission were unfinished. No
 default production activation, protected proof, simulator or GPU credit follows.
 
 ## Scoped Pliron Bridge
@@ -247,3 +247,95 @@ composition with the production compiler. Actual source materialization,
 typed pending-owner custody, optimizer/verification consumption, protected
 proof and safe launch still need integrated acceptance. M1-M7 remain incomplete;
 strict production-to-required-proof-to-safe-GPU coverage remains **0/47**.
+
+## Source-Owner Integration
+
+Candidate `ea42e151850a667e0faab92c69376fe02373c584` composes the scoped
+frontend, original-source invocation dependencies, deferred emission, V23 bridge
+and inventory with immutable #271 candidate
+`9533203467e356595b2f383ef9e739f9d65f40f0`. A private closed profile now lets
+the existing materialization/replay engine retain either its historical V18
+owner or the distinct V23 owner. V23 reconstruction keeps the original source,
+SSA, launch inputs, graph and attachments together on their original account;
+it does not convert a V18 owner or grant optimization/launch authority.
+
+| Run | Candidate | Result |
+| --- | --- | --- |
+| r192 | `4f5dd5d3f` | Library check failed with six deferred-type lifetime errors |
+| r193 | `dee83a59e` | Test compilation failed with 11 fixture errors; no tests ran |
+| r194 | `ea42e1518` | Test compilation succeeded; 174 passed, 25 failed, none ignored |
+
+r192 exposed missing propagation of the sidecar-backed type lifetime through
+five signatures. The fix changes no ownership or accounting predicate. r193
+then exposed missing launch-type imports and unchecked fixture projection
+constructor results. Both failures are preserved, not reported as test passes.
+
+r194 ran 199 selected lowerer tests, not the whole repository. All eight r186
+failures now pass. All seven scalar-forwarding controls also pass after removal
+of the duplicate V31 DFS and adaptation to the shared V32 forwarding service.
+The three new closed-profile compatibility controls pass, but the complete
+historical source-owner suite still needs a separate run.
+
+Twenty-three failures stop at the shared invocation fixture's
+`InvalidTypeLayout` admission error, before dependency, emission, census or
+pending-owner assertions. None earns positive or intended-negative coverage.
+The fixture's nominal `usize` declaration omitted `rustc_layout_is_noundef`,
+required by the existing nominal-type validator. Successor `f470d3b99` supplies
+that fixture property without weakening admission; its result is not included
+in r194. The remaining two failures match #271's known byte-initialization
+type-closure fixture and call-return mutation hitting an earlier identity guard.
+
+The eight integration commits after `4f5dd5d3f` passed exact DCO sign-off,
+whitespace and hygiene-delta checks. All three runs retained unchanged
+source/tool inventories. r194 source snapshot:
+`d6c4657945157b645881e1b9672ba263c03c29b7dd04d5a36edb50a399298714`.
+Log SHA-256:
+
+- r192: `0010130cbd332170f903a163f75d94eedc0074e3758ca435a0a1d7d740765362`
+- r193: `17a7cb9c41444bd1a69aa877f974c347e1d31b865f6fc699809b89d5a1e0d33c`
+- r194: `883c71f5493e43bb441e396e9eb48c009da9397e5b8927426f7623c6dcca8192`
+
+r195 repeated the focused invocation, census and pending-owner tests at
+`f470d3b99924e6a339df6a5db587fc8b431524b8`, and added the complete historical
+source-owner controls: **19 passed, 23 failed, zero ignored**. All 16 historical
+controls and three profile-compatibility controls passed. The 23 invocation
+fixtures now pass the former type-layout boundary but stop at the shared
+`InvalidFunctionAbi` admission error, before their intended assertions. They
+still earn no positive or intended-negative coverage; this is not a green
+integration result. The source and tool inventories remained unchanged.
+
+r195 source snapshot SHA-256:
+`09e55f66a84187ecc07f8fe97f1551107c8f21dfc13c8938b89d530a4c0f7cde`.
+Log SHA-256:
+`679d8003026538e3ae6b8671c60fec4cbcec81f703cd0a7279e8853f92d6de40`.
+
+Genuine V41 source-to-pending consumption, branch/terminal invocation cleanup,
+simulator execution and AMD lowering are separate active integration scopes.
+The V23 optimizer still needs typed structural, transition, analysis and
+source-owner consumers through the existing pipeline. No protected proof,
+simulator or kernel GPU execution occurred in these runs. M1-M7 and **0/47**
+are unchanged; the compiler candidate is not public-main qualification.
+
+## Scoped Transition Payloads
+
+Isolated candidate `fd51516564fde40c116b739bcbd128d026e65dbc` extends the
+existing transition payload comparator for the five scoped operations. Exact
+operation variants remain distinct; scope-end payload lengths are compared,
+while the existing operand visitor retains SSA identity, order and multiplicity
+checks. None of these operations becomes pure. This is raw payload comparison,
+not a checked V23 optimizer transition or production authority.
+
+r196 ran the complete kernel-analysis library: **698 passed, zero failed,
+zero ignored**. This includes five new controls for variant separation, each
+SSA operand position, repeated/reordered operands, visitor early termination,
+legacy separation and exact/one-short work limits on the original account.
+The source and tool inventories remained unchanged.
+
+Source snapshot SHA-256:
+`2e7fc25b6090e8b9d7bb1bb61cc5651754ab03c5b80a5e1d905e92a0b21d23fc`.
+Log SHA-256:
+`61e373da4d7e9156b1b1bc30f7e5cfef18802fa2f450d5b16da23b26a03fff92`.
+
+The typed structural, transition, analysis and source-owner optimizer consumers
+still need integration. No protected proof, simulator or GPU ran in r196;
+M1-M7 remain open and strict end-to-end coverage remains **0/47**.
