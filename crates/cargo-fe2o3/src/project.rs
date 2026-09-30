@@ -558,6 +558,11 @@ impl PinnedDirectory {
         &self.file
     }
 
+    /// Complete inert owner charge, including its allocation's actual capacity.
+    pub(crate) fn retained_storage(&self) -> Option<usize> {
+        std::mem::size_of::<Self>().checked_add(self.display_path.capacity())
+    }
+
     #[cfg(unix)]
     pub(crate) const fn identity_parts(&self) -> (u64, u64) {
         (self.identity.device, self.identity.inode)

@@ -1506,6 +1506,7 @@ fn native_intake_account()
         .checked_add(root_intake::SCRATCH)
         .and_then(|n| n.checked_add(root_intake::CAPTURE_SCRATCH))
         .and_then(|n| n.checked_add(root_intake::PARENT_MAX_STORAGE))
+        .and_then(|n| n.checked_add(root_intake::OUTPUT_OWNER_STORAGE))
         .and_then(|n| n.checked_add(size_of::<capability_broker::BrokeredInvocationAuthorityV1>()))
         .and_then(|n| n.checked_add(header))
         .ok_or_else(overflow)?;
@@ -1675,7 +1676,9 @@ impl CompilerCapabilities {
             ));
         }
         profile
-            .with_profile_budget(|profile, b| parent.contact_original_root(profile, authority, b))
+            .with_profile_budget(|profile, b| {
+                parent.contact_original_root(profile, authority, &self.artifact, b)
+            })
             .map(|_| ())
             .map_err(
                 |error: crate::protected_compiler_handoff_v3::root_intake::Error| {

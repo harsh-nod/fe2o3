@@ -147,14 +147,23 @@ load-readiness/publication recovery refuses in this branch. These quotas cover
 the native descriptor capture and transport, not every allocation in the older
 Command/environment preparation pipeline.
 
-The 224-byte V3 intake records are inert. Hello, challenge and ACK carry no
-rights; ordered input records carry exactly one CLOEXEC right: sealed invocation,
-cwd, then each originally non-CLOEXEC stdio selected in the mask. The actual
+The paired sender/receiver now use inert 240-byte V4 intake records, not an
+upgrade of the retained 224-byte V3 codec. Both versions share the same closed
+canonical engine; each rejects the other version, and V3 still rejects role 6.
+Hello, challenge and ACK carry no rights; ordered input records carry exactly
+one CLOEXEC right: sealed invocation, cwd, mandatory output directory (role 6,
+child destination 197), then each originally non-CLOEXEC stdio selected in the
+mask. Every V4 frame binds the output device/inode at bytes 192..208 before its
+digest at 208..240. Neither scalar coordinate grants authority; the actual
+received descriptor must match. The actual
 invocation length must match the bounded declaration before read/admission.
 Fresh nonce/challenge and preceding digests bind order, but do not authenticate
 the peer. The fixed root-owned directory chain, socket identity, actual root
 SO_PEERCRED and per-record SCM_CREDENTIALS are the transport TCB. The V3 profile's
-supervisor UID/GID is not reinterpreted as a measured root identity.
+supervisor UID/GID is not reinterpreted as a measured root identity. The wrapper
+borrows its original brokered `PinnedDirectory` through the exact ACK, checking
+its actual FD and full bounded capacity on its original funded profile account.
+Root never reopens a wrapper pathname or searches a PID's descriptor table.
 
 The coordinator accepts through the original listener; issuer staging exports
 only its root directory, never a competing listener. Received rights enter the
@@ -164,6 +173,25 @@ right. The receiver keeps those rights through the exact terminal refusal ACK
 and handled cancellation/drain. Dropping Prepared starts anchor cancellation;
 the original pool retains its child/domain and canonical guard until terminal
 cleanup. No failed request refunds its account or retries on a fresh ledger.
+
+The receiver similarly keeps the original output right and installs a separately
+prepaid, move-only `CompilerOutputDirectory` duplicate before leaving the intake
+scope. Errors and unwind cannot remove the original right or refund either
+reservation. The existing `CompilerInvocationBacking::prepare` now requires and
+consumes this full output owner on the same account; revalidation includes it,
+staging quotes cover its additional duplicate, and final output validation reads
+the actual Stage binding at 197. The current refusal-only receiver does not
+extract it or construct a fake runtime to call that preparation. The accepted
+descriptor route is exactly `/proc/self/fd/197`, without argv/env rewriting.
+This is directory custody only, not a read-only snapshot, source mapping,
+namespace isolation, publication lock or a runtime-enforcement guard.
+
+Additional authored, unrun coverage checks V3/V4 refusal, output identity on all
+transcript joins, missing/duplicate/wrong output inputs, pre-ACK trailing input,
+original right retention after constructor/outer failure, one-short funding,
+original/moved/foreign budgets, actual Stage destination checks and unwind.
+One new unsafe test block only stages inert owned descriptors and never spawns.
+No native qualification, proof, compiler or GPU claim is added.
 
 New authored coverage includes real one-right socket transfer/closure, all
 stdio masks, original right retention on constructor denial, malformed sequence,

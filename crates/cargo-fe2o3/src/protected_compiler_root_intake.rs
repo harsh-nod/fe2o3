@@ -1,20 +1,21 @@
 //! Original-root TCB transport only. No accepted/compiler-ready wire status exists.
 use super::ParentRustcInvocationCustody as Parent;
 use crate::capability_broker::BrokeredInvocationAuthorityV1 as InvocationAuthority;
+use crate::project::PinnedDirectory;
 use fe2o3_compiler_closure_capability::{
     CompilerExecutionCapabilityErrorV2 as CapabilityError,
     CompilerExecutionClientProfileCapabilityV3 as Profile,
     RustcInvocationCapabilityV1 as Invocation,
 };
 use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_ROOT_INTAKE_BYTES_V3 as N,
-    COMPILER_EXECUTION_ROOT_INTAKE_STORAGE_V3 as RECORD_SCRATCH,
-    COMPILER_EXECUTION_ROOT_INTAKE_WORK_V3 as RECORD_WORK,
+    COMPILER_EXECUTION_ROOT_INTAKE_BYTES_V4 as N,
+    COMPILER_EXECUTION_ROOT_INTAKE_STORAGE_V4 as RECORD_SCRATCH,
+    COMPILER_EXECUTION_ROOT_INTAKE_WORK_V4 as RECORD_WORK,
     COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1 as DIRECTORY_MODE,
     COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1 as SOCKET_MODE,
     COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1 as SOCKET_PATH,
-    CompilerExecutionRootIntakeErrorV3 as RecordError, CompilerExecutionRootIntakeKindV3 as Kind,
-    CompilerExecutionRootIntakeRecordV3 as Record, CompilerExecutionRootIntakeRoleV3 as Role,
+    CompilerExecutionRootIntakeErrorV4 as RecordError, CompilerExecutionRootIntakeKindV4 as Kind,
+    CompilerExecutionRootIntakeRecordV4 as Record, CompilerExecutionRootIntakeRoleV4 as Role,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -34,7 +35,11 @@ use std::{
 const MAX_ATTEMPTS: usize = 120_001;
 const LOCAL_WORK: usize = 8 + 128 * 1024;
 const FRAME: usize = 4 * size_of::<Endpoint>() + 16 * N + 16 * size_of::<Error>() + 16384;
-const TRANSFERS: usize = Invocation::NATIVE_FILE_STORAGE + 4 * size_of::<OwnedFd>();
+const TRANSFERS: usize = Invocation::NATIVE_FILE_STORAGE + 5 * size_of::<OwnedFd>();
+// Exact producer owner is checked against this bound before transfer. No tree
+// contents or namespace authority is included in this descriptor/header charge.
+pub(crate) const OUTPUT_OWNER_STORAGE: usize =
+    size_of::<PinnedDirectory>() + fe2o3_rustc_invocation::MAX_PATH_BYTES_V2;
 pub(crate) const PARENT_MAX_STORAGE: usize =
     2 * Invocation::NATIVE_MAX_RETAINED_STORAGE + size_of::<Parent>();
 // Existing V2 capture, V3 binding, descriptor clone, sealing and bounded
@@ -56,6 +61,7 @@ pub(crate) fn prepay_capture_once(
     b.charge_work(CAPTURE_WORK)?;
     check_capture_shape(command, argv0, cwd, environment)?;
     b.reserve_storage(PARENT_MAX_STORAGE)?;
+    b.reserve_storage(OUTPUT_OWNER_STORAGE)?;
     b.reserve_storage(CAPTURE_SCRATCH)?;
     b.reserve_storage(size_of::<InvocationAuthority>())?;
     Ok(())
@@ -187,16 +193,24 @@ impl Parent {
         &self,
         profile: &Profile,
         _authority: &InvocationAuthority,
+        output: &PinnedDirectory,
         b: &mut Budget<'_>,
     ) -> Result<Refusal> {
         let floor = self
             .native_retained_storage()?
             .checked_add(profile.retained_storage())
+            .and_then(|n| n.checked_add(OUTPUT_OWNER_STORAGE))
             .and_then(|n| n.checked_add(size_of::<InvocationAuthority>()))
             .ok_or(Resource::Arithmetic)?;
         b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
             self.revalidate_native(b)?;
             profile.revalidate(b)?;
+            validate_output(output)?;
+            if self.invocation.descriptor().artifact_output_directory() != "/proc/self/fd/197" {
+                return Err(Error::Rejected(
+                    "native invocation does not name output FD197",
+                ));
+            }
             let stdio = self
                 .stdio
                 .as_ref()
@@ -238,6 +252,7 @@ impl Parent {
                 nonce,
                 mask,
                 u64::try_from(length).map_err(|_| Error::Rejected("negative invocation length"))?,
+                output.identity_parts(),
                 b,
             )?;
             let endpoint = Endpoint::capture(profile.profile().supervisor_gid())?;
@@ -329,6 +344,7 @@ impl Parent {
                                 phase = Phase::Input(0);
                             }
                             Phase::Input(index) => {
+                                validate_output(output)?;
                                 let challenge = challenge.as_ref().unwrap();
                                 let role = challenge
                                     .roles()
@@ -341,6 +357,7 @@ impl Parent {
                                         .working_directory
                                         .native_source()
                                         .map_err(|_| Error::Rejected("original cwd changed"))?,
+                                    Role::OutputDirectory => output.file().as_fd(),
                                     Role::Stdin => streams[0].unwrap().source(),
                                     Role::Stdout => streams[1].unwrap().source(),
                                     Role::Stderr => streams[2].unwrap().source(),
@@ -384,6 +401,7 @@ impl Parent {
                                 endpoint.revalidate()?;
                                 profile.revalidate(b)?;
                                 self.revalidate_native(b)?;
+                                validate_output(output)?;
                                 return Ok(true);
                             }
                         }
@@ -401,6 +419,32 @@ impl Parent {
             Err(Error::Rejected("root intake attempt bound exhausted"))
         })
     }
+}
+
+// The already brokered PinnedDirectory stays borrowed through the exact ACK.
+// Compare its actual FD, never reopen display_path or a wrapper PID's fd table.
+fn validate_output(output: &PinnedDirectory) -> Result<()> {
+    if output.retained_storage().ok_or(Resource::Arithmetic)? > OUTPUT_OWNER_STORAGE {
+        return Err(Error::Rejected(
+            "native output owner exceeds prepaid capacity",
+        ));
+    }
+    let fd = output.file();
+    let stat = syscall("inspect original output directory", fs::fstat(fd))?;
+    let flags = syscall("inspect original output access", fs::fcntl_getfl(fd))?;
+    let descriptor = syscall(
+        "inspect original output descriptor",
+        rustix::io::fcntl_getfd(fd),
+    )?;
+    if fs::FileType::from_raw_mode(stat.st_mode) != fs::FileType::Directory
+        || (stat.st_dev, stat.st_ino) != output.identity_parts()
+        || flags & fs::OFlags::ACCMODE != fs::OFlags::RDONLY
+        || flags.contains(fs::OFlags::PATH)
+        || !descriptor.contains(rustix::io::FdFlags::CLOEXEC)
+    {
+        return Err(Error::Rejected("original output directory changed"));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

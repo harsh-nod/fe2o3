@@ -241,6 +241,9 @@
   "crates/fe2o3-compiler-execution-coordinator/src/compiler_child_channel_tests.rs": {
     "block": 3
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/compiler_output_directory_tests.rs": {
+    "block": 1
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs": {
     "block": 3
   },

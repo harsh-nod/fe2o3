@@ -61,6 +61,30 @@ fn preflight_prepays_actual_capacity_walk_on_the_original_budget() {
 }
 
 #[test]
+fn preparation_input_floor_includes_the_complete_consumed_output_owner() {
+    let descriptor = descriptor();
+    let input = RUNTIME_CHARGE + descriptor.retained_storage_bytes().unwrap();
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(
+        &mut work,
+        input + Output::STORAGE + CompilerInvocationBacking::FRAME_STORAGE,
+    );
+    b.reserve_storage(input).unwrap();
+    assert!(matches!(
+        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &descriptor, &mut b),
+        Err(CompilerInvocationBackingError::Resource(
+            Resource::Accounting
+        ))
+    ));
+    assert_eq!(b.storage(), input);
+    b.reserve_storage(Output::STORAGE).unwrap();
+    assert_eq!(
+        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &descriptor, &mut b).unwrap(),
+        input + Output::STORAGE
+    );
+}
+
+#[test]
 fn preflight_refuses_short_work_scratch_and_source_floor_without_refunding_history() {
     let descriptor = descriptor();
     let input = RUNTIME_CHARGE + descriptor.retained_storage_bytes().unwrap();

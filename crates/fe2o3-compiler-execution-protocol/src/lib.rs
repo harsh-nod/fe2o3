@@ -91,6 +91,13 @@ pub use root_intake_v3::{
     CompilerExecutionRootIntakeKindV3, CompilerExecutionRootIntakeRecordV3,
     CompilerExecutionRootIntakeRoleV3,
 };
+mod root_intake_v4;
+pub use root_intake_v4::{
+    COMPILER_EXECUTION_ROOT_INTAKE_BYTES_V4, COMPILER_EXECUTION_ROOT_INTAKE_OUTPUT_FD_V4,
+    COMPILER_EXECUTION_ROOT_INTAKE_STORAGE_V4, COMPILER_EXECUTION_ROOT_INTAKE_WORK_V4,
+    CompilerExecutionRootIntakeErrorV4, CompilerExecutionRootIntakeKindV4,
+    CompilerExecutionRootIntakeRecordV4, CompilerExecutionRootIntakeRoleV4,
+};
 mod service;
 mod service_native_adapter;
 mod service_ready;

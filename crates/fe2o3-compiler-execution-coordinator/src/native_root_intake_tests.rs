@@ -109,6 +109,7 @@ fn begin(
     p: &Policy,
     cap: &Invocation,
     mask: u8,
+    output: (u64, u64),
     client_budget: &mut Budget<'_>,
     root_budget: &mut Budget<'_>,
 ) -> Record {
@@ -123,6 +124,7 @@ fn begin(
             [9; 32],
             mask,
             file.metadata().unwrap().len(),
+            output,
             client_budget,
         )
         .unwrap(),
@@ -169,6 +171,9 @@ fn original_account_retains_every_right_before_only_terminal_refusal_ack() {
         let cap = invocation();
         let source = cap.try_clone_for_transfer().unwrap();
         let cwd = File::open("/").unwrap();
+        let output_dir = tempfile::tempdir().unwrap();
+        let output = File::open(output_dir.path()).unwrap();
+        let output_metadata = output.metadata().unwrap();
         let stdio = tempfile::tempfile().unwrap();
         let metadata = stdio.metadata().unwrap();
         let (client, mut receiver) = pair();
@@ -176,13 +181,23 @@ fn original_account_retains_every_right_before_only_terminal_refusal_ack() {
         let mut b = Budget::new(&mut work, LIMIT);
         b.reserve_storage(Receiver::STORAGE).unwrap();
         let ledger = b.work_ledger_identity_v1();
-        let challenge = begin(&client, &mut receiver, &p, &cap, mask, &mut cb, &mut b);
+        let challenge = begin(
+            &client,
+            &mut receiver,
+            &p,
+            &cap,
+            mask,
+            (output_metadata.dev(), output_metadata.ino()),
+            &mut cb,
+            &mut b,
+        );
         let mut last = None;
         for role in challenge.roles() {
             let input = retained_record(Record::input(&challenge, role, &mut cb).unwrap(), &mut cb);
             let file = match role {
                 Role::Invocation => &source,
                 Role::WorkingDirectory => &cwd,
+                Role::OutputDirectory => &output,
                 _ => &stdio,
             };
             assert!(
@@ -206,9 +221,11 @@ fn original_account_retains_every_right_before_only_terminal_refusal_ack() {
         assert_eq!(receiver.phase, Phase::Ack);
         assert_eq!(
             receiver.files.iter().flatten().count(),
-            2 + mask.count_ones() as usize
+            3 + mask.count_ones() as usize
         );
         assert!(receiver.invocation.is_some());
+        assert!(receiver.output.is_some());
+        assert_eq!(refs(&output_metadata), 3);
         assert_eq!(refs(&metadata), 1 + mask.count_ones() as usize);
         assert!(step(&mut receiver, &p, &mut b).unwrap());
         let bytes = io::receive_authenticated_packet::<N>(client.as_fd(), sender())
@@ -226,6 +243,7 @@ fn original_account_retains_every_right_before_only_terminal_refusal_ack() {
         assert_eq!(refs(&metadata), 1 + mask.count_ones() as usize);
         assert!(b.work_ledger_identity_v1() == ledger);
         drop(receiver);
+        assert_eq!(refs(&output_metadata), 1);
         assert_eq!(refs(&metadata), 1);
         // Only actual final Drop permits retiring the single complete reservation.
         b.release_storage(Receiver::STORAGE).unwrap();
@@ -245,7 +263,7 @@ fn receive_then_constructor_denial_keeps_original_right_until_outer_drop() {
     let mut work = Work::new(usize::MAX);
     let mut b = Budget::new(&mut work, LIMIT);
     b.reserve_storage(Receiver::STORAGE).unwrap();
-    let challenge = begin(&client, &mut receiver, &p, &cap, 0, &mut cb, &mut b);
+    let challenge = begin(&client, &mut receiver, &p, &cap, 0, (0, 0), &mut cb, &mut b);
     let input = retained_record(
         Record::input(&challenge, Role::Invocation, &mut cb).unwrap(),
         &mut cb,
@@ -258,7 +276,7 @@ fn receive_then_constructor_denial_keeps_original_right_until_outer_drop() {
     let before = refs(&metadata);
     // Consume the original remaining work, leaving enough for receive, decode,
     // exact join and duplicate, but not native capability admission. No reset.
-    let allowance = 2 * LOCAL_WORK + io::packet_receive_work(N) + 2 * RECORD_WORK + 16;
+    let allowance = 2 * LOCAL_WORK + EXCHANGE_WORK + 2 * RECORD_WORK + 16;
     let burn = usize::MAX - b.work() - allowance;
     b.charge_work(burn).unwrap();
     assert!(matches!(
@@ -295,7 +313,7 @@ fn malformed_input_retains_received_fd_and_unwind_closes_it_without_refunding_ac
     let mut work = Work::new(usize::MAX);
     let mut b = Budget::new(&mut work, LIMIT);
     b.reserve_storage(Receiver::STORAGE).unwrap();
-    let challenge = begin(&client, &mut receiver, &p, &cap, 0, &mut cb, &mut b);
+    let challenge = begin(&client, &mut receiver, &p, &cap, 0, (0, 0), &mut cb, &mut b);
     let wrong = retained_record(
         Record::input(&challenge, Role::WorkingDirectory, &mut cb).unwrap(),
         &mut cb,
@@ -334,7 +352,7 @@ fn receive_scope_refuses_one_short_before_dequeue_and_preserves_first_denial() {
         let mut work = Work::new(if storage_short {
             usize::MAX
         } else {
-            LOCAL_WORK + io::packet_receive_work(N) - 1
+            LOCAL_WORK + EXCHANGE_WORK - 1
         });
         let mut b = Budget::new(
             &mut work,
@@ -360,4 +378,208 @@ fn receive_scope_refuses_one_short_before_dequeue_and_preserves_first_denial() {
             assert!(b.failed_storage().is_some());
         }
     }
+}
+
+fn send_input(client: &OwnedFd, challenge: &Record, role: Role, file: &File, b: &mut Budget<'_>) {
+    let record = retained_record(Record::input(challenge, role, b).unwrap(), b);
+    assert!(
+        io::send_packet_with_descriptor(client.as_fd(), record.canonical_bytes(), file.as_fd())
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn mandatory_output_refuses_wrong_role_object_missing_right_and_omission_without_ack() {
+    for case in 0..5 {
+        let mut client_work = Work::new(usize::MAX);
+        let mut cb = Budget::new(&mut client_work, LIMIT);
+        let p = policy(&mut cb);
+        let cap = invocation();
+        let source = cap.try_clone_for_transfer().unwrap();
+        let cwd = File::open("/").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let output = File::open(directory.path()).unwrap();
+        let wrong = tempfile::tempfile().unwrap();
+        let metadata = output.metadata().unwrap();
+        let (client, mut receiver) = pair();
+        let mut work = Work::new(usize::MAX);
+        let mut b = Budget::new(&mut work, LIMIT);
+        b.reserve_storage(Receiver::STORAGE).unwrap();
+        let challenge = begin(
+            &client,
+            &mut receiver,
+            &p,
+            &cap,
+            0,
+            (metadata.dev(), metadata.ino()),
+            &mut cb,
+            &mut b,
+        );
+        for (role, file) in [(Role::Invocation, &source), (Role::WorkingDirectory, &cwd)] {
+            send_input(&client, &challenge, role, file, &mut cb);
+            assert!(!step(&mut receiver, &p, &mut b).unwrap());
+        }
+        assert_eq!(receiver.phase, Phase::Input(2));
+        match case {
+            0 => send_input(&client, &challenge, Role::OutputDirectory, &wrong, &mut cb),
+            1 => send_input(&client, &challenge, Role::OutputDirectory, &cwd, &mut cb),
+            2 => send_input(
+                &client,
+                &challenge,
+                Role::WorkingDirectory,
+                &output,
+                &mut cb,
+            ),
+            3 => {
+                let input = retained_record(
+                    Record::input(&challenge, Role::OutputDirectory, &mut cb).unwrap(),
+                    &mut cb,
+                );
+                assert!(
+                    io::send_packet(client.as_fd(), input.canonical_bytes())
+                        .unwrap()
+                        .is_some()
+                );
+            }
+            _ => {
+                assert!(!step(&mut receiver, &p, &mut b).unwrap());
+                assert_eq!(receiver.phase, Phase::Input(2));
+                assert!(receiver.output.is_none());
+                assert!(
+                    io::receive_authenticated_packet::<N>(client.as_fd(), sender())
+                        .unwrap()
+                        .is_none()
+                );
+                drop(client);
+            }
+        }
+        assert!(step(&mut receiver, &p, &mut b).is_err());
+        assert_eq!(receiver.phase, Phase::Failed);
+        assert!(receiver.output.is_none());
+        assert_eq!(
+            receiver.files.iter().flatten().count(),
+            if case < 3 { 3 } else { 2 }
+        );
+        assert_eq!(b.storage(), Receiver::STORAGE);
+        if case == 2 {
+            assert_eq!(refs(&metadata), 2);
+        }
+        drop(receiver);
+        assert_eq!(refs(&metadata), 1);
+    }
+}
+
+#[test]
+fn output_constructor_and_outer_failures_keep_received_custody_without_refund() {
+    for outer_failure in [false, true] {
+        let mut client_work = Work::new(usize::MAX);
+        let mut cb = Budget::new(&mut client_work, LIMIT);
+        let p = policy(&mut cb);
+        let cap = invocation();
+        let source = cap.try_clone_for_transfer().unwrap();
+        let cwd = File::open("/").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let output = File::open(directory.path()).unwrap();
+        let metadata = output.metadata().unwrap();
+        let (client, mut receiver) = pair();
+        let mut work = Work::new(usize::MAX);
+        let mut b = Budget::new(&mut work, LIMIT);
+        b.reserve_storage(Receiver::STORAGE).unwrap();
+        let challenge = begin(
+            &client,
+            &mut receiver,
+            &p,
+            &cap,
+            0,
+            (metadata.dev(), metadata.ino()),
+            &mut cb,
+            &mut b,
+        );
+        for (role, file) in [(Role::Invocation, &source), (Role::WorkingDirectory, &cwd)] {
+            send_input(&client, &challenge, role, file, &mut cb);
+            step(&mut receiver, &p, &mut b).unwrap();
+        }
+        send_input(&client, &challenge, Role::OutputDirectory, &output, &mut cb);
+        if outer_failure {
+            let result: Result<()> = b.with_prepaid_scope(Receiver::STORAGE, 0, 0, 0, |b| {
+                step(&mut receiver, &p, b)?;
+                b.reserve_storage(LIMIT)?;
+                Ok(())
+            });
+            assert!(matches!(result, Err(Error::Resource(Resource::Storage(_)))));
+            assert!(receiver.output.is_some());
+            assert_eq!(refs(&metadata), 3);
+        } else {
+            let allowance = LOCAL_WORK + EXCHANGE_WORK + 2 * RECORD_WORK + Output::WORK - 1;
+            b.charge_work(usize::MAX - b.work() - allowance).unwrap();
+            assert!(matches!(
+                step(&mut receiver, &p, &mut b),
+                Err(Error::Resource(Resource::Work(_)))
+            ));
+            assert!(receiver.output.is_none());
+            assert_eq!(refs(&metadata), 2);
+        }
+        assert!(receiver.files[2].is_some());
+        assert_eq!(b.storage(), Receiver::STORAGE);
+        let denial = (b.failed_work(), b.failed_storage());
+        assert!(
+            std::panic::catch_unwind(AssertUnwindSafe(move || {
+                let _receiver = receiver;
+                panic!("output intake outer unwind");
+            }))
+            .is_err()
+        );
+        assert_eq!(refs(&metadata), 1);
+        assert_eq!(b.storage(), Receiver::STORAGE);
+        assert_eq!((b.failed_work(), b.failed_storage()), denial);
+    }
+}
+
+#[test]
+fn duplicate_output_queued_before_ack_is_rejected_without_dropping_installed_owners() {
+    let mut client_work = Work::new(usize::MAX);
+    let mut cb = Budget::new(&mut client_work, LIMIT);
+    let p = policy(&mut cb);
+    let cap = invocation();
+    let source = cap.try_clone_for_transfer().unwrap();
+    let cwd = File::open("/").unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let output = File::open(directory.path()).unwrap();
+    let metadata = output.metadata().unwrap();
+    let (client, mut receiver) = pair();
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(Receiver::STORAGE).unwrap();
+    let challenge = begin(
+        &client,
+        &mut receiver,
+        &p,
+        &cap,
+        0,
+        (metadata.dev(), metadata.ino()),
+        &mut cb,
+        &mut b,
+    );
+    for (role, file) in [
+        (Role::Invocation, &source),
+        (Role::WorkingDirectory, &cwd),
+        (Role::OutputDirectory, &output),
+    ] {
+        send_input(&client, &challenge, role, file, &mut cb);
+        step(&mut receiver, &p, &mut b).unwrap();
+    }
+    assert_eq!(receiver.phase, Phase::Ack);
+    send_input(&client, &challenge, Role::OutputDirectory, &output, &mut cb);
+    assert!(step(&mut receiver, &p, &mut b).is_err());
+    assert_eq!(receiver.phase, Phase::Failed);
+    assert!(receiver.output.is_some());
+    assert_eq!(refs(&metadata), 3);
+    assert!(
+        io::receive_authenticated_packet::<N>(client.as_fd(), sender())
+            .unwrap()
+            .is_none()
+    );
+    drop(receiver);
+    assert_eq!(refs(&metadata), 1);
 }

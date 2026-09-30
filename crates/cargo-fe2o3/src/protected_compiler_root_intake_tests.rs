@@ -11,7 +11,10 @@ use std::{
 #[test]
 fn native_capture_prepaid_exact_and_one_short_never_reset_the_original_account() {
     let command = Command::new("/toolchain/rustc");
-    let retained = PARENT_MAX_STORAGE + CAPTURE_SCRATCH + size_of::<InvocationAuthority>();
+    let retained = PARENT_MAX_STORAGE
+        + OUTPUT_OWNER_STORAGE
+        + CAPTURE_SCRATCH
+        + size_of::<InvocationAuthority>();
     for (work, storage, succeeds) in [
         (CAPTURE_WORK, retained, true),
         (CAPTURE_WORK - 1, retained, false),
@@ -134,4 +137,26 @@ fn fixed_directory_shape_rejects_nonroot_writable_and_noncanonical_runtime_modes
     ] {
         assert!(changed.directory(true).is_err());
     }
+}
+
+#[test]
+fn original_output_owner_is_borrowed_checked_and_capacity_bounded_without_reopening() {
+    let file = File::open("/").unwrap();
+    let pinned = PinnedDirectory::from_transferred_file(file, "inert test output").unwrap();
+    assert!(validate_output(&pinned).is_ok());
+    // The transferred owner's display path is deliberately not an openable path.
+    assert!(!pinned.display_path().exists());
+    assert!(pinned.retained_storage().unwrap() <= OUTPUT_OWNER_STORAGE);
+    rustix::io::fcntl_setfd(pinned.file(), rustix::io::FdFlags::empty()).unwrap();
+    assert!(matches!(validate_output(&pinned), Err(Error::Rejected(_))));
+    rustix::io::fcntl_setfd(pinned.file(), rustix::io::FdFlags::CLOEXEC).unwrap();
+    assert!(validate_output(&pinned).is_ok());
+    let mut oversized = std::path::PathBuf::with_capacity(OUTPUT_OWNER_STORAGE + 1);
+    oversized.push("/");
+    let oversized = PinnedDirectory::open_existing(oversized, "oversized inert owner").unwrap();
+    assert!(oversized.retained_storage().unwrap() > OUTPUT_OWNER_STORAGE);
+    assert!(matches!(
+        validate_output(&oversized),
+        Err(Error::Rejected(_))
+    ));
 }

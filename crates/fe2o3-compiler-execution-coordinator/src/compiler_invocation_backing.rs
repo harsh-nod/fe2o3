@@ -9,6 +9,7 @@
 use crate::compiler_invocation_staging::{
     RustcInvocationStagingErrorV1 as StagingError, StagedRustcInvocationV1 as Invocation,
 };
+use crate::compiler_output_directory::{CompilerOutputDirectory as Output, Error as OutputError};
 use fe2o3_build_authority::COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1 as MAX_RUNTIME_ENTRIES;
 use fe2o3_compiler_closure_capability::{
     RetainedCompilerRuntimeErrorV1 as RuntimeError,
@@ -18,6 +19,10 @@ use fe2o3_compiler_closure_capability::{
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
+use fe2o3_protected_service_spawn::{
+    ProtectedServiceDescriptorBindingV1 as Binding,
+    native_spawn::StagedProtectedServiceExecV2 as Stage,
 };
 use fe2o3_rustc_invocation::{
     MAX_COMPILE_ENVIRONMENT_ENTRIES_V2, MAX_RUSTC_ARGUMENTS_V2,
@@ -35,6 +40,7 @@ pub(crate) enum CompilerInvocationBackingError {
     Resource(Resource),
     Runtime(RuntimeError),
     Staging(StagingError),
+    Output(OutputError),
     InvalidCount,
 }
 
@@ -55,6 +61,11 @@ impl From<StagingError> for CompilerInvocationBackingError {
         Self::Staging(error)
     }
 }
+impl From<OutputError> for CompilerInvocationBackingError {
+    fn from(error: OutputError) -> Self {
+        Self::Output(error)
+    }
+}
 
 impl fmt::Display for CompilerInvocationBackingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -62,6 +73,7 @@ impl fmt::Display for CompilerInvocationBackingError {
             Self::Resource(error) => error.fmt(f),
             Self::Runtime(error) => error.fmt(f),
             Self::Staging(error) => error.fmt(f),
+            Self::Output(error) => error.fmt(f),
             Self::InvalidCount => f.write_str("compiler invocation exceeds count bound"),
         }
     }
@@ -73,6 +85,7 @@ impl std::error::Error for CompilerInvocationBackingError {
             Self::Resource(error) => Some(error),
             Self::Runtime(error) => Some(error),
             Self::Staging(error) => Some(error),
+            Self::Output(error) => Some(error),
             Self::InvalidCount => None,
         }
     }
@@ -104,6 +117,7 @@ impl CompilerInvocationBackingCharge {
 pub(crate) struct CompilerInvocationBacking {
     runtime: Runtime,
     descriptor: Descriptor,
+    output: Output,
     invocation: Invocation,
     rustc: File,
     interpreter: File,
@@ -120,6 +134,7 @@ impl CompilerInvocationBacking {
     const ENVELOPE: usize = size_of::<(Self, CompilerInvocationBackingCharge)>()
         - size_of::<Runtime>()
         - size_of::<Descriptor>()
+        - size_of::<Output>()
         - size_of::<Invocation>()
         - 4 * size_of::<File>()
         - 4 * size_of::<TransferCharge>();
@@ -134,23 +149,33 @@ impl CompilerInvocationBacking {
             + 4096;
 
     /// Consumes the original runtime and exact descriptor from prepared capture.
-    /// Both FULL source reservations must remain prepaid on the runtime's original
-    /// Budget. Preserve those reservations and reserve returned GROWTH before
+    /// All three FULL source reservations, including the received output owner,
+    /// must remain prepaid on the runtime's original Budget. Preserve those
+    /// reservations and reserve returned GROWTH before
     /// retaining the result. On failure the consumed inputs drop, but caller-owned
     /// reservations remain unchanged and must be retired by the caller. Work and
     /// denial history are never refunded. No descriptor clone/encode is performed.
     pub(crate) fn prepare(
         runtime: Runtime,
         descriptor: Descriptor,
+        output: Output,
         b: &mut Budget<'_>,
     ) -> Result<(Self, CompilerInvocationBackingCharge)> {
         // Fund bounded local retirement before fallible source measurement.
         b.charge_work(Self::LOCAL_WORK)?;
-        let input = measure_inputs(runtime.required_retained_storage(), &descriptor, b)?;
+        let input = measure_inputs(
+            runtime
+                .required_retained_storage()
+                .checked_add(Output::STORAGE)
+                .ok_or(Resource::Arithmetic)?,
+            &descriptor,
+            b,
+        )?;
         b.with_prepaid_scope(input, 0, 0, Self::FRAME_STORAGE, |b| {
             // This checks the complete closure and the runtime's own account,
             // approval and fixed origins before any new backing is retained.
             runtime.require_compiler(*descriptor.compiler_closure(), b)?;
+            output.revalidate(descriptor.artifact_output_directory(), b)?;
             let (invocation, invocation_charge) = Invocation::stage(&descriptor, b)?;
             b.reserve_storage(invocation_charge.additional_storage())?;
             let (rustc, rustc_charge) = runtime.try_clone_rustc_for_exec(b)?;
@@ -176,6 +201,7 @@ impl CompilerInvocationBacking {
             let owner = Self {
                 runtime,
                 descriptor,
+                output,
                 invocation,
                 rustc,
                 interpreter,
@@ -237,7 +263,14 @@ impl CompilerInvocationBacking {
         self.retained
     }
 
-    /// Full additional backing for a stage that duplicates all four sources.
+    /// Exact received output at 197. This binding is not a namespace or runtime
+    /// guard. The caller retains this whole owner through staging and cleanup.
+    pub(crate) fn output_binding(&self, b: &mut Budget<'_>) -> Result<Binding<'_>> {
+        self.revalidate(b)?;
+        Ok(self.output.binding(b)?)
+    }
+
+    /// Full additional backing for all four image sources and the output FD.
     /// Reserve it while those duplicates coexist with this complete owner. Native
     /// stage structures, other bindings and pointer tables require separate charge.
     pub(crate) fn staged_sources_storage(&self) -> Result<usize> {
@@ -246,7 +279,9 @@ impl CompilerInvocationBacking {
             self.interpreter_charge.full_storage(),
             self.codegen_backend_charge.full_storage(),
             self.fe2o3_proc_macro_charge.full_storage(),
-        )
+        )?
+        .checked_add(crate::native_launch::FILE_STORAGE)
+        .ok_or_else(|| Resource::Arithmetic.into())
     }
 
     /// Recheck the full closure, original account, inventory and retained transfers.
@@ -265,18 +300,24 @@ impl CompilerInvocationBacking {
     /// this complete owner remains reserved. The existing runtime validators
     /// reject wrong roles, different inodes and changed origins even if bytes or
     /// pathname claims match. This never imports these Files as approved sources
-    /// or proves their child FD/input bindings, loading or ELF resolution.
+    /// or proves the image FD/input bindings, loading or ELF resolution. Output
+    /// validation additionally reads the exact 197 entry from the actual Stage.
     pub(crate) fn validate_staged_sources(
         &self,
+        stage: &Stage,
         rustc: &File,
         interpreter: &File,
         codegen_backend: &File,
         fe2o3_proc_macro: &File,
         b: &mut Budget<'_>,
     ) -> Result<()> {
-        let floor = staged_floor(self.retained, self.staged_sources_storage()?)?;
+        // The image inputs are the actual Stage's borrowed files. Preserve the
+        // original full-source floor even if an unsafe staging caller underquoted.
+        let stage_floor = stage.retained_storage().max(self.staged_sources_storage()?);
+        let floor = staged_floor(self.retained, stage_floor)?;
         b.with_prepaid_scope(floor, ENTRY, Self::LOCAL_WORK, Self::FRAME_STORAGE, |b| {
             self.check(b)?;
+            self.output.validate_staged(stage, b)?;
             self.runtime.validate_rustc_exec_transfer(rustc, b)?;
             self.runtime
                 .validate_elf_interpreter_exec_transfer(interpreter, b)?;
@@ -289,6 +330,8 @@ impl CompilerInvocationBacking {
     }
 
     fn check(&self, b: &mut Budget<'_>) -> Result<()> {
+        self.output
+            .revalidate(self.descriptor.artifact_output_directory(), b)?;
         // These existing entrypoints enforce ledger identity AND Budget address.
         // A fresh budget cannot recreate the runtime's account association.
         self.runtime
