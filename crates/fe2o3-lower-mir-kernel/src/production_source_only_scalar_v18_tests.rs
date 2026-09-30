@@ -331,6 +331,7 @@ fn optimized_scalar_inner_attempt_header_exact_and_short_keep_first_refusal() {
                         Vec<OptimizedSourceScalarReadV18>,
                         Vec<SourceWrappingValueV23>,
                         OptimizedSourceScalarBoundariesV31,
+                        Vec<OptimizedIssuedPresenceV31>,
                         &fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>,
                         usize,
                     ),
@@ -342,6 +343,7 @@ fn optimized_scalar_inner_attempt_header_exact_and_short_keep_first_refusal() {
                     + size_of::<Vec<SourceWrappingValueV23>>()
                     + size_of::<SourceWrappingValueV23>()
                     + optimized_source_boundary_headers_v31()?
+                    + slice_view_v1::optimized_presence_headers_v31()?
                     + size_of::<std::thread::Result<SourceOwnedResultV18<()>>>()
                     + source_reference_cleanup_headers_v29()?;
                 OPTIMIZED_SCALAR_ATTEMPT_PROBE_V18.set(Some((
