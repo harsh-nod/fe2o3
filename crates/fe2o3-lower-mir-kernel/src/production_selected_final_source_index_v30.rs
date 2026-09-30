@@ -59,6 +59,7 @@ pub(super) struct ProjectionIndexV30<'a> {
     pub(super) accesses: Vec<AccessIndexV30>,
     definitions: Vec<DefinitionProjectionV30>,
     edges: Vec<EdgeProjectionV30>,
+    source_edges: Vec<usize>,
     guards: Vec<GuardProjectionV30>,
     leaves: Vec<usize>,
     guard_rows: Vec<usize>,
@@ -151,6 +152,7 @@ impl<'a> ProjectionIndexV30<'a> {
             accesses: resources::vector(counts[5], budget)?,
             definitions: resources::vector(counts[0], budget)?,
             edges: resources::vector(counts[1], budget)?,
+            source_edges: resources::vector(counts[1], budget)?,
             guards: resources::vector(counts[2], budget)?,
             leaves: resources::vector(counts[3], budget)?,
             guard_rows: resources::vector(counts[6], budget)?,
@@ -296,6 +298,21 @@ impl<'a> ProjectionIndexV30<'a> {
         index
             .edges
             .sort_unstable_by_key(|row| (row.access, row.output, row.source));
+        budget.charge_work(index.edges.len())?;
+        index.source_edges.extend(0..index.edges.len());
+        sorted_work(&index.source_edges, 3, budget)?;
+        index.source_edges.sort_unstable_by_key(|&at| {
+            let row = index.edges[at];
+            (row.access, row.source)
+        });
+        budget.charge_work(index.source_edges.len())?;
+        if index.source_edges.windows(2).any(|pair| {
+            let left = index.edges[pair[0]];
+            let right = index.edges[pair[1]];
+            (left.access, left.source) == (right.access, right.source)
+        }) {
+            return resources::binding("selected final repeated source edge projection");
+        }
         sorted_work(&index.guards, 6, budget)?;
         index
             .guards
@@ -322,6 +339,39 @@ impl<'a> ProjectionIndexV30<'a> {
             return resources::binding("selected final repeated exact projection row");
         }
         Ok(index)
+    }
+
+    pub(super) fn transport_rows(&self) -> &[SelectedTransportRowV30] {
+        self.rows
+    }
+
+    pub(super) fn source_edge_projection(
+        &self,
+        access: usize,
+        source: SourceEdgeV30,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<&EdgeProjectionV30>> {
+        if self.source_edges.len() != self.edges.len() {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        charge_execution_cfg_lookup_v29(self.source_edges.len(), budget)
+            .map_err(source_emission_error_v18)?;
+        let found = self
+            .source_edges
+            .binary_search_by_key(&(access, source), |&at| {
+                self.edges
+                    .get(at)
+                    .map(|row| (row.access, row.source))
+                    .unwrap_or((usize::MAX, SourceEdgeV30::Invocation(usize::MAX)))
+            });
+        match found {
+            Ok(at) => self
+                .edges
+                .get(self.source_edges[at])
+                .map(Some)
+                .ok_or(ArgumentResourceV1::Accounting.into()),
+            Err(_) => Ok(None),
+        }
     }
 
     pub(super) fn matches(
@@ -536,10 +586,14 @@ impl<'a> ProjectionIndexV30<'a> {
             h::<Vec<EdgeProjectionV30>>()?,
             h::<GuardProjectionV30>()?,
             h::<Vec<GuardProjectionV30>>()?,
-            argument_product_v1(3, h::<Vec<usize>>()?)?,
+            argument_product_v1(4, h::<Vec<usize>>()?)?,
             h::<Vec<(usize, usize, usize)>>()?,
             h::<[usize; 7]>()?,
             h::<&[EdgeProjectionV30]>()?,
+            h::<Option<&EdgeProjectionV30>>()?,
+            h::<SourceEdgeV30>()?,
+            h::<(usize, SourceEdgeV30)>()?,
+            h::<Result<usize, usize>>()?,
             h::<&[GuardProjectionV30]>()?,
             h::<&[(usize, usize, usize)]>()?,
             h::<(usize, usize)>()?,
@@ -585,6 +639,7 @@ mod tests {
                 accesses: Vec::new(),
                 definitions: Vec::new(),
                 edges: Vec::new(),
+                source_edges: Vec::new(),
                 guards,
                 leaves: Vec::new(),
                 guard_rows: Vec::new(),
@@ -655,6 +710,7 @@ mod tests {
                 accesses: Vec::new(),
                 definitions,
                 edges: Vec::new(),
+                source_edges: Vec::new(),
                 guards: Vec::new(),
                 leaves: Vec::new(),
                 guard_rows: Vec::new(),
@@ -691,6 +747,7 @@ mod tests {
             Vec<AccessIndexV30>,
             Vec<DefinitionProjectionV30>,
             Vec<EdgeProjectionV30>,
+            Vec<usize>,
             Vec<GuardProjectionV30>,
             Vec<usize>,
             Vec<usize>,
@@ -711,10 +768,14 @@ mod tests {
             + h::<Vec<EdgeProjectionV30>>()
             + h::<GuardProjectionV30>()
             + h::<Vec<GuardProjectionV30>>()
-            + 3 * h::<Vec<usize>>()
+            + 4 * h::<Vec<usize>>()
             + h::<Vec<(usize, usize, usize)>>()
             + h::<[usize; 7]>()
             + h::<&[EdgeProjectionV30]>()
+            + h::<Option<&EdgeProjectionV30>>()
+            + h::<SourceEdgeV30>()
+            + h::<(usize, SourceEdgeV30)>()
+            + h::<Result<usize, usize>>()
             + h::<&[GuardProjectionV30]>()
             + h::<&[(usize, usize, usize)]>()
             + h::<(usize, usize)>()

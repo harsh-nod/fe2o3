@@ -2,7 +2,7 @@
 use super::*;
 use index::ProjectionIndexV30;
 
-fn push<T>(
+pub(super) fn push<T>(
     rows: &mut Vec<T>,
     value: T,
     budget: &mut ArgumentBudgetV1<'_>,
@@ -33,6 +33,16 @@ struct WalkV30 {
 }
 
 impl WalkV30 {
+    fn contains(&self, at: usize, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<bool> {
+        budget.charge_work(1)?;
+        Ok(self
+            .marks
+            .get(at)
+            .copied()
+            .ok_or(ArgumentResourceV1::Accounting)?
+            == self.generation)
+    }
+
     fn new(count: usize, budget: &mut ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<Self> {
         let mut marks = resources::vector(count, budget)?;
         budget.charge_work(count)?;
@@ -67,6 +77,7 @@ impl WalkV30 {
         nodes: &[ActualNode],
         incoming: &[ActualIncoming],
         index: &ProjectionIndexV30<'_>,
+        forwarding: &forwarding::ForwardingV30,
         output: &mut Vec<SelectedFinalEdgeJoinV30>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<()> {
@@ -97,9 +108,25 @@ impl WalkV30 {
                         let projections =
                             index.edge_projections(access, edge.occurrence, budget)?;
                         if projections.is_empty() {
-                            return resources::binding(
-                                "selected final actual edge has no exact source occurrence",
-                            );
+                            let anchor = forwarding
+                                .edge(
+                                    argument_sum_v1(&[first, relative])?,
+                                    at,
+                                    nodes,
+                                    incoming,
+                                    budget,
+                                )?
+                                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                                    "selected final actual edge has no exact source occurrence",
+                                ))?;
+                            push(
+                                output,
+                                SelectedFinalEdgeJoinV30 {
+                                    actual: argument_sum_v1(&[first, relative])?,
+                                    original: SelectedFinalEdgeOriginV30::Forwarding { anchor },
+                                },
+                                budget,
+                            )?;
                         }
                         for projection in projections {
                             budget.charge_work(4)?;
@@ -115,7 +142,7 @@ impl WalkV30 {
                                 output,
                                 SelectedFinalEdgeJoinV30 {
                                     actual: argument_sum_v1(&[first, relative])?,
-                                    original: projection.source,
+                                    original: SelectedFinalEdgeOriginV30::Source(projection.source),
                                 },
                                 budget,
                             )?;
@@ -223,11 +250,16 @@ fn leaf_matches(
 }
 
 fn injection_matches(
+    optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
     access: usize,
     obligation: PendingSourceSelectedObligationV30,
     choice: &ActualChoice,
     incoming: &[ActualIncoming],
+    nodes: &[ActualNode],
     index: &ProjectionIndexV30<'_>,
+    walk: &WalkV30,
+    forwarding: &mut forwarding::ForwardingV30,
+    paths: &mut Vec<SelectedFinalForwardingStepV30>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<bool> {
     match choice.injection {
@@ -239,15 +271,63 @@ fn injection_matches(
             let edge = incoming.get(at).ok_or(ArgumentResourceV1::Accounting)?;
             let projections = index.edge_projections(access, edge.occurrence, budget)?;
             let source = match obligation.usage {
-                PendingSourceSelectedUseV30::Access => return Ok(false),
-                PendingSourceSelectedUseV30::Incoming(at) => SourceEdgeV30::Incoming(at),
-                PendingSourceSelectedUseV30::Invocation(at) => SourceEdgeV30::Invocation(at),
+                PendingSourceSelectedUseV30::Access => None,
+                PendingSourceSelectedUseV30::Incoming(at) => Some(SourceEdgeV30::Incoming(at)),
+                PendingSourceSelectedUseV30::Invocation(at) => Some(SourceEdgeV30::Invocation(at)),
             };
-            charge_execution_cfg_lookup_v29(projections.len(), budget)
-                .map_err(source_emission_error_v18)?;
-            Ok(projections
-                .binary_search_by_key(&source, |row| row.source)
-                .is_ok())
+            if !projections.is_empty() {
+                let Some(source) = source else {
+                    return Ok(false);
+                };
+                charge_execution_cfg_lookup_v29(projections.len(), budget)
+                    .map_err(source_emission_error_v18)?;
+                return Ok(projections
+                    .binary_search_by_key(&source, |row| row.source)
+                    .is_ok());
+            }
+            if forwarding.edge(at, edge.parameter, nodes, incoming, budget)? != Some(choice.leaf) {
+                return Ok(false);
+            }
+            let destination = match source {
+                Some(source) => {
+                    let Some(projection) = index.source_edge_projection(access, source, budget)?
+                    else {
+                        return Ok(false);
+                    };
+                    let Some(target) = projection.relation.output_target else {
+                        return Ok(false);
+                    };
+                    let target = forwarding::definition_node(optimized, nodes, target, budget)?;
+                    if !projection.relation.control.executable || !walk.contains(target, budget)? {
+                        return Ok(false);
+                    }
+                    projection.relation.output_incoming
+                }
+                None => {
+                    index
+                        .accesses
+                        .get(access)
+                        .ok_or(ArgumentResourceV1::Accounting)?
+                        .pointer
+                }
+            };
+            let Some(destination) = destination else {
+                return Ok(false);
+            };
+            let destination = forwarding::definition_node(optimized, nodes, destination, budget)?;
+            if !walk.contains(destination, budget)? {
+                return Ok(false);
+            }
+            forwarding.path(
+                edge.parameter,
+                destination,
+                choice.leaf,
+                SelectedFinalForwardingStepV30::Incoming { actual: at },
+                nodes,
+                incoming,
+                paths,
+                budget,
+            )
         }
     }
 }
@@ -259,6 +339,8 @@ fn choices(
     actual: &[ActualChoice],
     nodes: &[ActualNode],
     incoming: &[ActualIncoming],
+    walk: &WalkV30,
+    forwarding: &mut forwarding::ForwardingV30,
     output: &mut SelectedFinalRowsV30,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
@@ -305,10 +387,36 @@ fn choices(
                 continue;
             }
             let first = output.obligations.len();
+            let first_path = output.forwarding.len();
             for &(_, _, ordinal) in index.leaf_obligations(access, leaf, budget)? {
                 let (obligation, _) = index.obligation(access, ordinal, budget)?;
-                if injection_matches(access, obligation, choice, incoming, index, budget)? {
-                    push(&mut output.obligations, ordinal, budget)?;
+                let path = output.forwarding.len();
+                if injection_matches(
+                    optimized,
+                    access,
+                    obligation,
+                    choice,
+                    incoming,
+                    nodes,
+                    index,
+                    walk,
+                    forwarding,
+                    &mut output.forwarding,
+                    budget,
+                )? {
+                    let count = output
+                        .forwarding
+                        .len()
+                        .checked_sub(path)
+                        .ok_or(ArgumentResourceV1::Accounting)?;
+                    push(
+                        &mut output.obligations,
+                        SelectedFinalObligationJoinV30 {
+                            original: ordinal,
+                            forwarding: RangeLocatorV30 { first: path, count },
+                        },
+                        budget,
+                    )?;
                 }
             }
             let count = output
@@ -372,6 +480,8 @@ fn choices(
                 // orphan obligations in the canonical retained join.
                 budget.charge_work(count)?;
                 output.obligations.truncate(first);
+                budget.charge_work(output.forwarding.len() - first_path)?;
+                output.forwarding.truncate(first_path);
             }
         }
         if output.choices.len() == first_choice {
@@ -394,11 +504,14 @@ pub(super) fn build(
     let nodes = formal(optimized.original, domains.pointer_nodes(function, budget))?;
     let incoming = formal(optimized.original, domains.incoming_edges(function, budget))?;
     let mut walk = WalkV30::new(nodes.len(), budget)?;
+    let mut forwarding =
+        forwarding::ForwardingV30::build(optimized, index, nodes, incoming, budget)?;
     let mut rows = SelectedFinalRowsV30 {
         accesses: resources::vector(sources.len(), budget)?,
         choices: Vec::new(),
         edges: Vec::new(),
         obligations: Vec::new(),
+        forwarding: Vec::new(),
     };
     for (ordinal, source) in sources.iter().enumerate() {
         budget.charge_work(6)?;
@@ -449,6 +562,7 @@ pub(super) fn build(
                     nodes,
                     incoming,
                     index,
+                    &forwarding,
                     &mut rows.edges,
                     budget,
                 )?;
@@ -459,6 +573,8 @@ pub(super) fn build(
                     actual_choices,
                     nodes,
                     incoming,
+                    &walk,
+                    &mut forwarding,
                     &mut rows,
                     budget,
                 )?;
@@ -513,7 +629,13 @@ pub(super) fn headers() -> Result<usize, ArgumentResourceV1> {
         h::<Vec<SelectedFinalChoiceJoinV30>>()?,
         h::<SelectedFinalEdgeJoinV30>()?,
         h::<Vec<SelectedFinalEdgeJoinV30>>()?,
-        h::<Vec<usize>>()?,
+        h::<Vec<SelectedFinalObligationJoinV30>>()?,
+        h::<SelectedFinalObligationJoinV30>()?,
+        h::<Vec<SelectedFinalForwardingStepV30>>()?,
+        h::<SelectedFinalForwardingStepV30>()?,
+        h::<Option<SourceEdgeV30>>()?,
+        h::<Option<&index::EdgeProjectionV30>>()?,
+        h::<SelectedFinalEdgeOriginV30>()?,
         h::<ActualNode>()?,
         h::<&[ActualNode]>()?,
         h::<&[ActualIncoming]>()?,
@@ -541,6 +663,7 @@ pub(super) fn headers() -> Result<usize, ArgumentResourceV1> {
         h::<bool>()?,
         h::<()>()?,
         growth_headers()?,
+        forwarding::headers()?,
     ])
 }
 
@@ -555,7 +678,8 @@ fn growth_headers() -> Result<usize, ArgumentResourceV1> {
         h::<SelectedFinalAccessV30>()?,
         h::<SelectedFinalChoiceJoinV30>()?,
         h::<SelectedFinalEdgeJoinV30>()?,
-        h::<usize>()?,
+        h::<SelectedFinalObligationJoinV30>()?,
+        h::<SelectedFinalForwardingStepV30>()?,
         argument_product_v1(2, size_of::<Result<(), ProductionSemanticKirErrorV1>>())?,
     ])
 }
@@ -572,7 +696,8 @@ mod growth_tests {
         let expected = h::<SelectedFinalAccessV30>()
             + h::<SelectedFinalChoiceJoinV30>()
             + h::<SelectedFinalEdgeJoinV30>()
-            + h::<usize>()
+            + h::<SelectedFinalObligationJoinV30>()
+            + h::<SelectedFinalForwardingStepV30>()
             + 2 * size_of::<Result<(), ProductionSemanticKirErrorV1>>();
         assert_eq!(growth_headers().unwrap(), expected);
         for limit in [expected, expected - 1] {

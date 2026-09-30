@@ -214,8 +214,22 @@ pub(in super::super::super) fn assert_join_v30(
                     }
                     let obligations = &view.rows.obligations[join.obligations.range()?];
                     assert!(!obligations.is_empty());
-                    for &ordinal in obligations {
-                        assert_eq!(original.obligations[ordinal].leaf, join.original_leaf);
+                    for obligation in obligations {
+                        assert_eq!(
+                            original.obligations[obligation.original].leaf,
+                            join.original_leaf
+                        );
+                        let path = &view.rows.forwarding[obligation.forwarding.range()?];
+                        if let Some(first) = path.first() {
+                            let ActualInjection::Incoming(at) = actual[join.actual].injection
+                            else {
+                                panic!("forwarding path without an actual incoming injection");
+                            };
+                            assert_eq!(
+                                *first,
+                                SelectedFinalForwardingStepV30::Incoming { actual: at }
+                            );
+                        }
                     }
                     count += 1;
                 }

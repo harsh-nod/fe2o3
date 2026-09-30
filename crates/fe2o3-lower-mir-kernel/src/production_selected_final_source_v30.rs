@@ -1,7 +1,6 @@
 //! Exact source/F joins for the borrowed conditional selected-memory domain.
 //! Copied choice records cannot enter this relation without their checked owner.
 use super::*;
-use slice_view_v1::DescriptorRoleScopeV18;
 use fe2o3_kernel_ir::{
     CanonicalSelectedPointerIncomingV30 as ActualIncoming,
     CanonicalSelectedPointerNodeV30 as ActualNode, CanonicalSelectedPointerStepV30 as ActualStep,
@@ -9,6 +8,7 @@ use fe2o3_kernel_ir::{
     CanonicalSelectedSliceInjectionV30 as ActualInjection,
     CheckedCanonicalSelectedSliceDomainsV30 as Domains,
 };
+use slice_view_v1::DescriptorRoleScopeV18;
 use std::ops::Range;
 
 #[path = "production_selected_final_source_build_v30.rs"]
@@ -16,6 +16,8 @@ mod build;
 
 #[cfg(test)]
 include!("production_selected_final_source_oracle_v30_tests.rs");
+#[path = "production_selected_final_forwarding_v30.rs"]
+mod forwarding;
 #[path = "production_selected_final_source_index_v30.rs"]
 mod index;
 
@@ -37,7 +39,25 @@ struct SelectedFinalChoiceJoinV30 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SelectedFinalEdgeJoinV30 {
     actual: usize,
-    original: SourceEdgeV30,
+    original: SelectedFinalEdgeOriginV30,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectedFinalEdgeOriginV30 {
+    Source(SourceEdgeV30),
+    Forwarding { anchor: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectedFinalForwardingStepV30 {
+    Cast { input: usize, target: usize },
+    Incoming { actual: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SelectedFinalObligationJoinV30 {
+    original: usize,
+    forwarding: RangeLocatorV30,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,7 +83,8 @@ struct SelectedFinalRowsV30 {
     accesses: Vec<SelectedFinalAccessV30>,
     choices: Vec<SelectedFinalChoiceJoinV30>,
     edges: Vec<SelectedFinalEdgeJoinV30>,
-    obligations: Vec<usize>,
+    obligations: Vec<SelectedFinalObligationJoinV30>,
+    forwarding: Vec<SelectedFinalForwardingStepV30>,
 }
 
 /// Private scoped intake for the selected final relation. Both original and
