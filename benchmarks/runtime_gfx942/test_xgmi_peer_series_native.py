@@ -276,7 +276,7 @@ class SourceQueryTests(unittest.TestCase):
 
 class CampaignControls(unittest.TestCase):
     def harness(self, root, *, bad_query=False, bad_workload=False, disk_error=False,
-                receipt_error=False, interrupt=False):
+                receipt_error=False, interrupt=False, source_error=False, build_error=False):
         hot, _, _ = native.load_helpers()
         output = root / "campaign"
         args = types.SimpleNamespace(output=output, commit="1" * 40, devices=copy.deepcopy(PHYSICAL))
@@ -295,21 +295,24 @@ class CampaignControls(unittest.TestCase):
                 folder = self.output / name
                 folder.mkdir()
                 data = b""
-                if name.startswith("build-"):
+                if name.startswith("build-") and not build_error:
                     backend = name.removeprefix("build-")
                     path = (Path(env["CARGO_TARGET_DIR"]) / "release/examples/kfd-sdma-xgmi-peer-benchmark"
                             if backend == "kfd" else Path(command[-1]))
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(backend.encode("ascii"))
                 elif name.startswith("host-"):
-                    context = {"boot_id": BOOT, "unique_id": "0x" + PHYSICAL[0]["unique_id"],
-                               "pci_bdf": PHYSICAL[0]["pci_bdf"]}
-                    for backend in ("kfd", "hip", "hsa"):
-                        path = Path(command[command.index("--" + backend + "-binary") + 1])
-                        context[backend + "_binary_sha256"] = hot.sha(path)
-                    data = json.dumps({"schema": "fe2o3.xgmi-peer-series-host-observation.v1",
-                                       "environment": environment(), "context": context,
-                                       "continuity": {"boot_id": BOOT}}).encode("ascii")
+                    if source_error or build_error:
+                        data = b"{}"
+                    else:
+                        context = {"boot_id": BOOT, "unique_id": "0x" + PHYSICAL[0]["unique_id"],
+                                   "pci_bdf": PHYSICAL[0]["pci_bdf"]}
+                        for backend in ("kfd", "hip", "hsa"):
+                            path = Path(command[command.index("--" + backend + "-binary") + 1])
+                            context[backend + "_binary_sha256"] = hot.sha(path)
+                        data = json.dumps({"schema": "fe2o3.xgmi-peer-series-host-observation.v1",
+                                           "environment": environment(), "context": context,
+                                           "continuity": {"boot_id": BOOT}}).encode("ascii")
                 elif "--inspect-peer-pair" in command:
                     data = query(Path(command[0]).name.removesuffix("-series"))
                     if bad_query:
@@ -322,6 +325,8 @@ class CampaignControls(unittest.TestCase):
                     raise OSError("synthetic receipt-save error")
                 original_write(folder / "receipt.json", {"pid": 10000 + len(called), "group_absent": True,
                     "stdout_sha256": hot.sha(folder / "stdout"), "stderr_sha256": hot.sha(folder / "stderr")})
+                if build_error and name == "build-kfd":
+                    raise RuntimeError("synthetic build failure")
                 if interrupt and name == "d01-t01-kfd":
                     hot.B.interrupted(signal.SIGTERM, None)
                 return folder
@@ -331,6 +336,11 @@ class CampaignControls(unittest.TestCase):
                 raise OSError("synthetic disk error")
             original_write(path, value)
 
+        def source_snapshot(_rec, label, *_args):
+            if source_error and label == "source-before":
+                raise RuntimeError("synthetic opening source failure")
+            return {"source": "2" * 64}
+
         handlers = {sig: signal.getsignal(sig) for sig in hot.B.MANAGED}
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(hot.B, "Recorder", FakeRecorder))
@@ -339,7 +349,7 @@ class CampaignControls(unittest.TestCase):
                 original_postflight(observe, name, failure, sleep=lambda _seconds: None)))
             stack.enter_context(mock.patch.object(hot, "parse_endpoint", side_effect=lambda raw, index, bdf, uid:
                 {"gpu_index": index, "pci_bdf": bdf, "unique_id": uid}))
-            stack.enter_context(mock.patch.object(native, "source_snapshot", return_value={"source": "2" * 64}))
+            stack.enter_context(mock.patch.object(native, "source_snapshot", side_effect=source_snapshot))
             stack.enter_context(mock.patch.object(native, "tool_snapshot", return_value={"tool": "3" * 64}))
             stack.enter_context(mock.patch.object(native.resource, "setrlimit"))
             # Any unintended process execution or historical PID probe is a test failure.
@@ -367,6 +377,28 @@ class CampaignControls(unittest.TestCase):
             self.assertTrue(final["native_execution"])
             self.assertFalse(final["performance_acceptance"])
             self.assertEqual(len(json.loads((output / "replay.json").read_text())["trials"]), 18)
+            self.assertTrue(all("admission-after-" + backend in called for backend in ("kfd", "hsa", "hip")))
+            self.assertFalse((output / "admission-after-status.json").exists())
+
+    def test_prebuild_failure_explicitly_skips_api_admission_but_keeps_physical_postflights(self):
+        for options in ({"source_error": True}, {"build_error": True}):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary:
+                output, called, error = self.harness(Path(temporary), **options)
+                self.assertIsNotNone(error)
+                self.assertFalse(any(name.startswith("admission-") or "-query-" in name for name in called))
+                self.assertFalse(set(called) & {row["name"] for row in receipts()})
+                for edge in ("settled", "delayed"):
+                    for index in (1, 2):
+                        self.assertIn(f"campaign-close-{edge}-gpu{index}", called)
+                status = json.loads((output / "admission-after-status.json").read_bytes())
+                self.assertEqual(status, {"performed": False, "status": "not-performed",
+                    "reason": "native-binaries-not-built", "native_acceptance": False})
+                final = json.loads((output / "finished.json").read_bytes())
+                self.assertFalse(final["native_execution"])
+                self.assertTrue(any("not performed: native binaries were not built" in row for row in final["failures"]))
+                self.assertEqual(json.loads((output / "records.json").read_bytes()), [])
+                self.assertFalse((output / "replay.json").exists())
+                self.assertTrue((output / "fresh-census.json").exists())
 
     def test_bad_query_runs_zero_workloads_and_still_closes(self):
         with tempfile.TemporaryDirectory() as temporary:

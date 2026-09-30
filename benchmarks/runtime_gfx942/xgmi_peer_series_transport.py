@@ -382,14 +382,25 @@ def receive(marker, stream):
     need(stream.read(1) == b"", "no trailing transport bytes")
     need(sha(owned / "source.tar.gz") == binding["payload_sha256"], "transport archive digest")
     validate_archive(owned / "source.tar.gz", binding["files"], owned)
+    restore_git_directories(owned)
     verify_source(owned, binding)
     print(json.dumps({"received": marker, "payload_sha256": binding["payload_sha256"], "files": len(binding["files"])}, sort_keys=True))
+
+
+def restore_git_directories(owned):
+    gitdir = owned / "source/.git"
+    need(gitdir.is_dir() and gitdir.resolve(strict=True) == gitdir, "canonical extracted Git directory")
+    refs = gitdir / "refs"
+    need(not refs.exists() and not refs.is_symlink(), "fresh omitted empty refs directory")
+    refs.mkdir(mode=0o700)
 
 
 def verify_source(owned, binding):
     expected = {name.removeprefix("source/"): row for name, row in binding["files"].items()}
     need(inventory(owned / "source") == expected, "exact immutable transported source/object closure")
     gitdir = owned / "source/.git"
+    refs = gitdir / "refs"
+    need(refs.is_dir() and refs.resolve(strict=True) == refs, "required canonical Git refs directory")
     for name in ("objects/info/alternates", "info/grafts", "refs/replace", "refs/remotes"):
         need(not (gitdir / name).exists() and not (gitdir / name).is_symlink(), "no packaged Git aliases/remotes")
     need((gitdir / "config").read_text("ascii") == "[core]\nrepositoryformatversion = 0\nbare = false\nfilemode = true\n",
@@ -532,6 +543,7 @@ def replay_fresh_closure(owned, native, hot, namespace):
 
 
 def remote_run(marker):
+    os.umask(0o077)
     owned = owned_path(marker)
     binding = read_binding(owned, marker)
     verify_source(owned, binding)
@@ -588,6 +600,7 @@ def remote_run(marker):
 
 
 def collect(marker):
+    os.umask(0o077)
     owned = owned_path(marker)
     binding = read_binding(owned, marker)
     verify_source(owned, binding)

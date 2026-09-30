@@ -33,6 +33,7 @@ class TransportControls(unittest.TestCase):
         owned.mkdir(mode=0o700)
         source = owned / "source"
         (source / ".git").mkdir(parents=True)
+        (source / ".git/refs").mkdir()
         commit = "1" * 40
         for name in ("HEAD", "shallow"):
             (source / ".git" / name).write_text(commit + "\n", encoding="ascii")
@@ -165,6 +166,52 @@ class TransportControls(unittest.TestCase):
         destination.mkdir()
         transport.validate_archive(archive, files, destination)
         self.assertEqual(transport.inventory(destination), files)
+
+    def test_complete_archive_extraction_restores_actual_git_recognition(self):
+        source = self.root / "original/source"
+        source.mkdir(parents=True)
+        def git(*arguments, cwd=source):
+            return subprocess.run(["/usr/bin/git", "--no-replace-objects", "-c", "gc.auto=0", *arguments],
+                cwd=cwd, env={"PATH": "/usr/bin:/bin", "HOME": str(self.root),
+                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+                preexec_fn=lambda: os.umask(0o077)).stdout
+        git("init", "--quiet")
+        git("-c", "user.name=control", "-c", "user.email=control@example.invalid", "-c", "commit.gpgsign=false",
+            "commit", "--quiet", "--allow-empty", "-m", "synthetic archive structure control")
+        commit = git("rev-parse", "HEAD").decode("ascii").strip()
+        git("update-ref", "--no-deref", "HEAD", commit)
+        git("update-ref", "-d", "refs/heads/master")
+        git("repack", "-ad")
+        (source / ".git/shallow").write_text(commit + "\n", encoding="ascii")
+        transport.sanitized_git(source / ".git", commit)
+        files = transport.inventory(source.parent)
+        archive = self.root / "git.tar.gz"
+        transport.make_archive(archive, source.parent, files)
+        destination = self.root / "extracted"
+        destination.mkdir()
+        transport.validate_archive(archive, files, destination)
+        with self.assertRaises(subprocess.CalledProcessError):
+            git("rev-parse", "HEAD", cwd=destination / "source")
+        transport.restore_git_directories(destination)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=destination / "source"), (commit + "\n").encode("ascii"))
+        self.assertEqual(transport.inventory(destination), files)
+        with self.assertRaises(ValueError):
+            transport.restore_git_directories(destination)
+
+    def test_fresh_remote_writing_processes_reset_shared_host_umask(self):
+        for entrypoint in ("remote_run", "collect"):
+            script = (
+                "import importlib.util,os,pathlib; "
+                f"s=importlib.util.spec_from_file_location('t',{str(transport.SCRIPT)!r}); "
+                "t=importlib.util.module_from_spec(s); s.loader.exec_module(t); os.umask(0o002); "
+                "t.owned_path=lambda *_: (_ for _ in ()).throw(RuntimeError(oct(os.umask(0o002)))); "
+                f"t.{entrypoint}({{}})"
+            )
+            result = subprocess.run([sys.executable, "-I", "-B", "-c", script],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b"RuntimeError: 0o77", result.stderr)
 
     def test_owned_pack_normalization_refuses_aliases_special_names_links_and_modes(self):
         owned, marker, _ = self.owner()

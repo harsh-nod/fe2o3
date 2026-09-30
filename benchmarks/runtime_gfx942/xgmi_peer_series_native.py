@@ -323,6 +323,10 @@ def run_campaign(args, hot, planner, observations):
     finally:
         try:
             try:
+                if binaries_before is None:
+                    save("admission-after-status", {"performed": False, "status": "not-performed",
+                        "reason": "native-binaries-not-built", "native_acceptance": False})
+                    raise RuntimeError("not performed: native binaries were not built")
                 same_admission(*query("admission-after", observe("admission-after-before")))
             except BaseException as error:
                 failures.append("admission-after: " + repr(error))
