@@ -182,12 +182,14 @@ impl StagedProtectedServiceExecV2 {
         4 * size_of::<Self>() + syscall::StagedProtectedServiceExecV1::TABLE_STORAGE + 4096;
     /// Parent checks/clone/cleanup work; child work and cleanup reservation are additional.
     pub const SPAWN_WORK: usize = ENTRY + 32 * (1024 + 64) + observations::CAPABILITY_CEILING_WORK;
-    /// Fixed parent/child ABI staging; not generated stack or process RSS.
+    /// Worst-case parent/child ABI staging, including compiler and namespace
+    /// filters even for unmapped service stages; not generated stack or process RSS.
     pub const SPAWN_SCRATCH: usize = 4 * size_of::<Self>()
         + 4 * RootOwnedProtectedServiceChildV2::STORAGE
         + observations::CAPABILITY_CEILING_SCRATCH
         + syscall::COMPILER_CHANNEL_SCRATCH
         + syscall::COMPILER_RESTRICTION_SCRATCH
+        + syscall::NAMESPACE_RESTRICTION_SCRATCH
         + 8192;
 
     /// Checked conservative full result charge including every duplicated image.
@@ -333,6 +335,12 @@ impl StagedProtectedServiceExecV2 {
     }
 
     /// Creates one root-to-service child under pre-funded finite cleanup custody.
+    /// Compiler stages and fresh-user-namespace children install an inherited
+    /// namespace filter before READY/exec: unshare/setns and namespace-bearing
+    /// legacy clone refuse with EPERM; clone3 returns ENOSYS. Unmapped generic
+    /// service stages keep legacy creator behavior. Selection follows the actual
+    /// stage/mapping operation, not a role claim. Neither branch establishes
+    /// cgroup-control exclusion, approved libc fallback or deployment authority.
     /// Returns a FULL unreserved child charge. Drop of a successfully returned
     /// child uses only the reservation's emergency allowance, never a fresh ledger.
     ///

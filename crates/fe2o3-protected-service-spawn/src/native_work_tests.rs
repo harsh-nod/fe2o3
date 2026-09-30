@@ -8,6 +8,12 @@ fn compiler_restriction_work_prepays_fixed_filter_and_all_install_calls() {
 }
 
 #[test]
+fn namespace_restriction_work_prepays_fixed_filter_and_all_install_calls() {
+    assert_eq!(super::NAMESPACE_RESTRICTION_WORK, 3 * 1088 + 16 * 64 + 256);
+    assert_eq!(super::NAMESPACE_RESTRICTION_WORK, 4544);
+}
+
+#[test]
 fn mapping_gate_prepays_read_retries_and_both_closes() {
     assert_eq!(super::MAPPING_GATE_WORK, (64 + 2) * 1088 + 256);
 }
@@ -37,7 +43,8 @@ fn compiler_channel_prepays_all_extra_syscalls_and_wire_construction() {
     );
 }
 
-// Independent syscall transcript, without the implementation's aggregated counts or weights.
+// Independent worst-case transcript, without implementation counts or weights.
+// Unmapped service stages still prepay the filter allowance they do not execute.
 fn transcript_work(descriptors: usize, cap_last_cap: u32) -> usize {
     let mut work = 256;
     let mut operation = || work += 1024 + 64;
@@ -82,6 +89,9 @@ fn transcript_work(descriptors: usize, cap_last_cap: u32) -> usize {
         "GET_DUMPABLE",
         "prlimit64",
         "umask",
+        "namespace GET_NO_NEW_PRIVS",
+        "namespace SET_SECCOMP",
+        "namespace GET_SECCOMP",
         "ready write",
     ] {
         operation();
@@ -103,17 +113,18 @@ fn transcript_work(descriptors: usize, cap_last_cap: u32) -> usize {
     ] {
         operation();
     }
-    work
+    work + 16 * 64 + 256 // Namespace program validation/copy and control.
 }
 
 #[test]
-fn every_supported_pair_matches_independent_transcript_and_formula() {
+fn every_supported_pair_matches_independent_worst_case_transcript_and_formula() {
     assert_eq!(crate::MAX_PROTECTED_SERVICE_DESCRIPTOR_BINDINGS_V1, 32);
     assert_eq!(crate::pre_exec::MAX_CHILD_GATE_ATTEMPTS_V2, 64);
     for descriptors in 1..=32 {
         for ceiling in 0..=63 {
             let transcript = transcript_work(descriptors, ceiling);
-            let formula = (166 + descriptors + 3 * (ceiling as usize + 1)) * 1088 + 256;
+            let formula =
+                (169 + descriptors + 3 * (ceiling as usize + 1)) * 1088 + 256 + 16 * 64 + 256;
             assert_eq!(transcript, formula);
             assert_eq!(child_work(descriptors, ceiling), Ok(transcript));
         }
@@ -121,9 +132,9 @@ fn every_supported_pair_matches_independent_transcript_and_formula() {
 }
 
 #[test]
-fn exact_minimum_and_maximum_include_exec_failure_suffix() {
-    assert_eq!(child_work(1, 0), Ok(185_216));
-    assert_eq!(child_work(32, 63), Ok(424_576));
+fn exact_worst_case_minimum_and_maximum_include_exec_failure_suffix() {
+    assert_eq!(child_work(1, 0), Ok(189_760));
+    assert_eq!(child_work(32, 63), Ok(429_120));
 }
 
 #[test]

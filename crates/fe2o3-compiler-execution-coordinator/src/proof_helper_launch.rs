@@ -4,6 +4,7 @@
 use crate::{
     compiler_invocation_backing::CompilerInvocationBacking as Compiler,
     native_launch::{self as native, Channels, CompilerExecutionLaunchErrorV2 as NativeError},
+    native_v3::root_intake::Receiver,
     proof_helper_backing::{
         ProofHelperBacking as Backing, ProofHelperBackingError as BackingError,
     },
@@ -39,19 +40,37 @@ use std::{
     fs::File,
     mem::size_of,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
-    sync::{Mutex, MutexGuard, TryLockError},
+    sync::{Arc, Mutex, MutexGuard, TryLockError},
     time::{Duration, Instant},
 };
 
 type Result<T> = std::result::Result<T, ProofHelperLaunchError>;
-type Child = RetainedChild<Backing>;
+type Child = RetainedChild<Payload>;
+
+// Published in the original cleanup slot before clone. In particular, failure
+// before READY cannot retire the original received rights with a live helper.
+pub(crate) struct Payload {
+    backing: Backing,
+    _received: Arc<Receiver>,
+}
+
+impl Payload {
+    pub(crate) fn storage(backing: usize) -> Result<usize> {
+        native::sum(&[
+            backing,
+            Receiver::TRANSPORT_STORAGE,
+            size_of::<Self>() - size_of::<Backing>(),
+        ])
+        .map_err(Into::into)
+    }
+}
 const BOOTSTRAP_FD: i32 = 3;
 const BINDING_STORAGE: usize = size_of::<[Binding<'static>; 1]>();
 const ENTRY_WORK: usize = 8;
 // Local descriptor/scalar work only. Existing image/backing, stage, child,
 // transport, record and cleanup APIs debit every nested operation separately.
-const LOCAL_WORK: usize = ENTRY_WORK + 192 * 1088;
-const FRAME: usize = 4 * size_of::<(ManagedProofHelper, usize)>()
+pub(crate) const LOCAL_WORK: usize = ENTRY_WORK + 192 * 1088;
+pub(crate) const FRAME: usize = 4 * size_of::<(ManagedProofHelper, usize)>()
     + 4 * size_of::<Stage>()
     + 8 * size_of::<ProofHelperLaunchError>()
     + 8 * size_of::<rustix::fs::Stat>()
@@ -188,10 +207,18 @@ impl Drop for FinishAttempt<'_> {
 }
 
 impl ManagedProofHelper {
-    const ENVELOPE: usize = size_of::<(Self, usize)>() - size_of::<Child>() - size_of::<OwnedFd>();
+    pub(crate) const ENVELOPE: usize =
+        size_of::<(Self, usize)>() - size_of::<Child>() - size_of::<OwnedFd>();
 
     pub(crate) const fn retained_storage(&self) -> usize {
         self.retained
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pid_for_test(&self) -> Pid {
+        let child = self.lock_child().unwrap();
+        child.phase.require_ready().unwrap();
+        child.child.pid()
     }
 
     /// Scoped access to the fixed compiler owner while this lifecycle is ready.
@@ -210,8 +237,14 @@ impl ManagedProofHelper {
             let child = self.lock_child()?;
             child.phase.require_ready()?;
             child.child.with_resources(b, |backing, b| -> Result<_> {
-                validate_backing(backing, self.runtime, b)?;
-                Ok(operation(backing.compiler(), b))
+                let credentials = validate_backing(&backing.backing, self.runtime, b)?;
+                validate_process(&child.child, credentials, b)?;
+                if !child.child.is_live(b)? {
+                    return Err(
+                        launch_io::Failure::ChildExited("proof helper backing access").into(),
+                    );
+                }
+                Ok(operation(backing.backing.compiler(), b))
             })
         })
         .map_err(E::from)?
@@ -260,8 +293,9 @@ impl ManagedProofHelper {
         lifecycle_scope(self.retained, b, |b| {
             let deadline = launch_io::bounded_deadline(timeout)?;
             let child = attempt.child();
-            let credentials =
-                child.with_resources(b, |backing, b| validate_backing(backing, self.runtime, b))?;
+            let credentials = child.with_resources(b, |backing, b| {
+                validate_backing(&backing.backing, self.runtime, b)
+            })?;
             validate_process(child, credentials, b)?;
             send_record(
                 child,
@@ -345,13 +379,14 @@ fn validate_backing(
 #[allow(unsafe_code)]
 pub(crate) unsafe fn launch(
     backing: Backing,
+    received: Arc<Receiver>,
     session: [u8; 32],
     peer: Credentials,
     timeout: Duration,
     cleanup: &mut Cleanup,
     b: &mut Budget<'_>,
 ) -> Result<(ManagedProofHelper, usize)> {
-    let input = backing.retained_storage();
+    let input = Payload::storage(backing.retained_storage())?;
     b.with_prepaid_scope(input, ENTRY_WORK, LOCAL_WORK, FRAME, |b| {
         let deadline = launch_io::bounded_deadline(timeout)?;
         if session == [0; 32] {
@@ -377,7 +412,10 @@ pub(crate) unsafe fn launch(
             stage.spawn_retaining_in_fresh_user_namespace(
                 credentials,
                 peer,
-                backing,
+                Payload {
+                    backing,
+                    _received: received,
+                },
                 input,
                 cleanup,
                 b,
@@ -395,7 +433,7 @@ pub(crate) unsafe fn launch(
             deadline,
         )?;
         child.with_resources(b, |backing, b| {
-            validate_stage(backing, &stage, &channels, b)
+            validate_stage(&backing.backing, &stage, &channels, b)
         })?;
         validate_process(&child, credentials, b)?;
         // Keep the parent's gate reader until after write, even if the child died.
@@ -456,7 +494,9 @@ pub(crate) unsafe fn launch(
             b,
             deadline,
         )?;
-        child.with_resources(b, |backing, b| validate_backing(backing, runtime, b))?;
+        child.with_resources(b, |backing, b| {
+            validate_backing(&backing.backing, runtime, b)
+        })?;
         validate_process(&child, credentials, b)?;
         if !child.is_live(b)? {
             return Err(launch_io::Failure::ChildExited("proof helper ready").into());

@@ -563,3 +563,138 @@ reconciles immutable #271 checkpoint
 `7bc097b0b3b32ae542d8549d3d04b824f6a424ed`; its regressions require a new run.
 The r141 build used a bounded 16 GiB host virtual-memory allowance. This changes
 only the local Rust build envelope, not any production work/storage/proof cap.
+
+## Reconciled Compiler Execution Results
+
+r144 completed at `857d7079a6699968cef7af47a1bc18278a3be0b0` with unchanged
+source/tools. Its lowerer selection executed **499 passing and 18 failing tests**:
+
+- Three aggregate-runtime cases still stop at the inherited unsupported
+  private-entry SSA block argument.
+- Four context-read controls panic before their intended checks because the
+  ABI test helper omits F32 slice descriptors. They do not yet validate the
+  context-read repair.
+- Eight index-call controls and three native-helper receiver controls stop at
+  `execution availability during defined child request`. Their intended
+  callbacks and substitutions are not reached; no negative credit is granted.
+
+The shared SSA-boundary selection passed one test and failed nine during fixture
+construction: edge-role zero is invalid. `f00040b7f` changes only fixture role
+values to nonzero values, preserving zero-based edge ordinals and the production
+rejection. r145 then passed all ten boundary tests.
+
+r144 selected zero tests in `dialect-amdgcn`, so it supplies no native-layout
+coverage. r145 explicitly selected `fe2o3-amdgcn-model`: ten tests passed and one
+failed because it incorrectly expected only the printed owner SHA to change.
+The owner also binds the emitted pseudoprobe GUID and function hash.
+
+`8be686cbed5e6b5c3ec704d34ff9cd2fc2c191e9` corrects that test: unchanged
+executable KIR is compared structurally, while the exact owner and both probe
+identifiers must change and appear in their emitted records. No production
+lowering check is relaxed. r146 passed **all ten SSA-boundary and eleven native
+target-lowering tests**, with zero failures/ignored and unchanged source/tools.
+These are CPU-side compiler tests, not GPU execution or complete refinement.
+
+Log SHA-256 values:
+
+- r144: `9a1ed41d08c9d45026ad635086746b0fb21e58261375e2bc666329a2a0ab3824`
+- r145: `029c1930a7e2f36560e764465ea0ce186ddf03c7a03ba5accce5db74929c3401`
+- r146: `f50d061a7a5ab38ab36e16752768e6939ffc3f7fc798d531094002ffbf0c6465`
+
+The lowerer failures still require their own fixes and reruns. No milestone,
+protected-runtime, simulator or safe-launch coverage advances from these results.
+
+## Actual Rust Data-Root Boundary
+
+r147 rebuilt the actual-source backend at
+`8be686cbed5e6b5c3ec704d34ff9cd2fc2c191e9` and finished at
+`2026-09-30T09:57:01.886Z`. All 80 cases failed before their required consumer
+with `pending global native changed exact data root`. This includes all 16
+positive cases and all 64 negative cases. The negative cases do not count as
+successful rejections at their intended boundaries.
+
+The matrix covers gfx942/gfx950, backend optimization 0/3, MIR optimization 0/2,
+five modes and two fresh sessions per combination. The fixture still uses the
+legacy ThreadIndex body with a logical context argument; it does not exercise
+the new `ctx.invocation()` source API. No finalizer, protected proof, simulator
+or hardware launch was reached. M1 remains incomplete and the strict count
+remains **0/47**.
+
+Source and tool inventories were unchanged throughout the run. Source snapshot:
+`5f706214465676dc08a11f14a10c170c81f64fdd7f5417928b4af25bba01a7a6`.
+Log SHA-256:
+`6c8ee1768a80e4ff3414045dda36f5a15d7caa71726532ba2fa19266e22f5989`.
+The next repair must preserve the exact original data-root binding; removing or
+weakening the identity check would not satisfy this gate.
+
+## Helper Claim and ABI Fixture Rerun
+
+r148 at `0b64fc8768f285ae23b3df4101cafbff605f0136` executed 96 selected
+lowerer tests: **76 passed, 20 failed, none ignored**. Source and tools remained
+unchanged. This includes the original-move claim repair, two additional helper
+positives, and the F32 ABI fixture correction.
+
+- The independent physical-root ABI test passes: the logical context adds no
+  physical argument in that fixture.
+- Four context-read controls now reach lifecycle validation instead of the old
+  ABI-construction panic, but fail before their intended read gate.
+- Ten helper index-call controls and three native-helper receiver controls now
+  report `scoped memory anchors differ from their source instance`, replacing
+  the earlier defined-child-request failure. Their required observers still do
+  not complete.
+- Three inherited aggregate-runtime controls still encounter the private-entry
+  SSA block-argument gap.
+
+Inspection identified an ordering defect in the claim repair: the original move
+clears the live SSA slot before the memory-occurrence capture checks it. The
+follow-up must capture first, then claim the original Use/MoveKill and validate
+the archive before removing the holder. The live-slot predicate is not relaxed.
+These failing negatives receive no intended-boundary credit.
+
+r148 log SHA-256:
+`f25313510cdfd14d73c229fa13d23b1dc539e74039ec7c70ce31f85efefe2503`.
+The separate [scoped-invocation schema tests](scoped-invocation-schemas-20260930.md)
+do not close these compiler integration failures.
+
+## Capture Ordering and Focused Rerun
+
+Candidate `450d8a0f8fa992957a0cb90610f680e0e0ebb031` includes the original
+memory-occurrence capture before the move claim, plus separate exact data and
+length metadata-carrier replay. Neither repair relaxes the original source
+identity requirement.
+
+r154 built the lowerer library and started its full 4,249-test suite. The run
+was deliberately stopped during unrelated optimizer resource tests so the
+focused integration failures could be examined. Its terminal status is 101;
+it is not a full-suite pass or a timeout. Full-suite verification remains due.
+
+r155 reused the unchanged candidate and executed 104 selected tests:
+**95 passed, nine failed, none ignored**.
+
+- All 13 `original_index_call_` controls passed, including the capture/claim
+  order, hostile source substitutions and resource accounting.
+- The selected context descriptor read-gate controls passed.
+- Three aggregate-runtime controls still stopped at unsupported private-entry
+  SSA block arguments.
+- Three new carrier controls failed a fixture assertion requiring distinct
+  data/length receiver IDs. Their intended native correspondence checks were
+  not reached; dropping that assertion would not establish the claimed coverage.
+- One mixed-predecessor fixture stopped at non-deterministic block identity
+  ordering before its intended rejection boundary.
+- Two older helper controls required a non-root receiver in both source phases;
+  the optimized phase can legitimately replace a transported receiver with the
+  ABI root. They stopped at that fixture assertion.
+
+After r155, candidate `e398b1c03182021258ba4113fc370efd8a009da4` incorporated
+the immutable #271 checkpoint `42102e4f8cd55deecc5044d5ebfa84840de78179`,
+fixed the appended block identities, and limited the non-root transport
+assertion to the original phase while retaining exact operand/type checks for
+both phases. These later changes were not tested by r155.
+
+Both r154 and r155 retained the same source and tool inventories. Log SHA-256:
+
+- r154: `c4bc328e07f9bb76b75a3af59efb8c0488e0bb4c09e1ceef5aea0007163edce6`
+- r155: `b3ef1bf758dbe1dddf38d6c5bc9d300b5c7d07f48e464db9022f3c9f91184e45`
+
+No protected proof, simulator or hardware launch occurred. M1 and the strict
+**0/47** count remain unchanged.

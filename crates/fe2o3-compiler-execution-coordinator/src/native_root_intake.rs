@@ -65,7 +65,15 @@ pub(crate) struct Receiver {
     output: Option<Output>,
 }
 
+// The shared owner adds exactly two atomic counts without header padding.
+const _: () = assert!(std::mem::align_of::<Receiver>() <= std::mem::align_of::<usize>());
+
 impl Receiver {
+    // After the typed capture/output move into Backing, these are the complete
+    // transport owners shared with the helper's independently funded cleanup.
+    pub(crate) const TRANSPORT_STORAGE: usize =
+        Self::STORAGE - Invocation::NATIVE_MAX_RETAINED_STORAGE - Output::STORAGE
+            + 2 * size_of::<usize>();
     // Includes the consumed invocation FD as well as its complete decoded owner.
     // Deliberately keep excess reserved until final Drop, including on errors.
     pub(crate) const STORAGE: usize = size_of::<Self>()
@@ -383,6 +391,16 @@ impl Receiver {
     // Transport only. Production reaches this through the installed request,
     // after its retained backing has been revalidated on the original account.
     fn send_refusal(&mut self) -> Result<bool> {
+        let finished = self.send_refusal_packet()?;
+        if finished {
+            self.phase = Phase::Refused;
+        }
+        Ok(finished)
+    }
+
+    // A consuming RootCompilerRequest owns the send phase once this receiver is
+    // shared with native cleanup. This operation never relinquishes its rights.
+    fn send_refusal_packet(&self) -> Result<bool> {
         if self.phase != Phase::Ack {
             return Err(rejected("refusal requires complete intake"));
         }
@@ -407,7 +425,6 @@ impl Receiver {
             .map_err(transport)?
             .is_some()
         {
-            self.phase = Phase::Refused;
             return Ok(true);
         }
         Ok(false)

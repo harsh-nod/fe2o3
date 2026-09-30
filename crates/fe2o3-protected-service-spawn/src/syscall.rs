@@ -52,6 +52,12 @@ pub(crate) use compiler_restrictions::{
     INSTRUCTIONS as COMPILER_RESTRICTION_INSTRUCTIONS, SCRATCH as COMPILER_RESTRICTION_SCRATCH,
 };
 
+#[path = "native_namespace_restrictions.rs"]
+mod namespace_restrictions;
+pub(crate) use namespace_restrictions::{
+    INSTRUCTIONS as NAMESPACE_RESTRICTION_INSTRUCTIONS, SCRATCH as NAMESPACE_RESTRICTION_SCRATCH,
+};
+
 pub(crate) fn has_exact_root_identity() -> bool {
     let mut uids = [u32::MAX; 3];
     let mut gids = [u32::MAX; 3];
@@ -135,6 +141,14 @@ pub(crate) struct StagedProtectedServiceExecV1 {
 }
 
 impl StagedProtectedServiceExecV1 {
+    pub(crate) fn requires_namespace_confinement(
+        &self,
+        mapping_gate: Option<(BorrowedFd<'_>, BorrowedFd<'_>)>,
+    ) -> bool {
+        // These are actual staging/mapping operations, not service-role claims.
+        self.compiler.is_some() || mapping_gate.is_some()
+    }
+
     pub(crate) fn new(
         executable: &File,
         bindings: &[ProtectedServiceDescriptorBindingV1<'_>],
@@ -602,6 +616,14 @@ unsafe fn child_exec(
         // the existing owned status/terminal cleanup path, never a weak fallback.
         if staged.compiler.is_some() && !compiler_restrictions::install() {
             child_fail(staged.exec_status_writer.as_raw_fd(), 13);
+        }
+        // Compiler stages and actually mapped children must be confined after
+        // mappings/profile/channel setup. Unmapped generic service stages keep
+        // their legacy creator behavior, including direct clone3. This branch
+        // does not authenticate a role or relax the caller's deployment duties.
+        if staged.requires_namespace_confinement(mapping_gate) && !namespace_restrictions::install()
+        {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 14);
         }
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
         if libc::syscall(

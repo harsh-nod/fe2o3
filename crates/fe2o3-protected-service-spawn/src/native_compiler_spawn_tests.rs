@@ -99,6 +99,74 @@ fn transfer_pair(kind: rustix::net::SocketType) -> (OwnedFd, OwnedFd) {
 }
 
 #[test]
+fn actual_stage_constructors_and_mapping_gate_select_mandatory_confinement() {
+    let f = Fixture::new();
+    let (_receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);
+    let mapping = crate::native_spawn::namespace_spawn::MappingGate::new().unwrap();
+    let mut work = Work::new(LIMIT);
+    let mut b = Budget::new(&mut work, LIMIT);
+    b.reserve_storage(SOURCE).unwrap();
+    let ledger = b.work_ledger_identity_v1();
+    // A destination that resembles a compiler channel is not role authority.
+    for destination in [3, 195] {
+        // SAFETY: inert files remain owned and fully funded; no child is created.
+        let (service, charge) = unsafe {
+            Stage::stage(
+                &f.file,
+                &[Binding::new(f.file.as_fd(), destination).unwrap()],
+                f.writer.as_fd(),
+                f.reader.as_fd(),
+                f.writer.as_fd(),
+                SOURCE,
+                &mut b,
+            )
+        }
+        .unwrap();
+        b.reserve_storage(charge.additional_storage()).unwrap();
+        assert!(!service.inner.requires_namespace_confinement(None));
+        assert!(
+            service
+                .inner
+                .requires_namespace_confinement(Some(mapping.child_ends()))
+        );
+        assert_eq!(
+            service.spawn_work(63).unwrap(),
+            Stage::spawn_work_for(1, 63).unwrap()
+        );
+        drop(service);
+        b.release_storage(charge.additional_storage()).unwrap();
+    }
+    let (compiler, compiler_charge) = f.stage(f.streams(), &[], &f.cwd, &mut b).unwrap();
+    b.reserve_storage(compiler_charge.additional_storage())
+        .unwrap();
+    let (channel, channel_charge) = f
+        .stage_channel([None; 3], &[], transfer.as_fd(), &mut b)
+        .unwrap();
+    b.reserve_storage(channel_charge.additional_storage())
+        .unwrap();
+    for stage in [&compiler, &channel] {
+        assert!(stage.inner.requires_namespace_confinement(None));
+        assert!(
+            stage
+                .inner
+                .requires_namespace_confinement(Some(mapping.child_ends()))
+        );
+    }
+    drop(channel);
+    drop(compiler);
+    b.release_storage(channel_charge.additional_storage())
+        .unwrap();
+    b.release_storage(compiler_charge.additional_storage())
+        .unwrap();
+    assert_eq!(b.storage(), SOURCE);
+    assert!(b.work_ledger_identity_v1() == ledger);
+    assert!(b.failed_work().is_none());
+    assert!(b.failed_storage().is_none());
+    // This only selects the private branch. Real mapping/exec is tested by the
+    // ignored native control, not manufactured by this pipe or inert image.
+}
+
+#[test]
 fn channel_staging_pins_exact_high_cloexec_transfer_and_charges_full_quota() {
     let f = Fixture::new();
     let (receiver, transfer) = transfer_pair(rustix::net::SocketType::SEQPACKET);

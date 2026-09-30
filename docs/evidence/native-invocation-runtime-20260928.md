@@ -271,3 +271,82 @@ This establishes image presence only, not provisioned root-request execution or
 proof-runtime readiness. No container, remote file, installation change, proof
 execution or GPU workload was created by these observations. Runtime integration
 and its genuine provisioned tests remain necessary.
+
+## Approval Paths and Retained Volume
+
+A subsequent September 30 read-only SSH check reached MI350-2 and inspected the
+actual build-authority paths, distinct from the earlier compiler-execution
+provisioning paths. `stat` reported all three absent:
+
+- `/etc/fe2o3/build-authority/policy-v2`
+- `/etc/fe2o3/build-authority/compiler-runtime-manifest-v1`
+- `/opt/fe2o3/compiler-runtime-v1`
+
+`docker volume inspect` confirmed that
+`fe2o3-authoring-proof-native-20260917-r1` exists. This does not establish its
+current file contents, pin integrity, compiler approval or readiness for the
+original-root request matrix. Earlier proof-runtime observations cannot be
+substituted for those checks. These probes created no container, remote file,
+proof job or GPU workload.
+
+A follow-up read-only inventory returned the retained `runtime` directory as
+root-owned mode 0555, its installed manifest as root-owned mode 0444, and the
+separate interpreter directory with a loader and eight DSOs. The installed
+manifest SHA-256 matches the repository pin:
+`ffef09bd240c90e72cbff31a82bc5173c796ba7ab9af239245e7ad892c25641c`.
+This observes the manifest only, not every payload hash, immutable flags,
+canonical loader resolution, writer exclusion or production admission. No
+remote installation or execution was performed.
+
+## Retained Volume Payload Audit
+
+At `2026-09-30T10:40:47Z`, a bounded read-only SSH audit checked the complete
+retained input volume against the local pinned manifest and target-file list.
+The single SSH invocation finished six seconds later with exit 0; its
+connection and overall limits were eight and ninety seconds.
+
+- Both pin-stream hashes matched before the 102 pin rows were interpreted.
+- The exact runtime roster contained 81 files and nine directories; the
+  interpreter roster contained the loader and eight libraries.
+- All 90 files (657,248,772 bytes) matched their pinned SHA-256 values.
+- Owners were 0:0, regular-file link counts were one, and modes matched the
+  pinned layout. No unexpected entries or group/other-writable objects appeared.
+
+This establishes reusable pinned input bytes, not protected runtime admission.
+Immutable flags, xattrs, mounted interpreter links, writer exclusion, compiler
+approval and genuine execution remain separate checks. No remote file was
+written and no container, mount, installation or proof/GPU job was created.
+
+Log: `native-retained-volume-pin-audit-20260930T104047Z-2176959.log` in the local
+evidence directory. SHA-256:
+`18fa62c6d07a851ccd2dccf9a73709b950f876f473730cd47672a9d204336817`.
+
+## Native Custody Library Rerun
+
+r157 at `5ef50c9e7c3730250fbd6303a3181c1310a3737b` ran both complete
+coordinator and protected-service-spawn library suites, with one Cargo job,
+serial tests, locked/offline dependencies and disabled GPU visibility:
+
+| Library | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| Compiler execution coordinator | 287 | 0 | 17 |
+| Protected service spawn | 271 | 0 | 16 |
+
+The 33 ignored tests include the genuine original-root request, native compiler
+execution, mapped-child confinement and cgroup cleanup matrices. They remain
+unexecuted, not qualified by the 558 passing library tests. The systemd source
+contract check also passed; it does not execute the service unit.
+
+This candidate retains the original request through helper-backed preparation
+and a compiler child behind a closed exec gate. The added channel fault hook is
+test-only and observes the authenticated child channel before trace seizure.
+Namespace confinement is mandatory for compiler children and mapped helpers;
+unmapped service creators retain their separate role. The compiler gate stays
+closed and the production response remains `RuntimeEnforcementUnavailable`.
+
+Source and tool inventories remained unchanged. Log SHA-256:
+`7eb8bbd02cfc3d6590050309822ed5a22ec9fbdcca3395ec590f628fd648b075`.
+The public integration applies the four new signed commits on top of their
+already-published signed prerequisites. Its code tree exactly matches this
+tested candidate; only evidence documents differ. Provisioned deployment,
+protected proof execution and GPU validation remain outstanding.

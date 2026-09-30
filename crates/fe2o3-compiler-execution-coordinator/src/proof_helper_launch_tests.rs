@@ -17,6 +17,7 @@ const RUNTIME: [u8; 32] = [12; 32];
 fn closed_launch_signature_consumes_actual_backing_and_original_custody() {
     let _: unsafe fn(
         Backing,
+        Arc<Receiver>,
         [u8; 32],
         Credentials,
         Duration,
