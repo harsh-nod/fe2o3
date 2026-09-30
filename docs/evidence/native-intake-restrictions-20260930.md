@@ -26,6 +26,7 @@ successful compiler path:
 | 37408e57b, f4b44dff2 | Exact and one-short original-account output validation tests. |
 | 97b17d5aa | Finite intake progress, failure and retained-owner tests. |
 | 649fe4a39, f9008e064 | Complete retained-runtime file transfers, including shared libraries, consumed by compiler backing. |
+| 9e85f5f86 | Actual-child inherited executable-read personality refusal before compiler readiness. |
 
 The V4 release/broker family preserves the legacy readers and selects an exact
 family before authentication. It retains the original wrapper invocation stream
@@ -53,15 +54,16 @@ Retained library files are not
 evidence that the loader resolves its paths to those files.
 
 The compiler-only native stage installs a fixed 57-instruction syscall filter
-after credentials/channel setup and before profile-ready, gate and exec. Its
-7,168 units of work are prepaid before clone, with 728 bytes of conservatively
+after credentials/channel setup and before profile-ready, gate and exec. It
+first rejects a failed personality query or inherited `READ_IMPLIES_EXEC`,
+without clearing the bit. Its 8,256 units of work are prepaid before clone, with 728 bytes of conservatively
 quoted scratch. The filter denies explicit writable-executable/anonymous-exec
 mapping requests and explicit executable protection changes, together with a
 fixed set of incompatible memory/debugging/asynchronous-I/O primitives. Ordinary
 data and file-backed RX mappings remain available.
 
 This is **not full executable-memory or runtime enforcement**. It does not
-validate inherited or exec-established `READ_IMPLIES_EXEC`, immutable executable
+validate exec-established personality or initial mappings, immutable executable
 backing, loader/proc-macro resolution, procfs writers, source/output namespaces
 or all descendants. No existing runtime-admission guard is weakened.
 
@@ -260,6 +262,46 @@ The passing stdout SHA-256 is
 These are real native process-mechanics tests, not execution of approved rustc,
 protected proofs, loader/source namespace enforcement or GPU qualification.
 
+### Inherited Personality Rejection
+
+Commit `9e85f5f86` adds the actual-child read-only personality query to the
+existing compiler install path. It refuses query failure or READ_IMPLIES_EXEC
+before READY; it neither clears state nor changes the fixed filter. Work rises
+from 7,168 to 8,256, including the added syscall before clone. The existing
+scratch envelope covers the scalar result. The original error/cleanup owner
+and `RuntimeEnforcementUnavailable` remain unchanged.
+
+At `f74cc3e3bc52c77dffc6b188b3a3ce3112beb512`, the following gates passed:
+
+| Gate | Result |
+| --- | --- |
+| r92 coordinator library | 278 passed, 11 ignored |
+| r92 spawn library | 266 passed, 13 ignored |
+| r93 isolated MI350-2 native tests | All eight selected tests passed in fresh processes |
+| r94 unsafe source policy | Five passed, one maintenance test ignored |
+| Source hygiene against 222a04ada | Passed |
+
+The two new native cases verify inherited-bit rejection with restoration of
+the actual clone-originating thread, including unwind, and genuine syscall
+query denial. The prior filter-installation negative now verifies its query is
+allowed and clean, preventing the new earlier refusal from substituting for
+the intended installation failure. All six previous native positives/negatives
+also pass on the new executable. The labeled container and private scratch were
+removed and verified absent; the runner is archived with the local evidence.
+
+Source/tool snapshots were stable in both local runs. SHA-256 records:
+
+| Record | SHA-256 |
+| --- | --- |
+| r92 log | `439be73a749f60fe57476aaf60d303f1342df1b5faa5661e8b881e4ac9db7d15` |
+| r93 test executable | `56bab74c75004de980d8e934fdd1eab66f02a141b3f0d78fdb180997807235a2` |
+| r93 native stdout | `d10c1244d85e0feaf65ae7db9636a6fd68cc23b94fa8f1abdca93dd08482c365` |
+| r94 log | `05d68f3ad44eb8dec42a9b65480d49748873103a2407cc9b54502f435f2dfc2c` |
+
+These are overlapping component gates, not a summed full-repository result.
+Dynamic loading, initial mappings and personality established by exec remain
+outside this check. No approved rustc, protected proof or GPU was executed.
+
 | Run | Log SHA-256 |
 | --- | --- |
 | r64 | `101bf3ca27d2092f8ee49dd626d1781e90c1355d7ce5bc89162721d0bede27b7` |
@@ -303,6 +345,15 @@ original trace-derived completion, generic finalization and safe GPU launch
 remain required. Source-side context/nominal import compatibility and f32
 correspondence use the existing #271 pipeline; these native changes do not
 complete that compiler continuation.
+
+The installed-runtime composition lane also needs a real compiler release
+packaging/install path. The current V3 provisioner installs the service records
+and client profile, not `policy-v2`, `compiler-runtime-manifest-v1` or the complete
+compiler runtime tree. Those require measured release/closure pins, actual
+compiler/backend/proc-macro/helper/interpreter/library files, matching profile
+identity and genuine immutable flags. A read-only mount or role-labelled fixture
+is not a substitute. Provisioning and testing must remain in a disposable root,
+without enabling the still-incomplete production coordinator.
 
 Required next validation includes the full affected libraries and wrappers in
 an environment allowing their actual socket operations, unsafe inventory,

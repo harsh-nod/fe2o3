@@ -414,3 +414,15 @@ dependency; it is not duplicated or bypassed here. The
 [handoff](https://github.com/harsh-nod/fe2o3/issues/271#issuecomment-5903321856)
 requests an immutable validated dependency before integration. No intended
 positive or negative consumer, proof, simulator or GPU result is credited.
+
+The separate candidate `b072d24b731ed0766712b1ee7f5d0c0d90c51158` additionally
+requires reached callbacks and exact ABI errors in the Policy9 negatives. Its
+foreign-account negative now matches the original storage limit/reservation,
+so underfunding cannot substitute for account-identity rejection. Both accounts'
+work/live/peak storage are checked unchanged around that query. Independent
+review found no remaining issue. `r90-policy9-rejection-boundary-controls`
+compiled those tests and passed the same 68 selected backend controls, with
+stable source/tool snapshots; log SHA-256:
+`24a584572a5e1cd95424726edcc65adb0a1e5e78e041105f3d7f9f86d486b2e2`.
+The hardened ordinary-source negatives are not executed by that selection;
+they remain dependent on the actual-source gate rather than earning pass credit.

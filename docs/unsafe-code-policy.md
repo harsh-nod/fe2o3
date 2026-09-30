@@ -624,7 +624,8 @@ a read-only personality query rejects query errors or inherited READ_IMPLIES_EXE
 in the actual child; three direct `prctl` calls then install/check a fixed
 immutable 57-instruction filter and live native `sock_fprog` header, synchronously
 copied by the kernel. There is no allocation, lock, callback or borrowed pointer
-escaping the child call. The original parent pays 8,256 additional compiler-only work before slot reservation
+escaping the child call. The original parent pays 8,256 additional compiler-only
+work before slot reservation
 and clone; the fixed spawn frame includes 728 bytes of filter/ABI scratch. The
 closed compiler stage installs it after profile/channel setup but before READY
 and exec; error uses the existing status-13 failure and original cleanup owner.
