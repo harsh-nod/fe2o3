@@ -208,10 +208,53 @@ fn retained_rvalue_header_oracle_covers_capture_and_query_envelopes() {
         + h::<ExecutionSiteV29>()
         + descriptor_operand_header_oracle_v30()
         + index_reader_header_oracle_v35()
+        + typed_endpoint_header_oracle_v36()
         + h::<std::slice::Iter<'_, SourceRvalueRowV30>>()
         + 8 * h::<usize>()
         + h::<()>();
     assert_eq!(source_rvalue_headers_v30().unwrap(), expected);
+}
+
+fn typed_endpoint_header_oracle_v36() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    h::<SourceSsaElementV36>()
+        + h::<SourceSsaCarrierTypeV36>()
+        + h::<SourceSsaLoanV36>()
+        + h::<SourceSsaPhysicalV36>()
+        + h::<SourceSsaEndpointRowV36>()
+        + h::<ProductionSourceSsaEndpointV36<'_, '_>>()
+        + h::<Vec<Option<SemanticLocalIdV1>>>()
+        + h::<&mut [Option<SemanticLocalIdV1>]>()
+        + h::<&[Option<SemanticLocalIdV1>]>()
+        + h::<Option<SemanticLocalIdV1>>()
+        + h::<&SourceReferenceEmissionV29<'_, '_>>()
+        + h::<&SemanticSourceReferenceBindingV29>()
+        + h::<&SourceReferenceLoanV29>()
+        + h::<&SourceReferenceOriginV29>()
+        + h::<&fe2o3_mir_model::SsaConstructionPlanV1>()
+        + h::<fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'_>>()
+        + h::<std::slice::Iter<'_, fe2o3_pliron::ProductionSemanticSsaEntryDefinitionOccurrenceV1>>(
+        )
+        + h::<std::slice::Iter<'_, fe2o3_pliron::ProductionSemanticSsaEventOccurrenceV1>>()
+        + h::<std::slice::Iter<'_, fe2o3_pliron::ProductionSemanticSsaEdgeDefinitionOccurrenceV1>>()
+        + h::<std::slice::Iter<'_, Option<SemanticLocalIdV1>>>()
+        + h::<&SemanticTypeShapeV1>()
+        + h::<Option<SourceSsaCarrierTypeV36>>()
+        + h::<(
+            SourceReferenceBindingOriginV29,
+            Option<SourceSsaCarrierTypeV36>,
+        )>()
+        + h::<(Option<SourceSsaCarrierTypeV36>, &SemanticTypeShapeV1)>()
+        + h::<(bool, Option<SourceSsaCarrierTypeV36>)>()
+        + h::<(&SemanticValueBindingV1, &SemanticTypeShapeV1)>()
+        + h::<SemanticFunctionIdV1>()
+        + h::<SemanticLocalIdV1>()
+        + h::<SemanticTypeIdV1>()
+        + 12 * h::<usize>()
 }
 
 fn index_reader_header_oracle_v35() -> usize {

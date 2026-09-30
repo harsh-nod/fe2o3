@@ -1,4 +1,6 @@
 include!("production_source_safe_private_memory_v18_tests.rs");
+#[path = "production_source_typed_endpoints_v36_tests.rs"]
+mod typed_endpoint_tests;
 
 #[test]
 fn private_memory_source_error_preserves_typed_cause_and_existing_fixed_layout() {

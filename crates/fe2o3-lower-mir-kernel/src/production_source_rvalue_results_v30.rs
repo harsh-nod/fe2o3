@@ -2,6 +2,7 @@
 // Unmodeled whole bindings are explicit refusals in the new scalar proof query.
 include!("production_source_descriptor_operand_v30.rs");
 include!("production_source_index_computation_v35.rs");
+include!("production_source_typed_endpoints_v36.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceRvalueEndpointV30 {
@@ -25,6 +26,7 @@ struct SourceSsaRowV30 {
     instance: usize,
     original: SsaValueV1,
     endpoint: SourceRvalueEndpointV30,
+    typed: SourceSsaEndpointRowV36,
 }
 
 struct OwnedSourceRvaluesV30 {
@@ -94,6 +96,7 @@ fn source_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
         h::<ExecutionSiteV29>()?,
         source_descriptor_operand_headers_v30()?,
         source_index_reader_headers_v35()?,
+        source_typed_endpoint_headers_v36()?,
         h::<std::slice::Iter<'_, SourceRvalueRowV30>>()?,
         argument_product_v1(8, h::<usize>()?)?,
         h::<()>()?,
@@ -150,6 +153,7 @@ fn retain_source_rvalues_v30(
         // definition-site checks. Preserve its exact sorted SSA identities
         // before the temporary owning bindings are destroyed.
         archive.check_original_v29(instances, instance, budget)?;
+        let definitions = source_ssa_definition_locals_v36(instances, instance, budget)?;
         for (original, binding) in &archive.bindings.owned {
             budget.charge_work(3)?;
             if values.len() == values.capacity() {
@@ -159,8 +163,23 @@ fn retain_source_rvalues_v30(
                 instance: ordinal,
                 original: *original,
                 endpoint: source_rvalue_endpoint_v30(binding),
+                typed: retain_source_typed_endpoint_v36(
+                    instances,
+                    instance,
+                    references,
+                    &definitions,
+                    *original,
+                    binding,
+                    budget,
+                )?,
             });
         }
+        let definition_storage = argument_product_v1(
+            definitions.capacity(),
+            size_of::<Option<SemanticLocalIdV1>>(),
+        )?;
+        drop(definitions);
+        budget.release_storage(definition_storage)?;
         let start = rows.len();
         for (block, original) in function.blocks().iter().enumerate() {
             budget.charge_work(2)?;
