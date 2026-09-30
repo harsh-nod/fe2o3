@@ -15,6 +15,11 @@ pub(crate) const COMPILER_CWD_WORK: usize = OPERATION_WORK;
 pub(crate) const COMPILER_RESTRICTION_WORK: usize =
     4 * OPERATION_WORK + crate::syscall::COMPILER_RESTRICTION_INSTRUCTIONS * 64 + CONTROL_WORK;
 
+// GET_NO_NEW_PRIVS, SET_SECCOMP, GET_SECCOMP and immutable filter validation.
+// Every child pays this on the original parent ledger before clone.
+pub(crate) const NAMESPACE_RESTRICTION_WORK: usize =
+    3 * OPERATION_WORK + crate::syscall::NAMESPACE_RESTRICTION_INSTRUCTIONS * 64 + CONTROL_WORK;
+
 // SO_PEERCRED, getpid/getppid, socketpair, high-FD fcntl, three pre-gate
 // closes, sendmsg, and final high-FD close. The final dup3 is already included
 // in descriptor_count/child_work. Wire and ancillary construction are explicit.
@@ -61,10 +66,12 @@ pub(crate) fn child_work(descriptors: usize, cap_last_cap: u32) -> Result<usize,
         sum.checked_add(count).ok_or(Resource::Arithmetic)
     })?;
     // With the current 64-attempt gate: (166 + descriptors + 3 * capabilities)
-    // operations, each with syscall and scalar allowance, plus fixed control work.
+    // operations, each with syscall/scalar allowance, plus fixed control work
+    // and the unconditional child-only namespace filter.
     operations
         .checked_mul(OPERATION_WORK)
         .and_then(|work| work.checked_add(CONTROL_WORK))
+        .and_then(|work| work.checked_add(NAMESPACE_RESTRICTION_WORK))
         .ok_or(Resource::Arithmetic)
 }
 

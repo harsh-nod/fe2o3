@@ -18,6 +18,10 @@ struct Backing {
 #[derive(Clone, Copy)]
 enum Mode<'a> {
     Execute(&'a str),
+    NamespaceService,
+    NamespaceInstallDenied,
+    NamespaceWorkShort,
+    NamespaceStorageShort,
     WorkShort,
     Unwind,
     InstallDenied,
@@ -111,6 +115,20 @@ fn compiler_restrictions_survive_thread_fork_and_exec() {
 }
 
 #[test]
+#[ignore = "requires isolated root/outside custodian, clone3, CAP_SYS_PTRACE and static -pthread native_compiler_exec.c"]
+fn every_native_child_confines_namespaces_and_preserves_thread_fork_exec() {
+    let mut pool = pool();
+    run(&mut pool.0, Mode::NamespaceWorkShort);
+    run(&mut pool.0, Mode::NamespaceStorageShort);
+    run(&mut pool.0, Mode::NamespaceService);
+    run(&mut pool.0, Mode::Execute("namespace"));
+    // Stacking the shared namespace floor must not relax compiler memory denial.
+    run(&mut pool.0, Mode::Execute("anon-rx"));
+    // A later creator clone still succeeds; the filter did not reach the parent.
+    run(&mut pool.0, Mode::NamespaceService);
+}
+
+#[test]
 #[ignore = "requires isolated root, clone3, CAP_SYS_PTRACE and static -pthread native_compiler_exec.c"]
 fn compiler_restrictions_prepay_before_clone_and_keep_unwind_custody() {
     let mut pool = pool();
@@ -138,6 +156,32 @@ fn next_retained(
 
 fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     assert!(syscall::has_exact_root_identity());
+    let service = matches!(
+        mode,
+        Mode::NamespaceService
+            | Mode::NamespaceInstallDenied
+            | Mode::NamespaceWorkShort
+            | Mode::NamespaceStorageShort
+    );
+    let namespace = service || matches!(mode, Mode::Execute("namespace"));
+    if namespace {
+        // SAFETY: zero unshare flags and invalid setns/clone3 arguments neither
+        // create tasks nor change namespaces. Refuse a host filter that could
+        // supply the expected child errno before our filter ever installed.
+        unsafe {
+            assert_eq!(libc::syscall(libc::SYS_unshare, 0), 0);
+            assert_eq!(libc::syscall(libc::SYS_setns, -1, 0), -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EBADF)
+            );
+            assert_eq!(libc::syscall(libc::SYS_clone3, 0, 0), -1);
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EINVAL)
+            );
+        }
+    }
     let baseline = pool.report().unwrap();
     let image = File::open(
         std::env::var_os("FE2O3_NATIVE_COMPILER_EXEC_FIXTURE").expect("static -pthread fixture"),
@@ -166,6 +210,10 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     .unwrap();
     let name = match mode {
         Mode::Execute(name) => name,
+        Mode::NamespaceService
+        | Mode::NamespaceInstallDenied
+        | Mode::NamespaceWorkShort
+        | Mode::NamespaceStorageShort => "namespace",
         _ => "ordinary",
     };
     let arguments = [
@@ -182,28 +230,45 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     // SAFETY: this isolated root test owns these actual sources, exact bytes,
     // channels and cleanup controller. No protected compiler admission is made.
     let (stage, charge) = unsafe {
-        Stage::stage_compiler(
-            &image,
-            &arguments,
-            &[],
-            cwd.as_fd(),
-            [None, Some(output.as_fd()), None],
-            &[],
-            ready_writer.as_fd(),
-            gate.as_fd(),
-            status_writer.as_fd(),
-            source,
-            &mut b,
-        )
+        if service {
+            Stage::stage(
+                &image,
+                &[Binding::new(output.as_fd(), 198).unwrap()],
+                ready_writer.as_fd(),
+                gate.as_fd(),
+                status_writer.as_fd(),
+                source,
+                &mut b,
+            )
+        } else {
+            Stage::stage_compiler(
+                &image,
+                &arguments,
+                &[],
+                cwd.as_fd(),
+                [None, Some(output.as_fd()), None],
+                &[],
+                ready_writer.as_fd(),
+                gate.as_fd(),
+                status_writer.as_fd(),
+                source,
+                &mut b,
+            )
+        }
     }
     .unwrap();
     b.reserve_storage(charge.additional_storage()).unwrap();
+    if matches!(mode, Mode::NamespaceStorageShort) {
+        // Exactly one byte short of the shared pre-clone ABI/filter frame.
+        b.reserve_storage(LIMIT - b.storage() - (Stage::SPAWN_SCRATCH - 1))
+            .unwrap();
+    }
     let original_storage = b.storage();
     let ceiling = observations::read_cap_last_cap().unwrap();
     let exact = stage
         .spawn_retaining_work::<Backing>(ceiling, source)
         .unwrap();
-    if matches!(mode, Mode::WorkShort) {
+    if matches!(mode, Mode::WorkShort | Mode::NamespaceWorkShort) {
         b.charge_work(LIMIT - b.work() - (exact - 1)).unwrap();
     }
     let before = b.work();
@@ -220,20 +285,41 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     // all error/unwind paths before fixture inputs or the creator are retired.
     let spawned = unsafe { stage.spawn_retaining(credentials, backing, source, pool, &mut b) };
     drop(personality);
-    if matches!(mode, Mode::WorkShort) {
-        assert!(matches!(
-            spawned,
-            Err(Error::Resource(Resource::Work(_)))
-                | Err(Error::Cleanup(
-                    crate::ProtectedServiceCleanupErrorV2::Resource(Resource::Work(_))
-                ))
-        ));
-        let denied = b.failed_work().expect("first work denial");
+    if matches!(
+        mode,
+        Mode::WorkShort | Mode::NamespaceWorkShort | Mode::NamespaceStorageShort
+    ) {
+        if matches!(mode, Mode::NamespaceStorageShort) {
+            assert!(matches!(
+                spawned,
+                Err(Error::Resource(Resource::Storage(_)))
+            ));
+            assert_eq!(b.failed_storage(), Some(LIMIT + 1));
+            assert!(b.failed_work().is_none());
+        } else {
+            assert!(matches!(
+                spawned,
+                Err(Error::Resource(Resource::Work(_)))
+                    | Err(Error::Cleanup(
+                        crate::ProtectedServiceCleanupErrorV2::Resource(Resource::Work(_))
+                    ))
+            ));
+            assert!(b.failed_work().is_some());
+            assert!(b.failed_storage().is_none());
+        }
+        let denied = (b.failed_work(), b.failed_storage());
         assert_eq!(b.storage(), original_storage);
         assert_eq!(pool.report().unwrap().storage, baseline.storage);
         assert_eq!(rustix::io::read(&witness, &mut [0]).unwrap(), 0);
         assert_eq!(output.metadata().unwrap().len(), 0);
-        assert_eq!(b.failed_work(), Some(denied));
+        assert_eq!((b.failed_work(), b.failed_storage()), denied);
+        assert_eq!(pool.report().unwrap().failed_work, baseline.failed_work);
+        assert_eq!(pool.report().unwrap().work_limit, baseline.work_limit);
+        drop(stage);
+        drop(ready_writer);
+        drop(status_writer);
+        assert_eq!(rustix::io::read(&ready, &mut [0]).unwrap(), 0);
+        assert_eq!(rustix::io::read(&status, &mut [0]).unwrap(), 0);
         return;
     }
     let (mut child, charge) = spawned.unwrap();
@@ -248,7 +334,10 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     let deadline = Instant::now() + Duration::from_secs(10);
     if matches!(
         mode,
-        Mode::InstallDenied | Mode::QueryDenied | Mode::InheritedReadImpliesExec
+        Mode::InstallDenied
+            | Mode::NamespaceInstallDenied
+            | Mode::QueryDenied
+            | Mode::InheritedReadImpliesExec
     ) {
         while child.is_live(&mut b).unwrap() {
             assert!(Instant::now() < deadline);
@@ -257,7 +346,14 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
         assert_eq!(rustix::io::read(&ready, &mut [0]).unwrap(), 0);
         let mut byte = [0];
         assert_eq!(rustix::io::read(&status, &mut byte).unwrap(), 1);
-        assert_eq!(byte, [0xcd]);
+        assert_eq!(
+            byte,
+            [if matches!(mode, Mode::NamespaceInstallDenied) {
+                0xce
+            } else {
+                0xcd
+            }]
+        );
         assert_eq!(output.metadata().unwrap().len(), 0);
         let _ = child.cancel();
         drop(child);
@@ -317,7 +413,7 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
                 ));
                 trace.resume(&mut b).unwrap();
             };
-            if matches!(name, "ordinary" | "fork" | "fork-exec") {
+            if matches!(name, "ordinary" | "fork" | "fork-exec" | "namespace") {
                 assert_eq!(terminal.exit_code(), Some(7), "{name}");
             } else {
                 assert_eq!(terminal.terminating_signal(), Some(libc::SIGSYS), "{name}");
@@ -326,12 +422,20 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
             assert_eq!(rustix::io::read(&witness, &mut [0]), Err(Errno::AGAIN));
             let _ = trace.cancel();
             drop(trace);
-            let mut marker = [0; b"restriction probe\n".len()];
+            let expected: &[u8] = if namespace {
+                b"namespace probe\nnamespace thread fork exec complete\n"
+            } else {
+                b"restriction probe\n"
+            };
+            let mut marker = vec![0; expected.len()];
             assert_eq!(
                 rustix::io::pread(&output, &mut marker, 0).unwrap(),
                 marker.len()
             );
-            assert_eq!(&marker, b"restriction probe\n");
+            assert_eq!(marker.as_slice(), expected);
+            if namespace {
+                assert_eq!(output.metadata().unwrap().len(), expected.len() as u64);
+            }
         }
     }
     // No request quota is released while any source may remain in the pool.
@@ -355,6 +459,10 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
     assert_eq!(pool.report().unwrap().storage, baseline.storage);
     assert_eq!(pool.report().unwrap().work_limit, baseline.work_limit);
     assert_eq!(pool.report().unwrap().failed_work, baseline.failed_work);
+    if namespace {
+        assert!(b.failed_work().is_none());
+        assert!(b.failed_storage().is_none());
+    }
 }
 
 #[test]
@@ -362,6 +470,13 @@ fn run(pool: &mut Cleanup, mode: Mode<'_>) {
 fn compiler_filter_install_failure_is_terminal_without_ready_or_exec() {
     const TEST: &str = "native_spawn::compiler_spawn::exec_tests::restrictions::compiler_filter_install_failure_is_terminal_without_ready_or_exec";
     isolated_refusal(TEST, Mode::InstallDenied);
+}
+
+#[test]
+#[ignore = "requires isolated root/outside custodian, clone3, seccomp and static -pthread native_compiler_exec.c"]
+fn namespace_filter_install_failure_is_terminal_without_ready_or_exec() {
+    const TEST: &str = "native_spawn::compiler_spawn::exec_tests::restrictions::namespace_filter_install_failure_is_terminal_without_ready_or_exec";
+    isolated_refusal(TEST, Mode::NamespaceInstallDenied);
 }
 
 #[test]
@@ -382,7 +497,10 @@ fn isolated_refusal(test: &str, mode: Mode<'_>) {
     const SENTINEL: &str = "FE2O3_COMPILER_RESTRICTION_REFUSAL_CHILD";
     if std::env::var_os(SENTINEL).is_some() {
         let mut pool = pool();
-        if matches!(mode, Mode::InstallDenied | Mode::QueryDenied) {
+        if matches!(
+            mode,
+            Mode::InstallDenied | Mode::NamespaceInstallDenied | Mode::QueryDenied
+        ) {
             install_denial(mode);
         }
         if matches!(mode, Mode::InstallDenied) {
@@ -442,13 +560,13 @@ fn isolated_refusal(test: &str, mode: Mode<'_>) {
 
 fn install_denial(mode: Mode<'_>) {
     let (nr, argument) = match mode {
-        Mode::InstallDenied => (157, 22),     // prctl(PR_SET_SECCOMP)
+        Mode::InstallDenied | Mode::NamespaceInstallDenied => (157, 22), // prctl(PR_SET_SECCOMP)
         Mode::QueryDenied => (135, u32::MAX), // personality query sentinel
         _ => panic!("invalid denial fixture mode"),
     };
     // SAFETY: this is the isolated clone-originating test thread after harness
     // startup. The kernel copies fixed stack BPF synchronously. Its EPERM denial
-    // is inherited by the actual compiler child, not injected through a test hook.
+    // is inherited by the actual service/compiler child, not a test hook.
     // The surrounding exact-test subprocess owns this irreversible restriction.
     unsafe {
         let filter = [

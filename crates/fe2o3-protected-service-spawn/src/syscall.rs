@@ -52,6 +52,12 @@ pub(crate) use compiler_restrictions::{
     INSTRUCTIONS as COMPILER_RESTRICTION_INSTRUCTIONS, SCRATCH as COMPILER_RESTRICTION_SCRATCH,
 };
 
+#[path = "native_namespace_restrictions.rs"]
+mod namespace_restrictions;
+pub(crate) use namespace_restrictions::{
+    INSTRUCTIONS as NAMESPACE_RESTRICTION_INSTRUCTIONS, SCRATCH as NAMESPACE_RESTRICTION_SCRATCH,
+};
+
 pub(crate) fn has_exact_root_identity() -> bool {
     let mut uids = [u32::MAX; 3];
     let mut gids = [u32::MAX; 3];
@@ -602,6 +608,12 @@ unsafe fn child_exec(
         // the existing owned status/terminal cleanup path, never a weak fallback.
         if staged.compiler.is_some() && !compiler_restrictions::install() {
             child_fail(staged.exec_status_writer.as_raw_fd(), 13);
+        }
+        // Every child is confined after mappings/profile/channel setup, never
+        // the creator that still needs clone3 for later launches. Stack with,
+        // rather than replace, the compiler filter before any READY or exec.
+        if !namespace_restrictions::install() {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 14);
         }
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
         if libc::syscall(

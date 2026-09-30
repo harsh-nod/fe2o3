@@ -188,6 +188,7 @@ impl StagedProtectedServiceExecV2 {
         + observations::CAPABILITY_CEILING_SCRATCH
         + syscall::COMPILER_CHANNEL_SCRATCH
         + syscall::COMPILER_RESTRICTION_SCRATCH
+        + syscall::NAMESPACE_RESTRICTION_SCRATCH
         + 8192;
 
     /// Checked conservative full result charge including every duplicated image.
@@ -333,6 +334,10 @@ impl StagedProtectedServiceExecV2 {
     }
 
     /// Creates one root-to-service child under pre-funded finite cleanup custody.
+    /// Every child installs an inherited namespace filter before READY/exec:
+    /// unshare/setns and namespace-bearing legacy clone refuse with EPERM;
+    /// clone3 returns ENOSYS. The creator is not filtered. This does not establish
+    /// cgroup-control exclusion, approved libc fallback or deployment authority.
     /// Returns a FULL unreserved child charge. Drop of a successfully returned
     /// child uses only the reservation's emergency allowance, never a fresh ledger.
     ///
