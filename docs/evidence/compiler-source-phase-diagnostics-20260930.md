@@ -344,6 +344,93 @@ r125 source snapshot:
 Log SHA-256:
 `3f0a116305bfede9b985ecc08f61d7c12c5efca9d9df88b4595d068c22e9c75d`.
 
+## Immutable Compiler Reconciliation
+
+The separate integration candidate reconciles source work `905e76107` with the
+published, immutable #271 checkpoint
+`7776f9d9b2c8af5a260a0c234886f207398235d4` and public runtime checkpoint
+`102be5b1b07058c6d804c36f081d809c7bfbc415`. It does not copy the compiler owner's
+live worktree. The integrated source commit is
+`54f15da57ff0fad547bb5fa94f26f32b72732c0e`; it remains unqualified and is not on
+the public main branches.
+
+The reconciliation preserves the owner's original SSA/rvalue archives,
+same-type slice-reborrow source-use ordering, store-guard checks, and single
+index-reader implementation. It composes the exact V40 importer and source
+commitments with the retained source/loan checks, rather than adding a second
+production route. Independent source review found no merge-specific blocker;
+execution is a separate gate.
+
+Guarded lowerer run `r129` compiled the candidate and completed with status 101:
+**442 passed, 7 failed, none ignored**, from 449 selected tests. This selection
+also includes the newer owner's rvalue and reborrow regressions, so it is not
+the same denominator as r125. The source and tool snapshots stayed unchanged.
+
+- The three native-helper receiver fixtures now stop specifically during
+  `execution availability during defined child request`, before the native
+  correspondence callback or intended mutations.
+- Two same-type slice-reborrow tests panic inside their audit callback's exact
+  diagnostic assertion. Their positive end-to-end test outcomes are still failed.
+- One shared-index origin test observes retained storage above its expected
+  no-scratch floor; the accounting discrepancy requires investigation.
+- One original shared-index mutation test receives the localized
+  `source reference promoted borrow archive differs from source SSA` diagnostic,
+  rather than its expected rejection detail. This is not accepted as passing
+  coverage without reconciling the intended boundary.
+
+A subsequent mechanical split separates shared-borrow origin queries, their
+carrier tests, and test-only expression helpers. Expanding the includes and
+formatting reconstructs the original three files exactly. The combined delta
+then passes the existing hygiene policy, without suppressions or removed checks.
+Compilation and actual-source validation of that successor remain separate
+gates. Neither reconciliation nor these component results advances M1 or 0/47.
+
+Subsequent independent review traced the 7,169-byte origin-test delta to fixed
+query headers intentionally retained by the enclosing emission scope, not a
+failed scratch refund. A separate test correction derives that exact delta
+from the original statement roster and concrete header types, while still
+requiring the scratch-only query to refund its full frame. It also updates the
+two localized-diagnostic expectations and requires reached mutation sites and
+unchanged rejected cursor state. These corrections have not yet been executed;
+they do not retroactively turn r129 into a passing run.
+
+Frontend run `r130` at successor
+`c3d15de67cf6df9334371a3e0d7b3d209af51364` passed **128 tests**, with **18 ignored**
+and none failed. It covers selected source-schema commitments, context custody,
+fixed provider policies, source observers, trusted-item controls and the default
+entry's refusal to fall back to a conditional continuation. The ignored genuine
+source callbacks and repeated-mutable pointer-cast matrix were compiled but not
+executed by this selection. Source and tool snapshots remained unchanged.
+
+r130 source snapshot SHA-256:
+`93349a6457b77801848716cdd4f86ed63926b108b13942c35bc04bedae37d763`.
+Log SHA-256:
+`358b0a4089952a3f6c26861dbf44b1ec62152464299d23aa6ec03996ac1cd4e1`.
+
+The subsequent actual-source run `r131` completed on that same successor and
+snapshot with status 101. All **80 fresh sessions** now pass the former ordered
+destination-claim and Store-guard failures, but stop later at
+`Source(Binding("slice global effect census is incomplete"))`. This affects
+both gfx942/gfx950 targets, both MIR levels, both optimizer settings, and both
+repeats of every mode: 16 positives and 64 named negative controls. None reaches
+the intended consuming callback or negative boundary. The parent result is
+0 passed / 1 failed / 0 ignored; its 292.88-second matrix is not 80 passing tests.
+
+The guard confirmed stable sources/tools, and the harness's private
+`fe2o3-context-source-v29-1796803-0` scratch was absent after termination. No
+protected proof, simulator or GPU workload was run. The newer published #271
+checkpoint `c1b5856df54dc3c3ef8688fde2b09989e0541d7d` is a separate dependency
+under comparison, not the revision tested by r131. Its live worktree was not
+copied into this run.
+
+r131 log SHA-256:
+`a646ff24cc575ec713a9e088f4de8322f7876aad242c56ea40b400e8a5649a66`.
+
+r129 source snapshot SHA-256:
+`13cf593236e8deaddb38b62b958b432df8aa7c37337097fd7dc3bea8d3e19a56`.
+Log SHA-256:
+`cb58f1474cbd83008f5ff05f831ba9afee6e4789d5f5e0b537ffefaa0752dab5`.
+
 ## Runtime Observation
 
 A primary-session read-only SSH check reached MI350-2 on 2026-09-30 and confirmed
