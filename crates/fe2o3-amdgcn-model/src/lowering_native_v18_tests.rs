@@ -206,7 +206,7 @@ fn native_v18_inert_scalar_unit_metadata_uses_actual_owner_without_legacy_wideni
 }
 
 #[test]
-fn native_v18_unused_record_array_and_pointer_metadata_remain_refused() {
+fn native_v18_unused_record_array_and_pointer_metadata_keep_exact_owner_anchors() {
     use fe2o3_kernel_ir::{
         StorageFieldV1, StorageLayoutIdV1 as Id, StorageLayoutKindV1 as Kind, StorageLayoutV1,
         StoragePointerV1,
@@ -250,17 +250,23 @@ fn native_v18_unused_record_array_and_pointer_metadata_remain_refused() {
         let mut work = Work::new(1_000_000_000);
         let mut budget = Budget::new(&mut work, 1_000_000_000);
         let (owner, retained) = admit_v18(&module, &mut budget);
-        for error in [
-            lower_canonical_v18_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(&owner).unwrap_err(),
-            lower_canonical_v18_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(&owner).unwrap_err(),
+        for llvm in [
+            lower_canonical_v18_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(&owner).unwrap(),
+            lower_canonical_v18_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(&owner).unwrap(),
         ] {
-            assert!(error.contains(LoweringDiagnosticCode::UnsupportedType));
-            assert!(error.to_string().contains("only inert scalar/unit layout metadata"));
+            assert!(llvm.contains("kir-version:18"));
+            assert!(llvm.contains(&format!("sha256:{}", lower_hex(owner.identity().digest()))));
         }
+        assert_eq!(owner.module().storage_layouts, module.storage_layouts);
+        assert!(reject_unsupported_v12_module(owner.module()).is_err());
         drop(owner);
         budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), 0);
     }
 }
+
+#[path = "lowering_native_inert_layout_v18_tests.rs"]
+mod inert_layout_tests;
 
 #[test]
 fn native_v18_dead_storage_type_and_read_are_not_authorized_by_scalar_metadata() {

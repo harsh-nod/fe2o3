@@ -21,26 +21,12 @@ pub(super) fn reject_unsupported_v17_module(
     reject_unsupported_module(owner.module(), Some(OrderedProfile::ProgramV17), false)
 }
 
-/// Only a genuine V18 owner may retain inert scalar/unit layout metadata.
-/// No storage type or operation is admitted by this metadata-only exception.
+/// Only a genuine V18 owner may retain its validated layout table. The complete
+/// executable scan below still refuses every storage type and operation, so
+/// unreferenced declarations never imply storage-aware lowering support.
 pub(super) fn reject_unsupported_v18_module(
     owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
 ) -> Result<(), LoweringErrors> {
-    use fe2o3_kernel_ir::StorageLayoutKindV1;
-    for row in &owner.module().storage_layouts {
-        let inert_scalar = match &row.kind {
-            StorageLayoutKindV1::Scalar(_) => true,
-            StorageLayoutKindV1::Record(fields) => fields.is_empty() && row.size == 0,
-            _ => false,
-        };
-        if !inert_scalar {
-            return Err(LoweringErrors::one(
-                LoweringLocation::module(owner.module()),
-                LoweringDiagnosticCode::UnsupportedType,
-                "V18 scalar LLVM lowering admits only inert scalar/unit layout metadata",
-            ));
-        }
-    }
     reject_unsupported_module(owner.module(), None, true)
 }
 
@@ -53,9 +39,9 @@ enum OrderedProfile {
 fn reject_unsupported_module(
     module: &Module,
     ordered: Option<OrderedProfile>,
-    scalar_v18_metadata: bool,
+    checked_v18_metadata: bool,
 ) -> Result<(), LoweringErrors> {
-    if !scalar_v18_metadata && !module.storage_layouts.is_empty() {
+    if !checked_v18_metadata && !module.storage_layouts.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
             LoweringDiagnosticCode::UnsupportedType,
