@@ -233,3 +233,25 @@ Do not label expanded helpers RawEmpty or add a vecadd-specific production route
 Popper/Carson's larger-root resource windows, native process/proof transport,
 finalizer activation and protected safe-host launch are separate owners. This
 patch changes none of those implementations and claims no milestone completion.
+
+## Shared Context And Nominal Types Candidate
+
+The private M1 candidate adds an explicit semantic-MIR V40 composition for
+ordinary operations, RustCall locals, execution-role records and nominal
+`usize`/`isize`. V29 cannot encode nominal pointer-sized types; V35 deliberately
+excludes execution roles and RustCall locals. Selecting the larger version number
+or erasing nominality would not resolve that incompatibility.
+
+V40 reuses the existing validators and encoding fields with closed feature
+membership. The legacy admission defaults, V29/V35 bytes and specialized sibling
+grammars remain unchanged. Decoding these inert records does not authenticate a
+Rust producer or create a capability. Twelve focused tests cover the four
+context/nominal combinations, mixed roots/helpers, RustCall, representation and
+role mutations, exact resource boundaries and incompatible-family refusal.
+Their execution is pending an isolated build; no passing result is claimed here.
+
+Allocation is provisional under the
+[#271 coordination scope](https://github.com/harsh-nod/fe2o3/issues/271#issuecomment-5902088576).
+The live importer and checked source-owned continuation still need to consume
+this contract with their original source, ABI and execution custody intact.
+This schema prerequisite does not complete M1 or advance the 0/47 matrix.
