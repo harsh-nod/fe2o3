@@ -250,6 +250,325 @@ fn scaled_public_constructor_rejects_bad_capacity_before_opening_kfd() {
     }
 }
 
+fn shared_host_payload_recipe() -> OwnedComputeLaunchV1 {
+    OwnedComputeLaunchV1 {
+        stream: 7,
+        kernel: 11,
+        explicit_kernarg: vec![0x5a; 32].into_boxed_slice(),
+        bindings: vec![BackendBindingV1 {
+            region: BackendMemoryRegionV1 {
+                allocation: 19,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 0,
+                byte_len: 64,
+            },
+            kernarg_byte_offset: 0,
+        }]
+        .into_boxed_slice(),
+        geometry: crate::RuntimeLaunchGeometryV1 {
+            grid: [64, 1, 1],
+            workgroup: [64, 1, 1],
+            dynamic_shared_bytes: 0,
+        },
+        semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+    }
+}
+
+fn shared_host_payload_bytes(launch: &OwnedComputeLaunchV1) -> u64 {
+    (launch.explicit_kernarg.len()
+        + launch.bindings.len() * core::mem::size_of::<BackendBindingV1>()) as u64
+}
+
+#[test]
+fn shared_host_account_constructor_refuses_before_kfd_and_refunds_partial_tables() {
+    for (device, bytes, records, kind) in [
+        (0, u64::MAX, 4, KfdRuntimeBackendErrorKindV1::InvalidLaunch),
+        (1, 0, 2, KfdRuntimeBackendErrorKindV1::Capacity),
+        (
+            1,
+            2 * pipeline_bytes() - 1,
+            2,
+            KfdRuntimeBackendErrorKindV1::Capacity,
+        ),
+        (1, u64::MAX, 1, KfdRuntimeBackendErrorKindV1::Capacity),
+    ] {
+        let account = account(bytes, records);
+        let before = account.usage();
+        let result = KfdRuntimeBackendV1::open_gfx942_vecadd_repeat_scale_qualification_with_shared_host_account_v1(
+            device, account.clone(),
+        );
+        assert!(matches!(result, Err(error) if error.kind() == kind));
+        assert_eq!(account.usage(), before);
+    }
+}
+
+#[test]
+fn shared_host_account_payload_and_tables_share_identity_bytes_and_final_alias_refund() {
+    let launch = shared_host_payload_recipe();
+    let payload_bytes = shared_host_payload_bytes(&launch);
+    let account = account(2 * pipeline_bytes() + payload_bytes, 4);
+    let backend = backend(account.clone());
+    assert!(backend.launch_payload_account.is_none());
+    let backend = backend.with_shared_host_payload_account_v1();
+    assert!(
+        backend
+            .dispatch_capacity
+            .account
+            .as_ref()
+            .unwrap()
+            .shares_ledger_with(&account)
+    );
+    assert!(
+        backend
+            .launch_payload_account
+            .as_ref()
+            .unwrap()
+            .shares_ledger_with(&account)
+    );
+    let payload = RetainedComputeLaunchV1::copy_from(
+        launch.borrowed(),
+        backend.launch_payload_account.as_ref(),
+    )
+    .unwrap();
+    let alias = Arc::clone(&payload);
+    let charged = account.usage();
+    assert_eq!(
+        charged.used.get(ResourceKindV1::ControlResidentBytes),
+        2 * pipeline_bytes() + payload_bytes
+    );
+    assert_eq!(charged.retained_records, 3);
+    assert_eq!(
+        backend.scale_qualification_host_table_usage_v1(),
+        Some(charged)
+    );
+    assert_eq!(
+        backend.scale_qualification_launch_payload_account_usage_v1(),
+        Some(charged)
+    );
+    rejected(
+        RetainedComputeLaunchV1::copy_from(
+            launch.borrowed(),
+            backend.launch_payload_account.as_ref(),
+        ),
+        KfdRuntimeBackendErrorKindV1::Capacity,
+    );
+    assert_eq!(account.usage(), charged);
+    drop(backend);
+    assert_eq!(
+        account
+            .usage()
+            .used
+            .get(ResourceKindV1::ControlResidentBytes),
+        payload_bytes
+    );
+    assert_eq!(account.usage().retained_records, 1);
+    drop(payload);
+    assert_eq!(account.usage().retained_records, 1);
+    drop(alias);
+    assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+    assert_eq!(account.usage().retained_records, 0);
+}
+
+#[test]
+fn shared_host_account_payload_competes_with_epoch_and_custody_tables_before_native_work() {
+    let launch = shared_host_payload_recipe();
+    let account = account(u64::MAX, 3);
+    let mut backend = backend(account.clone()).with_shared_host_payload_account_v1();
+    let baseline = account.usage();
+    let payload = RetainedComputeLaunchV1::copy_from(
+        launch.borrowed(),
+        backend.launch_payload_account.as_ref(),
+    )
+    .unwrap();
+    let charged = account.usage();
+    rejected(
+        backend.preallocate_native_binding_v1(false),
+        KfdRuntimeBackendErrorKindV1::Capacity,
+    );
+    assert!(RuntimeAllocationCustodyV1::try_new(&backend.dispatch_capacity).is_err());
+    assert_eq!(account.usage(), charged);
+    assert!(!backend.terminal && backend.queue.is_none() && backend.admitted_device.is_none());
+    assert!(backend.native_compute_lanes.iter().all(Option::is_none));
+    drop(payload);
+    assert_eq!(account.usage(), baseline);
+
+    // This allocates only the real epoch host table, not a queue or native backing.
+    let epoch = backend
+        .preallocate_native_binding_v1(false)
+        .unwrap()
+        .unwrap();
+    rejected(
+        RetainedComputeLaunchV1::copy_from(
+            launch.borrowed(),
+            backend.launch_payload_account.as_ref(),
+        ),
+        KfdRuntimeBackendErrorKindV1::Capacity,
+    );
+    drop(epoch);
+    assert_eq!(account.usage(), baseline);
+    let custody = RuntimeAllocationCustodyV1::try_new(&backend.dispatch_capacity).unwrap();
+    rejected(
+        RetainedComputeLaunchV1::copy_from(
+            launch.borrowed(),
+            backend.launch_payload_account.as_ref(),
+        ),
+        KfdRuntimeBackendErrorKindV1::Capacity,
+    );
+    drop(custody);
+    assert_eq!(account.usage(), baseline);
+    assert!(backend.queue.is_none() && backend.admitted_device.is_none());
+    drop(backend);
+    assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+}
+
+#[test]
+fn shared_host_account_sibling_charges_enforce_root_byte_and_record_limits() {
+    let launch = shared_host_payload_recipe();
+    let payload_bytes = shared_host_payload_bytes(&launch);
+    for record_limit in [false, true] {
+        let records = if record_limit { 3 } else { 4 };
+        let bootstrap =
+            fe2o3_resource_accounting::resource_domain_bootstrap_bytes_v1(3, records).unwrap();
+        let root = ResourceCreditAccountV1::new_root(
+            ResourceVectorV1::ZERO.with(
+                ResourceKindV1::ControlResidentBytes,
+                if record_limit {
+                    u64::MAX
+                } else {
+                    bootstrap + 2 * pipeline_bytes() + payload_bytes
+                },
+            ),
+            3,
+            records,
+        )
+        .unwrap();
+        let before = root.usage();
+        let child = root
+            .new_child(
+                ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, u64::MAX),
+                records,
+            )
+            .unwrap();
+        let sibling = root
+            .new_child(
+                ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, u64::MAX),
+                records,
+            )
+            .unwrap();
+        let competing = sibling
+            .reserve(
+                ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, payload_bytes),
+            )
+            .unwrap()
+            .retain();
+        let backend = backend(child.clone()).with_shared_host_payload_account_v1();
+        let payload_account = backend.launch_payload_account.as_ref().unwrap();
+        assert!(payload_account.shares_ledger_with(&child));
+        assert!(payload_account.shares_root_with(&sibling));
+        assert!(!payload_account.shares_ledger_with(&sibling));
+        let charged = root.usage();
+        rejected(
+            RetainedComputeLaunchV1::copy_from(launch.borrowed(), Some(payload_account)),
+            KfdRuntimeBackendErrorKindV1::Capacity,
+        );
+        assert_eq!(root.usage(), charged);
+        competing.release_after_disposal().unwrap();
+        let payload =
+            RetainedComputeLaunchV1::copy_from(launch.borrowed(), Some(payload_account)).unwrap();
+        assert_eq!(root.usage().retained_records, 3);
+        drop(payload);
+        drop(backend);
+        assert_eq!(child.usage().used, ResourceVectorV1::ZERO);
+        assert_eq!(root.usage(), before);
+    }
+}
+
+#[test]
+fn shared_host_account_child_keeps_intermediate_ancestor_limits() {
+    let launch = shared_host_payload_recipe();
+    for record_limit in [false, true] {
+        let root = ResourceCreditAccountV1::new_root(
+            ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, u64::MAX),
+            3,
+            4,
+        )
+        .unwrap();
+        let before = root.usage();
+        let parent = root
+            .new_child(
+                ResourceVectorV1::ZERO.with(
+                    ResourceKindV1::ControlResidentBytes,
+                    if record_limit {
+                        u64::MAX
+                    } else {
+                        2 * pipeline_bytes() + shared_host_payload_bytes(&launch) - 1
+                    },
+                ),
+                if record_limit { 2 } else { 4 },
+            )
+            .unwrap();
+        let child = parent
+            .new_child(
+                ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, u64::MAX),
+                4,
+            )
+            .unwrap();
+        let backend = backend(child.clone()).with_shared_host_payload_account_v1();
+        let charged = root.usage();
+        rejected(
+            RetainedComputeLaunchV1::copy_from(
+                launch.borrowed(),
+                backend.launch_payload_account.as_ref(),
+            ),
+            KfdRuntimeBackendErrorKindV1::Capacity,
+        );
+        assert_eq!(root.usage(), charged);
+        drop(backend);
+        let payload = RetainedComputeLaunchV1::copy_from(launch.borrowed(), Some(&child)).unwrap();
+        assert_eq!(parent.usage().retained_records, 1);
+        drop(payload);
+        assert_eq!(child.usage().used, ResourceVectorV1::ZERO);
+        assert_eq!(root.usage(), before);
+    }
+}
+
+#[test]
+fn shared_host_account_quarantined_credit_is_not_recovered_by_payload_or_table_refusal() {
+    let launch = shared_host_payload_recipe();
+    let account = account(u64::MAX, 3);
+    let mut backend = backend(account.clone()).with_shared_host_payload_account_v1();
+    account
+        .reserve(ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, 1))
+        .unwrap()
+        .retain()
+        .quarantine();
+    let charged = account.usage();
+    assert_eq!(charged.quarantined_records, 1);
+    assert!(!charged.poisoned);
+    rejected(
+        RetainedComputeLaunchV1::copy_from(
+            launch.borrowed(),
+            backend.launch_payload_account.as_ref(),
+        ),
+        KfdRuntimeBackendErrorKindV1::Capacity,
+    );
+    rejected(
+        backend.preallocate_native_binding_v1(false),
+        KfdRuntimeBackendErrorKindV1::Capacity,
+    );
+    assert_eq!(account.usage(), charged);
+    drop(backend);
+    assert_eq!(
+        account
+            .usage()
+            .used
+            .get(ResourceKindV1::ControlResidentBytes),
+        1
+    );
+    assert_eq!(account.usage().quarantined_records, 1);
+    assert_eq!(account.usage().retained_records, 0);
+}
+
 #[test]
 fn scaled_capacity_is_forwarded_at_both_native_startup_sites() {
     // Source routing is not evidence of native construction or publication.

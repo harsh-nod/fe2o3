@@ -280,6 +280,50 @@ impl KfdRuntimeBackendV1 {
         Ok(backend)
     }
 
+    /// Opens the repeat profile with one existing account for charged host tables
+    /// and retained launch payloads.
+    ///
+    /// Both runtime pipeline tables are reserved before opening KFD. Native epoch
+    /// host tables, per-allocation custody tables and retained kernarg/binding
+    /// slices then compete for the same account's bytes and reservation records.
+    /// A domain child keeps its exact leaf identity and all ancestor limits;
+    /// this constructor creates neither an account nor an accounting domain.
+    /// Include table replacement peaks and one record per live table or payload.
+    ///
+    /// Only these requested payload extents are charged. This is not total-memory
+    /// accounting: dependencies, other metadata, Arc/allocator overhead, Context
+    /// registries, native backing and RSS remain outside this budget. Fallible
+    /// vector reservation does not make Arc allocation OOM-safe. No new launch,
+    /// native disposal, quiescence or performance authority is granted.
+    #[cfg(feature = "scale-qualification")]
+    pub fn open_gfx942_vecadd_repeat_scale_qualification_with_shared_host_account_v1(
+        device_unique_id: u64,
+        account: ResourceCreditAccountV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        if device_unique_id == 0 {
+            return Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "device unique id must be nonzero",
+            ));
+        }
+        let admitted = crate::qualification_gfx942_vecadd_repeat_v1::admit_gfx942_vecadd_repeat_qualification_v1()
+            .map_err(|error| KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch, error.to_string(),
+            ))?;
+        Self::open_gfx942_vecadd_scaled_with_host_table_account_v1(
+            device_unique_id,
+            account,
+            KfdRuntimeLaunchGateV1::ExactGfx942VecaddRepeat(admitted),
+        )
+        .map(Self::with_shared_host_payload_account_v1)
+    }
+
+    #[cfg(feature = "scale-qualification")]
+    fn with_shared_host_payload_account_v1(mut self) -> Self {
+        self.launch_payload_account = self.dispatch_capacity.account.clone();
+        self
+    }
+
     /// Usage of the attached account, including any other participating owners.
     /// Neither zero usage nor disposal grants native quiescence authority.
     #[cfg(feature = "scale-qualification")]
@@ -298,19 +342,33 @@ impl KfdRuntimeBackendV1 {
         max_host_table_reservations: usize,
         gate: KfdRuntimeLaunchGateV1,
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
-        let dispatch = ResourceCreditAccountV1::new(
+        let account = ResourceCreditAccountV1::new(
             ResourceVectorV1::ZERO.with(
                 ResourceKindV1::ControlResidentBytes,
                 host_table_budget_bytes,
             ),
             max_host_table_reservations,
         )
-        .and_then(|account| {
-            RuntimeDispatchStateV1::try_new(RuntimeDispatchCapacityV1::qualification_1024(account))
-        })
         .map_err(|error| {
             KfdRuntimeBackendErrorV1::new(KfdRuntimeBackendErrorKindV1::Capacity, error.to_string())
         })?;
+        Self::open_gfx942_vecadd_scaled_with_host_table_account_v1(device_unique_id, account, gate)
+    }
+
+    #[cfg(feature = "scale-qualification")]
+    fn open_gfx942_vecadd_scaled_with_host_table_account_v1(
+        device_unique_id: u64,
+        account: ResourceCreditAccountV1,
+        gate: KfdRuntimeLaunchGateV1,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let dispatch =
+            RuntimeDispatchStateV1::try_new(RuntimeDispatchCapacityV1::qualification_1024(account))
+                .map_err(|error| {
+                    KfdRuntimeBackendErrorV1::new(
+                        KfdRuntimeBackendErrorKindV1::Capacity,
+                        error.to_string(),
+                    )
+                })?;
         let device = Self::open_checked_device_v1(device_unique_id)?;
         Ok(Self::new_with_dispatch_state_v1(
             Self::describe_device_v1(&device),
@@ -324,7 +382,9 @@ impl KfdRuntimeBackendV1 {
         ))
     }
 
-    /// Reports only this opt-in profile's host-table ledger, not GPU or total memory.
+    /// Reports the attached host-table account, including other participating owners.
+    /// With a shared host account this includes retained launch payloads too, but
+    /// never implies GPU or total-memory accounting.
     #[cfg(feature = "scale-qualification")]
     pub fn scale_qualification_host_table_usage_v1(
         &self,
