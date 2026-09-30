@@ -1,4 +1,6 @@
 use super::*;
+#[path = "canonical_ranked_selected_pending_v30_tests.rs"]
+mod selected_memory_v30;
 use fe2o3_kernel_ir::{
     Axis, CheckedCanonicalConditionalSliceDomainsV26 as Globals, ComparePredicate,
     ExplicitLaunchExtent, FormalIndexWidth, FunctionRole, IntrinsicOperation,

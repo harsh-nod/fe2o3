@@ -405,7 +405,9 @@ pub use private_memory::PendingCanonicalPrivateMemoryPoliciesV18;
 
 #[path = "canonical_ranked_mixed_pending_v26.rs"]
 mod mixed_memory;
-pub use mixed_memory::PendingCanonicalMixedMemoryPoliciesV26;
+pub use mixed_memory::{
+    PendingCanonicalMixedMemoryPoliciesV26, PendingCanonicalSelectedMemoryPoliciesV30,
+};
 
 #[path = "canonical_global_pending_v18.rs"]
 mod global_memory;

@@ -10,6 +10,7 @@ mod fixed_policy_v3;
 mod graph_analysis_v1;
 mod kir_bridge_v1;
 mod kir_optimization_map_v12;
+mod native_conditional_domains_v30;
 mod optimization_v1;
 mod optimization_v12;
 mod production;

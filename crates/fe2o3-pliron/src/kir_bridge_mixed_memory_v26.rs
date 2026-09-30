@@ -1,15 +1,16 @@
 //! Native mixed-memory admission retains, but does not discharge, slice premises.
 use super::*;
+use crate::native_conditional_domains_v30::NativeConditionalDomainsV30 as Domains;
 use fe2o3_kernel_ir::{
-    CanonicalConditionalSliceDomainV26 as Domain, CanonicalGuardedGlobalReadErrorV1,
-    CheckedCanonicalConditionalSliceDomainsV26 as Globals, IndexKind, IntrinsicKind,
+    CanonicalGuardedGlobalReadErrorV1, CheckedCanonicalConditionalSliceDomainsV26 as Globals,
+    IndexKind, IntrinsicKind,
 };
 
 /// A closed adapter for the exact imported owner and current native epoch.
 /// Global rows are a separate conditional family, never private memory facts.
 pub(crate) struct NativeCanonicalMixedAdmissionV26<'a> {
     private: NativeCanonicalPrivateAdmissionV18<'a>,
-    globals: &'a Globals<'a, 'a>,
+    globals: Domains<'a>,
     kinds: &'a [Option<Kind>],
     counts: [usize; 2],
 }
@@ -266,7 +267,7 @@ fn formal_error(error: CanonicalGuardedGlobalReadErrorV1) -> Failure {
 
 fn mixed_rows_v26(
     physical: &CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
-    globals: &Globals<'_, '_>,
+    globals: Domains<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<Vec<Option<Kind>>, Failure> {
     if !std::ptr::eq(
@@ -310,12 +311,12 @@ fn mixed_rows_v26(
                 return Err(Failure::ExactGraph);
             }
             accesses = accesses.checked_add(1).ok_or(ResourceError::Arithmetic)?;
-            // The same-owner checked domain already establishes the exact
-            // Global slice root and typed transport to this actual pointer.
-            // Generic is preserved representation, never origin evidence.
-            match (global.domain(), &row.operation.kind) {
-                (Domain::Read(domain), OperationKind::Load { pointer, access })
-                    if domain.pointer() == *pointer
+            // The closed checked domain retains every actual source choice.
+            // Operation shape alone neither selects a leaf nor discharges
+            // source, initialization, alias or physical runtime premises.
+            match (global, &row.operation.kind) {
+                ((false, checked_pointer), OperationKind::Load { pointer, access })
+                    if checked_pointer == *pointer
                         && matches!(
                             access.address_space,
                             fe2o3_kernel_ir::AddressSpace::Global
@@ -326,11 +327,11 @@ fn mixed_rows_v26(
                     Some(Kind::ConditionalGlobalReadV26)
                 }
                 (
-                    Domain::Store(domain),
+                    (true, checked_pointer),
                     OperationKind::Store {
                         pointer, access, ..
                     },
-                ) if domain.pointer() == *pointer
+                ) if checked_pointer == *pointer
                     && matches!(
                         access.address_space,
                         fe2o3_kernel_ir::AddressSpace::Global
@@ -440,9 +441,7 @@ fn check_trap_pair_v26(
 
 fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure> {
     use fe2o3_kernel_analysis::CanonicalKirOperationRefV1;
-    use fe2o3_kernel_ir::{
-        CanonicalConditionalSliceAccessV26, ExplicitLaunchExtent, FormalIndexWidth,
-    };
+    use fe2o3_kernel_ir::{ExplicitLaunchExtent, FormalIndexWidth};
     use std::{cell::Ref, mem::size_of};
     fn h<T>() -> Result<usize, Failure> {
         size_of::<T>()
@@ -455,7 +454,7 @@ fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure>
     }
     type Rows<'a> = (
         &'a CheckedCanonicalKirPrivateMemoryV18<'a, 'a>,
-        &'a Globals<'a, 'a>,
+        Domains<'a>,
         &'a CanonicalKirInventoryV18<'a>,
         &'a mut Budget<'a>,
         Vec<Option<Kind>>,
@@ -463,9 +462,9 @@ fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure>
         usize,
         std::iter::Enumerate<std::slice::Iter<'a, CanonicalKirOperationRefV1<'a>>>,
         Option<(usize, &'a CanonicalKirOperationRefV1<'a>)>,
-        Option<&'a CanonicalConditionalSliceAccessV26>,
+        Option<(bool, ValueId)>,
         Option<Kind>,
-        Domain,
+        (bool, ValueId),
         &'a OperationKind,
         &'a fe2o3_kernel_ir::IntrinsicOperation,
     );
@@ -499,7 +498,7 @@ fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure>
         ),
     );
     type Conditions<'a> = (
-        &'a Globals<'a, 'a>,
+        Domains<'a>,
         fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
         Option<(ExplicitLaunchExtent, FormalIndexWidth, usize, usize)>,
         ExplicitLaunchExtent,
@@ -540,6 +539,7 @@ fn mixed_headers_v26(capture: usize, alignment: usize) -> Result<usize, Failure>
         .checked_add(KirPlironGraphV18::pending_global_scan_headers_v18()?)
         .ok_or(ResourceError::Arithmetic)?;
     for item in [
+        crate::native_conditional_domains_v30::conditional_query_headers_v30()?,
         h::<Rows<'_>>()?,
         h::<Index<'_>>()?,
         h::<Snapshot<'_>>()?,
@@ -578,6 +578,27 @@ impl KirPlironGraphV18<'_> {
         &mut self,
         physical: &CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
         globals: &Globals<'_, '_>,
+        epoch: u64,
+        layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
+        structural: Option<&crate::kir_bridge_v1::StructuralBridgeWitnessV18>,
+        budget: &mut Budget<'_>,
+        consume: impl FnMut(usize, &NativeCanonicalMixedAdmissionV26<'_>) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        self.visit_conditional_policy_functions_v30(
+            physical,
+            Domains::Legacy(globals),
+            epoch,
+            layouts,
+            structural,
+            budget,
+            consume,
+        )
+    }
+
+    pub(crate) fn visit_conditional_policy_functions_v30(
+        &mut self,
+        physical: &CheckedCanonicalKirPrivateMemoryV18<'_, '_>,
+        globals: Domains<'_>,
         epoch: u64,
         layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
         structural: Option<&crate::kir_bridge_v1::StructuralBridgeWitnessV18>,
