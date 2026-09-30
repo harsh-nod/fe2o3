@@ -248,7 +248,12 @@ grammars remain unchanged. Decoding these inert records does not authenticate a
 Rust producer or create a capability. Twelve focused tests cover the four
 context/nominal combinations, mixed roots/helpers, RustCall, representation and
 role mutations, exact resource boundaries and incompatible-family refusal.
-Their execution is pending an isolated build; no passing result is claimed here.
+The isolated full MIR-model library run `r69-isolated-context-nominal-mir` passed
+all 382 tests, including these twelve, at `0f113f634ad4b438d588a6e967902780126adc66`.
+It used pinned nightly `2026-04-03`, locked/offline dependencies and a fresh
+worktree-specific target directory. Source/tool hashes were unchanged; log
+SHA-256 is `6eb57bd85c902c1abe60980c383d7cbb062eedae0595e4630b6733f678002e3e`.
+These are inert-model tests, not ordinary-Rust or executable-path validation.
 
 Allocation is provisional under the
 [#271 coordination scope](https://github.com/harsh-nod/fe2o3/issues/271#issuecomment-5902088576).
