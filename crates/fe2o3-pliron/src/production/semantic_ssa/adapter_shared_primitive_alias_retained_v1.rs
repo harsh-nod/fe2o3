@@ -1,5 +1,5 @@
-//! Retained alias ownership, including source-driven producers; no ordinary routing.
-//! Actual Shared source/SSA admission and whole-root preparation remain separate.
+//! Retained alias ownership, including source-driven producers.
+//! The actual Shared wrapper supplies source/SSA admission; whole-root backing remains separate.
 use super::super::super::shared_primitive_reads_v1::RetainedSharedObserverV1;
 use super::*;
 use fe2o3_kernel_ir::{
@@ -49,7 +49,7 @@ struct Source<'a> {
     tree_work: usize,
 }
 #[derive(Debug)]
-pub(super) enum RetainedAliasErrorV1 {
+pub(in super::super::super) enum RetainedAliasErrorV1 {
     Resource(Resource),
     Original(Error),
 }
@@ -817,7 +817,7 @@ mod place_ops;
 #[path = "adapter_shared_primitive_read_retained_v1.rs"]
 mod read_ops;
 #[allow(unused_imports)]
-pub(super) use engine_ops::RetainedSharedEngineV1;
+pub(in super::super::super) use engine_ops::RetainedSharedEngineV1;
 #[cfg(test)]
 #[path = "adapter_shared_primitive_alias_retained_v1_tests.rs"]
 mod tests;

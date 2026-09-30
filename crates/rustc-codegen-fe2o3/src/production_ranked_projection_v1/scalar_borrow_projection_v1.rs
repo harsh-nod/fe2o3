@@ -711,3 +711,9 @@ pub(super) fn with_scalar_private_borrows_v1<T, F: ProjectedAssertionFactsV1>(
 mod retained_borrows;
 #[allow(unused_imports)]
 pub(super) use retained_borrows::RetainedScalarBorrowsV1;
+
+#[cfg(test)]
+#[path = "whole_root_scalar_borrow_oracle_v1_tests.rs"]
+mod whole_root_original_oracle;
+#[cfg(test)]
+pub(super) use whole_root_original_oracle::{compare_retained_original_v1, comparison_frame_v1};

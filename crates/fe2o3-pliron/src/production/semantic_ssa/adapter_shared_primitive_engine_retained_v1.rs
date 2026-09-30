@@ -663,9 +663,9 @@ enum EnginePhase {
     Complete,
 }
 
-/// Source-driven analysis only. Observer dimensions and SSA membership are still
-/// supplied by the future real wrapper; no production route calls this owner yet.
-pub(in super::super) struct RetainedSharedEngineV1<'a> {
+/// Source-driven retained analysis. The actual Shared wrapper establishes source/SSA
+/// membership and original discovery/sizing before entering this owner.
+pub(in super::super::super::super) struct RetainedSharedEngineV1<'a> {
     phase: EnginePhase,
     source: Option<(&'a SemanticFunctionDeclV1, &'a [SemanticTypeDeclV1])>,
     aliases: RetainedAliasStateV1<'a>,
@@ -679,7 +679,7 @@ pub(in super::super) struct RetainedSharedEngineV1<'a> {
     exhausted: bool,
 }
 impl<'a> RetainedSharedEngineV1<'a> {
-    pub(in super::super) fn new() -> Self {
+    pub(in super::super::super::super) fn new() -> Self {
         Self {
             phase: EnginePhase::Fresh,
             source: None,
@@ -696,7 +696,7 @@ impl<'a> RetainedSharedEngineV1<'a> {
     }
     /// Still-private, unadmitted row preparation seam. The actual wrapper must
     /// supply the original has_candidates/scan_size/scratch chronology.
-    pub(in super::super) fn prepare_observer_into(
+    pub(in super::super::super::super) fn prepare_observer_into(
         &mut self,
         function: &'a SemanticFunctionDeclV1,
         types: &'a [SemanticTypeDeclV1],
@@ -716,7 +716,7 @@ impl<'a> RetainedSharedEngineV1<'a> {
         self.phase = EnginePhase::Fresh;
         Ok(())
     }
-    pub(in super::super) fn analyze_into(
+    pub(in super::super::super::super) fn analyze_into(
         &mut self,
         function: &'a SemanticFunctionDeclV1,
         types: &'a [SemanticTypeDeclV1],
@@ -839,7 +839,43 @@ impl<'a> RetainedSharedEngineV1<'a> {
         self.phase = EnginePhase::Complete;
         Ok(())
     }
-    pub(in super::super) fn accepted_for(
+
+    /// Concrete original observer postprocessing. The source-driven analysis and
+    /// every retained owner are checked before the allocation-free row transfer.
+    pub(in super::super::super::super) fn finish_rows_into(
+        &mut self,
+        function: &SemanticFunctionDeclV1,
+        types: &[SemanticTypeDeclV1],
+        promoted: &[bool],
+        output: &mut super::super::super::super::shared_primitive_reads_v1::RetainedSharedRowsV1,
+        budget: &mut Budget<'_>,
+        owned: &usize,
+    ) -> RetainedResult<()> {
+        let ready = self
+            .accepted_for(function, types, budget, owned)
+            .map(|_| ());
+        self.phase = EnginePhase::Terminal;
+        ready?;
+        let accepted = if self.exhausted {
+            &self.empty_result
+        } else {
+            &self.accepted
+        };
+        self.aliases
+            .observer
+            .finish_rows_into(
+                function,
+                types,
+                accepted,
+                promoted,
+                output,
+                budget,
+                owned,
+                &mut self.aliases.failure,
+            )
+            .map_err(RetainedAliasErrorV1::Resource)
+    }
+    pub(in super::super::super::super) fn accepted_for(
         &self,
         function: &SemanticFunctionDeclV1,
         types: &[SemanticTypeDeclV1],
@@ -930,274 +966,7 @@ fn retired_capacity(
     result
 }
 
-pub(super) fn frame() -> std::result::Result<usize, Resource> {
-    // Typed reached-carrier envelopes, not native stack or allocator metadata.
-    let rows = [
-        size_of::<RetainedSharedEngineV1<'static>>(),
-        size_of::<(
-            EnginePhase,
-            Option<(&SemanticFunctionDeclV1, &[SemanticTypeDeclV1])>,
-            RetainedAliasStateV1<'static>,
-            liveness::RetainedSharedLivenessV1<'static>,
-            Vec<AliasData>,
-            BTreeSet<SemanticTransparentBorrowSiteV1>,
-            BTreeSet<SemanticTransparentBorrowSiteV1>,
-            usize,
-            usize,
-            usize,
-            bool,
-        )>(),
-        size_of::<(
-            Vec<Alias>,
-            Option<Vec<Alias>>,
-            Vec<u32>,
-            Option<&SemanticRvalueV1>,
-            Option<&SemanticStatementKindV1>,
-            Option<&SemanticTerminatorKindV1>,
-            Output,
-            &Output,
-        )>(),
-        size_of::<(
-            &mut RetainedSharedEngineV1<'static>,
-            &RetainedSharedEngineV1<'static>,
-            &mut RetainedAliasSessionV1<'static, 'static, 'static>,
-            &mut RetainedAliasStateV1<'static>,
-            &mut liveness::RetainedSharedLivenessV1<'static>,
-        )>(),
-        size_of::<(
-            &'static SemanticPlaceV1,
-            Path<'static>,
-            Option<Path<'static>>,
-            Result<Path<'static>>,
-            Source<'static>,
-            Option<Source<'static>>,
-            Result<Source<'static>>,
-            &model::SemanticAssignmentV1,
-            Option<(u32, SemanticTypeIdV1, SemanticTypeIdV1)>,
-            (u32, SemanticTypeIdV1, SemanticTypeIdV1),
-        )>(),
-        size_of::<(
-            std::vec::IntoIter<Alias>,
-            Option<std::vec::IntoIter<Alias>>,
-            &mut std::vec::IntoIter<Alias>,
-            Option<&mut std::vec::IntoIter<Alias>>,
-            Result<&mut std::vec::IntoIter<Alias>>,
-            Alias,
-            Option<Alias>,
-            Result<Alias>,
-            &Alias,
-            &mut Alias,
-            Result<&Alias>,
-            Result<&mut Alias>,
-            Option<&Alias>,
-            Option<&mut Alias>,
-        )>(),
-        size_of::<(
-            Vec<Alias>,
-            &Vec<Alias>,
-            &mut Vec<Alias>,
-            Option<Vec<Alias>>,
-            Option<&Vec<Alias>>,
-            Option<&mut Vec<Alias>>,
-            Result<Vec<Alias>>,
-            Result<&Vec<Alias>>,
-            Result<&mut Vec<Alias>>,
-            &mut Vec<u32>,
-            &[u32],
-        )>(),
-        size_of::<(
-            &SemanticRvalueV1,
-            &SemanticRvalueKindV1,
-            &SemanticOperandV1,
-            &model::SemanticAggregateRvalueV1,
-            model::SemanticAggregateKindV1,
-            &model::SemanticAggregateKindV1,
-            &model::SemanticTypeDeclV1,
-            Option<&model::SemanticTypeDeclV1>,
-            &SemanticTypeShapeV1,
-            &model::SemanticAggregateTypeV1,
-            &[SemanticTypeIdV1],
-            Option<&[SemanticTypeIdV1]>,
-            Option<&SemanticTypeIdV1>,
-            &SemanticTypeIdV1,
-            SemanticTypeIdV1,
-        )>(),
-        size_of::<(
-            std::iter::Enumerate<std::slice::Iter<'static, SemanticOperandV1>>,
-            std::slice::Iter<'static, SemanticOperandV1>,
-            &[SemanticOperandV1],
-            (usize, &SemanticOperandV1),
-            &SemanticOperandV1,
-            usize,
-            bool,
-        )>(),
-        size_of::<(
-            &SemanticFunctionDeclV1,
-            &[SemanticTypeDeclV1],
-            &[model::SemanticLocalDeclV1],
-            &model::SemanticLocalDeclV1,
-            Option<&model::SemanticLocalDeclV1>,
-            model::SemanticLocalRoleV1,
-            model::SemanticLocalIdV1,
-            &model::SemanticLocalIdV1,
-            model::SemanticTypeIdV1,
-            u32,
-            usize,
-        )>(),
-        size_of::<(
-            &model::SemanticPointerTypeV1,
-            model::SemanticPointerKindV1,
-            model::SemanticMutabilityV1,
-            model::SemanticPointerMetadataV1,
-            model::SemanticBorrowKindV1,
-            &model::SemanticBorrowKindV1,
-            &[SemanticProjectionV1],
-            std::slice::Iter<'static, SemanticProjectionV1>,
-            &SemanticProjectionV1,
-            SemanticProjectionKindV1,
-        )>(),
-        size_of::<(
-            &model::SemanticCheckedBinaryRvalueV1,
-            &model::SemanticUncheckedBinaryRvalueV1,
-            &model::SemanticMemoryLoadV1,
-            &model::SemanticMemoryStoreV1,
-            &model::SemanticAtomicRmwV1,
-            &model::SemanticAtomicCompareExchangeV1,
-            &SemanticPlaceV1,
-            &SemanticOperandV1,
-        )>(),
-        size_of::<(
-            &SemanticStatementKindV1,
-            &SemanticTerminatorKindV1,
-            &model::SemanticDirectCallV1,
-            &model::SemanticDirectTailCallV1,
-            &model::SemanticAssertMessageV1,
-            &[SemanticOperandV1],
-            std::slice::Iter<'static, SemanticOperandV1>,
-            &SemanticOperandV1,
-        )>(),
-        size_of::<(
-            std::collections::btree_map::Iter<'static, u32, Vec<Alias>>,
-            (&u32, &Vec<Alias>),
-            &u32,
-            u32,
-            std::slice::Iter<'static, Alias>,
-            &Alias,
-            std::slice::IterMut<'static, Candidate>,
-            &mut Candidate,
-            &BTreeMap<u32, Vec<Alias>>,
-            &mut Vec<Candidate>,
-        )>(),
-        size_of::<(
-            std::iter::Enumerate<std::slice::Iter<'static, model::SemanticBasicBlockV1>>,
-            &[model::SemanticBasicBlockV1],
-            &model::SemanticBasicBlockV1,
-            (usize, &model::SemanticBasicBlockV1),
-            &model::SemanticTerminatorV1,
-        )>(),
-        size_of::<(
-            std::iter::Enumerate<std::slice::Iter<'static, model::SemanticStatementV1>>,
-            &[model::SemanticStatementV1],
-            &model::SemanticStatementV1,
-            (usize, &model::SemanticStatementV1),
-            &SemanticStatementKindV1,
-        )>(),
-        size_of::<(
-            SemanticTransparentBorrowSiteV1,
-            &SemanticTransparentBorrowSiteV1,
-            &mut BTreeSet<SemanticTransparentBorrowSiteV1>,
-            &BTreeSet<SemanticTransparentBorrowSiteV1>,
-            RetainedResult<&BTreeSet<SemanticTransparentBorrowSiteV1>>,
-            Candidate,
-            &Candidate,
-            AliasData,
-            Vec<AliasData>,
-            &Vec<AliasData>,
-            &mut Vec<AliasData>,
-            (u32, Vec<Alias>),
-        )>(),
-        size_of::<(
-            Result<()>,
-            Result<bool>,
-            Result<usize>,
-            Error,
-            Resource,
-            RetainedAliasErrorV1,
-            RetainedResult<()>,
-            RetainedResult<usize>,
-            liveness::RetainedLivenessErrorV1,
-            std::result::Result<(), liveness::RetainedLivenessErrorV1>,
-            std::result::Result<&liveness::Schedule, liveness::RetainedLivenessErrorV1>,
-            &liveness::Schedule,
-        )>(),
-        size_of::<(
-            std::result::Result<(), std::collections::TryReserveError>,
-            std::collections::TryReserveError,
-            std::result::Result<(), Resource>,
-            std::result::Result<usize, Resource>,
-            std::num::TryFromIntError,
-            std::result::Result<u32, std::num::TryFromIntError>,
-            Result<u32>,
-            Option<usize>,
-        )>(),
-        size_of::<(
-            &Budget<'static>,
-            &mut Budget<'static>,
-            &usize,
-            &mut usize,
-            Option<Resource>,
-            &mut Option<Resource>,
-            &mut Resource,
-            &mut RetainedSharedObserverV1<'static>,
-            RetainedAliasSessionV1<'static, 'static, 'static>,
-            RetainedResult<RetainedAliasSessionV1<'static, 'static, 'static>>,
-        )>(),
-        size_of::<(
-            Option<(&SemanticFunctionDeclV1, &[SemanticTypeDeclV1])>,
-            std::result::Result<(&SemanticFunctionDeclV1, &[SemanticTypeDeclV1]), Resource>,
-            &SemanticFunctionDeclV1,
-            &[SemanticTypeDeclV1],
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            u32,
-            u32,
-            bool,
-            bool,
-            bool,
-            (usize, usize, usize),
-        )>(),
-        size_of::<(
-            &mut RetainedAliasSessionV1<'static, 'static, 'static>,
-            &SemanticOperandV1,
-            &SemanticRvalueKindV1,
-            &model::SemanticAssertMessageV1,
-            &model::SemanticAggregateRvalueV1,
-            Option<&[SemanticTypeIdV1]>,
-            usize,
-            bool,
-            Result<()>,
-            &mut Option<Resource>,
-        )>(),
-        liveness::retained_expiry::frame()?,
-        size_of::<(
-            [usize; 24],
-            std::array::IntoIter<usize, 24>,
-            usize,
-            usize,
-            std::result::Result<usize, Resource>,
-            Resource,
-        )>(),
-    ];
-    rows.into_iter().try_fold(0usize, |sum, bytes| {
-        sum.checked_add(bytes).ok_or(Resource::Arithmetic)
-    })
-}
+include!("adapter_shared_primitive_engine_frame_retained_v1.rs");
 
 #[cfg(test)]
 #[path = "adapter_shared_primitive_engine_retained_v1_tests.rs"]

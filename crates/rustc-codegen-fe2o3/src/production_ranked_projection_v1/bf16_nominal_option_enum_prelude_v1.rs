@@ -357,3 +357,6 @@ pub(in crate::production_ranked_projection_v1) use option_enum_scalar_prelude::{
 
 #[cfg(test)]
 pub(crate) use option_enum_scalar_prelude::observe_actual_capability_prefix_for_test_v1;
+
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use option_enum_scalar_prelude::PendingWholeRootBeforeArgumentWritersV1;

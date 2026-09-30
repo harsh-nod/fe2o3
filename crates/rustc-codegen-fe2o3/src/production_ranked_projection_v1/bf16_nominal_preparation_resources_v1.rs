@@ -310,3 +310,52 @@ pub(super) fn retained_custody_snapshot_frame_v1() -> usize {
         bool,
     )>()
 }
+
+impl PreparationResourcesV1<'_, '_> {
+    /// Domain-specific operation only: no generic original-Budget callback or loan.
+    pub(super) fn prepare_shared_reads<'s>(
+        &mut self,
+        pending: &mut fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1<'s>,
+        owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    ) -> Result<(), Error> {
+        match &mut self.ledger {
+            Ledger::Original { budget, owned } => pending
+                .prepare_into(owner, function, budget, owned)
+                .map_err(super::canonical_assertion_facts_v1::shared_read_error_v1),
+            Ledger::Legacy => Err(resource(Resource::Accounting)),
+        }
+    }
+    pub(super) fn check_shared_reads(
+        &self,
+        pending: &fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1<'_>,
+        owner: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    ) -> Result<(), Error> {
+        match &self.ledger {
+            Ledger::Original { budget, owned } => pending
+                .completed_for(owner, function, budget, owned)
+                .map(|_| ())
+                .map_err(super::canonical_assertion_facts_v1::shared_read_error_v1),
+            Ledger::Legacy => Err(resource(Resource::Accounting)),
+        }
+    }
+}
+
+/// Source-level frame for the fixed Shared operations below. Keeping the
+/// private match carriers here exposes neither Ledger nor an original-Budget loan.
+pub(super) fn retained_shared_frame_v1() -> usize {
+    size_of::<(
+        Ledger<'static, 'static>,
+        &mut Ledger<'static, 'static>,
+        &Ledger<'static, 'static>,
+        &mut &mut Budget<'static>,
+        &&mut Budget<'static>,
+        &mut &mut usize,
+        &&mut usize,
+        &mut Budget<'static>,
+        &Budget<'static>,
+        &mut usize,
+        &usize,
+    )>()
+}

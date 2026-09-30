@@ -965,7 +965,8 @@ mod adapter;
 mod nominal_reference_effects_v29;
 mod shared_primitive_reads_v1;
 pub use shared_primitive_reads_v1::{
-    ProductionSemanticSharedReadErrorV1, ProductionSemanticSharedReadsV1,
+    ProductionSemanticSharedReadErrorV1, ProductionSemanticSharedReadsPreparationV1,
+    ProductionSemanticSharedReadsV1,
 };
 mod occurrences_v1;
 mod partial_moves;

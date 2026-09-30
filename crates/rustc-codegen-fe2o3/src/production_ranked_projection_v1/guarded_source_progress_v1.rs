@@ -743,6 +743,28 @@ fn require_ranked_bound(
 }
 
 impl<F: ProjectedAssertionFactsV1> ProjectedAssertionFactsV1 for GuardedFacts<'_, '_, '_, F> {
+    fn prepare_retained_shared_reads_v1<'s>(
+        &mut self,
+        pending: &mut fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1<'s>,
+        owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: SemanticFunctionIdV1,
+        owned: &mut usize,
+    ) -> Result<()> {
+        self.progress.check(self.facts)?;
+        self.facts
+            .prepare_retained_shared_reads_v1(pending, owner, function, owned)
+    }
+    fn check_retained_shared_reads_v1(
+        &mut self,
+        pending: &fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1<'_>,
+        owner: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: SemanticFunctionIdV1,
+        owned: &mut usize,
+    ) -> Result<()> {
+        self.progress.check(self.facts)?;
+        self.facts
+            .check_retained_shared_reads_v1(pending, owner, function, owned)
+    }
     fn shared_value_reads_v1<'s>(
         &mut self,
         owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,

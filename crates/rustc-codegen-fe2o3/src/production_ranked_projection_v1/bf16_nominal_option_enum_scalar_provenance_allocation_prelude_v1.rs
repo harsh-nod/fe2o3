@@ -402,3 +402,9 @@ pub(crate) use genuine::observe_option_enum_scalar_provenance_allocation_before_
 
 #[cfg(test)]
 pub(crate) use genuine::observe_actual_capability_prefix_for_test_v1;
+
+#[allow(dead_code)]
+#[path = "whole_root_before_argument_writers_v1.rs"]
+mod whole_root_before_argument_writers;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use whole_root_before_argument_writers::PendingWholeRootBeforeArgumentWritersV1;

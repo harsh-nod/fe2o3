@@ -165,6 +165,10 @@ pub(super) fn with_scope<F: ProjectedAssertionFactsV1>(
     }
 }
 
+#[path = "retained_lazy_scope_prefix_v1.rs"]
+mod retained_lazy_prefix;
+pub(super) use retained_lazy_prefix::{RetainedLazyScopePrefixV1, retained_lazy_prefix_frame_v1};
+
 #[derive(Debug, Eq, PartialEq)]
 #[cfg_attr(test, derive(Clone))]
 pub(super) struct Entries {

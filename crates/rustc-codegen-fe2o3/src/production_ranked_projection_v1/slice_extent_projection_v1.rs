@@ -110,6 +110,12 @@ impl Scope<'_> {
     }
 }
 
+#[path = "retained_slice_scope_prefix_v1.rs"]
+mod retained_scope_prefix;
+pub(super) use retained_scope_prefix::{
+    RetainedSliceScopePrefixV1, retained_slice_prefix_frame_v1,
+};
+
 pub(super) struct Context<'a> {
     pub(super) scratch: &'a mut Scratch,
     pub(super) facts: &'a mut dyn ProjectedAssertionFactsV1,

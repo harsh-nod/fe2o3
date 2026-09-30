@@ -145,7 +145,7 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// Private consumer contract. Production implements it only with the sealed
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
-fn shared_read_error_v1(
+pub(super) fn shared_read_error_v1(
     error: fe2o3_pliron::ProductionSemanticSharedReadErrorV1,
 ) -> ProjectionError {
     match error {
@@ -160,6 +160,29 @@ fn shared_read_error_v1(
 }
 
 pub(super) trait ProjectedAssertionFactsV1 {
+    fn prepare_retained_shared_reads_v1<'s>(
+        &mut self,
+        _pending: &mut fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1<'s>,
+        _owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        _function: SemanticFunctionIdV1,
+        _owned: &mut usize,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "retained Shared reads require canonical source custody",
+        ))
+    }
+    fn check_retained_shared_reads_v1(
+        &mut self,
+        _pending: &fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1<'_>,
+        _owner: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        _function: SemanticFunctionIdV1,
+        _owned: &mut usize,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "retained Shared postflight requires canonical source custody",
+        ))
+    }
+
     fn shared_value_reads_v1<'s>(
         &mut self,
         _owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
@@ -414,6 +437,122 @@ impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
     }
 }
 
+#[cfg(test)]
+impl<'r, 'i, 'g, 'b, 'w> CanonicalAssertionSessionV1<'r, 'i, 'g, 'b, 'w> {
+    /// Concrete access only for the retained snapshot controls. The ordinary
+    /// for_source() stays opaque; no Budget getter or production trait changes.
+    pub(super) fn for_retained_whole_root_snapshot_control_v1<'f>(
+        &'f mut self,
+        correspondence_owner: SemanticFunctionIdV1,
+        semantic_function: SemanticFunctionIdV1,
+    ) -> CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'f, 'w> {
+        CanonicalSourceAssertionFactsV1 {
+            owner: self.owner,
+            origins: self.origins,
+            report: self.report,
+            budget: &mut *self.budget,
+            correspondence_owner,
+            semantic_function,
+            masked: None,
+        }
+    }
+}
+
+impl CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    /// Read-only, live canonical custody observation. No source query, work,
+    /// allocation, replacement ledger, Budget loan or readiness is produced.
+    pub(super) fn retained_whole_root_snapshot_v1(
+        &mut self,
+        owner: &ProductionPreRankedKirOwnerV1,
+        function: SemanticFunctionIdV1,
+        owned: &mut usize,
+        held: Option<super::bf16_nominal_preparation_resources_v1::PreparationCustodySnapshotV1>,
+    ) -> Result<
+        super::bf16_nominal_preparation_resources_v1::PreparationCustodySnapshotV1,
+        ProjectionError,
+    > {
+        use super::bf16_nominal_preparation_resources_v1::{PreparationResourcesV1, resource};
+        if self.masked.is_some()
+            || !std::ptr::eq(self.owner, owner)
+            || self.semantic_function != function
+        {
+            return Err(ProjectionError::Incomplete(
+                "whole-root snapshot requires exact live canonical source",
+            ));
+        }
+        let now = PreparationResourcesV1::new(self.budget, owned)
+            .retained_custody_snapshot_v1()
+            .ok_or_else(|| resource(Resource::Accounting))?;
+        if now.denied_work || now.denied_storage || now.owned > now.storage {
+            return Err(resource(Resource::Accounting));
+        }
+        if let Some(held) = held {
+            let growth = now
+                .owned
+                .checked_sub(held.owned)
+                .ok_or_else(|| resource(Resource::Accounting))?;
+            let floor = held
+                .storage
+                .checked_add(growth)
+                .ok_or_else(|| resource(Resource::Arithmetic))?;
+            if held.denied_work
+                || held.denied_storage
+                || held.owned > held.storage
+                || now.budget_slot != held.budget_slot
+                || now.work_ledger != held.work_ledger
+                || now.owned_slot != held.owned_slot
+                || now.storage < floor
+                || now.work < held.work
+                || now.peak < held.peak
+            {
+                return Err(resource(Resource::Accounting));
+            }
+        }
+        Ok(now)
+    }
+}
+pub(super) fn retained_whole_root_snapshot_frame_v1() -> Result<usize, ProjectionError> {
+    use super::bf16_nominal_preparation_resources_v1::{
+        PreparationCustodySnapshotV1 as Snapshot, PreparationResourcesV1 as Prep, resource,
+        retained_custody_snapshot_frame_v1,
+    };
+    let rows = [
+        std::mem::size_of::<(
+            &mut CanonicalSourceAssertionFactsV1<'static, 'static, 'static, 'static, 'static>,
+            &ProductionPreRankedKirOwnerV1,
+            SemanticFunctionIdV1,
+            &mut usize,
+            Option<Snapshot>,
+            Snapshot,
+            Result<Snapshot, ProjectionError>,
+            Prep<'static, 'static>,
+            &Prep<'static, 'static>,
+            &mut Budget<'static>,
+            usize,
+            usize,
+            Option<usize>,
+            Result<usize, ProjectionError>,
+            Resource,
+            CanonicalAssertionErrorV1,
+            ProjectionError,
+            bool,
+        )>(),
+        std::mem::size_of::<(
+            [usize; 3],
+            std::array::IntoIter<usize, 3>,
+            usize,
+            usize,
+            Option<usize>,
+            Result<usize, ProjectionError>,
+        )>(),
+        retained_custody_snapshot_frame_v1(),
+    ];
+    rows.into_iter().try_fold(0usize, |sum, row| {
+        sum.checked_add(row)
+            .ok_or_else(|| resource(Resource::Arithmetic))
+    })
+}
+
 pub(super) struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     owner: &'g ProductionPreRankedKirOwnerV1,
     origins: SemanticKirAssertOriginsV1<'g>,
@@ -424,6 +563,44 @@ pub(super) struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     masked: Option<&'r MaskedSourceAssertionTableV1<'g>>,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn prepare_retained_shared_reads_v1<'s>(
+        &mut self,
+        pending: &mut fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1<'s>,
+        owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: SemanticFunctionIdV1,
+        owned: &mut usize,
+    ) -> Result<(), ProjectionError> {
+        if !std::ptr::eq(owner, self.owner.semantic_ssa()) || function != self.semantic_function {
+            return Err(ProjectionError::Unsupported(
+                "Shared read owner/source-function mismatch",
+            ));
+        }
+        self.budget.charge_work(3).map_err(resource)?;
+        super::bf16_nominal_preparation_resources_v1::PreparationResourcesV1::new(
+            self.budget,
+            owned,
+        )
+        .prepare_shared_reads(pending, owner, function)
+    }
+    fn check_retained_shared_reads_v1(
+        &mut self,
+        pending: &fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1<'_>,
+        owner: &fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        function: SemanticFunctionIdV1,
+        owned: &mut usize,
+    ) -> Result<(), ProjectionError> {
+        if !std::ptr::eq(owner, self.owner.semantic_ssa()) || function != self.semantic_function {
+            return Err(ProjectionError::Unsupported(
+                "Shared read owner/source-function mismatch",
+            ));
+        }
+        super::bf16_nominal_preparation_resources_v1::PreparationResourcesV1::new(
+            self.budget,
+            owned,
+        )
+        .check_shared_reads(pending, owner, function)
+    }
+
     fn shared_value_reads_v1<'s>(
         &mut self,
         owner: &'s fe2o3_pliron::ProductionSemanticSsaOwnerV1,
@@ -878,7 +1055,6 @@ pub(crate) use bf16_nominal_recipe_resources_v1::observe_actual_root_fixed_prefi
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(super) use bf16_nominal_facts_observation_v1::with_checked_nominal_facts_observation_v1;
-#[cfg(test)]
 #[allow(unused_imports)]
 pub(super) use bf16_nominal_recipe_resources_v1::{
     ActualSelectedInputsV1, select_actual_capability_prefix_inputs_v1,

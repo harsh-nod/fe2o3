@@ -1,10 +1,14 @@
 use fe2o3_device::{DisjointSlice, KernelContext, kernel, thread};
 
 // Keep the manifest's indexing, guarded output and f32 arithmetic body unchanged.
-include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../../examples/vecadd/src/vecadd_body.rs"
-));
+#[cfg(feature = "provider_context_protocol")]
+#[macro_use]
+mod context_body {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../../../examples/vecadd/src/vecadd_body.rs"
+    ));
+}
 
 macro_rules! production_f32_add {
     ($lhs:expr, $rhs:expr) => {{ $lhs + $rhs }};

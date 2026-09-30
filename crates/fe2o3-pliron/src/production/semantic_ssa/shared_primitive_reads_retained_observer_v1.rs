@@ -228,6 +228,49 @@ impl<'a> RetainedSharedObserverV1<'a> {
         }
         self.check(function, types, budget, owned, failure)
     }
+
+    /// Fixed original accepted/promoted filter and sort, followed by a sealed
+    /// allocation-free move. No owned argument or replaceable observer is accepted.
+    pub(in super::super) fn finish_rows_into(
+        &mut self,
+        function: &SemanticFunctionDeclV1,
+        types: &[SemanticTypeDeclV1],
+        accepted: &BTreeSet<SemanticTransparentBorrowSiteV1>,
+        promoted: &[bool],
+        output: &mut RetainedSharedRowsV1,
+        budget: &mut Budget<'_>,
+        owned: &usize,
+        failure: &mut Option<Resource>,
+    ) -> std::result::Result<(), Resource> {
+        if self.phase != Phase::Ready {
+            return Err(first(failure, Resource::Accounting));
+        }
+        self.phase = Phase::Terminal;
+        let result = (|| {
+            self.check(function, types, budget, owned, failure)?;
+            // An existing allocation, including empty capacity, is never overwritten.
+            if output.transferred || output.rows.capacity() != 0 || !output.rows.is_empty() {
+                return Err(Resource::Accounting);
+            }
+            budget.charge_work(product(
+                self.reads.rows.len(),
+                sum(4, height(accepted.len()))?,
+            )?)?;
+            self.reads.rows.retain(|row| {
+                accepted.contains(&row.borrow) && promoted.get(row.source as usize) == Some(&true)
+            });
+            budget.charge_work(product(
+                self.reads.rows.len(),
+                height(self.reads.rows.len()),
+            )?)?;
+            self.reads.rows.sort_unstable_by_key(Read::key);
+            self.check(function, types, budget, owned, failure)?;
+            output.rows = std::mem::take(&mut self.reads.rows);
+            output.transferred = true;
+            Ok(())
+        })();
+        result.map_err(|error| first(failure, error))
+    }
     #[cfg(test)]
     pub(in super::super) fn test_rows(&self) -> Vec<(u32, u32, u32, u32, u32, usize)> {
         self.reads
@@ -360,8 +403,25 @@ fn frame() -> std::result::Result<usize, Resource> {
             &mut [Read],
         )>(),
         size_of::<(
-            [usize; 8],
-            std::array::IntoIter<usize, 8>,
+            RetainedSharedRowsV1,
+            &mut RetainedSharedRowsV1,
+            &BTreeSet<SemanticTransparentBorrowSiteV1>,
+            &[bool],
+            Option<&bool>,
+            &bool,
+            &Read,
+            &SemanticTransparentBorrowSiteV1,
+            &mut [Read],
+            &mut dyn FnMut(&Read) -> bool,
+            fn(&Read) -> (u32, u32, usize),
+            usize,
+            usize,
+            bool,
+            std::result::Result<(), Resource>,
+        )>(),
+        size_of::<(
+            [usize; 9],
+            std::array::IntoIter<usize, 9>,
             usize,
             usize,
             std::result::Result<usize, Resource>,

@@ -781,8 +781,9 @@ pub(in super::super) fn analyze_observed(
 #[allow(dead_code)]
 #[path = "adapter_shared_primitive_alias_retained_v1.rs"]
 mod retained_alias_state;
+pub(in super::super) use retained_alias_state::{RetainedAliasErrorV1, RetainedSharedEngineV1};
 #[allow(unused_imports)]
-use retained_alias_state::{RetainedAliasErrorV1, RetainedAliasSessionV1, RetainedAliasStateV1};
+use retained_alias_state::{RetainedAliasSessionV1, RetainedAliasStateV1};
 
 // Inert test DATA only; never a source-membership or SSA capability.
 #[cfg(test)]

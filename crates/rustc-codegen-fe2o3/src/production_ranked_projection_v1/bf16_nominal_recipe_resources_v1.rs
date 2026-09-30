@@ -236,7 +236,6 @@ pub(crate) use root_prefix_indices_v1::observe_actual_root_retired_fixed_proof_f
 #[cfg(test)]
 pub(crate) use root_prefix_indices_v1::observe_actual_root_fixed_prefix_comparison_for_test_v1;
 
-#[cfg(test)]
 pub(in crate::production_ranked_projection_v1) fn with_nominal_source_preparation_v1<'g, 'w, R, F>(
     facts: &mut CanonicalSourceAssertionFactsV1<'_, '_, 'g, '_, 'w>,
     expected_function: &SemanticFunctionDeclV1,
@@ -282,7 +281,6 @@ where
     }
     with_resource_borrow(facts.budget, owned, state, inspect)
 }
-#[cfg(test)]
 fn source_preparation_frame<R, F>() -> Result<usize> {
     let rows = [
         size_of::<(
@@ -335,7 +333,6 @@ fn source_preparation_frame<R, F>() -> Result<usize> {
     })
 }
 
-#[cfg(test)]
 #[allow(unused_imports)]
 pub(in crate::production_ranked_projection_v1) use root_prefix_indices_v1::{
     ActualSelectedInputsV1, select_actual_capability_prefix_inputs_v1,

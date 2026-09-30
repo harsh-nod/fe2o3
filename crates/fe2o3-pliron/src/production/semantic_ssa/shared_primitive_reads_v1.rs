@@ -420,3 +420,12 @@ impl<'s> ProductionSemanticSharedReadsV1<'s> {
 mod retained_observer;
 #[allow(unused_imports)]
 pub(super) use retained_observer::RetainedSharedObserverV1;
+
+// Sealed row ownership transfer shared by concrete engine and actual wrapper.
+pub(super) struct RetainedSharedRowsV1 {
+    rows: Vec<Read>,
+    transferred: bool,
+}
+#[path = "shared_primitive_reads_retained_v1.rs"]
+mod retained_wrapper;
+pub use retained_wrapper::ProductionSemanticSharedReadsPreparationV1;

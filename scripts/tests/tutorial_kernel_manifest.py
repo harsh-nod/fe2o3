@@ -160,7 +160,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "240144c5e64470d8eb34f36616bfa7985c3fe9a9eec29856d693d044c76c1131")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "441c9c37fa1c951d3cc66c6418cc5cb830e70952142f58247eb1b0520a5d40ad")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -638,7 +638,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "16b76c3034ab9d487ca47ec71835d272a7331cc4c6a2f4995c995815e4c88c18")
+                         "b33c321b4020c0643f40289629bd9710167f454158fb8f9f6475ffc574862fc2")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 75, "required-negative": 3, "conceptual": 26, "helper": 18})
@@ -1574,6 +1574,164 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                 self.validator.source_item_contract_sha256("cpu-semantic-simulation", tab),
             )
         self.assertNotEqual(original["sourceItem"]["contractSha256"], self.validator.source_item_contract_sha256("other-lesson", original))
+
+    def test_context_protocol_include_is_scoped_without_dropping_its_source(self):
+        relative = (
+            "crates/rustc-codegen-fe2o3/tests/fixtures/"
+            "production-ranked-bounds-device"
+        )
+        package = ROOT / relative
+        path = package / "context_vecadd.rs"
+        sources = dict(self.validator.package_rust_sources(
+            ROOT, relative + "/Cargo.toml", "context protocol regression"
+        ))
+        self.assertIn(path, sources)
+        source = sources[path]
+        self.assertIn(
+            '#[cfg(feature = "provider_context_protocol")]\n'
+            '#[macro_use]\nmod context_body {\n',
+            source,
+        )
+        self.assertIn(
+            "pub fn vecadd(_ctx: KernelContext<'_>,",
+            source,
+        )
+        self.assertIn(
+            "vecadd_kernel_body!(thread, (), production_f32_add, a, b, c);",
+            source,
+        )
+        names = self.validator.ordinary_attributed_kernel_names(source)
+        self.assertEqual(len(names), 1)
+        self.assertIn("vecadd", names)
+        validate = self.validator.validate_rust_source_includes
+        validate(
+            source, path, package, "context protocol regression",
+            inactive_features=frozenset({"provider_context_protocol"}),
+        )
+        for inactive in (None, frozenset(), frozenset({"unrelated"})):
+            with self.subTest(inactive=inactive), self.assertRaisesRegex(
+                SystemExit, "non-literal include"
+            ):
+                validate(
+                    source, path, package, "context protocol regression",
+                    inactive_features=inactive,
+                )
+
+    def test_context_protocol_package_scope_retains_closure_and_selected_refusal(self):
+        original = ROOT / (
+            "crates/rustc-codegen-fe2o3/tests/fixtures/"
+            "production-ranked-bounds-device/context_vecadd.rs"
+        )
+        context_source = original.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "fixture"
+            (package / "src").mkdir(parents=True)
+            manifest = package / "Cargo.toml"
+            manifest.write_text(
+                '[package]\nname = "fixture"\nversion = "0.1.0"\n'
+                'build = false\n[workspace]\n[features]\n'
+                'provider_context_protocol = []\n'
+                'protocol_alias = ["provider_context_protocol"]\n'
+                'default = ["provider_context_protocol"]\n',
+                encoding="utf-8",
+            )
+            lock = package / "Cargo.lock"
+            lock.write_text("version = 4\n", encoding="utf-8")
+            (package / "src/lib.rs").write_text(
+                "#[kernel] fn selected() {}\n", encoding="utf-8"
+            )
+            context = package / "context_vecadd.rs"
+            context.write_text(context_source, encoding="utf-8")
+            sources = self.validator.package_rust_sources(
+                root, "fixture/Cargo.toml", "context package regression"
+            )
+            self.assertEqual(
+                {path.relative_to(package).as_posix() for path, _ in sources},
+                {"context_vecadd.rs", "src/lib.rs"},
+            )
+            item = {
+                "packageManifest": "fixture/Cargo.toml",
+                "packageManifestSha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                "cargoLockPath": "fixture/Cargo.lock",
+                "cargoLockSha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+                "sourcePaths": ["fixture/src/lib.rs"],
+                "sourceClosureSha256": self.validator.package_source_closure_sha256(
+                    root, sources
+                ),
+                "cargoTarget": {
+                    "kind": "lib", "name": "fixture", "sourcePath": "src/lib.rs"
+                },
+                "defaultFeatures": False,
+                "features": [],
+                "kernelSymbols": ["selected"],
+            }
+            validate = self.validator.validate_compiler_input_data
+            result = validate(
+                root, item, "context package regression",
+                feature_scoped_includes=True,
+            )
+            self.assertEqual(result["enabledFeatures"], [])
+            for features, defaults, scoped in (
+                (["provider_context_protocol"], False, True),
+                (["protocol_alias"], False, True),
+                ([], True, True),
+                ([], False, False),
+            ):
+                candidate = copy.deepcopy(item)
+                candidate.update(features=features, defaultFeatures=defaults)
+                with self.subTest(
+                    features=features, defaults=defaults, scoped=scoped
+                ), self.assertRaisesRegex(SystemExit, "non-literal include"):
+                    validate(
+                        root, candidate, "context package regression",
+                        feature_scoped_includes=scoped,
+                    )
+            # Disabled bodies remain exact package inputs, not omitted closure files.
+            context.write_text(
+                context_source + "\n// disabled source is still digest-bound\n",
+                encoding="utf-8",
+            )
+            changed = self.validator.package_rust_sources(
+                root, "fixture/Cargo.toml", "context package regression"
+            )
+            changed_digest = self.validator.package_source_closure_sha256(root, changed)
+            self.assertNotEqual(item["sourceClosureSha256"], changed_digest)
+            with self.assertRaisesRegex(SystemExit, "sourceClosureSha256 is stale"):
+                validate(
+                    root, item, "context package regression",
+                    feature_scoped_includes=True,
+                )
+            item["sourceClosureSha256"] = changed_digest
+            validate(
+                root, item, "context package regression",
+                feature_scoped_includes=True,
+            )
+
+    def test_context_protocol_scope_preserves_external_and_unconditional_refusals(self):
+        feature = frozenset({"provider_context_protocol"})
+        source = (
+            '#[cfg(feature = "provider_context_protocol")]\n'
+            '#[macro_use]\nmod context_body { include!("../outside.rs"); }\n'
+        )
+        package = ROOT / "include-regression-package"
+        args = (package / "context_vecadd.rs", package, "context include regression")
+        validate = self.validator.validate_rust_source_includes
+        validate(source, *args, inactive_features=feature)
+        for inactive in (None, frozenset(), frozenset({"unrelated"})):
+            with self.subTest(inactive=inactive), self.assertRaisesRegex(
+                SystemExit, "include! path escaping its package root"
+            ):
+                validate(source, *args, inactive_features=inactive)
+        for candidate in (
+            source + 'include!(concat!("outside", ".rs"));\n',
+            '#[cfg(feature = "provider_context_protocol")]\n'
+            '#[macro_use]\ninclude!(concat!("outside", ".rs"));\n',
+        ):
+            with self.subTest(candidate=candidate), self.assertRaisesRegex(
+                SystemExit, "non-literal include"
+            ):
+                validate(candidate, *args, inactive_features=feature)
 
     def test_feature_scoped_includes_require_a_literal_false_top_level_module(self):
         source = '#[cfg(feature = "generated")] mod selected { include!(env!("SOURCE")); }'

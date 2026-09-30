@@ -916,7 +916,6 @@ pub(crate) use guarded_genuine_v1::observe_actual_root_guarded_accesses_for_test
 #[cfg(test)]
 pub(crate) use argument_initialization::observe_actual_root_fixed_prefix_comparison_for_test_v1;
 
-#[cfg(test)]
 impl ActualSelectedInputsV1<'_> {
     pub(in crate::production_ranked_projection_v1) fn source_root(
         &self,
@@ -932,7 +931,6 @@ impl ActualSelectedInputsV1<'_> {
         self.references
     }
 }
-#[cfg(test)]
 pub(in crate::production_ranked_projection_v1) fn select_actual_capability_prefix_inputs_v1<'a>(
     owner: &ProductionPreRankedKirOwnerV1,
     checked: &CheckedBf16NominalCallV1<'_>,
@@ -961,7 +959,6 @@ pub(in crate::production_ranked_projection_v1) fn select_actual_capability_prefi
         resources,
     )
 }
-#[cfg(test)]
 fn capability_prefix_selection_frame() -> Result<usize> {
     // Keep the unchanged source-selection call's original assembly-policy
     // envelope; new wrapper/view/transfer vertices are separately additive.

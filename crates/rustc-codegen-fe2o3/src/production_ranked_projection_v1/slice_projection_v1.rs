@@ -401,3 +401,7 @@ impl ProjectedSliceQueriesV1 {
         Ok(())
     }
 }
+
+#[path = "retained_projected_view_prefix_v1.rs"]
+mod retained_view_prefix;
+pub(super) use retained_view_prefix::{ProjectedViewPrefixLoanV1, RetainedProjectedViewPrefixV1};

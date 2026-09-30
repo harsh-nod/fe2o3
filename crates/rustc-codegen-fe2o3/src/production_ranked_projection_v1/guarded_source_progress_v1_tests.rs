@@ -937,3 +937,67 @@ fn foreign_retained_report_is_not_equivalent_source_custody() {
     drop((reports, foreign, stage));
     budget.release_storage(budget.storage() - FLOOR).unwrap();
 }
+
+#[test]
+fn retained_shared_guard_forwarders_preserve_original_preflight_before_default_refusal() {
+    // Genuine captured source/guard setup, but Facts intentionally has no
+    // canonical Shared authority. This tests forwarding/refusal order only;
+    // the existing full guarded projection controls cover the real positive path.
+    for mode in 0..3 {
+        with_candidate(|progress, facts, _, _| {
+            let capture = progress.capture;
+            let owner = capture.original().semantic_ssa();
+            let function = SemanticFunctionIdV1::from_index(0);
+            let mut pending = fe2o3_pliron::ProductionSemanticSharedReadsPreparationV1::new();
+            let mut owned = 0usize;
+            match mode {
+                1 => progress.slot = progress.slot.checked_add(1).unwrap(),
+                2 => progress.floor = progress.floor.checked_add(1).unwrap(),
+                _ => {}
+            }
+            let before = (facts.0.work(), facts.0.storage(), owned);
+            let mut guarded = GuardedFacts {
+                facts,
+                progress,
+                root: function,
+                function,
+            };
+            let prepared =
+                guarded.prepare_retained_shared_reads_v1(&mut pending, owner, function, &mut owned);
+            let checked =
+                guarded.check_retained_shared_reads_v1(&pending, owner, function, &mut owned);
+            if mode == 0 {
+                assert!(matches!(
+                    prepared,
+                    Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "retained Shared reads require canonical source custody"
+                    ))
+                ));
+                assert!(matches!(
+                    checked,
+                    Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "retained Shared postflight requires canonical source custody"
+                    ))
+                ));
+            } else {
+                assert!(matches!(
+                    prepared,
+                    Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                        CanonicalAssertionErrorV1::Resource(Resource::Accounting)
+                    ))
+                ));
+                assert!(matches!(
+                    checked,
+                    Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                        CanonicalAssertionErrorV1::Resource(Resource::Accounting)
+                    ))
+                ));
+            }
+            assert!(pending.view().is_none());
+            assert_eq!(
+                before,
+                (guarded.facts.0.work(), guarded.facts.0.storage(), owned)
+            );
+        });
+    }
+}
