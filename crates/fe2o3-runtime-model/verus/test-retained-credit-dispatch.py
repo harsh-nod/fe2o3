@@ -105,6 +105,8 @@ check.calibration_arguments(["--calibrate"])
 for arguments in ([], ["--verus", "/tmp/verus"], ["--output", "/tmp/proof"],
                   ["--calibrate", "--output", "/tmp/proof"], ["--unknown"]):
     refused(lambda: check.calibration_arguments(arguments), "execution or unknown checker arguments accepted")
+    refused(lambda: check.cli(arguments), "implicit or mixed campaign arguments accepted")
+refused(lambda: check.cli(["--campaign", "--calibrate"]), "mixed execution/calibration accepted")
 need(type(check.EXPECTED_VERIFIED) is int and check.EXPECTED_VERIFIED == 41, "measured full discovery count")
 refused(check.campaign().main, "measured count enabled inherited single-body execution")
 original = check.EXPECTED_VERIFIED

@@ -240,7 +240,21 @@ def multi_body_recorder_required(*_args, **_kwargs):
 
 
 def calibration_arguments(arguments):
-    need(arguments == ["--calibrate"], "calibration-only checker: use --calibrate; proof execution requires the bounded recorder")
+    need(arguments == ["--calibrate"], "source calibration requires exactly --calibrate")
+
+
+def cli(arguments):
+    if arguments == ["--calibrate"]:
+        runpy.run_path(str(ROOT / V / "test-retained-credit-dispatch.py"))
+        return 0
+    need(arguments and arguments[0] == "--campaign" and "--calibrate" not in arguments,
+         "use --calibrate or --campaign --verus ABS --output FRESH_ABS")
+    runner = ROOT / V / "run-retained-credit-dispatch.py"
+    module = types.ModuleType("retained_credit_dispatch_runner")
+    module.__file__ = str(runner)
+    sys.modules[module.__name__] = module
+    exec(compile(runner.read_bytes(), str(runner), "exec"), module.__dict__)
+    return module.main(arguments)
 
 
 def campaign():
@@ -252,6 +266,4 @@ def campaign():
 
 
 if __name__ == "__main__":
-    # Execution uses the bounded external recorder, including all five mutant paths.
-    calibration_arguments(sys.argv[1:])
-    runpy.run_path(str(ROOT / V / "test-retained-credit-dispatch.py"))
+    raise SystemExit(cli(sys.argv[1:]))

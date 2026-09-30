@@ -83,11 +83,8 @@ defined but the signed campaign was pending. No historical capture is
 retroactively reclassified by the policy update.
 
 The development recorders and raw packets currently live in the retained local
-qualification directory, outside repository CI. The public component checker
-accepts only `--calibrate` and refuses unsupported multi-body proof execution.
-These results are not a self-contained published rerun package. A portable
-campaign entry point and publication of its complete inputs remain separate
-community-release work, even after source integration.
+qualification directory, outside repository CI. They remain historical,
+host-specific evidence, not an attestation of the portable runner below.
 
 Older record/observer/constructor/fold/KFD/R75 source guards are compatibility
 metadata updates only. Their executable proof closures, counts, mutant policies
@@ -131,3 +128,73 @@ All twelve merged-tree CI source-control commands pass locally. The CI job
 adds the source-only dispatch control, not a solver campaign or hosted result.
 CPU/static evidence remains the earlier exact-byte development reuse. Live
 freshness, conservation, native execution, A0-A7 and HIP/HSA parity remain open.
+
+## Portable Campaign
+
+The repository-contained runner is a new host-tool profile, not a reuse of
+S2's host-tool qualification. Its source/synthetic controls exercise the
+orchestration without running a compiler or solver. A clean relocated, signed
+checkout must complete a fresh campaign before portable qualification can be
+claimed; that execution is pending.
+
+Source-only calibration remains available:
+
+```sh
+python3 -I -B crates/fe2o3-runtime-model/verus/check-retained-credit-dispatch.py --calibrate
+python3 -I -B crates/fe2o3-runtime-model/verus/test-run-retained-credit-dispatch.py
+```
+
+For proof execution, install the exact Linux x86_64 Verus release specified by
+`crates/fe2o3-runtime-model/verus/pins/VERUS_CLOSURE_MANIFEST` and the Rustup
+`1.97.1-x86_64-unknown-linux-gnu` toolchain. A full Git checkout is required;
+sparse checkouts may omit only paths outside the selected source inventory.
+Use Python 3.12 or later, GNU timeout/coreutils, Git with SSH signature support,
+OpenSSH ssh-keygen, and readable Linux procfs. `CARGO_HOME` and `RUSTUP_HOME`
+may locate existing installations; neither downloads nor Cargo builds occur.
+
+```sh
+python3 -I -B crates/fe2o3-runtime-model/verus/check-retained-credit-dispatch.py \
+  --campaign --verus /absolute/release/verus --output /absolute/new-evidence
+```
+
+The direct `run-retained-credit-dispatch.py` entry point accepts the same
+campaign arguments. Output must be absent, canonical, outside both checkout
+and verifier, and have an existing parent. Missing/unknown/mixed mode flags
+fail closed. Existing evidence is never overwritten or resumed.
+
+The runner requires a clean commit signed by the explicitly pinned ED25519
+key `SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg` for
+`harmenon@amd.com`. Git/ssh-keygen cryptographically verify the commit; every
+selected working file is independently joined to its signed Git blob and
+SHA-256 digest. This inventory covers crates, examples, Cargo configuration,
+root build manifests, this document, and the two imported evidence helpers.
+It does not assert authenticity of every other documentation or vendor file.
+Forks signed by another key are deliberately refused, not implicitly trusted.
+
+The entire 190-file Verus/vstd/Z3 release is checked against the pinned manifest
+before and in a `finally` closing stage. Direct release executable identities
+are checked at each stage. Host Git, ssh-keygen, Python, timeout, shell, closure
+utilities, Rustup and the named rustc executable are instead measured on this
+machine and checked for path/hash continuity. They are not pinned to S2's
+historical tool bytes. Python/system libraries, Rust compiler libraries,
+dynamic linking, kernel and procfs remain trust boundaries; this is not a
+hermetic build or a compiler/ISA proof.
+
+The 33-stage plan uses the unchanged repository-owned process-group owner and
+strict diagnostic classifiers. A generated tree contains exactly the fourteen
+proof inputs; each of the 25 negative trees changes only its named body. A
+negative must fail logically on that family's postcondition and carry the
+matching body excerpt, macro call and macro definition. In particular, the
+overlapping account selector cannot qualify an unrelated Runtime failure.
+Timeouts, frontend errors, unexpected diagnostics and count drift fail closed.
+
+Source, tool, raw-log, namespace and generated-tree observations are independent
+closing checks. A fresh-only census examines only this invocation's recorded
+groups in its unchanged PID namespace. It makes no historical or host-wide
+absence claim. A failed campaign retains its logs, attempts the closing release
+check when opening release was attempted, and reports `accepted: false`; no
+later positive is run after rejection. Source/CPU/native/performance milestone
+gates are not closed by a component proof campaign.
+Acceptance requires both a normal zero exit and a complete `accepted: true`
+receipt. Evidence-write failures propagate as errors, may leave incomplete
+receipts, and still restore the caller's working directory and signal handlers.
