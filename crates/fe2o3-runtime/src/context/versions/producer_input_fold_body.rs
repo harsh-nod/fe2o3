@@ -38,8 +38,45 @@ macro_rules! producer_input_fold_body {
     };
 }
 
+macro_rules! producer_dependency_contains_body {
+    ($syntax:ident, $dependencies:ident, $dependency:ident, $index:ident,
+     [$($invariants:tt)*]) => {
+        $syntax!({
+            let mut $index = 0usize;
+            while $index < $dependencies.len()
+                $($invariants)*
+            {
+                if &$dependencies[$index] == $dependency {
+                    return true;
+                }
+                $index += 1;
+            }
+            false
+        })
+    };
+}
+
+macro_rules! producer_source_pair_contains_body {
+    ($syntax:ident, $sources:ident, $source:ident, $index:ident,
+     [$($invariants:tt)*]) => {
+        $syntax!({
+            let mut $index = 0usize;
+            while $index < $sources.len()
+                $($invariants)*
+            {
+                let original = &$sources[$index];
+                if original.region == $source.region && original.record == $source.record {
+                    return true;
+                }
+                $index += 1;
+            }
+            false
+        })
+    };
+}
+
 macro_rules! producer_input_validate_body {
-    ($syntax:ident, $context:ident, $versions:ident, $root:ident, $id:ident,
+    ($syntax:ident, $context:ident, $root:ident, $id:ident,
      $consumer:ident, $launch:ident, $index:ident, $active_index:ident,
      $queued_index:ident, $observations:ident) => {
         $syntax!({
@@ -58,7 +95,7 @@ macro_rules! producer_input_validate_body {
                             .incarnation
                             .checked_add(*$active_index as u64)
                             != Some(reference.incarnation)
-                        || $versions.journal.lookup_producer_read(reference)? != request
+                        || $observations.observe_active_lookup(reference)? != request
                     {
                         return Err(E::InvalidReference);
                     }
@@ -72,7 +109,7 @@ macro_rules! producer_input_validate_body {
                         request.read.byte_offset,
                         request.read.byte_len,
                         request.producer,
-                        $versions.journal.producer_read_status(reference)?,
+                        $observations.observe_active_status(reference)?,
                     )
                 }
                 ProducerReadRequestV1::Queued(request) => {
@@ -86,7 +123,7 @@ macro_rules! producer_input_validate_body {
                             .incarnation
                             .checked_add(*$queued_index as u64)
                             != Some(reference.incarnation)
-                        || $versions.journal.lookup_queued_producer_read(reference)? != request
+                        || $observations.observe_queued_lookup(reference)? != request
                     {
                         return Err(E::InvalidReference);
                     }
@@ -96,26 +133,36 @@ macro_rules! producer_input_validate_body {
                         request.byte_offset,
                         request.byte_len,
                         request.producer,
-                        $versions.journal.queued_producer_read_status(reference)?,
+                        $observations.observe_queued_status(reference)?,
                     )
                 }
             };
             let bound = if $launch {
-                $context.producer_launches.get(&$id).is_some_and(|launch| {
-                    launch.dependencies_held
-                        && launch.dependencies.contains(&input.dependency)
-                        && launch.sources.iter().any(|original| {
-                            original.region == source.region && original.record == source.record
-                        })
-                })
+                match $context.producer_launches.get(&$id) {
+                    Some(launch) => {
+                        launch.dependencies_held
+                            && producer_dependency_contains_v1(
+                                &launch.dependencies,
+                                &input.dependency,
+                            )
+                            && producer_source_pair_contains_v1(&launch.sources, &source)
+                    }
+                    None => false,
+                }
             } else {
-                $context.scalar_peer_copies.get(&$id).is_some_and(|peer| {
-                    peer.directed.is_some()
-                        && peer.dependencies_held
-                        && peer.dependencies.contains(&input.dependency)
-                        && peer.source.region == source.region
-                        && peer.source.record == source.record
-                })
+                match $context.scalar_peer_copies.get(&$id) {
+                    Some(peer) => {
+                        peer.directed.is_some()
+                            && peer.dependencies_held
+                            && producer_dependency_contains_v1(
+                                &peer.dependencies,
+                                &input.dependency,
+                            )
+                            && peer.source.region == source.region
+                            && peer.source.record == source.record
+                    }
+                    None => false,
+                }
             };
             if !bound
                 || producer.key
@@ -136,7 +183,7 @@ macro_rules! producer_input_validate_body {
                     source.record.device,
                     source.record.byte_len,
                 )
-                || $versions.validate_live(source.region.allocation, &source.record)?
+                || $observations.observe_live(source.region.allocation, &source.record)?
                     != allocation.allocation
                 || allocation.device
                     != enrollment(

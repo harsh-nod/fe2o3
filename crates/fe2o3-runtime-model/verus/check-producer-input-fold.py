@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Conditional actual fold-controller refinement, not native input validation.
 
-The complete runtime Rust roster binds the native observation adapter and both
-shared macros. Only producer_input_fold_body is expanded in the proof. Each
+The complete runtime Rust roster binds the native observation adapter and shared
+fold, validation and scan macros. Only producer_input_fold_body is expanded in the proof. Each
 replay receipt must correspond to an actual reached validation, family advance
 and exact return. Its credit metadata grants no accounting/native authority.
 Opaque local owner/error values are framed without claiming an Arc interior
@@ -25,15 +25,18 @@ PROOF = V / "context_producer_input_fold_v1.rs"
 FILES = [PROOF, BODY]
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "19ec915583c9bac2da4ffeba186fe13747b6747ad7065655fe49ac726ad88671"
+SOURCE_TREE_SHA = "46db873f380e92c600ad8948c101130ab75397dffd5ad7d6cfa15085cd985d1a"
 SOURCE_FILES = 327
 PROOF_SHA = "0588fd557956b177b7b7be56fda006f25a82e509e23c40920907fecb78830184"
+BODY_SHA = "701824a7cf27d45d9ec93e36401bffd988e2d6e8e27da281868507a51f74f158"
+FOLD_PREFIX_SHA = "f38d698075a14e469478805710dd6cf1058346aafc3d1b966efe0518c6a7c991"
+FOLD_PREFIX_BYTES = 2003
 # Full unfiltered --no-cheating discovery V5 accepted this count, not the mutants.
 EXPECTED_VERIFIED = 13
 MUTANT_COUNT = 22
 SELECTOR = "*Observations::reconcile"
 FOLD_ANCHOR = "macro_rules! producer_input_fold_body {"
-NATIVE_ANCHOR = "\nmacro_rules! producer_input_validate_body {"
+NATIVE_ANCHOR = "macro_rules! producer_dependency_contains_body {"
 
 
 def need(value, message):
@@ -67,6 +70,12 @@ def audit(sources):
     need(len(implementation) == SOURCE_FILES and tree_hash(implementation) == SOURCE_TREE_SHA,
          "reviewed runtime roster and bytes, including native adapter and helper boundary")
     need(sha(sources[PROOF]) == PROOF_SHA, "exact accepted receipt/cursor/error/frame contracts and proof")
+    body = sources[BODY]
+    need(sha(body) == BODY_SHA and body.count(NATIVE_ANCHOR) == 1,
+         "exact shared body and first following helper boundary")
+    prefix = body[:body.index(NATIVE_ANCHOR)]
+    need(len(prefix.encode("utf-8")) == FOLD_PREFIX_BYTES and sha(prefix) == FOLD_PREFIX_SHA,
+         "original 2003-byte fold prefix preserved without helper macros")
     need(sources[OWNER].count('include!("producer_input_fold_body.rs");') == 1
          and sources[OWNER].count("producer_input_fold_body!(") == 1
          and sources[OWNER].count("producer_input_validate_body!(") == 1,
@@ -83,7 +92,7 @@ def audit(sources):
 
 def change(body, before, after):
     need(body.count(FOLD_ANCHOR) == 1 and body.count(NATIVE_ANCHOR) == 1,
-         "exact shared fold and native validation macros")
+         "exact shared fold and first following helper macros")
     start, end = body.index(FOLD_ANCHOR), body.index(NATIVE_ANCHOR)
     need(start < end, "fold macro precedes native helper")
     selected = body[start:end]

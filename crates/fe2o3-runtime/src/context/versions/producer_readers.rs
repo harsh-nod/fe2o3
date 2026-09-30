@@ -123,6 +123,26 @@ struct ProducerInputObservationsV1<'a, B: RuntimeBackendV1> {
     launch: bool,
 }
 
+fn producer_dependency_contains_v1(
+    dependencies: &[ScalarPeerDependencyV1],
+    dependency: &ScalarPeerDependencyV1,
+) -> bool {
+    producer_dependency_contains_body!(
+        completion_journal_rust_syntax,
+        dependencies,
+        dependency,
+        index,
+        []
+    )
+}
+
+fn producer_source_pair_contains_v1(
+    sources: &[ContextReadSourceV1],
+    source: &ContextReadSourceV1,
+) -> bool {
+    producer_source_pair_contains_body!(completion_journal_rust_syntax, sources, source, index, [])
+}
+
 impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
     fn input_count(&self) -> usize {
         self.root.inputs.len()
@@ -134,6 +154,42 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
 
     fn queued_count(&self) -> usize {
         self.root.queued_references.len()
+    }
+
+    fn observe_active_lookup(
+        &mut self,
+        reference: ContextProducerReadReferenceV1,
+    ) -> Result<ContextProducerReadV1, ContextVersionJournalErrorV1> {
+        self.versions.journal.lookup_producer_read(reference)
+    }
+
+    fn observe_active_status(
+        &mut self,
+        reference: ContextProducerReadReferenceV1,
+    ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
+        self.versions.journal.producer_read_status(reference)
+    }
+
+    fn observe_queued_lookup(
+        &mut self,
+        reference: ContextQueuedProducerReadReferenceV1,
+    ) -> Result<ContextQueuedProducerReadV1, ContextVersionJournalErrorV1> {
+        self.versions.journal.lookup_queued_producer_read(reference)
+    }
+
+    fn observe_queued_status(
+        &mut self,
+        reference: ContextQueuedProducerReadReferenceV1,
+    ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
+        self.versions.journal.queued_producer_read_status(reference)
+    }
+
+    fn observe_live(
+        &mut self,
+        id: RuntimeAllocationIdV1,
+        record: &AllocationRecordV1,
+    ) -> Result<ContextAllocationReferenceV1, ContextVersionJournalErrorV1> {
+        self.versions.validate_live(id, record)
     }
 
     fn observe_expected_credit(
@@ -154,7 +210,6 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
         queued_index: &mut usize,
     ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
         let context = self.context;
-        let versions = self.versions;
         let root = self.root;
         let id = self.id;
         let consumer = self.consumer;
@@ -162,7 +217,6 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
         producer_input_validate_body!(
             completion_journal_rust_syntax,
             context,
-            versions,
             root,
             id,
             consumer,

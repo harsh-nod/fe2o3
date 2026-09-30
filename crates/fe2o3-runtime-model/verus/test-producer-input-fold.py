@@ -72,6 +72,13 @@ need(set(cases) == expected_names and len(cases) == check.MUTANT_COUNT == 22,
      "exact proposed controller mutation roster")
 need(len({body for body, _ in cases.values()}) == 22, "unique body bytes")
 original = sources[check.BODY]
+prefix = original[:original.index(check.NATIVE_ANCHOR)]
+need(len(prefix.encode("utf-8")) == check.FOLD_PREFIX_BYTES == 2003
+     and check.sha(prefix) == check.FOLD_PREFIX_SHA
+     == "f38d698075a14e469478805710dd6cf1058346aafc3d1b966efe0518c6a7c991",
+     "exact preserved original fold bytes before both scan helpers")
+need(all(name not in prefix for name in ("producer_dependency_contains_body", "producer_source_pair_contains_body",
+                                        "producer_input_validate_body")), "no helper or validator in fold mutation interval")
 native_suffix = original[original.index(check.NATIVE_ANCHOR):]
 leaf = types.SimpleNamespace(LOGICAL_ERRORS={"postcondition not satisfied", "precondition not satisfied"})
 for name, (body, focus) in cases.items():
@@ -86,6 +93,9 @@ for name, (body, focus) in cases.items():
 refused(lambda: check.change(original, "not a source site", "replacement"), "absent mutation accepted")
 refused(lambda: check.change(original, "return Err(E::InvalidReference);", "return Ok(status);"),
         "native validator selected as controller mutation")
+for before, after in (("if &$dependencies[$index] == $dependency {", "if false {"),
+                      ("let original = &$sources[$index];", "let original = &$sources[0];")):
+    refused(lambda: check.change(original, before, after), "scan helper selected as fold mutation")
 for focus in ("reconcile", "*", "*Observations::validate", "*NativeOwner::quarantine"):
     refused(lambda: check.selection_notes(leaf, focus), "out-of-scope function selector accepted")
 
