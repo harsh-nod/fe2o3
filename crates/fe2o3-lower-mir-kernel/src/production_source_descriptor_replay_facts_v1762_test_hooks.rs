@@ -134,7 +134,9 @@ fn original_descriptor_replay_facts_header_has_an_independent_full_layout_oracle
     }
     assert_eq!(
         source_slice_replay_headers_v18().unwrap(),
-        size_of::<FactsMirror<'_>>() + std::mem::align_of::<FactsMirror<'_>>()
+        size_of::<FactsMirror<'_>>()
+            + std::mem::align_of::<FactsMirror<'_>>()
+            + descriptor_origin_header_oracle_v30()
     );
     assert!(size_of::<FactsMirror<'_>>() > size_of::<SliceFacts<'_>>());
 }

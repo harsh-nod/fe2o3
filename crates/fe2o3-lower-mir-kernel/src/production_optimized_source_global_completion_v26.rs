@@ -11,6 +11,8 @@ pub(super) enum CompletedGlobalOperationV26 {
     PointerTransport,
 }
 
+include!("production_source_descriptor_length_completion_v30.rs");
+
 /// An exact source-bound parameter contract whose concrete allocation and
 /// launch requirements must be transported to the runtime, not assumed here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -642,6 +644,15 @@ where
                                     .source
                                     .missing("mixed global root effect census differs");
                             }
+                            complete_source_descriptor_lengths_v30(
+                                original,
+                                optimized,
+                                root,
+                                completion,
+                                &mut operations,
+                                &mut operation_count,
+                                budget,
+                            )?;
                             Ok(())
                         },
                     )

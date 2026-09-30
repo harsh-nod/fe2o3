@@ -1,5 +1,7 @@
 // Paid original-assignment locators, captured before temporary archives expire.
 // Unmodeled whole bindings are explicit refusals in the new scalar proof query.
+include!("production_source_descriptor_operand_v30.rs");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceRvalueEndpointV30 {
     Unit,
@@ -14,6 +16,7 @@ struct SourceRvalueRowV30 {
     statement: u32,
     ty: SemanticTypeIdV1,
     endpoint: SourceRvalueEndpointV30,
+    descriptor: Option<SourceDescriptorOperandV30>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,12 +80,17 @@ fn source_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
         h::<&SourceRvalueRowV30>()?,
         h::<&SemanticFunctionDeclV1>()?,
         h::<&fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1>()?,
+        h::<(
+            &SourceRvalueRowV30,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1,
+        )>()?,
         h::<&fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1<'_>>()?,
         h::<Option<usize>>()?,
         h::<Type>()?,
         h::<(usize, u32, u32)>()?,
         h::<ExecutionCallSourceV29>()?,
         h::<ExecutionSiteV29>()?,
+        source_descriptor_operand_headers_v30()?,
         h::<std::slice::Iter<'_, SourceRvalueRowV30>>()?,
         argument_product_v1(8, h::<usize>()?)?,
         h::<()>()?,
@@ -170,6 +178,9 @@ fn retain_source_rvalues_v30(
                 let ty = assignment.value().result_type();
                 let binding =
                     archive.lookup_rvalue_original_v30(instances, instance, site, ty, budget)?;
+                let descriptor = retain_source_descriptor_operand_v30(
+                    instances, instance, archive, site, assignment, budget,
+                )?;
                 if rows.len() == rows.capacity() {
                     return Err(ArgumentResourceV1::Accounting.into());
                 }
@@ -179,6 +190,7 @@ fn retain_source_rvalues_v30(
                     statement,
                     ty,
                     endpoint: source_rvalue_endpoint_v30(binding),
+                    descriptor,
                 });
             }
         }
@@ -366,14 +378,17 @@ impl ProductionSourceCorrespondenceV18<'_> {
         self.retain_query(result)
     }
 
-    fn assignment_scalar_contents_v30(
+    fn assignment_result_row_v30(
         &self,
         root: usize,
         instance: usize,
         block: SemanticBlockIdV1,
         statement: u32,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> SourceOwnedResultV18<Option<usize>> {
+    ) -> SourceOwnedResultV18<(
+        &SourceRvalueRowV30,
+        &fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1,
+    )> {
         self.query(budget)?;
         let owner = self.source.root_row(root)?;
         let results =
@@ -431,6 +446,20 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 .source
                 .missing("original assignment result type differs");
         }
+        Ok((row, assignment))
+    }
+
+    fn assignment_scalar_contents_v30(
+        &self,
+        root: usize,
+        instance: usize,
+        block: SemanticBlockIdV1,
+        statement: u32,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<usize>> {
+        let (row, _) = self.assignment_result_row_v30(root, instance, block, statement, budget)?;
+        let source = self.source.source_ssa(budget)?;
+        let owner = self.source.root_row(root)?;
         match row.endpoint {
             SourceRvalueEndpointV30::Unmodeled => self
                 .source

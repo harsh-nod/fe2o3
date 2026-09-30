@@ -1,3 +1,5 @@
+include!("production_source_descriptor_length_native_v30_tests.rs");
+
 fn mixed_native_launches_v26(
     original: &ProductionSourceCorrespondenceV18<'_>,
     budget: &mut ArgumentBudgetV1<'_>,

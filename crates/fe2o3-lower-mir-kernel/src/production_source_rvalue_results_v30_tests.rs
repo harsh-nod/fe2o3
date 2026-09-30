@@ -98,7 +98,7 @@ fn retained_source_rvalue_replay_detects_type_endpoint_omission_and_source_chang
     prepared
         .with_checked_source_v18(&mut budget, |source, budget| {
             let original = source.root_row(0)?.rvalue_results.as_ref().unwrap();
-            for fault in 0..5 {
+            for fault in 0..6 {
                 let mut altered = OwnedSourceRvaluesV30 {
                     source: original.source,
                     ledger: original.ledger,
@@ -114,6 +114,15 @@ fn retained_source_rvalue_replay_detects_type_endpoint_omission_and_source_chang
                         altered.rows.pop();
                     }
                     4 => altered.source.semantic[0] ^= 1,
+                    5 => {
+                        altered.rows[0].descriptor = Some(SourceDescriptorOperandV30 {
+                            event: 0,
+                            original: SsaValueV1::Definition(
+                                fe2o3_mir_model::SsaDefinitionIdV1::new(0),
+                            ),
+                            receiver: ValueId(0),
+                        })
+                    }
                     _ => unreachable!(),
                 }
                 assert_eq!(
@@ -186,16 +195,55 @@ fn retained_rvalue_header_oracle_covers_capture_and_query_envelopes() {
         + h::<&SourceRvalueRowV30>()
         + h::<&SemanticFunctionDeclV1>()
         + h::<&fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1>()
+        + h::<(
+            &SourceRvalueRowV30,
+            &fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1,
+        )>()
         + h::<&fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1<'_>>()
         + h::<Option<usize>>()
         + h::<Type>()
         + h::<(usize, u32, u32)>()
         + h::<ExecutionCallSourceV29>()
         + h::<ExecutionSiteV29>()
+        + descriptor_operand_header_oracle_v30()
         + h::<std::slice::Iter<'_, SourceRvalueRowV30>>()
         + 8 * h::<usize>()
         + h::<()>();
     assert_eq!(source_rvalue_headers_v30().unwrap(), expected);
+}
+
+fn descriptor_operand_header_oracle_v30() -> usize {
+    #[allow(dead_code)]
+    struct Operand {
+        event: usize,
+        original: SsaValueV1,
+        receiver: ValueId,
+    }
+    assert_eq!(
+        size_of::<Operand>(),
+        size_of::<SourceDescriptorOperandV30>()
+    );
+    type Frame<'a> = (
+        [&'a (); 8],
+        [usize; 4],
+        Operand,
+        Option<Operand>,
+        Option<(&'a SemanticPlaceV1, usize, ExecutionOperandV29)>,
+        Option<(usize, SsaValueV1)>,
+        Option<&'a fe2o3_pliron::ProductionSemanticSsaEventOccurrenceV1>,
+        fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'a>,
+        Result<Option<Operand>, ProductionSemanticKirErrorV1>,
+        SourceOwnedResultV18<()>,
+        Result<&'a SemanticValueBindingV1, ProductionSemanticKirErrorV1>,
+        &'a SemanticValueBindingV1,
+        std::iter::Enumerate<
+            std::slice::Iter<'a, fe2o3_pliron::ProductionSemanticSsaEventOccurrenceV1>,
+        >,
+        std::slice::Iter<'a, SemanticProjectionV1>,
+    );
+    let expected = size_of::<Frame<'_>>() + std::mem::align_of::<Frame<'_>>();
+    assert_eq!(source_descriptor_operand_headers_v30().unwrap(), expected);
+    expected
 }
 
 #[test]

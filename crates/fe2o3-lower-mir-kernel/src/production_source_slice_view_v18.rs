@@ -1,5 +1,7 @@
 // Genuine original Source slice replay. MAIN legacy V1 remains in its original host.
 
+include!("production_source_descriptor_origin_v30.rs");
+
 #[cfg(test)]
 include!("production_source_descriptor_replay_facts_v1762_test_hooks.rs");
 
@@ -16,6 +18,7 @@ fn source_slice_replay_headers_v18() -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
         size_of::<SourceSliceReplayFactsV18<'_>>(),
         std::mem::align_of::<SourceSliceReplayFactsV18<'_>>(),
+        source_descriptor_origin_headers_v30()?,
     ])
 }
 
@@ -323,50 +326,24 @@ impl<'a, O> SourceSliceQueryV18<'a, '_, O> {
 
     fn descriptor_origin(
         &self,
-        mut value: ValueId,
+        value: ValueId,
         budget: &mut SliceBudget<'_>,
     ) -> SliceResult<SliceDefinition> {
-        let steps = self
-            .function
-            .definitions
-            .len()
-            .checked_add(1)
-            .ok_or(ArgumentResourceV1::Arithmetic)?;
-        for _ in 0..steps {
-            budget.charge_work(1)?;
-            let origin = self.origin(value, budget)?;
-            if let SliceDefinition::Result {
-                operation,
-                result: 0,
-            } = origin
-            {
-                let operation = self.operation(operation, budget)?;
-                if let OperationKind::Cast {
-                    kind: CastKind::SliceToGeneric,
-                    value: input,
-                    to,
-                } = &operation.operation.kind
-                {
-                    let definition = self
-                        .inventory
-                        .definition_for_value(self.function.coordinate, *input, budget)
-                        .map_err(slice_inventory_error)?
-                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-                    if !source_descriptor_widening_v29(definition.ty, to)
-                        || operation.operation.results.len() != 1
-                        || operation.operation.results[0].ty != *to
-                    {
-                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-                    }
-                    value = *input;
-                    continue;
-                }
-            }
-            return Ok(origin);
+        match source_descriptor_origin_v30(
+            self.inventory,
+            self.function,
+            self.origins,
+            value,
+            budget,
+        )? {
+            DescriptorOriginV30::Exact(origin) => Ok(origin),
+            DescriptorOriginV30::Unknown => Err(self
+                .site
+                .unsupported("slice access has conflicting or ungrounded SSA origins")),
+            DescriptorOriginV30::Cyclic => Err(self
+                .site
+                .unsupported("slice descriptor transport is cyclic")),
         }
-        Err(self
-            .site
-            .unsupported("slice descriptor transport is cyclic"))
     }
 
     fn defining_operation(
