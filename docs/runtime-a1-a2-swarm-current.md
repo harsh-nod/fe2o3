@@ -27,6 +27,17 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [lossless KFD test snapshots](runtime-kfd-snapshot-test-fixtures-v1.md)
+are integrated at `273b964d2`. The same CPU creation-unwind matrix measured
+305.88 seconds at baseline and 103.49 seconds with compact snapshots in one
+ordered comparison; this is not GPU performance evidence. Its complete
+pre-format KFD run finishes with 1819 passes and one `SocketAdmission` failure,
+which both retained baseline and candidate binaries reproduce. The suite remains
+rejected. Final formatting/comment bytes receive a fresh build, unchanged
+1820-test listing, six passing focused tests and strict static checks; all eight
+fresh process groups close. Exact candidate-byte reuse binds these pre-signing
+checks, not a new full-suite run. Older KFD proof bodies and counts are unchanged.
+
 The [independent-account post-lock observer](runtime-independent-retained-observation-v1.md)
 is integrated at `f8994fdb8`. Its signed campaign passes three overlapping full
 eight-obligation runs and all ten actual-body logical negatives. Both verifier
