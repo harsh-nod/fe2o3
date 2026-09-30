@@ -160,6 +160,13 @@ pub enum SharedMemorySessionPhaseV1 {
     Quarantined,
 }
 
+// Pinned vstd bridge for this fieldless enum's derived equality. Rust derive
+// expansion remains a compiler boundary, not an additional native-state fact.
+impl vstd::std_specs::cmp::PartialEqSpecImpl for SharedMemorySessionPhaseV1 {
+    open spec fn obeys_eq_spec() -> bool { true }
+    open spec fn eq_spec(&self, other: &Self) -> bool { *self == *other }
+}
+
 pub enum QueueGetterResult {
     Live,
     Refused,
@@ -210,13 +217,13 @@ pub struct PostCallbackCustody<C> {
 
 pub uninterp spec fn returning_quarantine_effect<C>(before: C, after: C) -> bool;
 
-pub open spec fn terminal_observation<C>(owner: PostCallbackCustody<C>) -> bool {
+pub closed spec fn terminal_observation<C>(owner: PostCallbackCustody<C>) -> bool {
     matches!(owner.queue.returned, QueueGetterResult::Refused)
         || owner.source.returned != SharedMemorySessionPhaseV1::Active
         || owner.destination.returned != SharedMemorySessionPhaseV1::Active
 }
 
-pub open spec fn one_returning_quarantine<C>(before: PostCallbackCustody<C>, after: PostCallbackCustody<C>) -> bool {
+pub closed spec fn one_returning_quarantine<C>(before: PostCallbackCustody<C>, after: PostCallbackCustody<C>) -> bool {
     &&& returning_quarantine_effect(before.storage, after.storage)
     &&& after.queue == before.queue
     &&& after.source == before.source
@@ -276,7 +283,7 @@ pub struct Scope<C> {
     finished: bool,
 }
 
-pub fn close_post_given_returning_quarantine_contract<C, M, K, D>(
+fn close_post_given_returning_quarantine_contract<C, M, K, D>(
     scope: &mut Scope<C>, result: Result<(), Gfx942SdmaErrorV1<M, K, D>>,
 ) -> (returned: Result<(), Gfx942SdmaErrorV1<M, K, D>>)
     ensures
@@ -291,7 +298,7 @@ pub fn close_post_given_returning_quarantine_contract<C, M, K, D>(
     retained_pair_close_post_body!(scope, result)
 }
 
-pub fn finish_terminal_given_returning_quarantine_contract<C>(scope: &mut Scope<C>)
+fn finish_terminal_given_returning_quarantine_contract<C>(scope: &mut Scope<C>)
     ensures
         final(scope).finished,
         one_returning_quarantine(old(scope).context, final(scope).context),
@@ -301,7 +308,7 @@ pub fn finish_terminal_given_returning_quarantine_contract<C>(scope: &mut Scope<
 
 // One explicit invocation of the actual Drop body. Automatic Drop/unwind timing
 // is external. The original finished flag is retained even on the abandoned path.
-pub fn drop_once_given_returning_quarantine_contract<C>(scope: &mut Scope<C>)
+fn drop_once_given_returning_quarantine_contract<C>(scope: &mut Scope<C>)
     ensures
         final(scope).finished == old(scope).finished,
         if old(scope).finished {

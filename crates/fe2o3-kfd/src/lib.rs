@@ -203,10 +203,6 @@ pub use queue::{
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use sdma::{
-    GFX942_XGMI_RETAINED_PAIR_POLICY_V1, GFX942_XGMI_RETAINED_PAIR_POLICY_SHA256_V1,
-    GFX942_XGMI_RETAINED_PAIR_PROFILE_V1, Gfx942NativeXgmiSdmaRetainedPairV1,
-    Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairCompletedCopyV1,
-    Gfx942XgmiRetainedPairWaitFailureV1, Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
     GFX942_SDMA_COPY_MANIFEST_SHA256_V1, GFX942_SDMA_COPY_MANIFEST_V1,
     GFX942_SDMA_COPY_PACKET_BYTES_V1, GFX942_SDMA_D2H_ENGINE_INDEX_V1,
     GFX942_SDMA_FENCE_PACKET_BYTES_V1, GFX942_SDMA_H2D_ENGINE_INDEX_V1,
@@ -218,10 +214,13 @@ pub use sdma::{
     GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, GFX942_SDMA_MAX_MULTI_QUEUE_REQUESTS_V1,
     GFX942_SDMA_MAX_MULTI_QUEUE_SHARDS_V1, GFX942_SDMA_MAX_STRIPED_QUEUES_V1,
     GFX942_SDMA_RING_BYTES_V1, GFX942_SDMA_SHARED_ALLOCATION_RECORDS_PER_QUEUE_V1,
-    GFX942_SDMA_SUBMISSION_BYTES_V1, Gfx942CombinedSdmaCapacityV1, Gfx942DevicePoolLimitsV1,
-    Gfx942DevicePoolUsageV1, Gfx942DirectionalSdmaQueueObservationV1, Gfx942HostPoolLimitsV1,
-    Gfx942HostPoolUsageV1, Gfx942NativeXgmiSdmaBatchV1, Gfx942NativeXgmiSdmaQueueCreationFailureV1,
-    Gfx942NativeXgmiSdmaQueueCreationRootV1, Gfx942NativeXgmiSdmaQueueV1, Gfx942SdmaBufferKindV1,
+    GFX942_SDMA_SUBMISSION_BYTES_V1, GFX942_XGMI_RETAINED_PAIR_POLICY_SHA256_V1,
+    GFX942_XGMI_RETAINED_PAIR_POLICY_V1, GFX942_XGMI_RETAINED_PAIR_PROFILE_V1,
+    Gfx942CombinedSdmaCapacityV1, Gfx942DevicePoolLimitsV1, Gfx942DevicePoolUsageV1,
+    Gfx942DirectionalSdmaQueueObservationV1, Gfx942HostPoolLimitsV1, Gfx942HostPoolUsageV1,
+    Gfx942NativeXgmiSdmaBatchV1, Gfx942NativeXgmiSdmaOwnedRetainedPairV1,
+    Gfx942NativeXgmiSdmaQueueCreationFailureV1, Gfx942NativeXgmiSdmaQueueCreationRootV1,
+    Gfx942NativeXgmiSdmaQueueV1, Gfx942NativeXgmiSdmaRetainedPairV1, Gfx942SdmaBufferKindV1,
     Gfx942SdmaBufferV1, Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
     Gfx942SdmaCopySubmissionV1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
     Gfx942SdmaLogicalMuxCompletedV2, Gfx942SdmaLogicalMuxNativeShardObservationV2,
@@ -234,8 +233,10 @@ pub use sdma::{
     Gfx942SdmaStripedDiagnosticSpinBudgetV1, Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
     Gfx942SdmaStripedWaitDiagnosticsV1, Gfx942SdmaUnpublishedCopyRequestV1,
     Gfx942XgmiBatchSubmissionFailureV1, Gfx942XgmiBatchWaitFailureV1, Gfx942XgmiCompletedCopyV1,
-    Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1, Gfx942XgmiSdmaCopyRequestV1,
-    Gfx942XgmiWaitFailureV1,
+    Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1, Gfx942XgmiOwnedRetainedPairFailureV1,
+    Gfx942XgmiOwnedRetainedPairPartsV1, Gfx942XgmiRetainedPairCompletedBatchV1,
+    Gfx942XgmiRetainedPairCompletedCopyV1, Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
+    Gfx942XgmiRetainedPairWaitFailureV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiWaitFailureV1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

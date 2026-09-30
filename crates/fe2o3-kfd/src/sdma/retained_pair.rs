@@ -4,6 +4,11 @@ use super::*;
 use crate::SharedMemorySessionPhaseV1;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+pub use owned::{
+    Gfx942NativeXgmiSdmaOwnedRetainedPairV1, Gfx942XgmiOwnedRetainedPairFailureV1,
+    Gfx942XgmiOwnedRetainedPairPartsV1,
+};
+
 /// Identifies the narrower observation contract; it grants no device authority.
 pub const GFX942_XGMI_RETAINED_PAIR_PROFILE_V1: &str =
     "fe2o3.gfx942-xgmi-retained-pair-ordinary-lifetime.v1";
@@ -67,7 +72,10 @@ impl Gfx942XgmiRetainedPairCompletedCopyV1 {
 
     pub fn into_mappings(
         self,
-    ) -> (Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMappedDeviceMemoryV1) {
+    ) -> (
+        Gfx942XgmiMappedDeviceMemoryV1,
+        Gfx942XgmiMappedDeviceMemoryV1,
+    ) {
         self.inner.into_mappings()
     }
 }
@@ -90,15 +98,22 @@ impl Gfx942XgmiRetainedPairCompletedBatchV1 {
         self.inner.is_empty()
     }
 
-    pub fn into_copies(self) -> impl ExactSizeIterator<Item = Gfx942XgmiRetainedPairCompletedCopyV1> {
-        self.inner.into_iter().map(|inner| Gfx942XgmiRetainedPairCompletedCopyV1 { inner })
+    pub fn into_copies(
+        self,
+    ) -> impl ExactSizeIterator<Item = Gfx942XgmiRetainedPairCompletedCopyV1> {
+        self.inner
+            .into_iter()
+            .map(|inner| Gfx942XgmiRetainedPairCompletedCopyV1 { inner })
     }
 }
 
 impl fmt::Debug for Gfx942XgmiRetainedPairCompletedBatchV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("Gfx942XgmiRetainedPairCompletedBatchV1")
-            .field("profile", &self.profile()).field("copies", &self.len()).finish()
+        formatter
+            .debug_struct("Gfx942XgmiRetainedPairCompletedBatchV1")
+            .field("profile", &self.profile())
+            .field("copies", &self.len())
+            .finish()
     }
 }
 
@@ -119,19 +134,31 @@ impl Gfx942XgmiRetainedPairWaitFailureV1 {
 
     /// These mappings do not authorize reuse, release, or successful completion.
     /// The queue and both endpoint sessions have already been quarantined.
-    pub fn into_indeterminate_mappings(self) -> Option<impl ExactSizeIterator<Item = (
-        Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMappedDeviceMemoryV1,
-    )>> {
-        self.inner.into_indeterminate_completions()
-            .map(|copies| copies.into_iter().map(Gfx942XgmiCompletedCopyV1::into_mappings))
+    pub fn into_indeterminate_mappings(
+        self,
+    ) -> Option<
+        impl ExactSizeIterator<
+            Item = (
+                Gfx942XgmiMappedDeviceMemoryV1,
+                Gfx942XgmiMappedDeviceMemoryV1,
+            ),
+        >,
+    > {
+        self.inner.into_indeterminate_completions().map(|copies| {
+            copies
+                .into_iter()
+                .map(Gfx942XgmiCompletedCopyV1::into_mappings)
+        })
     }
 }
 
 impl fmt::Debug for Gfx942XgmiRetainedPairWaitFailureV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("Gfx942XgmiRetainedPairWaitFailureV1")
+        formatter
+            .debug_struct("Gfx942XgmiRetainedPairWaitFailureV1")
             .field("profile", &GFX942_XGMI_RETAINED_PAIR_PROFILE_V1)
-            .field("error", self.error()).finish_non_exhaustive()
+            .field("error", self.error())
+            .finish_non_exhaustive()
     }
 }
 
@@ -159,6 +186,7 @@ enum Settled<R, P> {
 }
 
 include!("retained_pair_operation_body.rs");
+mod owned;
 
 fn terminal_success_error() -> Gfx942SdmaErrorV1 {
     Gfx942SdmaErrorV1::Contract("retained XGMI success has terminal custody")
@@ -182,11 +210,17 @@ impl TerminalOutcome for Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchW
     }
 }
 
-fn settle_operation<C: Custody, R: TerminalOutcome, P>(context: &mut C, outcome: Result<R, P>) -> Settled<R, P> {
+fn settle_operation<C: Custody, R: TerminalOutcome, P>(
+    context: &mut C,
+    outcome: Result<R, P>,
+) -> Settled<R, P> {
     retained_pair_settle_body!(context, outcome)
 }
 
-fn run_operation<C: Custody, R: TerminalOutcome>(context: &mut C, operation: impl FnOnce(&mut C) -> R) -> R {
+fn run_operation<C: Custody, R: TerminalOutcome>(
+    context: &mut C,
+    operation: impl FnOnce(&mut C) -> R,
+) -> R {
     retained_pair_operation_body!(context, operation)
 }
 
@@ -196,7 +230,10 @@ struct Scope<C: Custody> {
 }
 
 impl<C: Custody> Scope<C> {
-    fn finish(mut self, close: impl FnOnce(&mut C) -> Result<(), Gfx942SdmaErrorV1>) -> Result<(), Gfx942SdmaErrorV1> {
+    fn finish(
+        mut self,
+        close: impl FnOnce(&mut C) -> Result<(), Gfx942SdmaErrorV1>,
+    ) -> Result<(), Gfx942SdmaErrorV1> {
         retained_pair_close_body!(self, close)
     }
 
@@ -223,7 +260,8 @@ impl Custody for Pair<'_> {
     }
 
     fn quarantine(&mut self) {
-        self.queue.quarantine_batch_v1(self.source, self.destination);
+        self.queue
+            .quarantine_batch_v1(self.source, self.destination);
     }
 }
 
@@ -236,7 +274,9 @@ fn require_drained(owner: &Gfx942SdmaQueueOwnerV1) -> Result<(), Gfx942SdmaError
         || owner.persistent_window_records.len() != slots
         || owner.uncertain_xgmi_ticket.is_some()
     {
-        return Err(Gfx942SdmaErrorV1::Contract("retained XGMI queue roster or uncertainty"));
+        return Err(Gfx942SdmaErrorV1::Contract(
+            "retained XGMI queue roster or uncertainty",
+        ));
     }
     if owner.records.iter().any(Option::is_some)
         || owner.xgmi_records.iter().any(Option::is_some)
@@ -251,32 +291,60 @@ fn require_drained(owner: &Gfx942SdmaQueueOwnerV1) -> Result<(), Gfx942SdmaError
 fn required_resources(
     owner: &Gfx942SdmaQueueOwnerV1,
     engine: u32,
-) -> Result<(&SdmaRingAuthorityV1, &SdmaControlAuthorityV1, &MappedHostBufferV1), Gfx942SdmaErrorV1> {
+) -> Result<
+    (
+        &SdmaRingAuthorityV1,
+        &SdmaControlAuthorityV1,
+        &MappedHostBufferV1,
+    ),
+    Gfx942SdmaErrorV1,
+> {
     if owner.engine_index != Some(engine) || owner.doorbell.is_none() {
-        return Err(Gfx942SdmaErrorV1::Contract("retained XGMI engine or doorbell binding"));
+        return Err(Gfx942SdmaErrorV1::Contract(
+            "retained XGMI engine or doorbell binding",
+        ));
     }
     Ok((
-        owner.ring.as_ref().ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA ring authority"))?,
-        owner.control.as_ref().ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA control authority"))?,
-        owner.completions.as_ref().ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA completion arena"))?,
+        owner.ring.as_ref().ok_or(Gfx942SdmaErrorV1::Contract(
+            "missing XGMI SDMA ring authority",
+        ))?,
+        owner.control.as_ref().ok_or(Gfx942SdmaErrorV1::Contract(
+            "missing XGMI SDMA control authority",
+        ))?,
+        owner
+            .completions
+            .as_ref()
+            .ok_or(Gfx942SdmaErrorV1::Contract(
+                "missing XGMI SDMA completion arena",
+            ))?,
     ))
 }
 
 impl Pair<'_> {
     fn require_drained(&self) -> Result<(), Gfx942SdmaErrorV1> {
         self.queue.require_live_queue_state_v1()?;
-        require_drained(self.queue.owner.as_ref()
-            .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"))?)
+        require_drained(
+            self.queue
+                .owner
+                .as_ref()
+                .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"))?,
+        )
     }
 
     fn admit_binding(&self) -> Result<(), Gfx942SdmaErrorV1> {
         self.require_drained()?;
-        let owner = self.queue.owner.as_ref()
+        let owner = self
+            .queue
+            .owner
+            .as_ref()
             .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"))?;
         self.source.validate_gfx942_retained_pair_binding_v1(
-            self.destination, self.queue.route, owner.owner,
+            self.destination,
+            self.queue.route,
+            owner.owner,
         )?;
-        let (ring, control, completions) = required_resources(owner, self.queue.route.recommended_engine_id())?;
+        let (ring, control, completions) =
+            required_resources(owner, self.queue.route.recommended_engine_id())?;
         self.source.validate_retained_queue_resource_v1(ring)?;
         self.source.validate_retained_queue_resource_v1(control)?;
         self.source.mapped_resource_facts(completions)?;
@@ -284,7 +352,8 @@ impl Pair<'_> {
     }
 
     fn operational(&mut self) -> Result<(), Gfx942SdmaErrorV1> {
-        self.source.validate_gfx942_retained_pair_operational_v1(self.destination, self.queue.route)?;
+        self.source
+            .validate_gfx942_retained_pair_operational_v1(self.destination, self.queue.route)?;
         Ok(())
     }
 }
@@ -369,13 +438,23 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         destination: &'a mut SharedGttMemorySessionV1,
         _environment_assumption: Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
     ) -> Result<Gfx942NativeXgmiSdmaRetainedPairV1<'a>, Gfx942SdmaErrorV1> {
-        let mut pair = Pair { queue: self, source, destination };
+        let mut pair = Pair {
+            queue: self,
+            source,
+            destination,
+        };
         pair.admit_binding()?;
         run_operation(&mut pair, |pair| {
-            pair.source.validate_gfx942_xgmi_route_with_peer(pair.destination, pair.queue.route)?;
+            pair.source
+                .validate_gfx942_xgmi_route_with_peer(pair.destination, pair.queue.route)?;
             pair.queue.require_live_queue_state_v1()
         })?;
-        Ok(Gfx942NativeXgmiSdmaRetainedPairV1 { scope: Scope { context: pair, finished: false } })
+        Ok(Gfx942NativeXgmiSdmaRetainedPairV1 {
+            scope: Scope {
+                context: pair,
+                finished: false,
+            },
+        })
     }
 }
 
@@ -388,9 +467,14 @@ impl Gfx942NativeXgmiSdmaRetainedPairV1<'_> {
         &mut self,
         requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
     ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiBatchSubmissionFailureV1> {
-        run_operation(&mut self.scope.context, |pair| pair.queue.submit_batch_with_currentness(
-            pair.source, pair.destination, requests, XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
-        ))
+        run_operation(&mut self.scope.context, |pair| {
+            pair.queue.submit_batch_with_currentness(
+                pair.source,
+                pair.destination,
+                requests,
+                XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
+            )
+        })
     }
 
     /// Uses the original deadline; timeout retains the exact queue-owned roster.
@@ -415,10 +499,15 @@ impl Gfx942NativeXgmiSdmaRetainedPairV1<'_> {
         tickets: Vec<Gfx942SdmaCopyTicketV1>,
         deadline: XgmiBatchDeadlineV1,
     ) -> Result<Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairWaitFailureV1> {
-        run_operation(&mut self.scope.context, |pair| pair.queue.wait_batch_for_with_currentness(
-            pair.source, pair.destination, tickets, deadline,
-            XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
-        ))
+        run_operation(&mut self.scope.context, |pair| {
+            pair.queue.wait_batch_for_with_currentness(
+                pair.source,
+                pair.destination,
+                tickets,
+                deadline,
+                XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
+            )
+        })
         .map(|inner| Gfx942XgmiRetainedPairCompletedBatchV1 { inner })
         .map_err(|inner| Gfx942XgmiRetainedPairWaitFailureV1 { inner })
     }

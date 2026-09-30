@@ -51,14 +51,16 @@ pub(crate) mod creation;
 use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
 mod xgmi_creation;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;
+mod retained_pair;
 mod xgmi_diagnostic;
 mod xgmi_retirement;
-mod retained_pair;
 pub use retained_pair::{
-    GFX942_XGMI_RETAINED_PAIR_POLICY_V1, GFX942_XGMI_RETAINED_PAIR_POLICY_SHA256_V1,
-    GFX942_XGMI_RETAINED_PAIR_PROFILE_V1, Gfx942NativeXgmiSdmaRetainedPairV1,
-    Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairCompletedCopyV1,
-    Gfx942XgmiRetainedPairWaitFailureV1, Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
+    GFX942_XGMI_RETAINED_PAIR_POLICY_SHA256_V1, GFX942_XGMI_RETAINED_PAIR_POLICY_V1,
+    GFX942_XGMI_RETAINED_PAIR_PROFILE_V1, Gfx942NativeXgmiSdmaOwnedRetainedPairV1,
+    Gfx942NativeXgmiSdmaRetainedPairV1, Gfx942XgmiOwnedRetainedPairFailureV1,
+    Gfx942XgmiOwnedRetainedPairPartsV1, Gfx942XgmiRetainedPairCompletedBatchV1,
+    Gfx942XgmiRetainedPairCompletedCopyV1, Gfx942XgmiRetainedPairEnvironmentAssumptionV1,
+    Gfx942XgmiRetainedPairWaitFailureV1,
 };
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::Gfx942XgmiCopyCallDiagnosticsV1;

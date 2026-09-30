@@ -291,6 +291,7 @@ struct CompletionPacketTemplatesV1<const N: usize> {
 }
 
 impl<const N: usize> CompletionPacketTemplatesV1<N> {
+    #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
     fn from_array(values: [CompletionPacketTemplateV1; N]) -> Self {
         Self {
             values: Box::new(values),
@@ -1521,6 +1522,7 @@ impl CompletionSignalArenaOwnerV1 {
         Ok(Gfx942BarrierProbeRecycleObservationV1)
     }
 
+    #[cfg(any(test, feature = "cpu-runtime-fixtures"))]
     pub(super) fn bind_batch<const N: usize>(
         &mut self,
         templates: [CompletionPacketTemplateV1; N],
