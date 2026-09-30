@@ -1,6 +1,9 @@
 use super::*;
 use production_call_instances_v1::with_production_call_instances_v1;
 
+include!("production_source_reference_selection_actual_v30_tests.rs");
+include!("production_source_reference_selection_bind_v30_tests.rs");
+
 fn selection_owner(parallel: bool, recurrence: bool) -> ProductionSemanticSsaOwnerV1 {
     let prior = distinct_origin_join_owner();
     let source = prior.source_semantic();
@@ -66,6 +69,44 @@ fn selection_owner(parallel: bool, recurrence: bool) -> ProductionSemanticSsaOwn
         vec![
             rebuild(root, root.locals().to_vec(), blocks),
             source.functions()[1].clone(),
+        ],
+        source.callables().to_vec(),
+    )
+}
+
+fn entry_loop_selection_owner() -> ProductionSemanticSsaOwnerV1 {
+    let prior = helper_owner(true, false, false);
+    let source = prior.source_semantic();
+    let helper = &source.functions()[1];
+    let mut statements = helper.blocks()[0].statements().to_vec();
+    statements.push(assign(
+        1,
+        REFERENCE,
+        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(3, REFERENCE))),
+    ));
+    let blocks = vec![
+        block(
+            100,
+            statements,
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: SemanticOperandV1::Copy(place(2, U32)),
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        1,
+                        edge(SemanticEdgeRoleV1::SwitchValue, 0),
+                    )],
+                    edge(SemanticEdgeRoleV1::SwitchOtherwise, 1),
+                )
+                .unwrap(),
+            },
+        ),
+        block(101, vec![], SemanticTerminatorKindV1::Return),
+    ];
+    admitted_owner(
+        source.types().to_vec(),
+        vec![
+            source.functions()[0].clone(),
+            rebuild(helper, helper.locals().to_vec(), blocks),
         ],
         source.callables().to_vec(),
     )
@@ -257,6 +298,88 @@ fn original_reference_selection_preserves_parallel_edges_and_seeded_loop_recurre
 }
 
 #[test]
+fn original_entry_reference_loop_retains_invocation_separately_from_its_backedge() {
+    let owner = entry_loop_selection_owner();
+    with_plan(&owner, |plan, budget| {
+        let child = ProductionCallInstanceIdV1(1);
+        let source = original_borrow(plan, child, 0);
+        with_source_reference_selection_v29(
+            plan,
+            child,
+            site(0),
+            ExecutionOperandV29::RvaluePlace,
+            source,
+            budget,
+            |graph, budget| {
+                let SourceReferenceSelectionStepV29::Parameter {
+                    block,
+                    variable,
+                    invocation: Some(input),
+                    first,
+                    count,
+                    ..
+                } = graph.nodes[0].step
+                else {
+                    panic!("original entry loop must retain its invocation selection");
+                };
+                assert_eq!((block.get(), variable.get(), count), (0, 1, 1));
+                assert_eq!(
+                    graph.edges[first].edge,
+                    SsaEdgeIdV1::new(SsaBlockIdV1::new(0), 0)
+                );
+                assert!(matches!(
+                    graph.nodes[input].step,
+                    SourceReferenceSelectionStepV29::CallArgument { .. }
+                ));
+                assert_ne!(graph.edges[first].input, input);
+                check_source_reference_selection_rows_v29(
+                    plan,
+                    child,
+                    site(0),
+                    ExecutionOperandV29::RvaluePlace,
+                    source,
+                    graph,
+                    budget,
+                )?;
+                for forged in [None, Some(graph.edges[first].input)] {
+                    let mut nodes = graph.nodes.clone();
+                    let SourceReferenceSelectionStepV29::Parameter { invocation, .. } =
+                        &mut nodes[0].step
+                    else {
+                        panic!("retained original entry parameter");
+                    };
+                    *invocation = forged;
+                    let forged = SourceReferenceSelectionGraphV29 {
+                        subject: graph.subject,
+                        nodes,
+                        edges: graph.edges.clone(),
+                    };
+                    assert_selection_error(check_source_reference_selection_rows_v29(
+                        plan,
+                        child,
+                        site(0),
+                        ExecutionOperandV29::RvaluePlace,
+                        source,
+                        &forged,
+                        budget,
+                    ));
+                }
+                check_source_reference_selection_rows_v29(
+                    plan,
+                    child,
+                    site(0),
+                    ExecutionOperandV29::RvaluePlace,
+                    source,
+                    graph,
+                    budget,
+                )
+            },
+        )
+        .unwrap();
+    });
+}
+
+#[test]
 fn single_origin_helper_selection_keeps_exact_call_argument_and_replay_is_unchanged() {
     let owner = helper_owner(true, false, false);
     with_plan(&owner, |plan, budget| {
@@ -372,6 +495,7 @@ fn selection_fixed_headers_and_callback_envelopes_have_an_independent_size_oracl
         + h::<SourceReferenceSelectionEdgeV29>()
         + h::<Option<SourceExternalReferenceOriginV29>>()
         + h::<Option<SemanticLocalIdV1>>()
+        + h::<Option<usize>>()
         + h::<&mut SourceIssuedSemanticV29<'_, '_, '_>>()
         + h::<Vec<bool>>()
         + h::<usize>()

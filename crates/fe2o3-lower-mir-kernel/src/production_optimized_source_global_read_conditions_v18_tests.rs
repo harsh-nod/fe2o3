@@ -1,3 +1,5 @@
+include!("production_source_global_domain_width_v30_tests.rs");
+
 fn run_local_read_condition_fixture_v18(
     mode: slice_view_v1::GlobalReadConditionTestV18,
     source: DescriptorRoleSourceV18,

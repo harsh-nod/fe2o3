@@ -301,39 +301,77 @@ fn rvalue_archive_entry_storage_covers_split_path_and_boxed_whole_binding() {
             + std::mem::size_of::<ExecutionRvalueBindingV30>();
         assert_eq!(
             execution_rvalue_entry_storage_v30(count).unwrap(),
-            expected + execution_rvalue_headers_v30().unwrap()
+            expected
+                + if count == 0 {
+                    instance_correspondence_tests::rvalue_archive_frame_storage_v30()
+                } else {
+                    0
+                }
         );
     }
 }
 
 #[test]
 fn rvalue_archive_fixed_frames_include_whole_bindings_and_query_results() {
-    fn h<T>() -> usize {
-        std::mem::size_of::<T>()
-            + 2 * std::mem::size_of::<Result<T, ProductionSemanticKirErrorV1>>()
-    }
-    let expected = h::<ExecutionArchiveCreditV29>()
-        + h::<Option<ExecutionArchiveCreditV29>>()
-        + h::<ExecutionSiteV29>()
-        + h::<(u32, u32)>()
-        + h::<SemanticTypeIdV1>()
-        + h::<SemanticValueBindingV1>()
-        + h::<Box<ExecutionRvalueBindingV30>>()
-        + h::<&ExecutionRvalueBindingV30>()
-        + h::<&SemanticValueBindingV1>()
-        + h::<&ExecutionArchiveV29>()
-        + h::<&ExecutionAvailabilityV29<'_>>()
-        + h::<&ExecutionInstancesV29<'_>>()
-        + h::<&SemanticFunctionDeclV1>()
-        + h::<&fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1>()
-        + h::<&mut ExecutionRvalueBindingsV30>()
-        + h::<&mut Option<ExecutionArchiveCreditV29>>()
-        + h::<&mut dyn SemanticEmissionBudgetV1>()
-        + h::<SourceIssuedActualValueV29<'_>>()
-        + h::<&Type>()
-        + h::<&Operation>()
-        + h::<ValueId>()
-        + 4 * h::<usize>()
-        + h::<()>();
+    let expected = instance_correspondence_tests::rvalue_archive_frame_storage_v30();
     assert_eq!(execution_rvalue_headers_v30().unwrap(), expected);
+}
+
+#[test]
+fn rvalue_archive_sequential_captures_share_one_exact_retained_frame() {
+    use std::mem::size_of;
+
+    for count in [1usize, 2, 8, 64] {
+        let mut expected = instance_correspondence_tests::rvalue_archive_frame_storage_v30();
+        for previous in 0..count {
+            let levels = previous.checked_ilog2().unwrap_or(0) as usize + 2;
+            expected +=
+                levels * 32 * size_of::<((u32, u32), Box<ExecutionRvalueBindingV30>, usize)>()
+                    + size_of::<ExecutionRvalueBindingV30>();
+        }
+        for short in [0usize, 1] {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 17 + expected - short);
+            budget.reserve_storage(17).unwrap();
+            let mut rows = ExecutionRvalueBindingsV30::new();
+            let mut credit = None;
+            for index in 0..count {
+                let result = archive_owned_rvalue_v30(
+                    &mut rows,
+                    &mut credit,
+                    ExecutionSiteV29::Statement {
+                        block: SsaBlockIdV1::new(0),
+                        statement: index as u32,
+                    },
+                    SemanticTypeIdV1::from_index(0),
+                    &SemanticValueBindingV1::Value {
+                        id: ValueId(index as u32),
+                        ty: Type::Scalar(ScalarType::U32),
+                    },
+                    &mut budget,
+                );
+                if short == 1 && index + 1 == count {
+                    assert!(
+                        matches!(
+                            result,
+                            Err(
+                                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                                    ArgumentResourceV1::Storage(_)
+                                )
+                            )
+                        ),
+                        "{result:?}"
+                    );
+                    assert_eq!(rows.len(), count - 1);
+                } else {
+                    result.unwrap();
+                }
+            }
+            if short == 0 {
+                assert_eq!(rows.len(), count);
+                assert_eq!(credit.unwrap().bytes, expected);
+                assert_eq!(budget.storage(), 17 + expected);
+            }
+        }
+    }
 }

@@ -2,6 +2,7 @@
 // alias/read-from/concurrency, native completion and launch stay independent.
 type GlobalReadFactsV18<'s, 'g> = fe2o3_kernel_ir::CheckedCanonicalGuardedGlobalReadsV18<'s, 'g>;
 type GlobalReadFactV18<'s, 'g> = fe2o3_kernel_ir::CanonicalGuardedGlobalReadFactV18<'s, 'g>;
+include!("production_source_global_domain_join_v30.rs");
 
 #[derive(Debug)]
 enum PendingGlobalReadConditionErrorV18 {
@@ -208,6 +209,7 @@ fn global_read_condition_headers_v18(
         capture,
         alignment,
         global_native_pair_headers_v18()?,
+        source_global_domain_join_headers_v30()?,
         h::<Frame<'_>>()?,
         h::<Capture<'_>>()?,
         h::<Capture<'_>>()?,
@@ -477,147 +479,14 @@ impl PendingGlobalSourceAccessesV18<'_> {
         fact: &GlobalReadFactV18<'_, '_>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), PendingGlobalReadConditionErrorV18> {
-        self.roles.original.retain_query((|| {
-            budget.charge_work(96 + 4)?;
-            let endpoint = &pair.output;
-            let domain = *fact.domain();
-            let root = optimized_source_definition_row_v18(inventory, endpoint.logical.root, budget)?;
-            let index = optimized_source_definition_row_v18(inventory, endpoint.logical.index, budget)?;
-            let address_index = optimized_source_definition_row_v18(inventory, endpoint.address_index, budget)?;
-            let condition = optimized_source_definition_row_v18(inventory, endpoint.logical.guard_condition, budget)?;
-            let guard = source_block_row_v18(inventory, endpoint.logical.guard_edge.source, budget)?;
-            budget.charge_work(32)?;
-            // This only rejoins actual control transport. Truth and the exact
-            // taken edge still come from the independent formal fact below.
-            let predicate = if condition.ty == &Type::BOOL {
-                if !matches!(guard.block.terminator.as_ref(), Some(Terminator::ConditionalBranch {
-                    condition: actual, ..
-                }) if condition.value == Some(*actual)) {
-                    return self.roles.original.source.missing("pending global read changed exact control transport");
-                }
-                condition
-            } else {
-                if condition.ty != &Type::Scalar(ScalarType::U32)
-                    || !matches!(guard.block.terminator.as_ref(), Some(Terminator::Switch {
-                        selector, ..
-                    }) if condition.value == Some(*selector)) {
-                    return self.roles.original.source.missing("pending global read changed exact control transport");
-                }
-                let SliceDefinition::Result { operation: cast, result: 0 } = condition.coordinate else {
-                    return self.roles.original.source.missing("pending global read changed exact control transport");
-                };
-                let cast = source_operation_row_v18(inventory, cast, budget)?.operation;
-                if !matches!(&cast.kind, OperationKind::Cast {
-                    kind: fe2o3_kernel_ir::CastKind::ZeroExtend, value, to,
-                } if *value == domain.predicate() && to == &Type::Scalar(ScalarType::U32))
-                    || !matches!(cast.results.as_slice(), [result]
-                        if Some(result.id) == condition.value && result.ty == Type::Scalar(ScalarType::U32)) {
-                    return self.roles.original.source.missing("pending global read changed exact control transport");
-                }
-                inventory.definition_for_value(fact.operation().block.function, domain.predicate(), budget)
-                    .map_err(source_pointer_inventory_error_v18)?
-                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding("pending global read predicate definition absent"))?
-            };
-            let SliceDefinition::Result { operation: comparison, result: 0 } = predicate.coordinate else {
-                return self.roles.original.source.missing("pending global read changed exact local domain");
-            };
-            let comparison = source_operation_row_v18(inventory, comparison, budget)?.operation;
-            let normalized_index = fact.normalized_index_origin();
-            let (comparison_index, comparison_length) = fact.comparison_operands();
-            let normalized_matches = match normalized_index {
-                fe2o3_kernel_ir::CanonicalGuardedReadIndexOriginV1::ProvenOrigin(value) =>
-                    index.value == Some(value),
-                fe2o3_kernel_ir::CanonicalGuardedReadIndexOriginV1::ExactBlockParameter(value) =>
-                    index.value == Some(value)
-                        && matches!(index.coordinate, SliceDefinition::BlockArgument { .. }),
-            };
-            let definition_function = |coordinate| match coordinate {
-                SliceDefinition::FunctionArgument { function, .. } => function,
-                SliceDefinition::BlockArgument { block, .. } => block.function,
-                SliceDefinition::Result { operation, .. } => operation.block.function,
-            };
-            let length = source_operation_row_v18(inventory, endpoint.logical.length, budget)?.operation;
-            let edge_index = guard.edges.start.checked_add(endpoint.logical.guard_edge.successor as usize)
-                .filter(|index| *index < guard.edges.end).ok_or(ArgumentResourceV1::Arithmetic)?;
-            let edge = inventory.edges().get(edge_index).ok_or(
-                ProductionSourceOwnedViewErrorV18::Binding("pending global read guard edge absent"))?;
-            let Some(bits) = endpoint.scalar.bit_width() else {
-                return self.roles.original.source.missing("pending global read scalar byte width");
-            };
-            let [length_value] = length.results.as_slice() else {
-                return self.roles.original.source.missing("pending global read length result");
-            };
-            if pair.output.writing || endpoint.memory.volatile
-                || !global_source_memory_space_v26(&pair.origin, endpoint.memory.address_space)
-                || !std::ptr::eq(fact.owner(), inventory.owner())
-                || fact.operation() != endpoint.logical.access.operation
-                || root.coordinate != (SliceDefinition::FunctionArgument {
-                    function: fact.operation().block.function,
-                    argument: domain.allocation().parameter_index(),
-                })
-                || root.value != Some(domain.slice()) || !normalized_matches
-                || !matches!(index.ty, Type::Scalar(ScalarType::Index | ScalarType::U64))
-                || address_index.value != Some(domain.index()) || address_index.ty != &Type::INDEX
-                || definition_function(index.coordinate) != fact.operation().block.function
-                || definition_function(address_index.coordinate) != fact.operation().block.function
-                || definition_function(condition.coordinate) != fact.operation().block.function
-                || definition_function(predicate.coordinate) != fact.operation().block.function
-                || endpoint.logical.length.block.function != fact.operation().block.function
-                || endpoint.logical.guard_edge.source.function != fact.operation().block.function
-                || length_value.id != fact.normalized_length_origin() || length_value.ty != Type::INDEX
-                || predicate.value != Some(domain.predicate()) || predicate.ty != &Type::BOOL
-                || !matches!(&comparison.kind, OperationKind::Compare {
-                    predicate: fe2o3_kernel_ir::ComparePredicate::LessThan, lhs, rhs,
-                } if (*lhs, *rhs) == (comparison_index, comparison_length))
-                || !matches!(comparison.results.as_slice(), [result]
-                    if Some(result.id) == predicate.value && result.ty == Type::BOOL)
-                || !matches!(root.ty, Type::Slice(slice)
-                    if slice.address_space == AddressSpace::Global && *slice.element == Type::Scalar(endpoint.scalar))
-                || domain.pointer() != endpoint.pointer
-                || bits % 8 != 0 || !matches!(bits / 8, 1 | 2 | 4 | 8)
-                || domain.element_bytes() != u64::from(bits / 8)
-                || !endpoint.memory.alignment.is_power_of_two()
-                || u64::from(endpoint.memory.alignment) > domain.element_bytes()
-                || edge.coordinate != endpoint.logical.guard_edge
-                || domain.path() != (fe2o3_kernel_ir::FormalGuardedPathV1::TrueEdge {
-                    source: guard.block.id,
-                    ordinal: endpoint.logical.guard_edge.successor as usize,
-                    target: edge.target_id,
-                })
-            {
-                return self.roles.original.source.missing("pending global read changed exact local domain");
-            }
-            Ok(())
-        })())?;
-        let predicate = facts
-            .true_at(fact.operation(), fact.domain().predicate(), budget)
-            .map_err(|error| self.local_read_formal_error(error))?;
-        self.roles
-            .original
-            .retain_query((|| {
-                budget.charge_work(8)?;
-                let domain = *fact.domain();
-                if !predicate.as_ref().is_some_and(|predicate| {
-                    std::ptr::eq(predicate.owner(), inventory.owner())
-                        && predicate.at() == fact.operation()
-                        && predicate.is_true()
-                        && predicate.value() == domain.predicate()
-                        && domain.path()
-                            == (fe2o3_kernel_ir::FormalGuardedPathV1::TrueEdge {
-                                source: predicate.edge().0,
-                                ordinal: predicate.edge().1,
-                                target: predicate.edge().2,
-                            })
-                }) {
-                    return self
-                        .roles
-                        .original
-                        .source
-                        .missing("pending global read changed actual guard truth");
-                }
-                Ok(())
-            })())
-            .map_err(Into::into)
+        check_source_read_endpoint_prepaid_v30(
+            self.roles.original,
+            inventory,
+            facts,
+            pair,
+            fact,
+            budget,
+        )
     }
 }
 

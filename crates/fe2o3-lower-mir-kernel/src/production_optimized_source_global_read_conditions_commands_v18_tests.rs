@@ -148,6 +148,7 @@ fn pending_global_read_conditions_fixed_frames_have_independent_exact_and_one_sh
         capture,
         alignment,
         global_native_pair_headers_v18().unwrap(),
+        source_domain_join_header_oracle_v30(),
         h::<Frame<'_>>(),
         h::<Capture<'_>>(),
         h::<Capture<'_>>(),
@@ -549,7 +550,7 @@ pub(super) fn test_pending_global_read_conditions_v18(
                             let mut previous = None;
                             for _ in 0..4 {
                                 let before = budget.work();
-                                source.with_local_read_conditions_v18(native, facts, operation, budget, |view, _| {
+                                source.with_local_read_conditions_v18(native, facts, operation, budget, |view, budget| {
                                     let view = view.expect("genuine read must have local conditions");
                                     assert!(view.requires_runtime_allocation_binding());
                                     assert!(!view.initialized_readable_region_is_proved());
@@ -558,6 +559,9 @@ pub(super) fn test_pending_global_read_conditions_v18(
                                     assert!(std::ptr::eq(view.fact.owner(), inventory.owner()));
                                     assert_eq!(view.fact.operation(), operation);
                                     assert!(std::ptr::eq(view.pair, pair));
+                                    check_source_read_endpoint_prepaid_v30(
+                                        source.roles.original, inventory, facts, view.pair, &view.fact, budget,
+                                    )?;
                                     let mut count = observed.get(); count[0] += 1; observed.set(count);
                                     Ok(())
                                 }).map_err(local_read_test_error_v18)?;

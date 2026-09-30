@@ -1621,6 +1621,10 @@ impl SourceRootTransactionV29<'_, '_> {
             }
         }
         retain_source_rvalues_v30(&mut pending, self.instances, plan, budget)?;
+        #[cfg(test)]
+        if let Some(observe) = ROOT_EXECUTION_ARCHIVE_DISCARD_OBSERVER_V30.get() {
+            observe(&mut pending, self.instances, plan, budget)?;
+        }
         #[cfg(not(test))]
         discard_root_execution_archives_v29(&mut pending, self.instances, plan, budget)?;
         Ok((pending, payload, slots))

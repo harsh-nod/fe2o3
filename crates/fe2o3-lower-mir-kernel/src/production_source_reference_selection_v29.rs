@@ -1,6 +1,7 @@
 // This source-only graph preserves selections, not a union of issuer authority.
 // Emitted pointer edges and final conditional access obligations must be replayed
 // separately before a selected reference can authorize a memory access.
+include!("production_source_reference_selection_actual_v30.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceReferenceSelectionValueV29 {
     instance: ProductionCallInstanceIdV1,
@@ -30,6 +31,7 @@ enum SourceReferenceSelectionStepV29 {
         block: SsaBlockIdV1,
         variable: fe2o3_mir_model::SsaVariableIdV1,
         ordinal: usize,
+        invocation: Option<usize>,
         first: usize,
         count: usize,
     },
@@ -85,6 +87,7 @@ fn source_reference_selection_headers_v29() -> Result<usize, ArgumentResourceV1>
         source_reference_emission_headers_v29::<SourceReferenceSelectionEdgeV29>()?,
         source_reference_emission_headers_v29::<Option<SourceExternalReferenceOriginV29>>()?,
         source_reference_emission_headers_v29::<Option<SemanticLocalIdV1>>()?,
+        source_reference_emission_headers_v29::<Option<usize>>()?,
         source_reference_emission_headers_v29::<&mut SourceIssuedSemanticV29<'_, '_, '_>>()?,
         source_reference_emission_headers_v29::<Vec<bool>>()?,
         source_reference_emission_headers_v29::<usize>()?,
@@ -238,6 +241,26 @@ impl<'scope, 'owner, 'source> SourceReferenceSelectionBuilderV29<'scope, 'owner,
         let occurrences = instances
             .occurrences(value.instance)
             .ok_or_else(source_reference_selection_error_v29)?;
+        let invocation = if block.get() == instance.declaration().entry().index() {
+            let arguments = ssa.entry_arguments();
+            budget.charge_work(arguments.len())?;
+            let argument = arguments
+                .get(ordinal)
+                .ok_or_else(source_reference_selection_error_v29)?;
+            if arguments.len() != variables.len() || argument.variable() != variable {
+                return Err(source_reference_selection_error_v29());
+            }
+            Some(self.intern(
+                SourceReferenceSelectionValueV29 {
+                    instance: value.instance,
+                    value: argument.value(),
+                    pointer_type: value.pointer_type,
+                },
+                budget,
+            )?)
+        } else {
+            None
+        };
         let first = self.graph.edges.len();
         // Occurrence order includes parallel successors. Only original dead
         // source blocks and checked no-normal-return continuations are omitted.
@@ -290,13 +313,14 @@ impl<'scope, 'owner, 'source> SourceReferenceSelectionBuilderV29<'scope, 'owner,
             )?;
         }
         let count = self.graph.edges.len() - first;
-        if count == 0 {
+        if count == 0 && invocation.is_none() {
             return Err(source_reference_selection_error_v29());
         }
         Ok(SourceReferenceSelectionStepV29::Parameter {
             block,
             variable,
             ordinal,
+            invocation,
             first,
             count,
         })
@@ -493,7 +517,12 @@ impl<'scope, 'owner, 'source> SourceReferenceSelectionBuilderV29<'scope, 'owner,
                     SourceReferenceSelectionStepV29::Leaf(_) => true,
                     SourceReferenceSelectionStepV29::Alias { input, .. }
                     | SourceReferenceSelectionStepV29::CallArgument { input, .. } => seeded[input],
-                    SourceReferenceSelectionStepV29::Parameter { first, count, .. } => {
+                    SourceReferenceSelectionStepV29::Parameter {
+                        first,
+                        count,
+                        invocation,
+                        ..
+                    } => {
                         let end = argument_sum_v1(&[first, count])?;
                         let inputs = self
                             .graph
@@ -501,7 +530,8 @@ impl<'scope, 'owner, 'source> SourceReferenceSelectionBuilderV29<'scope, 'owner,
                             .get(first..end)
                             .ok_or_else(source_reference_selection_error_v29)?;
                         budget.charge_work(inputs.len())?;
-                        inputs.iter().any(|edge| seeded[edge.input])
+                        invocation.is_some_and(|input| seeded[input])
+                            || inputs.iter().any(|edge| seeded[edge.input])
                     }
                 };
                 if has_seed {

@@ -57,8 +57,13 @@ fn execution_rvalue_entry_storage_v30(count: usize) -> Result<usize, ArgumentRes
     argument_sum_v1(&[
         execution_cfg_map_entry_storage_v29::<(u32, u32), Box<ExecutionRvalueBindingV30>>(count)?,
         std::mem::size_of::<ExecutionRvalueBindingV30>(),
-        // Keep the capture frame charged with the archive until destruction.
-        execution_rvalue_headers_v30()?,
+        // Captures are sequential. One retained frame covers every append to
+        // this map; per-entry rows and binding payloads remain separately paid.
+        if count == 0 {
+            execution_rvalue_headers_v30()?
+        } else {
+            0
+        },
     ])
 }
 

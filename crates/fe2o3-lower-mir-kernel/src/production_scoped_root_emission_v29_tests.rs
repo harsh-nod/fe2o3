@@ -899,6 +899,10 @@ mod execution_archive_discard_tests {
             .credit;
         match FAULT.get() {
             0 => {
+                let retained = pending.rvalue_results.as_ref().unwrap();
+                let retained_rows = retained.rows.as_ptr();
+                let retained_count = retained.rows.len();
+                assert!(retained_count > 0);
                 discard_root_execution_archives_v29(pending, instances, plan, budget)?;
                 assert!(
                     pending
@@ -908,6 +912,9 @@ mod execution_archive_discard_tests {
                         .all(|row| row.execution_observation.is_none())
                 );
                 assert_eq!(budget.storage(), before - bytes);
+                let retained = pending.rvalue_results.as_ref().unwrap();
+                assert_eq!(retained.rows.as_ptr(), retained_rows);
+                assert_eq!(retained.rows.len(), retained_count);
                 COMPLETED.set(true);
                 Ok(())
             }
@@ -956,12 +963,12 @@ mod execution_archive_discard_tests {
         struct Reset(Option<RootExecutionArchiveObserverV29>);
         impl Drop for Reset {
             fn drop(&mut self) {
-                ROOT_EXECUTION_ARCHIVE_OBSERVER_V29.set(self.0);
+                ROOT_EXECUTION_ARCHIVE_DISCARD_OBSERVER_V30.set(self.0);
             }
         }
         FAULT.set(fault);
         COMPLETED.set(false);
-        let reset = Reset(ROOT_EXECUTION_ARCHIVE_OBSERVER_V29.replace(Some(observe)));
+        let reset = Reset(ROOT_EXECUTION_ARCHIVE_DISCARD_OBSERVER_V30.replace(Some(observe)));
         let result = run_lifecycle(
             false,
             super::fault(2, ProductionSemanticKirLimitsV1::default()),

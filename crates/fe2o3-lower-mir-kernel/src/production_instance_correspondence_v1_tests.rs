@@ -87,6 +87,36 @@ pub(super) fn scalar_lowering_scratch_storage_v29(output: &LoweredFunctionResult
         .unwrap()
 }
 
+pub(super) fn rvalue_archive_frame_storage_v30() -> usize {
+    fn h<T>() -> usize {
+        std::mem::size_of::<T>()
+            + 2 * std::mem::size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+    }
+    h::<ExecutionArchiveCreditV29>()
+        + h::<Option<ExecutionArchiveCreditV29>>()
+        + h::<ExecutionSiteV29>()
+        + h::<(u32, u32)>()
+        + h::<SemanticTypeIdV1>()
+        + h::<SemanticValueBindingV1>()
+        + h::<Box<ExecutionRvalueBindingV30>>()
+        + h::<&ExecutionRvalueBindingV30>()
+        + h::<&SemanticValueBindingV1>()
+        + h::<&ExecutionArchiveV29>()
+        + h::<&ExecutionAvailabilityV29<'_>>()
+        + h::<&ExecutionInstancesV29<'_>>()
+        + h::<&SemanticFunctionDeclV1>()
+        + h::<&fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1>()
+        + h::<&mut ExecutionRvalueBindingsV30>()
+        + h::<&mut Option<ExecutionArchiveCreditV29>>()
+        + h::<&mut dyn SemanticEmissionBudgetV1>()
+        + h::<SourceIssuedActualValueV29<'_>>()
+        + h::<&Type>()
+        + h::<&Operation>()
+        + h::<ValueId>()
+        + 4 * h::<usize>()
+        + h::<()>()
+}
+
 pub(super) fn scalar_archive_storage_v1(
     output: &LoweredFunctionResultV1,
     instances: &ProductionCallInstancePlanV1<'_>,
@@ -123,7 +153,25 @@ pub(super) fn scalar_archive_storage_v1(
                 .and_then(|bytes| bytes.checked_add(size_of::<SemanticValueBindingV1>()))
         })
         .unwrap();
-    let owned = size_of::<ExecutionArchiveV29>().checked_add(map).unwrap();
+    assert!(archive.rvalues.values().all(|row| matches!(
+        row.binding,
+        SemanticValueBindingV1::Unit
+            | SemanticValueBindingV1::Value {
+                ty: Type::Scalar(_),
+                ..
+            }
+    )));
+    let rvalue_node = 32 * size_of::<((u32, u32), Box<ExecutionRvalueBindingV30>, usize)>();
+    let rvalues = (0..archive.rvalues.len()).fold(0usize, |bytes, previous| {
+        let levels = previous.checked_ilog2().unwrap_or(0) as usize + 2;
+        bytes + levels * rvalue_node + size_of::<ExecutionRvalueBindingV30>()
+    });
+    let frame = if archive.rvalues.is_empty() {
+        0
+    } else {
+        rvalue_archive_frame_storage_v30()
+    };
+    let owned = size_of::<ExecutionArchiveV29>() + map + rvalues + frame;
     assert_eq!(archive.credit.bytes, owned);
     // These fixtures use cursors without source-reference plans, so their
     // carrier descriptor tables stay empty. The table/query headers are paid,

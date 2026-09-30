@@ -109,6 +109,7 @@ type RootExecutionArchiveObserverV29 = fn(
 #[cfg(test)]
 thread_local! {
     static ROOT_EXECUTION_ARCHIVE_OBSERVER_V29: std::cell::Cell<Option<RootExecutionArchiveObserverV29>> = const { std::cell::Cell::new(None) };
+    static ROOT_EXECUTION_ARCHIVE_DISCARD_OBSERVER_V30: std::cell::Cell<Option<RootExecutionArchiveObserverV29>> = const { std::cell::Cell::new(None) };
 }
 
 #[derive(Clone, Copy)]
