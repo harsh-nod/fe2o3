@@ -82,12 +82,11 @@ struct Record {
     phase: Phase,
 }
 
+include!("retained_charge_body.rs");
+
 impl Record {
     fn matches_retained_charge(&self, owner: u64, expected: ResourceVectorV1) -> bool {
-        owner != 0
-            && self.owner == owner
-            && self.phase == Phase::Retained
-            && self.charge == expected
+        retained_credit_record_matches_body!(self, owner, expected)
     }
 }
 

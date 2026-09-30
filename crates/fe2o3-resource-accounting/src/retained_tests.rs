@@ -58,6 +58,61 @@ fn snapshot(account: &ResourceCreditAccountV1) -> String {
 }
 
 #[test]
+fn retained_record_predicate_exact_owner_and_all_phases_without_mutation() {
+    for actual in [0, 1, 2, u64::MAX] {
+        for expected in [0, 1, 2, u64::MAX] {
+            for phase in [
+                Phase::Reserved,
+                Phase::Retained,
+                Phase::Quarantined,
+                Phase::Vacant,
+            ] {
+                let record = Record {
+                    owner: actual,
+                    charge: charge(),
+                    phase,
+                };
+                let before = (record.owner, record.charge, record.phase);
+                assert_eq!(
+                    record.matches_retained_charge(expected, record.charge),
+                    expected != 0 && actual == expected && phase == Phase::Retained
+                );
+                assert_eq!((record.owner, record.charge, record.phase), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn retained_record_predicate_checks_every_vector_coordinate_and_zero_charge() {
+    assert_eq!(KINDS.len(), fe2o3_runtime_model::R67_RESOURCE_DIMENSIONS_V1);
+    for charge in [
+        ResourceVectorV1::ZERO,
+        charge(),
+        KINDS.iter().fold(ResourceVectorV1::ZERO, |vector, &kind| {
+            vector.with(kind, u64::MAX)
+        }),
+    ] {
+        let record = Record {
+            owner: u64::MAX,
+            charge,
+            phase: Phase::Retained,
+        };
+        assert!(record.matches_retained_charge(u64::MAX, charge));
+        for kind in KINDS {
+            let changed = charge.with(kind, charge.get(kind) ^ 1);
+            assert!(!record.matches_retained_charge(u64::MAX, changed));
+            let changed_record = Record {
+                charge: changed,
+                ..record
+            };
+            assert!(!changed_record.matches_retained_charge(u64::MAX, charge));
+            assert_eq!(record.charge, charge);
+        }
+    }
+}
+
+#[test]
 fn retained_charge_exact_independent_account_vector_and_unchanged_queries() {
     let a = account();
     let cloned = a.clone();
