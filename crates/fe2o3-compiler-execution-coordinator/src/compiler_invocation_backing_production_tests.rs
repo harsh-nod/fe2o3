@@ -2,6 +2,9 @@
 //! Requires the real root-owned immutable policy-v2, profile-v3, manifest-v1 and
 //! complete code tree at their production paths, plus writable temporary storage.
 //! Missing admission fails; no installed-input mutation or immutability stub.
+//! Invocations are inert fixture-created sealed descriptors, not cargo-authored
+//! captures. Successful backing preparation retains data plus genuine runtime
+//! approval; it cannot establish capture authorship, runtime enforcement or exec.
 //! No spawn/enforcement claim. Terminal means owner Drop, not process/pool retirement.
 use super::*;
 use fe2o3_build_authority::CompilerRuntimeRoleV1 as Role;
@@ -17,7 +20,7 @@ use fixture::{HARNESS, STORAGE, WORK, account, admit, history};
 
 #[test]
 #[ignore = "requires installed immutable approved compiler runtime; run serially"]
-fn approved_runtime_inventory_composes_and_drops_on_original_account() {
+fn approved_runtime_retains_received_inert_capture_and_drops_on_original_account() {
     account(|b| {
         let (inputs, witness) = admit(b, false);
         let input_storage = inputs.storage;
@@ -30,6 +33,13 @@ fn approved_runtime_inventory_composes_and_drops_on_original_account() {
             charge.retained_storage(),
             input_storage + charge.additional_storage()
         );
+        assert_eq!(
+            input_storage,
+            owner.runtime().required_retained_storage()
+                + owner.capture.native_retained_storage().unwrap()
+                + Output::STORAGE
+        );
+        witness.assert_capture_retained(&owner);
         let sources = owner.inventory_sources();
         let expected_sources = size_of::<(Sources, TransferCharge)>()
             + usize::try_from(owner.runtime().manifest().total_file_bytes()).unwrap();
@@ -62,6 +72,94 @@ fn approved_runtime_inventory_composes_and_drops_on_original_account() {
         assert_eq!(b.storage(), floor);
         assert_eq!(history(b), before_drop);
         b.release_storage(charge.retained_storage()).unwrap();
+    });
+}
+
+#[test]
+#[ignore = "requires installed immutable approved compiler runtime; run serially"]
+fn approved_runtime_backing_revalidates_the_retained_sealed_invocation() {
+    account(|b| {
+        let (inputs, witness) = admit(b, false);
+        let (owner, charge) = inputs.prepare(b).unwrap();
+        b.reserve_storage(charge.additional_storage()).unwrap();
+        witness.assert_capture_retained(&owner);
+        owner.revalidate(b).unwrap();
+        let floor = b.storage();
+        let before = history(b);
+        witness.invocation_mode(rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR);
+        let refused = owner.revalidate(b);
+        witness.invocation_mode(rustix::fs::Mode::RUSR);
+        assert!(matches!(
+            refused,
+            Err(CompilerInvocationBackingError::Capture(
+                CaptureError::Rejected(" is not an exact regular mode-0400 file")
+            ))
+        ));
+        assert_eq!(b.storage(), floor);
+        assert!(b.work() > before.0);
+        assert_eq!((b.failed_work(), b.failed_storage()), (before.2, before.3));
+        owner.revalidate(b).unwrap();
+        witness.assert_capture_retained(&owner);
+        drop(owner);
+        witness.assert_dropped();
+        b.release_storage(charge.retained_storage()).unwrap();
+    });
+}
+
+#[test]
+#[ignore = "requires installed immutable approved compiler runtime; run serially"]
+fn approved_runtime_preparation_rejects_changed_sealed_invocation_and_drops_inputs() {
+    account(|b| {
+        let (inputs, witness) = admit(b, false);
+        let input_storage = inputs.storage;
+        let floor = b.storage();
+        let before = history(b);
+        witness.invocation_mode(rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR);
+        let refused = inputs.prepare(b);
+        witness.invocation_mode(rustix::fs::Mode::RUSR);
+        assert!(matches!(
+            refused,
+            Err(CompilerInvocationBackingError::Capture(
+                CaptureError::Rejected(" is not an exact regular mode-0400 file")
+            ))
+        ));
+        witness.assert_dropped();
+        assert_eq!(b.storage(), floor);
+        assert!(b.work() > before.0);
+        assert_eq!((b.failed_work(), b.failed_storage()), (before.2, before.3));
+        b.release_storage(input_storage).unwrap();
+    });
+}
+
+#[test]
+#[ignore = "requires installed immutable approved compiler runtime; run serially"]
+fn approved_runtime_preparation_native_work_denial_drops_inputs_on_original_account() {
+    account(|b| {
+        let (inputs, witness) = admit(b, false);
+        let input_storage = inputs.storage;
+        // Fund local preparation and measurement, then leave native
+        // revalidation one short of its eight-unit entry charge.
+        b.charge_work(
+            WORK - b.work() - CompilerInvocationBacking::LOCAL_WORK - MEASURE_WORK - 8 + 1,
+        )
+        .unwrap();
+        let spent = b.work();
+        let floor = b.storage();
+        assert!(matches!(
+            inputs.prepare(b),
+            Err(CompilerInvocationBackingError::Capture(
+                CaptureError::Resource(Resource::Work(_))
+            ))
+        ));
+        assert_eq!(
+            b.work(),
+            spent + CompilerInvocationBacking::LOCAL_WORK + MEASURE_WORK
+        );
+        assert_eq!(b.failed_work(), Some(WORK + 1));
+        assert!(b.failed_storage().is_none());
+        witness.assert_dropped();
+        assert_eq!(b.storage(), floor);
+        b.release_storage(input_storage).unwrap();
     });
 }
 

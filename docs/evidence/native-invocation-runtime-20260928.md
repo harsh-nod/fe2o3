@@ -5,7 +5,8 @@ Date: 2026-09-28 (Pacific). Continues the
 
 Next checkpoint: [native compiler exec and capture](native-compiler-exec-20260928.md).
 
-**M0-M7 and the 47/47 production-to-safe-GPU-launch gate remain incomplete.**
+At this September 28 checkpoint, M0-M7 and the 47/47 production-to-safe-GPU-launch
+gate remained incomplete. The September 30 follow-up below records newer status.
 No tutorial entry changes classification. This checkpoint adds exact invocation
 custody, approved helper configuration and bounded runtime admission, not an
 integrated compiler/helper attempt, proof RPC or GPU execution.
@@ -137,3 +138,119 @@ in this batch and is not evidence for the new source snapshot.
    authority refusals remain until their exact obligations are implemented.
 5. Complete generic safe launch, the 47-kernel positive/negative matrix,
    target-matched hardware validation, tutorial updates and release gates.
+
+## September 30 Sealed Invocation Follow-Up
+
+Code commit `f37e4d097` replaces the detached descriptor input to
+`CompilerInvocationBacking::prepare` with the received sealed
+`RustcInvocationCapabilityV1`. Preparation and revalidation retain and check
+that same capability. Staging borrows its decoded descriptor; there is no
+second descriptor clone, decode or encode path. The original invocation FD,
+decoded allocations, canonical bytes, runtime and output owners stay accounted
+for together. This remains private backing preparation, not cargo authorship
+or permission to execute a compiler.
+
+Every capability constructor now caches checked decoded allocation capacity.
+The native retained-storage check includes the entire owner, canonical vector
+capacity, sealed image bytes and result envelope. A legacy-created descriptor
+with excessive spare capacity is rejected against the existing native bound;
+equal canonical bytes do not make its actual allocations disappear. The backing
+requires the full received FD charge plus native admission growth, not just the
+decoded descriptor charge. Consuming failure closes the inputs but does not
+refund the caller's reservations or erase work/denial history.
+
+Guarded tests ran on `09105af9f65cb6f23b620dea48d5c5f3eab49c29`, pinned
+nightly-2026-04-03, locked/offline, one Cargo job and serial tests:
+
+| Run | Result |
+| --- | --- |
+| r126 closure-capability library | 288 passed, 4 ignored |
+| r126 execution-coordinator library | 280 passed, 14 ignored |
+| r127 both crates' doctests | 222 passed, none ignored |
+| r128 both crates, all-target Clippy | Completed with warnings; not a strict warning-clean gate |
+
+Nested subprocess results are not counted twice. The eight installed-runtime
+backing tests remain ignored: their genuine fixed-origin approval/runtime inputs
+were not provided by these local runs. Real sealed-file mechanics and synthetic
+descriptor text do not substitute for those prerequisites. No compiler, proof
+helper or GPU workload was launched, and no remote host was modified.
+
+New passing controls cover every construction path, excessive decoded and
+canonical capacity, exact/full-owner and one-byte-over boundaries, original FD
+identity, FD-plus-growth accounting, consuming closure, and preserved ledger,
+budget address, peaks and denial history. Scoped rustfmt, whitespace, DCO and
+the repository hygiene delta policy also passed. No safety guard or production
+approval constructor was broadened.
+
+All three guarded runs retained the same 9,498-file source snapshot:
+`931d99bbd463dcf8ffbb0420512cd163ed2747b4989138e4bd1991eeaee2ee22`.
+Log SHA-256 values:
+
+- r126: `d51832452b4a67982b2dbb2e961982ff1eca490eaf4b41f6084b78c32d30d8e0`
+- r127: `cb5cc6061d2bf690cf33a37ab636497e99ba583d2e8117e4a09a735e3167bb96`
+- r128: `25db5f102ac72430ea5934e6a1edc6d7e4f292679b435d3bd74ea3a9c04af9a1`
+
+The root intake still does not produce this backing through its real request
+path. That consuming integration, continuous code/source/output enforcement,
+original compiler completion and protected proof execution remain required.
+V4 intake remains refusal-only. For issue #272, M0 is now complete; M1-M7 remain
+incomplete and the strict production-to-safe-GPU-launch matrix remains **0/47**.
+
+## September 30 Original Root Request Integration
+
+Code commits `47f393561` and `d67ec80e5` integrate backing preparation with the
+real root-request intake. The original authenticated request is retained before
+fallible preparation, then consumed using the fixed-origin production approval
+and runtime constructors. The received sealed invocation, typed output, original
+budget and request rights are not reconstructed through a second authority path.
+Only backing growth and the new owner envelope are reserved in addition to the
+already retained request charge. Failure consumes the turn; cancellation and
+draining retain the original backing and rights until their owners retire.
+
+This supersedes the preceding checkpoint's missing root-intake connection, but
+does not activate compiler execution. The next turn still returns the existing
+V4 `RuntimeEnforcementUnavailable` refusal. Continuous code/source/output
+enforcement, actual compiler completion, proof RPC and safe GPU launch remain
+unfinished. No success acknowledgement or production safety check was weakened.
+
+The new ignored root-request process matrix obtains its owners from genuine
+fixed-origin V3 provisioning records, installed image measurements, approval and
+runtime inputs. It no longer depends on synthetic test keys or a hardcoded test
+profile. It covers consuming preparation/refusal, short or foreign accounting,
+moved same-ledger budgets, trailing requests, unwind and retained descriptor
+identity. These cases are implemented and compiled, not executed in this batch.
+Running them requires genuine provisioning in a disposable isolated environment
+with an external whole-cgroup custodian, bounded resources and deadline,
+descendant termination/reaping, and private-mount cleanup. Environment opt-ins
+alone do not establish that isolation. The unwind exit assertion is not evidence
+of descendant or mount cleanup.
+
+Guarded local validation used `d67ec80e5a5b84236a2af88bb36c9b96ffcc559c`, the
+pinned nightly, locked/offline dependencies, one Cargo job and serial tests:
+
+| Run | Result |
+| --- | --- |
+| r133 closure-capability library | 288 passed, 4 ignored |
+| r133 execution-coordinator library | 282 passed, 16 ignored |
+| r134 both crates' doctests | 222 passed, none ignored |
+| r135 both crates, all-target Clippy | Completed with warnings; not warning-clean |
+
+Nested subprocess results are not counted twice. The total library result is
+570 passed and 20 ignored. The genuine installed matrix remains ignored; no
+compiler, proof helper or GPU workload ran. All three runs retained the same
+9,504-file source snapshot and unchanged tools. Whitespace, DCO and the existing
+delta hygiene policy passed for both code commits.
+
+Source snapshot SHA-256:
+`15e4f54db07d5a4d5413a1167b22b27801c8e0ca020483754b60237cfad03852`.
+Log SHA-256 values:
+
+- r133: `446b814a8e4750641d64d0f27f71e0778e1ea769ce737c132d6fb06e94010d59`
+- r134: `aa4ad7f3d00ce663fd4462eabb6b80e71ea2dbf05836f7ea65b5d2cac1d356ca`
+- r135: `dd70cb8670f233f78090ea707e8d2f6c1bacfa3577d425d4b6afae84a8bc0347`
+
+A later bounded read-only SSH probe reached MI350-2's Conductor authorization
+step but timed out before returning filesystem or image results. The earlier
+host observations above are historical, not reconfirmed by that probe. No remote
+job, container or scratch directory was created. M1-M7 remain incomplete and
+the strict end-to-end count remains **0/47**.

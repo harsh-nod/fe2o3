@@ -9,7 +9,7 @@ use fe2o3_rustc_invocation::{
 
 use crate::native_capability::{
     CompilerExecutionCapabilityErrorV2 as NativeError,
-    CompilerExecutionCapabilityStorageV2 as NativeStorage,
+    CompilerExecutionCapabilityStorageV2 as NativeStorage, envelope_overhead,
 };
 use crate::sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};
 use fe2o3_kernel_ir::{
@@ -32,6 +32,8 @@ pub const RUSTC_INVOCATION_CHILD_FD_V1: RawFd = 199;
 /// An immutable file capability containing one canonical V3 rustc invocation descriptor.
 pub struct RustcInvocationCapabilityV1 {
     descriptor: RustcInvocationDescriptorV3,
+    // Immutable capacity accounting, not receipt provenance or approval.
+    decoded_storage: usize,
     canonical_bytes: Vec<u8>,
     pub(super) image: SealedCapabilityImage,
 }
@@ -46,7 +48,7 @@ impl RustcInvocationCapabilityV1 {
     const NATIVE_COMPARE_WORK_PER_BYTE: usize = 8;
     const NATIVE_STORAGE_PER_BYTE: usize = 64;
 
-    /// Conservative full owner bound for any admitted canonical V3 descriptor.
+    /// Conservative full owner bound for capacity-checked native admission.
     pub const NATIVE_MAX_RETAINED_STORAGE: usize =
         Self::NATIVE_STORAGE_PER_BYTE * MAX_DESCRIPTOR_BYTES_V3 + Self::NATIVE_FRAME;
     /// Complete nested admission work; the input File owner is prepaid separately.
@@ -89,9 +91,10 @@ impl RustcInvocationCapabilityV1 {
     /// Fresh metered admission of the existing canonical V3 invocation format.
     /// No V1 compiler-execution subject, service or policy owner is constructed.
     /// The frozen decoder is prepaid in full before entry: bounded field scans,
-    /// UTF-8/path validation, fixed environment searches and canonical re-encodes
-    /// are linear in its input. This is logical work/storage, not allocator RSS
-    /// or a claim that the shared decoder's internal allocations are fallible.
+    /// UTF-8/path validation, fixed environment searches, canonical re-encodes
+    /// and the decoded-capacity traversal are linear in its input. This is
+    /// logical work/storage, not allocator RSS or a claim that the shared
+    /// decoder's internal allocations are fallible.
     pub fn from_file_native(
         image: File,
         budget: &mut Budget<'_>,
@@ -112,8 +115,12 @@ impl RustcInvocationCapabilityV1 {
                     let canonical_bytes = image.read_bounded_native()?;
                     let descriptor = decode_descriptor_v3(&canonical_bytes)
                         .map_err(|_| NativeError::Rejected("invalid canonical V3 invocation"))?;
+                    let decoded_storage = descriptor
+                        .retained_storage_bytes()
+                        .ok_or(Resource::Arithmetic)?;
                     let admitted = Self {
                         descriptor,
+                        decoded_storage,
                         canonical_bytes,
                         image,
                     };
@@ -147,8 +154,25 @@ impl RustcInvocationCapabilityV1 {
     }
 
     /// Conservative full owner charge, including canonical and decoded backing.
+    /// Rejects legacy-created owners whose spare capacity exceeds the native
+    /// bound. Cached decoded capacity makes this check allocation-free and
+    /// constant-time; neither the cache nor this check establishes provenance.
     pub fn native_retained_storage(&self) -> Result<usize, NativeError> {
-        Self::native_storage_for(self.canonical_bytes.len())
+        let actual = self
+            .decoded_storage
+            .checked_sub(size_of::<RustcInvocationDescriptorV3>())
+            .and_then(|n| n.checked_add(size_of::<(Self, NativeStorage)>()))
+            .and_then(|n| n.checked_add(envelope_overhead::<(Self, NativeStorage), NativeError>()))
+            .and_then(|n| n.checked_add(self.canonical_bytes.capacity()))
+            .and_then(|n| n.checked_add(self.image.native_length()))
+            .ok_or(Resource::Arithmetic)?;
+        let bound = Self::native_storage_for(self.canonical_bytes.len())?;
+        if actual > bound {
+            return Err(NativeError::Rejected(
+                "retained invocation capacity exceeds native owner bound",
+            ));
+        }
+        Ok(bound)
     }
 
     fn native_storage_for(length: usize) -> Result<usize, NativeError> {
@@ -173,7 +197,9 @@ impl RustcInvocationCapabilityV1 {
             ));
         }
         // 4096 covers per-byte scanning/copying and the bounded V2-body/V3
-        // validator/encoder passes; fixed closure hashing is separately covered.
+        // validator/encoder passes and decoded-capacity traversal (at most one
+        // argument per four bytes and one environment entry per six bytes);
+        // fixed closure hashing is separately covered.
         let work = length
             .checked_mul(if decode {
                 Self::NATIVE_DECODE_WORK_PER_BYTE
@@ -187,11 +213,15 @@ impl RustcInvocationCapabilityV1 {
 
     /// Creates and seals the canonical encoding of one validated V3 invocation descriptor.
     pub fn create(descriptor: RustcInvocationDescriptorV3) -> Result<Self, String> {
+        let decoded_storage = descriptor
+            .retained_storage_bytes()
+            .ok_or("rustc-invocation decoded storage overflow")?;
         let canonical_bytes = encode_descriptor_v3(&descriptor)
             .map_err(|error| format!("cannot encode rustc-invocation capability: {error}"))?;
         let image = SealedCapabilityImage::create(&canonical_bytes, ROLE, LENGTH)?;
         let admitted = Self {
             descriptor,
+            decoded_storage,
             canonical_bytes,
             image,
         };
@@ -255,8 +285,12 @@ impl RustcInvocationCapabilityV1 {
     fn from_image(image: SealedCapabilityImage) -> Result<Self, String> {
         let canonical_bytes = image.read_exact_bytes()?;
         let descriptor = decode_canonical(&canonical_bytes)?;
+        let decoded_storage = descriptor
+            .retained_storage_bytes()
+            .ok_or("rustc-invocation decoded storage overflow")?;
         let admitted = Self {
             descriptor,
+            decoded_storage,
             canonical_bytes,
             image,
         };
@@ -275,3 +309,7 @@ fn decode_canonical(bytes: &[u8]) -> Result<RustcInvocationDescriptorV3, String>
     }
     Ok(descriptor)
 }
+
+#[cfg(test)]
+#[path = "rustc_invocation_native_tests.rs"]
+mod native_tests;

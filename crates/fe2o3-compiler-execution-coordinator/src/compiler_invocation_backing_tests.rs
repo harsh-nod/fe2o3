@@ -1,5 +1,6 @@
-//! Bounded negative/preflight mechanics. The separate ignored production tests
-//! require genuine installed approval; no synthetic successful admission exists.
+//! Inert sealed-descriptor accounting, not cargo authorship or native execution.
+//! The separate ignored preparation tests require genuine installed approval;
+//! these local fixtures cannot manufacture an approved runtime or backing.
 use super::*;
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
@@ -9,7 +10,11 @@ const RUNTIME_CHARGE: usize = 719;
 const PREFIX: usize = 31;
 
 fn descriptor() -> Descriptor {
-    let mut cwd = String::with_capacity(8192);
+    descriptor_with_cwd_capacity(8192)
+}
+
+fn descriptor_with_cwd_capacity(capacity: usize) -> Descriptor {
+    let mut cwd = String::with_capacity(capacity);
     cwd.push_str("/workspace/project");
     let v2 = RustcInvocationDescriptorV2::new(
         [0x11; 32],
@@ -36,11 +41,15 @@ fn descriptor() -> Descriptor {
     Descriptor::new(v2, closure).unwrap()
 }
 
+fn capture() -> Capture {
+    Capture::create(descriptor()).unwrap()
+}
+
 #[test]
-fn preflight_prepays_actual_capacity_walk_on_the_original_budget() {
-    let descriptor = descriptor();
-    let input = RUNTIME_CHARGE + descriptor.retained_storage_bytes().unwrap();
-    assert!(input >= RUNTIME_CHARGE + 8192);
+fn preflight_keeps_full_sealed_owner_on_the_original_budget() {
+    let capture = capture();
+    let input = RUNTIME_CHARGE + capture.native_retained_storage().unwrap();
+    assert!(input > RUNTIME_CHARGE + capture.descriptor().retained_storage_bytes().unwrap());
     let mut work = Work::new(PREFIX + MEASURE_WORK);
     let floor = PREFIX + input;
     let mut b = Budget::new(&mut work, floor + CompilerInvocationBacking::FRAME_STORAGE);
@@ -48,7 +57,7 @@ fn preflight_prepays_actual_capacity_walk_on_the_original_budget() {
     b.charge_work(PREFIX).unwrap();
     let identity = b.work_ledger_identity_v1();
     assert_eq!(
-        measure_inputs(RUNTIME_CHARGE, &descriptor, &mut b).unwrap(),
+        measure_inputs(RUNTIME_CHARGE, &capture, &mut b).unwrap(),
         input
     );
     assert!(identity == b.work_ledger_identity_v1());
@@ -62,8 +71,8 @@ fn preflight_prepays_actual_capacity_walk_on_the_original_budget() {
 
 #[test]
 fn preparation_input_floor_includes_the_complete_consumed_output_owner() {
-    let descriptor = descriptor();
-    let input = RUNTIME_CHARGE + descriptor.retained_storage_bytes().unwrap();
+    let capture = capture();
+    let input = RUNTIME_CHARGE + capture.native_retained_storage().unwrap();
     let mut work = Work::new(usize::MAX);
     let mut b = Budget::new(
         &mut work,
@@ -71,7 +80,7 @@ fn preparation_input_floor_includes_the_complete_consumed_output_owner() {
     );
     b.reserve_storage(input).unwrap();
     assert!(matches!(
-        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &descriptor, &mut b),
+        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &capture, &mut b),
         Err(CompilerInvocationBackingError::Resource(
             Resource::Accounting
         ))
@@ -79,15 +88,15 @@ fn preparation_input_floor_includes_the_complete_consumed_output_owner() {
     assert_eq!(b.storage(), input);
     b.reserve_storage(Output::STORAGE).unwrap();
     assert_eq!(
-        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &descriptor, &mut b).unwrap(),
+        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &capture, &mut b).unwrap(),
         input + Output::STORAGE
     );
 }
 
 #[test]
 fn preflight_refuses_short_work_scratch_and_source_floor_without_refunding_history() {
-    let descriptor = descriptor();
-    let input = RUNTIME_CHARGE + descriptor.retained_storage_bytes().unwrap();
+    let capture = capture();
+    let input = RUNTIME_CHARGE + capture.native_retained_storage().unwrap();
     for case in 0..4 {
         let floor = input - usize::from(case == 0);
         let work_limit = match case {
@@ -101,7 +110,7 @@ fn preflight_refuses_short_work_scratch_and_source_floor_without_refunding_histo
         b.reserve_storage(floor).unwrap();
         let identity = b.work_ledger_identity_v1();
         assert!(matches!(
-            measure_inputs(RUNTIME_CHARGE, &descriptor, &mut b),
+            measure_inputs(RUNTIME_CHARGE, &capture, &mut b),
             Err(CompilerInvocationBackingError::Resource(_))
         ));
         assert!(identity == b.work_ledger_identity_v1());
@@ -124,7 +133,7 @@ fn preflight_refuses_short_work_scratch_and_source_floor_without_refunding_histo
 
 #[test]
 fn preflight_overflow_restores_entry_storage_and_preserves_first_denials() {
-    let descriptor = descriptor();
+    let capture = capture();
     let mut work = Work::new(MEASURE_WORK);
     let mut b = Budget::new(&mut work, PREFIX + CompilerInvocationBacking::FRAME_STORAGE);
     b.reserve_storage(PREFIX).unwrap();
@@ -133,7 +142,7 @@ fn preflight_overflow_restores_entry_storage_and_preserves_first_denials() {
     let failed_work = b.failed_work();
     let failed_storage = b.failed_storage();
     assert!(matches!(
-        measure_inputs(usize::MAX, &descriptor, &mut b),
+        measure_inputs(usize::MAX, &capture, &mut b),
         Err(CompilerInvocationBackingError::Resource(
             Resource::Arithmetic
         ))
@@ -142,6 +151,115 @@ fn preflight_overflow_restores_entry_storage_and_preserves_first_denials() {
     assert_eq!(b.work(), MEASURE_WORK);
     assert_eq!(b.failed_work(), failed_work);
     assert_eq!(b.failed_storage(), failed_storage);
+}
+
+#[test]
+fn preflight_rejects_oversized_sealed_owner_and_preserves_original_account_history() {
+    let ordinary = capture();
+    let bound = ordinary.native_retained_storage().unwrap();
+    let oversized = Capture::create(descriptor_with_cwd_capacity(2 * bound)).unwrap();
+    assert_eq!(oversized.descriptor(), ordinary.descriptor());
+    assert!(oversized.descriptor().retained_storage_bytes().unwrap() > bound);
+    // Separately fund the exact supplied decoded allocations and the maximum
+    // sealed backing. This negative must reach the capacity guard, not fail
+    // because its budget ran out or its claimed original owner was underfunded.
+    let floor = ordinary.native_retained_storage().unwrap()
+        + oversized.descriptor().retained_storage_bytes().unwrap()
+        + Capture::NATIVE_MAX_RETAINED_STORAGE
+        + RUNTIME_CHARGE
+        + Output::STORAGE;
+    let limit = floor + CompilerInvocationBacking::FRAME_STORAGE;
+    let mut work = Work::new(PREFIX + 2 * MEASURE_WORK);
+    let mut b = Budget::new(&mut work, limit);
+    b.reserve_storage(floor).unwrap();
+    b.charge_work(PREFIX).unwrap();
+    assert!(b.charge_work(usize::MAX).is_err());
+    assert!(b.reserve_storage(usize::MAX).is_err());
+    let denials = (b.failed_work(), b.failed_storage());
+    let ledger = b.work_ledger_identity_v1();
+    let address = &b as *const Budget<'_>;
+    assert!(matches!(
+        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &oversized, &mut b),
+        Err(CompilerInvocationBackingError::Capture(
+            CaptureError::Rejected("retained invocation capacity exceeds native owner bound")
+        ))
+    ));
+    assert_eq!(b.storage(), floor);
+    assert_eq!(b.work(), PREFIX + MEASURE_WORK);
+    assert_eq!(b.peak_storage(), limit);
+    assert_eq!(
+        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &ordinary, &mut b).unwrap(),
+        RUNTIME_CHARGE + Output::STORAGE + bound
+    );
+    assert_eq!(b.work(), PREFIX + 2 * MEASURE_WORK);
+    assert_eq!((b.failed_work(), b.failed_storage()), denials);
+    assert!(ledger == b.work_ledger_identity_v1());
+    assert_eq!(address, &b as *const Budget<'_>);
+    drop(oversized);
+    drop(ordinary);
+    assert_eq!(b.storage(), floor);
+    b.release_storage(floor).unwrap();
+}
+
+#[test]
+fn received_sealed_input_keeps_original_fd_charge_plus_native_admission_growth() {
+    // Synthetic process text in a real sealed file is still only inert input.
+    let source = capture();
+    let source_storage = source.native_retained_storage().unwrap();
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, usize::MAX);
+    b.reserve_storage(source_storage).unwrap();
+    let ledger = b.work_ledger_identity_v1();
+    let address = &b as *const Budget<'_>;
+    let (file, file_charge) = source.try_clone_for_transfer_native(&mut b).unwrap();
+    assert_eq!(
+        file_charge.additional_storage(),
+        Capture::NATIVE_FILE_STORAGE
+    );
+    b.reserve_storage(file_charge.additional_storage()).unwrap();
+    let (received, growth) = Capture::from_file_native(file, &mut b).unwrap();
+    b.reserve_storage(growth.additional_storage()).unwrap();
+    let full = received.native_retained_storage().unwrap();
+    assert_eq!(
+        full,
+        Capture::NATIVE_FILE_STORAGE + growth.additional_storage()
+    );
+    assert_eq!(received.descriptor(), source.descriptor());
+    drop(source);
+    b.release_storage(source_storage).unwrap();
+    b.reserve_storage(RUNTIME_CHARGE + Output::STORAGE).unwrap();
+    let input = full + RUNTIME_CHARGE + Output::STORAGE;
+    assert_eq!(b.storage(), input);
+    received.revalidate_native(&mut b).unwrap();
+    assert_eq!(
+        measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &received, &mut b).unwrap(),
+        input
+    );
+    // Admission growth alone, and the former plain descriptor charge, must
+    // both fail the outer floor even when temporary frames would cover it.
+    for reserved in [
+        growth.additional_storage(),
+        received.descriptor().retained_storage_bytes().unwrap(),
+    ] {
+        let missing = full.checked_sub(reserved).unwrap();
+        assert!(missing > 0);
+        b.release_storage(missing).unwrap();
+        assert!(matches!(
+            measure_inputs(RUNTIME_CHARGE + Output::STORAGE, &received, &mut b),
+            Err(CompilerInvocationBackingError::Resource(
+                Resource::Accounting
+            ))
+        ));
+        assert_eq!(b.storage(), input - missing);
+        b.reserve_storage(missing).unwrap();
+    }
+    assert!(ledger == b.work_ledger_identity_v1());
+    assert_eq!(address, &b as *const Budget<'_>);
+    let spent = b.work();
+    drop(received);
+    assert_eq!(b.storage(), input);
+    assert_eq!(b.work(), spent);
+    b.release_storage(input).unwrap();
 }
 
 #[test]

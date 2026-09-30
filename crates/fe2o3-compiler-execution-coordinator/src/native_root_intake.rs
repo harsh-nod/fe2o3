@@ -31,6 +31,10 @@ const DIGEST_SCRATCH: usize = Invocation::NATIVE_OPERATION_SCRATCH;
 // Final refusal probes for trailing input before sending its zero-right ACK.
 const EXCHANGE_WORK: usize = 2 * io::packet_receive_work(N);
 
+#[path = "native_root_request.rs"]
+mod request;
+pub(crate) use request::RootCompilerRequest;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
     Accept,
@@ -106,6 +110,17 @@ impl Receiver {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn received_for_test(
+        &self,
+    ) -> (Option<&Invocation>, [Option<std::os::fd::RawFd>; 6]) {
+        use std::os::fd::AsRawFd;
+        (
+            self.invocation.as_ref(),
+            std::array::from_fn(|i| self.files[i].as_ref().map(AsRawFd::as_raw_fd)),
+        )
+    }
+
     pub(crate) fn activate(&self, prepared: &mut Prepared, b: &mut Budget<'_>) -> Result<()> {
         let floor = root::sum(&[Self::STORAGE, prepared.retained_storage()])?;
         b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
@@ -116,12 +131,13 @@ impl Receiver {
         })
     }
 
-    /// One nonblocking attempt. Native validates actual Prepared before each
-    /// turn, including the final ACK turn. True means only terminal refusal.
+    /// One nonblocking intake attempt. True means complete received custody,
+    /// NOT an ACK or execution permission. Native must move this whole receiver
+    /// and its original Prepared into RootCompilerRequest before continuing.
     pub(crate) fn step(&mut self, prepared: &mut Prepared, b: &mut Budget<'_>) -> Result<bool> {
         let floor = root::sum(&[Self::STORAGE, prepared.retained_storage()])?;
         let result = b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
-            if matches!(self.phase, Phase::Refused | Phase::Failed) {
+            if matches!(self.phase, Phase::Ack | Phase::Refused | Phase::Failed) {
                 return Err(rejected("intake cannot be reused"));
             }
             if self
@@ -155,7 +171,8 @@ impl Receiver {
                 }
                 return Ok(false);
             }
-            self.exchange(prepared.trust.policy().policy().identity().as_bytes(), b)
+            self.exchange(prepared.trust.policy().policy().identity().as_bytes(), b)?;
+            Ok(self.phase == Phase::Ack)
         });
         if result.is_err() {
             self.phase = Phase::Failed;
@@ -168,16 +185,16 @@ impl Receiver {
     // policy bytes select an inert association, never admit a Prepared/Trace.
     fn exchange(&mut self, policy: &[u8; 32], b: &mut Budget<'_>) -> Result<bool> {
         let result = (|| {
-            let connection = self
-                .connection
-                .as_ref()
-                .ok_or_else(|| rejected("missing connection"))?;
             let sender = self
                 .sender
                 .ok_or_else(|| rejected("missing peer credentials"))?;
             b.with_prepaid_scope(0, 8, EXCHANGE_WORK, io::packet_receive_scratch(N), |b| {
                 match self.phase {
                     Phase::Hello => {
+                        let connection = self
+                            .connection
+                            .as_ref()
+                            .ok_or_else(|| rejected("missing connection"))?;
                         let Some(bytes) =
                             io::receive_authenticated_packet::<N>(connection.as_fd(), sender)
                                 .map_err(transport)?
@@ -207,6 +224,10 @@ impl Receiver {
                         self.phase = Phase::Challenge;
                     }
                     Phase::Challenge => {
+                        let connection = self
+                            .connection
+                            .as_ref()
+                            .ok_or_else(|| rejected("missing connection"))?;
                         if io::send_packet(
                             connection.as_fd(),
                             self.challenge.as_ref().unwrap().canonical_bytes(),
@@ -218,6 +239,10 @@ impl Receiver {
                         }
                     }
                     Phase::Input(index) => {
+                        let connection = self
+                            .connection
+                            .as_ref()
+                            .ok_or_else(|| rejected("missing connection"))?;
                         let Some((bytes, fd)) =
                             io::receive_authenticated_descriptor::<N>(connection.as_fd(), sender)
                                 .map_err(transport)?
@@ -340,22 +365,7 @@ impl Receiver {
                     }
                     Phase::Ack => {
                         Self::revalidate_output(self.output.as_ref(), self.invocation.as_ref(), b)?;
-                        if io::receive_authenticated_packet::<N>(connection.as_fd(), sender)
-                            .map_err(transport)?
-                            .is_some()
-                        {
-                            return Err(rejected("trailing input before refusal ACK"));
-                        }
-                        if io::send_packet(
-                            connection.as_fd(),
-                            self.ack.as_ref().unwrap().canonical_bytes(),
-                        )
-                        .map_err(transport)?
-                        .is_some()
-                        {
-                            self.phase = Phase::Refused;
-                            return Ok(true);
-                        }
+                        return self.send_refusal();
                     }
                     Phase::Accept | Phase::Refused | Phase::Failed => {
                         return Err(rejected("intake cannot be reused"));
@@ -368,6 +378,39 @@ impl Receiver {
             self.phase = Phase::Failed;
         }
         result
+    }
+
+    // Transport only. Production reaches this through the installed request,
+    // after its retained backing has been revalidated on the original account.
+    fn send_refusal(&mut self) -> Result<bool> {
+        if self.phase != Phase::Ack {
+            return Err(rejected("refusal requires complete intake"));
+        }
+        let connection = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| rejected("missing connection"))?;
+        let sender = self
+            .sender
+            .ok_or_else(|| rejected("missing peer credentials"))?;
+        let ack = self
+            .ack
+            .as_ref()
+            .ok_or_else(|| rejected("missing refusal ACK"))?;
+        if io::receive_authenticated_packet::<N>(connection.as_fd(), sender)
+            .map_err(transport)?
+            .is_some()
+        {
+            return Err(rejected("trailing input before refusal ACK"));
+        }
+        if io::send_packet(connection.as_fd(), ack.canonical_bytes())
+            .map_err(transport)?
+            .is_some()
+        {
+            self.phase = Phase::Refused;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn revalidate_output(

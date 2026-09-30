@@ -5,6 +5,9 @@ use fe2o3_kernel_ir::{
 };
 use std::{cell::RefCell, panic::AssertUnwindSafe, rc::Rc};
 
+#[path = "native_root_request_process_tests.rs"]
+mod root_request;
+
 const EFFECT_WORK: usize = 7;
 const RETAINED: usize = 42;
 
@@ -438,6 +441,8 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
     let old = Deployment::startup_quota(2, 1).unwrap();
     let root = Deployment::original_root_startup_quota(2, 1).unwrap();
     let continuity = Prepared::maximum_revalidation_quota().unwrap();
+    let request = RootCompilerRequest::preparation_quota().unwrap();
+    let refusal = RootCompilerRequest::refusal_quota().unwrap();
     assert_eq!(root.cleanup_work(), old.cleanup_work());
     assert_eq!(root.cleanup_storage(), old.cleanup_storage());
     assert_eq!(
@@ -445,11 +450,18 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
         old.request_work()
             + super::root::LOCAL_WORK
             + fe2o3_compiler_execution_supervisor::ProvisionedProtectedIssuerServiceInputsV2::WORK
-            + 2 * (Receiver::TURN_WORK + continuity.work())
+            + request.work()
+            + 2 * (Receiver::TURN_WORK + continuity.work() + refusal.work())
     );
     assert!(
         root.request_storage()
-            >= old.request_storage() + Receiver::STORAGE + Receiver::SCRATCH + continuity.scratch()
+            >= old.request_storage()
+                + Receiver::STORAGE
+                + Receiver::SCRATCH
+                + continuity.scratch()
+                + RootCompilerRequest::ENVELOPE
+                + request.scratch()
+                + refusal.scratch()
     );
     assert!(Deployment::original_root_startup_quota(usize::MAX, 1).is_err());
     assert!(Deployment::original_root_startup_quota(1, usize::MAX).is_err());
