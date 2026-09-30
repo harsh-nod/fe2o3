@@ -1,5 +1,6 @@
 // Source-only, total acyclic helper expressions. The actual call/return transport
 // remains separately checked; no physical definition chooses a source result.
+include!("production_source_helper_callable_v34.rs");
 #[derive(Clone, Copy, Debug)]
 struct OriginalHelperCallV33 {
     key: [usize; 3],
@@ -19,6 +20,8 @@ fn source_helper_expression_headers_v33() -> Result<usize, ArgumentResourceV1> {
         Option<ProductionSemanticExpressionV2>,
         SourceOwnedResultV18<ProductionSemanticExpressionV2>,
         SourceOwnedResultV18<OriginalHelperCallV33>,
+        SourceOwnedResultV18<SemanticFunctionIdV1>,
+        Option<&'a SemanticCallableDeclV1>,
         SourceOwnedResultV18<()>,
         Vec<usize>,
         SemanticPlaceV1,
@@ -210,7 +213,7 @@ impl OriginalEntryIndexV20<'_, '_> {
             .filter(|row| row.key == key)
             .copied()
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                "source helper call has no defined invocation",
+                "source helper defined call has no invocation",
             ))?;
         if !self
             .source
@@ -270,7 +273,7 @@ impl OriginalEntryIndexV20<'_, '_> {
                 .source
                 .missing("source helper call-return context differs");
         }
-        let child = self.helper_child_v33(leaves.leaves.root, instance, block, budget)?;
+        let child = self.helper_for_call_v34(leaves.leaves.root, instance, block, call, budget)?;
         self.private_helper_arguments_v33(
             leaves, instance, function, block, call, child, depth, remaining, budget,
         )?;
@@ -631,8 +634,13 @@ impl OriginalEntryIndexV20<'_, '_> {
                             .source
                             .missing("source helper nested call effect is not modeled");
                     }
-                    let child =
-                        self.helper_child_v33(leaves.leaves.root, instance, block as u32, budget)?;
+                    let child = self.helper_for_call_v34(
+                        leaves.leaves.root,
+                        instance,
+                        block as u32,
+                        call,
+                        budget,
+                    )?;
                     self.private_helper_arguments_v33(
                         leaves,
                         instance,

@@ -1,4 +1,5 @@
 use super::*;
+include!("production_source_helper_callable_v34_tests.rs");
 
 #[derive(Clone, Copy)]
 enum HelperCase {
