@@ -583,3 +583,59 @@ Log SHA-256:
 - r226: `ff11b296f3e9e8630b56d2ac8a6f8be877d879263c2efb2e93b5c89e488bb16f`
 
 M0 remains complete; M1-M7 and strict end-to-end **0/47** remain unchanged.
+
+## Helper Transport and Native Analysis
+
+The following local runs used the pinned offline toolchain, one build worker,
+serial tests and disabled GPU runtimes. These are candidate component results,
+not required-proof execution or production launch evidence.
+
+| Run | Candidate | Scope | Result |
+| --- | --- | --- | --- |
+| r227 | `24a1d84d494efc52f61823ac62b27e4c47621d33` | Selected lowerer source/optimizer tests | 35 passed, 27 failed, zero ignored |
+| r228 | `e82baa5fc1d41fe2a0e1f2a17197c92d05e9536d` | Analysis and optimizer libraries | Test compilation failed; no tests executed |
+| r229 | `31d21aad2d4f39609a231adcc835fcd253b7c7e5` | Complete analysis and optimizer libraries | Analysis 720 passed; optimizer 445 passed, three existing child helpers ignored; zero failures |
+| r230 | Unmerged working tree, not a sealed candidate | IR and analysis attempt | Invalid integration attempt; compilation stopped at conflict markers |
+| r231 | `522c36642619aab8539c3d91b875fa94349022fa` | IR and analysis libraries | Test compilation failed; no tests executed |
+| r232 | `d76e21409f1a395da533f5e0da160656fafc9d3b` | Complete IR and analysis libraries | IR 1429 and analysis 726 passed; zero failures or ignored tests |
+
+r227 passed the corrected owned-slice fixture gate, but all 27 failures stopped
+at the internal helper's `Option<&mut u32>` ABI check. The optional reference is
+tracked by the scoped source plan; it still falls through to the general enum
+argument refusal. This does not validate the intended downstream optimizer
+consumer controls. The ordinary Rust fill/vector-add parents were not selected
+by this lowerer-only run.
+
+r228 exposed an empty-layout fixture using a nonexistent `Default` constructor.
+The correction supplies explicit zero limits for its empty table. r229 exercises
+the shared legacy/scoped LICM engine and its analysis consumers. r231 exposed two
+overlapping mutable test-view queries; copying each observation before the next
+query corrected the test. r232 exercises the initial scoped ranked/private and
+conditional memory views. Neither run proves their integration with all nine
+native stages, source-bound refinement requests, or actual Rust kernel launches.
+
+r230 was started before a dependency cherry-pick conflict was noticed. Its
+recorded HEAD is not the source that compiled: the file snapshot contains
+conflict markers. It receives neither positive nor intended-negative credit.
+The owned failed cherry-pick was aborted, the missing dependency was applied,
+and subsequent candidates were sealed before testing. The local runner now
+rejects an unmerged index before creating a test snapshot.
+
+Runner provenance also has a historical limitation: r227 began before that
+runner edit but read the runner file's hash at completion. Its reported
+`fd0434853cc28c56d795a956cdbef34d8f72167b85b2b5664e4ec1ef471fe0a2`
+therefore does not authenticate the script loaded at startup. Its stable source
+and tool snapshots and test log remain component observations; the raw report
+has not been rewritten. Subsequent runs capture the runner hash at startup.
+
+Log SHA-256:
+
+- r227: `3e1780d07916d4eeb328e0f5d8151921a0e2996988fc2430a765fdcec2ac53e8`
+- r228: `23aa173fc9cf122e8acea19c32b694a0fb9df5f1e3192dfe551dcadc93459768`
+- r229: `948c3b29e90b2fa5a31c4b576f7d1a672b37f16d8820464784e4bab4d5f136ea`
+- r230: `aa6746ae8b9af4d410f929f0f7e302abe54307b32b3cf1ff15d51cd658926bb7`
+- r231: `cc1f48d5448603c54e1d549cb54548c7a0f717745ee682263490975cf84dc4b7`
+- r232: `646be830fe148fbac02c5db5a85a35bc185351c67d4778d575292e40245bf51c`
+
+M0 remains complete; M1-M7 are incomplete and strict end-to-end coverage remains
+**0/47**. These runs did not execute a protected proof runtime or a GPU kernel.
