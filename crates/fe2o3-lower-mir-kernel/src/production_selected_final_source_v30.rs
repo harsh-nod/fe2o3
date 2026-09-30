@@ -1,6 +1,7 @@
 //! Exact source/F joins for the borrowed conditional selected-memory domain.
 //! Copied choice records cannot enter this relation without their checked owner.
 use super::*;
+use slice_view_v1::DescriptorRoleScopeV18;
 use fe2o3_kernel_ir::{
     CanonicalSelectedPointerIncomingV30 as ActualIncoming,
     CanonicalSelectedPointerNodeV30 as ActualNode, CanonicalSelectedPointerStepV30 as ActualStep,
@@ -244,7 +245,7 @@ impl<'work, C> SelectedFinalExecutionV30<'_, '_, 'work, C> {
         } else {
             result
         };
-        if budget.storage() != view.scope.required {
+        if budget.storage() != view.scope.required_storage() {
             optimized.original.source.cleanup.deny_refund();
             domains.refuse_retained_custody();
         }

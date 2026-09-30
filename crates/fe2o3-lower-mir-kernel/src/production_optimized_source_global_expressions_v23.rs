@@ -12,7 +12,7 @@ impl OriginalEntryIndexV20<'_, '_> {
 }
 
 impl ProductionSourceCorrespondenceV18<'_> {
-    fn global_expression_entry_v23(
+    pub(super) fn global_expression_entry_v23(
         &self,
         optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
         budget: &ArgumentBudgetV1<'_>,

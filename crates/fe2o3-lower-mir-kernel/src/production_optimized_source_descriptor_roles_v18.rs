@@ -75,14 +75,14 @@ impl DescriptorAccessSummaryV18 {
     }
 }
 
-struct DescriptorRoleScopeV18 {
+pub(super) struct DescriptorRoleScopeV18 {
     required: usize,
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
 }
 
 impl DescriptorRoleScopeV18 {
-    fn new(budget: &ArgumentBudgetV1<'_>) -> Self {
+    pub(super) fn new(budget: &ArgumentBudgetV1<'_>) -> Self {
         Self {
             required: budget.storage(),
             slot: std::ptr::from_ref(budget) as usize,
@@ -90,7 +90,11 @@ impl DescriptorRoleScopeV18 {
         }
     }
 
-    fn observe(
+    pub(super) fn required_storage(&self) -> usize {
+        self.required
+    }
+
+    pub(super) fn observe(
         &self,
         original: &ProductionSourceCorrespondenceV18<'_>,
         budget: &ArgumentBudgetV1<'_>,
