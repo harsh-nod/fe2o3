@@ -6,7 +6,10 @@ until the intended original-root direct startup route is composed and tested.
 The native entry now prepares the independently retained anchor, keeps the
 actual `Prepared` owner and activates its sole original-root listener. It runs
 the bounded intake receiver on that owner and the original request account.
-This source has not been built or tested by its author. The old indirect V3
+Local builds and tests have exercised parts of this candidate, but the affected
+results require an isolated-cache rerun; see
+[validation evidence](evidence/native-intake-restrictions-20260930.md).
+The old indirect V3
 `Deployment::launch` / `PreparedCompilerExecutionSupervisorV3::launch` still refuses with
 `native V3 indirect launch requires the original-root FD12 route`.
 Here FD12 means the issuer's original-root control socket, not the unit's

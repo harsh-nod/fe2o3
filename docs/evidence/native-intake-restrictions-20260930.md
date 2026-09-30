@@ -19,6 +19,12 @@ successful compiler path:
 | 7a73f076b | Explicit V4 release/broker transport of genuine V3 client profiles. |
 | f78afd2f5 | Bounded original-root intake and wrapper custody. |
 | c007b4874 | Compiler-only prepaid pre-exec restrictions. |
+| 3a05a74bb | Exact release-family child-entry validation. |
+| ea4a00544 | Private broker profile-transport extraction; no wire change. |
+| 5cbe65ed5 | Original output-directory custody through V4 root intake and FD197 staging. |
+| 952a1143a | Field-scoped output validation borrows. |
+| 37408e57b, f4b44dff2 | Exact and one-short original-account output validation tests. |
+| 97b17d5aa | Finite intake progress, failure and retained-owner tests. |
 
 The V4 release/broker family preserves the legacy readers and selects an exact
 family before authentication. It retains the original wrapper invocation stream
@@ -26,6 +32,13 @@ and account while transferring the actual input descriptors. The root keeps its
 original listener, installs incoming descriptor ownership before fallible decode,
 and retains it through original-pool cleanup. Its only terminal acknowledgement
 is `RuntimeEnforcementUnavailable`; no ready compiler session is produced.
+
+The new root-intake V4 record is 240 bytes; the frozen V3 record stays 224 bytes.
+V4 transfers the broker-authenticated output directory as an explicit role.
+The receiver retains that original right and a separately funded typed duplicate;
+staging checks the actual FD197 binding and canonical `/proc/self/fd/197` output.
+No pathname or process-ID reopen replaces the retained directory. This does not
+yet constrain every source, loader or output pathname used by a compiler.
 
 The compiler-only native stage installs a fixed 57-instruction syscall filter
 after credentials/channel setup and before profile-ready, gate and exec. Its
@@ -76,6 +89,41 @@ returns `EPERM`. That is consistent with the two r57 EOF failures but does not
 replace a completed permissive-environment rerun. No tests were rewritten to
 treat environmental refusal as success.
 
+### Shared-Cache Results Are Provisional
+
+Runs r62-r67 alternated two worktrees while sharing a Cargo target directory.
+In r67, the floating-point worktree exported `mixed_conditional_v26`, but Cargo
+selected descriptor metadata built from the other worktree, where that module
+does not exist. Its dependency file used relative paths and the cached artifact
+was newer than the selected source. The run stopped with unresolved imports;
+no tests ran. Before/after source hashes alone did not catch this dependency
+freshness problem. All affected passing results below require isolated rebuilds.
+
+| Run | Observation, not accepted final validation |
+| --- | --- |
+| r62 | Compilation found an overlapping receiver borrow; corrected in 952a1143a. |
+| r63 | Coordinator: 11 passed, 7 socket-setup refusals; protocol: 9 passed. |
+| r64 | 25 selected release, broker and wrapper tests passed. |
+| r65 | Compilation caught two nonexistent test budget accessors; corrected in f4b44dff2. |
+| r66 | Coordinator: 249 passed, 27 socket-setup refusals, 6 ignored; protocol: 119 passed. Unsafe inventory: 4 passed, 1 failed, 1 ignored. |
+| r67 | Floating-point worktree failed to compile against mismatched cached dependency metadata. |
+
+The r66 inventory failure identified seventeen stale entries, subsequently
+reviewed individually; see [unsafe policy](../unsafe-code-policy.md).
+Its ten intake tests all failed before reaching the receiver because socket
+credential setup was denied. They have no behavioral pass credit.
+
+The guarded runner now assigns a separate target directory to each canonical
+worktree and records that directory in its report. Cargo's download cache remains
+shared. Optional `FE2O3_OPT` is hashed along with the compiler tools. No native,
+protected-proof or hardware result is inferred from these local checks.
+
+| Run | Log SHA-256 |
+| --- | --- |
+| r64 | `101bf3ca27d2092f8ee49dd626d1781e90c1355d7ce5bc89162721d0bede27b7` |
+| r66 | `dd5893df7b5e971ef192e011b727bd74fa87084a721d5c5a67d841bd46ce5b69` |
+| r67 | `400738fabd86f8468e869bf2451dbdfcb4023b46c30803f1ec18c1a1eb9e9816` |
+
 Both source-contract scripts passed:
 
 ```sh
@@ -106,9 +154,9 @@ Local reports are in the sibling
 
 ## Remaining Integration
 
-The receiver still lacks the actual output-directory role needed by the
-compiler's FD197 binding; a separate reviewed continuation is being developed.
-Immutable runtime/source/output namespace enforcement, protected proof RPC,
+The actual output-directory role and FD197 custody are integrated, but not a
+complete consuming compiler launch. Immutable runtime/source/output namespace
+enforcement, protected proof RPC,
 original trace-derived completion, generic finalization and safe GPU launch
 remain required. Source-side context/nominal import compatibility and f32
 correspondence use the existing #271 pipeline; these native changes do not

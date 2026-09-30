@@ -41,6 +41,40 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The 2026-09-30 native-custody audit reconciles seventeen omitted or stale
+inventory entries. All seventeen source files are unchanged from the published
+`edd71e6762252d1990d10d84d10cc53b666d09b7` checkpoint; this is a review record,
+not new runtime behavior. The primary reviewed issuer fixed-slot ownership and
+the coordinator publication fixture; two independent workers reviewed broker
+publication/channel custody and retained-child cleanup respectively. No blocking
+safety defect was identified by these static reviews.
+
+- The six broker files contain sixteen blocks and three trait implementations.
+  Test credential changes occur only in explicit disposable subprocesses;
+  closed-descriptor probes never construct a borrowed owner. Production payload
+  acquisition installs each actual owner before later fallible accounting.
+  Retirement retains the independently owned barrier across destruction,
+  without holding a coordinator mutex or forging `Send`. OFD-lock probes use a
+  fully initialized native `flock` and a live, separately opened file.
+- The seven spawn files contain fifty-one constructs. Late operations require
+  the original account, creator thread, reserved slot and holder identity.
+  Prepared tokens retain mutex custody and trace-bound lifetimes. Deferral keeps
+  both payload and funding; the temporary `Arc` is dropped before terminal
+  publication. Test implementations hold inert counters or empty payloads;
+  fake descriptor-free children cannot signal scalar PIDs. The real traced-child
+  fixture is an observation test, not protected compiler admission.
+- The issuer V3 reader's three blocks inspect inherited flags and duplicate
+  descriptors above the entire inherited table before transferring unique
+  ownership to `File`. Its two test files contain seven and four blocks;
+  fixed-slot mutations and `dup2` run only in isolated children with retained
+  high-numbered sources. Raw borrowed slots remain live for each use.
+- The coordinator publication fixture's three blocks use a genuine stopped
+  trace and its original cleanup lifetime, plus initialized nonblocking OFD-lock
+  probes. They neither resume a compiler nor establish production admission.
+
+The inventory gate must still be rerun in an isolated worktree build. These
+reviews do not establish native execution, protected proofs or GPU qualification.
+
 The paired native V3 coordinator and provisioner mains each add one reviewed
 unsafe call block. These dedicated binaries call their existing unsafe entrypoint
 exactly once, before creating threads, handlers, environment borrows or Rust
