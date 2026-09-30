@@ -23281,7 +23281,11 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             CastKind::Bitcast
         } else if let Some(destination) = destination {
             self.check_descriptor_destination_v29(block, destination, value, &actual, &expected)?;
-            CastKind::SliceToGeneric
+            if matches!(actual, Type::Pointer(_)) {
+                CastKind::PointerToGeneric
+            } else {
+                CastKind::SliceToGeneric
+            }
         } else {
             return Err(unsupported(0, Some(block.index()), statement, description));
         };

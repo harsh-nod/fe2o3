@@ -380,10 +380,27 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 budget,
                 |values, budget| {
                     budget.charge_work(1)?;
+                    // Thin references use the same source-typed representation
+                    // relation as calls; this does not prove a memory origin.
+                    let widening = source_descriptor_widening_v29(actual, expected)
+                        || (component == 0
+                            && values.len() == 1
+                            && source_reference_call_widening_v26(
+                                this.types,
+                                cursor
+                                    .function
+                                    .locals()
+                                    .get(local as usize)
+                                    .ok_or_else(execution_cfg_error_v29)?
+                                    .ty(),
+                                actual,
+                                expected,
+                                budget,
+                            )?);
                     if values
                         .get(component)
                         .is_none_or(|row| row.id != value || &row.ty != actual)
-                        || !source_descriptor_widening_v29(actual, expected)
+                        || !widening
                     {
                         return Err(execution_cfg_error_v29());
                     }

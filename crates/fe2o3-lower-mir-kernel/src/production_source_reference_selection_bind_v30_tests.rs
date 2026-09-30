@@ -135,6 +135,39 @@ fn query_full_selection_bind(
                 .filter(|node| matches!(node.step, SourceReferenceSelectionStepV29::Leaf(_)))
                 .count();
             assert_eq!(leaves, if entry { 1 } else { 2 });
+            if !entry {
+                let body = pending.function.body.as_ref().unwrap();
+                for edge in &actual.edges {
+                    let block = body
+                        .blocks
+                        .iter()
+                        .find(|block| block.id == edge.source)
+                        .unwrap();
+                    let argument = edge.argument.unwrap();
+                    let cast = block
+                        .operations
+                        .iter()
+                        .find(|operation| {
+                            operation.results.iter().any(|result| result.id == argument)
+                        })
+                        .unwrap();
+                    let input = &actual.nodes[edge.original.input];
+                    assert_eq!(input.space, AddressSpace::Global);
+                    assert!(matches!(&cast.kind,
+                        OperationKind::Cast { kind: CastKind::PointerToGeneric, value, to }
+                            if *value == input.pointer
+                                && *to == Type::pointer(Type::Scalar(input.element), AddressSpace::Generic, input.access)));
+                    assert_eq!(cast.results.len(), 1);
+                    assert_eq!(
+                        cast.results[0].ty,
+                        Type::pointer(
+                            Type::Scalar(input.element),
+                            AddressSpace::Generic,
+                            input.access,
+                        )
+                    );
+                }
+            }
             Ok(())
         },
     );
@@ -185,6 +218,63 @@ fn observe_full_selection_bind(
     assert_actual_selection_error(query_full_selection_bind(pending, instances, plan, budget));
     pending.coordinates.controls.rows[index].original_block = original;
     query_full_selection_bind(pending, instances, plan, budget)?;
+    if !entry {
+        let casts: Vec<_> = pending
+            .function
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block, row)| {
+                row.operations
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(operation, row)| {
+                        matches!(
+                            row.kind,
+                            OperationKind::Cast {
+                                kind: CastKind::PointerToGeneric,
+                                ..
+                            }
+                        )
+                        .then_some((block, operation))
+                    })
+            })
+            .collect();
+        assert_eq!(casts.len(), 2);
+        for (block, operation) in casts {
+            let original =
+                pending.function.body.as_ref().unwrap().blocks[block].operations[operation].clone();
+            for fault in 0..3 {
+                let changed = &mut pending.function.body.as_mut().unwrap().blocks[block].operations
+                    [operation];
+                let OperationKind::Cast { kind, value, to } = &mut changed.kind else {
+                    unreachable!()
+                };
+                match fault {
+                    0 => *kind = CastKind::Bitcast,
+                    1 => *value = ValueId(u32::MAX),
+                    2 => {
+                        *to = Type::pointer(
+                            Type::Scalar(ScalarType::U64),
+                            AddressSpace::Generic,
+                            AccessMode::ReadWrite,
+                        );
+                        changed.results[0].ty = to.clone();
+                    }
+                    _ => unreachable!(),
+                }
+                assert_actual_selection_error(query_full_selection_bind(
+                    pending, instances, plan, budget,
+                ));
+                pending.function.body.as_mut().unwrap().blocks[block].operations[operation] =
+                    original.clone();
+                query_full_selection_bind(pending, instances, plan, budget)?;
+            }
+        }
+    }
     if entry {
         let sidecar = pending
             .sidecars
@@ -340,17 +430,19 @@ fn run_full_selection_bind(entry: bool) {
         .filter(|operation| matches!(operation.kind, OperationKind::GetElementPointer { .. }))
         .count();
     assert_eq!(geps, if entry { 1 } else { 2 });
-    assert!(pending
-        .pending_module()
-        .functions
-        .iter()
-        .filter_map(|function| function.body.as_ref())
-        .flat_map(|body| &body.blocks)
-        .flat_map(|block| &block.operations)
-        .all(|operation| !matches!(
-            operation.kind,
-            OperationKind::Load { .. } | OperationKind::Store { .. }
-        )));
+    assert!(
+        pending
+            .pending_module()
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .all(|operation| !matches!(
+                operation.kind,
+                OperationKind::Load { .. } | OperationKind::Store { .. }
+            ))
+    );
     let retained = pending.adopted_storage();
     assert_eq!(budget.storage(), 37 + occurrence_storage + retained);
     drop(pending);
@@ -367,6 +459,123 @@ fn distinct_reference_diamond_full_source_archive_binding_rejects_changed_contro
 #[test]
 fn entry_reference_loop_full_source_archive_binding_rejects_changed_invocation_component() {
     run_full_selection_bind(true);
+}
+
+#[test]
+fn original_reference_cfg_widening_preserves_exact_source_type_and_permissions() {
+    let owner = full_selection_bind_owner(false);
+    let types = owner.source_semantic().types();
+    let pointer = |element, space, access| Type::pointer(Type::Scalar(element), space, access);
+    let expected = pointer(
+        ScalarType::U32,
+        AddressSpace::Generic,
+        AccessMode::ReadWrite,
+    );
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    budget.reserve_storage(17).unwrap();
+    for space in [
+        AddressSpace::Global,
+        AddressSpace::Workgroup,
+        AddressSpace::Private,
+    ] {
+        assert!(
+            source_reference_call_widening_v26(
+                types,
+                REFERENCE,
+                &pointer(ScalarType::U32, space, AccessMode::ReadWrite),
+                &expected,
+                &mut budget
+            )
+            .unwrap()
+        );
+        assert_eq!(budget.storage(), 17);
+    }
+    for (source, actual, expected) in [
+        (REFERENCE, expected.clone(), expected.clone()),
+        (
+            U32,
+            pointer(ScalarType::U32, AddressSpace::Global, AccessMode::ReadWrite),
+            expected.clone(),
+        ),
+        (
+            REFERENCE,
+            pointer(
+                ScalarType::U32,
+                AddressSpace::Constant,
+                AccessMode::ReadWrite,
+            ),
+            expected.clone(),
+        ),
+        (
+            REFERENCE,
+            pointer(ScalarType::U64, AddressSpace::Global, AccessMode::ReadWrite),
+            expected.clone(),
+        ),
+        (
+            REFERENCE,
+            pointer(ScalarType::U32, AddressSpace::Global, AccessMode::ReadOnly),
+            expected.clone(),
+        ),
+        (
+            REFERENCE,
+            pointer(ScalarType::U32, AddressSpace::Global, AccessMode::ReadWrite),
+            pointer(ScalarType::U32, AddressSpace::Generic, AccessMode::ReadOnly),
+        ),
+        (
+            REFERENCE,
+            pointer(ScalarType::U32, AddressSpace::Global, AccessMode::ReadWrite),
+            pointer(
+                ScalarType::U32,
+                AddressSpace::Workgroup,
+                AccessMode::ReadWrite,
+            ),
+        ),
+    ] {
+        assert!(
+            !source_reference_call_widening_v26(types, source, &actual, &expected, &mut budget)
+                .unwrap()
+        );
+        assert_eq!(budget.storage(), 17);
+    }
+}
+
+#[test]
+fn original_reference_cfg_widening_has_exact_and_one_short_paid_resources() {
+    let owner = full_selection_bind_owner(false);
+    let types = owner.source_semantic().types();
+    let actual = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let expected = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Generic,
+        AccessMode::ReadWrite,
+    );
+    let run = |work_limit, storage_limit| {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+        budget.reserve_storage(17).unwrap();
+        let result =
+            source_reference_call_widening_v26(types, REFERENCE, &actual, &expected, &mut budget);
+        assert_eq!(budget.storage(), 17);
+        (result, budget.work(), budget.peak_storage())
+    };
+    let (result, work, peak) = run(usize::MAX, usize::MAX);
+    assert!(result.unwrap());
+    let (result, exact_work, exact_peak) = run(work, peak);
+    assert!(result.unwrap());
+    assert_eq!((exact_work, exact_peak), (work, peak));
+    let (result, _, _) = run(work - 1, peak);
+    assert!(matches!(result,
+        Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(error)))
+            if error.actual() == work && error.limit() == work - 1));
+    let (result, _, _) = run(work, peak - 1);
+    assert!(matches!(result,
+        Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Storage(error)))
+            if error.actual() == peak && error.limit() == peak - 1));
 }
 
 #[test]
