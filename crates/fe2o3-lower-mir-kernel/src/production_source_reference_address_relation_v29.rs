@@ -1946,6 +1946,7 @@ fn source_address_accesses_v29(
                 instance,
                 anchor,
                 physical: SourceAddressAccessV29 {
+                    footprint: 0,
                     block,
                     operation: operation as usize,
                     slot: target,
@@ -1986,14 +1987,26 @@ fn source_address_accesses_v29(
     if raw_seen.iter().any(|seen| !seen) {
         return Err(source_raw_physical_error_v29());
     }
-    call_splice_sort_work_v1(argument_product_v1(rows.len(), 2)?, budget)
+    call_splice_sort_work_v1(argument_product_v1(rows.len(), 3)?, budget)
         .map_err(source_address_call_error_v29)?;
-    rows.sort_unstable_by_key(|row| (row.physical.block, row.physical.operation));
+    rows.sort_unstable_by_key(|row| {
+        (
+            row.physical.block,
+            row.physical.operation,
+            row.physical.footprint,
+        )
+    });
     for pair in rows.windows(2) {
-        budget.charge_work(2)?;
-        if (pair[0].physical.block, pair[0].physical.operation)
-            == (pair[1].physical.block, pair[1].physical.operation)
-        {
+        budget.charge_work(3)?;
+        if (
+            pair[0].physical.block,
+            pair[0].physical.operation,
+            pair[0].physical.footprint,
+        ) == (
+            pair[1].physical.block,
+            pair[1].physical.operation,
+            pair[1].physical.footprint,
+        ) {
             return Err(source_raw_physical_error_v29());
         }
     }

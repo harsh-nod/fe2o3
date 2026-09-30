@@ -73,6 +73,7 @@ fn empty_local_domain_does_not_authorize_unknown_aliases_to_any_real_cell() {
         )
     ));
     let fabricated = [SourceAddressAccessV29 {
+        footprint: 0,
         block: BlockId(77),
         operation: 1,
         slot: 0,
@@ -176,16 +177,19 @@ fn fixture() -> Function {
 fn accesses() -> Vec<SourceAddressAccessV29> {
     vec![
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 5,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 6,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 7,
             slot: 0,
@@ -826,6 +830,7 @@ fn activation_loop(
     });
     let mut next = block(88);
     let mut rows = vec![SourceAddressAccessV29 {
+        footprint: 0,
         block: BlockId(77),
         operation: 5,
         slot: 2,
@@ -836,6 +841,7 @@ fn activation_loop(
         next.operations
             .push(store(CELL, ValueId(22), AddressSpace::Private));
         rows.push(SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 1,
             slot: 2,
@@ -847,12 +853,14 @@ fn activation_loop(
         });
     }
     rows.push(SourceAddressAccessV29 {
+        footprint: 0,
         block: BlockId(88),
         operation: next.operations.len(),
         slot: 2,
     });
     next.operations.push(load());
     rows.push(SourceAddressAccessV29 {
+        footprint: 0,
         block: BlockId(88),
         operation: next.operations.len(),
         slot: 0,
@@ -966,11 +974,13 @@ fn unwritten_and_killed_pointer_cells_do_not_gain_origins_from_read_receipts() {
         .remove(5);
     let reads = [
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 5,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 6,
             slot: 0,
@@ -1037,26 +1047,31 @@ fn diamond(other: ValueId) -> (Function, Vec<SourceAddressAccessV29>) {
         function,
         vec![
             SourceAddressAccessV29 {
+                footprint: 0,
                 block: BlockId(77),
                 operation: 5,
                 slot: 2,
             },
             SourceAddressAccessV29 {
+                footprint: 0,
                 block: BlockId(88),
                 operation: 0,
                 slot: 2,
             },
             SourceAddressAccessV29 {
+                footprint: 0,
                 block: BlockId(99),
                 operation: 0,
                 slot: 2,
             },
             SourceAddressAccessV29 {
+                footprint: 0,
                 block: BlockId(100),
                 operation: 0,
                 slot: 2,
             },
             SourceAddressAccessV29 {
+                footprint: 0,
                 block: BlockId(100),
                 operation: 1,
                 slot: 0,
@@ -1105,16 +1120,19 @@ fn real_loop_memory_edges_recompute_writes_and_do_not_ground_an_unwritten_cycle(
     body.blocks.extend([loop_body, block(99)]);
     let rows = [
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 0,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 1,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 2,
             slot: 0,
@@ -1139,11 +1157,13 @@ fn real_loop_memory_edges_recompute_writes_and_do_not_ground_an_unwritten_cycle(
         .remove(0);
     let rows = [
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 0,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 1,
             slot: 0,
@@ -1177,21 +1197,25 @@ fn loop_carried_store_of_prior_load_requires_a_real_entry_initialization() {
     body.blocks.extend([loop_body, block(99)]);
     let mut rows = vec![
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 5,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 0,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 1,
             slot: 2,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(88),
             operation: 2,
             slot: 0,

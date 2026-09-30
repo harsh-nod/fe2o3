@@ -55,9 +55,8 @@ impl CheckedOptimizedSourceMemoryV18<'_> {
         })())
     }
 
-    // The complete footprint key is intentional. The present constructor
-    // proves single-footprint whole-value endpoints; other typed endpoints cannot
-    // collapse CopyObject's two roles merely because their pointer IDs alias.
+    // The complete footprint key is intentional. Value queries still require a
+    // whole-value role; CopyObject's roles never collapse when pointers alias.
     pub(super) fn retained_value_footprint_v18(
         &self,
         original: &ProductionSourceCorrespondenceV18<'_>,
@@ -113,7 +112,10 @@ impl CheckedOptimizedSourceMemoryV18<'_> {
             }
             let (actual, actual_pointer) =
                 immutable_memory_access_v29(original, root, pending, budget)?;
-            if actual != input || actual_pointer != pointer || row.input_access != 0 {
+            if actual != input
+                || actual_pointer != pointer
+                || row.input_access != pending.physical.footprint
+            {
                 return original
                     .source
                     .missing("retained value footprint changed its exact input role");
@@ -694,18 +696,24 @@ fn check_optimized_source_memory_equations_v18(
         budget.charge_work(1)?;
         let (input, _) = immutable_memory_access_v29(relation, original.root, row, budget)?;
         let input_operation = source_operation_row_v18(relation.inventory, input, budget)?;
-        let (_, is_typed) =
-            optimized_currentness_value_footprint_v18(input_operation.operation, budget)?;
+        let input_footprint =
+            source_address_footprint_v33(input_operation.operation, row.physical.footprint, budget)
+                .map_err(immutable_memory_error_v29)?
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "optimized currentness input footprint ordinal",
+                ))?;
+        let is_typed = input_footprint.typed;
         let mapped = match optimized.operation(input, budget)? {
             ProductionOptimizedSourceOperationV18::Retained { output, .. } => output,
             ProductionOptimizedSourceOperationV18::RemovedUnreachable { .. } => {
                 if is_typed {
-                    physical_typed.unreachable = argument_sum_v1(&[physical_typed.unreachable, 1])?;
+                    physical_typed.unreachable_footprints =
+                        argument_sum_v1(&[physical_typed.unreachable_footprints, 1])?;
                 }
                 occurrences.push(OptimizedSourceMemoryOccurrenceV18 {
                     original: ordinal,
                     input,
-                    input_access: 0,
+                    input_access: row.physical.footprint,
                     output: None,
                 });
                 continue;
@@ -726,20 +734,30 @@ fn check_optimized_source_memory_equations_v18(
             optimized,
             Usage::OperationOperand {
                 operation: input,
-                operand: 0,
+                operand: input_footprint.operand,
             },
             mapped,
             budget,
         )?;
         let operation = source_operation_row_v18(output, mapped, budget)?.operation;
-        let (actual, output_typed) = optimized_currentness_value_footprint_v18(operation, budget)?;
-        if actual != pointer || is_typed != output_typed {
+        let actual = source_address_footprint_v33(operation, row.physical.footprint, budget)
+            .map_err(immutable_memory_error_v29)?
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "optimized currentness output footprint ordinal",
+            ))?;
+        if actual.pointer != pointer
+            || input_footprint.role != actual.role
+            || input_footprint.operand != actual.operand
+            || input_footprint.access != actual.access
+            || is_typed != actual.typed
+        {
             return relation
                 .source
                 .missing("optimized physical access changed actual pointer");
         }
         if is_typed {
-            physical_typed.retained = argument_sum_v1(&[physical_typed.retained, 1])?;
+            physical_typed.retained_footprints =
+                argument_sum_v1(&[physical_typed.retained_footprints, 1])?;
         }
         if memory
             .operation(mapped, budget)
@@ -752,6 +770,7 @@ fn check_optimized_source_memory_equations_v18(
         }
         let block = source_block_row_v18(output, mapped.block, budget)?.block.id;
         accesses.push(SourceAddressAccessV29 {
+            footprint: row.physical.footprint,
             block,
             operation: mapped.operation as usize,
             slot: row.physical.slot,
@@ -759,18 +778,29 @@ fn check_optimized_source_memory_equations_v18(
         occurrences.push(OptimizedSourceMemoryOccurrenceV18 {
             original: ordinal,
             input,
-            input_access: 0,
-            output: Some((mapped, 0, pointer)),
+            input_access: row.physical.footprint,
+            output: Some((mapped, row.physical.footprint, pointer)),
         });
     }
     // Exact input keys are made unique below. Together with the complete typed
     // source/output census, these counts rule out a typed effect omitted from
     // the physical equation system, including unreachable original effects.
     sort_optimized_currentness_occurrences_v18(&mut occurrences, budget)?;
-    if typed != physical_typed {
-        return relation
-            .source
-            .missing("optimized typed effects lack complete physical footprint coverage");
+    let mut prior = None;
+    for row in &occurrences {
+        budget.charge_work(1)?;
+        if prior == Some(row.input) {
+            continue;
+        }
+        prior = Some(row.input);
+        let operation = source_operation_row_v18(relation.inventory, row.input, budget)?.operation;
+        if matches!(operation.kind, OperationKind::Storage(_)) {
+            if row.output.is_some() {
+                physical_typed.retained = argument_sum_v1(&[physical_typed.retained, 1])?;
+            } else {
+                physical_typed.unreachable = argument_sum_v1(&[physical_typed.unreachable, 1])?;
+            }
+        }
     }
     let mut kills =
         emission_vec_v1(pending.kills.len(), budget).map_err(immutable_memory_error_v29)?;
@@ -881,7 +911,7 @@ fn check_optimized_source_memory_equations_v18(
     }
     private_array_heapsort_v1(
         &mut accesses,
-        |row| [row.block.0 as usize, row.operation],
+        |row| [row.block.0 as usize, row.operation, row.footprint as usize],
         &mut SourceCorrespondenceWorkV18(budget),
         || ArgumentResourceV1::Arithmetic.into(),
     )?;
@@ -944,6 +974,15 @@ fn check_optimized_source_memory_equations_v18(
             .map_err(immutable_memory_error_v29)?;
         (checked.graph, SourceAddressGeometryV29::PendingIndices)
     };
+    let projects = check_optimized_source_projects_v33(original, optimized, &graph, budget)?;
+    physical_typed.retained = argument_sum_v1(&[physical_typed.retained, projects.retained])?;
+    physical_typed.unreachable =
+        argument_sum_v1(&[physical_typed.unreachable, projects.unreachable])?;
+    if typed != physical_typed {
+        return relation.source.missing(
+            "optimized typed effects lack complete physical footprint and Project coverage",
+        );
+    }
     let transport = optimized_source_alias_transport_v18(
         original,
         optimized,
@@ -1050,6 +1089,9 @@ fn optimized_currentness_query_headers_v18() -> Result<usize, ArgumentResourceV1
         size_of::<[usize; 4]>(),
         size_of::<SourceOwnedResultV18<bool>>(),
         size_of::<SourceOwnedResultV18<(ValueId, bool)>>(),
+        size_of::<Result<Option<SourceAddressFootprintV33>, ProductionSemanticKirErrorV1>>(),
+        argument_product_v1(2, size_of::<SourceAddressFootprintV33>())?,
+        size_of::<Option<fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1>>(),
         size_of::<
             Option<(
                 fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
@@ -1204,6 +1246,9 @@ mod optimized_currentness_occurrence_tests {
         let expected = size_of::<[usize; 4]>()
             + size_of::<SourceOwnedResultV18<bool>>()
             + size_of::<SourceOwnedResultV18<(ValueId, bool)>>()
+            + size_of::<Result<Option<SourceAddressFootprintV33>, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceAddressFootprintV33>()
+            + size_of::<Option<fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1>>()
             + size_of::<
                 Option<(
                     fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
@@ -1259,7 +1304,7 @@ where
                         size_of::<CheckedOptimizedSourceMemoryV18<'_>>(),
                         size_of::<std::thread::Result<Result<T, E>>>(),
                         argument_product_v1(9, size_of::<Vec<usize>>())?,
-                        argument_product_v1(2, size_of::<OptimizedSourceObjectCensusV18>())?,
+                        argument_product_v1(3, size_of::<OptimizedSourceObjectCensusV18>())?,
                         optimized_currentness_query_headers_v18()?,
                         physical_discard_headers_v29::<T, E>()?,
                     ])?)?;

@@ -189,14 +189,21 @@ fn require_optimized_source_typed_roles_v18(
             row.actual.operation,
             ScopedObjectOperationV29::ReadValue { .. }
                 | ScopedObjectOperationV29::WriteValue { .. }
+                | ScopedObjectOperationV29::Project {
+                    step: ScopedObjectProjectionV29::Field(_)
+                        | ScopedObjectProjectionV29::ArrayIndex(_),
+                    ..
+                }
         ) {
             return original
                 .source
-                .missing("optimized typed project/tag/copy currentness remains pending");
+                .missing("optimized typed tag/copy/variant currentness remains pending");
         }
         Ok(())
     })
 }
+
+include!("production_optimized_source_projects_v33.rs");
 
 #[cfg(test)]
 pub(super) fn test_optimized_whole_value_roles_v18(
@@ -222,6 +229,8 @@ pub(super) struct OptimizedSourceObjectV18<'a> {
 pub(super) struct OptimizedSourceObjectCensusV18 {
     retained: usize,
     unreachable: usize,
+    retained_footprints: usize,
+    unreachable_footprints: usize,
 }
 
 pub(super) fn visit_optimized_source_objects_v18(
@@ -302,6 +311,15 @@ pub(super) fn visit_optimized_source_objects_v18(
                         input_operation,
                         budget,
                     )?;
+                    let mut footprints = 0;
+                    payload
+                        .actual
+                        .operation
+                        .try_visit_memory_accesses(|_, _, _| {
+                            budget.charge_work(1)?;
+                            footprints = argument_sum_v1(&[footprints, 1])?;
+                            Ok::<_, ProductionSourceOwnedViewErrorV18>(())
+                        })?;
                     mark_source_object_operation_v18(
                         original.inventory,
                         input,
@@ -311,6 +329,8 @@ pub(super) fn visit_optimized_source_objects_v18(
                     )?;
                     match optimized.operation(input_operation, budget)? {
                         ProductionOptimizedSourceOperationV18::RemovedUnreachable { .. } => {
+                            census.unreachable_footprints =
+                                argument_sum_v1(&[census.unreachable_footprints, footprints])?;
                             census.unreachable = census
                                 .unreachable
                                 .checked_add(1)
@@ -371,6 +391,8 @@ pub(super) fn visit_optimized_source_objects_v18(
                                 .retained
                                 .checked_add(1)
                                 .ok_or(ArgumentResourceV1::Arithmetic)?;
+                            census.retained_footprints =
+                                argument_sum_v1(&[census.retained_footprints, footprints])?;
                         }
                     }
                 }
@@ -418,6 +440,7 @@ pub(super) fn visit_optimized_source_objects_v18(
             size_of::<Box<dyn std::any::Any + Send>>(),
             size_of::<std::panic::AssertUnwindSafe<Result>>(),
             size_of::<OptimizedSourceObjectCensusV18>(),
+            size_of::<usize>(),
             size_of::<SourcePhysicalObjectV18<'_>>(),
             size_of::<OptimizedSourceObjectV18<'_>>(),
             size_of::<ScopedObjectPayloadV29>(),

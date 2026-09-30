@@ -95,11 +95,13 @@ fn scalar_field_equations_v29(
         slots,
         vec![
             SourceAddressAccessV29 {
+                footprint: 0,
                 block: BlockId(77),
                 operation: 3,
                 slot: 0,
             },
             SourceAddressAccessV29 {
+                footprint: 0,
                 block: BlockId(77),
                 operation: 4,
                 slot: 0,
@@ -177,6 +179,144 @@ fn static_field_equations_keep_sibling_initialization_and_slot_kills_distinct() 
 }
 
 #[test]
+fn optimized_project_equations_reject_displaced_duplicate_and_missing_subobjects() {
+    use scoped_raw_admission_v29::{
+        test_finish_optimized_project_equations_v33 as finish_optimized_source_project_equations_v33,
+        test_optimized_project_equation_v33 as check_optimized_source_project_equation_v33,
+        test_optimized_project_headers_v33 as optimized_source_project_headers_v33,
+    };
+    let (function, slots, accesses) = scalar_field_equations_v29(false);
+    let layouts = scalar_field_layouts_v29();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+    budget.reserve_storage(FLOOR).unwrap();
+    with_canonical_call_scratch_v1(&mut budget, |budget| {
+        let graph = SourceAddressMemoryV29::prepare_with_layouts(
+            &function, &slots, None, &accesses, &layouts, budget,
+        )?
+        .solve(&slots, &accesses, &[], budget)?;
+        budget.reserve_storage(optimized_source_project_headers_v33().unwrap())?;
+        let mut seen = emission_vec_v1(graph.projections.len(), budget)?;
+        budget.charge_work(graph.projections.len())?;
+        seen.resize(graph.projections.len(), false);
+        let source = graph.object_location(A, budget)?;
+        let left = graph.object_location(EXPOSED_A, budget)?;
+        let right = graph.object_location(EXPOSED_B, budget)?;
+        assert_eq!(seen.len(), 2);
+        for changed in [
+            SourceStaticObjectLocationV29 {
+                slot: source.slot + 1,
+                ..source
+            },
+            SourceStaticObjectLocationV29 {
+                offset: source.offset + 4,
+                ..source
+            },
+            SourceStaticObjectLocationV29 {
+                schema: None,
+                ..source
+            },
+        ] {
+            assert!(matches!(
+                check_optimized_source_project_equation_v33(
+                    changed, left, &graph, A, EXPOSED_A, &mut seen, budget,
+                ),
+                Err(ProductionSourceOwnedViewErrorV18::Binding(
+                    "optimized Project changed source subobject geometry"
+                ))
+            ));
+        }
+        assert!(matches!(
+            check_optimized_source_project_equation_v33(
+                source, left, &graph, A, EXPOSED_B, &mut seen, budget,
+            ),
+            Err(ProductionSourceOwnedViewErrorV18::Binding(
+                "optimized Project changed source subobject geometry"
+            ))
+        ));
+        check_optimized_source_project_equation_v33(
+            source, left, &graph, A, EXPOSED_A, &mut seen, budget,
+        )
+        .unwrap();
+        assert!(matches!(
+            finish_optimized_source_project_equations_v33(&seen, budget),
+            Err(ProductionSourceOwnedViewErrorV18::Binding(
+                "optimized Project lacks checked original source role"
+            ))
+        ));
+        assert!(matches!(
+            check_optimized_source_project_equation_v33(
+                source, left, &graph, A, EXPOSED_A, &mut seen, budget,
+            ),
+            Err(ProductionSourceOwnedViewErrorV18::Binding(
+                "optimized Project repeats actual pointer equation"
+            ))
+        ));
+        check_optimized_source_project_equation_v33(
+            source, right, &graph, A, EXPOSED_B, &mut seen, budget,
+        )
+        .unwrap();
+        finish_optimized_source_project_equations_v33(&seen, budget).unwrap();
+        // This checks actual solved geometry, not source custody or admission.
+        // The existing two-root aggregate chain test exercises that consumer.
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(budget.storage(), FLOOR);
+}
+
+#[test]
+fn typed_project_checks_stale_unused_base_at_its_execution_point() {
+    let (mut function, slots, _) = scalar_field_equations_v29(false);
+    function.body.as_mut().unwrap().blocks[0]
+        .operations
+        .truncate(3);
+    let layouts = scalar_field_layouts_v29();
+    for state in [None, Some(false), Some(true)] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+        budget.reserve_storage(FLOOR).unwrap();
+        let lifetimes: Vec<_> = state
+            .into_iter()
+            .map(|live| SourceAddressLifetimeV29 {
+                block: BlockId(77),
+                gap: 1,
+                sequence: 0,
+                slot: 0,
+                live,
+            })
+            .collect();
+        let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
+            let graph = SourceAddressMemoryV29::prepare_with_layouts(
+                &function,
+                &slots,
+                None,
+                &[],
+                &layouts,
+                budget,
+            )?
+            .solve(&slots, &[], &[], budget)?;
+            check_source_address_currentness_v29(
+                &function,
+                &graph,
+                &slots,
+                &[],
+                &[],
+                &[true],
+                &lifetimes,
+                &[],
+                budget,
+            )
+        });
+        match state {
+            None => result.unwrap(),
+            Some(_) => unsupported(result),
+        }
+        assert_eq!(budget.storage(), FLOOR);
+    }
+}
+
+#[test]
 fn static_field_equations_join_all_reachable_predecessor_histories() {
     for second_write in [false, true] {
         let (mut function, slots, _) = scalar_field_equations_v29(false);
@@ -213,18 +353,21 @@ fn static_field_equations_join_all_reachable_predecessor_histories() {
             .blocks
             .extend([left, right, join]);
         let mut accesses = vec![SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(78),
             operation: 0,
             slot: 0,
         }];
         if second_write {
             accesses.push(SourceAddressAccessV29 {
+                footprint: 0,
                 block: BlockId(79),
                 operation: 0,
                 slot: 0,
             });
         }
         accesses.push(SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(80),
             operation: 0,
             slot: 0,

@@ -114,11 +114,13 @@ fn descriptor_local_geometry_v29(
     let slots = [literal_array_slot(1)];
     let accesses = [
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(0),
             operation: 5,
             slot: 0,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(0),
             operation: 6,
             slot: 0,

@@ -561,16 +561,14 @@ fn immutable_memory_access_v29(
             budget,
         )?;
         check_immutable_static_object_value_v29(correspondence, root, &object, budget)?;
-        let pointer = match object.actual.operation {
-            ScopedObjectOperationV29::ReadValue { address, .. }
-            | ScopedObjectOperationV29::WriteValue { address, .. } => address,
-            _ => {
-                return correspondence
-                    .source
-                    .missing("physical census requires a whole typed value effect");
-            }
-        };
-        return Ok((operation, pointer));
+        let actual =
+            source_operation_row_v18(correspondence.inventory, operation, budget)?.operation;
+        let footprint = source_address_footprint_v33(actual, row.physical.footprint, budget)
+            .map_err(immutable_memory_error_v29)?
+            .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                "physical census typed footprint ordinal",
+            ))?;
+        return Ok((operation, footprint.pointer));
     }
     let [pointer] = correspondence.attachment_range(
         TileAttachmentKeyV29 {
@@ -596,7 +594,8 @@ fn immutable_memory_access_v29(
         .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
             "physical census actual access",
         ))?;
-    if !matches!(&actual.kind, OperationKind::Load { pointer: actual, .. }
+    if row.physical.footprint != 0
+        || !matches!(&actual.kind, OperationKind::Load { pointer: actual, .. }
         | OperationKind::Store { pointer: actual, .. } if *actual == pointer)
     {
         return correspondence
@@ -1081,6 +1080,7 @@ fn check_immutable_source_memory_v29(
     for row in &pending.accesses {
         let (operation, _) = immutable_memory_access_v29(correspondence, root, row, budget)?;
         accesses.push(SourceAddressAccessV29 {
+            footprint: row.physical.footprint,
             block: row.physical.block,
             operation: operation.operation as usize,
             slot: row.physical.slot,
@@ -1957,7 +1957,10 @@ pub(super) fn test_mixed_scalar_activation_census_v26(
     let mut counts = [0, 0];
     for access in &pending.accesses {
         let slot = &owner.source_slots.slots[access.physical.slot];
-        if !matches!(slot.representation, ScopedSlotRepresentationV29::ScalarArray(_)) {
+        if !matches!(
+            slot.representation,
+            ScopedSlotRepresentationV29::ScalarArray(_)
+        ) {
             continue;
         }
         assert!(!access.alternatives.is_empty());
@@ -2341,8 +2344,11 @@ fn retain_pending_memory_v29(
             budget.charge_work(2)?;
             if source.raw.is_none()
                 && matches!(
-                    slots.slots.get(source.physical.slot)
-                        .ok_or_else(source_raw_physical_error_v29)?.representation,
+                    slots
+                        .slots
+                        .get(source.physical.slot)
+                        .ok_or_else(source_raw_physical_error_v29)?
+                        .representation,
                     ScopedSlotRepresentationV29::ScalarArray(_)
                 )
             {

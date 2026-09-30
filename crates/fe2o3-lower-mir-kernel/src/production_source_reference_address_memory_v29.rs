@@ -10,6 +10,7 @@ include!("production_source_static_object_geometry_v29.rs");
 include!("production_source_static_pointer_cells_v29.rs");
 
 include!("production_source_reference_logical_alias_v29.rs");
+include!("production_source_address_footprints_v33.rs");
 
 #[derive(Clone, Copy)]
 struct SourceAddressValueAccessV29 {
@@ -63,6 +64,7 @@ fn source_address_value_access_v29(
 struct SourceAddressAccessV29 {
     block: BlockId,
     operation: usize,
+    footprint: u32,
     slot: usize,
 }
 
@@ -373,6 +375,28 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                     check(current[register], budget)?;
                     check(current[self.object(access.slot)?], budget)?;
                 }
+                let project_input =
+                    if let OperationKind::Storage(ScopedObjectOperationV29::Project {
+                        base, ..
+                    }) = operation.kind
+                    {
+                        let input = self
+                            .use_register(
+                                block.id,
+                                Some(gap),
+                                None,
+                                0,
+                                base,
+                                &mut used_aliases,
+                                budget,
+                            )?
+                            .ok_or_else(source_raw_physical_error_v29)?;
+                        check(current[input], budget)?;
+                        check(current[self.object(self.objects[input].0)?], budget)?;
+                        Some(input)
+                    } else {
+                        None
+                    };
                 let birth = births
                     .get(next_birth)
                     .filter(|row| (row.block, row.operation) == (block.id, gap));
@@ -437,20 +461,8 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                                 .ok_or_else(source_raw_physical_error_v29)?;
                             link(current[input], definition, budget)?;
                         }
-                        OperationKind::Storage(ScopedObjectOperationV29::Project {
-                            base, ..
-                        }) => {
-                            let input = self
-                                .use_register(
-                                    block.id,
-                                    Some(gap),
-                                    None,
-                                    0,
-                                    *base,
-                                    &mut used_aliases,
-                                    budget,
-                                )?
-                                .ok_or_else(source_raw_physical_error_v29)?;
+                        OperationKind::Storage(ScopedObjectOperationV29::Project { .. }) => {
+                            let input = project_input.ok_or_else(source_raw_physical_error_v29)?;
                             link(current[input], definition, budget)?;
                         }
                         OperationKind::Select {
@@ -638,6 +650,7 @@ fn source_address_currentness_headers_v29() -> Result<usize, ArgumentResourceV1>
         std::mem::size_of::<SourceAddressBoundaryCursorV29>(),
         std::mem::size_of::<[usize; 4]>(),
         std::mem::size_of::<Result<usize, usize>>(),
+        std::mem::size_of::<Option<usize>>(),
     ])
 }
 
@@ -1035,10 +1048,48 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Option<&'a SourceAddressAccessV29>, ProductionSemanticKirErrorV1> {
         budget.charge_work(call_splice_search_work_v1(rows.len()))?;
-        Ok(rows
-            .binary_search_by_key(&(block, operation), |row| (row.block, row.operation))
-            .ok()
-            .map(|index| &rows[index]))
+        let index = rows.partition_point(|row| (row.block, row.operation) < (block, operation));
+        budget.charge_work(2)?;
+        let Some(row) = rows
+            .get(index)
+            .filter(|row| (row.block, row.operation) == (block, operation))
+        else {
+            return Ok(None);
+        };
+        if row.footprint != 0
+            || rows
+                .get(index + 1)
+                .is_some_and(|next| (next.block, next.operation) == (block, operation))
+        {
+            return Err(source_raw_physical_error_v29());
+        }
+        Ok(Some(row))
+    }
+
+    fn access_footprint<'a>(
+        rows: &'a [SourceAddressAccessV29],
+        block: BlockId,
+        operation: usize,
+        footprint: u32,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Option<&'a SourceAddressAccessV29>, ProductionSemanticKirErrorV1> {
+        budget.charge_work(call_splice_search_work_v1(rows.len()))?;
+        let key = (block, operation, footprint);
+        let index = rows.partition_point(|row| (row.block, row.operation, row.footprint) < key);
+        budget.charge_work(2)?;
+        let Some(row) = rows
+            .get(index)
+            .filter(|row| (row.block, row.operation, row.footprint) == key)
+        else {
+            return Ok(None);
+        };
+        if rows
+            .get(index + 1)
+            .is_some_and(|row| (row.block, row.operation, row.footprint) == key)
+        {
+            return Err(source_raw_physical_error_v29());
+        }
+        Ok(Some(row))
     }
 
     fn same_type(
@@ -1563,7 +1614,7 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
         let mut prior = None;
         for row in accesses {
             budget.charge_work(3)?;
-            let key = (row.block, row.operation);
+            let key = (row.block, row.operation, row.footprint);
             if prior.is_some_and(|prior| prior >= key) || row.slot >= slots.len() {
                 return Err(source_raw_physical_error_v29());
             }
@@ -1573,7 +1624,7 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                 .operations
                 .get(row.operation)
                 .ok_or_else(source_raw_physical_error_v29)?;
-            if source_address_value_access_v29(operation)?.is_none() {
+            if source_address_footprint_v33(operation, row.footprint, budget)?.is_none() {
                 return Err(source_raw_physical_error_v29());
             }
         }

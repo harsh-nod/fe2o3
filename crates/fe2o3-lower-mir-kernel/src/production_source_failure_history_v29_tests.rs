@@ -119,11 +119,13 @@ fn run_unprojected_object_history_v29(
         .push(object);
     let accesses = [
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 1,
             slot: 0,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 2,
             slot: 0,
@@ -200,11 +202,13 @@ fn run_failure_history_v29(
     let (function, slots, layouts) = failure_history_fixture_v29(typed);
     let accesses = [
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 1,
             slot: 0,
         },
         SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation: 2,
             slot: 0,

@@ -344,7 +344,8 @@ fn logical_alias_currentness_header_matches_independent_live_shapes() {
         + 4 * std::mem::size_of::<Vec<usize>>()
         + std::mem::size_of::<[usize; 3]>()
         + std::mem::size_of::<[usize; 4]>()
-        + std::mem::size_of::<Result<usize, usize>>();
+        + std::mem::size_of::<Result<usize, usize>>()
+        + std::mem::size_of::<Option<usize>>();
     assert_eq!(source_address_currentness_headers_v29().unwrap(), expected);
     for limit in [expected, expected - 1] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(0);

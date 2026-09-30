@@ -189,6 +189,7 @@ fn check_folded_index_v29(
             )
         })
         .map(|(operation, _)| SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(0),
             operation,
             slot: 0,

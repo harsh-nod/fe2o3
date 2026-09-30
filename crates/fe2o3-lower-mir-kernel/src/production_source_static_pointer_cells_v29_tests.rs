@@ -102,6 +102,7 @@ fn pointer_subcell_fixture_v29(
     let accesses = [7, 8, 9, 10]
         .into_iter()
         .map(|operation| SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(77),
             operation,
             slot: if operation == 10 { 0 } else { 2 },
@@ -410,6 +411,7 @@ fn opaque_pointer_subcell_fixture_v29() -> (
     body.blocks.push(child);
     rows.truncate(2);
     rows.extend([0, 1].map(|operation| SourceAddressAccessV29 {
+        footprint: 0,
         block: BlockId(78),
         operation,
         slot: 2,
@@ -588,6 +590,7 @@ fn observed_pointer_subcell_addresses_require_one_independent_allocation_locatio
             rows.insert(
                 0,
                 SourceAddressAccessV29 {
+                    footprint: 0,
                     block: BlockId(77),
                     operation: 7,
                     slot: 2,
@@ -750,6 +753,7 @@ fn nonaccess_array_projections_still_require_full_geometry_and_complete_access_c
             rows.insert(
                 0,
                 SourceAddressAccessV29 {
+                    footprint: 0,
                     block: BlockId(77),
                     operation: 4,
                     slot: 2,

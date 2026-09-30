@@ -154,6 +154,7 @@ fn run_mixed_history_v29(
     let accesses: Vec<_> = [(5, 0), (6, 0), (12, 1), (13, 1)]
         .into_iter()
         .map(|(operation, slot)| SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(0),
             operation,
             slot,

@@ -772,6 +772,7 @@ mod retained_index_equations_v29 {
                         };
                         let slot = slots.iter().position(|row| row.origin.pointer == pointer)?;
                         Some(SourceAddressAccessV29 {
+                            footprint: 0,
                             block: block.id,
                             operation,
                             slot,

@@ -187,6 +187,7 @@ fn literal_array_history(
             )
         })
         .map(|(operation, _)| SourceAddressAccessV29 {
+            footprint: 0,
             block: BlockId(0),
             operation,
             slot: 0,
