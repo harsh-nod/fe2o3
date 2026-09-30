@@ -302,7 +302,7 @@ fn check_scoped_memory_anchors_v29(
                 {
                     check_scoped_payload_memory_v29(
                         source.declaration(),
-                        &anchors.rows,
+                        anchors,
                         next,
                         row,
                         value,

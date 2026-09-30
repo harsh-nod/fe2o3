@@ -164,7 +164,7 @@ fn source_address_object_slot_v29(
 fn source_address_object_payload_v29(
     anchors: &ScopedMemoryAnchorsV29,
     row: &ScopedMemoryAnchorV29,
-    budget: &mut ArgumentBudgetV1<'_>,
+    budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<Option<(ScopedObjectEndpointV29, ScopedMemoryPayloadV29)>, ProductionSemanticKirErrorV1>
 {
     if !matches!(row.kind, ScopedMemoryAnchorKindV29::Object(_)) {
@@ -1877,7 +1877,7 @@ fn check_source_object_stored_read_v29(
 fn source_object_read_payload_v29(
     anchors: &ScopedMemoryAnchorsV29,
     row: &ScopedMemoryAnchorV29,
-    budget: &mut ArgumentBudgetV1<'_>,
+    budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<Option<(ValueId, ScopedMemoryReadV29)>, ProductionSemanticKirErrorV1> {
     if let ScopedMemoryAnchorKindV29::Access {
         payload: Some(ScopedMemoryPayloadV29::Load { result, read }),

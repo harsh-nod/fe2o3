@@ -2646,7 +2646,7 @@ fn check_source_address_payloads_v29(
                             ScopedMemoryOperandSourceV29::Memory { occurrence, access } => {
                                 check_scoped_payload_memory_v29(
                                     original,
-                                    anchors,
+                                    recorded,
                                     source.anchor,
                                     row,
                                     value,

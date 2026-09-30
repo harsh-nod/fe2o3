@@ -113,7 +113,7 @@ fn scoped_payload_archived_value_v29(
 
 fn check_scoped_payload_memory_v29(
     function: &SemanticFunctionDeclV1,
-    anchors: &[ScopedMemoryAnchorV29],
+    anchors: &ScopedMemoryAnchorsV29,
     ordinal: usize,
     row: &ScopedMemoryAnchorV29,
     value: ValueId,
@@ -127,14 +127,12 @@ fn check_scoped_payload_memory_v29(
     budget.charge_work(12)?;
     let original =
         scoped_payload_place_v29(function, site, role).ok_or_else(scoped_memory_error_v29)?;
-    let prior = anchors.get(access).ok_or_else(scoped_memory_error_v29)?;
-    let ScopedMemoryAnchorKindV29::Access {
-        payload: Some(ScopedMemoryPayloadV29::Load { result, read }),
-        ..
-    } = prior.kind
-    else {
-        return Err(scoped_memory_error_v29());
-    };
+    let prior = anchors
+        .rows
+        .get(access)
+        .ok_or_else(scoped_memory_error_v29)?;
+    let (result, read) = scoped_payload_read_receipt_v30(anchors, prior, budget)?
+        .ok_or_else(scoped_memory_error_v29)?;
     if access >= ordinal
         || prior.block != row.block
         || prior.position >= row.position
@@ -150,6 +148,43 @@ fn check_scoped_payload_memory_v29(
         return Err(scoped_memory_error_v29());
     }
     Ok(())
+}
+
+// The locator can name either retained representation. It is never sufficient
+// on its own: callers rejoin the exact source occurrence, generated value and
+// earlier operation, and the complete object/physical validators still run.
+fn scoped_payload_read_receipt_v30(
+    anchors: &ScopedMemoryAnchorsV29,
+    row: &ScopedMemoryAnchorV29,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<Option<(ValueId, ScopedMemoryReadV29)>, ProductionSemanticKirErrorV1> {
+    let header = argument_sum_v1(&[
+        std::mem::size_of::<ScopedObjectPayloadV29>(),
+        std::mem::size_of::<ScopedObjectEndpointV29>(),
+        std::mem::size_of::<ScopedMemoryPayloadV29>(),
+        argument_product_v1(
+            2,
+            std::mem::size_of::<Option<(ValueId, ScopedMemoryReadV29)>>(),
+        )?,
+        argument_product_v1(
+            2,
+            std::mem::size_of::<
+                Result<Option<(ValueId, ScopedMemoryReadV29)>, ProductionSemanticKirErrorV1>,
+            >(),
+        )?,
+        argument_product_v1(4, std::mem::size_of::<&()>())?,
+    ])?;
+    budget.reserve_storage(header)?;
+    let result = anchors
+        .check_object_ledger(budget)
+        .and_then(|()| source_object_read_payload_v29(anchors, row, budget));
+    // This lookup has no callback or retained allocation. Only its known fixed
+    // envelope is refunded, including on a failed lookup.
+    let released = budget.release_storage(header);
+    result.and_then(|value| {
+        released?;
+        Ok(value)
+    })
 }
 
 fn check_scoped_payload_archive_v29(
@@ -389,13 +424,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 .rows
                 .get(access)
                 .ok_or_else(scoped_memory_error_v29)?;
-            let ScopedMemoryAnchorKindV29::Access {
-                payload: Some(ScopedMemoryPayloadV29::Load { result, read }),
-                ..
-            } = prior.kind
-            else {
-                return Err(scoped_memory_error_v29());
-            };
+            let (result, read) = scoped_payload_read_receipt_v30(&recorder.anchors, prior, budget)?
+                .ok_or_else(scoped_memory_error_v29)?;
             // A holder read is not the final operand value. It remains an
             // unresolved payload rather than receiving a memory transport claim.
             if result != value {
@@ -509,7 +539,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                                     ScopedMemoryOperandSourceV29::Memory { occurrence, access } => {
                                         check_scoped_payload_memory_v29(
                                             this.function,
-                                            &recorder.anchors.rows,
+                                            &recorder.anchors,
                                             ordinal,
                                             row,
                                             value,

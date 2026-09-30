@@ -1136,8 +1136,8 @@ impl ScopedMemoryAnchorsV29 {
                                             return Err(scoped_object_error_v29());
                                         };
                                         check_scoped_payload_memory_v29(
-                                            function, &self.rows, ordinal, anchor, value, site,
-                                            role, ty, occurrence, access, budget,
+                                            function, self, ordinal, anchor, value, site, role, ty,
+                                            occurrence, access, budget,
                                         )?;
                                     }
                                 }
@@ -1456,6 +1456,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             argument_sum_v1(&[
                 std::mem::size_of::<ScopedMemoryAnchorV29>(),
                 std::mem::size_of::<ScopedObjectPayloadV29>(),
+                std::mem::size_of::<usize>(),
+                std::mem::size_of::<(ScopedObjectOperationV29, ScopedObjectRoleV29)>(),
                 argument_product_v1(
                     2,
                     std::mem::size_of::<Result<(), ProductionSemanticKirErrorV1>>(),
@@ -1475,6 +1477,8 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         role,
                     };
                     payload.check_parts(&OperationKind::Storage(operation), results, budget)?;
+                    budget.charge_work(2)?;
+                    let ordinal = recorder.anchors.rows.len();
                     recorder.anchors.append_object(
                         recorder.block.ok_or_else(scoped_object_error_v29)?,
                         position,
@@ -1483,7 +1487,17 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         budget,
                     )?;
                     recorder.object_role = None;
-                    recorder.last_load = None;
+                    recorder.last_load = matches!(
+                        (payload.operation, payload.role),
+                        (
+                            ScopedObjectOperationV29::ReadValue { .. },
+                            ScopedObjectRoleV29::ReadValue {
+                                read: ScopedObjectReadOriginV29::Original(_),
+                                ..
+                            }
+                        )
+                    )
+                    .then_some(ordinal);
                     Ok(())
                 })
             },

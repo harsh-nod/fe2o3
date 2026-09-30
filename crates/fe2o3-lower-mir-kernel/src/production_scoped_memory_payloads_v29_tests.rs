@@ -106,7 +106,7 @@ fn inspect_payloads(
                             );
                             check_scoped_payload_memory_v29(
                                 source,
-                                &anchors.rows,
+                                anchors,
                                 ordinal,
                                 row,
                                 value,
@@ -317,8 +317,9 @@ fn inspect_memory_transport(
         .unwrap();
     let source = instances.instance(item.instance).unwrap().declaration();
     let lowered = emitted[item.instance.index()].as_ref().unwrap();
-    let anchors = &lowered.scoped_memory_anchors.as_ref().unwrap().rows;
+    let anchors = lowered.scoped_memory_anchors.as_ref().unwrap();
     let (ordinal, row) = anchors
+        .rows
         .iter()
         .enumerate()
         .find(|(_, row)| {
@@ -358,7 +359,15 @@ fn inspect_memory_transport(
         source, anchors, ordinal, row, value, site, role, ty, occurrence, access, budget,
     )?;
     for mutation in 0..9 {
-        let mut rows = anchors.clone();
+        let mut changed = ScopedMemoryAnchorsV29 {
+            subject: anchors.subject,
+            placement: anchors.placement,
+            rows: anchors.rows.clone(),
+            objects: anchors.objects.clone(),
+            object_components: anchors.object_components.clone(),
+            zero_objects: anchors.zero_objects.clone(),
+        };
+        let rows = &mut changed.rows;
         let mut changed_row = *row;
         let mut changed_access = access;
         let mut changed_value = value;
@@ -417,7 +426,7 @@ fn inspect_memory_transport(
         }
         let error = check_scoped_payload_memory_v29(
             source,
-            &rows,
+            &changed,
             ordinal,
             &changed_row,
             changed_value,
