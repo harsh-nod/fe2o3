@@ -101,6 +101,7 @@ fn audit_slice_reborrow_source_events_v29(
     instances: &ExecutionInstancesV29<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) {
+    assert!(references.plan.descriptor_root.is_some());
     let floor = budget.storage();
     with_source_reference_availability_v29(
         instances,
@@ -199,22 +200,97 @@ fn audit_slice_reborrow_source_events_v29(
     assert_eq!(budget.storage(), floor);
 }
 
+fn slice_reborrow_kernel_abi_probe_v29(
+    write: bool,
+    fault: DescriptorFault,
+    allowance: Option<(usize, usize)>,
+) -> (
+    Result<(), EntranceError>,
+    usize,
+    usize,
+    Option<usize>,
+    Option<usize>,
+) {
+    let _observers = DescriptorObservers::install(fault);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let (result, used, peak, denied_storage) = {
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let prepared = with_pending_api_owner_v18(
+            ModuleFixture::Ordinary,
+            false,
+            &mut budget,
+            || slice_reborrow_source_owner_v29(write),
+            |owner, launch, input, _, budget| {
+                let fixture = kernel_argument_abi_v18::tests::FixtureKernelAbiV18::new(&owner);
+                let roots = fixture.roots();
+                ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
+                    owner,
+                    launch,
+                    input,
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                )
+                .unwrap()
+            },
+        );
+        let retained = prepared.adopted_storage();
+        budget
+            .reserve_storage(budget.peak_storage() + 1 - budget.storage())
+            .unwrap();
+        if let Some((left_work, left_storage)) = allowance {
+            budget
+                .charge_work(MODULE_LIMIT - budget.work() - left_work)
+                .unwrap();
+            budget
+                .reserve_storage(MODULE_LIMIT - budget.storage() - left_storage)
+                .unwrap();
+        }
+        let entry = budget.storage();
+        let before = budget.work();
+        let result = prepared.with_checked_source_v18(&mut budget, |view, budget| {
+            let semantic = view.source_semantic(budget)?;
+            let original = &semantic.functions()[0];
+            for &ty in &original.abi().source_input_types()[..2] {
+                let SemanticTypeShapeV1::Pointer(pointer) =
+                    semantic.types()[ty.index() as usize].shape()
+                else {
+                    panic!("source slice");
+                };
+                assert_eq!(pointer.address_space(), 0);
+            }
+            let canonical = view.canonical(budget)?;
+            let (_, root) = view.root(0, budget)?;
+            for ty in &canonical.module().functions[root].signature.parameters[..2] {
+                assert!(matches!(ty, Type::Slice(slice)
+                    if slice.address_space == AddressSpace::Global));
+            }
+            let identity = *view.owner.pending_identity();
+            let floor = budget.storage();
+            view.owner.replay_with_budget(budget)?;
+            assert_eq!(view.owner.pending_identity(), &identity);
+            assert_eq!(budget.storage(), floor);
+            Ok(())
+        });
+        assert_eq!(budget.storage(), entry - retained);
+        let used = budget.work() - before;
+        let peak = budget.peak_storage() - entry;
+        let denied_storage = budget.failed_storage();
+        budget.release_storage(budget.storage() - MODULE_FLOOR);
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+        DESCRIPTOR_RUN_COMPLETED.set(true);
+        (result, used, peak, denied_storage)
+    };
+    (result, used, peak, work.failed_work(), denied_storage)
+}
+
 #[test]
 fn source_same_type_slice_reborrow_consumes_original_use_before_definition_and_replays() {
     for write in [false, true] {
-        let case = DescriptorCase {
-            write,
-            ..DescriptorCase::READ
-        };
-        run_descriptor_owner_module(
-            slice_reborrow_source_owner_v29(write),
-            case,
-            DescriptorFault::SliceReborrowSourceAudit,
-            MODULE_LIMIT,
-            MODULE_LIMIT,
-        )
-        .0
-        .unwrap_or_else(|error| panic!("write={write}: {error:?}"));
+        slice_reborrow_kernel_abi_probe_v29(write, DescriptorFault::SliceReborrowSourceAudit, None)
+            .0
+            .unwrap_or_else(|error| panic!("write={write}: {error:?}"));
         descriptor_resource_assertions_completed(true);
         assert!(DESCRIPTOR_EMITTED.get() > 0);
         assert_eq!(DESCRIPTOR_TAMPERED.get(), 0);
@@ -224,30 +300,60 @@ fn source_same_type_slice_reborrow_consumes_original_use_before_definition_and_r
 #[test]
 fn source_same_type_slice_reborrow_has_exact_and_one_short_source_resources() {
     for write in [false, true] {
-        let case = DescriptorCase {
-            write,
-            ..DescriptorCase::READ
+        let run = |allowance| {
+            slice_reborrow_kernel_abi_probe_v29(write, DescriptorFault::None, allowance)
         };
-        let run = |work, storage| {
-            run_descriptor_owner_module(
-                slice_reborrow_source_owner_v29(write),
-                case,
-                DescriptorFault::None,
-                work,
-                storage,
-            )
-        };
-        let (result, work, peak) = run(MODULE_LIMIT, MODULE_LIMIT);
+        let (result, work, peak, denied_work, denied_storage) = run(None);
         result.unwrap();
         descriptor_resource_assertions_completed(true);
-        assert!(work > 0 && peak > MODULE_FLOOR);
-        run(work, peak).0.unwrap();
+        assert!(work > 0 && peak > 0);
+        assert_eq!((denied_work, denied_storage), (None, None));
+        let exact = run(Some((work, peak)));
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3, exact.4),
+            (work, peak, None, None)
+        );
         descriptor_resource_assertions_completed(true);
-        let work_error = run(work - 1, peak).0.unwrap_err();
+        let short_work = run(Some((work - 1, peak)));
         descriptor_resource_assertions_completed(false);
-        descriptor_resource_error(work_error, true);
-        let storage_error = run(work, peak - 1).0.unwrap_err();
+        assert!(matches!(
+            entrance_resource(short_work.0.unwrap_err()),
+            ArgumentResourceV1::Work(_)
+        ));
+        assert!(short_work.3.is_some());
+        let short_storage = run(Some((work, peak - 1)));
         descriptor_resource_assertions_completed(false);
-        descriptor_resource_error(storage_error, false);
+        assert!(matches!(
+            entrance_resource(short_storage.0.unwrap_err()),
+            ArgumentResourceV1::Storage(_)
+        ));
+        assert!(short_storage.4.is_some());
+    }
+}
+
+#[test]
+fn source_same_type_slice_reborrow_generic_profile_preserves_exact_representation_refusal() {
+    // Unprofiled AS0 descriptors are Generic. The existing same-type slice
+    // reborrow lowering expects Global; source admission alone is not lowering.
+    for write in [false, true] {
+        let result = run_descriptor_owner_module(
+            slice_reborrow_source_owner_v29(write),
+            DescriptorCase {
+                write,
+                ..DescriptorCase::READ
+            },
+            DescriptorFault::None,
+            MODULE_LIMIT,
+            MODULE_LIMIT,
+        );
+        assert!(matches!(
+            result.0,
+            Err(ScopedModuleErrorV29::Source(
+                ProductionSemanticKirErrorV1::CorrespondenceMismatch
+            ))
+        ));
+        descriptor_resource_assertions_completed(false);
+        assert_eq!(DESCRIPTOR_TAMPERED.get(), 0);
     }
 }

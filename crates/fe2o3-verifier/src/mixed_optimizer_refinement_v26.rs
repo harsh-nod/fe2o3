@@ -26,8 +26,14 @@ use crate::{
     MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
 };
 
+#[path = "mixed_optimizer_aggregate_refinement_v30.rs"]
+mod aggregate_v30;
 #[path = "mixed_optimizer_cfg_refinement_v27.rs"]
 mod cfg_v27;
+pub use aggregate_v30::{
+    AggregateMemoryCfgObligationV30, AggregateMemoryCfgSubjectV30,
+    prepare_aggregate_memory_cfg_obligation_v30,
+};
 #[path = "mixed_optimizer_receipt_v26.rs"]
 mod receipt;
 #[path = "mixed_optimizer_relocation_plan_v28.rs"]

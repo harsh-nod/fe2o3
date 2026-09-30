@@ -33,8 +33,13 @@ mod congruence_v27;
 #[path = "mixed_optimizer_relocation_cfg_semantics_v28.rs"]
 mod relocation_v28;
 pub(super) use relocation_v28::generate as generate_relocation_cfg_v28;
+#[path = "mixed_optimizer_aggregate_semantics_v30.rs"]
+mod aggregate_v30;
 #[path = "mixed_optimizer_relocation_composition_v28.rs"]
 mod relocation_composition_v28;
+#[cfg(test)]
+pub(super) use aggregate_v30::check_omissions as check_aggregate_memory_omissions_v30;
+pub(super) use aggregate_v30::generate as generate_aggregate_memory_cfg_v30;
 #[cfg(test)]
 pub(super) use relocation_composition_v28::bridge_negative_controls;
 pub(super) use relocation_composition_v28::generate as generate_composed_relocation_cfg_v28;
@@ -657,12 +662,46 @@ fn body_in(
     environment: Environment,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
+    body_in_memory(
+        input,
+        output,
+        plan,
+        original,
+        target,
+        side,
+        proof,
+        environment,
+        None,
+        out,
+    )
+}
+
+// The concrete selected-memory case is internal and owner-derived. Unchanged
+// operators still use this one arithmetic/Select/effect emitter.
+fn body_in_memory(
+    input: &Inventory<'_>,
+    output: &Inventory<'_>,
+    plan: &Plan,
+    original: usize,
+    target: usize,
+    side: Side,
+    proof: bool,
+    environment: Environment,
+    memory: Option<&fe2o3_kernel_analysis::CanonicalKirAggregateSsaWitnessV18>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
     let (inv, block) = match side {
         Side::Input => (input, original),
         Side::Output => (output, target),
     };
     let label = side.label();
     emit!(out, " let {label}_state0: int = initial;\n");
+    if memory.is_some() {
+        emit!(
+            out,
+            " let private = cells;\n let initialized = initialized;\n let memory_valid = true;\n"
+        );
+    }
     let mut state = 0;
     for ordinal in inv.blocks()[block].operations.clone() {
         out.budget.charge_work(2)?;
@@ -671,6 +710,58 @@ fn body_in(
             Side::Input => ordinal,
             Side::Output => plan.output_operations[ordinal],
         };
+        if let Some(memory) = memory {
+            use fe2o3_kernel_analysis::CanonicalKirAggregateSsaMemoryEventV18 as M;
+            if !matches!(side, Side::Input) {
+                return Err(Error::Statement(
+                    "concrete private memory belongs to original graph",
+                ));
+            }
+            match memory.memory_events()[ordinal] {
+                M::Allocate { allocation } => {
+                    for (slot, row) in memory.memory_slots().iter().enumerate() {
+                        out.budget.charge_work(1)?;
+                        if row.is_some_and(|row| row.allocation == allocation) {
+                            emit!(
+                                out,
+                                " let initialized = initialized.update({slot}, false);\n"
+                            );
+                        }
+                    }
+                    continue;
+                }
+                M::Project { .. } => continue,
+                M::Write { slot, .. } => {
+                    if row.operands.len() != 2 || !row.results.is_empty() {
+                        return Err(Error::Statement("concrete selected WriteValue shape"));
+                    }
+                    let value = inv.uses()[row.operands.start + 1].definition;
+                    emit!(out, " let private = private.update({slot}, ");
+                    value_in(inv, plan, block, side, environment, value, out)?;
+                    emit!(
+                        out,
+                        ");\n let initialized = initialized.update({slot}, true);\n"
+                    );
+                    continue;
+                }
+                M::Read { slot, .. } => {
+                    if row.operands.len() != 1 || row.results.len() != 1 {
+                        return Err(Error::Statement("concrete selected ReadValue shape"));
+                    }
+                    emit!(
+                        out,
+                        " let memory_valid = memory_valid && initialized[{slot}];\n"
+                    );
+                    emit!(
+                        out,
+                        " let {label}{}: int = private[{slot}];\n",
+                        row.results.start
+                    );
+                    continue;
+                }
+                M::None => {}
+            }
+        }
         if let OperationKind::Constant(constant) = &row.operation.kind {
             emit!(
                 out,

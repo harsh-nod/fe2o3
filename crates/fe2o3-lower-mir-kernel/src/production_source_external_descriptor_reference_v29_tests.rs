@@ -300,6 +300,7 @@ fn inspect_descriptor_helper(
         else {
             panic!("original descriptor address producer");
         };
+        assert_ne!(*offset, *base, "the original index is not the data pointer");
         *offset = *base;
         references.descriptors[0].set(Some(claim));
     }
@@ -337,6 +338,8 @@ fn original_readonly_descriptor_reference_helper_checks_source_archive_and_actua
             if fault { [1, 0, 0] } else { [1, 1, 1] }
         );
         if fault {
+            // Index normalization rejects the substituted pointer before the
+            // later descriptor GEP equations can run.
             assert!(
                 matches!(
                     result,
@@ -345,7 +348,7 @@ fn original_readonly_descriptor_reference_helper_checks_source_archive_and_actua
                             function: 0,
                             block: None,
                             statement: None,
-                            detail: "source runtime slice descriptor/index/extent correspondence differs",
+                            detail: "execution availability differs from its source SSA instance",
                         }
                     ))
                 ),
@@ -383,21 +386,24 @@ fn original_readonly_descriptor_reference_helper_rejects_actual_load_alignment_t
         )
         .0;
         assert_eq!(DESCRIPTOR_TAMPERED.get(), 1);
-        let expected = match fault {
-            DescriptorFault::ExternalHelperAlignment => {
-                "source runtime slice descriptor/index/extent correspondence differs"
-            }
+        let (expected_function, expected_detail) = match fault {
+            DescriptorFault::ExternalHelperAlignment => (
+                0,
+                "source runtime slice descriptor/index/extent correspondence differs",
+            ),
             DescriptorFault::ExternalHelperResultType
             | DescriptorFault::ExternalHelperVolatility => {
-                "scoped memory anchors differ from their source instance"
+                // The common scoped checker rejects these in the original
+                // helper before the root-level descriptor relation runs.
+                (1, "scoped memory anchors differ from their source instance")
             }
             _ => unreachable!(),
         };
         assert!(
             matches!(result,
             Err(ScopedModuleErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported {
-                function: 0, block: None, statement: None, detail,
-            })) if detail == expected),
+                function, block: None, statement: None, detail,
+            })) if function == expected_function && detail == expected_detail),
             "changed helper load {fault:?}: {result:?}"
         );
         run_descriptor_owner_module(
