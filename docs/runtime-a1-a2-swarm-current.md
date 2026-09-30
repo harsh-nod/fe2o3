@@ -4,9 +4,9 @@
 
 Local qualification snapshot: 2026-09-30 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
-refreshed on this date: the issue remains Open, with 31 comments and its latest
-update at 17:41:21 UTC. Before the native campaign integration below, both
-repository branch refs were confirmed through `6f60ba44b`. GitHub and MI300X
+refreshed on this date: the issue remains Open, with 32 comments and its latest
+update at 19:46:57 UTC. Both runtime branch refs were confirmed through signed
+commit `69893f490`. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
@@ -56,10 +56,14 @@ composition and six actual journal/live/credit observer refinements remain open;
 no native freshness, composed Context theorem or milestone exit follows. The
 signed campaign's broader evidence packet remains local.
 
-The [compiler-owner update at 18:32:44 UTC](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5917328644)
-reports new native process controls and an 80-case Rust source matrix, but the
-strict production/proof/safe-GPU chain remains 0/47 and compiler M1-M7 remain
-incomplete. Those results do not grant protected runtime launch authority.
+The [compiler-owner update at 21:21:07 UTC](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5919950751)
+reports passing component suites: 717 analysis tests, 2,423 Pliron tests and
+110 documentation tests, 2,501 IR/simulator tests with one existing ignore, and
+92 simulator CLI library tests. These counts overlap and are not independent
+coverage to sum. Genuine-source attempts r214 and r218 failed test compilation;
+no protected proof or hardware ran. The strict production/proof/safe-GPU chain
+remains 0/47 and compiler M1-M7 remain incomplete. The evidence-only publication
+at `95398fa6e` does not grant protected runtime launch authority.
 
 The [retained KFD CPU regression](evidence/dev-kfd-retained-regression-2026-09-30/README.md)
 now passes all 1,824 tests with two test threads, zero failures, ignores or
@@ -99,7 +103,9 @@ series tests. Those commands pass locally; workflow YAML and
 command inventory checks also pass. The resource-domain command selects its six
 source-only controls, not its three subprocess lifecycle tests. This adds drift
 detection, not solver execution, Rust test execution, authenticated proof
-acceptance or a hosted CI result.
+acceptance or a hosted CI result. Commit `69893f490` adds the shared native hot
+helper to both push and pull-request trigger paths; all 64 native harness tests
+pass again, and the sixteen commands and read-only permissions are unchanged.
 
 The [portable retained-credit campaign](evidence/dev-retained-dispatch-portable-2026-09-30/README.md)
 is integrated at `0c38a20c6`. Signed candidate `b27f19993` passes all 33 public
