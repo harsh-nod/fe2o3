@@ -25,6 +25,7 @@ successful compiler path:
 | 952a1143a | Field-scoped output validation borrows. |
 | 37408e57b, f4b44dff2 | Exact and one-short original-account output validation tests. |
 | 97b17d5aa | Finite intake progress, failure and retained-owner tests. |
+| 649fe4a39, f9008e064 | Complete retained-runtime file transfers, including shared libraries, consumed by compiler backing. |
 
 The V4 release/broker family preserves the legacy readers and selects an exact
 family before authentication. It retains the original wrapper invocation stream
@@ -39,6 +40,15 @@ The receiver retains that original right and a separately funded typed duplicate
 staging checks the actual FD197 binding and canonical `/proc/self/fd/197` output.
 No pathname or process-ID reopen replaces the retained directory. This does not
 yet constrain every source, loader or output pathname used by a compiler.
+
+Compiler backing now retains one complete approved inventory transfer instead
+of four independent image transfers. Original and transferred image bytes remain
+separately charged; origin, account and file checks bracket duplication. The
+existing four-source Stage map and FD197 check are unchanged. Independent static
+review found no blocking defect, including in the private-module extraction.
+This patch still needs isolated library/doctest validation and a genuine
+approved-runtime-to-backing composition run. Retained library files are not
+evidence that the loader resolves its paths to those files.
 
 The compiler-only native stage installs a fixed 57-instruction syscall filter
 after credentials/channel setup and before profile-ready, gate and exec. Its
