@@ -29,7 +29,8 @@ OpenFile=/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v3:anchor-key-see
 
 # Lifecycle '..' traversal through service-owned 0700 roots needs read/search.
 # Exact namespace observation of the distinct-UID, nondumpable anchor needs ptrace.
-CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
+# The creator writes the fresh helper's identity uid_map, including parent UID 0.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
 AmbientCapabilities=
 NoNewPrivileges=no
 PrivateDevices=yes
@@ -43,9 +44,16 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/fe2o3/compiler-execution /var/lib/fe2o3/external-anchor
+# Empty Delegate enables subtree ownership without requesting controllers. The
+# external manager still owns this unit cgroup and whole-service termination.
+Slice=system.slice
+Delegate=
+ReadWritePaths=/var/lib/fe2o3/compiler-execution /var/lib/fe2o3/external-anchor /sys/fs/cgroup/system.slice/%n
 RestrictAddressFamilies=AF_UNIX
-RestrictNamespaces=yes
+# RestrictNamespaces would deny clone3 even for trusted creator roles. Mapped
+# helpers and compiler stages install the mandatory child-only namespace filter.
+RestrictNamespaces=no
+SystemCallFilter=~unshare:EPERM setns:EPERM
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes

@@ -1,4 +1,5 @@
 //! Parser and state tests only: no admitted domain, clone, or cleanup evidence.
+//! The separately ignored mount tests exercise only read-only preparation.
 
 use super::*;
 
@@ -126,6 +127,74 @@ fn membership_rejects_ambiguous_escaped_deleted_or_noncanonical_paths() {
 }
 
 #[test]
+fn membership_split_admits_only_the_final_actual_component() {
+    for (path, prefix, leaf) in [
+        (&b"/"[..], &b"/"[..], &b"."[..]),
+        (b"/service", b"/", b"service"),
+        (
+            b"/system.slice/fe2o3-compiler-execution.service",
+            b"/system.slice",
+            b"fe2o3-compiler-execution.service",
+        ),
+        (b"/a/b/service/child", b"/a/b/service", b"child"),
+    ] {
+        assert_eq!(membership_components(path).unwrap(), (prefix, leaf));
+        assert!(!leaf.contains(&b'/'));
+    }
+    for path in [
+        &b""[..],
+        b"relative",
+        b"//service",
+        b"/a/../service",
+        b"/a/./service",
+        b"/a//service",
+        b"/a/service/",
+        b"/a/service\0suffix",
+    ] {
+        assert!(membership_components(path).is_err(), "accepted {path:?}");
+    }
+    let maximum = format!("/prefix/{}", "a".repeat(255));
+    assert_eq!(
+        membership_components(maximum.as_bytes()).unwrap().1.len(),
+        255
+    );
+    assert!(membership_components(format!("{maximum}a").as_bytes()).is_err());
+    assert_eq!(
+        RESOLVE,
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV
+    );
+}
+
+#[test]
+fn membership_metadata_requires_same_filesystem_and_protected_root_owner() {
+    // A metadata-only fixture, not evidence of cgroup2 or current membership.
+    let fd = fs::open(c"/", READ_FLAGS | OFlags::DIRECTORY, Mode::empty()).unwrap();
+    let root = fs::fstat(&fd).unwrap();
+    let mut current = root;
+    current.st_uid = 0;
+    current.st_gid = 0;
+    current.st_mode = libc::S_IFDIR | 0o755;
+    current.st_nlink = 1;
+    assert!(validate_membership_stat(&root, &current).is_ok());
+    for field in 0..6 {
+        let mut wrong = current;
+        match field {
+            0 => wrong.st_dev = wrong.st_dev.wrapping_add(1),
+            1 => wrong.st_uid = 1,
+            2 => wrong.st_gid = 1,
+            3 => wrong.st_mode |= 0o020,
+            4 => wrong.st_mode = libc::S_IFLNK | 0o755,
+            5 => wrong.st_nlink = 0,
+            _ => unreachable!(),
+        }
+        assert!(
+            validate_membership_stat(&root, &wrong).is_err(),
+            "field {field}"
+        );
+    }
+}
+
+#[test]
 fn generated_component_is_fixed_bounded_and_contains_no_caller_path() {
     let uuid = b"12345678-90ab-cdef-0123-456789abcdef\n";
     let generated = generated_name(uuid).unwrap();
@@ -242,7 +311,17 @@ fn logical_bounds_cover_owner_and_fixed_frames() {
         Domain::STORAGE,
         size_of::<Domain>() + 4 * size_of::<usize>()
     );
-    assert!(Domain::PREPARE_SCRATCH >= 5 * READ_LIMIT);
+    // Independent old envelope plus the bounded admission delta. Storage and
+    // cleanup remain unchanged; no new owner survives preparation failure.
+    assert_eq!(
+        Domain::PREPARE_SCRATCH,
+        6 * 4096 + 4 * size_of::<Domain>() + 12 * size_of::<Stat>() + 1024
+    );
+    assert_eq!(Domain::PREPARE_WORK, 96 * (1024 + 64) + 48 * 4096);
+    assert_eq!(
+        Domain::PREPARE_WORK - (64 * (1024 + 64) + 32 * 4096),
+        100_352
+    );
     assert!(Domain::CREATE_SCRATCH >= 2 * READ_LIMIT);
     assert!(Domain::STEP_SCRATCH >= READ_LIMIT);
     assert!(Domain::CLONE_FD_SCRATCH >= 8 * size_of::<Stat>());
@@ -251,3 +330,6 @@ fn logical_bounds_cover_owner_and_fixed_frames() {
     assert!(Domain::STEP_WORK >= 64 * OPERATION_WORK);
     assert!(Domain::CLONE_FD_WORK >= 32 * OPERATION_WORK);
 }
+
+#[path = "native_cgroup_mount_tests.rs"]
+mod mounts;
