@@ -17,6 +17,44 @@ status=$?
 set -e
 [[ ${status} -eq 2 && "${usage}" == usage:* ]] || fail 'builder argument gate changed'
 
+# Execute the actual argument/jobs prologue only. No Git, Cargo, CMake, output
+# directories, or synthetic successful bundle are involved in these controls.
+[[ "$(grep -cx 'umask 077' "${builder}")" == 1 ]] ||
+  fail 'expected one build side-effect boundary'
+readonly job_prologue="$(sed '/^umask 077$/,$d' "${builder}")"
+[[ "${job_prologue}" == *'export CMAKE_BUILD_PARALLEL_LEVEL="${jobs}"'* ]] ||
+  fail 'job validation must precede the build side-effect boundary'
+readonly job_report='[[ $(declare -p CARGO_BUILD_JOBS) == "declare -x "* ]] &&
+[[ $(declare -p CMAKE_BUILD_PARALLEL_LEVEL) == "declare -x "* ]] || exit 91
+printf "cargo=%s cmake=%s jobs=%s\n" "$CARGO_BUILD_JOBS" "$CMAKE_BUILD_PARALLEL_LEVEL" "$jobs"'
+default_jobs="$(env -i PATH=/dev/null CMAKE_BUILD_PARALLEL_LEVEL=0 \
+  /bin/bash -c "${job_prologue}"$'\n'"${job_report}" job-control unused-output)"
+[[ "${default_jobs}" == 'cargo=1 cmake=1 jobs=1' ]] || fail 'unset jobs must default to one'
+for jobs in {1..16}; do
+  observed="$(env -i PATH=/dev/null CARGO_BUILD_JOBS="${jobs}" CMAKE_BUILD_PARALLEL_LEVEL=999 \
+    /bin/bash -c "${job_prologue}"$'\n'"${job_report}" job-control unused-output)"
+  [[ "${observed}" == "cargo=${jobs} cmake=${jobs} jobs=${jobs}" ]] ||
+    fail "Cargo/CMake job bound differs for ${jobs}"
+done
+for jobs in '' 0 -1 +1 01 1.0 1e1 auto 17 64 999999999999999999999999999999 \
+  ' 1' '1 ' $'1\n' $'1\n2' '1+1' '$(exit 99)' '1; exit 99'; do
+  set +e
+  # An empty command search path makes accidental work past validation fail
+  # without invoking a build, even when these tests run on a clean checkout.
+  rejection="$(env -i PATH=/dev/null CARGO_BUILD_JOBS="${jobs}" \
+    /bin/bash "${builder}" unused-output 2>&1)"
+  status=$?
+  set -e
+  [[ ${status} -eq 2 && "${rejection}" == \
+    'CARGO_BUILD_JOBS must be a canonical integer from 1 through 16' ]] ||
+    fail 'malformed job bound reached work or changed its refusal'
+done
+grep -Fxq -- 'cmake --build "${target_root}/launcher" --parallel "${jobs}"' "${builder}" ||
+  fail 'launcher build must receive the exact explicit job bound'
+if grep -Eq -- '--parallel[[:space:]]*$' "${builder}"; then
+  fail 'bare unlimited CMake parallelism is forbidden'
+fi
+
 for helper in \
   build-static-compiler-execution-coordinator.sh \
   build-static-compiler-execution-supervisor.sh \
