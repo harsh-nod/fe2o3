@@ -896,7 +896,14 @@ fn private_entry_index_cut_v20(cut: Option<(bool, usize)>) -> (usize, usize, boo
                             let units = budget.work() - before.0;
                             let bytes = budget.storage() - before.1;
                             let expected_bytes = index.definitions.capacity()
-                                * size_of::<OriginalEntryDefinitionRowV20>();
+                                * size_of::<OriginalEntryDefinitionRowV20>()
+                                + index.helper_calls.capacity()
+                                    * size_of::<OriginalHelperCallV33>()
+                                + size_of::<Vec<OriginalHelperCallV33>>()
+                                + size_of::<OriginalHelperCallV33>()
+                                + 16 * size_of::<usize>()
+                                + 12 * size_of::<&()>()
+                                + size_of::<SourceOwnedResultV18<Vec<OriginalHelperCallV33>>>();
                             assert_eq!(bytes, expected_bytes);
                             assert!(!index.definitions.is_empty());
                             drop(index);

@@ -1030,7 +1030,12 @@ fn source_scalar_boundaries_derivation_and_control_frames_match_field_envelopes(
         &'a (),
         std::ops::Range<usize>,
     );
-    type Index<'a> = (&'a (), Vec<OriginalEntryDefinitionRowV20>, usize);
+    type Index<'a> = (
+        &'a (),
+        Vec<OriginalEntryDefinitionRowV20>,
+        Vec<OriginalHelperCallV33>,
+        usize,
+    );
     type Arguments<'a> = (&'a (), usize, Vec<Option<SourceRootParameterV18>>);
     type Normalizer<'a> = (&'a (), &'a ());
     assert_eq!(
