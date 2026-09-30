@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_helper_expression_v33_tests.rs"]
+mod helper_expression_v33;
+
 fn call_return_owner() -> ProductionSemanticSsaOwnerV1 {
     let base = header_loop();
     let source = base.source_semantic();

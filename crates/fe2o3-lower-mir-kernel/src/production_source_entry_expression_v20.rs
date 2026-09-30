@@ -24,6 +24,7 @@ struct OriginalEntryDefinitionRowV20 {
 struct OriginalEntryIndexV20<'a, 'source> {
     source: &'a ProductionSourceCorrespondenceV18<'source>,
     definitions: Vec<OriginalEntryDefinitionRowV20>,
+    helper_calls: Vec<OriginalHelperCallV33>,
     required: usize,
 }
 
@@ -186,9 +187,11 @@ impl<'a, 'source> OriginalEntryIndexV20<'a, 'source> {
                     return source.source.missing("private entry definition repeated");
                 }
             }
+            let helper_calls = source_helper_calls_v33(source, budget)?;
             Ok(Self {
                 source,
                 definitions,
+                helper_calls,
                 required: budget.storage(),
             })
         })())

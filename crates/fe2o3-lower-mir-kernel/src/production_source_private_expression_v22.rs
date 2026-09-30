@@ -31,6 +31,7 @@ fn original_private_expression_headers_v22() -> Result<usize, ArgumentResourceV1
         argument_product_v1(MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1, frame)?,
         issued_discriminant_query_headers_v31()?,
         source_call_return_headers_v32()?,
+        source_helper_expression_headers_v33()?,
     ])
 }
 
@@ -399,11 +400,21 @@ impl OriginalEntryIndexV20<'_, '_> {
                         .missing("private source expression SSA local differs");
                 }
                 let input = match definition.origin {
-                    OriginalEntryDefinitionV20::CallReturn { .. } => {
-                        return self
-                            .source
-                            .source
-                            .missing("private source call-return computation is not interpreted");
+                    OriginalEntryDefinitionV20::CallReturn { block, edge } => {
+                        return self.private_call_expression_v33(
+                            leaves,
+                            instance,
+                            function_id,
+                            definition,
+                            value,
+                            block,
+                            edge,
+                            ty,
+                            scalar,
+                            next,
+                            remaining,
+                            budget,
+                        );
                     }
                     OriginalEntryDefinitionV20::Argument(argument) => {
                         OriginalPrivateInputV22::Argument(argument)
@@ -647,6 +658,7 @@ impl OriginalEntryIndexV20<'_, '_> {
     }
 }
 
+include!("production_source_helper_expression_v33.rs");
 include!("production_source_private_shared_capture_v26.rs");
 
 // Only the private write profile uses these total fixed-width bit-vector
