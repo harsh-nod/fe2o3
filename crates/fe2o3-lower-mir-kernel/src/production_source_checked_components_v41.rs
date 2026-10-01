@@ -49,7 +49,7 @@ impl OriginalEntryIndexV20<'_, '_> {
         scalar: ProductionSemanticScalarTypeV2,
         mut site: EntrySiteV20,
         mut role: EntryOperandV20,
-        mut place: &SemanticPlaceV1,
+        place: &SemanticPlaceV1,
         mut depth: usize,
         remaining: &mut usize,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -57,6 +57,7 @@ impl OriginalEntryIndexV20<'_, '_> {
         self.check(budget)?;
         budget.reserve_storage(source_checked_component_headers_v41()?)?;
         let function = leaves.original_function(instance, budget)?;
+        let mut place = place;
         let (function_id, _) = self
             .source
             .source
