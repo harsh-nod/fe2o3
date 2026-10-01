@@ -468,12 +468,22 @@ def _fixture_include_path(source: str, start: int, end: int, pairs: dict[int, in
     if (cursor == end or source[cursor] != "(" or closing is None or closing > end
             or _fixture_trivia_end(source, closing, end) != end):
         _fail("unsupported literal fixture include")
-    literal = re.fullmatch(
-        r'\s*(?:"(?P<quoted>[^"\\\r\n]*)"|r(?P<hashes>#{0,255})"(?P<raw>.*?)"(?P=hashes))\s*',
-        source[cursor + 1:closing - 1], re.DOTALL)
-    if literal is None:
-        _fail("fixture include requires one unescaped literal path")
-    value = literal["quoted"] if literal["quoted"] is not None else literal["raw"]
+    start = _fixture_trivia_end(source, cursor + 1, closing - 1)
+    raw = re.compile(r'r(#{0,255})"').match(source, start, closing - 1)
+    if raw is not None:
+        delimiter = '"' + raw[1]
+        end = source.find(delimiter, raw.end(), closing - 1)
+        if end < 0:
+            _fail("fixture include requires one terminated raw literal path")
+        value = source[raw.end():end]
+        end += len(delimiter)
+    else:
+        literal = re.compile(r'"([^"\\\r\n]*)"').match(source, start, closing - 1)
+        if literal is None:
+            _fail("fixture include requires one unescaped literal path")
+        value, end = literal[1], literal.end()
+    if _fixture_trivia_end(source, end, closing - 1) != closing - 1:
+        _fail("fixture include has trailing tokens after its literal path")
     relative = PurePosixPath(value)
     if (not value or not relative.parts or len(value) > 256 or relative.is_absolute() or str(relative) != value
             or ".." in relative.parts or "\\" in value or any(ord(char) < 32 for char in value)):

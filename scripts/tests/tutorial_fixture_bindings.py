@@ -646,6 +646,24 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
                 self.assertEqual(source.encode()[offset:offset + 7], b"visible")
                 self.assertEqual(source, sources[self.library])
 
+    def test_raw_literal_stops_at_first_delimiter_despite_authenticated_filename(self):
+        for hashes in ("", "#", "##"):
+            argument = f'r{hashes}"first.rs"{hashes} r{hashes}"second.rs"{hashes}'
+            swallowed = f'first.rs"{hashes} r{hashes}"second.rs'
+            sources = self.sources(f"include!({argument});\n")
+            sources["pkg/src/" + swallowed] = self.definition
+            sources["pkg/src/first.rs"] = self.definition
+            with self.subTest(hashes=hashes), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "trailing tokens after its literal path"):
+                self.select(sources)
+
+    def test_raw_literal_can_name_authenticated_paths_with_embedded_quotes(self):
+        for hashes in ("#", "##"):
+            source = f'include!(r{hashes}"body"quote.rs"{hashes} /* trailing trivia */);\n' + self.kernel
+            sources = {self.library: source, 'pkg/src/body"quote.rs': self.definition}
+            with self.subTest(hashes=hashes):
+                self.assertEqual(self.select(sources)["visible"][0], self.library)
+
     def test_nested_includes_are_relative_to_containing_file_not_module_context(self):
         child = 'include!("shared/body.rs");\n' + self.kernel
         sources = {self.library: "mod child;", "pkg/src/child.rs": child,
