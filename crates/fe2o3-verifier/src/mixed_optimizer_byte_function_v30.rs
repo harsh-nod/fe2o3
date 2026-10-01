@@ -165,8 +165,8 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         allocations: &'a R,
         out: &mut Writer<'_, '_>,
     ) -> Result<Self> {
-        allocations.check_owner(inventory.owner(), out)?;
         interpretation.check_owner(inventory.owner(), out)?;
+        allocations.check_owner(inventory.owner(), out)?;
         let width = interpretation.width;
         out.budget.reserve_storage(headers::<R>())?;
         out.budget.charge_work(4)?;
