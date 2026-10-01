@@ -558,3 +558,6 @@ impl Reader<'_> {
 #[cfg(test)]
 #[path = "canonical_kir_transition_receipt_v1_tests.rs"]
 mod tests;
+
+#[path = "canonical_kir_transition_retained_storage_v1.rs"]
+mod retained_storage_v1;

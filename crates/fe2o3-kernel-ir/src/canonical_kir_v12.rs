@@ -684,3 +684,6 @@ mod resource_tests;
 #[cfg(test)]
 #[path = "canonical_kir_v12_borrowed_resource_tests.rs"]
 mod borrowed_resource_tests;
+
+#[path = "canonical_kir_v12_retained_storage_v1.rs"]
+mod retained_storage_v1;
