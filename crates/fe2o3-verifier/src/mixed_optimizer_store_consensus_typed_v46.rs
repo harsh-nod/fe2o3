@@ -311,7 +311,11 @@ fn emit_classifiers<R: ByteAllocationResolverV30>(
             return Err(mismatch());
         };
         let row = &input.operations()[ordinal];
-        let OperationKind::Load { access, .. } = row.operation.kind else {
+        let (OperationKind::Load { access, .. }
+        | OperationKind::Storage(fe2o3_kernel_ir::StorageOperationV1::ReadValue {
+            access, ..
+        })) = row.operation.kind
+        else {
             return Err(mismatch());
         };
         let coordinate = row.coordinate;
