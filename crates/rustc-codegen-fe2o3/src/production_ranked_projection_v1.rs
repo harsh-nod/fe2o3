@@ -40315,3 +40315,6 @@ mod retained_storage_v1;
 #[allow(dead_code)]
 #[path = "production_ranked_projection_v1/root_cfg_terminator_resources_v1.rs"]
 mod root_cfg_terminator_resources_v1;
+
+#[cfg(test)]
+pub(crate) use canonical_assertion_facts_v1::observe_actual_root_block_stream_for_test_v1;

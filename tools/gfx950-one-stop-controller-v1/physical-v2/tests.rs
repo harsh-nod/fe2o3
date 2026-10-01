@@ -68,6 +68,7 @@ fn script() -> Vec<Vec<u8>> {
         "auto-load local-gdbinit",
         "auto-load python-scripts",
         "startup-with-shell",
+        "displaced-stepping",
     ] {
         v.push(b(&format!(
             "=cmd-param-changed,param=\"{p}\",value=\"off\"\n"
@@ -666,3 +667,110 @@ mod async_stop_tests;
 
 #[path = "physical_snapshot_v2_tests.rs"]
 mod physical;
+
+#[test]
+fn each_fixed_startup_setting_is_required_before_target_load() {
+    for param in [
+        "auto-load gdb-scripts",
+        "auto-load libthread-db",
+        "auto-load local-gdbinit",
+        "auto-load python-scripts",
+        "startup-with-shell",
+        "displaced-stepping",
+    ] {
+        let missing = b(&format!(
+            "=cmd-param-changed,param=\"{param}\",value=\"off\"\n"
+        ));
+        let mut input = script();
+        let at = input.iter().position(|line| *line == missing).unwrap();
+        input.remove(at);
+        let mut f = Fake::new(input);
+        assert_eq!(observe(&mut f).unwrap_err().refusal, Refusal::State);
+        assert_eq!(f.sent, expected_commands()[..8], "{param}");
+        assert_eq!((f.child, f.entry, f.finish, f.cleanup), (0, 0, 0, 1));
+    }
+}
+
+#[test]
+fn displaced_step_policy_rejects_on_auto_and_nonexact_off() {
+    for value in ["on", "auto", "OFF", "", "0", "off "] {
+        let mut input = script();
+        replace(
+            &mut input,
+            "param=\"displaced-stepping\",value=\"off\"",
+            &format!("param=\"displaced-stepping\",value=\"{value}\""),
+        );
+        let mut f = Fake::new(input);
+        assert_eq!(observe(&mut f).unwrap_err().refusal, Refusal::State);
+        assert!(f.sent.is_empty());
+        assert_eq!((f.child, f.finish, f.cleanup), (0, 0, 1));
+    }
+}
+
+#[test]
+fn displaced_step_policy_notification_has_no_extra_or_missing_fields() {
+    for replacement in [
+        "param=\"displaced-stepping\",value=\"off\",unknown=\"1\"",
+        "param=\"displaced-stepping\",value=\"off\",value=\"off\"",
+        "param=\"displaced-stepping\"",
+        "value=\"off\"",
+        "param=\"displaced-stepping \",value=\"off\"",
+    ] {
+        let mut input = script();
+        replace(
+            &mut input,
+            "param=\"displaced-stepping\",value=\"off\"",
+            replacement,
+        );
+        let mut f = Fake::new(input);
+        assert!(observe(&mut f).is_err(), "{replacement}");
+        assert!(f.sent.is_empty());
+        assert_eq!((f.child, f.finish, f.cleanup), (0, 0, 1));
+    }
+}
+
+#[test]
+fn duplicate_displaced_step_policy_notification_is_not_idempotent() {
+    let mut input = script();
+    let line = b("=cmd-param-changed,param=\"displaced-stepping\",value=\"off\"\n");
+    let at = input.iter().position(|value| *value == line).unwrap();
+    input.insert(at + 1, line);
+    let mut f = Fake::new(input);
+    assert_eq!(observe(&mut f).unwrap_err().refusal, Refusal::Duplicate);
+    assert!(f.sent.is_empty());
+    assert_eq!((f.child, f.finish, f.cleanup), (0, 0, 1));
+}
+
+#[test]
+fn displaced_step_policy_after_run_is_not_a_startup_acknowledgement() {
+    let mut input = script();
+    let at = input
+        .iter()
+        .position(|line| *line == b("12^running\n"))
+        .unwrap();
+    input.insert(
+        at + 1,
+        b("=cmd-param-changed,param=\"displaced-stepping\",value=\"off\"\n"),
+    );
+    let mut f = Fake::new(input);
+    assert_eq!(observe(&mut f).unwrap_err().refusal, Refusal::State);
+    assert_eq!(f.sent, expected_commands()[..12]);
+    assert_eq!((f.entry, f.finish, f.cleanup), (0, 0, 1));
+}
+
+#[test]
+fn missing_displaced_step_policy_cannot_be_repaired_after_load_boundary() {
+    let mut input = script();
+    let line = b("=cmd-param-changed,param=\"displaced-stepping\",value=\"off\"\n");
+    let at = input.iter().position(|value| *value == line).unwrap();
+    input.remove(at);
+    let load_result = input
+        .iter()
+        .position(|value| *value == b("9^done\n"))
+        .unwrap();
+    input.insert(load_result, line);
+    let mut f = Fake::new(input);
+    assert_eq!(observe(&mut f).unwrap_err().refusal, Refusal::State);
+    assert_eq!(f.sent, expected_commands()[..8]);
+    assert_eq!((f.child, f.entry, f.finish, f.cleanup), (0, 0, 0, 1));
+}
