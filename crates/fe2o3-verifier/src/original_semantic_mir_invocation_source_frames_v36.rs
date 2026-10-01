@@ -421,6 +421,11 @@ open spec fn invocation_source_return_v36(
                             && !byte_allocation_in_frame_v30(source.slots[descriptor].allocation, frame),
                         |descriptor: int| source.slots[descriptor],
                     ),
+                    objects: Map::new(
+                        |local: int| source.objects.contains_key(local)
+                            && !byte_allocation_in_frame_v30(source.slots[source.objects[local].descriptor].allocation, frame),
+                        |local: int| source.objects[local],
+                    ),
                     logical,
                 }, returned,
             }

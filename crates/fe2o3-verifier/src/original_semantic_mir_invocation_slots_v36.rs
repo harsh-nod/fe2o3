@@ -25,6 +25,10 @@ mod source_abi;
 mod source_tags;
 pub(super) use source_tags::{SourceTagClassV39, SourceTagRecipeV39};
 
+#[path = "original_semantic_mir_source_object_activations_v40.rs"]
+mod source_objects;
+pub(super) use source_objects::ObjectActivation;
+
 pub(super) struct SourceSlots<'a, 'source> {
     relation: &'a Correspondence<'source>,
     operations: Vec<Operation>,
@@ -32,6 +36,7 @@ pub(super) struct SourceSlots<'a, 'source> {
     source_order: Vec<(SourceKey, usize)>,
     abi: source_abi::SourceAbi,
     tags: source_tags::SourceTagIndexV39,
+    objects: source_objects::SourceObjects,
     required: usize,
 }
 
@@ -220,6 +225,8 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         sort_source(&mut source_order, out)?;
         let abi = source_abi::SourceAbi::derive(plan, relation, out)?;
         let tags = source_tags::SourceTagIndexV39::derive(semantic.types(), out)?;
+        let objects =
+            source_objects::SourceObjects::derive(plan, relation, &operations, &frames, out)?;
         Ok(Self {
             relation,
             operations,
@@ -227,6 +234,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             source_order,
             abi,
             tags,
+            objects,
             required: out.budget.storage(),
         })
     }
@@ -261,6 +269,33 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
     ) -> Result<&'a Correspondence<'source>> {
         self.check_source(self.relation, out)?;
         Ok(self.relation)
+    }
+
+    pub(super) fn has_original_object(
+        &self,
+        root: usize,
+        instance: usize,
+        local: u32,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<bool> {
+        self.check_source(self.relation, out)?;
+        Ok(!self
+            .objects
+            .local_range(root, instance, local, out)?
+            .is_empty())
+    }
+
+    pub(super) fn object_activation(
+        &self,
+        root: usize,
+        instance: usize,
+        local: u32,
+        generation: u32,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<ObjectActivation>> {
+        self.check_source(self.relation, out)?;
+        self.objects
+            .activation(root, instance, local, generation, out)
     }
 
     pub(super) fn descriptor_slice_bits(
@@ -469,7 +504,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             self.frames.len()
         )
         .map_err(|_| out.error())?;
-        Ok(())
+        self.objects.emit(out)
     }
 }
 
@@ -996,6 +1031,7 @@ mod tests {
             Vec<(SourceKey, usize)>,
             source_abi::SourceAbi,
             source_tags::SourceTagIndexV39,
+            source_objects::SourceObjects,
             usize,
         );
         fn h<T>() -> usize {

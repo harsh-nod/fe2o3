@@ -1,6 +1,8 @@
 use super::*;
 use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
 
+include!("original_semantic_mir_source_object_execution_v40_tests.rs");
+
 #[test]
 fn original_mir_use_diagnostics_distinguish_projected_carriers_and_all_constant_kinds() {
     use fe2o3_mir_model::semantic_mir_v1::*;

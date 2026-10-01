@@ -26,6 +26,7 @@ mod witness_transfers;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Address {
     Slot { descriptor: usize, offset: u64 },
+    Object { local: usize, offset: u64 },
     Pointer { local: usize, offset: u64 },
 }
 
@@ -92,6 +93,14 @@ pub(super) enum Event {
         access: Access,
     },
     Deinitialize(Access),
+    ObjectLive {
+        descriptor: usize,
+        local: usize,
+        activation: u32,
+    },
+    ObjectDead {
+        local: usize,
+    },
     StorageLive {
         descriptor: usize,
         local: usize,
@@ -284,6 +293,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             instance,
             locals: row.locals.clone(),
         };
+        let mut first_epoch = 1usize;
         for (block_ordinal, block) in function.blocks().iter().enumerate() {
             out.budget.charge_work(1)?;
             let start = events.len();
@@ -310,9 +320,40 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     })?,
                     _ => None,
                 };
-                let event = match borrowed {
-                    Some(borrow) => Event::WitnessBorrow(borrow),
-                    None => context.statement(statement.kind(), out).map_err(|error| {
+                let object_lifetime = match statement.kind() {
+                    Statement::StorageLive(local) | Statement::StorageDead(local)
+                        if slots.has_original_object(root, instance, local.index(), out)? =>
+                    {
+                        let flat = context.local(local.index())?;
+                        Some(if matches!(statement.kind(), Statement::StorageLive(_)) {
+                            let activation = u32::try_from(
+                                first_epoch
+                                    .checked_add(statement_ordinal)
+                                    .ok_or(Resource::Arithmetic)?,
+                            )
+                            .map_err(|_| Resource::Arithmetic)?;
+                            let row = slots
+                                .object_activation(root, instance, local.index(), activation, out)?
+                                .ok_or_else(unsupported)?;
+                            if row.origin != (fe2o3_lower_mir_kernel::ProductionSourceObjectActivationV40::StorageLive {
+                                block: fe2o3_mir_model::semantic_mir_v1::SemanticBlockIdV1::from_index(u32::try_from(block_ordinal).map_err(|_| Resource::Arithmetic)?), statement: statement_ordinal,
+                            }) { return Err(mismatch()); }
+                            Event::ObjectLive {
+                                descriptor: row.descriptor,
+                                local: flat,
+                                activation,
+                            }
+                        } else {
+                            Event::ObjectDead { local: flat }
+                        })
+                    }
+                    _ => None,
+                };
+                let event = match (borrowed, object_lifetime) {
+                    (Some(_), Some(_)) => return Err(mismatch()),
+                    (None, Some(event)) => event,
+                    (Some(borrow), None) => Event::WitnessBorrow(borrow),
+                    (None, None) => context.statement(statement.kind(), out).map_err(|error| {
                         statement_error(error, site, statement.kind(), context.types)
                     })?,
                 };
@@ -322,6 +363,9 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                 events.push(event);
             }
             blocks.push(start..events.len());
+            first_epoch = first_epoch
+                .checked_add(block.statements().len())
+                .ok_or(Resource::Arithmetic)?;
         }
         if events.len() != count {
             return Err(mismatch());
@@ -600,6 +644,16 @@ impl Context<'_, '_, '_> {
                 local: self.local(place.local().index())?,
                 offset: 0,
             }
+        } else if self.slots.has_original_object(
+            self.root,
+            self.instance,
+            place.local().index(),
+            out,
+        )? {
+            Address::Object {
+                local: self.local(place.local().index())?,
+                offset: 0,
+            }
         } else {
             let (descriptor, frame) = self
                 .slots
@@ -694,6 +748,7 @@ impl Context<'_, '_, '_> {
             .layout();
         let address = match base {
             Address::Slot { descriptor, .. } => Address::Slot { descriptor, offset },
+            Address::Object { local, .. } => Address::Object { local, offset },
             Address::Pointer { local, .. } => Address::Pointer { local, offset },
         };
         Ok(Access {
@@ -711,7 +766,14 @@ impl Context<'_, '_, '_> {
             .locals()
             .get(place.local().index() as usize)
             .ok_or_else(mismatch)?;
-        if place.projections().is_empty() && self.descriptor(place.local().index(), out)?.is_none()
+        if place.projections().is_empty()
+            && !self.slots.has_original_object(
+                self.root,
+                self.instance,
+                place.local().index(),
+                out,
+            )?
+            && self.descriptor(place.local().index(), out)?.is_none()
         {
             if declaration.ty() != place.ty() {
                 return Err(mismatch());
@@ -1018,6 +1080,11 @@ fn emit_access(access: Access, out: &mut Writer<'_, '_>) -> Result<()> {
     out.budget.charge_work(1)?;
     write!(out, "InvocationSourceByteAccessV36 {{ base: ").map_err(|_| out.error())?;
     let offset = match access.address {
+        Address::Object { local, offset } => {
+            write!(out, "InvocationSourceByteBaseV36::ObjectLocal({local}int)")
+                .map_err(|_| out.error())?;
+            offset
+        }
         Address::Slot { descriptor, offset } => {
             write!(out, "InvocationSourceByteBaseV36::Slot {{ descriptor: {descriptor}int, slot: invocation_source_slot_{descriptor}_v36() }}").map_err(|_| out.error())?;
             offset
@@ -1039,6 +1106,20 @@ fn emit_access(access: Access, out: &mut Writer<'_, '_>) -> Result<()> {
 fn emit_event(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
     out.budget.charge_work(1)?;
     match event {
+        Event::ObjectLive {
+            descriptor,
+            local,
+            activation,
+        } => {
+            write!(out, "InvocationSourceByteEventV36::ObjectLive {{ descriptor: {descriptor}int, slot: invocation_source_slot_{descriptor}_v36(), local: {local}int, activation: {activation}int }}").map_err(|_| out.error())?;
+        }
+        Event::ObjectDead { local } => {
+            write!(
+                out,
+                "InvocationSourceByteEventV36::ObjectDead {{ local: {local}int }}"
+            )
+            .map_err(|_| out.error())?;
+        }
         Event::Pointer(event) => {
             write!(out, "InvocationSourceByteEventV36::Pointer(").map_err(|_| out.error())?;
             pointer_events::emit(event, out)?;
@@ -1114,6 +1195,10 @@ fn headers() -> usize {
         + h::<Vec<Range<usize>>>()
         + h::<Range<usize>>()
         + h::<Event>()
+        + h::<Option<Event>>()
+        + h::<super::slots::ObjectActivation>()
+        + h::<Option<super::slots::ObjectActivation>>()
+        + h::<fe2o3_lower_mir_kernel::ProductionSourceObjectActivationV40>()
         + h::<Value>()
         + h::<TypedOperand>()
         + h::<(TypedOperand, [Option<TypedOperand>; 2])>()
@@ -1148,11 +1233,18 @@ struct InvocationSourceByteStateV36 {
     // Exact descriptor ordinals name current logical source allocations. These
     // are not local values, target pointers, or inferred latest generations.
     slots: Map<int, MemoryPointerV30>,
+    objects: Map<int, InvocationSourceObjectV40>,
     logical: InvocationSourceLogicalV38,
 }
 
-// This structural invariant does not grant a descriptor's source identity;
-// every use still joins its exact literal SourceSlot in the dispatcher.
+struct InvocationSourceObjectV40 {
+    descriptor: int,
+    slot: InvocationSourceSlotV36,
+    activation: int,
+}
+
+// Object bindings use the generated original-owner roster. Dynamic allocation
+// currentness is still checked independently at each address use.
 open spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
     byte_memory_well_formed_v30(source.machine.memory)
         && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len())
@@ -1160,6 +1252,15 @@ open spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSour
         && byte_private_frames_live_v30(source.machine.memory, source.machine.frames)
         && private_generation_counters_valid_v30(source.machine.generations, source.machine.memory)
         && source.slots.dom().finite()
+        && source.objects.dom().finite()
+        && (forall|local: int| source.objects.contains_key(local) ==>
+            0 <= local < source.machine.values.len()
+                && source.objects[local].activation >= 0
+                && invocation_source_object_binding_v40(local, source.objects[local])
+                && source.slots.contains_key(source.objects[local].descriptor))
+        && (forall|left: int, right: int| source.objects.contains_key(left)
+            && source.objects.contains_key(right) && left != right ==>
+                source.objects[left].descriptor != source.objects[right].descriptor)
         && (forall|descriptor: int| source.slots.contains_key(descriptor) ==>
             descriptor >= 0 && source.slots[descriptor].byte_offset == 0
                 && source.machine.memory.live.contains_key(source.slots[descriptor].allocation)
@@ -1178,6 +1279,7 @@ open spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSour
 
 enum InvocationSourceByteBaseV36 {
     Slot { descriptor: int, slot: InvocationSourceSlotV36 },
+    ObjectLocal(int),
     PointerLocal(int),
 }
 
@@ -1215,6 +1317,8 @@ enum InvocationSourceByteEventV36 {
         value: InvocationSourceByteValueV36, bits: int },
     Address { destination: int, access: InvocationSourceByteAccessV36 },
     Deinitialize(InvocationSourceByteAccessV36),
+    ObjectLive { descriptor: int, slot: InvocationSourceSlotV36, local: int, activation: int },
+    ObjectDead { local: int },
     StorageLive { descriptor: int, slot: InvocationSourceSlotV36, local: int },
     StorageDead { descriptor: int, slot: InvocationSourceSlotV36, local: int },
 }
@@ -1284,6 +1388,11 @@ open spec fn invocation_source_byte_address_v36(
     root: int, instance: int,
 ) -> Option<MemoryPointerV30> {
     let base = match access.base {
+        InvocationSourceByteBaseV36::ObjectLocal(local) =>
+            if source.objects.contains_key(local) {
+                let object = source.objects[local];
+                invocation_source_byte_slot_v36(source, object.descriptor, object.slot, root, instance)
+            } else { None },
         InvocationSourceByteBaseV36::Slot { descriptor, slot } =>
             invocation_source_byte_slot_v36(source, descriptor, slot, root, instance),
         InvocationSourceByteBaseV36::PointerLocal(local) =>
@@ -1444,7 +1553,7 @@ open spec fn invocation_source_byte_activate_v36(
                 generations: source.machine.generations.insert(site, generation + 1),
                 frames: source.machine.frames, valid: true },
                 slots: source.slots.insert(descriptor, MemoryPointerV30 { allocation, byte_offset: 0, view: None }),
-                logical: invocation_source_logical_write_v38(source.logical, local) }
+                logical: invocation_source_logical_write_v38(source.logical, local), ..source }
         }
     }
 }
@@ -1473,11 +1582,48 @@ open spec fn invocation_source_byte_end_v36(
     }
 }
 
+open spec fn invocation_source_object_end_v40(
+    source: InvocationSourceByteStateV36, local: int, root: int, instance: int,
+) -> InvocationSourceByteStateV36 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !source.objects.contains_key(local) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let object = source.objects[local];
+        let removed = InvocationSourceByteStateV36 { objects: source.objects.remove(local), ..source };
+        invocation_source_byte_end_v36(removed, object.descriptor, object.slot, local, root, instance)
+    }
+}
+
+open spec fn invocation_source_object_activate_v40(
+    source: InvocationSourceByteStateV36, descriptor: int, slot: InvocationSourceSlotV36,
+    local: int, activation: int, root: int, instance: int,
+) -> InvocationSourceByteStateV36 {
+    let object = InvocationSourceObjectV40 { descriptor, slot, activation };
+    if !invocation_source_object_binding_v40(local, object) {
+        invocation_source_byte_refused_v36(source)
+    }
+    else {
+        // Restart invalidates the old dynamic identity even when source bytes
+        // or the chosen physical backing happen to remain numerically equal.
+        let before = if source.objects.contains_key(local) {
+            invocation_source_object_end_v40(source, local, root, instance)
+        } else { source };
+        let active = invocation_source_byte_activate_v36(before, descriptor, slot, local, root, instance);
+        if !active.machine.valid { active }
+        else { InvocationSourceByteStateV36 { objects: active.objects.insert(local, object), ..active } }
+    }
+}
+
 open spec fn invocation_source_byte_step_v36(
     source: InvocationSourceByteStateV36, event: InvocationSourceByteEventV36,
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteStateV36 {
     match event {
+        InvocationSourceByteEventV36::ObjectLive { descriptor, slot, local, activation } =>
+            invocation_source_object_activate_v40(source, descriptor, slot, local, activation, root, instance),
+        InvocationSourceByteEventV36::ObjectDead { local } =>
+            invocation_source_object_end_v40(source, local, root, instance),
         InvocationSourceByteEventV36::WitnessBorrow { destination, origin, source_type,
             generation, instance, block, statement } => invocation_source_borrow_witness_v38(
                 source, destination, origin, source_type, generation, instance, block, statement),

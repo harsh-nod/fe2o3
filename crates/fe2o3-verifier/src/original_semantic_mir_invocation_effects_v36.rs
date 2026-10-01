@@ -86,6 +86,8 @@ open spec fn invocation_source_statement_effects_v36(
             | Some(InvocationSourceByteEventV36::Pointer(_))
             | Some(InvocationSourceByteEventV36::Address { .. })
             | Some(InvocationSourceByteEventV36::Deinitialize(_))
+            | Some(InvocationSourceByteEventV36::ObjectLive { .. })
+            | Some(InvocationSourceByteEventV36::ObjectDead { .. })
             | Some(InvocationSourceByteEventV36::StorageLive { .. })
             | Some(InvocationSourceByteEventV36::StorageDead { .. }) => seq![],
         }

@@ -26,6 +26,7 @@ struct Slot {
     descriptor: usize,
     local: usize,
     implicit: bool,
+    object: bool,
 }
 
 pub(super) struct SourceFrameEnter<'slots, 'view, 'source> {
@@ -126,10 +127,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         for position in range {
             let (descriptor, slot) = slots.descriptor_in_source_order(position, out)?;
             out.budget.charge_work(5)?;
-            if slot.root() != root
-                || slot.instance() != instance
-                || slot.function() != row.function
-                || slot.source_generation().is_some()
+            if slot.root() != root || slot.instance() != instance || slot.function() != row.function
             {
                 return Err(unsupported());
             }
@@ -138,6 +136,14 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             if declaration.ty() != slot.semantic_type() {
                 return Err(mismatch());
             }
+            let object = slot.source_generation().is_some();
+            let implicit = if object {
+                slots
+                    .object_activation(root, instance, slot.local(), 0, out)?
+                    .is_some_and(|activation| activation.descriptor == descriptor)
+            } else {
+                !*explicit.get(local).ok_or_else(mismatch)?
+            };
             allocations.push(Slot {
                 descriptor,
                 local: row
@@ -145,7 +151,8 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                     .start
                     .checked_add(local)
                     .ok_or(Resource::Arithmetic)?,
-                implicit: !*explicit.get(local).ok_or_else(mismatch)?,
+                implicit,
+                object,
             });
         }
         let inputs = function.abi().source_input_types();
@@ -300,6 +307,12 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             self.owners.len() - 1
         };
         write!(out, "open spec fn invocation_source_enter_{}_{}_v36(source: InvocationSourceByteStateV36, arguments: Seq<MemoryValueV30>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
+        write!(
+            out,
+            " || (exists|local: int| {} <= local < {} && source.objects.contains_key(local))",
+            self.locals.start, self.locals.end
+        )
+        .map_err(|_| out.error())?;
         for (i, owner) in self.owners[..before_depth].iter().enumerate() {
             out.budget.charge_work(1)?;
             write!(
@@ -345,7 +358,11 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         for slot in &self.allocations {
             out.budget.charge_work(1)?;
             if slot.implicit {
-                write!(out, " let entered = invocation_source_byte_activate_v36(entered, {}, invocation_source_slot_{}_v36(), {}, {}, {});\n", slot.descriptor, slot.descriptor, slot.local, self.root, self.instance).map_err(|_| out.error())?;
+                if slot.object {
+                    write!(out, " let entered = invocation_source_object_activate_v40(entered, {}, invocation_source_slot_{}_v36(), {}, 0int, {}, {});\n", slot.descriptor, slot.descriptor, slot.local, self.root, self.instance).map_err(|_| out.error())?;
+                } else {
+                    write!(out, " let entered = invocation_source_byte_activate_v36(entered, {}, invocation_source_slot_{}_v36(), {}, {}, {});\n", slot.descriptor, slot.descriptor, slot.local, self.root, self.instance).map_err(|_| out.error())?;
+                }
             }
         }
         for (i, argument) in self.arguments.iter().enumerate() {
@@ -374,6 +391,8 @@ fn headers() -> usize {
         + h::<Option<Argument>>()
         + h::<Range<usize>>()
         + h::<Class>()
+        + h::<super::slots::ObjectActivation>()
+        + h::<Option<super::slots::ObjectActivation>>()
         + 32 * size_of::<usize>()
         + 24 * size_of::<&()>()
 }
