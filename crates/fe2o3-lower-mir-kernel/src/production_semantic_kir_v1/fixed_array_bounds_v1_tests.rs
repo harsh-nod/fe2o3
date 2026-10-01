@@ -1,5 +1,7 @@
 use super::*;
-use fe2o3_mir_model::semantic_mir_v1::{SemanticSourceFileIdentityV1, SemanticSourceOriginV1};
+use fe2o3_mir_model::semantic_mir_v1::{
+    SemanticMirErrorV1, SemanticSourceFileIdentityV1, SemanticSourceOriginV1,
+};
 
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const ELEMENT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
@@ -412,11 +414,22 @@ fn indexed_place_uses_actual_emitted_constants_without_host_truncation() {
 #[test]
 fn constant_index_place_resolves_forward_and_from_end_boundaries() {
     let fixture = Fixture::new();
+    assert_eq!(
+        SemanticProjectionV1::new(
+            SemanticProjectionKindV1::ConstantIndex {
+                offset: 0,
+                minimum_length: 4,
+                from_end: true,
+            },
+            ELEMENT,
+        ),
+        Err(SemanticMirErrorV1::InvalidProjectionShape),
+    );
     for (offset, from_end, expected) in [
-        (3, false, Some(3)),
-        (1, true, Some(3)),
-        (3, true, Some(1)),
-        (0, true, None),
+        (3, false, 3),
+        (1, true, 3),
+        (3, true, 1),
+        (4, true, 0),
     ] {
         let mut lowering = fixture.lowering();
         let mut operations = vec![];
@@ -432,22 +445,10 @@ fn constant_index_place_resolves_forward_and_from_end_boundaries() {
             lowering.next_value,
         );
         let result = lowering.lower_indexed_place_address(BLOCK, None, &place, &mut operations);
-        if let Some(expected) = expected {
-            assert_eq!(
-                result.unwrap().value().unwrap(),
-                (values[expected], Type::Scalar(ScalarType::U32)),
-            );
-        } else {
-            assert_oob(
-                result.unwrap_err(),
-                0,
-                None,
-                u128::from(offset),
-                4,
-                true,
-                fixture.terminator_source,
-            );
-        }
+        assert_eq!(
+            result.unwrap().value().unwrap(),
+            (values[expected], Type::Scalar(ScalarType::U32)),
+        );
         assert_eq!(
             (
                 operations.len(),

@@ -5652,6 +5652,58 @@ mod tests {
     }
 
     #[test]
+    fn constant_index_place_codec_checks_forward_and_suffix_bounds() {
+        let ty = SemanticTypeIdV1::from_index(0);
+        let place = |projection| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![projection], ty).unwrap()
+        };
+        for (offset, minimum_length, from_end) in [
+            (0, 1, false),
+            (u64::MAX - 1, u64::MAX, false),
+            (1, 1, true),
+            (4, 4, true),
+            (u64::MAX, u64::MAX, true),
+        ] {
+            let projection = SemanticProjectionV1::new(
+                SemanticProjectionKindV1::ConstantIndex {
+                    offset,
+                    minimum_length,
+                    from_end,
+                },
+                ty,
+            )
+            .unwrap();
+            component_round_trip(place(projection), encode_place, |decoder| decoder.place());
+        }
+        for (offset, minimum_length, from_end) in [
+            (0, 1, true),
+            (2, 1, true),
+            (u64::MAX, u64::MAX - 1, true),
+            (1, 1, false),
+            (u64::MAX, u64::MAX, false),
+        ] {
+            let malformed = place(SemanticProjectionV1 {
+                kind: SemanticProjectionKindV1::ConstantIndex {
+                    offset,
+                    minimum_length,
+                    from_end,
+                },
+                result_type: ty,
+            });
+            let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
+            encode_place(&mut writer, &malformed).unwrap();
+            let encoded = writer.finish();
+            let mut decoder = CanonicalDecoderV1::new(&encoded, SemanticMirLimitsV1::default());
+            assert_eq!(
+                decoder.place(),
+                Err(SemanticMirDecodeErrorV1::Validation(
+                    SemanticMirErrorV1::InvalidProjectionShape
+                )),
+            );
+        }
+    }
+
+    #[test]
     fn every_place_operand_constant_rvalue_and_statement_variant_round_trips_exactly() {
         let t = SemanticTypeIdV1::from_index(0);
         let local = SemanticLocalIdV1::from_index(0);

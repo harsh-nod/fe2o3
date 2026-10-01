@@ -84,6 +84,12 @@ The helper-return parent requires joined constructors and copied results with
 distinct scalar payload variants to compile and match an independent CPU oracle.
 The separate refusal parent checks the unsupported pointer/capability result
 boundary; it does not replace the required shared-slice `get` positive.
+The `codegen-lib` phase separately selects an exact slice-pattern construction
+parent. It checks prefix, suffix, and combined patterns through genuine AMD
+rustc callbacks on gfx942/gfx950 at opt0/opt3, preserving original projection
+fields, element types, local mappings, and source coordinates. It shares the
+checked-output tests' pinned dependency builder. This establishes semantic body
+construction, not dynamic bounds proof, borrowed-result lowering, or GPU execution.
 Optional failure-only MIR replays are diagnostic observations, not proof that
 the original source export succeeded or that a source shape survived optimization.
 These use the existing pinned nightly `rust-src`

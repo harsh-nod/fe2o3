@@ -3228,8 +3228,10 @@ impl SemanticProjectionV1 {
             SemanticProjectionKindV1::ConstantIndex {
                 offset,
                 minimum_length,
-                from_end: _,
-            } if offset >= minimum_length => {
+                from_end,
+            } if (from_end && (offset == 0 || offset > minimum_length))
+                || (!from_end && offset >= minimum_length) =>
+            {
                 return Err(SemanticMirErrorV1::InvalidProjectionShape);
             }
             SemanticProjectionKindV1::Subslice {
@@ -15058,15 +15060,18 @@ fn validate_place(
                 }
             }
             SemanticProjectionKindV1::ConstantIndex { minimum_length, .. } => {
-                let SemanticTypeShapeV1::Array { element, length } =
-                    type_shape(context, current_type)
-                else {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
-                };
-                if minimum_length > *length {
-                    return invalid_type_operation(SemanticTypeOperationV1::Projection, location);
+                match type_shape(context, current_type) {
+                    SemanticTypeShapeV1::Array { element, length } if minimum_length <= *length => {
+                        *element
+                    }
+                    SemanticTypeShapeV1::Slice { element } => *element,
+                    _ => {
+                        return invalid_type_operation(
+                            SemanticTypeOperationV1::Projection,
+                            location,
+                        );
+                    }
                 }
-                *element
             }
             SemanticProjectionKindV1::Subslice { from, to, from_end } => {
                 let SemanticTypeShapeV1::Array { element, length } =

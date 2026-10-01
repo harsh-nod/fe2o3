@@ -102,6 +102,10 @@ run_rustc_codegen_lib_tests() {
     bash scripts/ci-cargo-test-json.sh --lib rlib,dylib \
       "${RUSTC_CODEGEN_TEST_PACKAGE}" rustc_codegen_fe2o3 \
       production_rustc_driver_v1::checked_output_source_v1_tests::formal_memory_diagnostic::ordinary_lds_source_retains_owner_bound_execution_discharge
+  run_step source-slice-constant-index \
+    bash scripts/ci-cargo-test-json.sh --lib rlib,dylib \
+      "${RUSTC_CODEGEN_TEST_PACKAGE}" rustc_codegen_fe2o3 \
+      production_semantic_body_v1::slice_constant_index_source_v1_tests::genuine_slice_constant_indices_preserve_retained_mir
 }
 
 run_generic_core_phase() {

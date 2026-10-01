@@ -72,6 +72,10 @@ mod construction_work_tests;
 #[path = "production_semantic_body_v1/receiver_construction_tests.rs"]
 mod receiver_construction_tests;
 
+#[cfg(test)]
+#[path = "production_semantic_body_v1/slice_constant_index_source_v1_tests.rs"]
+mod slice_constant_index_source_v1_tests;
+
 const MAX_ERROR_COMPONENT_CHARS_V1: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2710,9 +2714,9 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     min_length,
                     from_end,
                 } => {
-                    if !matches!(derived.ty.kind(), TyKind::Array(..)) {
+                    if !matches!(derived.ty.kind(), TyKind::Array(..) | TyKind::Slice(..)) {
                         return Err(unsupported(
-                            "ConstantIndex projection on a non-array place",
+                            "ConstantIndex projection on a non-array/slice place",
                             block,
                             statement,
                         ));

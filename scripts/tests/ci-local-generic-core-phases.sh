@@ -241,6 +241,7 @@ assert_core_source_auth_fail_fast() {
 assert_codegen_lib_steps() {
   assert_step_count rustc-codegen-lib-tests 1 'backend library tests were omitted or duplicated'
   assert_step_count source-formal-execution-discharge 1 'formal source parent was omitted or duplicated'
+  assert_step_count source-slice-constant-index 1 'slice index source parent was omitted or duplicated'
   assert_equals \
     "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
     "$(step_command rustc-codegen-lib-tests)" 'backend library test command changed'
@@ -248,6 +249,10 @@ assert_codegen_lib_steps() {
   expected+=" production_rustc_driver_v1::checked_output_source_v1_tests::formal_memory_diagnostic::ordinary_lds_source_retains_owner_bound_execution_discharge"
   assert_equals "${expected}" "$(step_command source-formal-execution-discharge)" \
     'formal source parent lost its exact library-kind/name/ignored selection'
+  expected="bash scripts/ci-cargo-test-json.sh --lib rlib\\,dylib ${RUSTC_CODEGEN_TEST_PACKAGE} rustc_codegen_fe2o3"
+  expected+=" production_semantic_body_v1::slice_constant_index_source_v1_tests::genuine_slice_constant_indices_preserve_retained_mir"
+  assert_equals "${expected}" "$(step_command source-slice-constant-index)" \
+    'slice index source parent lost its exact library-kind/name/ignored selection'
   local index
   for index in "${!STEP_NAMES[@]}"; do
     if [[ "${STEP_NAMES[index]}" == source-formal-execution-discharge ]]; then
@@ -255,12 +260,17 @@ assert_codegen_lib_steps() {
       assert_equals rustc-codegen-lib-tests "${STEP_NAMES[index-1]}" \
         'formal source parent must directly follow the ordinary library tests'
     fi
+    if [[ "${STEP_NAMES[index]}" == source-slice-constant-index ]]; then
+      ((index > 0))
+      assert_equals source-formal-execution-discharge "${STEP_NAMES[index-1]}" \
+        'slice index source parent must follow formal source coverage'
+    fi
   done
 }
 
 assert_codegen_lib_fail_fast() {
   local step status trace
-  for step in rustc-codegen-lib-tests source-formal-execution-discharge; do
+  for step in rustc-codegen-lib-tests source-formal-execution-discharge source-slice-constant-index; do
     trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
     status=0
     timeout --signal=TERM --kill-after=2s 10s \
@@ -335,7 +345,7 @@ assert_generic_core_phases() {
   reset_generic_phase_capture
   run_generic_core_phase codegen-lib
   assert_codegen_lib_steps
-  assert_equals 2 "${#STEP_NAMES[@]}" 'library phase ran unrelated stages'
+  assert_equals 3 "${#STEP_NAMES[@]}" 'library phase ran unrelated stages'
   assert_equals 0 "${#STEP_TIMEOUT_OVERRIDES[@]}" 'library parent changed timeout policy'
   assert_codegen_lib_fail_fast
 
