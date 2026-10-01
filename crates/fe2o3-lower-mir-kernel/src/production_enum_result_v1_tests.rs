@@ -662,7 +662,7 @@ mod scalar_enum_result_tests {
                 },
             )
             .unwrap();
-        let module = lowered.module();
+        let module = lowered.executable().module();
         for function in &module.functions {
             for block in &function.body.as_ref().unwrap().blocks {
                 assert!(!block.operations.iter().any(|operation| matches!(operation.kind,
