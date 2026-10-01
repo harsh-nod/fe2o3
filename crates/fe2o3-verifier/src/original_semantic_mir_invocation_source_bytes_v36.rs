@@ -127,6 +127,75 @@ fn mismatch() -> Error {
     Error::Statement("original MIR typed byte statement identity or layout differs")
 }
 
+fn statement_kind(statement: &Statement) -> &'static str {
+    match statement {
+        Statement::Assign(assignment) => match assignment.value().kind() {
+            Rvalue::Use(_) => "Assign.Use",
+            Rvalue::Unary { .. } => "Assign.Unary",
+            Rvalue::Binary { .. } => "Assign.Binary",
+            Rvalue::CheckedBinary(_) => "Assign.CheckedBinary",
+            Rvalue::UncheckedBinary(_) => "Assign.UncheckedBinary",
+            Rvalue::Cast { .. } => "Assign.Cast",
+            Rvalue::Borrow { .. } => "Assign.Borrow",
+            Rvalue::AddressOf { .. } => "Assign.AddressOf",
+            Rvalue::Length(_) => "Assign.Length",
+            Rvalue::Discriminant(_) => "Assign.Discriminant",
+            Rvalue::Aggregate(_) => "Assign.Aggregate",
+            Rvalue::Load(_) => "Assign.Load",
+        },
+        Statement::Store(_) => "Store",
+        Statement::AtomicRmw(_) => "AtomicRmw",
+        Statement::AtomicCompareExchange(_) => "AtomicCompareExchange",
+        Statement::SetDiscriminant { .. } => "SetDiscriminant",
+        Statement::Deinitialize(_) => "Deinitialize",
+        Statement::StorageLive(_) => "StorageLive",
+        Statement::StorageDead(_) => "StorageDead",
+        Statement::Assume(_) => "Assume",
+        Statement::Nop => "Nop",
+    }
+}
+
+fn statement_result_type(statement: &Statement, types: &[Type]) -> Option<(u32, &'static str)> {
+    let Statement::Assign(assignment) = statement else {
+        return None;
+    };
+    let ty = assignment.value().result_type();
+    let shape = match types.get(ty.index() as usize).map(Type::shape) {
+        Some(Shape::Unit) => "Unit",
+        Some(Shape::Never) => "Never",
+        Some(Shape::Scalar(_)) => "Scalar",
+        Some(Shape::ValidityScalar(_)) => "ValidityScalar",
+        Some(Shape::Pointer(_)) => "Pointer",
+        Some(Shape::Array { .. }) => "Array",
+        Some(Shape::Slice { .. }) => "Slice",
+        Some(Shape::Tuple(_)) => "Tuple",
+        Some(Shape::Aggregate(_)) => "Aggregate",
+        Some(Shape::Union(_)) => "Union",
+        Some(Shape::Enum { .. }) => "Enum",
+        Some(Shape::FunctionPointer { .. }) => "FunctionPointer",
+        Some(Shape::Opaque) => "Opaque",
+        None => "Missing",
+    };
+    Some((ty.index(), shape))
+}
+
+fn statement_error(error: Error, site: [usize; 5], statement: &Statement, types: &[Type]) -> Error {
+    // Never turn a resource/owner failure into an unsupported-language report.
+    match error {
+        Error::Statement(reason) => Error::SourceStatement {
+            root: site[0],
+            instance: site[1],
+            function: site[2],
+            block: site[3],
+            statement: site[4],
+            kind: statement_kind(statement),
+            result_type: statement_result_type(statement, types),
+            reason,
+        },
+        other => other,
+    }
+}
+
 pub(super) fn slice_metadata_bits_v36(declaration: &Type, out: &mut Writer<'_, '_>) -> Result<u32> {
     out.budget.charge_work(2)?;
     let BackendRepr::ScalarPair {
@@ -203,6 +272,13 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             let start = events.len();
             for (statement_ordinal, statement) in block.statements().iter().enumerate() {
                 out.budget.charge_work(1)?;
+                let site = [
+                    root,
+                    instance,
+                    row.function.index() as usize,
+                    block_ordinal,
+                    statement_ordinal,
+                ];
                 let borrowed = match statement.kind() {
                     Statement::Assign(assignment) => witness_events::Borrow::derive(
                         &context,
@@ -211,12 +287,17 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                         statement_ordinal,
                         assignment,
                         out,
-                    )?,
+                    )
+                    .map_err(|error| {
+                        statement_error(error, site, statement.kind(), context.types)
+                    })?,
                     _ => None,
                 };
                 let event = match borrowed {
                     Some(borrow) => Event::WitnessBorrow(borrow),
-                    None => context.statement(statement.kind(), out)?,
+                    None => context.statement(statement.kind(), out).map_err(|error| {
+                        statement_error(error, site, statement.kind(), context.types)
+                    })?,
                 };
                 if events.len() == events.capacity() {
                     return Err(Resource::Accounting.into());
@@ -955,6 +1036,11 @@ fn headers() -> usize {
         + h::<ScalarV30>()
         + h::<TypeId>()
         + h::<Address>()
+        + h::<[usize; 5]>()
+        + h::<&Statement>()
+        + h::<&str>()
+        + h::<&[Type]>()
+        + h::<Option<(u32, &'static str)>>()
         + pointer_events::headers()
         + 24 * size_of::<usize>()
         + 20 * size_of::<&()>()

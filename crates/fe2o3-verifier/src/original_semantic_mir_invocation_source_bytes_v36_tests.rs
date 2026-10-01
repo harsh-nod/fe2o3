@@ -46,6 +46,63 @@ fn original_mir_witness_issue_and_conversion_do_not_create_pointer_provenance() 
 
 const LIMIT: usize = 100_000_000;
 
+#[test]
+fn original_mir_statement_refusal_keeps_original_coordinates_kind_type_and_reason() {
+    run(LIMIT, LIMIT, false, 1, |body, out| {
+        let context = body.context(out)?;
+        let statement = context.function.blocks()[0].statements()[0].kind();
+        assert_eq!(statement_kind(statement), "Assign.Binary");
+        let site = [body.root, body.instance, body.function, 0, 0];
+        let error = statement_error(unsupported(), site, statement, context.types);
+        assert!(matches!(&error, Error::SourceStatement {
+            root, instance, function, block: 0, statement: 0,
+            kind: "Assign.Binary", result_type: Some((_, "Scalar")),
+            reason: "original MIR typed byte statement is not modeled",
+        } if *root == body.root && *instance == 1 && *function == body.function));
+        assert!(std::error::Error::source(&error).is_none());
+        let text = format!("{error:?}");
+        // Already contextualized errors must not be reassigned to a later site.
+        let same = statement_error(error, [99; 5], &Statement::Nop, &[]);
+        assert_eq!(format!("{same:?}"), text);
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_statement_refusal_does_not_reclassify_resource_or_owner_errors() {
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationStorageLimitV1 as StorageLimit,
+        CanonicalKernelIrWorkBudgetV1 as WorkBudget,
+    };
+    let mut work = WorkBudget::new(7);
+    let work = work.charge_work(8).unwrap_err();
+    for resource in [
+        Resource::Work(work),
+        Resource::Storage(StorageLimit::new(13, 12)),
+        Resource::Accounting,
+        Resource::Arithmetic,
+        Resource::Allocation,
+    ] {
+        let mapped = statement_error(Error::Resource(resource), [3; 5], &Statement::Nop, &[]);
+        assert!(matches!(mapped, Error::Resource(actual) if actual == resource));
+    }
+    let owner = Error::Source(
+        fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Binding(
+            "exact original owner differs",
+        ),
+    );
+    assert!(matches!(
+        statement_error(owner, [3; 5], &Statement::Nop, &[]),
+        Error::Source(
+            fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Binding(
+                "exact original owner differs"
+            )
+        )
+    ));
+}
+
 fn run(
     work: usize,
     storage: usize,

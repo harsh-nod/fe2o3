@@ -114,6 +114,25 @@ pub enum MixedOptimizerRefinementErrorV26 {
     Execution(crate::FunctionalRefinementVerusExecutionErrorV2),
     Receipt(&'static str),
     Statement(&'static str),
+    /// A refused original MIR statement, with exact static source coordinates.
+    SourceStatement {
+        /// Source root ordinal.
+        root: usize,
+        /// Original static call-instance ordinal within the root.
+        instance: usize,
+        /// Original semantic function ordinal.
+        function: usize,
+        /// Original block ordinal within that declaration.
+        block: usize,
+        /// Original statement ordinal within that block.
+        statement: usize,
+        /// Exhaustively classified original statement or rvalue kind.
+        kind: &'static str,
+        /// Assignment result TypeId and its original nominal shape, when present.
+        result_type: Option<(u32, &'static str)>,
+        /// Unchanged diagnostic from the refusing source interpreter.
+        reason: &'static str,
+    },
 }
 type Error = MixedOptimizerRefinementErrorV26;
 type Result<T> = std::result::Result<T, Error>;
@@ -169,7 +188,7 @@ impl std::error::Error for Error {
             Self::Generated(error) => Some(error),
             Self::Runtime(error) => Some(error),
             Self::Execution(error) => Some(error),
-            Self::Statement(_) | Self::Receipt(_) => None,
+            Self::Statement(_) | Self::Receipt(_) | Self::SourceStatement { .. } => None,
         }
     }
 }
