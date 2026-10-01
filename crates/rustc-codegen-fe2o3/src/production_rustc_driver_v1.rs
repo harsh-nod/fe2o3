@@ -1094,3 +1094,6 @@ mod bf16_tile_source_driver_v1;
 pub use bf16_tile_source_driver_v1::{
     run_bf16_tile_source_inspection_driver_v1, run_bf16_tile_source_promotion_driver_v1,
 };
+
+#[cfg(target_os = "linux")]
+pub use bf16_tile_source_driver_v1::run_bf16_generated_source_admission_driver_v1;

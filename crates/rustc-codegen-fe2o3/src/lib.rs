@@ -698,3 +698,6 @@ mod tests {
 pub use production_rustc_driver_v1::{
     run_bf16_tile_source_inspection_driver_v1, run_bf16_tile_source_promotion_driver_v1,
 };
+
+#[cfg(target_os = "linux")]
+pub use production_rustc_driver_v1::run_bf16_generated_source_admission_driver_v1;

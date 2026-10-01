@@ -292,3 +292,7 @@ fn finish_report_with_writer(
     }
     Ok(())
 }
+
+#[path = "bf16_generated_source_driver_v1.rs"]
+mod generated_source;
+pub use generated_source::run_bf16_generated_source_admission_driver_v1;
