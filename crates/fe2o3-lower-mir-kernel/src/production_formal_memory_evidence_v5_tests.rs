@@ -67,7 +67,8 @@ fn stale_graph_and_stripped_raw_receipt_cannot_replay() {
     assert!(
         InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(evidence.canonical_bytes()).is_err()
     );
-    module.functions[0].blocks[0].operations[1].kind = OperationKind::Constant(Constant::Index(2));
+    module.functions[0].body.as_mut().unwrap().blocks[0].operations[1].kind =
+        OperationKind::Constant(Constant::Index(2));
     assert!(
         evidence
             .revalidate_against_verified_module(verify_module_ref(&module).unwrap())
@@ -130,7 +131,9 @@ fn fresh_inert_digest_cannot_authorize_changed_witness_or_conflict_coordinates()
 fn legacy_raw_replay_accepts_only_current_conflict_free_bytes() {
     let mut module = fixture();
     let conflict = evidence(&module);
-    module.functions[0].blocks[1].operations.clear();
+    module.functions[0].body.as_mut().unwrap().blocks[1]
+        .operations
+        .clear();
     let raw =
         InertFormalMemoryReceiptFormatV4::from_current_obligations(&obligations(&module)).unwrap();
     let verified = verify_module_ref(&module).unwrap();

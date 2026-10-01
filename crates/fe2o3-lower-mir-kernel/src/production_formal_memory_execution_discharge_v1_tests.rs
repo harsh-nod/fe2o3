@@ -112,13 +112,16 @@ fn non_singleton_and_false_edge_keep_original_conflict_refusal() {
                 then_target,
                 else_target,
                 ..
-            } = module.functions[0].blocks[0].terminator.as_mut().unwrap()
+            } = module.functions[0].body.as_mut().unwrap().blocks[0]
+                .terminator
+                .as_mut()
+                .unwrap()
             else {
                 panic!()
             };
             std::mem::swap(then_target, else_target);
         } else {
-            module.functions[0].blocks[0].operations[1].kind =
+            module.functions[0].body.as_mut().unwrap().blocks[0].operations[1].kind =
                 OperationKind::Constant(Constant::Index(2));
         }
         let raw = obligations(&module);
@@ -133,8 +136,10 @@ fn non_singleton_and_false_edge_keep_original_conflict_refusal() {
 #[test]
 fn unresolved_member_prevents_partial_discharge() {
     let mut module = fixture();
-    let store = module.functions[0].blocks[1].operations[0].clone();
-    module.functions[0].blocks[0].operations.push(store);
+    let store = module.functions[0].body.as_ref().unwrap().blocks[1].operations[0].clone();
+    module.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .push(store);
     let raw = obligations(&module);
     assert!(raw.inter_invocation_conflicts().len() > 1);
     assert!(matches!(
@@ -150,7 +155,9 @@ fn empty_report_has_no_discharge_and_kernel_substitution_refuses() {
     let mut other = module.kernels[0].clone();
     other.id = fe2o3_kernel_ir::KernelId::new("other");
     assert!(derive_execution_discharges_v1(&module, &other, &raw).is_err());
-    module.functions[0].blocks[1].operations.clear();
+    module.functions[0].body.as_mut().unwrap().blocks[1]
+        .operations
+        .clear();
     let empty = obligations(&module);
     assert!(
         derive_execution_discharges_v1(&module, &module.kernels[0], &empty)
