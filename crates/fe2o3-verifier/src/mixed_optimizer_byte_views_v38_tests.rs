@@ -19,7 +19,7 @@ fn byte_view_all_writes_stamp_destination_epochs_and_preserve_contracts() {
         ),
         ("byte_pointer_store_v37", "address", "width"),
         ("byte_deinitialize_v37", "address", "width"),
-        ("byte_copy_object_v37", "destination", "width"),
+        ("byte_copy_snapshot_v39", "destination", "width"),
     ] {
         let body = view_spec_body_v38(name);
         assert!(
@@ -41,8 +41,13 @@ fn byte_view_all_writes_stamp_destination_epochs_and_preserve_contracts() {
     }
     let copy = view_spec_body_v38("byte_copy_object_v37");
     assert!(copy.contains("let snapshot = memory.live[source.allocation]"));
-    assert!(copy.contains("let previous = memory.live[destination.allocation]"));
+    assert!(copy.contains(
+        "byte_copy_snapshot_v39(memory, snapshot, source.byte_offset, destination, width)"
+    ));
     assert!(!copy.contains("snapshot.write_epochs"));
+    let snapshot = view_spec_body_v38("byte_copy_snapshot_v39");
+    assert!(snapshot.contains("let previous = memory.live[destination.allocation]"));
+    assert!(!snapshot.contains("snapshot.write_epochs"));
     let stamp = view_spec_body_v38("byte_overwrite_epochs_v38");
     assert!(stamp.contains("else { previous.write_epochs[i] }"));
     assert!(!stamp.contains("previous.bytes"));
@@ -50,6 +55,46 @@ fn byte_view_all_writes_stamp_destination_epochs_and_preserve_contracts() {
         view_spec_body_v38("byte_write_clock_v38")
             .contains("previous.write_clock + if 0 < width { 1 } else { 0 }")
     );
+}
+
+#[test]
+fn byte_copy_snapshot_reads_only_the_saved_source_window_before_destination_invalidation() {
+    let body = view_spec_body_v38("byte_copy_snapshot_v39");
+    for required in [
+        "snapshot: MemoryBytesV30, source_offset: int",
+        "byte_object_relocations_well_formed_v37(snapshot)",
+        "0 <= source_offset && 0 <= width && source_offset + width <= snapshot.bytes.len()",
+        "byte_range_live_v30(memory, destination, width)",
+        "source_offset + at - destination.byte_offset",
+        "snapshot.bytes[copied(i)]",
+        "snapshot.initialized[copied(i)]",
+        "else { previous.bytes[i] }",
+        "else { previous.initialized[i] }",
+    ] {
+        assert!(body.contains(required), "{required}");
+    }
+    assert!(!body.contains("memory.live[source.allocation]"));
+    assert!(!body.contains("byte_load_v30"));
+    assert!(!body.contains("byte_range_initialized_v30"));
+}
+
+#[test]
+fn byte_copy_snapshot_keeps_complete_cell_containment_and_partial_fragment_policy() {
+    let body = view_spec_body_v38("byte_copy_snapshot_v39");
+    for required in [
+        "destination.byte_offset <= at",
+        "at < destination.byte_offset + width",
+        "snapshot.relocations.contains_key(copied(at))",
+        "copied(at) + snapshot.relocations[copied(at)].width <= source_offset + width",
+        "byte_relocations_without_overlap_v37(previous.relocations, destination.byte_offset, width)",
+        "retained.contains_key(at) || complete(at)",
+        "if complete(at) { snapshot.relocations[copied(at)] } else { retained[at] }",
+    ] {
+        assert!(body.contains(required), "{required}");
+    }
+    assert!(!body.contains("source_offset == destination.byte_offset"));
+    assert!(!body.contains("source.allocation == destination.allocation"));
+    assert!(!body.contains("byte_pointer_load_v37"));
 }
 
 #[test]

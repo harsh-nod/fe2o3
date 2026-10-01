@@ -169,12 +169,27 @@ open spec fn byte_copy_object_v37(
         byte_range_live_v30(memory, source, width), byte_range_live_v30(memory, destination, width),
 {
     let snapshot = memory.live[source.allocation];
+    byte_copy_snapshot_v39(memory, snapshot, source.byte_offset, destination, width)
+}
+
+// Source Move consumes the source after taking this snapshot, then writes the
+// destination. Keeping the snapshot independent preserves self/overlap moves
+// without reconstructing initialization or provenance from the consumed bytes.
+open spec fn byte_copy_snapshot_v39(
+    memory: ByteMemoryV30, snapshot: MemoryBytesV30, source_offset: int,
+    destination: MemoryPointerV30, width: int,
+) -> ByteMemoryV30
+    recommends byte_memory_well_formed_v30(memory),
+        byte_object_relocations_well_formed_v37(snapshot),
+        0 <= source_offset && 0 <= width && source_offset + width <= snapshot.bytes.len(),
+        byte_range_live_v30(memory, destination, width),
+{
     let previous = memory.live[destination.allocation];
-    let copied = |at: int| source.byte_offset + at - destination.byte_offset;
+    let copied = |at: int| source_offset + at - destination.byte_offset;
     let complete = |at: int| destination.byte_offset <= at
         && at < destination.byte_offset + width
         && snapshot.relocations.contains_key(copied(at))
-        && copied(at) + snapshot.relocations[copied(at)].width <= source.byte_offset + width;
+        && copied(at) + snapshot.relocations[copied(at)].width <= source_offset + width;
     let retained = byte_relocations_without_overlap_v37(previous.relocations, destination.byte_offset, width);
     let relocations = Map::new(
         |at: int| retained.contains_key(at) || complete(at),
