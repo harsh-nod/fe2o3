@@ -44,10 +44,19 @@ fn alter_tag_census_v43(
             tags.push(index);
         }
     }
-    assert!(
-        tags.len() >= 4 && tags.len().is_multiple_of(4),
+    let expected = match source_index.pending.coordinates.root.index() {
+        0 => 8,
+        1 => 0,
+        _ => panic!("unexpected original enum fixture root"),
+    };
+    assert_eq!(
+        tags.len(),
+        expected,
         "two exact tag writes and two reads per original helper invocation"
     );
+    if expected == 0 {
+        return Ok(());
+    }
     let first = tags[0];
     let last = *tags.last().unwrap();
     budget.charge_work(5)?;

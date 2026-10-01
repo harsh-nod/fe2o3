@@ -290,17 +290,20 @@ fn observe_original_reference_enum_v44(
     _: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    let expected_helpers = enum_fixture_helper_count_v49(instances, emitted);
     let references = references.unwrap();
     let plan = references.plan;
     let mut samples = [None, None];
     let mut count = 0;
     let mut sample_instance = None;
+    let mut payloads = [0usize; 3];
     for lowered in emitted.iter().flatten() {
         let instance = lowered.source_call_instance.unwrap();
         let original = instances.instance(instance).unwrap().declaration();
-        if original.locals().len() != 10 || sample_instance.is_some_and(|prior| prior != instance) {
+        if instances.instance(instance).unwrap().function().index() != 2 {
             continue;
         }
+        assert_eq!(original.locals().len(), 10);
         let archive = lowered.execution_observation.as_ref().unwrap();
         let anchors = lowered.scoped_memory_anchors.as_ref().unwrap();
         for row in &anchors.objects {
@@ -327,6 +330,10 @@ fn observe_original_reference_enum_v44(
             ) {
                 continue;
             }
+            payloads[instance.index()] += 1;
+            if sample_instance.is_some_and(|prior| prior != instance) {
+                continue;
+            }
             let place = scoped_payload_place_v29(original, site, role).unwrap();
             let ScopedObjectOperationV29::WriteValue { value, .. } = row.operation else {
                 panic!("actual reference write")
@@ -345,6 +352,19 @@ fn observe_original_reference_enum_v44(
             sample_instance = Some(instance);
             count += 1;
         }
+    }
+    assert_eq!(
+        payloads,
+        if expected_helpers == 0 {
+            [0, 0, 0]
+        } else {
+            [0, 2, 2]
+        }
+    );
+    if expected_helpers == 0 {
+        assert_eq!(count, 0);
+        assert!(samples.iter().all(Option::is_none));
+        return Ok(());
     }
     assert_eq!(
         count, 2,

@@ -1320,6 +1320,46 @@ fn original_tag_emission_owner() -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
 }
 
+fn enum_fixture_helper_count_v49(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+) -> usize {
+    let root = instances
+        .instance(instances.root())
+        .unwrap()
+        .function()
+        .index();
+    let expected: &[u32] = match root {
+        0 => &[0, 2, 2],
+        1 => &[1],
+        _ => panic!("unexpected original enum fixture root"),
+    };
+    assert_eq!(instances.instances().len(), expected.len());
+    assert_eq!(emitted.len(), expected.len());
+    for (ordinal, function) in expected.iter().copied().enumerate() {
+        let instance = instances.id_at(ordinal).unwrap();
+        assert_eq!(
+            instances.instance(instance).unwrap().function().index(),
+            function
+        );
+        assert_eq!(instances.instance_reachable(instance), Some(true));
+        let lowered = emitted[ordinal].as_ref().unwrap();
+        assert_eq!(lowered.source_call_instance, Some(instance));
+        if function != 2 {
+            assert!(
+                lowered
+                    .scoped_memory_anchors
+                    .as_ref()
+                    .unwrap()
+                    .objects
+                    .is_empty(),
+                "the original roots contain calls/scalars, not enum object effects"
+            );
+        }
+    }
+    expected.len() - 1
+}
+
 fn observe_original_tag_emission(
     _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
@@ -1327,6 +1367,7 @@ fn observe_original_tag_emission(
     slots: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    let expected_helpers = enum_fixture_helper_count_v49(instances, emitted);
     let mut helpers = std::collections::BTreeSet::new();
     let mut allocations = std::collections::BTreeMap::new();
     for slot in &slots.slots {
@@ -1362,9 +1403,10 @@ fn observe_original_tag_emission(
         );
         helpers.insert(slot.instance.index());
     }
-    assert!(
-        !helpers.is_empty(),
-        "actual source helper must emit typed allocations"
+    assert_eq!(
+        helpers.len(),
+        expected_helpers,
+        "every original helper emits typed allocations"
     );
     assert_eq!(
         allocations.len(),

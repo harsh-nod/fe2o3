@@ -14,24 +14,30 @@ fn observe_storage_constructor_views_v44(
     _: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    let expected_helpers = enum_fixture_helper_count_v49(instances, emitted);
     let plan = references.unwrap().plan;
-    let lowered = emitted
-        .iter()
-        .flatten()
-        .find(|row| {
-            row.scoped_memory_anchors.as_ref().is_some_and(|anchors| {
-                anchors.objects.iter().any(|row| {
-                    matches!(
-                        row.operation,
-                        ScopedObjectOperationV29::Project {
-                            step: ScopedObjectProjectionV29::VariantForWrite { .. },
-                            ..
-                        }
-                    )
-                })
+    let mut constructors = emitted.iter().flatten().filter(|row| {
+        row.scoped_memory_anchors.as_ref().is_some_and(|anchors| {
+            anchors.objects.iter().any(|row| {
+                matches!(
+                    row.operation,
+                    ScopedObjectOperationV29::Project {
+                        step: ScopedObjectProjectionV29::VariantForWrite { .. },
+                        ..
+                    }
+                )
             })
         })
-        .expect("genuine retained constructor views");
+    });
+    let lowered = constructors.next();
+    assert_eq!(
+        usize::from(lowered.is_some()) + constructors.count(),
+        expected_helpers
+    );
+    let Some(lowered) = lowered else {
+        assert_eq!(expected_helpers, 0);
+        return Ok(());
+    };
     let anchors = lowered.scoped_memory_anchors.as_ref().unwrap();
     let mut views = anchors
         .objects

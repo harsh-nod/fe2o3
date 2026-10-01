@@ -253,6 +253,7 @@ fn observe_original_enum_construction_v43(
     slots: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    let expected_helpers = enum_fixture_helper_count_v49(instances, emitted);
     let fields = ENUM_CONSTRUCTION_FIELDS_V43.get();
     let mut helpers = std::collections::BTreeSet::new();
     for slot in &slots.slots {
@@ -278,7 +279,11 @@ fn observe_original_enum_construction_v43(
             helpers.insert(slot.instance.index());
         }
     }
-    assert!(!helpers.is_empty());
+    assert_eq!(
+        helpers.len(),
+        expected_helpers,
+        "each original helper has retained constructor storage"
+    );
     for instance in helpers {
         let lowered = emitted[instance].as_ref().unwrap();
         let anchors = lowered.scoped_memory_anchors.as_ref().unwrap();

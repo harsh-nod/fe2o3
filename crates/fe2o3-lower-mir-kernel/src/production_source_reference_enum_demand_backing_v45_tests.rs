@@ -86,6 +86,7 @@ fn observe_demand_backed_reference_enum_v45(
     root: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    let expected_helpers = enum_fixture_helper_count_v49(instances, emitted);
     observe_original_reference_enum_v44(
         instances, emitted, slots, references, identity, root, budget,
     )?;
@@ -122,9 +123,10 @@ fn observe_demand_backed_reference_enum_v45(
             if pointer.address_space == AddressSpace::Private));
             backed[index] += 1;
         }
-        assert!(
-            backed.into_iter().all(|count| count != 0),
-            "both distinct referents require backing"
+        assert_eq!(
+            backed,
+            [expected_helpers, expected_helpers],
+            "both distinct referents require one backing per original helper"
         );
         Ok(())
     })?;
