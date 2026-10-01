@@ -17,9 +17,11 @@ compiles selected test code but executes no tests. The preceding r315 receive
 assertion type error is corrected by checking both returned lengths; r313's
 borrow error was already cleared in r315.
 
-Two focused local suites also passed: r317 ran **29 process-tree cleanup tests**
+Three focused local suites also passed: r317 ran **29 process-tree cleanup tests**
 with zero failures/ignored and 342 filtered; r320 ran **nine source-receipt codec
-tests** with zero failures/ignored and 27 filtered. These are selected component
+tests** with zero failures/ignored and 27 filtered; r321 ran **seven receipt RPC
+profile tests**, including pinned legacy statement/execution/wire bytes, with
+zero failures/ignored and 850 filtered. These are selected component
 tests, not complete crate suites or successful compiler/proof executions.
 
 The latest actual Rust source run, r312 at
@@ -41,7 +43,7 @@ Local repairs now join source events to exact value IDs independently of event
 ordering, and bind genuine context-derived coordinates into scalar expressions.
 The attachment census releases only its own temporary bookkeeping before
 emitting retained output. Coordinate interpretation uses the already-global
-cell instead of applying the invocation mapping twice. New regression tests
+cell instead of applying the invocation mapping twice. New source regression tests
 are authored but not yet executed. Control-condition coordinate binding and
 the proof-client/runtime changes also remain local, not end-to-end acceptance.
 Complete source-bound proof execution, paired publication/finalization and
@@ -75,9 +77,10 @@ and runner before moving each validation worktree. Raw log SHA-256 values:
 - r318: `79e84d3de455f9b9ed254614543a1562d8b04922b730d7d611d3fb79450f5da7`
 - r319: `b3239ad751063505e3b31a26580ce7daebc4844d48113404f9b66e55ac9506b1`
 - r320: `e07aa564c4a935a557a54a6c8c318d771f2c29e0d274956d8f3623ff49e449b6`
+- r321: `f57c3611b24ff2f5d46f332018ee8e59605d22373f7ef73b811f744837fee27a`
 
 Both public mains were read at
-`f0145ab1a71a2dcaa888623e6035c47144f59c38` before this update. This publishes
+`ae4f0206a693b0c09a1847007c857702aea97c65` before this update. This publishes
 evidence, not the unfinished compiler candidate. **M0 alone is complete;
 M1-M7 remain incomplete; strict coverage remains 0/47.**
 
