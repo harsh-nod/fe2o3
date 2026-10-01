@@ -19,9 +19,9 @@ No full HIP/HSA behavioral or performance parity is accepted.
 | Milestone | Status | Remaining exit gates |
 | --- | --- | --- |
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
-| A1: single-device async | Active, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
-| A2: dependencies and overlap | Active, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
-| A3: local multi-GPU | Partial foundations | XGMI copy witnesses exist; unified compute, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
+| A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
+| A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
+| A3: local multi-GPU | Current priority, incomplete | Qualify multi-device compute with staged transfers first; unified compute/XGMI, all-admitted-GPU sharding, group drain and partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
 | A6: failure qualification | Partial coverage | Scripted failures and ordinary native cleanup exist; isolated device/network/participant/collective fault campaigns remain |
@@ -31,6 +31,38 @@ Broader accepted lane checkpoints remain Native R125, Admission R118B
 C1/C2/C3 and Resources R116/V3. Protected Worker/compiler refinement,
 device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
+
+## Current Priority: Working Multi-GPU
+
+The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
+campaign and A2 proof-runner campaign below are parked, not abandoned or
+completed. Neither is a prerequisite for the existing multi-device compute
+router's first native qualification.
+
+1. Qualify the existing compute router on two currently idle MI300X devices:
+   publish exact typed vecadd on both before waiting, verify both outputs,
+   copy computed bytes between devices, verify the complete destination and
+   explicitly retire logical and native resources.
+2. Exercise retained multi-device async group drain and shutdown, including
+   pending, failed and uncertain outcomes. Reuse the existing current-thread
+   owner and drain API; do not create a second orchestration interface.
+3. Compose compute and native XGMI under compatible VM/session ownership, then
+   qualify dependency-driven peer-to-compute pipelines and additional devices.
+4. Add real workload partitioning, partial-failure campaigns and matched scaling
+   measurements only after the complete-output execution path passes.
+
+The first witness uses replicated repository-owned exact fixtures and
+**host-staged** transfers. It does not establish sharding, physical overlap,
+production kernel authority, native XGMI integration or HIP/HSA parity. Its
+source now passes 1,928 runtime CPU tests, strict Clippy, the no-default library
+check and its CLI test; the native executable is built. This is an explicitly
+composed seventeen-gate prefix plus five-command completion, not a new
+single-pass campaign. Native execution remains pending: fresh MI300X snapshots
+found another process using devices despite idle engine percentages. The
+[qualification guide](runtime-multi-device-qualification-v1.md) and
+[CPU evidence packet](evidence/dev-multi-device-cpu-2026-10-01/README.md) record
+exact scope and next dependencies. On the shared host, point-idle observations are
+not exclusive reservations, and cleanup is limited to exact owned resources.
 
 ## Latest Qualification
 
@@ -42,7 +74,7 @@ transport remains rejected; only the complete recovered CPU result was
 independently adopted. This authenticates provisioned peer-origin claims, not
 truthful native completion, durable replay protection or two-host operation.
 
-The next A1 candidate joins an accounted ordinary primary queue to Context for
+The parked A1 candidate joins an accounted ordinary primary queue to Context for
 one fixed coherent HostVisible generation. Its 32-path implementation and
 37-stage full CPU qualification plan have passed source review and 34 controller
 tests. The first local admission window expired below its unchanged 24 GiB
@@ -51,7 +83,7 @@ qualification and the single exact vecadd/retirement hardware witness remain
 pending. This profile does not admit generated dispatch, device-local storage,
 SDMA, dependencies, rebinding or whole-process resource accounting.
 
-The separate A2 live-allocation candidate retains its accepted 1,901-test
+The parked A2 live-allocation candidate retains its accepted 1,901-test
 runtime CPU result and full 219/0 positive proof captures. Fresh leaf/concrete
 mutation qualification is incomplete. The remote raw-capture adapter passes
 32 controller tests, but has not executed a remote proof; controller coverage

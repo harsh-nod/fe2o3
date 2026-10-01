@@ -89,6 +89,8 @@ mod allocation_request;
 mod allocation_table;
 mod multi_admission;
 mod multi_allocation;
+#[cfg(feature = "hardware-qualification")]
+mod multi_qualification;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_launch_payload;
@@ -11641,17 +11643,47 @@ impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
         stream: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        if self.cooperative_stream_pending_counts.contains_key(&stream)
-            || self.cooperative_stream_tails.contains_key(&stream)
-        {
+        if self.cooperative_stream_pending_counts.contains_key(&stream) {
             return Err(KfdRuntimeBackendV1::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "stream retains a pending cooperative copy",
             ));
         }
         let route = Self::route(&self.streams, stream, "unknown multi-device KFD stream")?;
+        if let Some(tail) = self.cooperative_stream_tails.get(&stream).copied() {
+            self.check_directed_if_present_v1(tail)?;
+            let intact = match self.submissions.get(&tail) {
+                Some(RoutedSubmissionV1::CooperativeCopy(copy)) if copy.stream == stream => {
+                    if !copy.is_quiescent() {
+                        return Err(KfdRuntimeBackendV1::rejected(
+                            KfdRuntimeBackendErrorKindV1::Busy,
+                            "stream retains a pending cooperative copy",
+                        ));
+                    }
+                    copy.dependencies.is_empty()
+                        && copy.staging.is_empty()
+                        && copy.sdma_leaf.as_ref().is_none_or(|leaf| {
+                            self.children
+                                .get(leaf.child())
+                                .is_some_and(|child| leaf.is_quiescent(child))
+                        })
+                }
+                _ => false,
+            };
+            if !intact {
+                self.terminal = true;
+                return Err(RuntimeBackendFailureV1::Terminal(
+                    KfdRuntimeBackendErrorV1::new(
+                        KfdRuntimeBackendErrorKindV1::Terminal,
+                        "cooperative stream tail lost quiescent custody",
+                    ),
+                ));
+            }
+        }
         let result = self.children[route.child].destroy_stream_v1(route.local);
         self.latch(result)?;
+        // Context destroys streams before releasing retained results and events.
+        self.cooperative_stream_tails.remove(&stream);
         self.streams.remove(&stream);
         Ok(())
     }
@@ -13396,6 +13428,8 @@ mod tests {
     mod initialized_storage_tests;
     mod materialized_cancellation_tests;
     mod materialized_publication_tests;
+    #[cfg(feature = "cpu-runtime-fixtures")]
+    mod multi_group_drain_tests;
     mod native_xgmi_creation_tests;
     mod native_xgmi_retirement_tests;
     mod prepared_cancellation_tests;

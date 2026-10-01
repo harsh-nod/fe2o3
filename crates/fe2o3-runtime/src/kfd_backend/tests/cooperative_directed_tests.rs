@@ -165,9 +165,6 @@ fn directed_router_chain_progress_reports_requested_status_and_retains_exact_his
     for allocation in f.allocations {
         f.backend.release_allocation_v1(allocation).unwrap();
     }
-    assert!(
-        matches!(f.backend.destroy_stream_v1(second_route.stream), Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy)
-    );
     assert_eq!(
         f.progress(second, second_route, &[first]).unwrap(),
         BackendPollV1::Succeeded
@@ -176,9 +173,14 @@ fn directed_router_chain_progress_reports_requested_status_and_retains_exact_his
         f.progress(second, second_route, &[]),
         Err(RuntimeBackendFailureV1::Rejected(_))
     ));
+    f.backend.destroy_stream_v1(second_route.stream).unwrap();
+    assert!(f.backend.submissions.contains_key(&second));
+    assert_eq!(f.backend.poll_v1(second).unwrap(), BackendPollV1::Succeeded);
     f.backend.release_submission_v1(second).unwrap();
     for stream in f.streams {
-        f.backend.destroy_stream_v1(stream).unwrap();
+        if stream != second_route.stream {
+            f.backend.destroy_stream_v1(stream).unwrap();
+        }
     }
     f.backend.assert_cooperative_indexes_consistent();
     f.backend.shutdown_native_v1().unwrap();

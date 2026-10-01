@@ -1,0 +1,51 @@
+{
+  "artifact_bytes_verified": true,
+  "artifacts": {
+    "runtime-debug": {
+      "bytes": 43974712,
+      "mode": 448,
+      "path": "/tmp/fe2o3-multigpu-cpu-dd5-d81705f06b41b2ff/target-all-features/debug/deps/fe2o3_runtime-e17da470d75521ab",
+      "sha256": "9320033c1ba03fc85dfe48c192058fb3947f8123f855d7824dfc9948d0853457"
+    },
+    "smoke-example": {
+      "bytes": 20893944,
+      "mode": 448,
+      "path": "/tmp/fe2o3-multigpu-cpu-dd5-d81705f06b41b2ff/target-all-features/debug/examples/gfx942-runtime-multi-device-smoke",
+      "sha256": "4f5ae8e611dbd1c72502e4744d9faa56be034c3fd6a7e2eba0723ae9d55f62ac"
+    },
+    "smoke-tests": {
+      "bytes": 1667552,
+      "mode": 448,
+      "path": "/tmp/fe2o3-multigpu-cpu-dd5-d81705f06b41b2ff/target-all-features/debug/examples/gfx942_runtime_multi_device_smoke-690fb98151a46e14",
+      "sha256": "ca6b4d04b5e7650ee4657fe91e7cbcd8060e52605fb7dcc8339ad5c902542f2f"
+    }
+  },
+  "commands_replayed": 23,
+  "completion_result_sha256": "665074a42539d69932ada74e1ac129732b0a6d37e182904a6ab35293913c4c23",
+  "composite_scope": "17 prior gates plus 5 completion commands",
+  "disclosed_documentation_changes": [
+    "docs/runtime-a1-a2-swarm-current.md"
+  ],
+  "example_passed": 1,
+  "formal_proofs_rerun": false,
+  "hardlink_custody_copies": {
+    "target-all-features/debug/examples/gfx942-runtime-multi-device-smoke": {
+      "bytes": 20893944,
+      "device": 66317,
+      "inode": 73532448,
+      "links": 2,
+      "mode": 448
+    }
+  },
+  "native_gpu_qualified": false,
+  "original_accepted": false,
+  "original_result_sha256": "22e40a2e340bef10c480b8cc5e8f47af28e735dc746e966b8b2b36ee46cfa61f",
+  "performance_accepted": false,
+  "prepared_sha256": "056e033d6b461f9a20686a95480e1949a84f26d78a635374085751e7120914e1",
+  "records_accepted": true,
+  "recovered_regular_files": 148,
+  "repository_files_hash_matched": 6593,
+  "runtime_ignored": 32,
+  "runtime_passed": 1928,
+  "source_record_sha256": "b1ab447c92cb6a7bd51f549f6489c828db304144b41ff79f1665e5c51730689a"
+}

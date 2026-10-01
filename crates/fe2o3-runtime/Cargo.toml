@@ -27,6 +27,10 @@ scale-qualification = ["hardware-qualification", "fe2o3-kfd/scale-qualification"
 name = "gfx942-lds-diagnostic"
 required-features = ["hardware-diagnostic"]
 
+[[example]]
+name = "gfx942-runtime-multi-device-smoke"
+required-features = ["hardware-qualification"]
+
 [[bin]]
 name = "fe2o3-runtime-kfd-worker-v5-qualification"
 path = "src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs"
