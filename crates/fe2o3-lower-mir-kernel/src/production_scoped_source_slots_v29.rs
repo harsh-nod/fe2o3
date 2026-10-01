@@ -793,26 +793,15 @@ fn append_scoped_source_slots_v29(
     {
         return Err(scoped_slot_error_v29());
     }
-    let mut actual_allocations = 0_usize;
-    for block in &body.blocks {
-        budget.charge_work(
-            block
-                .operations
-                .len()
-                .checked_add(1)
-                .ok_or(ArgumentResourceV1::Arithmetic)?,
-        )?;
-        for operation in &block.operations {
-            if matches!(operation.kind, OperationKind::Alloca { .. }) {
-                actual_allocations = actual_allocations
-                    .checked_add(1)
-                    .ok_or(ArgumentResourceV1::Arithmetic)?;
-            }
-        }
-    }
-    if actual_allocations != count {
-        return Err(scoped_slot_error_v29());
-    }
+    check_scoped_allocation_census_v55(
+        instances,
+        id,
+        lowered,
+        entry,
+        prologue.map_or(0, |span| span.operation_count) as usize,
+        &slots[start..],
+        budget,
+    )?;
     lowered
         .scoped_initialization
         .as_ref()
