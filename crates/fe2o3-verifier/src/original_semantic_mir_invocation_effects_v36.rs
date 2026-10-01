@@ -82,6 +82,7 @@ open spec fn invocation_source_statement_effects_v36(
             // Borrow formation checks initialized bytes but is not a Load.
             Some(InvocationSourceByteEventV36::Scalar)
             | Some(InvocationSourceByteEventV36::WitnessBorrow { .. })
+            | Some(InvocationSourceByteEventV36::WitnessTransfer { .. })
             | Some(InvocationSourceByteEventV36::Pointer(_))
             | Some(InvocationSourceByteEventV36::Address { .. })
             | Some(InvocationSourceByteEventV36::Deinitialize(_))
@@ -127,6 +128,8 @@ open spec fn invocation_source_effects_v36(result: InvocationSourceBlockResultV3
 ) -> Seq<MemoryOperationEffectV30> {
     invocation_source_statements_effects_v36(result.observations, little_endian)
         + invocation_source_operands_effects_v36(result.operands, little_endian)
+        + Seq::new(invocation_source_trap_observations_v40(result).len(),
+            |i: int| invocation_source_trap_observations_v40(result)[i].effect)
 }
 "#
 );

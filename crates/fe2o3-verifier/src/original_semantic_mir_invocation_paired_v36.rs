@@ -413,7 +413,9 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                             }
                         }
                         Terminator::Return => End::Return,
-                        Terminator::Goto(_) | Terminator::SwitchInt { .. } => End::Ordinary,
+                        Terminator::Goto(_)
+                        | Terminator::SwitchInt { .. }
+                        | Terminator::Assert { .. } => End::Ordinary,
                         _ => return Err(mismatch()),
                     };
                     result.census[2] = add(result.census[2], declaration.statements().len())?;

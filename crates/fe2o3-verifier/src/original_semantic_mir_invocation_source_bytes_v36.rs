@@ -425,6 +425,63 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         Ok(value)
     }
 
+    pub(super) fn assertion_operands(
+        &self,
+        block: usize,
+        original: &Terminator,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<(TypedOperand, [Option<TypedOperand>; 2])> {
+        use fe2o3_mir_model::semantic_mir_v1::SemanticAssertMessageV1 as Message;
+        let context = self.context(out)?;
+        out.budget.charge_work(4)?;
+        let captured = context
+            .function
+            .blocks()
+            .get(block)
+            .map(|block| block.terminator().kind())
+            .ok_or_else(mismatch)?;
+        if !std::ptr::eq(captured, original) {
+            return Err(mismatch());
+        }
+        let Terminator::Assert {
+            condition, message, ..
+        } = captured
+        else {
+            return Err(mismatch());
+        };
+        let condition = context.typed_operand(condition, out)?;
+        if condition.scalar() != Some(ScalarV30::Bool) {
+            return Err(unsupported());
+        }
+        let inputs = match message {
+            Message::BoundsCheck { length, index } => [Some(length), Some(index)],
+            Message::Overflow { left, right, .. } => [Some(left), Some(right)],
+            Message::MisalignedPointerDereference {
+                required_alignment,
+                found_alignment,
+            } => [Some(required_alignment), Some(found_alignment)],
+            Message::DivisionByZero(value) | Message::RemainderByZero(value) => [Some(value), None],
+            Message::NullPointerDereference
+            | Message::ResumedAfterReturn
+            | Message::ResumedAfterPanic => [None, None],
+        };
+        let mut failure = [None, None];
+        for (at, input) in inputs.into_iter().enumerate() {
+            out.budget.charge_work(1)?;
+            if let Some(input) = input {
+                let value = context.typed_operand(input, out)?;
+                if value
+                    .scalar()
+                    .is_none_or(|scalar| scalar == ScalarV30::Unit)
+                {
+                    return Err(unsupported());
+                }
+                failure[at] = Some(value);
+            }
+        }
+        Ok((condition, failure))
+    }
+
     pub(super) fn event_at(
         &self,
         block: usize,
@@ -1059,6 +1116,9 @@ fn headers() -> usize {
         + h::<Event>()
         + h::<Value>()
         + h::<TypedOperand>()
+        + h::<(TypedOperand, [Option<TypedOperand>; 2])>()
+        + h::<[Option<&Operand>; 2]>()
+        + h::<std::iter::Enumerate<std::array::IntoIter<Option<&Operand>, 2>>>()
         + h::<OperandKind>()
         + h::<BackendRepr>()
         + h::<BackendScalar>()

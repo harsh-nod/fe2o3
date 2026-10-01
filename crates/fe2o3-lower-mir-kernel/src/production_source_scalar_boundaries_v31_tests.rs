@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_scalar_boundary_asserts_v40_tests.rs"]
+mod assertions;
+
 #[path = "production_source_call_return_v32_tests.rs"]
 mod call_return;
 
@@ -1104,6 +1107,7 @@ fn source_scalar_boundaries_derivation_and_control_frames_match_field_envelopes(
         size_of::<Control<'_, '_>>()
             + std::mem::align_of::<Control<'_, '_>>()
             + original_private_expression_headers_v22().unwrap()
+            + assertions::independent_assert_headers()
     );
 }
 

@@ -11,6 +11,7 @@ open spec fn invocation_project_effect_v39(effect: MemoryOperationEffectV30)
 {
     match effect {
         MemoryOperationEffectV30::Refused => Some(MemoryOperationEffectV30::Refused),
+        MemoryOperationEffectV30::Trap => Some(MemoryOperationEffectV30::Trap),
         MemoryOperationEffectV30::Pure => None,
         MemoryOperationEffectV30::Allocate { address, .. } => match address {
             MemoryValueV30::Pointer(pointer) => if invocation_private_allocation_v36(pointer.allocation) {
@@ -141,6 +142,25 @@ open spec fn invocation_source_observations_v39(result: InvocationSourceBlockRes
 ) -> Seq<InvocationSourceEffectObservationV39> {
     invocation_source_statements_observations_v39(result.observations, little_endian)
         + invocation_source_operands_observations_v39(result.operands, little_endian)
+        + invocation_source_trap_observations_v40(result)
+}
+
+open spec fn invocation_source_trap_observations_v40(result: InvocationSourceBlockResultV36)
+    -> Seq<InvocationSourceEffectObservationV39>
+{
+    if result.source.machine.pc != -2 { seq![] } else {
+        let before = if result.operands.len() > 0 {
+            result.operands.last().after
+        } else { result.before_control };
+        let authentic = result.before_control.machine.pc >= 0
+            && result.operands.len() > 0
+            && result.operands[0].role == InvocationSourceOperandRoleV36::AssertCondition
+            && result.source == invocation_source_byte_trap_v40(before)
+            && result.source.machine.valid && result.returned.is_none();
+        invocation_source_observe_effects_v39(
+            seq![if authentic { MemoryOperationEffectV30::Trap } else { MemoryOperationEffectV30::Refused }],
+            before, result.source)
+    }
 }
 
 // Compare exactly the selected window, including padding initialization and
@@ -180,6 +200,11 @@ open spec fn invocation_observed_effect_related_v39(
     && byte_observation_snapshots_valid_v39(target) && target.valid_before && target.valid_after
     && byte_state_memory_well_formed_v30(target.before) && byte_state_memory_well_formed_v30(target.after)
     && match (source.effect, target.effect) {
+        (MemoryOperationEffectV30::Trap, MemoryOperationEffectV30::Trap) =>
+            source.before.machine.pc >= 0 && source.after.machine.pc == -2
+            && target.before.pc >= 0 && target.after.pc == -2
+            && source.after == invocation_source_byte_trap_v40(source.before)
+            && target.after == (MemoryStateV30 { pc: -2, ..target.before }),
         (MemoryOperationEffectV30::Read { address: sa, width: sw, alignment: ss, value: sv },
          MemoryOperationEffectV30::Read { address: ta, width: tw, alignment: ts, value: tv }) =>
             sw == tw && ss == ts && invocation_value_related_v36(sa, ta, before_map)
@@ -213,6 +238,7 @@ open spec fn invocation_observed_effect_related_v39(
         | (MemoryOperationEffectV30::TagRead { .. }, _) => false,
         (MemoryOperationEffectV30::Read { .. }, _)
         | (MemoryOperationEffectV30::Write { .. }, _)
-        | (MemoryOperationEffectV30::Copy { .. }, _) => false,
+        | (MemoryOperationEffectV30::Copy { .. }, _)
+        | (MemoryOperationEffectV30::Trap, _) => false,
     }
 }

@@ -21,6 +21,9 @@ use std::{fmt::Write as _, mem::size_of, ops::Range};
 #[path = "original_semantic_mir_invocation_source_index_v37.rs"]
 mod index_calls;
 
+#[path = "original_semantic_mir_source_assert_control_v40.rs"]
+mod assertions;
+
 enum End {
     Unreachable,
     Goto(usize),
@@ -34,6 +37,7 @@ enum End {
         arguments: Vec<TypedOperand>,
     },
     Index(index_calls::IndexCall),
+    Assert(assertions::SourceAssertControlV40),
     Return,
 }
 
@@ -300,6 +304,15 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                             otherwise: target(targets.otherwise().target().index())?,
                         }
                     }
+                    Terminator::Assert { target: edge, .. } => {
+                        End::Assert(assertions::SourceAssertControlV40::derive(
+                            &body,
+                            block,
+                            declaration.terminator().kind(),
+                            target(edge.target().index())?,
+                            out,
+                        )?)
+                    }
                     Terminator::Call(call)
                         if matches!(
                             semantic.callables().get(call.callee().index() as usize),
@@ -459,6 +472,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             .map_err(|_| out.error())?;
             match &row.end {
                 End::Index(call) => call.emit(out)?,
+                End::Assert(assertion) => assertion.emit(r, i, block, out)?,
                 End::Goto(target) => {
                     write!(out, " let source = invocation_source_byte_pc_v36(cursor.source, {target});\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }}\n").map_err(|_| out.error())?;
                 }
@@ -537,6 +551,7 @@ fn headers() -> usize {
         + h::<Vec<(u128, usize)>>()
         + h::<Vec<TypedOperand>>()
         + h::<TypedOperand>()
+        + assertions::headers()
         + h::<Range<usize>>()
         + 32 * size_of::<usize>()
         + 28 * size_of::<&()>()
@@ -568,6 +583,8 @@ struct InvocationSourceMicroStateV36 {
 enum InvocationSourceOperandRoleV36 {
     Switch,
     CallArgument(int),
+    AssertCondition,
+    AssertMessage(int),
 }
 struct InvocationSourceOperandObservationV36 {
     root: int,
@@ -587,11 +604,19 @@ struct InvocationSourceBlockResultV36 {
     returned: Option<MemoryValueV30>,
 }
 open spec fn invocation_source_byte_pc_v36(source: InvocationSourceByteStateV36, pc: int) -> InvocationSourceByteStateV36 {
-    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || pc < 0 {
+    if !source.machine.valid || source.machine.pc < 0
+        || !invocation_source_byte_state_well_formed_v36(source) || pc < 0 {
         invocation_source_byte_refused_v36(source)
     } else { InvocationSourceByteStateV36 { machine: MemoryStateV30 { pc,
         values: source.machine.values, memory: source.machine.memory, generations: source.machine.generations,
         frames: source.machine.frames, valid: true }, ..source } }
+}
+open spec fn invocation_source_byte_trap_v40(source: InvocationSourceByteStateV36) -> InvocationSourceByteStateV36 {
+    if !source.machine.valid || source.machine.pc < 0
+        || !invocation_source_byte_state_well_formed_v36(source) {
+        invocation_source_byte_refused_v36(source)
+    } else { InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 { pc: -2, ..source.machine }, ..source } }
 }
 open spec fn invocation_source_micro_refused_v36(cursor: InvocationSourceMicroStateV36) -> InvocationSourceMicroStateV36 {
     InvocationSourceMicroStateV36 { source: invocation_source_byte_refused_v36(cursor.source),

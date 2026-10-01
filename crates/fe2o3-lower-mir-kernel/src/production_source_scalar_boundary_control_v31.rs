@@ -9,6 +9,8 @@ struct SourceBoundaryCheckV31<'a> {
     bindings: std::ops::Range<usize>,
 }
 
+include!("production_source_scalar_boundary_asserts_v40.rs");
+
 fn source_boundary_function_seen_v31(
     inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
     function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
@@ -96,6 +98,7 @@ fn source_boundary_control_headers_v31() -> Result<usize, ArgumentResourceV1> {
         size_of::<Frame<'_, '_>>(),
         std::mem::align_of::<Frame<'_, '_>>(),
         original_private_expression_headers_v22()?,
+        source_boundary_assert_headers_v40()?,
     ])
 }
 
@@ -536,6 +539,25 @@ impl SourceBoundaryCheckV31<'_> {
         actual: ValueId,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<()> {
+        self.selector_with_role(
+            instance,
+            block,
+            source,
+            actual,
+            EntryOperandV20::SwitchDiscriminant,
+            budget,
+        )
+    }
+
+    fn selector_with_role(
+        &self,
+        instance: usize,
+        block: SemanticBlockIdV1,
+        source: &SemanticOperandV1,
+        actual: ValueId,
+        role: EntryOperandV20,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()> {
         let run = |budget: &mut ArgumentBudgetV1<'_>| {
             self.leaves.relation.retain_query((|| {
                 let owner = self.leaves.relation.source.source_semantic(budget)?;
@@ -559,7 +581,7 @@ impl SourceBoundaryCheckV31<'_> {
                         site: EntrySiteV20::Terminator {
                             block: BoundaryBlockV31::new(block.index()),
                         },
-                        role: EntryOperandV20::SwitchDiscriminant,
+                        role,
                         operand: source,
                     },
                     0,
@@ -696,6 +718,8 @@ impl SourceScalarLeavesV18<'_, '_> {
                     None => relation.inventory,
                 };
                 let root = relation.source.root_row(self.root)?;
+                let assertions =
+                    source_boundary_assertions_v40(relation, root.function_ordinal, budget)?;
                 let controls = source_reference_selection_control_index_v30(
                     &root.coordinates.controls.rows,
                     budget,
@@ -811,6 +835,18 @@ impl SourceScalarLeavesV18<'_, '_> {
                                         .missing("source SSA boundary control entry differs");
                                 }
                                 match (original, actual.terminator) {
+                                    (SemanticTerminatorKindV1::Assert { .. }, _) => {
+                                        check.assertion_v40(
+                                            &assertions,
+                                            instance,
+                                            source.function,
+                                            semantic_block,
+                                            original,
+                                            original_actual,
+                                            actual,
+                                            budget,
+                                        )?;
+                                    }
                                     (
                                         SemanticTerminatorKindV1::Goto(_),
                                         Terminator::Branch { .. },

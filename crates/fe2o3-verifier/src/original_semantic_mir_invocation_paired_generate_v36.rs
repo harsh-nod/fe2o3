@@ -151,7 +151,7 @@ fn related(
 ) -> Result<()> {
     emit!(
         out,
-        "open spec fn invocation_paired_related_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n source.machine.valid && target.valid && source.machine.values.len() == {} && target.values.len() == {}\n && (match source.machine.frames.execution {{ Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false }})\n && invocation_source_byte_storage_related_{root}_v36(source, target)\n && ({{ let map = invocation_source_byte_map_{root}_v36(source, target);\n if source.machine.pc < 0 {{ source.machine.pc == -1 && target.pc == -1 && source.machine.frames.active.len() == 0 }} else\n",
+        "open spec fn invocation_paired_related_{root}_v36(source: InvocationSourceByteStateV36, target: MemoryStateV30) -> bool {{\n source.machine.valid && target.valid && source.machine.values.len() == {} && target.values.len() == {}\n && (match source.machine.frames.execution {{ Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false }})\n && invocation_source_byte_storage_related_{root}_v36(source, target)\n && ({{ let map = invocation_source_byte_map_{root}_v36(source, target);\n if source.machine.pc < 0 {{ (source.machine.pc == -1 && target.pc == -1 && source.machine.frames.active.len() == 0) || (source.machine.pc == -2 && target.pc == -2) }} else\n",
         model.locals,
         model.definitions
     );
