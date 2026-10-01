@@ -414,6 +414,14 @@ impl OriginalEntryIndexV20<'_, '_> {
                     return Ok(expression);
                 }
                 if !place.projections().is_empty() {
+                    if matches!(place.projections(), [projection]
+                        if matches!(projection.kind(), SemanticProjectionKindV1::Field(_)))
+                    {
+                        return self.checked_component_expression_v41(
+                            leaves, instance, ty, scalar, site, role, place, next, remaining,
+                            budget,
+                        );
+                    }
                     return self.captured_shared_reference_expression_v26(
                         leaves, instance, ty, scalar, site, role, place, next, remaining, budget,
                     );
@@ -754,6 +762,7 @@ impl OriginalEntryIndexV20<'_, '_> {
 
 include!("production_source_helper_expression_v33.rs");
 include!("production_source_private_shared_capture_v26.rs");
+include!("production_source_checked_components_v41.rs");
 
 // Only the private write profile uses these total fixed-width bit-vector
 // identities. In particular, checked arithmetic and floating values retain

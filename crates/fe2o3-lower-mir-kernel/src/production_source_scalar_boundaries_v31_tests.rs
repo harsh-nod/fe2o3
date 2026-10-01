@@ -3,6 +3,9 @@ use super::*;
 #[path = "production_source_scalar_boundary_asserts_v40_tests.rs"]
 mod assertions;
 
+#[path = "production_source_checked_components_v41_tests.rs"]
+mod checked_components;
+
 #[path = "production_source_call_return_v32_tests.rs"]
 mod call_return;
 

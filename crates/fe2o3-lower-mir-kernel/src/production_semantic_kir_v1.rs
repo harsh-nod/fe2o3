@@ -4355,6 +4355,8 @@ enum NormalizedScalarExpressionV1 {
     },
 }
 
+include!("production_checked_arithmetic_expression_v41.rs");
+
 include!("production_semantic_kir_v1/scalar_value_correspondence_v1.rs");
 mod native_helper_value_context_v1;
 mod native_helper_value_expansion_v1;
@@ -4706,6 +4708,51 @@ fn normalize_kir_expression_inner_v1(
             visiting,
             budget,
         );
+    }
+    if let OperationKind::Binary {
+        op: BinaryOp::Checked(operator),
+        lhs,
+        rhs,
+    } = &operation.kind
+        && operation
+            .results
+            .get(1)
+            .is_some_and(|result| result.id == value)
+    {
+        let [payload, overflow] = operation.results.as_slice() else {
+            return None;
+        };
+        let integer = kir_semantic_scalar_v1(&payload.ty)?;
+        checked_arithmetic_scalar_v41(integer)?;
+        if scalar != ProductionSemanticScalarTypeV2::Bool
+            || overflow.ty != Type::BOOL
+            || payload.id == overflow.id
+            || kir_value_scalar_v1(function, kir, *lhs)? != integer
+            || kir_value_scalar_v1(function, kir, *rhs)? != integer
+        {
+            return None;
+        }
+        let operands = [*lhs, *rhs];
+        let next = next.checked_add(CHECKED_ARITHMETIC_DEPTH_V41)?;
+        return normalize_checked_overflow_v41(*operator, integer, budget, |index, budget| {
+            match index {
+                Some(index) => normalize_kir_expression_with_visiting_v18(
+                    function,
+                    kir,
+                    semantic_sites,
+                    operands[index],
+                    next,
+                    visiting,
+                    budget,
+                    helpers,
+                )
+                .map(Some),
+                None => {
+                    helpers.charge_normalization_node_v1()?;
+                    Some(None)
+                }
+            }
+        });
     }
     let mut recurse = |operand,
                        visiting: &mut dyn ScalarValueVisitingV18,
