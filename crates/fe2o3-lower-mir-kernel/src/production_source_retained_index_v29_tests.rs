@@ -1089,6 +1089,7 @@ mod retained_index_equations_v29 {
                     if initialized {
                         assert!(query.check_bound(0, target, INDEX, 4, budget).unwrap());
                         let kill = [SourceAddressKillV29 {
+                            source_order: [0; 5],
                             block: BlockId(100),
                             gap: 0,
                             slot: 0,

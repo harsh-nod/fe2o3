@@ -186,6 +186,7 @@ fn observed_pointer_subcells_preserve_distinct_contents_without_extent_expansion
 fn observed_pointer_subcells_expire_all_contents_on_kill_and_pointee_restart() {
     let (function, slots, rows, layouts) = pointer_subcell_fixture_v29(2);
     let kill = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: 9,
         slot: 2,

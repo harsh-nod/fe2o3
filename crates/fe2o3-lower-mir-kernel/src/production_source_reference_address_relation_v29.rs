@@ -513,7 +513,8 @@ fn source_address_boundaries_v29(
                 scoped_expected_kill_v29(
                     original.declaration(),
                     occurrence,
-                    matches!(declaration.shape(), SemanticTypeShapeV1::Array { .. }),
+                    legacy.is_some()
+                        && matches!(declaration.shape(), SemanticTypeShapeV1::Array { .. }),
                 )
             } else {
                 None
@@ -1012,6 +1013,16 @@ fn source_address_lifetimes_v29(
                     _ => true,
                 },
             });
+            if kills.len() == capacity {
+                return Err(ArgumentResourceV1::Accounting.into());
+            }
+            budget.charge_work(1)?;
+            kills.push(SourceAddressKillV29 {
+                block: preheader.physical_block,
+                gap: 0,
+                slot,
+                source_order: [0; 5],
+            });
         }
     }
     // Invocation reset precedes source operations; explicit source boundaries
@@ -1074,15 +1085,7 @@ fn source_address_lifetimes_v29(
                 slot: row.slot,
                 live,
             });
-        } else {
-            kills.push(SourceAddressKillV29 {
-                block: row.block,
-                gap: row.gap,
-                slot: row.slot,
-            });
         }
-    }
-    for row in &lifetimes {
         budget.charge_work(1)?;
         if kills.len() == capacity {
             return Err(ArgumentResourceV1::Accounting.into());
@@ -1091,14 +1094,15 @@ fn source_address_lifetimes_v29(
             block: row.block,
             gap: row.gap,
             slot: row.slot,
+            source_order: [0, 0, 1, row.instance.index(), row.anchor],
         });
     }
     call_splice_sort_work_v1(argument_product_v1(lifetimes.len(), 3)?, budget)
         .map_err(source_address_call_error_v29)?;
     lifetimes.sort_unstable_by_key(|row| (row.block, row.gap, row.sequence));
-    call_splice_sort_work_v1(argument_product_v1(kills.len(), 3)?, budget)
+    call_splice_sort_work_v1(argument_product_v1(kills.len(), 8)?, budget)
         .map_err(source_address_call_error_v29)?;
-    kills.sort_unstable_by_key(|row| (row.block, row.gap, row.slot));
+    kills.sort_unstable_by_key(|row| (row.block, row.gap, row.source_order, row.slot));
     budget.charge_work(kills.len())?;
     kills.dedup();
     let scratch = argument_sum_v1(&[

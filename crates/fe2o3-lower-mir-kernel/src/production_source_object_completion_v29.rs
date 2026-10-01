@@ -950,7 +950,7 @@ fn check_source_object_effect_census_v29(
         }
     }
     for failure in failures {
-        budget.charge_work(4)?;
+        budget.charge_work(9)?;
         let original = instances
             .instance(failure.instance)
             .ok_or_else(scoped_object_error_v29)?
@@ -967,7 +967,11 @@ fn check_source_object_effect_census_v29(
             .rows
             .get(failure.anchor)
             .ok_or_else(scoped_object_error_v29)?;
-        let place = checked_scoped_failure_read_v29(original, &occurrences, row, budget)?;
+        let place = if failure.failure_only {
+            checked_scoped_failure_read_v29(original, &occurrences, row, budget)?
+        } else {
+            checked_scoped_scalar_move_v45(original, &occurrences, row, budget)?
+        };
         let frame = row.source.ok_or_else(scoped_object_error_v29)?;
         let (block, statement) = scoped_memory_site_key_v29(frame.site);
         let site = SourceReferenceSiteV29 {
@@ -976,8 +980,10 @@ fn check_source_object_effect_census_v29(
             statement: statement.map(|row| row as usize),
         };
         if source_failure_scalar_slot_v29(instances, plan, slots, site, place, budget)?
-            != failure.slot
-            || source_failure_operand_moved_v29(original, row, budget)? != failure.move_after
+            != (failure.slot, failure.range)
+            || failure.source_order != [0, 0, 1, failure.instance.index(), failure.anchor]
+            || (!failure.failure_only || source_failure_operand_moved_v29(original, row, budget)?)
+                != failure.move_after
         {
             return Err(scoped_object_error_v29());
         }
@@ -993,7 +999,8 @@ fn check_source_object_effect_census_v29(
         let seen = terminal
             .get_mut(ordinal)
             .ok_or_else(scoped_object_error_v29)?;
-        if std::mem::replace(seen, true) {
+        if failure.failure_only && std::mem::replace(seen, true) || !failure.failure_only && !*seen
+        {
             return Err(scoped_object_error_v29());
         }
     }

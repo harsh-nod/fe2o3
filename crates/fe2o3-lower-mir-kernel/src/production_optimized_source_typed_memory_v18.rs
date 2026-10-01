@@ -114,6 +114,24 @@ impl OptimizedMemoryGapPrefixV18 {
         original_gap: usize,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<Option<(BlockId, usize)>> {
+        Ok(self
+            .boundary_with_source_v45(original, optimized, root, block, original_gap, budget)?
+            .2)
+    }
+
+    fn boundary_with_source_v45(
+        &self,
+        original: &ProductionSourceCorrespondenceV18<'_>,
+        optimized: &ProductionOptimizedSourceCorrespondenceV18<'_>,
+        root: usize,
+        block: BlockId,
+        original_gap: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<(
+        fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1,
+        usize,
+        Option<(BlockId, usize)>,
+    )> {
         optimized_source_endpoints_v18(original, optimized, budget)?;
         let owner = original.source.root_row(root)?;
         let input_function = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
@@ -131,7 +149,9 @@ impl OptimizedMemoryGapPrefixV18 {
                 "optimized lifetime original block",
             ))?;
         let gap = immutable_memory_gap_v29(owner, block, original_gap, true, budget)?;
-        self.canonical_boundary(original, optimized, input_block.coordinate, gap, budget)
+        let actual =
+            self.canonical_boundary(original, optimized, input_block.coordinate, gap, budget)?;
+        Ok((input_block.coordinate, gap, actual))
     }
 
     fn canonical_boundary(

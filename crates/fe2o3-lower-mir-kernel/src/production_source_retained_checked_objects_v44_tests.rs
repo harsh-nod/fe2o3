@@ -1,5 +1,10 @@
 use super::*;
 
+mod scalar_range_tests_v45 {
+    use super::*;
+    include!("production_source_scalar_ranges_owner_v45_tests.rs");
+}
+
 thread_local! {
     static CHECKED_OBJECT_FAULT_V44: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static CHECKED_OBJECT_MUTATIONS_V44: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

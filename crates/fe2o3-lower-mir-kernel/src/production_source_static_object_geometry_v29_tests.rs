@@ -164,6 +164,7 @@ fn static_field_equations_keep_sibling_initialization_and_slot_kills_distinct() 
     let (sibling, slots, accesses) = scalar_field_equations_v29(true);
     unsupported(run_scalar_field_history_v29(&sibling, &slots, &accesses, &[], LIMIT, LIMIT).0);
     let killed = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: 4,
         slot: 0,

@@ -251,8 +251,16 @@ fn check_scoped_defined_call_phases_with_references_v29(
                     let first = span.first_operation_ordinal as usize;
                     let end = argument_sum_v1(&[first, span.operation_count as usize])?;
                     let (arguments_first, call_operation) = match row.kind {
-                        SemanticKirCallReturnKindV1::Call { arguments_first, call_operation, .. }
-                        | SemanticKirCallReturnKindV1::NoNormalReturnCall { arguments_first, call_operation, .. } => (arguments_first, call_operation),
+                        SemanticKirCallReturnKindV1::Call {
+                            arguments_first,
+                            call_operation,
+                            ..
+                        }
+                        | SemanticKirCallReturnKindV1::NoNormalReturnCall {
+                            arguments_first,
+                            call_operation,
+                            ..
+                        } => (arguments_first, call_operation),
                         SemanticKirCallReturnKindV1::Return { .. } => return Err(mismatch()),
                     };
                     let inputs = match (&target.invocation_entry, &target.direct_call_inputs) {
@@ -558,6 +566,7 @@ fn check_scoped_call_access_phases_v29(
             ScopedMemoryAnchorKindV29::Access { pointer, .. } => Some(pointer),
             ScopedMemoryAnchorKindV29::Object(_) => None,
             ScopedMemoryAnchorKindV29::Kill { .. }
+            | ScopedMemoryAnchorKindV29::ScalarMove { .. }
             | ScopedMemoryAnchorKindV29::FailureRead { .. } => continue,
         };
         if row.block != block.id || !(first..end).contains(&row.position) {

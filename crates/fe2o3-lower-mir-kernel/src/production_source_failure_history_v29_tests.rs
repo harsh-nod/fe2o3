@@ -1,3 +1,5 @@
+include!("production_source_scalar_range_history_v45_tests.rs");
+
 fn failure_history_fixture_v29(
     typed: bool,
 ) -> (
@@ -133,6 +135,7 @@ fn run_unprojected_object_history_v29(
     ];
     let kills = if fault == 1 {
         vec![SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 2,
             slot: 0,
@@ -216,6 +219,7 @@ fn run_failure_history_v29(
     ];
     let kills = if killed {
         vec![SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 2,
             slot: 0,
@@ -227,12 +231,15 @@ fn run_failure_history_v29(
         .iter()
         .enumerate()
         .map(|(anchor, &(gap, move_after))| SourceIndexFailureV29 {
+            source_order: [0, 0, 1, 0, anchor],
             instance: ProductionCallInstanceIdV1(0),
             anchor,
             slot: 0,
             block: BlockId(77),
             gap,
             move_after,
+            range: SourceScalarByteRangeV45 { start: 0, end: 4 },
+            failure_only: true,
         })
         .collect::<Vec<_>>();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);

@@ -34,6 +34,7 @@ enum EventKind {
     Set(bool),
     KillSlot,
     FailureKillSlot,
+    FailureKillCell,
     ForgetSelector,
     Preserve,
 }
@@ -61,6 +62,7 @@ impl Event {
                 Some(false)
             }
             EventKind::ForgetSelector if self.cell == cell => Some(false),
+            EventKind::FailureKillCell if self.cell == cell => Some(false),
             EventKind::Set(value) if self.cell == cell => Some(value),
             _ => None,
         }
@@ -400,7 +402,9 @@ fn with_history_cell(
                 let event = events[event_index];
                 let failure = matches!(
                     event.kind,
-                    EventKind::FailureRead | EventKind::FailureKillSlot
+                    EventKind::FailureRead
+                        | EventKind::FailureKillSlot
+                        | EventKind::FailureKillCell
                 );
                 let predecessor = if failure {
                     failure_previous.unwrap_or(previous)
@@ -905,6 +909,9 @@ pub(super) fn check_with_source_selectors(
         let (local, read) = match row.kind {
             ScopedMemoryAnchorKindV29::Kill { local, .. } => (local, false),
             ScopedMemoryAnchorKindV29::FailureRead { local, .. } => (local, true),
+            ScopedMemoryAnchorKindV29::ScalarMove { .. } => {
+                return Err(invalid("projected scalar move requires byte-range history"));
+            }
             ScopedMemoryAnchorKindV29::Access { .. } => continue,
             ScopedMemoryAnchorKindV29::Object(_) => return Err(scoped_object_pending_v29()),
         };

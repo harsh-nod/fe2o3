@@ -802,6 +802,7 @@ fn physical_value_kill_does_not_fabricate_referent_lifetime_end() {
         &fixture(),
         &accesses(),
         &[SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 7,
             slot: 2,
@@ -989,12 +990,14 @@ fn unwritten_and_killed_pointer_cells_do_not_gain_origins_from_read_receipts() {
     ];
     unsupported(run(&function, &reads, &[], LIMIT, LIMIT).0);
     let kill = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: 6,
         slot: 2,
     }];
     unsupported(run(&fixture(), &accesses(), &kill, LIMIT, LIMIT).0);
     let prior_kill = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: 5,
         slot: 2,
@@ -1013,6 +1016,7 @@ fn wrong_or_duplicate_physical_rows_are_rejected_before_solving() {
     rows[0].operation = 4;
     unsupported(run(&fixture(), &rows, &[], LIMIT, LIMIT).0);
     let kills = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(999),
         gap: 0,
         slot: 2,
@@ -1089,6 +1093,7 @@ fn actual_predecessors_join_same_cell_values_without_cross_product_origins() {
     unsupported(run(&function, &rows, &[], LIMIT, LIMIT).0);
     let (function, rows) = diamond(EXPOSED_A);
     let killed_arm = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(99),
         gap: 1,
         slot: 2,
@@ -1140,6 +1145,7 @@ fn real_loop_memory_edges_recompute_writes_and_do_not_ground_an_unwritten_cycle(
         },
     ];
     let kills = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(88),
         gap: 0,
         slot: 2,
@@ -1148,6 +1154,7 @@ fn real_loop_memory_edges_recompute_writes_and_do_not_ground_an_unwritten_cycle(
     // Moving the same kill after the actual write invalidates the next Load;
     // the loop edge and a source target hypothesis cannot revive that value.
     let kills = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(88),
         gap: 1,
         slot: 2,

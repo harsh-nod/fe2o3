@@ -1,6 +1,16 @@
 // Partition only at observed access boundaries, never once per byte or once per
 // declared array element. Existing all-path history equations check each segment.
 include!("production_source_tag_history_v43.rs");
+
+type SourceScalarHistoryOrderFrameV45<'a> = (
+    Option<[usize; 7]>,
+    [usize; 7],
+    Option<&'a SourceAddressKillV29>,
+    Option<&'a SourceIndexFailureV29>,
+    &'a SourceIndexFailureV29,
+    &'a std::ops::Range<usize>,
+    [usize; 5],
+);
 fn check_expanded_static_object_history_v29(
     function: &Function,
     graph: &SourceAddressMemoryV29<'_>,
@@ -22,9 +32,13 @@ fn check_expanded_static_object_history_v29(
         budget.reserve_storage(source_reference_emission_headers_v29::<
             SourceAddressHistoryQueryFrameV43<'_>,
         >()?)?;
-        let mut footprints = emission_vec_v1(accesses.len(), budget)?;
+        budget.reserve_storage(source_reference_emission_headers_v29::<
+            SourceScalarHistoryOrderFrameV45<'_>,
+        >()?)?;
+        let footprint_count = argument_sum_v1(&[accesses.len(), failures.len()])?;
+        let mut footprints = emission_vec_v1(footprint_count, budget)?;
         let mut cells = emission_vec_v1(
-            argument_sum_v1(&[slots.len(), argument_product_v1(accesses.len(), 2)?])?,
+            argument_sum_v1(&[slots.len(), argument_product_v1(footprint_count, 2)?])?,
             budget,
         )?;
         for (slot, row) in slots.iter().enumerate() {
@@ -55,39 +69,52 @@ fn check_expanded_static_object_history_v29(
                 index: CellIndex::Literal(end),
             });
         }
+        let mut previous_range = None;
+        for row in failures {
+            budget.charge_work(13)?;
+            let key = row.key_v45();
+            if previous_range.is_some_and(|previous| previous >= key) {
+                return Err(scoped_slot_error_v29());
+            }
+            previous_range = Some(key);
+            let slot = slots.get(row.slot).ok_or_else(scoped_slot_error_v29)?;
+            if row.range.start >= row.range.end || row.range.end > slot.representation.bytes() {
+                return Err(scoped_slot_error_v29());
+            }
+            match slot.representation {
+                ScopedSlotRepresentationV29::ScalarArray(scalar)
+                    if scalar.length == 1
+                        && scalar.bytes == scalar.element.size
+                        && row.range.start == 0
+                        && row.range.end == scalar.bytes
+                        && matches!(
+                            scalar.element.element,
+                            PrivateRetainedElementFactsV1::Scalar(_)
+                        ) => {}
+                ScopedSlotRepresentationV29::Object { schema, bytes, .. }
+                    if graph
+                        .object_layouts
+                        .get(schema.0 as usize)
+                        .is_some_and(|layout| layout.bytes == bytes) => {}
+                _ => return Err(scoped_slot_error_v29()),
+            }
+            footprints.push((row.slot, Some((row.range.start, row.range.end)), false));
+            cells.push(Cell {
+                slot: row.slot,
+                index: CellIndex::Literal(row.range.start),
+            });
+            cells.push(Cell {
+                slot: row.slot,
+                index: CellIndex::Literal(row.range.end),
+            });
+        }
         call_splice_sort_work_v1(cells.len(), budget).map_err(source_address_call_error_v29)?;
         cells.sort_unstable();
         budget.charge_work(cells.len())?;
         cells.dedup();
         let mut ranges = emission_vec_v1(footprints.len(), budget)?;
-        let mut event_count = argument_sum_v1(&[kills.len(), failures.len()])?;
-        for row in failures {
-            budget.charge_work(3)?;
-            let slot = slots.get(row.slot).ok_or_else(scoped_slot_error_v29)?;
-            let scalar = match slot.representation {
-                ScopedSlotRepresentationV29::ScalarArray(scalar) => {
-                    scalar.length == 1
-                        && scalar.bytes == scalar.element.size
-                        && matches!(
-                            scalar.element.element,
-                            PrivateRetainedElementFactsV1::Scalar(_)
-                        )
-                }
-                ScopedSlotRepresentationV29::Object { schema, .. } => graph
-                    .object_layouts
-                    .get(schema.0 as usize)
-                    .is_some_and(|layout| {
-                        matches!(layout.value, SourceStaticObjectValueV29::Scalar(_))
-                    }),
-            };
-            if !scalar {
-                return Err(invalid(
-                    "failure history requires an exact whole scalar diagnostic",
-                ));
-            }
-            event_count = argument_sum_v1(&[event_count, usize::from(row.move_after)])?;
-        }
-        for &(slot, range, _) in &footprints {
+        let mut event_count = kills.len();
+        for (ordinal, &(slot, range, _)) in footprints.iter().enumerate() {
             let Some((start, end)) = range else {
                 budget.charge_work(1)?;
                 ranges.push(0..0);
@@ -112,7 +139,15 @@ fn check_expanded_static_object_history_v29(
             if first >= limit {
                 return Err(scoped_slot_error_v29());
             }
-            event_count = argument_sum_v1(&[event_count, limit - first])?;
+            let repetitions = if ordinal < accesses.len() {
+                1
+            } else {
+                1 + usize::from(failures[ordinal - accesses.len()].move_after)
+            };
+            event_count = argument_sum_v1(&[
+                event_count,
+                argument_product_v1(limit - first, repetitions)?,
+            ])?;
             ranges.push(first..limit);
         }
         let mut events = emission_vec_v1(event_count, budget)?;
@@ -136,42 +171,65 @@ fn check_expanded_static_object_history_v29(
             let first = events.len();
             for gap in 0..=block.operations.len() {
                 budget.charge_work(1)?;
-                while let Some(row) = kills.get(kill)
-                    && (row.block, row.gap) == (block.id, gap)
-                {
-                    budget.charge_work(1)?;
-                    events.push(Event {
-                        cell: Cell {
-                            slot: row.slot,
-                            index: CellIndex::Literal(0),
-                        },
-                        kind: EventKind::KillSlot,
-                        operation: gap,
-                        sequence: events.len(),
-                    });
-                    kill += 1;
-                }
-                while let Some(row) = failures.get(failure)
-                    && (row.block, row.gap) == (block.id, gap)
-                {
-                    budget.charge_work(2 + usize::from(row.move_after))?;
-                    let cell = Cell {
-                        slot: row.slot,
-                        index: CellIndex::Literal(0),
-                    };
-                    events.push(Event {
-                        cell,
-                        kind: EventKind::FailureRead,
-                        operation: gap,
-                        sequence: events.len(),
-                    });
-                    if row.move_after {
+                loop {
+                    let next_kill = kills
+                        .get(kill)
+                        .filter(|row| (row.block, row.gap) == (block.id, gap));
+                    let next_range = failures
+                        .get(failure)
+                        .filter(|row| (row.block, row.gap) == (block.id, gap));
+                    if next_kill.is_none() && next_range.is_none() {
+                        break;
+                    }
+                    budget.charge_work(7)?;
+                    if let (Some(kill), Some(range)) = (next_kill, next_range)
+                        && kill.source_order == range.source_order
+                    {
+                        return Err(scoped_slot_error_v29());
+                    }
+                    if let Some(row) = next_kill
+                        && next_range.is_none_or(|range| row.source_order < range.source_order)
+                    {
                         events.push(Event {
-                            cell,
-                            kind: EventKind::FailureKillSlot,
+                            cell: Cell {
+                                slot: row.slot,
+                                index: CellIndex::Literal(0),
+                            },
+                            kind: EventKind::KillSlot,
                             operation: gap,
                             sequence: events.len(),
                         });
+                        kill += 1;
+                        continue;
+                    }
+                    let row = next_range.ok_or_else(scoped_slot_error_v29)?;
+                    let range = ranges
+                        .get(argument_sum_v1(&[accesses.len(), failure])?)
+                        .ok_or_else(scoped_slot_error_v29)?;
+                    for &cell in cells.get(range.clone()).ok_or_else(scoped_slot_error_v29)? {
+                        budget.charge_work(2 + usize::from(row.move_after))?;
+                        events.push(Event {
+                            cell,
+                            kind: if row.failure_only {
+                                EventKind::FailureRead
+                            } else {
+                                EventKind::Read
+                            },
+                            operation: gap,
+                            sequence: events.len(),
+                        });
+                        if row.move_after {
+                            events.push(Event {
+                                cell,
+                                kind: if row.failure_only {
+                                    EventKind::FailureKillCell
+                                } else {
+                                    EventKind::Set(false)
+                                },
+                                operation: gap,
+                                sequence: events.len(),
+                            });
+                        }
                     }
                     failure += 1;
                 }

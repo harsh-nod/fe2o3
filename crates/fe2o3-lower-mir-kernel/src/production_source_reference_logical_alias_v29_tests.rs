@@ -440,6 +440,7 @@ fn logical_alias_gap_kill_run_v29(
     .to_vec();
     let kill_gap = if after_store { 5 } else { 4 };
     let kills = [SourceAddressKillV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: kill_gap,
         slot: 2,

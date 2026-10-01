@@ -187,7 +187,9 @@ fn optimized_alias_transport_headers_v18() -> Result<usize, ArgumentResourceV1> 
         size_of::<SourceOwnedResultV18<(AliasBlockV18, usize, Option<(BlockId, usize)>)>>(),
         size_of::<OptimizedAliasBoundaryV18>(),
         size_of::<Option<[usize; 6]>>(),
-        size_of::<[usize; 3]>(),
+        size_of::<[usize; 8]>(),
+        size_of::<[usize; 5]>(),
+        size_of::<SourceOwnedResultV18<[usize; 5]>>(),
         size_of::<Result<usize, usize>>(),
     ])
 }
@@ -208,9 +210,8 @@ fn optimized_alias_order_boundaries_v18(
     budget.charge_work(kills.len())?;
     seen_kills.resize(kills.len(), 0_u8);
     for pair in kills.windows(2) {
-        budget.charge_work(3)?;
-        if (pair[0].block, pair[0].gap, pair[0].slot) >= (pair[1].block, pair[1].gap, pair[1].slot)
-        {
+        budget.charge_work(8)?;
+        if pair[0].key_v45() >= pair[1].key_v45() {
             return Err(ProductionSourceOwnedViewErrorV18::Binding(
                 "logical alias physical kills are not canonical",
             ));
@@ -279,8 +280,8 @@ fn optimized_alias_order_boundaries_v18(
                         "logical alias kill changed output position",
                     ));
                 }
-                // Every source occurrence must join its exact physical key.
-                // Repeated clears at one gap are idempotent, not extra events.
+                // Every source occurrence joins its exact physical and source
+                // order key, even when several clears share an output gap.
                 seen_kills[index] = 1;
                 continue;
             }
@@ -626,7 +627,8 @@ fn optimized_source_alias_transport_v18(
     slots: &[ScopedSourceSlotV29],
     prefix: &OptimizedMemoryGapPrefixV18,
     lifetimes: &mut [SourceAddressLifetimeV29],
-    kills: &[SourceAddressKillV29],
+    kills: &mut [SourceAddressKillV29],
+    failures: &mut [SourceIndexFailureV29],
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<OptimizedSourceAliasTransportV18> {
     let relation = original.correspondence;
@@ -638,6 +640,49 @@ fn optimized_source_alias_transport_v18(
     let floor = budget.storage();
     budget.reserve_storage(optimized_alias_transport_headers_v18()?)?;
     let (segments, output_uses) = optimized_alias_output_census_v18(original, optimized, budget)?;
+    let output_inventory = optimized.output_inventory(budget)?;
+    // Reuse the checked original-to-output segment census. A source block
+    // ordinal alone is not chronological order after a checked block merge.
+    let order = |block,
+                 mut order: [usize; 5],
+                 budget: &mut ArgumentBudgetV1<'_>|
+     -> SourceOwnedResultV18<[usize; 5]> {
+        budget.charge_work(7)?;
+        let segment = segments.get(order[0]).copied().flatten().ok_or(
+            ProductionSourceOwnedViewErrorV18::Binding("source byte boundary segment"),
+        )?;
+        if source_block_row_v18(output_inventory, segment.output, budget)?
+            .block
+            .id
+            != block
+            || order[2] > 1
+            || order[2] == 0 && (order[3] != 0 || order[4] != 0)
+        {
+            return relation
+                .source
+                .missing("source byte boundary changed checked segment");
+        }
+        order[0] = segment.ordinal;
+        Ok(order)
+    };
+    for row in kills.iter_mut() {
+        row.source_order = order(row.block, row.source_order, budget)?;
+    }
+    for row in failures.iter_mut() {
+        row.source_order = order(row.block, row.source_order, budget)?;
+    }
+    private_array_heapsort_v1(
+        kills,
+        SourceAddressKillV29::key_v45,
+        &mut SourceCorrespondenceWorkV18(budget),
+        || ArgumentResourceV1::Arithmetic.into(),
+    )?;
+    private_array_heapsort_v1(
+        failures,
+        SourceIndexFailureV29::key_v45,
+        &mut SourceCorrespondenceWorkV18(budget),
+        || ArgumentResourceV1::Arithmetic.into(),
+    )?;
     let mut original_births =
         emission_vec_v1(input.operations.len(), budget).map_err(immutable_memory_error_v29)?;
     budget.charge_work(input.operations.len())?;
@@ -964,10 +1009,19 @@ fn optimized_source_alias_transport_v18(
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                 "logical alias kill segment",
             ))?;
+        let [0, 0, phase, instance, anchor] = row.source_order else {
+            return relation.source.missing("logical alias original kill order");
+        };
+        let expected = SourceAddressKillV29 {
+            block,
+            gap,
+            slot: row.slot,
+            source_order: [segment.ordinal, input_gap, phase, instance, anchor],
+        };
         let index = private_array_partition_v1(
             kills,
-            |row| [row.block.0 as usize, row.gap, row.slot],
-            [block.0 as usize, gap, row.slot],
+            SourceAddressKillV29::key_v45,
+            expected.key_v45(),
             false,
             &mut SourceCorrespondenceWorkV18(budget),
         )?;
@@ -976,8 +1030,8 @@ fn optimized_source_alias_transport_v18(
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                 "logical alias kill missing mapped original row",
             ))?;
-        budget.charge_work(3)?;
-        if mapped.block != block || mapped.gap != gap || mapped.slot != row.slot {
+        budget.charge_work(8)?;
+        if *mapped != expected {
             return relation
                 .source
                 .missing("logical alias kill changed exact source transition");
@@ -991,7 +1045,7 @@ fn optimized_source_alias_transport_v18(
                 gap,
                 kind: SourceAddressBoundaryKindV29::Kill(index),
             },
-            order: [segment.ordinal, input_gap, 2, row.slot],
+            order: [segment.ordinal, input_gap, 2, index],
         });
     }
     // Unreachable original kills have no output gap. Every reachable occurrence

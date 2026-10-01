@@ -258,12 +258,14 @@ fn check_expanded_array_history_v29<'view, 'inventory, 'graph>(
                 && (row.block, row.gap) == (block.id, gap)
             {
                 budget.charge_work(1)?;
-                if slots
+                let scalar = slots
                     .get(row.slot)
                     .ok_or_else(scoped_slot_error_v29)?
-                    .scalar_array()?
-                    .length
-                    != 1
+                    .scalar_array()?;
+                if scalar.length != 1
+                    || !row.failure_only
+                    || row.range.start != 0
+                    || row.range.end != scalar.bytes
                 {
                     return Err(scoped_slot_error_v29());
                 }

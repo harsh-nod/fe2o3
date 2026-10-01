@@ -298,6 +298,10 @@ pub(super) enum PendingSourceMemoryEffectV29 {
         instance: ProductionCallInstanceIdV1,
         anchor: usize,
     },
+    ScalarMove {
+        instance: ProductionCallInstanceIdV1,
+        anchor: usize,
+    },
     Invocation(ProductionCallInstanceIdV1),
     Return {
         instance: ProductionCallInstanceIdV1,
@@ -629,6 +633,15 @@ fn immutable_memory_access_v29(
 }
 
 impl CheckedSourceMemoryV29<'_> {
+    #[cfg(test)]
+    pub(super) fn scalar_range_test_rows_v45(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<(&[SourceIndexFailureV29], &[SourceAddressKillV29])> {
+        self.check(budget)?;
+        Ok((&self.pending.index_failures, &self.pending.kills))
+    }
+
     fn observe_custody(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         self.correspondence.observe_custody(budget)?;
         if budget.storage() < self.required {
@@ -1136,7 +1149,7 @@ fn check_immutable_source_memory_v29(
     let mut failures = emission_vec_v1(pending.index_failures.len(), budget)
         .map_err(immutable_memory_error_v29)?;
     for row in &pending.index_failures {
-        budget.charge_work(5)?;
+        budget.charge_work(10)?;
         let sidecar = correspondence
             .source
             .sidecar(root, row.instance.index(), budget)?;
@@ -1166,8 +1179,12 @@ fn check_immutable_source_memory_v29(
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                 "index diagnostic original function",
             ))?;
-        let place = checked_scoped_failure_read_v29(original, &occurrences, anchor, budget)
-            .map_err(immutable_memory_error_v29)?;
+        let place = if row.failure_only {
+            checked_scoped_failure_read_v29(original, &occurrences, anchor, budget)
+        } else {
+            checked_scoped_scalar_move_v45(original, &occurrences, anchor, budget)
+        }
+        .map_err(immutable_memory_error_v29)?;
         let slot = owner.source_slots.slots.get(row.slot).ok_or(
             ProductionSourceOwnedViewErrorV18::Binding("index diagnostic source slot"),
         )?;
@@ -1180,15 +1197,21 @@ fn check_immutable_source_memory_v29(
                     .missing("failure diagnostic source representation");
             }
         };
+        let (root_type, range) =
+            source_scalar_range_v45(original, ssa.source_semantic().types(), place, budget)
+                .map_err(immutable_memory_error_v29)?;
         if slot.instance != row.instance
             || local != place.local().index()
-            || slot.origin.semantic_type != place.ty()
-            || !place.projections().is_empty()
-            || source_failure_operand_moved_v29(original, anchor, budget)
-                .map_err(immutable_memory_error_v29)?
+            || slot.origin.semantic_type != root_type
+            || range != row.range
+            || row.source_order != [0, 0, 1, row.instance.index(), row.anchor]
+            || range.end > slot.representation.bytes()
+            || (!row.failure_only
+                || source_failure_operand_moved_v29(original, anchor, budget)
+                    .map_err(immutable_memory_error_v29)?)
                 != row.move_after
             || matches!(slot.representation, ScopedSlotRepresentationV29::ScalarArray(scalar)
-                if scalar.element_type != place.ty() || scalar.length != 1
+                if !place.projections().is_empty() || scalar.element_type != place.ty() || scalar.length != 1
                     || !matches!(scalar.element.element, PrivateRetainedElementFactsV1::Scalar(_)))
         {
             return correspondence
@@ -2732,9 +2755,16 @@ fn retain_pending_memory_v29(
         budget.charge_work(1)?;
         emission_push_v1(
             &mut output.effects,
-            PendingSourceMemoryEffectV29::FailureRead {
-                instance: failure.instance,
-                anchor: failure.anchor,
+            if failure.failure_only {
+                PendingSourceMemoryEffectV29::FailureRead {
+                    instance: failure.instance,
+                    anchor: failure.anchor,
+                }
+            } else {
+                PendingSourceMemoryEffectV29::ScalarMove {
+                    instance: failure.instance,
+                    anchor: failure.anchor,
+                }
             },
             budget,
         )?;

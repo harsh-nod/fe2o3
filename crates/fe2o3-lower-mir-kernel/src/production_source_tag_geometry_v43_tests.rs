@@ -411,6 +411,7 @@ fn restarted_tag_backing_requires_fresh_initialization_not_a_stale_tag() {
             });
         }
         let kills = [SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 2,
             slot: 0,

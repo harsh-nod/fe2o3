@@ -54,6 +54,24 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             return Ok(());
         };
         if !self.execution_cfg_local_v29(place.local().index() as usize) {
+            if matches!(operand, SemanticOperandV1::Move(_))
+                && self.has_retained_scalar_move_v45(place)?
+            {
+                // Folding the branch does not discard the original read or
+                // its exact-range common-path Move effect.
+                let value =
+                    self.lower_source_operand_v29(block, None, Some(role), operand, operations)?;
+                if !matches!(
+                    value,
+                    SemanticValueBindingV1::Value {
+                        ty: Type::Scalar(_),
+                        ..
+                    }
+                ) {
+                    return Err(execution_availability_error_v29());
+                }
+                return Ok(());
+            }
             return self.consume_scoped_discarded_operand_v29(
                 block,
                 role,

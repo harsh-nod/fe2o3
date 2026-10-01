@@ -1059,7 +1059,9 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         )
                     })?;
                 }
-                this.lower_operand_inner_v1(block, statement, operand, operations)
+                let result = this.lower_operand_inner_v1(block, statement, operand, operations)?;
+                this.record_scoped_scalar_move_v45(site, role, operand, operations.len())?;
+                Ok(result)
             },
         )
     }

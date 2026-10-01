@@ -648,6 +648,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                         local: _,
                         cause: _,
                     }
+                    | ScopedMemoryAnchorKindV29::ScalarMove { .. }
                     | ScopedMemoryAnchorKindV29::FailureRead { event: _, local: _ } => {
                         self.emitted_gap(key, instance, block, tile_attachment_u32_v29(position)?)?;
                     }
@@ -671,6 +672,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                         local: _,
                         cause: _,
                     }
+                    | ScopedMemoryAnchorKindV29::ScalarMove { .. }
                     | ScopedMemoryAnchorKindV29::FailureRead { event: _, local: _ } => {
                         self.emit(key, TileAttachmentLocationV29::NoOutput)?;
                     }
@@ -725,6 +727,7 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                     ),
                     ScopedMemoryAnchorKindV29::Access { .. }
                     | ScopedMemoryAnchorKindV29::Kill { .. }
+                    | ScopedMemoryAnchorKindV29::ScalarMove { .. }
                     | ScopedMemoryAnchorKindV29::FailureRead { .. } => None,
                 };
                 if let Some(object) = object {

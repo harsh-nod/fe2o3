@@ -805,15 +805,33 @@ fn check_optimized_source_memory_equations_v18(
     let mut kills =
         emission_vec_v1(pending.kills.len(), budget).map_err(immutable_memory_error_v29)?;
     for row in &pending.kills {
-        if let Some((block, gap)) = prefix.boundary(
+        let (input_block, input_gap, actual) = prefix.boundary_with_source_v45(
             relation,
             optimized,
             original.root,
             row.block,
             row.gap,
             budget,
-        )? {
-            kills.push(SourceAddressKillV29 { block, gap, ..*row });
+        )?;
+        if let Some((block, gap)) = actual {
+            budget.charge_work(5)?;
+            let [0, 0, phase, instance, anchor] = row.source_order else {
+                return relation
+                    .source
+                    .missing("original kill source order changed");
+            };
+            kills.push(SourceAddressKillV29 {
+                block,
+                gap,
+                source_order: [
+                    input_block.block as usize,
+                    input_gap,
+                    phase,
+                    instance,
+                    anchor,
+                ],
+                ..*row
+            });
         }
     }
     let mut lifetimes =
@@ -898,15 +916,33 @@ fn check_optimized_source_memory_equations_v18(
     let mut failures = emission_vec_v1(pending.index_failures.len(), budget)
         .map_err(immutable_memory_error_v29)?;
     for row in &pending.index_failures {
-        if let Some((block, gap)) = prefix.boundary(
+        let (input_block, input_gap, actual) = prefix.boundary_with_source_v45(
             relation,
             optimized,
             original.root,
             row.block,
             row.gap,
             budget,
-        )? {
-            failures.push(SourceIndexFailureV29 { block, gap, ..*row });
+        )?;
+        if let Some((block, gap)) = actual {
+            budget.charge_work(5)?;
+            if row.source_order != [0, 0, 1, row.instance.index(), row.anchor] {
+                return relation
+                    .source
+                    .missing("original scalar range source order changed");
+            }
+            failures.push(SourceIndexFailureV29 {
+                block,
+                gap,
+                source_order: [
+                    input_block.block as usize,
+                    input_gap,
+                    1,
+                    row.instance.index(),
+                    row.anchor,
+                ],
+                ..*row
+            });
         }
     }
     private_array_heapsort_v1(
@@ -917,16 +953,14 @@ fn check_optimized_source_memory_equations_v18(
     )?;
     private_array_heapsort_v1(
         &mut kills,
-        |row| [row.block.0 as usize, row.gap, row.slot],
+        SourceAddressKillV29::key_v45,
         &mut SourceCorrespondenceWorkV18(budget),
         || ArgumentResourceV1::Arithmetic.into(),
     )?;
-    // Erased operations and merged segments can collapse repeated clears of
-    // the same holder into one actual gap. Origin/currentness/history solvers
-    // all interpret Kill as an idempotent clear. The alias producer still joins
-    // every original occurrence and proves complete output-key coverage.
+    // Clear identities must survive collapsed gaps: a scalar Move/read can
+    // occur between two clears of the same original object.
     budget.charge_work(kills.len())?;
-    kills.dedup_by_key(|row| (row.block, row.gap, row.slot));
+    kills.dedup();
     private_array_heapsort_v1(
         &mut lifetimes,
         |row| [row.block.0 as usize, row.gap, row.sequence],
@@ -941,14 +975,7 @@ fn check_optimized_source_memory_equations_v18(
     )?;
     private_array_heapsort_v1(
         &mut failures,
-        |row| {
-            [
-                row.block.0 as usize,
-                row.gap,
-                row.instance.index(),
-                row.anchor,
-            ]
-        },
+        SourceIndexFailureV29::key_v45,
         &mut SourceCorrespondenceWorkV18(budget),
         || ArgumentResourceV1::Arithmetic.into(),
     )?;
@@ -990,7 +1017,8 @@ fn check_optimized_source_memory_equations_v18(
         &slots,
         &prefix,
         &mut lifetimes,
-        &kills,
+        &mut kills,
+        &mut failures,
         budget,
     )?;
     let equations = OptimizedSourceCurrentnessEquationsV18 {
@@ -1086,7 +1114,14 @@ fn optimized_currentness_value_footprint_v18(
 
 fn optimized_currentness_query_headers_v18() -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
-        size_of::<[usize; 4]>(),
+        size_of::<[usize; 8]>(),
+        size_of::<
+            SourceOwnedResultV18<(
+                fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1,
+                usize,
+                Option<(BlockId, usize)>,
+            )>,
+        >(),
         size_of::<SourceOwnedResultV18<bool>>(),
         size_of::<SourceOwnedResultV18<(ValueId, bool)>>(),
         size_of::<Result<Option<SourceAddressFootprintV33>, ProductionSemanticKirErrorV1>>(),
@@ -1243,7 +1278,14 @@ mod optimized_currentness_occurrence_tests {
 
     #[test]
     fn currentness_query_header_charge_is_independent_and_precedes_queries() {
-        let expected = size_of::<[usize; 4]>()
+        let expected = size_of::<[usize; 8]>()
+            + size_of::<
+                SourceOwnedResultV18<(
+                    fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1,
+                    usize,
+                    Option<(BlockId, usize)>,
+                )>,
+            >()
             + size_of::<SourceOwnedResultV18<bool>>()
             + size_of::<SourceOwnedResultV18<(ValueId, bool)>>()
             + size_of::<Result<Option<SourceAddressFootprintV33>, ProductionSemanticKirErrorV1>>()

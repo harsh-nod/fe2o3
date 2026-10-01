@@ -1,6 +1,7 @@
 // Producer-owned physical coordinates and source invalidation occurrences.
 include!("production_scoped_memory_payloads_v29.rs");
 include!("production_source_object_payloads_v29.rs");
+include!("production_source_scalar_move_anchors_v45.rs");
 
 #[derive(Clone, Copy)]
 struct ScopedMemorySpanV29 {
@@ -118,7 +119,7 @@ fn check_scoped_memory_anchors_v29(
                 scoped_expected_kill_v29(
                     source.declaration(),
                     event,
-                    matches!(ty.shape(), SemanticTypeShapeV1::Array { .. }),
+                    legacy.is_some() && matches!(ty.shape(), SemanticTypeShapeV1::Array { .. }),
                 )
             }
             Err(_) => None,
@@ -134,11 +135,26 @@ fn check_scoped_memory_anchors_v29(
             return Err(scoped_memory_error_v29());
         }
         expected.push(expectation);
-        failure_reads.push(
-            event.is_reachable()
-                && event.role() == ExecutionEventV29::BaseUse
-                && matches!(event.operand(), ExecutionOperandV29::AssertMessage(_)),
-        );
+        let failure = event.is_reachable()
+            && event.role() == ExecutionEventV29::BaseUse
+            && matches!(event.operand(), ExecutionOperandV29::AssertMessage(_));
+        let moved = if event.is_reachable()
+            && !objects.is_empty()
+            && event.role() == ExecutionEventV29::BaseUse
+            && !matches!(event.operand(), ExecutionOperandV29::AssertMessage(_))
+        {
+            match scoped_source_operand_v29(source.declaration(), event.site(), event.operand()) {
+                Some(SemanticOperandV1::Move(place)) => source_scalar_move_path_v45(
+                    instances.owner().source_semantic().types(),
+                    place,
+                    budget,
+                )?,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        failure_reads.push(u8::from(failure) | (u8::from(moved) << 1));
     }
     let count = argument_sum_v1(&[
         lowered.statement_operation_spans.len(),
@@ -218,6 +234,7 @@ fn check_scoped_memory_anchors_v29(
                         row.kind,
                         ScopedMemoryAnchorKindV29::Kill { .. }
                             | ScopedMemoryAnchorKindV29::FailureRead { .. }
+                            | ScopedMemoryAnchorKindV29::ScalarMove { .. }
                     )
                 {
                     break;
@@ -374,10 +391,22 @@ fn check_scoped_memory_anchors_v29(
             let needed = failure_reads
                 .get_mut(event)
                 .ok_or_else(scoped_memory_error_v29)?;
-            if !*needed {
+            if *needed != 1 {
                 return Err(scoped_memory_error_v29());
             }
-            *needed = false;
+            *needed = 0;
+        }
+        if let ScopedMemoryAnchorKindV29::ScalarMove { event, .. } = row.kind {
+            checked_scoped_scalar_move_v45(source.declaration(), &occurrences, row, budget)?;
+            if std::mem::replace(
+                failure_reads
+                    .get_mut(event)
+                    .ok_or_else(scoped_memory_error_v29)?,
+                0,
+            ) != 2
+            {
+                return Err(scoped_memory_error_v29());
+            }
         }
     }
     budget.charge_work(expected.len())?;
@@ -385,7 +414,7 @@ fn check_scoped_memory_anchors_v29(
         return Err(scoped_memory_error_v29());
     }
     budget.charge_work(failure_reads.len())?;
-    if failure_reads.iter().any(|needed| *needed) {
+    if failure_reads.iter().any(|needed| *needed != 0) {
         return Err(scoped_memory_error_v29());
     }
     Ok(())
@@ -486,6 +515,10 @@ enum ScopedMemoryAnchorKindV29 {
         payload: Option<ScopedMemoryPayloadV29>,
     },
     FailureRead {
+        event: usize,
+        local: u32,
+    },
+    ScalarMove {
         event: usize,
         local: u32,
     },
@@ -920,13 +953,10 @@ fn scoped_discarded_move_cause_v29(
             if !matches!(slot.storage, SemanticRetainedStorageV29::Object { .. }) {
                 return Err(scoped_memory_error_v29());
             }
-            let ty = types
+            let _ty = types
                 .get(slot.semantic_type.index() as usize)
                 .ok_or_else(scoped_memory_error_v29)?;
-            (
-                slot,
-                matches!(ty.shape(), SemanticTypeShapeV1::Array { .. }),
-            )
+            (slot, false)
         }
         (None, None) => return Ok(None),
     };
@@ -1296,12 +1326,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             let event = &cursor.occurrences.events()[event_index];
             let array = match slot.storage {
                 SemanticRetainedStorageV29::ScalarArray { ref array, .. } => array.is_some(),
-                SemanticRetainedStorageV29::Object { .. } => matches!(
-                    this.types
-                        .get(slot.semantic_type.index() as usize)
-                        .map(SemanticTypeDeclV1::shape),
-                    Some(SemanticTypeShapeV1::Array { .. })
-                ),
+                SemanticRetainedStorageV29::Object { .. } => false,
             };
             if scoped_expected_kill_v29(cursor.function, event, array)
                 != Some((local.index(), cause))

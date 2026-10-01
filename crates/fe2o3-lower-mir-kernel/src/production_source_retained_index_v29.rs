@@ -726,6 +726,25 @@ struct SourceIndexFailureV29 {
     block: BlockId,
     gap: usize,
     move_after: bool,
+    range: SourceScalarByteRangeV45,
+    // False denotes an ordinary original Move; its invalidation reaches successors.
+    failure_only: bool,
+    source_order: [usize; 5],
+}
+
+impl SourceIndexFailureV29 {
+    fn key_v45(&self) -> [usize; 7] {
+        let [segment, gap, phase, instance, anchor] = self.source_order;
+        [
+            self.block.0 as usize,
+            self.gap,
+            segment,
+            gap,
+            phase,
+            instance,
+            anchor,
+        ]
+    }
 }
 
 include!("production_source_failure_history_v29.rs");
@@ -931,23 +950,31 @@ fn source_index_failures_v29(
             .ok_or_else(source_raw_physical_error_v29)?;
         for (anchor, row) in anchors.rows.iter().enumerate() {
             budget.charge_work(2)?;
-            if !matches!(row.kind, ScopedMemoryAnchorKindV29::FailureRead { .. }) {
+            let failure_only = match row.kind {
+                ScopedMemoryAnchorKindV29::FailureRead { .. } => true,
+                ScopedMemoryAnchorKindV29::ScalarMove { .. } => false,
+                _ => continue,
+            };
+            if failure_only
+                && source_failure_is_promoted_scalar_v29(
+                    instances,
+                    source_index,
+                    slots,
+                    instance,
+                    row,
+                    budget,
+                )?
+            {
                 continue;
             }
-            if source_failure_is_promoted_scalar_v29(
-                instances,
-                source_index,
-                slots,
-                instance,
-                row,
-                budget,
-            )? {
-                continue;
-            }
-            let place = checked_scoped_failure_read_v29(original, &occurrences, row, budget)?;
+            let place = if failure_only {
+                checked_scoped_failure_read_v29(original, &occurrences, row, budget)?
+            } else {
+                checked_scoped_scalar_move_v45(original, &occurrences, row, budget)?
+            };
             let frame = row.source.ok_or_else(source_raw_physical_error_v29)?;
             let (block, statement) = scoped_memory_site_key_v29(frame.site);
-            if statement.is_some() || !place.projections().is_empty() {
+            if failure_only && statement.is_some() {
                 return Err(source_reference_error_v29(
                     "failure history requires an exact whole scalar diagnostic",
                 ));
@@ -955,10 +982,12 @@ fn source_index_failures_v29(
             let site = SourceReferenceSiteV29 {
                 instance,
                 block: SemanticBlockIdV1::from_index(block),
-                statement: None,
+                statement: statement.map(|index| index as usize),
             };
-            let slot = source_failure_scalar_slot_v29(instances, plan, slots, site, place, budget)?;
-            let move_after = source_failure_operand_moved_v29(original, row, budget)?;
+            let (slot, range) =
+                source_failure_scalar_slot_v29(instances, plan, slots, site, place, budget)?;
+            let move_after =
+                !failure_only || source_failure_operand_moved_v29(original, row, budget)?;
             source_index.frame_gap(instance, frame, row.block, row.position, budget)?;
             let mut mapping = ScopedEmittedPointsV29 {
                 coordinates: &source_index.pending.coordinates,
@@ -983,13 +1012,17 @@ fn source_index_failures_v29(
                     block,
                     gap: gap as usize,
                     move_after,
+                    range,
+                    failure_only,
+                    source_order: [0, 0, 1, instance.index(), anchor],
                 },
                 budget,
             )?;
         }
     }
-    call_splice_sort_work_v1(output.len(), budget).map_err(source_address_call_error_v29)?;
-    output.sort_unstable_by_key(|row| (row.block, row.gap, row.instance.index(), row.anchor));
+    call_splice_sort_work_v1(argument_product_v1(output.len(), 7)?, budget)
+        .map_err(source_address_call_error_v29)?;
+    output.sort_unstable_by_key(|row| (row.block, row.gap, row.source_order));
     Ok(output)
 }
 

@@ -1644,6 +1644,7 @@ impl ProductionSourceOwnedViewV18<'_> {
                 payload: _,
             } => Some((row.block, row.position, pointer)),
             ScopedMemoryAnchorKindV29::Kill { .. }
+            | ScopedMemoryAnchorKindV29::ScalarMove { .. }
             | ScopedMemoryAnchorKindV29::FailureRead { .. } => None,
         })
     }
@@ -1689,6 +1690,7 @@ impl ProductionSourceOwnedViewV18<'_> {
             }
             ScopedMemoryAnchorKindV29::Access { .. }
             | ScopedMemoryAnchorKindV29::Kill { .. }
+            | ScopedMemoryAnchorKindV29::ScalarMove { .. }
             | ScopedMemoryAnchorKindV29::FailureRead { .. } => Ok(None),
         }
     }

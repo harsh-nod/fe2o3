@@ -80,7 +80,33 @@ struct SourceAddressKillV29 {
     block: BlockId,
     gap: usize,
     slot: usize,
+    // Invocation resets precede source events. Other kills retain the exact
+    // original anchor order when no physical operation separates boundaries.
+    // Checked output segment, original input gap, reset/source, instance, anchor.
+    source_order: [usize; 5],
 }
+
+impl SourceAddressKillV29 {
+    fn key_v45(&self) -> [usize; 8] {
+        let [segment, gap, phase, instance, anchor] = self.source_order;
+        [
+            self.block.0 as usize,
+            self.gap,
+            segment,
+            gap,
+            phase,
+            instance,
+            anchor,
+            self.slot,
+        ]
+    }
+}
+
+type SourceAddressKillOrderFrameV45<'a> = (
+    Option<(BlockId, usize, [usize; 5], usize)>,
+    (BlockId, usize, [usize; 5], usize),
+    &'a SourceAddressKillV29,
+);
 
 // Original-source mapping supplies these ordered lifetime boundaries. Repeating
 // a `live` boundary always expires old aliases before the new activation.
@@ -1671,22 +1697,30 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                 return Err(source_raw_physical_error_v29());
             }
         }
-        let mut prior = None;
-        for row in kills {
-            budget.charge_work(3)?;
-            let key = (row.block, row.gap, row.slot);
-            if prior.is_some_and(|prior| prior >= key) || row.slot >= slots.len() {
-                return Err(source_raw_physical_error_v29());
-            }
-            prior = Some(key);
-            if row.gap
-                > self.blocks[self.block(row.block, budget)?]
-                    .1
-                    .operations
-                    .len()
-            {
-                return Err(source_raw_physical_error_v29());
-            }
+        if !kills.is_empty() {
+            with_canonical_call_scratch_v1(budget, |budget| {
+                budget.reserve_storage(source_reference_emission_headers_v29::<
+                    SourceAddressKillOrderFrameV45<'_>,
+                >()?)?;
+                let mut prior = None;
+                for row in kills {
+                    budget.charge_work(8)?;
+                    let key = (row.block, row.gap, row.source_order, row.slot);
+                    if prior.is_some_and(|prior| prior >= key) || row.slot >= slots.len() {
+                        return Err(source_raw_physical_error_v29());
+                    }
+                    prior = Some(key);
+                    if row.gap
+                        > self.blocks[self.block(row.block, budget)?]
+                            .1
+                            .operations
+                            .len()
+                    {
+                        return Err(source_raw_physical_error_v29());
+                    }
+                }
+                Ok(())
+            })?;
         }
         Ok(())
     }

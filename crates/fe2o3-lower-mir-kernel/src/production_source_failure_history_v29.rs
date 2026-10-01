@@ -1,5 +1,6 @@
 // Diagnostic reads have no physical load. Their original read and optional
 // move are checked in a failure-only shadow, never in the successful CFG state.
+include!("production_source_scalar_ranges_v45.rs");
 type SourceFailureScalarPathFrameV43<'a> = (
     &'a SemanticFunctionDeclV1,
     &'a [SemanticTypeDeclV1],
@@ -98,35 +99,31 @@ fn source_failure_scalar_slot_v29(
     site: SourceReferenceSiteV29,
     place: &SemanticPlaceV1,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<usize, ProductionSemanticKirErrorV1> {
+) -> Result<(usize, SourceScalarByteRangeV45), ProductionSemanticKirErrorV1> {
     budget.charge_work(8)?;
     if slots.ledger != budget.work_ledger_identity_v1()
         || slots.source != ExecutionCallSourceV29::from_instances(instances, budget)?
     {
         return Err(ArgumentResourceV1::Accounting.into());
     }
-    if !place.projections().is_empty()
-        || !matches!(
-            instances
-                .owner()
-                .source_semantic()
-                .types()
-                .get(place.ty().index() as usize)
-                .map(SemanticTypeDeclV1::shape),
-            Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
-        )
-    {
-        return Err(source_reference_error_v29(
-            "failure history requires an exact whole scalar diagnostic",
-        ));
-    }
+    let original = instances
+        .instance(site.instance)
+        .ok_or_else(source_raw_physical_error_v29)?
+        .declaration();
+    let (root_type, range) = source_scalar_range_v45(
+        original,
+        instances.owner().source_semantic().types(),
+        place,
+        budget,
+    )?;
     let access =
         source_reference_access_at_v29(plan, site, place, SourceReferenceAccessV29::Read, budget)?;
+    budget.charge_work(place.projections().len())?;
     if access.instance != site.instance
         || access.local != place.local()
         || access.ty != place.ty()
         || access.loan.is_some()
-        || !access.projections.is_empty()
+        || plan.projections.get(access.projections.clone()) != Some(place.projections())
         || !access.traversed.is_empty()
     {
         return Err(source_raw_physical_error_v29());
@@ -150,21 +147,23 @@ fn source_failure_scalar_slot_v29(
     let index = match (legacy, objects.is_empty()) {
         (Some(index), true) => index,
         (None, false) => {
-            return source_address_object_slot_v29(
+            let slot = source_address_object_slot_v29(
                 instances,
                 plan,
                 slots,
                 site.instance,
                 place.local(),
                 access.generation,
-                place.ty(),
+                root_type,
                 budget,
-            );
+            )?;
+            return Ok((slot, range));
         }
         _ => return Err(source_raw_physical_error_v29()),
     };
     let slot = &rows[index];
     if slot.instance != site.instance
+        || !place.projections().is_empty()
         || slot.origin.semantic_type != place.ty()
         || matches!(slot.representation, ScopedSlotRepresentationV29::ScalarArray(scalar)
             if scalar.length != 1 || scalar.element_type != place.ty()
@@ -172,7 +171,7 @@ fn source_failure_scalar_slot_v29(
     {
         return Err(source_raw_physical_error_v29());
     }
-    argument_sum_v1(&[owner.slots.start, index]).map_err(Into::into)
+    Ok((argument_sum_v1(&[owner.slots.start, index])?, range))
 }
 
 fn source_boundary_is_failure_move_v29(row: &SourceAddressBoundaryV29) -> bool {

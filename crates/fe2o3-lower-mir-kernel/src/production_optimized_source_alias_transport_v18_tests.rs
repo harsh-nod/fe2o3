@@ -311,11 +311,13 @@ fn optimized_alias_order_rejects_duplicate_keys_changed_points_and_missing_kills
         ];
         let kills = [
             SourceAddressKillV29 {
+                source_order: [0; 5],
                 block: BlockId(3),
                 gap: 0,
                 slot: 0,
             },
             SourceAddressKillV29 {
+                source_order: [0; 5],
                 block: BlockId(3),
                 gap: 0,
                 slot: 1,
@@ -363,11 +365,13 @@ fn optimized_alias_order_canonicalizes_source_kill_reversal_and_repeated_clears(
     ];
     let kills = [
         SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(3),
             gap: 0,
             slot: 0,
         },
         SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(3),
             gap: 0,
             slot: 1,
@@ -415,6 +419,7 @@ fn optimized_alias_kill_coverage_refuses_foreign_missing_duplicate_and_cross_gap
     for fault in 0..5 {
         let mut ordered = [event(0, 1, 2, 0, SourceAddressBoundaryKindV29::Kill(0))];
         let mut kills = vec![SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(3),
             gap: 0,
             slot: 0,
@@ -434,6 +439,7 @@ fn optimized_alias_kill_coverage_refuses_foreign_missing_duplicate_and_cross_gap
             }
             3 => {
                 kills.push(SourceAddressKillV29 {
+                    source_order: [0; 5],
                     block: BlockId(4),
                     gap: 0,
                     slot: 0,
@@ -466,6 +472,7 @@ fn optimized_alias_collapsed_kill_scratch_has_exact_and_one_short_resource_bound
             event(1, 0, 2, 0, SourceAddressBoundaryKindV29::Kill(0)),
         ];
         let kills = [SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(3),
             gap: 0,
             slot: 0,
@@ -527,6 +534,7 @@ fn optimized_alias_collapsed_kill_ordering_work_is_subquadratic() {
             .map(|index| event(index, 0, 2, 0, SourceAddressBoundaryKindV29::Kill(0)))
             .collect::<Vec<_>>();
         let kills = [SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(3),
             gap: 0,
             slot: 0,
@@ -609,7 +617,9 @@ fn optimized_alias_transport_live_headers_have_an_independent_shape_mirror() {
         + size_of::<SourceOwnedResultV18<(AliasBlockV18, usize, Option<(BlockId, usize)>)>>()
         + size_of::<BoundaryShape>()
         + size_of::<Option<[usize; 6]>>()
-        + size_of::<[usize; 3]>()
+        + size_of::<[usize; 8]>()
+        + size_of::<[usize; 5]>()
+        + size_of::<SourceOwnedResultV18<[usize; 5]>>()
         + size_of::<Result<usize, usize>>();
     assert_eq!(optimized_alias_transport_headers_v18().unwrap(), expected);
     for short in [0, 1] {

@@ -162,11 +162,13 @@ fn run_mixed_history_v29(
         .collect();
     let kills = match fault {
         5 => vec![SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(0),
             gap: 13,
             slot: 1,
         }],
         6 => vec![SourceAddressKillV29 {
+            source_order: [0; 5],
             block: BlockId(0),
             gap: 6,
             slot: 0,
