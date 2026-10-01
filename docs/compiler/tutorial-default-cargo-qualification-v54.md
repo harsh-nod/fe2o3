@@ -76,8 +76,11 @@ tutorial inputs or those gates.
 ## Harness Tests
 
 ```sh
-python3 scripts/tests/tutorial_default_cargo.py -v
+python3 -I -B scripts/tests/tutorial_default_cargo.py -v
 ```
+
+The `generic-core` CI lane runs this harness test suite, also inherited by the
+`generic` lane. CI runs the harness tests, not the protected compiler census.
 
 These tests use the real manifest validator and physical source snapshots, plus
 explicit unit-only subprocess/mock outcomes for failure, timeout, output bounds,
