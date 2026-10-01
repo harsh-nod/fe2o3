@@ -115,13 +115,13 @@
     "end": "class native_adapter final {",
     "current_header": {
       "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
-      "bytes": 11432,
-      "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
+      "bytes": 11369,
+      "sha256": "8da53f55e01bb959f6ad8dcec6c22e66498fe62d7a469d18156ad00dd61570ea"
     },
     "prior_header": {
       "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
-      "bytes": 11219,
-      "sha256": "d27609cfd5705df5a3830626cd940f1a3cdc47b706d9e4db1ffcc37a35fed8b3"
+      "bytes": 11156,
+      "sha256": "c916ea38c9e9db3efdb6bf68b4a8a2c78a8249fce08e39cfb4c638a9ff53561d"
     },
     "extraction": {
       "path": "tests/loaded-scratch.inc",
@@ -136,6 +136,19 @@
       "objects_added": 0
     },
     "actual_gdb_layout": null,
-    "native_authority": false
+    "native_authority": false,
+    "previous_header_pins": {
+      "current_header": {
+        "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+        "bytes": 11432,
+        "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
+      },
+      "prior_header": {
+        "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+        "bytes": 11219,
+        "sha256": "d27609cfd5705df5a3830626cd940f1a3cdc47b706d9e4db1ffcc37a35fed8b3"
+      }
+    },
+    "prior_header_role": "Current successor with only the debug-type anchor removed; includes additive finish-event-context changes. Previous literal pins remain above."
   }
 }

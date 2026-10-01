@@ -13,6 +13,7 @@
 #include "amd-dbgapi-one-stop-locator-v1.h"
 #include "amd-dbgapi-one-stop-sha256-v1.h"
 #include <sys/stat.h>
+#include <optional>
 namespace amd_owned_one_stop_v1 {
 class owned_checkpoint_breakpoint;
 // Source-owned logical envelopes, not an optimized C++ stack/RSS assertion.
@@ -193,18 +194,17 @@ private:
   gdb_signal m_infrun_signal=GDB_SIGNAL_0;
 };
 constexpr std::uint64_t native_adapter::logical_storage () noexcept {
-  /* sizeof includes owner + every concrete scratch/data member. Additional
-     4096 prepays fixed constants, parser/scalar stack scratch and fixed RAII
-     guards, with the sole128-byte library callback allocation separate.
-     The new snapshot adds its own1024-byte fixed scalar/temporary envelope;
-     retained snapshot arrays are already included in sizeof(native_adapter).
-     Another256 bytes prepay simultaneous borrowed output pointers/closures,
-     without silently reusing any of those existing reservations. */
+  /* sizeof owns all retained members. Additions separately prepay scalar/RAII,
+     snapshot, entry, loaded-maintenance and publication scratch, the one
+     library callback allocation, and the finish-step context guard. These are
+     logical reservations, not allocator overhead or stack-peak measurements. */
   return sizeof (native_adapter) + constant_and_scratch + snapshot_scalar_scratch
     + entry_maintenance_scalar_scratch + loaded_maintenance_scalar_scratch
+    + sizeof (std::optional<scoped_restore_current_thread>)
     + limits::client_output_bytes + publication_output::scratch_bytes;
 }
 static_assert (sizeof (native_adapter) + 4096 + 1024 + 256 + sizeof (loaded_maintenance_scratch) + limits::client_output_bytes + 256
+               + sizeof (std::optional<scoped_restore_current_thread>)
                <= limits::logical_bytes, "all new fixed retained data is prepaid");
 static_assert (limits::file_requested_bytes == target_file_read_cap
                && limits::file_rounds == target_file_round_cap,

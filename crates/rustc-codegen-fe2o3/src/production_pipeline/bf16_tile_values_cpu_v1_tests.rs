@@ -74,7 +74,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let phase = Cell::new(None);
         let result = (|| {
             let (ssa, source_seed) = self.prepare_bf16_tile_values_source_v1()?;
-            let prepared = ssa.with_prepared_materialization_budget_v29(|prepared, budget| {
+            let prepared = ssa.with_retained_materialization_budget_v1(|prepared, budget| {
                 let floor = budget.storage();
                 let source_storage = source_seed.phase_storage_bytes();
                 let ledger = budget.work_ledger_identity_v1();
@@ -218,30 +218,50 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 })).is_none());
                 result
             })?;
-            let PreparedMaterializationV29 {
-                materialized: (materialized, observed),
-                ranked_roots,
-                bindings,
-            } = prepared;
-            // Success keeps the actual owner and both retained receipts until
-            // the unchanged normal ranked consumer takes it. Its explicit
-            // Bf16Nominal refusal is evidence, never converted to normal success.
-            let normal = MaterializedNeutralProductionCompilation {
-                materialized,
-                ranked_roots,
-                bindings,
-            }
-            .verify_general_kernel_checks();
-            let mut row = phase.get().expect("successful nominal phase");
-            row.normal_attempted = true;
-            row.normal_succeeded = normal.is_ok();
-            phase.set(Some(row));
-            normal
-                .map(|checked| {
-                    drop(checked);
-                    observed
+            // Keep the actual same account after the source callback returns.
+            // This entry is opt-in and test-only; the default stack-backed
+            // preparation helper and ordinary nominal refusal are unchanged.
+            prepared
+                .try_map(|prepared, budget| {
+                    let before = phase.get().expect("successful nominal phase");
+                    assert_eq!(budget.work(), before.work);
+                    assert_eq!(budget.storage(), before.final_storage);
+                    assert_eq!(budget.peak_storage(), before.phase_peak_storage);
+                    assert!(!budget.failed_work().is_some());
+                    assert!(!budget.failed_storage().is_some());
+                    let PreparedMaterializationV29 {
+                        materialized: (materialized, observed),
+                        ranked_roots,
+                        bindings,
+                    } = prepared;
+                    // The original account stays live while the same nominal
+                    // owner enters the unchanged refusing normal consumer.
+                    let normal = MaterializedNeutralProductionCompilation {
+                        materialized,
+                        ranked_roots,
+                        bindings,
+                    }
+                    .verify_general_kernel_checks();
+                    let mut row = before;
+                    row.normal_attempted = true;
+                    row.normal_succeeded = normal.is_ok();
+                    phase.set(Some(row));
+                    assert_eq!(budget.work(), before.work);
+                    assert_eq!(budget.storage(), before.final_storage);
+                    eprintln!(
+                        "fe2o3-bf16-retained-source-account-v1 work={} storage={} normal_ok={}",
+                        budget.work(),
+                        budget.storage(),
+                        normal.is_ok(),
+                    );
+                    normal
+                        .map(|checked| {
+                            drop(checked);
+                            observed
+                        })
+                        .map_err(Box::new)
                 })
-                .map_err(Box::new)
+                .map(|finished| finished.finish_copy())
         })();
         (result, phase.get())
     }

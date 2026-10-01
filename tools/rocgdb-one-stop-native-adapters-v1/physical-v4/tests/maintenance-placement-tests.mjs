@@ -17,9 +17,10 @@ function prior(name,stage){
  }
  return result;
 }
-test('35 runtime edits join and invert all five immutable v3 preimages',()=>{
- assert.equal(transforms.operations.length,35);assert.equal(transforms.operations.filter(x=>x.stage==='diagnostic').length,13);
+test('40 runtime edits join and invert all five immutable v3 preimages',()=>{
+ assert.equal(transforms.operations.length,40);assert.equal(transforms.operations.filter(x=>x.stage==='diagnostic').length,13);
  assert.equal(transforms.operations.filter(x=>x.stage==='loaded').length,21);
+ assert.equal(transforms.operations.filter(x=>x.stage==='finish-event-context').length,5);
  for(const row of spec.patches[0].changes){
   const name=row.path.slice(4),p=name==='amd-dbgapi-owned-one-stop-v1.h'?'../../src/'+name:'../../physical-v3/src/'+name;
   const before=checkedText(row.preimage,readBounded(fileURLToPath(new URL(p,import.meta.url)),MAX_FILE));
@@ -119,10 +120,13 @@ test('old truncated foreign or extended CPU scratch cannot bypass anchor binding
   assert.notEqual(bad,scratch);assert.throws(()=>debugTypeAnchor(header,bad));
  }
 });
-test('anchor is a third exact stage and keeps all34 prior transformations',()=>{
+test('anchor keeps all34 prior transforms before five additive context edits',()=>{
  const anchors=transforms.operations.filter(x=>x.stage==='observability');assert.equal(anchors.length,1);
- assert.equal(transforms.operations.at(-1),anchors[0]);assert.equal(anchors[0].file,'amd-dbgapi-one-stop-native-v1.h');assert.equal(anchors[0].count,1);
- assert.deepEqual(transforms.operations.slice(0,-1).map(x=>x.stage),[...Array(13).fill('diagnostic'),...Array(21).fill('loaded')]);
+ assert.equal(transforms.operations[34],anchors[0]);assert.equal(anchors[0].file,'amd-dbgapi-one-stop-native-v1.h');assert.equal(anchors[0].count,1);
+ assert.deepEqual(transforms.operations.slice(0,34).map(x=>x.stage),[...Array(13).fill('diagnostic'),...Array(21).fill('loaded')]);
+ assert.deepEqual(transforms.operations.slice(35).map(x=>x.stage),Array(5).fill('finish-event-context'));
+ const expected=JSON.parse(packageText('tests/finish-event-context-extraction.json')).unchanged_first35_transforms_sha256;
+ assert.equal(sha(JSON.stringify(transforms.operations.slice(0,35))),expected);
  const x=JSON.parse(packageText('tests/helper-extraction.json')).scratch;assert.equal(anchors[0].before,x.anchor.before);assert.equal(anchors[0].after,x.anchor.after);
  falseGates(files);for(const key of ['activation_available','capture_available','publication_available','source_checks_are_native_authority'])assert.equal(spec[key],false);
 });
