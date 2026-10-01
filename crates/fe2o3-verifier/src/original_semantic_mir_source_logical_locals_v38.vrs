@@ -172,6 +172,39 @@ open spec fn invocation_source_convert_witness_v38(
     }
 }
 
+open spec fn invocation_source_transfer_witness_v40(
+    source: InvocationSourceByteStateV36, destination: int, input: int,
+    source_type: int, reference: bool, moved: bool,
+) -> InvocationSourceByteStateV36 {
+    if destination < 0 || source.machine.values.len() <= destination {
+        invocation_source_byte_refused_v36(source)
+    } else if reference {
+        if !invocation_source_reference_current_v38(source, input, source_type)
+            || destination == source.logical.references[input].origin {
+            invocation_source_byte_refused_v36(source)
+        } else {
+            // Snapshot before consuming input, including self-moves. The full
+            // original loan record keeps its origin, version and frame identity.
+            let loan = source.logical.references[input];
+            let value = source.machine.values[input];
+            let consumed = if moved {
+                invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+            } else { source };
+            let changed = invocation_source_byte_put_local_v36(consumed, destination, value);
+            InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+                references: changed.logical.references.insert(destination, loan),
+                ..changed.logical }, ..changed }
+        }
+    } else if !moved {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        // The nominal type is unchanged; convert checks currentness, consumes
+        // input and updates destination through the version-invalidating writer.
+        invocation_source_convert_witness_v38(source, destination, input,
+            source_type, source_type, true)
+    }
+}
+
 proof fn invocation_source_same_value_write_invalidates_reference_v38(
     source: InvocationSourceByteStateV36, reference: int, source_type: int,
 )

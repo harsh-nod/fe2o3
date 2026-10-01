@@ -93,6 +93,7 @@ open spec fn invocation_source_statement_observations_v39(
         },
         Some(InvocationSourceByteEventV36::Scalar)
         | Some(InvocationSourceByteEventV36::WitnessBorrow { .. })
+        | Some(InvocationSourceByteEventV36::WitnessTransfer { .. })
         | Some(InvocationSourceByteEventV36::Pointer(_))
         | Some(InvocationSourceByteEventV36::Address { .. })
         | Some(InvocationSourceByteEventV36::Deinitialize(_))

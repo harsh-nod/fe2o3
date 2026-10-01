@@ -20,6 +20,8 @@ mod pointer_events;
 pub(super) use pointer_events::SOURCE_POINTERS_V36;
 #[path = "original_semantic_mir_source_witness_borrows_v38.rs"]
 pub(super) mod witness_events;
+#[path = "original_semantic_mir_source_witness_transfers_v40.rs"]
+mod witness_transfers;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Address {
@@ -78,6 +80,7 @@ pub(super) enum Event {
     /// The existing scalar graph must still interpret and check this statement.
     Scalar,
     WitnessBorrow(witness_events::Borrow),
+    WitnessTransfer(witness_transfers::Transfer),
     Pointer(pointer_events::Event),
     Transfer {
         destination: Destination,
@@ -748,6 +751,11 @@ impl Context<'_, '_, '_> {
 
     fn statement(&self, statement: &Statement, out: &mut Writer<'_, '_>) -> Result<Event> {
         out.budget.charge_work(2)?;
+        if let Statement::Assign(assignment) = statement
+            && let Some(transfer) = witness_transfers::Transfer::derive(self, assignment, out)?
+        {
+            return Ok(Event::WitnessTransfer(transfer));
+        }
         if let Some(event) = pointer_events::derive(self, statement, out)? {
             return Ok(Event::Pointer(event));
         }
@@ -956,6 +964,7 @@ fn emit_event(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
             write!(out, ")").map_err(|_| out.error())?;
         }
         Event::WitnessBorrow(borrow) => borrow.emit(out)?,
+        Event::WitnessTransfer(transfer) => transfer.emit(out)?,
         Event::Scalar => {
             write!(out, "InvocationSourceByteEventV36::Scalar").map_err(|_| out.error())?
         }
@@ -1042,6 +1051,7 @@ fn headers() -> usize {
         + h::<&[Type]>()
         + h::<Option<(u32, &'static str)>>()
         + pointer_events::headers()
+        + witness_transfers::headers()
         + 24 * size_of::<usize>()
         + 20 * size_of::<&()>()
 }
@@ -1115,6 +1125,7 @@ enum InvocationSourceByteEventV36 {
     Scalar,
     WitnessBorrow { destination: int, origin: int, source_type: int, generation: int,
         instance: int, block: int, statement: int },
+    WitnessTransfer { destination: int, input: int, source_type: int, reference: bool, moved: bool },
     Pointer(InvocationSourcePointerEventV36),
     Transfer { destination: InvocationSourceByteDestinationV36,
         value: InvocationSourceByteValueV36, bits: int },
@@ -1386,6 +1397,9 @@ open spec fn invocation_source_byte_step_v36(
         InvocationSourceByteEventV36::WitnessBorrow { destination, origin, source_type,
             generation, instance, block, statement } => invocation_source_borrow_witness_v38(
                 source, destination, origin, source_type, generation, instance, block, statement),
+        InvocationSourceByteEventV36::WitnessTransfer { destination, input, source_type,
+            reference, moved } => invocation_source_transfer_witness_v40(
+                source, destination, input, source_type, reference, moved),
         // A scalar marker is not a no-op. The exact statement's existing
         // primitive graph must run on the current values between byte events.
         InvocationSourceByteEventV36::Scalar => invocation_source_byte_refused_v36(source),

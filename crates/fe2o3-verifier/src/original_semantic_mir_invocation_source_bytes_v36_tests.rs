@@ -47,6 +47,78 @@ fn original_mir_witness_issue_and_conversion_do_not_create_pointer_provenance() 
 const LIMIT: usize = 100_000_000;
 
 #[test]
+fn original_mir_witness_transfers_preserve_full_nominal_loan_and_consume_before_write() {
+    let text = SOURCE_BYTES_V36;
+    let transfer = text
+        .split_once("open spec fn invocation_source_transfer_witness_v40")
+        .unwrap()
+        .1
+        .split_once("proof fn invocation_source_same_value_write_invalidates_reference_v38")
+        .unwrap()
+        .0;
+    assert!(
+        transfer.contains("invocation_source_reference_current_v38(source, input, source_type)")
+    );
+    assert!(transfer.contains("destination == source.logical.references[input].origin"));
+    assert!(transfer.contains("let loan = source.logical.references[input]"));
+    assert!(transfer.contains("references: changed.logical.references.insert(destination, loan)"));
+    let snapshot = transfer.find("let loan =").unwrap();
+    let consume = transfer.find("let consumed =").unwrap();
+    let write = transfer.find("let changed =").unwrap();
+    assert!(snapshot < consume && consume < write);
+    assert!(transfer.contains("source_type, source_type, true"));
+    assert!(transfer.contains("else if !moved"));
+    assert!(!transfer.contains("InvocationSourceReferenceV38 {"));
+    assert!(!transfer.contains("MemoryValueV30::Pointer"));
+    assert!(!transfer.contains("MemoryAllocationV30"));
+    assert!(!transfer.contains("input == destination"));
+}
+
+#[test]
+fn original_mir_witness_transfer_event_has_explicit_pure_effect_and_law_obligations() {
+    let effects = include_str!("original_semantic_mir_observed_effects_v39.vrs");
+    assert!(effects.contains("Some(InvocationSourceByteEventV36::WitnessTransfer { .. })"));
+    assert!(
+        SOURCE_BYTES_V36.contains("reference, moved } => invocation_source_transfer_witness_v40(")
+    );
+    let laws = include_str!("original_semantic_mir_witness_transfer_laws_v40.vrs");
+    for law in [
+        "cannot_copy_authority",
+        "rejects_stale_input",
+        "rejects_stale_loan",
+        "keeps_exact_loan",
+        "move_consumes_input",
+        "move_invalidates_old_borrow",
+        "self_move_advances_version_twice",
+    ] {
+        assert!(laws.contains(law));
+    }
+    assert!(!laws.contains("assume("));
+}
+
+#[test]
+fn original_mir_witness_transfer_classifier_leaves_real_ordinary_scalar_uses_unchanged() {
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAssignmentV1, SemanticLocalIdV1, SemanticRvalueV1,
+    };
+    run(LIMIT, LIMIT, false, 1, |body, out| {
+        let context = body.context(out)?;
+        let ty = context.function.locals()[1].ty();
+        let place = Place::new(SemanticLocalIdV1::from_index(1), vec![], ty).unwrap();
+        let assignment = SemanticAssignmentV1::new(
+            place.clone(),
+            SemanticRvalueV1::new(ty, Rvalue::Use(Operand::Copy(place))),
+        );
+        let before = out.text.len();
+        assert!(witness_transfers::Transfer::derive(&context, &assignment, out)?.is_none());
+        assert_eq!(out.text.len(), before);
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
 fn original_mir_statement_refusal_keeps_original_coordinates_kind_type_and_reason() {
     run(LIMIT, LIMIT, false, 1, |body, out| {
         let context = body.context(out)?;

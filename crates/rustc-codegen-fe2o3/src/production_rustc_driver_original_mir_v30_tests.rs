@@ -7,9 +7,15 @@ const SCALAR: &str = "let temporary = a ^ b; let _result = temporary | a;";
 const CONTROL: &str = "let _result = if a == b { a ^ b } else { a | b };";
 const WITNESS: &str = r#"
 let index = fe2o3_device::thread::index_1d();
-let ordinary = index.get();
-let disjoint = index.into_disjoint();
-let owned = disjoint.get();
+let borrowed = &index;
+let copied_reference = borrowed;
+let ordinary = copied_reference.get();
+let moved_index = index;
+let disjoint = moved_index.into_disjoint();
+let moved_disjoint = disjoint;
+let borrowed_disjoint = &moved_disjoint;
+let copied_disjoint_reference = borrowed_disjoint;
+let owned = copied_disjoint_reference.get();
 let _result = ordinary ^ owned;
 "#;
 
@@ -35,7 +41,7 @@ struct OriginalObservation {
     statement: [u8; 32],
     work: usize,
     peak: usize,
-    witness_protocol: [bool; 4],
+    witness_protocol: [bool; 6],
 }
 
 fn original_observe(
@@ -114,6 +120,14 @@ fn original_observe(
             source.contains("Some(InvocationSourceByteEventV36::WitnessBorrow {"),
             source.contains("invocation_source_read_witness_v38(cursor.source"),
             source.contains("invocation_source_convert_witness_v38(cursor.source"),
+            source.lines().any(|line| {
+                line.contains("Some(InvocationSourceByteEventV36::WitnessTransfer {")
+                    && line.contains("reference: false, moved: true")
+            }),
+            source.lines().any(|line| {
+                line.contains("Some(InvocationSourceByteEventV36::WitnessTransfer {")
+                    && line.contains("reference: true, moved: false")
+            }),
         ],
     })
 }
@@ -309,7 +323,7 @@ fn actual_original_mir_cfg_request_reaches_worker_with_scalar_and_control() {
             assert!(report.work > 0 && report.peak > 0);
             assert_eq!(&report.census[..2], &[2, 2]);
             assert_ne!(report.statement, [0; 32]);
-            assert_eq!(report.witness_protocol, [case == "witness_borrow_read"; 4]);
+            assert_eq!(report.witness_protocol, [case == "witness_borrow_read"; 6]);
         },
     );
 }
