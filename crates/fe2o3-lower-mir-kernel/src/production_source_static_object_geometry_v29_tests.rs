@@ -535,6 +535,184 @@ fn static_field_solver_and_history_have_exact_measured_resource_boundaries() {
     ));
 }
 
+fn object_write_equations_v48(
+    rights: AccessMode,
+) -> (
+    Function,
+    Vec<ScopedSourceSlotV29>,
+    Vec<SourceAddressAccessV29>,
+) {
+    let (mut function, slots, mut accesses) = scalar_field_equations_v29(false);
+    let operations = &mut function.body.as_mut().unwrap().blocks[0].operations;
+    let Type::Pointer(pointer) = &mut operations[1].results[0].ty else {
+        unreachable!()
+    };
+    pointer.access = rights;
+    operations.truncate(4);
+    accesses.truncate(1);
+    (function, slots, accesses)
+}
+
+#[test]
+fn object_write_only_solver_admits_payload_writes_without_read_authority() {
+    for rights in [AccessMode::ReadWrite, AccessMode::WriteOnly] {
+        let (function, slots, accesses) = object_write_equations_v48(rights);
+        let (result, _, _, completed) =
+            run_scalar_field_history_v29(&function, &slots, &accesses, &[], LIMIT, LIMIT);
+        result.unwrap();
+        assert!(completed);
+    }
+    let (read_only, slots, accesses) = object_write_equations_v48(AccessMode::ReadOnly);
+    let (result, _, _, completed) =
+        run_scalar_field_history_v29(&read_only, &slots, &accesses, &[], LIMIT, LIMIT);
+    unsupported(result);
+    assert!(!completed);
+
+    let (mut unreadable, slots, accesses) = scalar_field_equations_v29(false);
+    let Type::Pointer(pointer) =
+        &mut unreadable.body.as_mut().unwrap().blocks[0].operations[1].results[0].ty
+    else {
+        unreachable!()
+    };
+    pointer.access = AccessMode::WriteOnly;
+    let (result, _, _, completed) =
+        run_scalar_field_history_v29(&unreadable, &slots, &accesses, &[], LIMIT, LIMIT);
+    unsupported(result);
+    assert!(!completed);
+}
+
+#[test]
+fn object_write_only_solver_retains_geometry_and_access_census_checks() {
+    let (function, slots, accesses) = object_write_equations_v48(AccessMode::WriteOnly);
+    run_scalar_field_history_v29(&function, &slots, &accesses, &[], LIMIT, LIMIT)
+        .0
+        .unwrap();
+    for wrong_space in [AddressSpace::Global, AddressSpace::Generic] {
+        let mut changed = function.clone();
+        let OperationKind::Storage(ScopedObjectOperationV29::WriteValue { access, .. }) =
+            &mut changed.body.as_mut().unwrap().blocks[0].operations[3].kind
+        else {
+            unreachable!()
+        };
+        access.address_space = wrong_space;
+        unsupported(run_scalar_field_history_v29(&changed, &slots, &accesses, &[], LIMIT, LIMIT).0);
+    }
+    for alignment in [0, 3, 8] {
+        let mut changed = function.clone();
+        let OperationKind::Storage(ScopedObjectOperationV29::WriteValue { access, .. }) =
+            &mut changed.body.as_mut().unwrap().blocks[0].operations[3].kind
+        else {
+            unreachable!()
+        };
+        access.alignment = alignment;
+        unsupported(run_scalar_field_history_v29(&changed, &slots, &accesses, &[], LIMIT, LIMIT).0);
+    }
+    unsupported(run_scalar_field_history_v29(&function, &slots, &[], &[], LIMIT, LIMIT).0);
+    let mut wrong_value = function.clone();
+    let OperationKind::Storage(ScopedObjectOperationV29::WriteValue { value, .. }) =
+        &mut wrong_value.body.as_mut().unwrap().blocks[0].operations[3].kind
+    else {
+        unreachable!()
+    };
+    *value = ValueId(0);
+    unsupported(run_scalar_field_history_v29(&wrong_value, &slots, &accesses, &[], LIMIT, LIMIT).0);
+}
+
+#[test]
+fn object_write_only_solver_has_exact_and_one_short_resources() {
+    let (function, slots, accesses) = object_write_equations_v48(AccessMode::WriteOnly);
+    let (result, work, storage, completed) =
+        run_scalar_field_history_v29(&function, &slots, &accesses, &[], LIMIT, LIMIT);
+    result.unwrap();
+    assert!(completed);
+    let (result, used, peak, completed) =
+        run_scalar_field_history_v29(&function, &slots, &accesses, &[], work, storage);
+    result.unwrap();
+    assert!(completed);
+    assert_eq!((used, peak), (work, storage));
+    let (result, _, _, completed) =
+        run_scalar_field_history_v29(&function, &slots, &accesses, &[], work - 1, storage);
+    assert!(matches!(
+        result,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(
+                limit
+            ))
+        ) if limit.limit() == work - 1 && limit.actual() == work
+    ));
+    assert!(!completed);
+    let (result, _, _, completed) =
+        run_scalar_field_history_v29(&function, &slots, &accesses, &[], work, storage - 1);
+    assert!(matches!(
+        result,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(limit)
+            )
+        ) if limit.limit() == storage - 1 && limit.actual() == storage
+    ));
+    assert!(!completed);
+}
+
+#[test]
+fn object_write_only_solver_does_not_widen_ordinary_pointer_access() {
+    for rights in [
+        AccessMode::ReadOnly,
+        AccessMode::ReadWrite,
+        AccessMode::WriteOnly,
+    ] {
+        for writing in [false, true] {
+            let mut entry = block(77);
+            entry.operations.push(if writing {
+                store(ValueId(0), ValueId(1), AddressSpace::Generic)
+            } else {
+                Operation::effect_free(
+                    ValueDef::new(LOADED, Type::Scalar(ScalarType::U32)),
+                    OperationKind::Load {
+                        pointer: ValueId(0),
+                        access: MemoryAccess::new(AddressSpace::Generic, 4),
+                    },
+                )
+            });
+            let function = Function::internal_helper(
+                "external-scalar-access-equations-only",
+                Signature::new(
+                    vec![
+                        Type::pointer(Type::Scalar(ScalarType::U32), AddressSpace::Generic, rights),
+                        Type::Scalar(ScalarType::U32),
+                    ],
+                    vec![],
+                ),
+                vec![ValueId(0), ValueId(1)],
+                vec![entry],
+            );
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+            let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+            budget.reserve_storage(FLOOR).unwrap();
+            let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
+                SourceAddressMemoryV29::prepare(&function, &[], None, &[], budget)?.solve(
+                    &[],
+                    &[],
+                    &[],
+                    budget,
+                )?;
+                Ok(())
+            });
+            assert_eq!(budget.storage(), FLOOR);
+            let allowed = if writing {
+                rights == AccessMode::ReadWrite
+            } else {
+                rights != AccessMode::WriteOnly
+            };
+            if allowed {
+                result.unwrap();
+            } else {
+                unsupported(result);
+            }
+        }
+    }
+}
+
 #[test]
 fn static_field_transfer_has_independent_constant_work_and_no_storage() {
     use fe2o3_kernel_ir::StorageLayoutIdV1 as Id;

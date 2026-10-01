@@ -2051,7 +2051,9 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                 };
                 if ty.address_space != access.address_space
                     || !access.alignment.is_power_of_two()
-                    || (writing && ty.access != AccessMode::ReadWrite)
+                    || (writing
+                        && ty.access != AccessMode::ReadWrite
+                        && !(object && ty.access == AccessMode::WriteOnly))
                     || (!writing && ty.access == AccessMode::WriteOnly)
                 {
                     return Err(source_raw_physical_error_v29());
