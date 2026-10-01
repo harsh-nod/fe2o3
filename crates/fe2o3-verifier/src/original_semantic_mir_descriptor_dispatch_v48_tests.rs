@@ -170,8 +170,8 @@ fn fixture(
         Some(8),
     )
     .unwrap();
-    // The original compiler binding authenticates the nominal type. This test
-    // does not execute a descriptor borrow or infer that binding from layout.
+    // The nominal binding must belong to a genuinely reachable intrinsic call,
+    // not an unused declaration inserted merely to classify an equal layout.
     let intrinsic_abi = SemanticFunctionAbiV1::new(
         SemanticAbiIdentityV1::from_sha256([240; 32]),
         functions[0].abi().layout_identity(),
@@ -187,6 +187,7 @@ fn fixture(
     .unwrap()
     .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::SharedBorrow])
     .unwrap();
+    let length_callable = SemanticCallableIdV1::from_index(callables.len() as u32);
     callables.push(SemanticCallableDeclV1::CompilerIntrinsic {
         binding: SemanticNonBodyCallableBindingV1::new(
             SemanticFunctionIdentityV1::from_sha256([240; 32]),
@@ -210,12 +211,12 @@ fn fixture(
         let source = old.source();
         let mut locals = old.locals().to_vec();
         assert_eq!(locals.len(), 4);
-        for (ordinal, ty) in [descriptor, descriptor, reference, lookalike]
+        for (ordinal, ty) in [descriptor, descriptor, reference, lookalike, length]
             .into_iter()
             .enumerate()
         {
             locals.push(SemanticLocalDeclV1::new(
-                SemanticLocalIdentityV1::from_sha256([210 + root as u8 * 4 + ordinal as u8; 32]),
+                SemanticLocalIdentityV1::from_sha256([210 + root as u8 * 5 + ordinal as u8; 32]),
                 ty,
                 if ordinal == 0 {
                     SemanticLocalRoleV1::Argument(2)
@@ -238,14 +239,55 @@ fn fixture(
             ));
         }
         let mut blocks = old.blocks().to_vec();
-        statements.extend_from_slice(blocks[0].statements());
+        assert_eq!(old.entry().index(), 0);
+        let continuation = SemanticBlockIdV1::from_index(blocks.len() as u32);
+        let original_entry = &blocks[0];
+        let resumed = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([244 + root as u8; 32]),
+            original_entry.source(),
+            original_entry.statements().to_vec(),
+            original_entry.terminator().clone(),
+        )
+        .unwrap();
+        let borrowed = Place::new(SemanticLocalIdV1::from_index(6), vec![], reference).unwrap();
+        statements.push(SemanticStatementV1::new(
+            source,
+            Statement::Assign(SemanticAssignmentV1::new(
+                borrowed.clone(),
+                SemanticRvalueV1::new(
+                    reference,
+                    Rvalue::Borrow {
+                        kind: SemanticBorrowKindV1::Shared,
+                        place: place(4),
+                    },
+                ),
+            )),
+        ));
         blocks[0] = SemanticBasicBlockV1::new(
             blocks[0].identity(),
             blocks[0].source(),
             statements,
-            blocks[0].terminator().clone(),
+            SemanticTerminatorV1::new(
+                source,
+                Terminator::Call(
+                    SemanticDirectCallV1::new_callable(
+                        length_callable,
+                        vec![Operand::Copy(borrowed)],
+                        Some(SemanticCallDestinationV1::new(
+                            Place::new(SemanticLocalIdV1::from_index(8), vec![], length).unwrap(),
+                            SemanticControlFlowEdgeV1::new(
+                                SemanticEdgeRoleV1::CallReturn,
+                                continuation,
+                            ),
+                        )),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            ),
         )
         .unwrap();
+        blocks.push(resumed);
         let mut arguments: Vec<_> = old
             .abi()
             .arguments()
