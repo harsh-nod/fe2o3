@@ -213,3 +213,6 @@ fn test_observer_is_cleared_on_early_refusal_without_invocation() {
     assert_eq!(result.unwrap_err().diagnostic(), "binding refusal");
     assert!(test_support::with_observer(None, || Ok(output())).is_ok());
 }
+
+#[path = "source_local_order_recipe_measurement_v1_tests.rs"]
+mod measurement;
