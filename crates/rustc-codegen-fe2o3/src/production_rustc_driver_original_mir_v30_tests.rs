@@ -2,6 +2,9 @@
 //! is fabricated or invoked, and generated source is not an executed receipt.
 use super::*;
 
+#[path = "production_rustc_driver_reference_enum_v45_tests.rs"]
+mod reference_enum_tests;
+
 const ORIGINAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::original_mir_v30_tests::original_mir_worker_child";
 const SCALAR: &str = "let temporary = a ^ b; let _result = temporary | a;";
 const CONTROL: &str = "let _result = if a == b { a ^ b } else { a | b };";
