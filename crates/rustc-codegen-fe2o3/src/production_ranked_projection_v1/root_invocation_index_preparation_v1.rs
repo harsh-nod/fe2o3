@@ -939,3 +939,147 @@ pub(super) fn prepare_root_namespace_indices_v1(
     }
     Ok(())
 }
+
+/// Seed-only paid adapter for an already retained original root namespace.
+/// The caller owns every destination and queue across all enclosing postflights.
+/// No row allocation/replacement, propagation, text emission, or grid recovery.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn seed_retained_root_invocation_values_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    definitions: &[u8],
+    address_escaped: &[bool],
+    options: &SemanticOptionDominanceV1,
+    indices: &mut [Option<ProjectedDisjointIndexV1>],
+    grids: &mut [Option<ProjectedGridLeaderV1>],
+    predicates: &mut [Option<GuardPredicateV1>],
+    index_fifo: &mut Vec<usize>,
+    index_cursor: &mut usize,
+    grid_fifo: &mut Vec<usize>,
+    grid_cursor: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    resources: &mut PreparationResourcesV1<'_, '_>,
+) -> Result<()> {
+    if !resources.is_metered() || resources.has_denial() {
+        return Err(resource(Resource::Accounting));
+    }
+    seed_invocation_values_v1(
+        callables,
+        function,
+        definitions,
+        address_escaped,
+        options,
+        indices,
+        grids,
+        predicates,
+        &mut IndexQueueV1::Paid {
+            values: index_fifo,
+            cursor: index_cursor,
+        },
+        &mut IndexQueueV1::Paid {
+            values: grid_fifo,
+            cursor: grid_cursor,
+        },
+        0,
+        operations,
+        next_value,
+        None,
+        resources,
+    )
+}
+
+/// Conservative source-carrier envelope for the seed-only call closure.
+/// Original donor work/reserve/error order is otherwise byte-unchanged.
+pub(super) fn retained_invocation_seed_call_frame_v1() -> Result<usize> {
+    use fe2o3_mir_model::semantic_mir_v1::{SemanticBasicBlockV1, SemanticCallDestinationV1};
+    const ROWS: usize = 7;
+    let rows = [
+        size_of::<(
+            &[SemanticCallableDeclV1],
+            &SemanticFunctionDeclV1,
+            &[u8],
+            &[bool],
+            &SemanticOptionDominanceV1,
+            &mut [Option<ProjectedDisjointIndexV1>],
+            &mut [Option<ProjectedGridLeaderV1>],
+            &mut [Option<GuardPredicateV1>],
+            &mut Vec<usize>,
+            &mut usize,
+            &mut Vec<usize>,
+            &mut usize,
+            &mut Vec<ProductionRankedOperationV1>,
+            &mut u32,
+            &mut PreparationResourcesV1<'static, 'static>,
+            Result<()>,
+        )>(),
+        size_of::<(
+            IndexQueueV1<'static>,
+            IndexQueueV1<'static>,
+            &mut IndexQueueV1<'static>,
+            &mut IndexQueueV1<'static>,
+            Option<&mut String>,
+            u64,
+            usize,
+            std::slice::Iter<'static, SemanticBasicBlockV1>,
+            &SemanticBasicBlockV1,
+            &SemanticDirectCallV1,
+            Option<&SemanticCallableDeclV1>,
+            &SemanticCompilerIntrinsicOperationV1,
+            SemanticLocalIdV1,
+            ProductionRankedValueIdV1,
+        )>(),
+        size_of::<(
+            &mut IndexQueueV1<'static>,
+            &mut Vec<usize>,
+            &mut usize,
+            usize,
+            &mut PreparationResourcesV1<'static, 'static>,
+            Result<()>,
+        )>(),
+        size_of::<(
+            &mut Vec<ProductionRankedOperationV1>,
+            &mut PreparationResourcesV1<'static, 'static>,
+            Result<()>,
+            Resource,
+            ProductionRankedProjectionErrorV1,
+            bool,
+        )>(),
+        size_of::<(
+            &mut u32,
+            u32,
+            Option<u32>,
+            ProductionRankedValueIdV1,
+            &mut PreparationResourcesV1<'static, 'static>,
+            Result<ProductionRankedValueIdV1>,
+        )>(),
+        size_of::<(
+            usize,
+            &[u8],
+            &[bool],
+            Option<&u8>,
+            Option<u8>,
+            Option<&bool>,
+            Option<bool>,
+            Result<()>,
+            &SemanticDirectCallV1,
+            Option<&SemanticCallDestinationV1>,
+            Option<&SemanticPlaceV1>,
+            Option<SemanticLocalIdV1>,
+            Result<SemanticLocalIdV1>,
+            ProjectedDisjointIndexV1,
+        )>(),
+        size_of::<(
+            [usize; ROWS],
+            std::array::IntoIter<usize, ROWS>,
+            usize,
+            usize,
+            Option<usize>,
+            Result<usize>,
+        )>(),
+    ];
+    rows.into_iter().try_fold(0usize, |sum, row| {
+        sum.checked_add(row)
+            .ok_or_else(|| resource(Resource::Arithmetic))
+    })
+}

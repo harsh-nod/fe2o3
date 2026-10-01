@@ -21,3 +21,12 @@ of D1–D7. Subsequent implementation qualification must be recorded separately.
 
 Broad accepted exits remain M1/V1/V2/U1/U2/U3 (6/18). The integrator's publication
 of this proposal is not an acceptance on behalf of other owners.
+
+T
+## September 30 integration decision
+
+The [current applicability record](APPLICABILITY-20260930.md) and its
+[exact-pin inventory](APPLICABILITY-20260930.json) preserve the historical
+proposal above. The primary integrator adopted four compiler/action
+qualification targets within its stated scope. Measured compliance, other
+required owner decisions and milestone exits remain open.
