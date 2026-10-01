@@ -135,6 +135,29 @@ pub enum MixedMiddleEndErrorV50<E = Infallible> {
     /// A mandatory exact capsule/source field differs.
     Binding,
 }
+impl<E: std::fmt::Display> std::fmt::Display for MixedMiddleEndErrorV50<E> {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Charge(error) => write!(out, "mixed middle-end work refused: {error}"),
+            Self::FieldLength => out.write_str("mixed middle-end mandatory field length differs"),
+            Self::Length => out.write_str("mixed middle-end complete wire extent differs"),
+            Self::Arithmetic => out.write_str("mixed middle-end resource arithmetic overflow"),
+            Self::Header => out.write_str("mixed middle-end canonical header differs"),
+            Self::Reserved => out.write_str("mixed middle-end reserved bytes are nonzero"),
+            Self::Identity => out.write_str("mixed middle-end content identity differs"),
+            Self::Storage => out.write_str("mixed middle-end prepaid scratch extent differs"),
+            Self::Binding => out.write_str("mixed middle-end exact capsule inputs differ"),
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for MixedMiddleEndErrorV50<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Charge(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 type Error<E> = MixedMiddleEndErrorV50<E>;
 impl<E> From<pair::Error<E>> for Error<E> {
     fn from(e: pair::Error<E>) -> Self {

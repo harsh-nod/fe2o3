@@ -1,5 +1,76 @@
 use super::*;
 
+#[test]
+fn typed_middle_end_v50_error_preserves_the_original_charge_source() {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct Denied(usize);
+    impl std::fmt::Display for Denied {
+        fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(out, "original work refusal {}", self.0)
+        }
+    }
+    impl std::error::Error for Denied {}
+    fn require_error_send_sync<T: std::error::Error + Send + Sync>() {}
+    require_error_send_sync::<MixedMiddleEndErrorV50<Denied>>();
+
+    let bytes = encoded();
+    let denied = Denied(17);
+    let error =
+        match read_mixed_middle_end_v50(&bytes, MIXED_MIDDLE_END_WORKING_STORAGE_V50, |_| {
+            Err(denied)
+        }) {
+            Err(error) => error,
+            Ok(_) => panic!("original work refusal must propagate"),
+        };
+    assert_eq!(error, MixedMiddleEndErrorV50::Charge(denied));
+    assert_eq!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<Denied>(),
+        Some(&denied)
+    );
+    assert_eq!(
+        error.to_string(),
+        "mixed middle-end work refused: original work refusal 17"
+    );
+}
+
+#[test]
+fn typed_middle_end_v50_structural_errors_have_distinct_messages_without_invented_causes() {
+    let cases: [(MixedMiddleEndErrorV50, &str); 8] = [
+        (
+            MixedMiddleEndErrorV50::FieldLength,
+            "mandatory field length differs",
+        ),
+        (
+            MixedMiddleEndErrorV50::Length,
+            "complete wire extent differs",
+        ),
+        (
+            MixedMiddleEndErrorV50::Arithmetic,
+            "resource arithmetic overflow",
+        ),
+        (MixedMiddleEndErrorV50::Header, "canonical header differs"),
+        (
+            MixedMiddleEndErrorV50::Reserved,
+            "reserved bytes are nonzero",
+        ),
+        (MixedMiddleEndErrorV50::Identity, "content identity differs"),
+        (
+            MixedMiddleEndErrorV50::Storage,
+            "prepaid scratch extent differs",
+        ),
+        (
+            MixedMiddleEndErrorV50::Binding,
+            "exact capsule inputs differ",
+        ),
+    ];
+    for (error, suffix) in cases {
+        assert_eq!(error.to_string(), format!("mixed middle-end {suffix}"));
+        assert!(std::error::Error::source(&error).is_none());
+    }
+}
+
 fn input() -> MixedMiddleEndInputV50<'static> {
     // Framing-only payloads deliberately are not admitted source or proof data.
     MixedMiddleEndInputV50 {
