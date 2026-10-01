@@ -88,6 +88,12 @@ fn store_consensus_pair_refuses_one_missing_unequal_clobbered_or_retyped_arm() {
 #[test]
 fn store_consensus_v18_pair_preserves_layouts_and_rejects_changed_actual_payloads() {
     use fe2o3_kernel_ir::{StorageLayoutKindV1, StorageLayoutLimitsV1, StorageLayoutV1};
+    let layouts = StorageLayoutLimitsV1 {
+        rows: 1,
+        edges: 0,
+        containment_depth: 1,
+        object_bytes: 8,
+    };
     let mut input = diamond();
     input.storage_layouts.push(StorageLayoutV1 {
         size: 4,
@@ -97,19 +103,13 @@ fn store_consensus_v18_pair_preserves_layouts_and_rejects_changed_actual_payload
     let (output, rows) = rewritten(&input, true);
     let mut work = Work::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
-    let (a, sa) = Owner18::from_module_ref_with_verification_budget_v18(
-        &input,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let (a, sa) =
+        Owner18::from_module_ref_with_verification_budget_v18(&input, layouts, &mut budget)
+            .unwrap();
     budget.reserve_storage(sa.retained_storage()).unwrap();
-    let (b, sb) = Owner18::from_module_ref_with_verification_budget_v18(
-        &output,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let (b, sb) =
+        Owner18::from_module_ref_with_verification_budget_v18(&output, layouts, &mut budget)
+            .unwrap();
     budget.reserve_storage(sb.retained_storage()).unwrap();
     let floor = budget.storage();
     let (pair, size) = check_canonical_kir_cross_block_forwarding_v18(
@@ -133,12 +133,9 @@ fn store_consensus_v18_pair_preserves_layouts_and_rejects_changed_actual_payload
         alignment: 8,
         kind: StorageLayoutKindV1::Scalar(ScalarType::U64),
     };
-    let (c, sc) = Owner18::from_module_ref_with_verification_budget_v18(
-        &changed,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let (c, sc) =
+        Owner18::from_module_ref_with_verification_budget_v18(&changed, layouts, &mut budget)
+            .unwrap();
     budget.reserve_storage(sc.retained_storage()).unwrap();
     assert!(matches!(
         check_canonical_kir_cross_block_forwarding_v18(

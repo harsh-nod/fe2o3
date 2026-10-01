@@ -10,6 +10,12 @@ use fe2o3_kernel_ir::{
 };
 
 const LIMIT: usize = 256 * 1024 * 1024;
+const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
+    rows: 0,
+    edges: 0,
+    containment_depth: 0,
+    object_bytes: 0,
+};
 
 fn block(id: u32, operations: Vec<KirOperation>, terminator: Terminator) -> BasicBlock {
     let mut block = BasicBlock::new(BlockId(id));
@@ -85,17 +91,13 @@ fn diamond(scalar: ScalarType) -> Module {
 fn assert_load_not_erased(module: Module) {
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
-    let (input, receipt) = Owner::from_module_ref_with_verification_budget_v18(
-        &module,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let (input, receipt) =
+        Owner::from_module_ref_with_verification_budget_v18(&module, LAYOUTS, &mut budget).unwrap();
     budget.reserve_storage(receipt.retained_storage()).unwrap();
     let tail = fe2o3_kernel_opt::prepare_owned_cross_block_forwarding_v18(
         &input,
         Default::default(),
-        StorageLayoutLimitsV1::default(),
+        LAYOUTS,
         &mut budget,
     )
     .unwrap();
@@ -187,17 +189,13 @@ fn with_pair(
 ) {
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
-    let (input, receipt) = Owner::from_module_ref_with_verification_budget_v18(
-        module,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let (input, receipt) =
+        Owner::from_module_ref_with_verification_budget_v18(module, LAYOUTS, &mut budget).unwrap();
     budget.reserve_storage(receipt.retained_storage()).unwrap();
     let tail = fe2o3_kernel_opt::prepare_owned_cross_block_forwarding_v18(
         &input,
         Default::default(),
-        StorageLayoutLimitsV1::default(),
+        LAYOUTS,
         &mut budget,
     )
     .unwrap();

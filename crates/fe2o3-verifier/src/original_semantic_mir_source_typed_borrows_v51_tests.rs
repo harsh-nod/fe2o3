@@ -228,7 +228,7 @@ fn program(case: Case, work: usize, storage: usize) -> (Result<()>, usize, usize
                 let paired = paired::PairedInvocations::derive(
                     plan,
                     &source,
-                    crate::FormalIndexWidth::Bits64,
+                    fe2o3_kernel_ir::FormalIndexWidth::Bits64,
                     out,
                 )?;
                 slots.emit(out)?;
