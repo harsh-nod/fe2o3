@@ -208,3 +208,5 @@ fn with_parameter_data_v18<'work, R>(
 #[cfg(test)]
 #[path = "production_argument_correspondence_v18_tests.rs"]
 mod original_argument_v18_tests;
+
+include!("production_source_root_slice_abi_v36.rs");

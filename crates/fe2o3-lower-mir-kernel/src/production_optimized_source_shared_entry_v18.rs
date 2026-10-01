@@ -70,7 +70,7 @@ impl PendingSharedEntryRegionV18<'_, '_> {
 
 // ArgumentView owns unit-query scratch. Observe the external consumer's exact
 // floor before any walker can refund that scratch and hide retained growth.
-fn shared_entry_consume_v18<'work>(
+pub(super) fn shared_entry_consume_v18<'work>(
     original: &ProductionSourceCorrespondenceV18<'_>,
     budget: &mut ArgumentBudgetV1<'work>,
     consume: impl FnOnce(&mut ArgumentBudgetV1<'work>) -> SourceOwnedResultV18<()>,

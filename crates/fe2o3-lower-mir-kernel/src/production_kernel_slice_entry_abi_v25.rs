@@ -35,6 +35,13 @@ impl SourceSliceEntryAbiV25<'_> {
         self.exclusive
     }
 
+    pub(super) fn components_v36(&self) -> [(u32, u16, u16); 2] {
+        self.argument.components.map(|component| {
+            let component = component.expect("checked source slice ABI component");
+            (component.offset, component.size, component.alignment)
+        })
+    }
+
     pub(super) fn allows_reads(&self) -> bool {
         matches!(
             self.argument.access,
