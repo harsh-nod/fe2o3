@@ -83,6 +83,7 @@ fn actual_normalizer_caps_shallow_dag_expansion_before_tree_allocation() {
         let bytes = reserved_nodes * std::mem::size_of::<NormalizedScalarExpressionV1>();
         let mut meter = NativeValueMeter {
             budget: &mut budget,
+            allowance: None,
             failed: false,
         };
         meter.work(reserved_nodes).unwrap();
@@ -144,6 +145,7 @@ fn per_argument_failure_restores_enclosing_allowance_and_keeps_correlation_limit
     let bytes = NODES * std::mem::size_of::<NormalizedScalarExpressionV1>();
     let mut meter = NativeValueMeter {
         budget: &mut budget,
+        allowance: None,
         failed: false,
     };
     meter.reserve(bytes).unwrap();
@@ -197,6 +199,7 @@ fn argument_allowance_restores_original_state_and_panic_payload() {
     budget.reserve_storage(FLOOR).unwrap();
     let mut meter = NativeValueMeter {
         budget: &mut budget,
+        allowance: None,
         failed: false,
     };
     for original in [None, Some(0), Some(17)] {
