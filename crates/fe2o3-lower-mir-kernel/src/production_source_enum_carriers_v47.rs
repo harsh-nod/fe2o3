@@ -1,5 +1,7 @@
 // Retain locators from the existing emitted enum binding. The discriminant is
 // logical source SSA, not a tag-byte decoder or evidence that a payload is live.
+include!("production_source_option_pointer_carriers_v52.rs");
+
 fn retain_source_enum_carriers_v47<'a>(
     instances: &ExecutionInstancesV29<'_>,
     ty: SemanticTypeIdV1,
@@ -8,6 +10,10 @@ fn retain_source_enum_carriers_v47<'a>(
     pending: &mut Vec<SourceCarrierFrameV37<'a>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Option<SourceSsaPhysicalV36>, ProductionSemanticKirErrorV1> {
+    if matches!(binding, SemanticValueBindingV1::OptionPointer { .. }) {
+        return retain_source_option_pointer_carriers_v52(instances, ty, binding, carriers, budget)
+            .map(Some);
+    }
     let SemanticValueBindingV1::Enum {
         discriminant,
         discriminant_ty,
@@ -131,6 +137,7 @@ fn retain_source_enum_carriers_v47<'a>(
         start,
         length: payloads.len(),
         known_variant: *variant,
+        presence: None,
     }))
 }
 
@@ -276,7 +283,12 @@ impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
         self.owner.retain_query((|| {
             self.owner.query(budget)?;
             budget.charge_work(1)?;
-            let SourceSsaPhysicalV36::Enum { discriminant, .. } = *self.physical else {
+            let SourceSsaPhysicalV36::Enum {
+                discriminant,
+                presence: None,
+                ..
+            } = *self.physical
+            else {
                 return self
                     .owner
                     .source
@@ -390,6 +402,14 @@ fn source_enum_carrier_headers_v47() -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
         h::<Option<SourceSsaPhysicalV36>>()?,
         h::<Option<(usize, usize)>>()?,
+        h::<Option<SemanticOptionAvailabilityV1>>()?,
+        h::<(
+            &ExecutionInstancesV29<'_>,
+            SemanticTypeIdV1,
+            &SemanticValueBindingV1,
+            &mut Vec<SourceSsaComponentV37>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()?,
         h::<Option<ProductionSourceSsaEndpointV36<'_, '_>>>()?,
         h::<(SemanticTypeIdV1, usize)>()?,
         h::<std::cmp::Ordering>()?,

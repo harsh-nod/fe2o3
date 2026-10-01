@@ -365,6 +365,14 @@ fn enum_carrier_header_oracle_v47() -> usize {
     }
     h::<Option<SourceSsaPhysicalV36>>()
         + h::<Option<(usize, usize)>>()
+        + h::<Option<SemanticOptionAvailabilityV1>>()
+        + h::<(
+            &ExecutionInstancesV29<'_>,
+            SemanticTypeIdV1,
+            &SemanticValueBindingV1,
+            &mut Vec<SourceSsaComponentV37>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()
         + h::<Option<ProductionSourceSsaEndpointV36<'_, '_>>>()
         + h::<(SemanticTypeIdV1, usize)>()
         + h::<std::cmp::Ordering>()

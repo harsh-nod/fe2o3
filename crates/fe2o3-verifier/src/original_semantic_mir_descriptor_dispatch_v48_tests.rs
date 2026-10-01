@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "original_semantic_mir_descriptor_indices_v52_tests.rs"]
+mod descriptor_indices_v52_tests;
 use fe2o3_kernel_descriptor::{
     AccessMode, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, LogicalArgumentV1,
     ScalarTypeV1 as DescriptorScalar, SourceTypeDescriptorV1, SourceTypeDescriptorV3,

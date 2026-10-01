@@ -143,7 +143,12 @@ impl PairedInvocations<'_, '_, '_> {
         let Carrier::Enum { known_variant, .. } = endpoint.carrier_shape(out.budget)? else {
             return Err(refused());
         };
-        let tag = endpoint.enum_discriminant_v47(out.budget)?;
+        let presence = endpoint.enum_pointer_presence_v52(out.budget)?;
+        let presence_encoded = presence.is_some();
+        let tag = match presence {
+            Some(tag) => tag,
+            None => endpoint.enum_discriminant_v47(out.budget)?,
+        };
         exact_endpoint(&tag, function, local, *discriminant, out)?;
         let Some(tag_definition) = tag.original_definition(out.budget)? else {
             return Err(refused());
@@ -160,12 +165,22 @@ impl PairedInvocations<'_, '_, '_> {
                 .get(tag_definition)
                 .map(|row| row.ty)
                 != Some(tag_type)
-            || !aggregate_bindings::scalar_matches(
-                source_tag,
-                semantic.types()[discriminant.index() as usize].rust_type_kind(),
-                tag_type,
-                self.width,
-            )
+            || if presence_encoded {
+                *tag_type != PhysicalType::BOOL
+                    || variants.len() != 2
+                    || variants[0].discriminant() != 0
+                    || variants[1].discriminant() != 1
+                    || !variants[0].fields().fields().is_empty()
+                    || variants[1].fields().fields().len() != 1
+                    || known_variant.is_some()
+            } else {
+                !aggregate_bindings::scalar_matches(
+                    source_tag,
+                    semantic.types()[discriminant.index() as usize].rust_type_kind(),
+                    tag_type,
+                    self.width,
+                )
+            }
             || known_variant.is_some_and(|variant| variant as usize >= variants.len())
         {
             return Err(refused());

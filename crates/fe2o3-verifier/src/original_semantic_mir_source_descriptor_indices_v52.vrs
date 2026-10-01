@@ -1,0 +1,90 @@
+open spec fn invocation_source_descriptor_index_v52(
+    source: InvocationSourceByteStateV36, destination: int, input: int, index: int,
+    recipe: InvocationSourceDescriptorRecipeV51, witness_type: int, option_type: int,
+    moved_receiver: bool, moved_index: bool, little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    if !recipe.mutable || !moved_receiver || !moved_index
+        || !invocation_source_descriptor_reference_current_v51(source, input, recipe)
+        || invocation_source_enum_field_count_v47(option_type, 0) != Some(0)
+        || invocation_source_enum_field_count_v47(option_type, 1) != Some(1)
+        || invocation_source_enum_discriminant_v47(option_type, 0) != Some(0)
+        || invocation_source_enum_discriminant_v47(option_type, 1) != Some(1) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let receiver = source.machine.values[input];
+        let consumed_receiver = if moved_receiver {
+            invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+        } else { source };
+        if !invocation_source_witness_current_v38(consumed_receiver, index, witness_type) {
+            invocation_source_byte_refused_v36(consumed_receiver)
+        } else {
+            let position = consumed_receiver.machine.values[index];
+            let consumed = if moved_index {
+                invocation_source_byte_put_local_v36(consumed_receiver, index, MemoryValueV30::Undefined)
+            } else { consumed_receiver };
+            match (receiver, position) {
+                (MemoryValueV30::Slice(slice), MemoryValueV30::Scalar(offset)) => {
+                    if offset < 0 || offset >= memory_value_modulus_v30(recipe.metadata_bits / 8) {
+                        invocation_source_byte_refused_v36(consumed)
+                    } else if offset >= slice.length {
+                        // An absent result does not inspect or authorize the speculative
+                        // physical payload pointer produced by the canonical lowering.
+                        invocation_source_enum_install_v47(consumed, destination,
+                            InvocationSourceEnumV47 { source_type: option_type,
+                                variant: 0, fields: Map::empty() })
+                    } else {
+                        let pointer = MemoryPointerV30 {
+                            byte_offset: slice.pointer.byte_offset + offset * recipe.width,
+                            ..slice.pointer };
+                        let value = MemoryValueV30::Pointer(pointer);
+                        match invocation_source_enum_field_type_v47(option_type, 1, 0) {
+                            Some(ty @ InvocationSourceEnumFieldTypeV47::Reference {
+                                referent_width, mutable: true, ..
+                            }) => {
+                                if referent_width != recipe.width
+                                    || !invocation_source_enum_field_current_v47(consumed, ty, value, little_endian) {
+                                    invocation_source_byte_refused_v36(consumed)
+                                } else {
+                                    invocation_source_enum_install_v47(consumed, destination,
+                                        InvocationSourceEnumV47 { source_type: option_type,
+                                            variant: 1, fields: Map::empty().insert(0, value) })
+                                }
+                            },
+                            _ => invocation_source_byte_refused_v36(consumed),
+                        }
+                    }
+                },
+                _ => invocation_source_byte_refused_v36(consumed),
+            }
+        }
+    }
+}
+
+proof fn descriptor_index_owned_witness_copy_is_refused_v52(
+    source: InvocationSourceByteStateV36, destination: int, input: int, index: int,
+    recipe: InvocationSourceDescriptorRecipeV51, witness_type: int, option_type: int,
+    little_endian: bool,
+)
+    ensures !invocation_source_descriptor_index_v52(source, destination, input, index,
+        recipe, witness_type, option_type, true, false, little_endian).machine.valid,
+{}
+
+proof fn descriptor_index_does_not_write_referent_bytes_v52(
+    source: InvocationSourceByteStateV36, destination: int, input: int, index: int,
+    recipe: InvocationSourceDescriptorRecipeV51, witness_type: int, option_type: int,
+    moved_receiver: bool, moved_index: bool, little_endian: bool,
+)
+    ensures invocation_source_descriptor_index_v52(source, destination, input, index,
+        recipe, witness_type, option_type, moved_receiver, moved_index, little_endian).machine.memory
+            == source.machine.memory,
+{}
+
+proof fn descriptor_index_stale_origin_is_refused_v52(
+    source: InvocationSourceByteStateV36, destination: int, input: int, index: int,
+    recipe: InvocationSourceDescriptorRecipeV51, witness_type: int, option_type: int,
+    moved_receiver: bool, moved_index: bool, little_endian: bool,
+)
+    requires !invocation_source_descriptor_reference_current_v51(source, input, recipe),
+    ensures !invocation_source_descriptor_index_v52(source, destination, input, index,
+        recipe, witness_type, option_type, moved_receiver, moved_index, little_endian).machine.valid,
+{}
