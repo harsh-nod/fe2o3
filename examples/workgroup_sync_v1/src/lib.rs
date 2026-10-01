@@ -13,6 +13,8 @@ pub mod contract;
 pub mod kernel;
 #[cfg(feature = "lds-f32-kernel")]
 mod kernel_f32;
+#[cfg(feature = "mixed-tile-u32-kernel")]
+mod kernel_mixed_tile_u32;
 #[cfg(feature = "row-affine-u32-kernel")]
 mod kernel_row_affine_u32;
 #[cfg(any(
@@ -53,6 +55,8 @@ mod kernel_scan_u32;
 mod kernel_scan_u32_exclusive;
 #[cfg(feature = "lds-u32-kernel")]
 mod kernel_u32;
+#[cfg(not(target_arch = "amdgpu"))]
+pub mod mixed_tile_oracle;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod row_affine_oracle;
 #[cfg(feature = "scoped-atomic-kernel")]
