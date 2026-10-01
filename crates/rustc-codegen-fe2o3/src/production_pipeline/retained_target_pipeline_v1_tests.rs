@@ -284,3 +284,6 @@ fn complete_paid_route_keeps_every_existing_gate_and_changes_only_verifier_selec
     }
     assert!(!route.contains(".verify_general_kernel_checks_retained_v1()"));
 }
+
+#[path = "paid_target_account_v1_tests.rs"]
+mod paid_target_account_v1_tests;
