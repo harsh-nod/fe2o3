@@ -403,7 +403,7 @@ pub fn slice_get_shared(input: &[{element}], index: u64, mut output: DisjointSli
             (
                 "core-range",
                 "input.get(index as usize..)",
-                "value.len() as u64",
+                "1_u64",
                 "",
                 EXTERNAL,
                 "::get",
