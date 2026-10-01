@@ -334,8 +334,7 @@ fn run_with_invalid_site(
                     ProductionKernelArgumentAbiInputV18 { roots: &roots },
                     ProductionSemanticKirLimitsV1::default(),
                     budget,
-                )
-                .map_err(ProductionSourceOwnedViewErrorV18::Source)?;
+                )?;
             prepared.with_source_consumer_v18(budget, |source, budget| {
                 source.with_analysis_v18(budget, |scope| {
                     scope.with_inventory_v1(|inventory, budget| {
