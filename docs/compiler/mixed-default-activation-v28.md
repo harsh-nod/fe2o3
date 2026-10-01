@@ -1,19 +1,20 @@
 # Mixed Compiler Default Activation
 
-The mixed compiler is not yet the sole default pipeline. The source-owned
-continuations are production APIs, but a prepared input, generated proof, or
-successful optimization does not authorize publication or execution. This page
-distinguishes implemented stage wiring from qualified default activation.
+The ordinary Worker publication entry now selects the mixed compiler. This
+wiring is not yet qualified for usable default activation: a prepared input,
+generated proof, or successful optimization does not authorize publication or
+execution. This page distinguishes implemented stage wiring from qualification.
 
 ## Current Integration
 
-The default target route in
+The ordinary `ProductionCompilation::publish_worker_handoff` entry in
 [`production_pipeline.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline.rs)
-still selects the `Current` semantic importer. Its existing ranked, formal-memory
-and publication continuation is not the nominal mixed pipeline. A failed mixed
-transaction does not authorize retry through that older route.
+calls `publish_mixed_worker_handoff_v53`. It does not retry the older `Current`
+importer or publication continuation on failure. Older stage APIs remain for
+diagnostics and replacement testing; their presence does not qualify retirement
+of the duplicated projections.
 
-The explicit source-owned Worker route in
+The source-owned Worker route in
 [`production_pipeline_source_mixed_worker_v28.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_mixed_worker_v28.rs)
 now requires this sequence:
 
@@ -29,7 +30,17 @@ collector-authenticated Rust closure and compiler bindings
   -> target lowering of that exact final graph
   -> original-root descriptor construction
   -> inert Worker input
+  -> admitted execution of the exact V50 source-to-final-KIR proof
+  -> strict V53 capsule with complete V26 contracts and original nominal ABI
+  -> protected measured compiler handoff and receipt
+  -> charged V53 finalization and managed publication
 ```
+
+Fresh Cargo publication and durable/compact recovery retain the V53 schema;
+they do not downgrade to unconditional descriptors. Descriptor traversal work
+and scratch are charged through finite real resource budgets. Existing bounded
+ELF, artifact and output allocations are separate domains, not a claim that the
+descriptor budget measures all process memory.
 
 Policy11 repeats these five passes, in order, through a complete unchanged
 round: select-same-value canonicalization, integer-neutral worklist
@@ -86,8 +97,10 @@ downstream trust boundary.
    descriptors, compiler execution and finalizer joins end to end. The runtime
    must discharge retained bounds, alias, access, initialization and launch
    conditions against the actual arguments.
-5. **Default activation and retirement.** Switch the sole default only after
-   the consuming joins and replacement tests pass. Remove redundant production
+5. **Default activation and retirement.** Qualify the wired ordinary publication
+   route and the protected host proof-to-load join before claiming usable
+   activation. A compiler current-record audit or physically prepared KFD
+   invocation alone does not supply native proof authority. Remove redundant production
    projections and selectors without allowing an unoptimized or older-policy
    fallback. Historical schema names may remain for compatibility.
 6. **Tutorial and target qualification.** Compile every compiler-produced
