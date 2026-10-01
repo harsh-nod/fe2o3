@@ -34,6 +34,8 @@ fn original_observe(
     candidate: PreparedMixedPublicationV28<'_, '_, '_>,
     budget: &mut Budget<'_>,
 ) -> Result<OriginalObservation, Error> {
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
     candidate.replay(budget)?;
     let request = candidate.original_mir_request(budget)?;
     request
@@ -68,6 +70,8 @@ fn original_observe(
             .open_gates()
             .contains(&MixedPublicationOpenGateV28::OriginalMirToKirRefinement)
     );
+    assert_eq!(budget.storage(), floor);
+    assert_eq!(budget.work_ledger_identity_v1(), ledger);
     Ok(OriginalObservation {
         census: subject.census(),
         statement: subject.statement_identity(),
@@ -80,6 +84,15 @@ fn original_observe(
 struct OriginalCallbacks {
     result: Option<Result<OriginalObservation, String>>,
 }
+
+// The on-account API retains root-phase charges until its enclosing transaction
+// ends. Call this only after its continuation and all original bindings are gone.
+fn finish_original_root_phase(budget: &mut Budget<'_>) {
+    let retained = budget.storage().checked_sub(41).unwrap();
+    budget.release_storage(retained).unwrap();
+    assert_eq!(budget.storage(), 41);
+}
+
 impl Callbacks for OriginalCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some((|| {
@@ -101,13 +114,9 @@ impl Callbacks for OriginalCallbacks {
                         original_observe(candidate, budget)
                     },
                 );
-                assert_eq!(budget.storage(), 41);
-                Ok::<_, String>((
-                    result.map(|result| result.into_observation()),
-                    entered,
-                    budget.work(),
-                    budget.peak_storage(),
-                ))
+                let result = result.map(|result| result.into_observation());
+                finish_original_root_phase(&mut budget);
+                Ok::<_, String>((result, entered, budget.work(), budget.peak_storage()))
             };
             let (measured, entered, work, peak) = run(500_000_000, 64_000_000)?;
             let mut measured = match measured {
@@ -184,7 +193,8 @@ impl Callbacks for OriginalCallbacks {
                 selected,
                 Err(Error::Unsupported("original MIR consumer refusal"))
             ));
-            assert_eq!(budget.storage(), 41);
+            drop(selected);
+            finish_original_root_phase(&mut budget);
             let pending = transaction()?;
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 pending.with_original_source_mixed_publication_on_account_v28::<(), _>(
@@ -197,7 +207,7 @@ impl Callbacks for OriginalCallbacks {
                 Ok(_) => panic!("original MIR consumer unwind was swallowed"),
             };
             assert_eq!(*payload.downcast::<u32>().unwrap(), 930);
-            assert_eq!(budget.storage(), 41);
+            finish_original_root_phase(&mut budget);
             measured.work = exact_work;
             measured.peak = peak;
             Ok(measured)
