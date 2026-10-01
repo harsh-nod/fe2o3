@@ -40,15 +40,27 @@ def one_index(events: list[dict[str, Any]], predicate: Any, label: str) -> int:
 
 
 def verify(
-    path: pathlib.Path, test_target: str, test_name: str, *, allow_filtered: bool = False
+    path: pathlib.Path, test_target: str, test_name: str, *, allow_filtered: bool = False,
+    library_kinds: list[str] | None = None,
 ) -> None:
+    if library_kinds is not None and (
+        not library_kinds or len(set(library_kinds)) != len(library_kinds)
+        or any(kind not in ("lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro")
+               for kind in library_kinds)
+    ):
+        fail("expected a nonempty exact library-kind roster without duplicates")
     events = load_events(path)
     artifact_index = one_index(
         events,
         lambda event: event.get("reason") == "compiler-artifact"
         and isinstance(event.get("target"), dict)
         and event.get("target", {}).get("name") == test_target
-        and event.get("target", {}).get("kind") == ["test"]
+        and event.get("target", {}).get("kind") == (library_kinds or ["test"])
+        and (library_kinds is None or (
+            event["target"].get("crate_types") == library_kinds
+            and isinstance(event.get("profile"), dict)
+            and event["profile"].get("test") is True
+        ))
         and isinstance(event.get("executable"), str)
         and bool(event["executable"]),
         f"Cargo artifact for test target {test_target!r}",
@@ -112,9 +124,12 @@ def verify(
     test_artifacts = [index for index, event in enumerate(events)
                       if event.get("reason") == "compiler-artifact"
                       and isinstance(event.get("target"), dict)
-                      and event["target"].get("kind") == ["test"]]
+                      and (event["target"].get("kind") == ["test"]
+                           or (library_kinds is not None
+                               and isinstance(event.get("profile"), dict)
+                               and event["profile"].get("test") is True))]
     if test_artifacts != [artifact_index]:
-        fail("expected exactly one integration test artifact")
+        fail("expected exactly one selected test artifact")
     for event in events:
         if "reason" in event:
             if "type" in event or event["reason"] not in (
@@ -153,10 +168,13 @@ def main() -> int:
     parser.add_argument("--test-name", required=True)
     parser.add_argument("--allow-filtered", action="store_true",
                         help="allow nonnegative filtered-out count for one exact selected test")
+    parser.add_argument("--lib", metavar="KINDS",
+                        help="require this exact comma-separated library kind/crate_types roster")
     arguments = parser.parse_args()
     try:
         verify(arguments.evidence, arguments.test_target, arguments.test_name,
-               allow_filtered=arguments.allow_filtered)
+               allow_filtered=arguments.allow_filtered,
+               library_kinds=None if arguments.lib is None else arguments.lib.split(","))
     except (OSError, ValueError) as error:
         print(f"invalid Cargo test evidence: {error}", file=sys.stderr)
         return 1

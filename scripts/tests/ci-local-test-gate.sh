@@ -5,6 +5,7 @@ export FE2O3_CI_EPHEMERAL_SUBTARGETS=0
 
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${TEST_SCRIPT_DIR}/../ci-local.sh"
+source "${TEST_SCRIPT_DIR}/ci-local-generic-core-phases.sh"
 
 TIMEOUT_TEST_ROOT="$(mktemp -d)"
 readonly TIMEOUT_TEST_ROOT
@@ -715,10 +716,7 @@ assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'generic tests did not validate the codegen shard policy'
-assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
-  "$(step_command rustc-codegen-lib-tests)" \
-  'generic backend library test command changed'
+assert_codegen_lib_steps
 assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -772,10 +770,7 @@ assert_equals \
   'full workspace tests did not retain the descriptor-safe artifact-transaction bound'
 assert_step_count fe2o3-artifact-transaction-tests 1 \
   'full workspace tests did not run artifact-transaction tests exactly once'
-assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
-  "$(step_command rustc-codegen-lib-tests)" \
-  'full workspace backend library test command changed'
+assert_codegen_lib_steps
 assert_equals \
   "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -796,6 +791,7 @@ assert_equals \
   'codegen shard did not keep its target isolated'
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
+assert_step_count source-formal-execution-discharge 0 'integration shard ran a library source parent'
 for shard_step in "${STEP_NAMES[@]}"; do
   if [[ "${shard_step}" == rustc-codegen-test-* ]] &&
     [[ "${shard_step}" != rustc-codegen-test-production_pipeline ]]; then
@@ -869,6 +865,7 @@ for core_step in \
   cpu-test-partition-revalidation \
   cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
+  source-formal-execution-discharge \
   core-doc-tests \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
@@ -1020,7 +1017,6 @@ for core_step in "${STEP_NAMES[@]}"; do
 done
 assert_no_codegen_test_driver
 
-source "${TEST_SCRIPT_DIR}/ci-local-generic-core-phases.sh"
 assert_generic_core_phases
 
 STEP_NAMES=()
@@ -1032,8 +1028,7 @@ assert_runtime_release_gate
 assert_all_codegen_targets_once
 assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
-assert_step_count rustc-codegen-lib-tests 1 \
-  'serial generic gate did not run backend library tests exactly once'
+assert_codegen_lib_steps
 assert_step_count tutorial-cpu-reference-tests 1 \
   'serial generic gate did not run tutorial CPU runner protocols exactly once'
 assert_step_count cpu-reference-tiled-gemm-paired-default 1 \

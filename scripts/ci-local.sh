@@ -974,15 +974,6 @@ load_rustc_codegen_shard_targets() {
   mapfile -t destination <<<"${output}"
 }
 
-run_rustc_codegen_lib_tests() {
-  # Do not combine this with integration targets: Cargo can emit a test rlib
-  # and an unversioned backend dylib with different Rust symbol hashes.
-  # Keep the aggregate rustc-private harness bounded like the isolated targets;
-  # full debuginfo can exceed the executable identity measurement limit.
-  run_step rustc-codegen-lib-tests \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
-}
-
 run_rustc_codegen_target() {
   local test_target="$1"
   local -a command=(

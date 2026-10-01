@@ -221,6 +221,49 @@ assert_core_source_auth_fail_fast() {
   done
 }
 
+assert_codegen_lib_steps() {
+  assert_step_count rustc-codegen-lib-tests 1 'backend library tests were omitted or duplicated'
+  assert_step_count source-formal-execution-discharge 1 'formal source parent was omitted or duplicated'
+  assert_equals \
+    "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
+    "$(step_command rustc-codegen-lib-tests)" 'backend library test command changed'
+  local expected="bash scripts/ci-cargo-test-json.sh --lib rlib,dylib ${RUSTC_CODEGEN_TEST_PACKAGE} rustc_codegen_fe2o3"
+  expected+=" production_rustc_driver_v1::checked_output_source_v1_tests::formal_memory_diagnostic::ordinary_lds_source_retains_owner_bound_execution_discharge"
+  assert_equals "${expected}" "$(step_command source-formal-execution-discharge)" \
+    'formal source parent lost its exact library-kind/name/ignored selection'
+  local index
+  for index in "${!STEP_NAMES[@]}"; do
+    if [[ "${STEP_NAMES[index]}" == source-formal-execution-discharge ]]; then
+      ((index > 0))
+      assert_equals rustc-codegen-lib-tests "${STEP_NAMES[index-1]}" \
+        'formal source parent must directly follow the ordinary library tests'
+    fi
+  done
+}
+
+assert_codegen_lib_fail_fast() {
+  local step status trace
+  for step in rustc-codegen-lib-tests source-formal-execution-discharge; do
+    trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
+    status=0
+    timeout --signal=TERM --kill-after=2s 10s \
+      env LIBRARY_FAIL_STEP="${step}" LIBRARY_TRACE="${trace}" \
+      bash -c '
+        source "$1"
+        run_step() {
+          printf "%s\n" "$1" >>"${LIBRARY_TRACE}"
+          [[ "$1" != "${LIBRARY_FAIL_STEP}" ]] || return 37
+        }
+        run_generic_core_phase codegen-lib
+        printf "%s\n" unexpected-success
+      ' -- "${TEST_SCRIPT_DIR}/../ci-local.sh" \
+      >"${trace}.stdout" 2>"${trace}.stderr" || status=$?
+    assert_equals 37 "${status}" 'a library parent failure was suppressed'
+    assert_equals "${step}" "$(tail -n 1 "${trace}")" 'library phase continued after failure'
+    [[ ! -s "${trace}.stdout" ]]
+  done
+}
+
 assert_generic_core_phases() {
   python3 -I -B "${TEST_SCRIPT_DIR}/cargo_test_json.py"
   bash "${TEST_SCRIPT_DIR}/ci-cargo-test-json.sh"
@@ -237,6 +280,7 @@ assert_generic_core_phases() {
   reset_generic_phase_capture
   run_generic_core
   assert_core_source_auth_steps
+  assert_codegen_lib_steps
   assert_equals "$(printf '%s\n' "${expected_names[@]}")" \
     "$(printf '%s\n' "${STEP_NAMES[@]}")" 'default core step order changed'
   assert_equals "$(printf '%s\n' "${expected_commands[@]}")" \
@@ -247,6 +291,7 @@ assert_generic_core_phases() {
     run_generic_core_phase "${phase}"
   done
   assert_core_source_auth_steps
+  assert_codegen_lib_steps
   assert_equals "$(printf '%s\n' "${expected_names[@]}")" \
     "$(printf '%s\n' "${STEP_NAMES[@]}")" 'phase concatenation changed core step order'
   assert_equals "$(printf '%s\n' "${expected_commands[@]}")" \
@@ -269,6 +314,13 @@ assert_generic_core_phases() {
   assert_step_count rustc-codegen-lib-tests 0 'fresh source phase ran codegen library tests'
   assert_equals 0 "${#STEP_TIMEOUT_OVERRIDES[@]}" 'source parents introduced timeout overrides'
   assert_core_source_auth_fail_fast
+
+  reset_generic_phase_capture
+  run_generic_core_phase codegen-lib
+  assert_codegen_lib_steps
+  assert_equals 2 "${#STEP_NAMES[@]}" 'library phase ran unrelated stages'
+  assert_equals 0 "${#STEP_TIMEOUT_OVERRIDES[@]}" 'library parent changed timeout policy'
+  assert_codegen_lib_fail_fast
 
   reset_generic_phase_capture
   run_generic_core_phase cpu

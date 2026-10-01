@@ -31,7 +31,16 @@ import sys
 expected = ["test", "--locked", "--offline", "-p", "fixture-package", "--test",
             "fixture-target", "fixture::selected", "--message-format=json", "--",
             "-Z", "unstable-options", "--format=json", "--ignored", "--exact", "--test-threads=1"]
+library = os.environ.get("MOCK_LIBRARY") == "1"
+if library:
+    expected[5:7] = ["--lib"]
 assert sys.argv[1:] == expected, sys.argv
+observed_tmp = Path(os.environ["TMPDIR"])
+if Path(os.environ["MOCK_TMP"]).resolve().is_relative_to(Path(os.environ["MOCK_REPO"])):
+    assert observed_tmp.name.startswith("fe2o3-source-test-json."), observed_tmp
+    assert not observed_tmp.is_relative_to(Path(os.environ["MOCK_REPO"]))
+else:
+    assert os.environ["TMPDIR"] == os.environ["MOCK_TMP"]
 print("original Cargo diagnostic", file=sys.stderr)
 mode = os.environ["MOCK_CASE"]
 if mode == "capture-failure":
@@ -55,6 +64,19 @@ rows = [
     {"type": "suite", "event": "ok", "passed": 1, "failed": 0,
      "ignored": 0, "measured": 0, "filtered_out": 17},
 ]
+if library:
+    rows[0]["target"].update(kind=["rlib", "dylib"], crate_types=["rlib", "dylib"])
+    rows[0]["profile"] = {"test": True}
+    if mode == "wrong-kind":
+        rows[0]["target"]["kind"] = ["dylib", "rlib"]
+    elif mode == "wrong-crate-types":
+        rows[0]["target"]["crate_types"] = ["rlib"]
+    elif mode == "non-test-profile":
+        rows[0]["profile"]["test"] = False
+    elif mode == "extra-harness":
+        rows.insert(1, {"reason": "compiler-artifact", "target": {
+            "name": "other", "kind": ["lib"], "crate_types": ["lib"]},
+            "profile": {"test": True}, "executable": "/fixture/other"})
 if mode == "zero":
     rows[2]["test_count"] = rows[-1]["passed"] = 0
     del rows[3:5]
@@ -87,12 +109,16 @@ chmod 700 -- "${root}/bin/cargo" "${root}/bin/python3"
 
 run_case() {
   local mode="$1" expected="$2" temporary="${3:-${root}/tmp}" status=0 receipt directory
+  local library="${4:-0}"
+  local -a selector=()
+  [[ "${library}" != 1 ]] || selector=(--lib rlib,dylib)
   timeout --signal=TERM --kill-after=2s 20s \
     env PATH="${root}/bin:${PATH}" REAL_PYTHON="${real_python}" \
       MOCK_CASE="${mode}" MOCK_ARGV="${root}/${mode}.argv" \
       MOCK_ARTIFACT="${root}/compiler-artifact" TMPDIR="${temporary}" \
+      MOCK_LIBRARY="${library}" MOCK_TMP="${temporary}" MOCK_REPO="${repo}" \
       bash "${repo}/scripts/ci-cargo-test-json.sh" \
-        fixture-package fixture-target fixture::selected \
+        "${selector[@]}" fixture-package fixture-target fixture::selected \
       >"${root}/${mode}.stdout" 2>"${root}/${mode}.stderr" || status=$?
   [[ "${status}" == "${expected}" ]] || {
     cat "${root}/${mode}.stderr" >&2
@@ -138,9 +164,23 @@ run_case overflow 75
 run_case large-artifact 0
 [[ "$(stat -c %s -- "${root}/compiler-artifact")" == 10485761 ]]
 run_case local-fallback 0 "${repo}"
+run_case library 0 "${root}/tmp" 1
+run_case library-fallback 0 "${repo}" 1
+for mode in zero renamed duplicate failed ignored wrong-kind wrong-crate-types non-test-profile extra-harness; do
+  run_case "${mode}" 1 "${root}/tmp" 1
+done
+run_case cargo-test-failure 37 "${root}/tmp" 1
+run_case advisory 0 "${root}/tmp" 1
 
 status=0
 env PATH="${root}/bin:${PATH}" bash "${repo}/scripts/ci-cargo-test-json.sh" \
   >"${root}/missing.stdout" 2>"${root}/missing.stderr" || status=$?
 [[ "${status}" == 2 && ! -s "${root}/missing.stdout" ]]
+for kinds in '' bin rlib,rlib rlib, ',rlib' 'rlib dylib'; do
+  status=0
+  env PATH="${root}/bin:${PATH}" bash "${repo}/scripts/ci-cargo-test-json.sh" \
+    --lib "${kinds}" fixture-package fixture-target fixture::selected \
+    >"${root}/invalid-lib.stdout" 2>"${root}/invalid-lib.stderr" || status=$?
+  [[ "${status}" == 2 && ! -s "${root}/invalid-lib.stdout" ]]
+done
 printf '%s\n' 'exact Cargo JSON execution helper controls passed'

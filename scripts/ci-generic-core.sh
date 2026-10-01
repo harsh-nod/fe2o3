@@ -82,6 +82,19 @@ run_generic_core_source_simulation() {
   run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
 }
 
+run_rustc_codegen_lib_tests() {
+  # Do not combine this with integration targets: Cargo can emit a test rlib
+  # and an unversioned backend dylib with different Rust symbol hashes.
+  # Keep the aggregate rustc-private harness bounded like the isolated targets;
+  # full debuginfo can exceed the executable identity measurement limit.
+  run_step rustc-codegen-lib-tests \
+    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
+  run_step source-formal-execution-discharge \
+    bash scripts/ci-cargo-test-json.sh --lib rlib,dylib \
+      "${RUSTC_CODEGEN_TEST_PACKAGE}" rustc_codegen_fe2o3 \
+      production_rustc_driver_v1::checked_output_source_v1_tests::formal_memory_diagnostic::ordinary_lds_source_retains_owner_bound_execution_discharge
+}
+
 run_generic_core_phase() {
   if (($# != 1)); then
     printf '%s\n' 'generic-core-phase requires exactly one phase id' >&2
