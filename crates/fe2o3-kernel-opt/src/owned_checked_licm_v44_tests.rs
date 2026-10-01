@@ -585,7 +585,26 @@ fn checked_licm_preserves_conditional_overflow_trap_and_pretrap_effects() {
                             x.kind,
                             fe2o3_kir_sim::SimulationExecutionErrorKindV1::ReachedUnreachable
                         ));
-                        assert!(old.0.is_empty());
+                        assert_eq!(x.site, y.site);
+                        let site = x.site.as_ref().expect("exact failing Trap operation");
+                        assert_eq!(
+                            (site.function_ordinal, site.block, site.operation),
+                            (0, BlockId(80), Some(0))
+                        );
+                        assert_eq!(x.invocation, y.invocation);
+                        assert!(x.observation_failure.is_none());
+                        assert!(y.observation_failure.is_none());
+                        // The two input buffers are observed before execution;
+                        // no Store, Return or other effect precedes this Trap.
+                        assert_eq!(old.0.len(), 2);
+                        for (event, bytes) in old.0.iter().zip([8, 2]) {
+                            assert!(matches!(event.kind,
+                                EventKind::AllocationPreexisting {
+                                    address_space: AddressSpace::Global,
+                                    bytes: actual,
+                                    ..
+                                } if actual == bytes));
+                        }
                     } else {
                         assert_eq!(x.unwrap().arguments(), y.unwrap().arguments());
                     }
@@ -692,7 +711,7 @@ fn deterministic_checked_record() -> String {
 
 #[test]
 fn checked_licm_deterministic_child() {
-    println!("CHECKED_LICM_V44 {}", deterministic_checked_record());
+    println!("\nCHECKED_LICM_V44 {}", deterministic_checked_record());
 }
 
 #[test]

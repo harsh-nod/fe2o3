@@ -45,7 +45,11 @@ fn mixed_checked_licm_source_v44(
         )
     };
     let mut blocks = original.blocks().to_vec();
-    let body = &blocks[5];
+    let body_index = blocks
+        .iter()
+        .position(|block| block.identity() == SemanticBlockIdentityV1::from_sha256([241; 32]))
+        .expect("the original mixed LICM loop-body identity");
+    let body = &blocks[body_index];
     let mut statements = vec![
         assign(
             place(temporary, pair),
@@ -74,8 +78,17 @@ fn mixed_checked_licm_source_v44(
         ),
     ];
     assert_eq!(body.statements().len(), 5);
+    assert!(
+        matches!(body.statements()[0].kind(), SemanticStatementKindV1::Assign(assignment)
+        if assignment.destination() == &place(9, scalar)
+            && matches!(assignment.value().kind(), SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::BitXor,
+                left: SemanticOperandV1::Copy(input),
+                ..
+            } if input == &place(8, scalar)))
+    );
     statements.extend_from_slice(&body.statements()[1..]);
-    blocks[5] = SemanticBasicBlockV1::new(
+    blocks[body_index] = SemanticBasicBlockV1::new(
         body.identity(),
         body.source(),
         statements,
