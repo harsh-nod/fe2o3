@@ -1,6 +1,34 @@
 // These raw-KIR fixtures test only the independently solved physical equations.
 // Genuine owner fixtures separately authenticate original source tag identities.
 #[test]
+fn whole_enum_tag_history_uses_byte_ranges_without_any_projected_value_access() {
+    for (scalar, bytes) in [
+        (ScalarType::U8, 1),
+        (ScalarType::U32, 4),
+        (ScalarType::U64, 8),
+    ] {
+        let (function, slots, layouts, accesses) = tag_graph_v43(scalar, bytes, false);
+        assert!(
+            function
+                .body
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .all(|operation| !matches!(
+                    operation.kind,
+                    OperationKind::Storage(ScopedObjectOperationV29::Project { .. })
+                ))
+        );
+        let (result, _, _, completed) =
+            run_tag_graph_v43(&function, &slots, &layouts, &accesses, &[], LIMIT, LIMIT);
+        result.unwrap();
+        assert!(completed);
+    }
+}
+
+#[test]
 fn tag_geometry_fixed_headers_are_independent_of_the_production_formula() {
     use std::mem::size_of;
     type Error = ProductionSemanticKirErrorV1;

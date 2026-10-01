@@ -491,7 +491,10 @@ pub(super) fn check_expanded_scalar_addresses_v29(
                 .object_layouts
                 .get(schema.0 as usize)
                 .ok_or_else(|| invalid("expanded history has no exact object layout"))?;
-            object_history |= matches!(layout.value, SourceStaticObjectValueV29::Aggregate);
+            object_history |= matches!(
+                layout.value,
+                SourceStaticObjectValueV29::Aggregate | SourceStaticObjectValueV29::Variants { .. }
+            );
         }
     }
     if object_history {

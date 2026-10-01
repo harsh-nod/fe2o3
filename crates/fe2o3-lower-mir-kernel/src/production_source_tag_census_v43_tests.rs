@@ -1,5 +1,22 @@
 include!("production_source_object_completion_gate_v44_tests.rs");
 
+#[test]
+fn nonvalue_tag_rows_and_constructor_views_still_require_complete_original_census() {
+    struct Restore(usize);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ENUM_CONSTRUCTION_FIELDS_V43.set(self.0);
+        }
+    }
+    let _restore = Restore(ENUM_CONSTRUCTION_FIELDS_V43.get());
+    for fields in [0, 1, 3] {
+        ENUM_CONSTRUCTION_FIELDS_V43.set(fields);
+        for fault in [0, 1, 4, 10] {
+            run_tag_census_case_v43(original_enum_construction_owner_v43, fault);
+        }
+    }
+}
+
 thread_local! {
     static TAG_CENSUS_FAULT_V43: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static TAG_CENSUS_VISITS_V43: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

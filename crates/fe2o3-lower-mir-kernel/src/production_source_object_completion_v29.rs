@@ -174,11 +174,17 @@ fn source_address_object_payload_v29(
     let payload = anchors.object_payload(row, budget)?;
     if matches!(
         payload.operation,
-        ScopedObjectOperationV29::Project {
-            step: ScopedObjectProjectionV29::Field(_),
-            ..
-        }
+        ScopedObjectOperationV29::ReadDiscriminant { .. }
+            | ScopedObjectOperationV29::SetDiscriminant { .. }
+            | ScopedObjectOperationV29::Project {
+                step: ScopedObjectProjectionV29::Field(_)
+                    | ScopedObjectProjectionV29::VariantForWrite { .. },
+                ..
+            }
     ) {
+        // These rows have no scalar value payload. Tags are authenticated by
+        // the complete original tag census and independent byte-range graph;
+        // constructor views retain their selected source schema and geometry.
         return Ok(None);
     }
     budget.charge_work(8)?;
