@@ -952,6 +952,19 @@ pub(crate) fn prepare_versioned_compact_finalizer_replay(
     })
 }
 
+/// Retain the exact V53 descriptor and strict Worker replay without converting
+/// it to a historical nominal descriptor or granting proof/launch authority.
+pub fn prepare_mixed_worker_compact_finalizer_replay_v53(
+    finalized: crate::PreparedFinalizedNominalWorkerHsacoV53,
+) -> Result<
+    PreparedProtectedWorkerV3CompactFinalizerReplayV2,
+    ProtectedWorkerV3CompactFinalizerReplayErrorV1,
+> {
+    prepare_versioned_compact_finalizer_replay(
+        crate::worker_v3_finalized_schema::FinalizedOwner::MixedV53(finalized),
+    )
+}
+
 #[derive(Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ProtectedWorkerV3CompactFinalizerReplayErrorV1 {

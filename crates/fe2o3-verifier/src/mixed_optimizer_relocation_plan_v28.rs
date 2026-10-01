@@ -26,7 +26,7 @@ mod check;
 #[path = "mixed_optimizer_typed_relocation_expressions_v48.rs"]
 mod typed_expressions_v48;
 pub use binding::{
-    ExecutedMixedComposedRefinementV29, ExecutedTypedSourceTailV50,
+    ExecutedMixedComposedRefinementV29, ExecutedTypedSourceTailV50, InertTypedSourceReceiptV53,
     MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,
     MixedOptimizerRelocationSubjectV28, PreparedMixedComposedExecutionV29,
     PreparedMixedComposedRelocationCfgRefinementV28,
@@ -34,7 +34,7 @@ pub use binding::{
     PreparedMixedFixedpointRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationExpressionsV29, PreparedMixedRelocationCfgRefinementV28,
     PreparedMixedRelocationExpressionsV28, PreparedTypedSourceTailExecutionV50,
-    PreparedTypedSourceTailV50, TypedSourceTailSubjectV50,
+    PreparedTypedSourceTailV50, TypedSourceTailSubjectV50, check_inert_typed_source_receipt_v53,
     prepare_mixed_fixedpoint_relocation_expressions_v29, prepare_mixed_relocation_expressions_v28,
     prepare_typed_source_tail_v50,
 };

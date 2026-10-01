@@ -257,12 +257,40 @@ fn push_name_using<F: TextError>(
     rows.push(value);
     Ok(())
 }
+#[derive(Clone, Copy)]
+pub(super) enum VerifiedTextGraphV53<'a> {
+    V12(&'a Owner),
+    V18(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18),
+}
+
+impl<'a> VerifiedTextGraphV53<'a> {
+    fn module(self) -> &'a Module {
+        match self {
+            Self::V12(owner) => owner.module(),
+            Self::V18(owner) => owner.module(),
+        }
+    }
+
+    fn canonical_bytes(self) -> &'a [u8] {
+        match self {
+            Self::V12(owner) => owner.canonical().canonical_bytes(),
+            Self::V18(owner) => owner.canonical_bytes(),
+        }
+    }
+}
+
 pub(super) fn preflight<F: TextError>(owner: &Owner, budget: &mut Budget<'_>) -> Result<(), F> {
+    preflight_graph::<F>(VerifiedTextGraphV53::V12(owner), budget)
+}
+
+pub(super) fn preflight_graph<F: TextError>(
+    owner: VerifiedTextGraphV53<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), F> {
     // Verified canonical bytes bound every visited record/type/name. The old
     // allocation-free bounds helper traverses only this actual verified graph.
     budget.charge_work(
         owner
-            .canonical()
             .canonical_bytes()
             .len()
             .checked_mul(64)
@@ -273,6 +301,13 @@ pub(super) fn preflight<F: TextError>(owner: &Owner, budget: &mut Budget<'_>) ->
 }
 pub(super) fn symbols<F: TextError>(
     owner: &Owner,
+    budget: &mut Budget<'_>,
+) -> Result<CompilerModuleSymbolClosureV1, F> {
+    symbols_graph::<F>(VerifiedTextGraphV53::V12(owner), budget)
+}
+
+pub(super) fn symbols_graph<F: TextError>(
+    owner: VerifiedTextGraphV53<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<CompilerModuleSymbolClosureV1, F> {
     let module = owner.module();
@@ -467,6 +502,14 @@ fn expect<F: TextError>(
 // from the same stored metadata. No borrowed/owned symbol list is allocated.
 pub(super) fn check_symbols<F: TextError>(
     owner: &Owner,
+    module: &InertCompilerModuleTextV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), F> {
+    check_symbols_graph::<F>(VerifiedTextGraphV53::V12(owner), module, budget)
+}
+
+pub(super) fn check_symbols_graph<F: TextError>(
+    owner: VerifiedTextGraphV53<'_>,
     module: &InertCompilerModuleTextV1,
     budget: &mut Budget<'_>,
 ) -> Result<(), F> {

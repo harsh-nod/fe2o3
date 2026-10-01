@@ -26,10 +26,18 @@ use sha2::{Digest, Sha256};
 #[path = "nominal_worker_publication_v3.rs"]
 mod nominal;
 use nominal::RecoveredPublicationRef;
+#[path = "mixed_worker_publication_v53.rs"]
+mod mixed_v53;
 #[path = "nominal_worker_publication_v4.rs"]
 mod nominal_v4;
 #[path = "nominal_worker_publication_v5.rs"]
 mod nominal_v5;
+pub use mixed_v53::{
+    PreparedMixedWorkerPublicationV53, PublishedMixedWorkerHsacoV53,
+    RecoveredMixedWorkerPublicationV53, persist_prepared_mixed_worker_publication_v53,
+    prepare_mixed_worker_publication_v53, publish_recovered_mixed_worker_hsaco_v53,
+    recover_mixed_worker_publication_v53,
+};
 pub use nominal::{
     PreparedNominalWorkerPublicationV3, PublishedNominalWorkerHsacoV3,
     RecoveredNominalWorkerPublicationV3, persist_prepared_nominal_worker_publication_v3,
@@ -558,6 +566,8 @@ pub enum WorkerV3HsacoPublicationErrorV1 {
     NominalFinalizationV4(crate::NominalWorkerFinalizationErrorV4<std::convert::Infallible>),
     NominalArtifactV5(crate::NominalFinalizationErrorV5<std::convert::Infallible>),
     NominalFinalizationV5(crate::NominalWorkerFinalizationErrorV5<std::convert::Infallible>),
+    MixedArtifactV53(crate::MixedWorkerFinalizationBudgetErrorV53),
+    MixedFinalizationV53(crate::MixedWorkerFinalizationBudgetErrorV53),
     ProducerIdentityMismatch,
     CompilerClosureMismatch,
     MissingExactFinalizerDerivation,
@@ -596,6 +606,8 @@ impl fmt::Display for WorkerV3HsacoPublicationErrorV1 {
             Self::NominalFinalizationV4(error) => error.fmt(formatter),
             Self::NominalArtifactV5(error) => error.fmt(formatter),
             Self::NominalFinalizationV5(error) => error.fmt(formatter),
+            Self::MixedArtifactV53(error) => error.fmt(formatter),
+            Self::MixedFinalizationV53(error) => error.fmt(formatter),
             Self::ProducerIdentityMismatch => {
                 formatter.write_str("V3 publication producer differs from the prepared producer")
             }
@@ -654,6 +666,8 @@ impl Error for WorkerV3HsacoPublicationErrorV1 {
             Self::NominalFinalizationV4(error) => Some(error),
             Self::NominalArtifactV5(error) => Some(error),
             Self::NominalFinalizationV5(error) => Some(error),
+            Self::MixedArtifactV53(error) => Some(error),
+            Self::MixedFinalizationV53(error) => Some(error),
             Self::CompactReplay(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::PublicationBinding(error) => Some(error),
@@ -1025,7 +1039,16 @@ fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
     let decoded = decode_compiler_module_handoff_v2(outer.module_handoff().canonical_bytes())
         .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
     let schema = DescriptorSchema::from_abi(outer.capsule().receipts().abi().canonical_preimage())?;
-    let raw_hsaco = schema.derive_raw(exact_finalized_hsaco)?;
+    // Raw reconstruction and strict V53 re-finalization share one cumulative
+    // finite descriptor ledger. Historical schema accounting is unchanged.
+    let mut mixed_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        crate::MIXED_WORKER_FINALIZATION_WORK_LIMIT_V53,
+    );
+    let mut mixed_budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut mixed_work,
+        crate::MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53,
+    );
+    let raw_hsaco = schema.derive_raw_on_mixed_budget(exact_finalized_hsaco, &mut mixed_budget)?;
     let crate::worker_finalizer_replay_engine::ReconstructedWorkerExchanges {
         plan,
         bootstrap_request_bytes,
@@ -1080,6 +1103,10 @@ fn validate_finalizer_replay_components<P: FinalizerProviderPayloadV1>(
                 &mut |_| Ok::<_, std::convert::Infallible>(()),
             )
             .map_err(WorkerV3HsacoPublicationErrorV1::NominalFinalizationV5)?,
+        ),
+        DescriptorSchema::MixedV53 => FinalizedOwner::MixedV53(
+            crate::finalize_protected_worker_nominal_hsaco_on_budget_v53(source, &mut mixed_budget)
+                .map_err(WorkerV3HsacoPublicationErrorV1::MixedFinalizationV53)?,
         ),
     };
     let view = finalized.view();
@@ -1166,6 +1193,7 @@ fn derive_revalidated_finalizer_derivation(
             DescriptorSchema::NominalV3 => 3,
             DescriptorSchema::NominalV4 => 4,
             DescriptorSchema::NominalV5 => 5,
+            DescriptorSchema::MixedV53 => 53,
         },
     }
 }

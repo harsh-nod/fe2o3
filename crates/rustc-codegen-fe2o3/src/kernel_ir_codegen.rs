@@ -29,6 +29,8 @@ pub(crate) use ordered_composition_v1::exact_ordered_composition_descriptor_exte
 pub(crate) use ordered_composition_v1::retain_verified_ordered_composition_compiler_module_text_v1;
 #[path = "kernel_ir_codegen_conditional_descriptor_v5.rs"]
 pub(crate) mod conditional_v5;
+#[path = "kernel_ir_codegen_mixed_descriptor_v53.rs"]
+pub(crate) mod mixed_v53;
 #[path = "kernel_ir_codegen_nominal_descriptor_v3.rs"]
 pub(crate) mod nominal_v3;
 #[path = "kernel_ir_codegen_physical_entry_v20.rs"]
@@ -50,6 +52,7 @@ enum DescriptorSourceIdentity {
     V1(CompilerDescriptorSourceIdentityV1),
     V3(fe2o3_compiler_ffi::CompilerDescriptorSourceIdentityV3),
     V5(fe2o3_compiler_ffi::CompilerDescriptorSourceIdentityV5),
+    Mixed53([u8; 32]),
 }
 
 const MAX_COMPILER_MODULE_ID_BYTES: usize = 256;

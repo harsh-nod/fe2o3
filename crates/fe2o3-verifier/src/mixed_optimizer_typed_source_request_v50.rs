@@ -6,7 +6,10 @@ use fe2o3_kernel_ir::{EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth};
 
 #[path = "mixed_optimizer_typed_source_receipt_v50.rs"]
 mod receipt;
-pub use receipt::{ExecutedTypedSourceTailV50, PreparedTypedSourceTailExecutionV50};
+pub use receipt::{
+    ExecutedTypedSourceTailV50, InertTypedSourceReceiptV53, PreparedTypedSourceTailExecutionV50,
+    check_inert_typed_source_receipt_v53,
+};
 
 const DOMAIN: &[u8] = b"FE2O3/ORIGINAL-MIR/POLICY11/LICM/STORE-CONSENSUS/TYPED/V50\0";
 type Native<'n, 'p, 'v, 's> = Handoff<'n, 'p, 'v, 's, Policy11<'v, 's>>;

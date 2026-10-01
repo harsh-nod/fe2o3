@@ -85,6 +85,8 @@ pub(crate) const fn disposition(device_candidate_count: usize) -> ProductionDisp
 
 #[derive(Debug)]
 pub(crate) enum ProductionPipelineError {
+    MixedSourcePublication(Box<source_owned_v29::Error>),
+    MixedRuntime(fe2o3_verifier::FunctionalRefinementRuntimeErrorV1),
     CustomLlvmConfiguration,
     EmptyCollectedDeviceClosure,
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
@@ -203,6 +205,8 @@ impl fmt::Display for ProductionPipelineError {
             Self::EmptyCollectedDeviceClosure => formatter.write_str(
                 "production compilation requires a nonempty collector-sealed device closure",
             ),
+            Self::MixedSourcePublication(error) => write!(formatter, "mandatory mixed source publication failed: {error}"),
+            Self::MixedRuntime(error) => write!(formatter, "mandatory mixed refinement runtime unavailable: {error}"),
             Self::SemanticImport(error) => write!(formatter, "production compilation {error}"),
             Self::SemanticMiddleEnd(error) => {
                 write!(formatter, "production compilation exact semantic middle end failed: {error}")
@@ -374,6 +378,8 @@ impl std::error::Error for ProductionPipelineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::ScalarEmissionCapture(error) => Some(error.as_ref()),
+            Self::MixedSourcePublication(error) => Some(error.as_ref()),
+            Self::MixedRuntime(error) => Some(error),
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
@@ -3627,8 +3633,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         compiler_execution: AdmittedProtectedCompilerExecutionV1,
     ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
     {
-        self.lower_production_target(target_budget)?
-            .publish_worker_handoff(compiler_execution)
+        self.publish_mixed_worker_handoff_v53(target_budget, compiler_execution)
     }
 
     /// Retains the original extraction milestone while consuming the same
@@ -4517,7 +4522,11 @@ mod tests {
             .unwrap()
             .0;
         assert!(publication.contains("compiler_execution: AdmittedProtectedCompilerExecutionV1"));
-        assert!(publication.contains(".publish_worker_handoff(compiler_execution)"));
+        assert!(
+            publication
+                .contains(".publish_mixed_worker_handoff_v53(target_budget, compiler_execution)")
+        );
+        assert!(!publication.contains("lower_production_target("));
         assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
         assert!(pipeline.contains(concat!(
             "publish_compiler_execution_receipt_transport",
