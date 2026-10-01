@@ -107,13 +107,16 @@ mod core_checked_add_tests {
             r#"#![no_std]
 use fe2o3_device::{{kernel, thread, DisjointSlice}};
 {declarations}
+fn checked_add_result(a: u64, b: u64) -> (u64, u8) {{
+    match {expression} {{
+        Some(value) => (value as u64, 1_u8),
+        None => (0_u64, 0_u8),
+    }}
+}}
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn checked_add_unsigned(a: u64, b: u64, mut output: DisjointSlice<u64>,
                            mut present: DisjointSlice<u8>) {{
-    let (value, flag) = match {expression} {{
-        Some(value) => (value as u64, 1_u8),
-        None => (0_u64, 0_u8),
-    }};
+    let (value, flag) = checked_add_result(a, b);
     if let core::option::Option::Some(slot) = output.get_mut(thread::index_1d()) {{ *slot = value; }}
     if let core::option::Option::Some(slot) = present.get_mut(thread::index_1d()) {{ *slot = flag; }}
 }}
