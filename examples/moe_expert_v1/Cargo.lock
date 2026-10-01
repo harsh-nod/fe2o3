@@ -435,6 +435,7 @@ dependencies = [
  "ed25519-dalek",
  "fe2o3-build-authority",
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-external-anchor-protocol",
  "fe2o3-kernel-ir",
  "fe2o3-rustc-invocation",
  "libc",
@@ -465,6 +466,7 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-external-anchor-protocol",
  "fe2o3-kernel-ir",
+ "fe2o3-rustc-invocation",
  "sha2 0.11.0",
 ]
 
@@ -574,6 +576,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-kernel-opt",
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-text",
  "fe2o3-lower-mir-kernel",
@@ -766,6 +769,37 @@ name = "fe2o3-proof-contracts"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-protected-service-profile"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "libc",
+ "rustix",
+]
+
+[[package]]
+name = "fe2o3-protected-service-spawn"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-kernel-ir",
+ "fe2o3-protected-service-profile",
+ "libc",
+ "rustix",
+]
+
+[[package]]
+name = "fe2o3-protected-static-executable"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-static-executable-format",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-runtime"
 version = "0.1.0"
 dependencies = [
@@ -794,6 +828,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco-finalize",
+ "fe2o3-static-executable-format",
  "sha2 0.11.0",
 ]
 
@@ -841,6 +876,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-static-executable-format"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-target-spec"
 version = "0.1.0"
 
@@ -855,6 +897,9 @@ dependencies = [
  "fe2o3-amdgcn-model",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-build-authority",
+ "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
@@ -867,8 +912,12 @@ dependencies = [
  "fe2o3-mir-model",
  "fe2o3-pliron",
  "fe2o3-proof-contracts",
+ "fe2o3-protected-service-profile",
+ "fe2o3-protected-service-spawn",
+ "fe2o3-protected-static-executable",
  "fe2o3-rustc-front",
  "fe2o3-rustc-invocation",
+ "libc",
  "rand_core",
  "rustix",
  "sha2 0.11.0",
