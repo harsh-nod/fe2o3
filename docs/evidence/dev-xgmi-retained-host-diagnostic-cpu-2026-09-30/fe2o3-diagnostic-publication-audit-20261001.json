@@ -1,0 +1,24 @@
+{
+  "archive_members": 410,
+  "auditor_sha256": "d05b40f6589998a17da67c72f43aa69bf02f342467284bed73b9c255824868e5",
+  "ci_commit": "4ad64047b0887a747a41aa7b0b9fa2f4206279c1",
+  "local_ci_commands": 17,
+  "new_solver_or_rust_test_or_gpu_execution": false,
+  "originals_and_signed_blobs_match": true,
+  "package": {
+    "README.md": "43622919c1361d925d59dad94c8be5804bf647bda863024f3c32f1ec9cd53ac1",
+    "allowed-signers": "ea67b34912b272ccbb46a4a83d8e00eb1a83e87832f089c1c134eed1786b560b",
+    "raw-index.json": "503413710e76542a5ae5a41a7d6eca055efab9e04b898e4a95ff8f16876201cc",
+    "raw.tar.xz": "f2e534117fa242cf7e41da14a060d4461588736a751b2d25ca36a1713ca354e2",
+    "signed-candidate.bundle": "4d7fdad71b7d0e31726f13804c1c9ff09329eeaf7a27d79c4deab778c29a5be6",
+    "signed-source-binding.json.xz": "3ed563f470f37425da54a3ad7f34cae4696a3756adb84b27402a04fe1070488a",
+    "signed-source-records.tar.xz": "2ef8610a9c5ed7ad31ee125285666c04586bd9f283babccf2f40bc1f3d7f4906",
+    "signed-source-verification.json": "8d3a2628b17ebe70b0b794a595d542cdfdbe22f5c45a1a95d82587989cd56516",
+    "summary-before-signed-binding.json": "b73d487f4156d1ca3e8cf40f575267d5291b27d57266242a6c243eb60a3d4b55",
+    "summary.json": "cde46371e62fdf65acf8285bc5a605a8c47cd3e65b50225983abe2409dd0164a"
+  },
+  "signature_and_bundle_verified": true,
+  "signed_source_files": 6477,
+  "source_commit": "d6b1906d0d24b366ea4222fbca4ae4a6966fad6c",
+  "source_record_members": 29
+}

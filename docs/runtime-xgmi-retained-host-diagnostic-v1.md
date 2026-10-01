@@ -93,11 +93,24 @@ tests; this change does not extend a Verus theorem to diagnostic timing.
 The whole-KFD closures in `check-retained-pair-post-catch.py` and
 `check-retained-pair-owned-storage.py`, the runtime/accounting/KFD closure in
 `check-retained-credit-dispatch.py`, and the build-file closure in
-`check-request-charge.py` cover changed paths. Their existing guard constants
-are preserved and must not be presented as accepting this candidate.
+`check-request-charge.py` cover changed paths. The original signed candidate
+`d6b1906d0` preserves their old constants. Integration at `877451ebf` refreshes
+only those four reviewed inventories after checking that all executable proof
+inputs and the 14/8/41/3 obligation and 29/21/25/21 mutation rosters are unchanged.
+Their source controls pass; no solver was rerun and no theorem is extended to
+the timing observer.
 Campaign-wide source inventories also change, including the portable retained
 credit campaign and native-series transport. Historical receipts remain bound
 to their original source commits.
+
+The [CPU qualification packet](evidence/dev-xgmi-retained-host-diagnostic-cpu-2026-09-30/README.md)
+binds the signed implementation to a complete 1,830-test all-feature KFD run,
+focused no-default tests, strict Clippy and example builds. Its explicit linked
+record combines nineteen prior closed stages with seven fresh continuation
+stages, not one continuous campaign. The no-default full suite and native GPU
+examples were not run. Integration adds the portable helpers at `4ad64047b`;
+all seventeen local CI commands pass, including 64 ordinary and 40 diagnostic
+harness tests. These local controls do not supply a new formal or native result.
 
 ## Portable Native Campaign
 

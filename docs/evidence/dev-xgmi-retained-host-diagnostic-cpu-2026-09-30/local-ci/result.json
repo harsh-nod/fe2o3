@@ -1,0 +1,213 @@
+{
+  "all_17_pass": true,
+  "commands": [
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-distributed-publication-contract.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "ad993148752580aa0ad61e34cbe51d6dc475b29bbd6160a1bc483ada7aa73bf0"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-distributed-publication-construction.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "ebef29a5dbc4b9af4ae8adc78e69004374633eda379774c2c20c38a7bc6f783c"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-queued-query.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "fee380c3b88d7c93feea1892772137a3630ba3eb88bc7898e67eb1539b8e9714"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-request-charge.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "becb6237ece822d2b579c6c7021d4ba8e9983aad70e9c28c2a42a179ea5691aa"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-retained-credit-record.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "d6f31dd228c8241e9ee995ea66e04edb43d3d578538faf747fbec52870a7df68"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-independent-retained-observation.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "10096b8270ce03a5f9cc3d551434e5b64c423e7792e1d8fa78f99d101604782d"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-domain-retained-observation.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "b31376d4547f1a115b0ba15f5fe4773e79fe548effc89984e341ddf58a70e940"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-retained-credit-dispatch.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "cd086451fe863ba42e4c5a1413161958f9a93a8228918623ff4cea7f1f7fe8cc"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-run-retained-credit-dispatch.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "42c9e11d4ab91c1fb39683b3e196c8de94f7adda93ea84f6935e3d24d956d758",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-producer-input-fold.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "7e02a520d1051f591ed9327def796b5f1a15d99ba2750f6299d3315cb8df5aea"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-producer-input-validate.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "75f664201bc7cb3114088d664c42a0920400fe0eaa9a5cb2add033d858009d05",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-retained-pair-routing.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "226940b23ea527db160173b39adb10d3b3546185ac1d7928e5756e72d4719ce1"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-retained-pair-owned-storage.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "c7ae5ffd635a946900c6d479217b2e433db1b46a0121083b1feb6a62ac6d21d9"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-retained-pair-post-catch.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "885aa093101e8274da8e4b2acbb4daa3ad601b82612eeb26b21e7deb515c3d82"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "crates/fe2o3-runtime-model/verus/test-resource-domain.py",
+        "Qualification.test_reviewed_closure_and_each_source_drift",
+        "Qualification.test_manifest_and_roster_drift",
+        "Qualification.test_positive_requires_exact_summary_and_exit",
+        "Qualification.test_negative_requires_logical_failure",
+        "Qualification.test_mutants_are_exact_distinct_body_edits",
+        "Qualification.test_duplicate_mutation_target_and_symlink_reject"
+      ],
+      "exit": 0,
+      "stderr_sha256": "71b40fd0510f1c258c1462079631cfc5a9b69efa837f163dd56d27fc782d99b1",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "benchmarks/runtime_gfx942",
+        "-p",
+        "test_xgmi_peer_series_*.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "cb997a486a638b5061ae579e8900d59f5bb651e51d5be81016e0f60c7259a967",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "benchmarks/runtime_gfx942",
+        "-p",
+        "test_xgmi_retained_host_diagnostic*.py"
+      ],
+      "exit": 0,
+      "stderr_sha256": "4b0a71415cf901ce2cbf934dcbd298ff87bd6bca24e4aa04b0706366a65bbcd4",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "head": "4ad64047b0887a747a41aa7b0b9fa2f4206279c1",
+  "scope": "Local workflow replay, including CPU C++ callback controls; no hosted CI, Rust tests, solver or GPU qualification.",
+  "workflow_sha256": "760e1b653685a11d24b5d5e844effbb60bda6398cad3e5dfaf17e1d7934aa679"
+}

@@ -1,0 +1,2052 @@
+{
+  "cpu-controller-1/README.md": {
+    "sha256": "a9b0ab5188caf89c5935b7b0229ea4328fb7c06875ef30283b5844d8adb3a6a8",
+    "size": 3936,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/README.md"
+  },
+  "cpu-controller-1/light-source-attempt-1/commands/opening-head/receipt.json": {
+    "sha256": "7f9f4da562dadb33e78e29507f62e27f550a4979a5c4aa405f0fa4b473e1f428",
+    "size": 1821,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/commands/opening-head/receipt.json"
+  },
+  "cpu-controller-1/light-source-attempt-1/commands/opening-head/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/commands/opening-head/stderr"
+  },
+  "cpu-controller-1/light-source-attempt-1/commands/opening-head/stdout": {
+    "sha256": "83ca30f7ea51811690aa38c19569fcb249564841118cf46ce82d62edbf98b7d9",
+    "size": 41,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/commands/opening-head/stdout"
+  },
+  "cpu-controller-1/light-source-attempt-1/commands/opening-tree/receipt.json": {
+    "sha256": "f808e2a88ef390998d52020c9ac19768c6a02400421ae721d50e5b41b966fc3c",
+    "size": 2295,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/commands/opening-tree/receipt.json"
+  },
+  "cpu-controller-1/light-source-attempt-1/commands/opening-tree/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/commands/opening-tree/stderr"
+  },
+  "cpu-controller-1/light-source-attempt-1/commands/opening-tree/stdout": {
+    "sha256": "9aa4cfc1a2b36ee3bfeac3d4bf3bccb2721fa661bc92609171ac0a946d104bb9",
+    "size": 784324,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/commands/opening-tree/stdout"
+  },
+  "cpu-controller-1/light-source-attempt-1/fresh-census.json": {
+    "sha256": "dea7ae7fe582dd71bba0f6964f6af41128856eea1c3711cf2e41c54b81f02d4f",
+    "size": 1094,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/fresh-census.json"
+  },
+  "cpu-controller-1/light-source-attempt-1/plan.json": {
+    "sha256": "b5a662399a30bbbf7b3991e56593554d1c385d308949f08fcd0425979d78939b",
+    "size": 11611,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/plan.json"
+  },
+  "cpu-controller-1/light-source-attempt-1/result.json": {
+    "sha256": "f2d63962ef62a950ccae23b05cb9869e3312022ca48ef9679e887f6043974f34",
+    "size": 145,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/result.json"
+  },
+  "cpu-controller-1/light-source-attempt-1/source.json": {
+    "sha256": "28dc194b6eb2c81fee0d0378c9eab34cd0882457f0a40aee5177d3b0faec7bda",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/light-source-attempt-1/source.json"
+  },
+  "cpu-controller-1/qualify.py": {
+    "sha256": "0f4d1eab50e01d999f100890771d599ad949b67f280cb959d59936c7f3542fd0",
+    "size": 30144,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/qualify.py"
+  },
+  "cpu-controller-1/test_qualify.py": {
+    "sha256": "05671a082d89a38a4d8548b125cb219bde149b93aa8d4f0a39c6027d9711b5fb",
+    "size": 14266,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930/test_qualify.py"
+  },
+  "cpu-controller-2/README.md": {
+    "sha256": "3d84f4eb1deb7e43d3837dc2030c250bd3472d1b91e187985a388882dafdf084",
+    "size": 5960,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930-revision-2/README.md"
+  },
+  "cpu-controller-2/TRANSITION.json": {
+    "sha256": "4bb5172dbacb5801e32eccaf3dc26a7c477f921930b6df5cc2f841b6ccbc3cf1",
+    "size": 6035,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930-revision-2/TRANSITION.json"
+  },
+  "cpu-controller-2/qualify.py": {
+    "sha256": "0c504f7a512873776df4af8e1666d6dfd3ab401e5f05dbf7d3c35a9e49eae3cb",
+    "size": 32381,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930-revision-2/qualify.py"
+  },
+  "cpu-controller-2/test_qualify.py": {
+    "sha256": "1e9ed499bfedd484462836d059b43489c6f416b7f6ebabf3e8c917763a1e27af",
+    "size": 24202,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-controller-20260930-revision-2/test_qualify.py"
+  },
+  "format-controller-1/README.md": {
+    "sha256": "f1528441d43259afed55ca2ddd1a2db3291fa5d684b92bc71a6dddf2db37dfdb",
+    "size": 4462,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-continuation-controller-20260930/README.md"
+  },
+  "format-controller-1/continue.py": {
+    "sha256": "aa595babd8bf4d716eaf58c9dbe50758c764a1a7edb759b6c62ad19d2e151a0a",
+    "size": 20334,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-continuation-controller-20260930/continue.py"
+  },
+  "format-controller-1/test_continue.py": {
+    "sha256": "78b38148146eae02905e0ecc7325b664b258f389c907ea4f72fd8c60e87433e1",
+    "size": 16439,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-continuation-controller-20260930/test_continue.py"
+  },
+  "linked-controller/README.md": {
+    "sha256": "1953627cf31e5e94ee9dd548122145b7c111d464e9ac727e42bc87c0738f5ca8",
+    "size": 6317,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-continuation-controller-20260930-revision-2/README.md"
+  },
+  "linked-controller/continue.py": {
+    "sha256": "76872adb05a9fd408cc3dfb75c8fba8647ff013a6747bc6746d5f691393b3057",
+    "size": 27020,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-continuation-controller-20260930-revision-2/continue.py"
+  },
+  "linked-controller/test_continue.py": {
+    "sha256": "7ba8015017eca1734d3c75bfb1e20834b3cb32d4e65a44ea5471dda1fc3a689f",
+    "size": 22627,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-continuation-controller-20260930-revision-2/test_continue.py"
+  },
+  "linked-cpu/added-test-fragment-format-check-result.json": {
+    "sha256": "cefa248c736e3c5c37c7dff6061554696f6c20e8f7949ae158236d79d2b1472d",
+    "size": 403,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/added-test-fragment-format-check-result.json"
+  },
+  "linked-cpu/all-features-clippy-result.json": {
+    "sha256": "af6d44a2a7ccf108a9044bab52f24e422f03dc1d66da300bd425a1088b3a4421",
+    "size": 390,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/all-features-clippy-result.json"
+  },
+  "linked-cpu/all-features-examples-result.json": {
+    "sha256": "c3ff83b9c7a1df1c130307090e5f744334f5fba65c7db5cd85aa21d3e431b231",
+    "size": 4370,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/all-features-examples-result.json"
+  },
+  "linked-cpu/all-features-focus-2-result.json": {
+    "sha256": "a9fe0c36c87da84bafb50f125aa0f67f86766fce7bb6a6d099f90bb98878fa5b",
+    "size": 787,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/all-features-focus-2-result.json"
+  },
+  "linked-cpu/all-features-full-lib-result.json": {
+    "sha256": "0ff17ff53a7f98a95f733545264160eab0ae6864b7b9b0eab6d4fa283f4bf5b3",
+    "size": 235521,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/all-features-full-lib-result.json"
+  },
+  "linked-cpu/artifacts-after.json": {
+    "sha256": "89e8023dafae4fb40115cf5aa979282e2962fd5d40f5084c7bfaedf3f3621c2b",
+    "size": 1183,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/artifacts-after.json"
+  },
+  "linked-cpu/artifacts-before.json": {
+    "sha256": "b5a3be974d0df816d970ba5e4a0930bb38d23ec6ba7adcb9ab638166dcc16f94",
+    "size": 565,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/artifacts-before.json"
+  },
+  "linked-cpu/closing-head-result.json": {
+    "sha256": "58517800da96bfe6c35c806f830872813b65a78a93d3f785b9d2369f04884027",
+    "size": 383,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/closing-head-result.json"
+  },
+  "linked-cpu/commands/added-test-fragment-format-check/receipt.json": {
+    "sha256": "30b3be9ac42c25cc64e61a830f749c0e9da27ff256ef9b3790c24de34d476524",
+    "size": 1992,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/added-test-fragment-format-check/receipt.json"
+  },
+  "linked-cpu/commands/added-test-fragment-format-check/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/added-test-fragment-format-check/stderr"
+  },
+  "linked-cpu/commands/added-test-fragment-format-check/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/added-test-fragment-format-check/stdout"
+  },
+  "linked-cpu/commands/all-features-clippy/receipt.json": {
+    "sha256": "d4a441fc22425e3de294bf279dba542a175e646b8ce43370b5134e6da98753d3",
+    "size": 1983,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-clippy/receipt.json"
+  },
+  "linked-cpu/commands/all-features-clippy/stderr": {
+    "sha256": "90cd6b3069bc9131c2bf7ac499f0dd612c48a4f12e894f31a95191f29b0afd98",
+    "size": 1853,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-clippy/stderr"
+  },
+  "linked-cpu/commands/all-features-clippy/stdout": {
+    "sha256": "9b127a942a39e6a76e4cbb082cc9dbda3e554701fd1c37705628a6081506a529",
+    "size": 45587,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-clippy/stdout"
+  },
+  "linked-cpu/commands/all-features-examples/receipt.json": {
+    "sha256": "331c8726935734da6d14b9313e85720b2d2cfb7b75bec25711c33fac0fa46a0f",
+    "size": 2035,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-examples/receipt.json"
+  },
+  "linked-cpu/commands/all-features-examples/stderr": {
+    "sha256": "4a9e57beda8c88437d68dd4b049cdbe6a236a1ce0422b97f1896d1caef58bf36",
+    "size": 182,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-examples/stderr"
+  },
+  "linked-cpu/commands/all-features-examples/stdout": {
+    "sha256": "ef6f4796c82d2f7e7353deac977ecc046683954e0794abc11f47cce11fa8b1e2",
+    "size": 28969,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-examples/stdout"
+  },
+  "linked-cpu/commands/all-features-focus-2/receipt.json": {
+    "sha256": "bc5d8426981e6f83e389b802b76fcb5ab0d56951c5ca2daf3b7ff4f665825386",
+    "size": 2034,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-focus-2/receipt.json"
+  },
+  "linked-cpu/commands/all-features-focus-2/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-focus-2/stderr"
+  },
+  "linked-cpu/commands/all-features-focus-2/stdout": {
+    "sha256": "ed8bfd8ea7025ef17c298e212018c811ac939ed3a3b70b83bfbcc4c63283b10a",
+    "size": 492,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-focus-2/stdout"
+  },
+  "linked-cpu/commands/all-features-full-lib/receipt.json": {
+    "sha256": "7268d03f596e357107ae568d38b8cc22a62919696aa0a5f7fb94c58f6a95ab04",
+    "size": 1912,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-full-lib/receipt.json"
+  },
+  "linked-cpu/commands/all-features-full-lib/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-full-lib/stderr"
+  },
+  "linked-cpu/commands/all-features-full-lib/stdout": {
+    "sha256": "af660f04074f0dfb4ee858620b11f5060d6ac89a8c222e9d7f9e17476c4a1faf",
+    "size": 586597,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/all-features-full-lib/stdout"
+  },
+  "linked-cpu/commands/closing-head/receipt.json": {
+    "sha256": "8c751bade09b3b8fbf2a06fbb11fd9873eb7c3cda41ce48aafa524193eee0608",
+    "size": 1788,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/closing-head/receipt.json"
+  },
+  "linked-cpu/commands/closing-head/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/closing-head/stderr"
+  },
+  "linked-cpu/commands/closing-head/stdout": {
+    "sha256": "83ca30f7ea51811690aa38c19569fcb249564841118cf46ce82d62edbf98b7d9",
+    "size": 41,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/closing-head/stdout"
+  },
+  "linked-cpu/commands/seven-rust-paths-format-check/receipt.json": {
+    "sha256": "0891fea65506eccda5173fc4b6733fa2127597c8a7fd56ed5ddd1802e39647d1",
+    "size": 2232,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/seven-rust-paths-format-check/receipt.json"
+  },
+  "linked-cpu/commands/seven-rust-paths-format-check/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/seven-rust-paths-format-check/stderr"
+  },
+  "linked-cpu/commands/seven-rust-paths-format-check/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/commands/seven-rust-paths-format-check/stdout"
+  },
+  "linked-cpu/formatter-after.json": {
+    "sha256": "6cfe288c46b042b3408acd764772fd8cfe7f215ff6db3c0ad7d16c3a26cd4dbb",
+    "size": 293,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/formatter-after.json"
+  },
+  "linked-cpu/formatter-before.json": {
+    "sha256": "6cfe288c46b042b3408acd764772fd8cfe7f215ff6db3c0ad7d16c3a26cd4dbb",
+    "size": 293,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/formatter-before.json"
+  },
+  "linked-cpu/fragment-after.json": {
+    "sha256": "a9cef2c449b318a17e51d43d8b56eda41f7d28293d560e1a5d64acdf7158641f",
+    "size": 623,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/fragment-after.json"
+  },
+  "linked-cpu/fragment-before.json": {
+    "sha256": "a9cef2c449b318a17e51d43d8b56eda41f7d28293d560e1a5d64acdf7158641f",
+    "size": 623,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/fragment-before.json"
+  },
+  "linked-cpu/fresh-census.json": {
+    "sha256": "c2dc2667f29c94623e3d378337532a5407ba19be44260c38e967217393f66e34",
+    "size": 3609,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/fresh-census.json"
+  },
+  "linked-cpu/legacy-format-rejection-after.json": {
+    "sha256": "7f012e92298e866d4ad84f2655be5715b159147dba5e1857f5fcabd976c27389",
+    "size": 1511,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/legacy-format-rejection-after.json"
+  },
+  "linked-cpu/legacy-format-rejection-before.json": {
+    "sha256": "7f012e92298e866d4ad84f2655be5715b159147dba5e1857f5fcabd976c27389",
+    "size": 1511,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/legacy-format-rejection-before.json"
+  },
+  "linked-cpu/namespace-after.json": {
+    "sha256": "4bb3cdd663603f5697b593fdbaf2446996a7c30bd4be84dfeaf74deca6ad88db",
+    "size": 19,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/namespace-after.json"
+  },
+  "linked-cpu/namespace-before.json": {
+    "sha256": "4bb3cdd663603f5697b593fdbaf2446996a7c30bd4be84dfeaf74deca6ad88db",
+    "size": 19,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/namespace-before.json"
+  },
+  "linked-cpu/plan.json": {
+    "sha256": "f37d7197c4e496c0e21ada89d5fb2c214059eec9c742a35c9d3385a19e6c031d",
+    "size": 6584,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/plan.json"
+  },
+  "linked-cpu/prior-after.json": {
+    "sha256": "b2a3a484dccb1a07196822431e4a8c588d2a947ecc540fa43a865a286ee0ec9f",
+    "size": 10311,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/prior-after.json"
+  },
+  "linked-cpu/prior-before.json": {
+    "sha256": "b2a3a484dccb1a07196822431e4a8c588d2a947ecc540fa43a865a286ee0ec9f",
+    "size": 10311,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/prior-before.json"
+  },
+  "linked-cpu/raw-after.json": {
+    "sha256": "ef29a5bca36e7f468be3413bf77b24b8c65960f923f0f64163619fef3aeb78fd",
+    "size": 1303,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/raw-after.json"
+  },
+  "linked-cpu/raw-before.json": {
+    "sha256": "ef29a5bca36e7f468be3413bf77b24b8c65960f923f0f64163619fef3aeb78fd",
+    "size": 1303,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/raw-before.json"
+  },
+  "linked-cpu/result.json": {
+    "sha256": "a8622e3ed86c18d3bd25db2c85571ab49cd52b30c730aacdadc690874855a747",
+    "size": 259870,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/result.json"
+  },
+  "linked-cpu/retained-diagnostic-added-test.rs": {
+    "sha256": "614a600c667ba95c0082b36fd20ca38b7e25614b7426a59a01ee939d02544d9c",
+    "size": 1821,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/retained-diagnostic-added-test.rs"
+  },
+  "linked-cpu/seven-rust-paths-format-check-result.json": {
+    "sha256": "3c94632763417caa10f820098f637facb2ed8217dfbde688a9be321451da6594",
+    "size": 400,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/seven-rust-paths-format-check-result.json"
+  },
+  "linked-cpu/source-after.json": {
+    "sha256": "73ef7e432dea941606caa96ab815a91b326dca33dc0a2126a402dba1989af4f7",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/source-after.json"
+  },
+  "linked-cpu/source-before.json": {
+    "sha256": "73ef7e432dea941606caa96ab815a91b326dca33dc0a2126a402dba1989af4f7",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/source-before.json"
+  },
+  "linked-cpu/tools-after.json": {
+    "sha256": "69b38d4e68c8a316b3ea3272e9ff3418be8ddf0aa5df269eb336914beeccf4af",
+    "size": 194080,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/tools-after.json"
+  },
+  "linked-cpu/tools-before.json": {
+    "sha256": "69b38d4e68c8a316b3ea3272e9ff3418be8ddf0aa5df269eb336914beeccf4af",
+    "size": 194080,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-2/tools-before.json"
+  },
+  "portable-controls/commands/relocated-campaign/receipt.json": {
+    "sha256": "e808409d4e2e2f33ca221b7fc2c6b9c4e84ff0d829cce032ecebef93eb19cb9d",
+    "size": 1040,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-campaign/receipt.json"
+  },
+  "portable-controls/commands/relocated-campaign/stderr": {
+    "sha256": "62bd0bb63a283f8c9c26879c33289687ba3cddaebdb3c9cfc2e3f93d16d5154c",
+    "size": 1276,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-campaign/stderr"
+  },
+  "portable-controls/commands/relocated-campaign/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-campaign/stdout"
+  },
+  "portable-controls/commands/relocated-native/receipt.json": {
+    "sha256": "37d94e6572a2d34ac85ea7a1d82435282088018ac15178be6b1d5e044c4e990f",
+    "size": 1038,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-native/receipt.json"
+  },
+  "portable-controls/commands/relocated-native/stderr": {
+    "sha256": "f9d4da88e442d2798c59c1302a68d70ba0a97cb834a660f4fe778f4028b7fe7c",
+    "size": 1580,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-native/stderr"
+  },
+  "portable-controls/commands/relocated-native/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-native/stdout"
+  },
+  "portable-controls/commands/relocated-transport/receipt.json": {
+    "sha256": "c1194b3c25b00d84ca9dea8572e583c44420b4f8f0f401ecfbff871e0ec197d8",
+    "size": 1041,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-transport/receipt.json"
+  },
+  "portable-controls/commands/relocated-transport/stderr": {
+    "sha256": "f4808b793f9c6d227d9a77c01fdf42758156a5cb7445085f510b9bbac3cd7a7f",
+    "size": 1830,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-transport/stderr"
+  },
+  "portable-controls/commands/relocated-transport/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/relocated-transport/stdout"
+  },
+  "portable-controls/commands/source-campaign/receipt.json": {
+    "sha256": "24289a3b934946635500a99ec1170ff59c95479dc0455d58e15cc39d62eddc01",
+    "size": 1015,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-campaign/receipt.json"
+  },
+  "portable-controls/commands/source-campaign/stderr": {
+    "sha256": "6e7d5a6011cd273b7a0ee886c451c87af3891ab8e52d9eaeafe92c4ee33df71b",
+    "size": 1276,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-campaign/stderr"
+  },
+  "portable-controls/commands/source-campaign/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-campaign/stdout"
+  },
+  "portable-controls/commands/source-native/receipt.json": {
+    "sha256": "a72d9c83b48535f454b157bb45d0d248dbafd1e82656c6afdb2d0e85a78db94f",
+    "size": 1013,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-native/receipt.json"
+  },
+  "portable-controls/commands/source-native/stderr": {
+    "sha256": "65a2b3cbd347d1a0d5faa967570dd4a3ff3a4cbecc9ca243e335eccee4029106",
+    "size": 1580,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-native/stderr"
+  },
+  "portable-controls/commands/source-native/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-native/stdout"
+  },
+  "portable-controls/commands/source-transport/receipt.json": {
+    "sha256": "1d08ab9a91b823fe6bf25bf0f46f17c61e7b92807ed43dc01a8c1a2824b4a295",
+    "size": 1016,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-transport/receipt.json"
+  },
+  "portable-controls/commands/source-transport/stderr": {
+    "sha256": "66b1316b1ebefaac4640965d615f46fdba5042521cdbc55ebda2d08935280a41",
+    "size": 1830,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-transport/stderr"
+  },
+  "portable-controls/commands/source-transport/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/commands/source-transport/stdout"
+  },
+  "portable-controls/controller.json": {
+    "sha256": "c3aeb72a7fcacdeab1425881367ee98414a938de2adb09fc2252ab2f2034c786",
+    "size": 190,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/controller.json"
+  },
+  "portable-controls/controller.py": {
+    "sha256": "2402511fec16256afd39bd3b1139a0d909b0eae3050bd567c53c7dc96066cd22",
+    "size": 5587,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-qualification-20260930.py"
+  },
+  "portable-controls/fresh-census.json": {
+    "sha256": "c7bea71025161f4a77f6c23dad58d977a7902a4dbf8ba67adc5a77cc3ca3f7c8",
+    "size": 3013,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/fresh-census.json"
+  },
+  "portable-controls/projection.json": {
+    "sha256": "b9ec4f885c8f2378962fb997552b6cccff777cdd849081ce730cb2807a60c638",
+    "size": 15969,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/projection.json"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/check-parity.py": {
+    "sha256": "03f798a9f94b88359a5e9ec309d1b74abb495afdc1a728d82303da465019c60b",
+    "size": 105436,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/check-parity.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/check-r40-striped.py": {
+    "sha256": "ba69968add06e1318f19d27b74dcaca061accb298fd39e1ea2ff4509bdf3efe1",
+    "size": 41275,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/check-r40-striped.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/check-r60-pipeline.py": {
+    "sha256": "46c70bdc8e9e60b44a04ea5efcb883fa867956464c4f828406e97bd022107574",
+    "size": 9051,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/check-r60-pipeline.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/check-scale3-protocol.py": {
+    "sha256": "8fff0b674e87051cacbaac02d67f8482e354b717e9aae4a9681b5c60d326cba5",
+    "size": 24889,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/check-scale3-protocol.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/check_drain_capture.py": {
+    "sha256": "7e68cdebfe5ecb0592bff44c69a9db87ece4a62c8ddc8c6a9c0c811ec72b95d1",
+    "size": 14098,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/check_drain_capture.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/check_r66_coexistence.py": {
+    "sha256": "9d1b2b028af7f2799263ec097af4e01b393e12867b36fcd4497b4ee33c34d521",
+    "size": 9449,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/check_r66_coexistence.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/copy-host-observe.py": {
+    "sha256": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51",
+    "size": 9939,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/copy-host-observe.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/hip_copy_diagnostic.py": {
+    "sha256": "d5a2ad3dc7c00e58e7666973f2fd14d1343d7dc13edb96e738c6710eb690c561",
+    "size": 7389,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/hip_copy_diagnostic.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/r26-host-guard.py": {
+    "sha256": "f16f8415badc3b44b72b840fe1c3191afc8dea4b577548e45b020f9b99768714",
+    "size": 53618,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/r26-host-guard.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/r26-system-identity.py": {
+    "sha256": "6a80769bde37c41787a28c725d9c6eeb04ec0837a752924969bed952af8e036f",
+    "size": 38042,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/r26-system-identity.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/run-drain-capture-mi300x.py": {
+    "sha256": "3b316299c17e70da53e13d49dea1fab48389a4328405172ac9b72a364b14c101",
+    "size": 1640,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/run-drain-capture-mi300x.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/run-r60-pipeline-mi300x.py": {
+    "sha256": "682a475bb91a5243c6d142d4c3baf02da161543c4d2a8dcd3dfd1adc3478921b",
+    "size": 34746,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/run-r60-pipeline-mi300x.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/run-r61-owner-mi300x.py": {
+    "sha256": "1671cb68e601f6c50cae599f88b2a313f435001262432217e9b6efb4a8b85bea",
+    "size": 15765,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/run-r61-owner-mi300x.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/run-r62-control-mi300x.py": {
+    "sha256": "9ea574b24104ca66abf2919425f3e36326cec66b7194318d9dd967006a2f37ca",
+    "size": 1320,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/run-r62-control-mi300x.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/run-r63-graph-mi300x.py": {
+    "sha256": "807bc6c75c66a593dc4a4228a34af5808ce66ef4a137914144c59ba81a334a18",
+    "size": 1267,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/run-r63-graph-mi300x.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/run-r65-drain-versions-mi300x.py": {
+    "sha256": "52f57f2008271630a92251dacd2e80ebdb8941513042b8281af60b25627ae864",
+    "size": 1509,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/run-r65-drain-versions-mi300x.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/run-r66-coexistence-mi300x.py": {
+    "sha256": "425ba61218558c458ea3558c652aa4a12865948d5ae9f74297f439d3e7d6f545",
+    "size": 10617,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/run-r66-coexistence-mi300x.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_bounded_binary_file_reader.py": {
+    "sha256": "86e18d1a16d56d7168d41e7294f64db4b8d062e29d8876df6cc6cedc27c6e264",
+    "size": 4369,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_bounded_binary_file_reader.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_check_drain_capture.py": {
+    "sha256": "35465678c5788af73280c0f92d86eeee26c74615acbebaf97f158f95116af872",
+    "size": 14502,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_check_drain_capture.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_check_parity.py": {
+    "sha256": "677c0460e80425f311b69ec8e87a731af9e7670a9440015da00de3d6bff07334",
+    "size": 64895,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_check_parity.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_check_r40_striped.py": {
+    "sha256": "f14aa1454ee9ebe4e293a2dcf4ed3fabb44692b343d7f8ebe2364a6299c3fa17",
+    "size": 27306,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_check_r40_striped.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_check_r60_pipeline.py": {
+    "sha256": "0c18bf88f322f10c580130e7431d80da9cd8a581f5a29d4a98bd2a0fc313f794",
+    "size": 8778,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_check_r60_pipeline.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_check_scale3_protocol.py": {
+    "sha256": "89de8f0ca5cec4f7075b73a80600a7e7a040581f635b4557595224714a0bf1ab",
+    "size": 21564,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_check_scale3_protocol.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_copy_host_observe.py": {
+    "sha256": "63a69ab4a060b4f0d0234d6f2bd6972f5e5e7fbcb64b0e717e6dd6507434a6ab",
+    "size": 12664,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_copy_host_observe.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_hip_copy_diagnostic.py": {
+    "sha256": "3201595505403ca972203fb27b3fc5b38a0591383f4e678a5b56f3d0cbcba986",
+    "size": 10248,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_hip_copy_diagnostic.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_hip_copy_payload.py": {
+    "sha256": "720bf164ecd7155d7e3c4585774b2b851dad6754df3c8d7a4e842afd622bf11b",
+    "size": 9063,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_hip_copy_payload.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_hsa_copy_diagnostic.py": {
+    "sha256": "3b14af0ef65cf7b3651ba7d97bf8d199bdae89ffd56efd9127c7e9c6e5c079aa",
+    "size": 11912,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_hsa_copy_diagnostic.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_native_benchmark_args.py": {
+    "sha256": "4abd7f8baf608b12e48df5f28d909329ac864309487e1bb4a35f3c66f1f756af",
+    "size": 2077,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_native_benchmark_args.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_r26_host_guard.py": {
+    "sha256": "1fa2785e07362ac6710bd934f90563387b3a0283947eb297ff5f57fedc44a526",
+    "size": 134743,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_r26_host_guard.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_r26_hsa_pool_policy.py": {
+    "sha256": "d3f75a087ff6efd026844f46b7cdecb68fba62ea2dc36017d0831992663ba172",
+    "size": 1121,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_r26_hsa_pool_policy.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_r26_system_identity.py": {
+    "sha256": "9246480418f5e930e3fe074b3e934ab43a156acacd5db59de6b35aea1850c00f",
+    "size": 18908,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_r26_system_identity.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_drain_capture.py": {
+    "sha256": "e0966f46f9d34f16ce4c72c9c40bc90e4929a2eed7756c3c444df1f2a4d5ed3e",
+    "size": 4237,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_drain_capture.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_r26_inplace_runner.py": {
+    "sha256": "b0ab661ab898bb7c910526934dc8f5aaa92cf024a257917cf9782a88942f5106",
+    "size": 17390,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_r26_inplace_runner.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_r40_striped_runner.py": {
+    "sha256": "40fb36331b0cf9fdd11e1617c642ceff4991687125d2070e3c4274d850d18413",
+    "size": 10135,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_r40_striped_runner.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_r60_pipeline.py": {
+    "sha256": "d8fadb20543a21859194479fe3c12146ed70cbdda7362822616d81ff9a921293",
+    "size": 17663,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_r60_pipeline.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_r61_owner.py": {
+    "sha256": "a1f355c1cebc3612f263da0bbb851dc358b71fd021cd6dd948dd3e91823deda0",
+    "size": 13844,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_r61_owner.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_r62_control.py": {
+    "sha256": "e7e98c6cc5f88db382e92d88c23dfb21f7ad0ec46114b9cf0a58c8fdb3aaf527",
+    "size": 2865,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_r62_control.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_r63_graph.py": {
+    "sha256": "870835bbd5ad4ca2bd4644e03ff11909129bab2242202de01222fa612dabe0a8",
+    "size": 2841,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_r63_graph.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_r65_drain_versions.py": {
+    "sha256": "3e0de54c5f69895af2aaf48ea9b921baa38d7dfc758f21893ac1b087da7eb8cd",
+    "size": 3929,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_r65_drain_versions.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_run_r66_coexistence.py": {
+    "sha256": "2085f684fa773ef0e500ae8ae3399eb73b9b1a927dd9194300766551fdccf916",
+    "size": 31317,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_run_r66_coexistence.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_striped_copy_common.py": {
+    "sha256": "6c43b2182fa9b1390c3bbc4555d7174b43c3b28af16d55277104b6a2fd72f093",
+    "size": 1088,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_striped_copy_common.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_backing_budget_campaign.py": {
+    "sha256": "c11fb5e7ed70d5132a85016fb6d87ec98e13da0055d8d3a443e5b17162041cdb",
+    "size": 13121,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_backing_budget_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_backing_budget_native.py": {
+    "sha256": "06ebcddc5b338124432e5c097e84667625b3f7ba6b12c7a0a01c6adcc6435b6b",
+    "size": 9522,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_backing_budget_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_backing_budget_results.py": {
+    "sha256": "1e1bac3da8ed59b8ec82e9ebd4ff1ad64943b44f3db2289773edda1334023580",
+    "size": 4885,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_backing_budget_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_directed_owner_campaign.py": {
+    "sha256": "cc6b8b5077ded206a46dce194c15db0f3ab37c5e8fec47a603d2d2317c3cbe17",
+    "size": 3689,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_directed_owner_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_directed_owner_native.py": {
+    "sha256": "0c7c9e7b55d5c7ad3fd7cd8b4dbb20dbec0fefb27678d084b8027deb964fc5c6",
+    "size": 8575,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_directed_owner_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_directed_owner_results.py": {
+    "sha256": "c2cf239c83235781a64af0e32cd36692394994c588d251831277b86717fc8af6",
+    "size": 4841,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_directed_owner_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_benchmark_common.py": {
+    "sha256": "14f0c8422b28cb01b4f9771d2aad87b18d39710a453f43e533ef61b5a74bffe1",
+    "size": 2243,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_benchmark_common.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_hot_callbacks.py": {
+    "sha256": "6eeb8f3c4c6e9e31e90494e405bb15be7715a14e437291bb6873004c666ee7aa",
+    "size": 4416,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_hot_callbacks.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_hot_results.py": {
+    "sha256": "14d4e889c3571e4e22105c4cf452fe84209dccc8aa97da7adb40ea1a59b99f6c",
+    "size": 8343,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_hot_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments.py": {
+    "sha256": "d67d7d4fe3819fd353c3d5a3676b224978829fc1f689fb419afbc8fffdc22091",
+    "size": 2609,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments_campaign.py": {
+    "sha256": "383c4a27c7286d3741e339e6efe8efcfe1f5fd6e5435e29edccbb9fb12fa648c",
+    "size": 3485,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments_diagnostic_campaign.py": {
+    "sha256": "9b4ba2f2907741c0f10be62160bcc3de57b187ea5a07ff9cf48862a49d716420",
+    "size": 3192,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments_diagnostic_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments_diagnostic_results.py": {
+    "sha256": "8c0250fe9b3767d452d46a72edb9e5280298b0494e29197ed70caae703ff3167",
+    "size": 5360,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments_diagnostic_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments_results.py": {
+    "sha256": "7123dba0a552311050b8b0163b69fbfd4780a0ac1bfd2b660cc1329f13ccf2b3",
+    "size": 5613,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_segments_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_campaign.py": {
+    "sha256": "3f34486c5d7d2870780fec0699c750b19b5dd4bbac5f38c23553e6a13808cd8d",
+    "size": 14121,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_common.py": {
+    "sha256": "2494c7c1d30e5db354b9dd0dcfe42dac4e40b330c1848dc0ece898bae409da0d",
+    "size": 1348,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_common.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_native.py": {
+    "sha256": "10f67e48553bda55988d4aa668a7c4d7b3485a4430f6a60fa529d596c3ee9eab",
+    "size": 31511,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_results.py": {
+    "sha256": "379fa1ea4ef7705da826d0e1c78c7935d220f7c472ed67815f5cb206eb4c7a27",
+    "size": 6570,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_transport.py": {
+    "sha256": "36592a9db5edc01ae40833eda43b277df68c4120423c64116e1c542e01f29d2f",
+    "size": 23706,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_peer_series_transport.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic.py": {
+    "sha256": "f116738facee0b7eac771eed028674654922fcf72a18152c3132c00d0dc9693c",
+    "size": 14240,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_campaign.py": {
+    "sha256": "545c6f3b8070e512511f4ed39404560bd1c3add200037bd47924e129566cf3ed",
+    "size": 5635,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_native.py": {
+    "sha256": "52a22b24915c8e9cd88d30f0a4c12722efe57e0b057c9810ade7091d342a8acc",
+    "size": 14641,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_transport.py": {
+    "sha256": "0282e686c568909cd7b87986fdc31e7b12898e9eeba59bb73fe43d4e598059d0",
+    "size": 18892,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_retained_host_diagnostic_transport.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_segments_owner_campaign.py": {
+    "sha256": "07a1789288f22b9e3b3e5fbd4a70e87be79f7c2af0da57211402c036814e9bdc",
+    "size": 3100,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_segments_owner_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/test_xgmi_segments_owner_results.py": {
+    "sha256": "c47e36916a282f677f3a4445db4e78e5927db5b99eadd8fd5ad4dc4286c7aa74",
+    "size": 2686,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/test_xgmi_segments_owner_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_backing_budget_campaign.py": {
+    "sha256": "9b90dac696bcebe7a4cf7328d404e9edfc485ff1cd0af63b36ae4795b1dfdf76",
+    "size": 12139,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_backing_budget_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_backing_budget_native.py": {
+    "sha256": "b0e5f5891e15809edc8a496f3133dadbc7c579cd39519e79dea908441a6aa126",
+    "size": 6993,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_backing_budget_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_backing_budget_results.py": {
+    "sha256": "7b084def7fcff4f06b72f2a9017147038d46c3364f52c9505d6489ce6e60151c",
+    "size": 1715,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_backing_budget_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_directed_owner_campaign.py": {
+    "sha256": "d7b237f6c36e90c02c27d5f665e37f856f18608d428efbf291eb53792e50da9b",
+    "size": 8553,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_directed_owner_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_directed_owner_native.py": {
+    "sha256": "8bb9a352cd97d4c69d3931c7d3e2a1a68d24b0eca110c4bd99eb023c0bc51e6e",
+    "size": 6821,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_directed_owner_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_directed_owner_results.py": {
+    "sha256": "64b3bfdb1218b811a4cf40199f527ff587a55d1d704dfa0f1538a8ac9925d6b6",
+    "size": 1700,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_directed_owner_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_hot_results.py": {
+    "sha256": "52735695f6d03ab09cceaf25e01226bad71b336e86687c034018ece80694c56c",
+    "size": 6649,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_hot_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_campaign.py": {
+    "sha256": "81e81bdbb7d900d90cce50ea2c7992cb4872f3fcc0ccc5ccbc18ccd7557d4de9",
+    "size": 11583,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_diagnostic_native.py": {
+    "sha256": "55ad80686e52363c030f79352fbdf81a6db4df1cf35e31f5a1b0b4b6ad14a625",
+    "size": 6883,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_diagnostic_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_diagnostic_results.py": {
+    "sha256": "9dc2c4c0ad897bc24e6e42f0abba3392bb06cd0bd74065c42544529e89cffc5a",
+    "size": 4817,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_diagnostic_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_native.py": {
+    "sha256": "d47da25e4f1a542a10b1c15cd86371c83593efbf70ebc1286b3453eca7632149",
+    "size": 7897,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_results.py": {
+    "sha256": "64a15ee95a07a427665fbc853069abe648fe63e8470e3028b9ac245f30313515",
+    "size": 4880,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_segments_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_campaign.py": {
+    "sha256": "461135fc0ad2a4e22a8d6c3533226f5c95e5a7b8c95434e764b632a1cb0afce7",
+    "size": 14357,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_host.py": {
+    "sha256": "2b5e8e1eed7289a36d0b74b4e8fd53bbbb363dc2241d61c237f51d6d6eb51d65",
+    "size": 5963,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_host.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_native.py": {
+    "sha256": "fef3e00f9310ee1895dff2dac133826c66a8432a600d5be6065b4249f3ebc3f4",
+    "size": 22586,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_observations.py": {
+    "sha256": "0778fbeec93134ae3c12ed588e0cd114b47391054e0c558d32c7c4252b582b2a",
+    "size": 5204,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_observations.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_results.py": {
+    "sha256": "f32e0337486640724be2cac63635e44503ef1c4b1e7b7578b6946bc9693a7923",
+    "size": 5294,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_results.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_transport.py": {
+    "sha256": "b0f6f3be586f91261889d1a22aa38470da52f8072820827f017b70e84bbdc675",
+    "size": 41356,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_peer_series_transport.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic.py": {
+    "sha256": "2240bd0a94d35f65171c4814397ae91ef9552d6917ac311c4da16ea577c82a4b",
+    "size": 8144,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic_campaign.py": {
+    "sha256": "9373fbf225da81c8d52e83052b5d210fff6ee3c250896d7511c1ee9ede6719ef",
+    "size": 5348,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic_native.py": {
+    "sha256": "9bef4616941cdb2c9c01610540ef7a9869d1275f2c6e2c24e94b04a66133ef6a",
+    "size": 15967,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic_transport.py": {
+    "sha256": "4bc99ac319ffd8a3a56efb37cb63a6e4769e41c3ccc610f6d2f3a2b3014f527f",
+    "size": 16840,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic_transport.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_segments_owner_campaign.py": {
+    "sha256": "7c1a7b4a19bc8f3ca03260e489b4b27770888b9d9f2b426991c86e3071fe7659",
+    "size": 8463,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_segments_owner_campaign.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_segments_owner_native.py": {
+    "sha256": "e2917c892626721d6558afbd033165430a06536fa984433268efbe07d66cf768",
+    "size": 6401,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_segments_owner_native.py"
+  },
+  "portable-controls/relocated/benchmarks/runtime_gfx942/xgmi_segments_owner_results.py": {
+    "sha256": "b0e6ec13c878f2a8c13c5fd6a5559ad54a98b417e48c7cc7b02fb50d3c9ccbaf",
+    "size": 1339,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/benchmarks/runtime_gfx942/xgmi_segments_owner_results.py"
+  },
+  "portable-controls/relocated/docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/native.py": {
+    "sha256": "820ad87e74a1f9915c2eb7d2d7c7c6c1c451da4cecf29fcc381229324d98473b",
+    "size": 17557,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/native.py"
+  },
+  "portable-controls/relocated/docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py": {
+    "sha256": "df740a80c83c94af02f7e7dfb1203dcf7c1eafbde0010e41219e4aac40b34bb7",
+    "size": 20463,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/relocated/docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py"
+  },
+  "portable-controls/result.json": {
+    "sha256": "9bcfe0b9231787cfb45bd7285c04e973c02c59c620cf8a50c9d81e74fbc1e921",
+    "size": 1554,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/result.json"
+  },
+  "portable-controls/source-after.json": {
+    "sha256": "88e323c1eef6974cafac13adef3576c6d18f8edd6d9ade88f9a71947590d3cb6",
+    "size": 1187566,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/source-after.json"
+  },
+  "portable-controls/source-before.json": {
+    "sha256": "88e323c1eef6974cafac13adef3576c6d18f8edd6d9ade88f9a71947590d3cb6",
+    "size": 1187566,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-portable-controls-20260930-final/source-before.json"
+  },
+  "publication/package.py": {
+    "sha256": "4c2185504ee1f21960714128c075643ef409b22271943353fa470ad5592efe0b",
+    "size": 8065,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-package-20260930.py"
+  },
+  "rejected-cpu-1/all-features-clippy-result.json": {
+    "sha256": "b47435f250159cc6ad5ff0a42a4497f117f71c66ecb630ee2dc34c9320e41a11",
+    "size": 390,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-clippy-result.json"
+  },
+  "rejected-cpu-1/all-features-elf.json": {
+    "sha256": "a757e2b815c57252045a03ab2daaf6d0b2addaafc3eadc1354b8e7974fd2c0ae",
+    "size": 1582,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-elf.json"
+  },
+  "rejected-cpu-1/all-features-examples-result.json": {
+    "sha256": "73f96d3044520d5b502fe3063c58262da35499048e3288ec5c367b7631199759",
+    "size": 4310,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-examples-result.json"
+  },
+  "rejected-cpu-1/all-features-focus-0-result.json": {
+    "sha256": "0e29ea39cbd357bb7689a17d9ea4055b7bb4836e9c5b78fd03aa246e79d4a9cf",
+    "size": 942,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-focus-0-result.json"
+  },
+  "rejected-cpu-1/all-features-focus-1-result.json": {
+    "sha256": "4241d6419d481ee0d690e2637072085acf30d6a8b523b1bc751b99f44690b87d",
+    "size": 609,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-focus-1-result.json"
+  },
+  "rejected-cpu-1/all-features-focus-2-result.json": {
+    "sha256": "c2ebb0b9fe456a5c95351226837dce52ced19797ef14fd13f36bd50fec891a8c",
+    "size": 600,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-focus-2-result.json"
+  },
+  "rejected-cpu-1/all-features-lib-build-result.json": {
+    "sha256": "491c22b28f7bd9f8f91e36d7da1a58b809fedbb04258f7216182fe6942f72f69",
+    "size": 393,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-lib-build-result.json"
+  },
+  "rejected-cpu-1/all-features-test-build-result.json": {
+    "sha256": "9121443d17b980885c8ab5d98c10b90a42b7d10ac707bf419c35c29673dcc7ba",
+    "size": 2059,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-test-build-result.json"
+  },
+  "rejected-cpu-1/all-features-test-list-result.json": {
+    "sha256": "28a3a99fbdcb7f98986398ec878f2db02406ee21a3f9588d1c2d9a1a6d3b187a",
+    "size": 222792,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/all-features-test-list-result.json"
+  },
+  "rejected-cpu-1/base-tree.json": {
+    "sha256": "7d7b3f3febcb7d037cf5f8976c6423962cba659af795ceae8d57a7e7cdd73e12",
+    "size": 1017319,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/base-tree.json"
+  },
+  "rejected-cpu-1/cargo-version-result.json": {
+    "sha256": "01255effbfd03cdaf373548c229f081d257b43b806a9e8e3c7da88f1e09a5c60",
+    "size": 376,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/cargo-version-result.json"
+  },
+  "rejected-cpu-1/clippy-version-result.json": {
+    "sha256": "69e3ac85b5a324e4380ef0f66c4ffda2d3331ab980081fb5f3dee01282e3a099",
+    "size": 377,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/clippy-version-result.json"
+  },
+  "rejected-cpu-1/commands/all-features-clippy/receipt.json": {
+    "sha256": "14a0f75e6fc8842d4cd8a80274a3c829f14d33b135279d734067fd010c65d1e5",
+    "size": 1968,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-clippy/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-clippy/stderr": {
+    "sha256": "eb88a4a5c226b7da9a486a19492f589341aac06f3d2ec0cf227efb7c58f751a5",
+    "size": 1753,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-clippy/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-clippy/stdout": {
+    "sha256": "eaec6ec448526a056006322e4a26e3817c05a9c8a310a0a2914cfcba793ea3c7",
+    "size": 44597,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-clippy/stdout"
+  },
+  "rejected-cpu-1/commands/all-features-examples/receipt.json": {
+    "sha256": "08d4c9783036226b85641149de0eb8df88f084f8b14c5b73aa94f4e603363177",
+    "size": 2020,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-examples/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-examples/stderr": {
+    "sha256": "263c771150f3425605fdc2cceb09b2711264ea830435cb146909fff6072aa075",
+    "size": 172,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-examples/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-examples/stdout": {
+    "sha256": "1483c8916d4c4bdd66a48a4faffbc7ee526f208c9b01661bd796dbd9b6b66c0a",
+    "size": 28609,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-examples/stdout"
+  },
+  "rejected-cpu-1/commands/all-features-focus-0/receipt.json": {
+    "sha256": "0798f534598d4479473fca9ca35dad2092a23f053edbc6661663b8e7b9d3ade6",
+    "size": 1943,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-0/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-focus-0/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-0/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-focus-0/stdout": {
+    "sha256": "d46b2e8f585ca0d7f0309ce584026cda4579a269afb3ce163d444181fd5b6232",
+    "size": 1371,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-0/stdout"
+  },
+  "rejected-cpu-1/commands/all-features-focus-1/receipt.json": {
+    "sha256": "33ae41ae5a4e0215e960e5027dc99a565919821197ad0ab4f865b7022c0a84ad",
+    "size": 2028,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-1/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-focus-1/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-1/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-focus-1/stdout": {
+    "sha256": "2bedfbd44b00c1070b6c911e963247e2eb3631a1f25f1991821b129e3b5fda44",
+    "size": 510,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-1/stdout"
+  },
+  "rejected-cpu-1/commands/all-features-focus-2/receipt.json": {
+    "sha256": "0459113f3f916bbf4077d8f16daf04d8d0100e09a6d2aac1d46ec8dbec8a068b",
+    "size": 2019,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-2/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-focus-2/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-2/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-focus-2/stdout": {
+    "sha256": "e60e4c0807148ca87cccd0e90890941ae2aa423d56349fa0852627a614829836",
+    "size": 492,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-focus-2/stdout"
+  },
+  "rejected-cpu-1/commands/all-features-full-lib/receipt.json": {
+    "sha256": "825ffb83f4929200a0118d75ddc6864a3053a488aa073a21291920f4b2265d9d",
+    "size": 1899,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-full-lib/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-full-lib/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-full-lib/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-full-lib/stdout": {
+    "sha256": "69ecfd73475f6f35a70f498316e12df4aa635e739e5aa40e89a688d876dfcb6c",
+    "size": 586398,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-full-lib/stdout"
+  },
+  "rejected-cpu-1/commands/all-features-lib-build/receipt.json": {
+    "sha256": "0c7273e896c3754197e2d36d8747ecefd1d3079e76cce376d6973581dab6cb0b",
+    "size": 1922,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-lib-build/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-lib-build/stderr": {
+    "sha256": "71a4f30e15bfa74a4cf7b72badd9a762f263983217e68cd9d9f00adb661dca96",
+    "size": 1753,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-lib-build/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-lib-build/stdout": {
+    "sha256": "b153f19dd620d92cb9c4b1f7107a24b067a18e6cc138ea45832f09965e4721b8",
+    "size": 26346,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-lib-build/stdout"
+  },
+  "rejected-cpu-1/commands/all-features-test-build/receipt.json": {
+    "sha256": "2f792d2818788692ee980296a4edbd25686c9a594b1ade5a7f1133277ee88119",
+    "size": 1938,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-test-build/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-test-build/stderr": {
+    "sha256": "0eaf9b1f624b6686ba002dfa7152ed599e17012bd6c499251addcd4a07881ef8",
+    "size": 1752,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-test-build/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-test-build/stdout": {
+    "sha256": "33e76eb9eea4f37cce22c3a8709cbe33b49f6927c1dc7df241940df6396774dd",
+    "size": 26343,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-test-build/stdout"
+  },
+  "rejected-cpu-1/commands/all-features-test-list/receipt.json": {
+    "sha256": "bb684383ee8a8ea58f7e1f72b518054513b0125ffb8dd10c26b5886cd0eabbef",
+    "size": 1830,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-test-list/receipt.json"
+  },
+  "rejected-cpu-1/commands/all-features-test-list/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-test-list/stderr"
+  },
+  "rejected-cpu-1/commands/all-features-test-list/stdout": {
+    "sha256": "479b16d6c0471bf3298a9796de6fd8d04f9e286b8552055e8379bd47c4a3f4ee",
+    "size": 216912,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/all-features-test-list/stdout"
+  },
+  "rejected-cpu-1/commands/cargo-version/receipt.json": {
+    "sha256": "474386a66a311f015a22477d8417d8838c039179bc05b4ef43e5af57d1bfe16f",
+    "size": 1771,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/cargo-version/receipt.json"
+  },
+  "rejected-cpu-1/commands/cargo-version/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/cargo-version/stderr"
+  },
+  "rejected-cpu-1/commands/cargo-version/stdout": {
+    "sha256": "ec757dbb82aca77f9d653bc3a3f1e69665ac3ea072fcfba984595bf479b17fcc",
+    "size": 44,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/cargo-version/stdout"
+  },
+  "rejected-cpu-1/commands/clippy-version/receipt.json": {
+    "sha256": "9d3d8c1b8f4c0b33650230fc8f3fb1e09f7abf5c891a83f9e6883ddc6e751197",
+    "size": 1786,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/clippy-version/receipt.json"
+  },
+  "rejected-cpu-1/commands/clippy-version/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/clippy-version/stderr"
+  },
+  "rejected-cpu-1/commands/clippy-version/stdout": {
+    "sha256": "277d6656c55b61089493cc45b9530b59eb7bd1081416cbf352fefdafca9ad21d",
+    "size": 38,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/clippy-version/stdout"
+  },
+  "rejected-cpu-1/commands/no-default-clippy/receipt.json": {
+    "sha256": "3ac3da2544d21af8a2db1032b92a4d61f92410ea33f4492d705cd54f949b89d0",
+    "size": 1973,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-clippy/receipt.json"
+  },
+  "rejected-cpu-1/commands/no-default-clippy/stderr": {
+    "sha256": "5e75b7958505e3fa6851a65b28b34d37058078d7c102b29431bc6fb1825cf3ab",
+    "size": 1753,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-clippy/stderr"
+  },
+  "rejected-cpu-1/commands/no-default-clippy/stdout": {
+    "sha256": "2ee1f043892187ae85774c96d33136e1e7a4f22eeb215fca30aae2fa18e554b8",
+    "size": 35895,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-clippy/stdout"
+  },
+  "rejected-cpu-1/commands/no-default-focus-0/receipt.json": {
+    "sha256": "dfac1cb2927939aea25e4bbe5726f6af98dd27d84ad7aa26dbbc483fd1168f7b",
+    "size": 1939,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-0/receipt.json"
+  },
+  "rejected-cpu-1/commands/no-default-focus-0/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-0/stderr"
+  },
+  "rejected-cpu-1/commands/no-default-focus-0/stdout": {
+    "sha256": "ed4c75de40ecdb2a8d81e3db12da70247312f0de247a3dd886cc0769a4c74b7b",
+    "size": 1371,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-0/stdout"
+  },
+  "rejected-cpu-1/commands/no-default-focus-1/receipt.json": {
+    "sha256": "3b50c9f6d828144398c3b2933b007215a659b76c4952d92b964fbd33073961fe",
+    "size": 2024,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-1/receipt.json"
+  },
+  "rejected-cpu-1/commands/no-default-focus-1/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-1/stderr"
+  },
+  "rejected-cpu-1/commands/no-default-focus-1/stdout": {
+    "sha256": "c14a4a30657d9bd1143aa6caa58e881a0188d27c65fc559597b1feb051434f7f",
+    "size": 508,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-1/stdout"
+  },
+  "rejected-cpu-1/commands/no-default-focus-2/receipt.json": {
+    "sha256": "8322605e5ab6f8fcdaa974ccae9e98e0e46b24dcef3fe94910a150787f5912b4",
+    "size": 2015,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-2/receipt.json"
+  },
+  "rejected-cpu-1/commands/no-default-focus-2/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-2/stderr"
+  },
+  "rejected-cpu-1/commands/no-default-focus-2/stdout": {
+    "sha256": "49e10e93b7862d4fd3127999b0463367d239ec83e19d3219c1924bd2a555ad3e",
+    "size": 492,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-focus-2/stdout"
+  },
+  "rejected-cpu-1/commands/no-default-lib-build/receipt.json": {
+    "sha256": "eb36e7b316bed01ef04f80d66a9017ef35e31cc97fa24beae85b1aad82b69cd5",
+    "size": 1927,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-lib-build/receipt.json"
+  },
+  "rejected-cpu-1/commands/no-default-lib-build/stderr": {
+    "sha256": "32d8799542f3d87756d6c0b456c0f5150e7e0c00ab687cda68ed663911300003",
+    "size": 1753,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-lib-build/stderr"
+  },
+  "rejected-cpu-1/commands/no-default-lib-build/stdout": {
+    "sha256": "fa4ad6305eda372f201830109048302d9aedf3dd160e54bcb0087ca6e90730bb",
+    "size": 26124,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-lib-build/stdout"
+  },
+  "rejected-cpu-1/commands/no-default-test-build/receipt.json": {
+    "sha256": "0e7dce5b3f28ec4f3bc3aee3f6263b36d7ca623f32e50f1def6c0c7258bd31ec",
+    "size": 1943,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-test-build/receipt.json"
+  },
+  "rejected-cpu-1/commands/no-default-test-build/stderr": {
+    "sha256": "ec752dd8f3cfc1da0c83d9c46037dba625d04185d47d8b4fe5d5504a8d1ccc62",
+    "size": 1752,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-test-build/stderr"
+  },
+  "rejected-cpu-1/commands/no-default-test-build/stdout": {
+    "sha256": "c31e2badfe49ff9c9e09b0a57d5d362e201c2c69b094dbaf8632b3e7c1fb2262",
+    "size": 26121,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-test-build/stdout"
+  },
+  "rejected-cpu-1/commands/no-default-test-list/receipt.json": {
+    "sha256": "f18d959fdbe4a3ed1085cd3dd2cab659b3778ed08cd522c680e6403b4a38acd5",
+    "size": 1826,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-test-list/receipt.json"
+  },
+  "rejected-cpu-1/commands/no-default-test-list/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-test-list/stderr"
+  },
+  "rejected-cpu-1/commands/no-default-test-list/stdout": {
+    "sha256": "72fad2bd0181082f9d0e8cef3f40b8d45c75bdf3c392f9adaa3b17626bb1b0f9",
+    "size": 216286,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/no-default-test-list/stdout"
+  },
+  "rejected-cpu-1/commands/opening-head/receipt.json": {
+    "sha256": "c8cdc2c10725869a4e16e6038ebb6db6173b017591630d79d3d1bd85f7e23dd1",
+    "size": 1773,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/opening-head/receipt.json"
+  },
+  "rejected-cpu-1/commands/opening-head/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/opening-head/stderr"
+  },
+  "rejected-cpu-1/commands/opening-head/stdout": {
+    "sha256": "83ca30f7ea51811690aa38c19569fcb249564841118cf46ce82d62edbf98b7d9",
+    "size": 41,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/opening-head/stdout"
+  },
+  "rejected-cpu-1/commands/opening-tree/receipt.json": {
+    "sha256": "47d448aaadbb609c8d33d2bd6db21379ec544d9a3b0dd5d145d3f31446783e03",
+    "size": 2247,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/opening-tree/receipt.json"
+  },
+  "rejected-cpu-1/commands/opening-tree/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/opening-tree/stderr"
+  },
+  "rejected-cpu-1/commands/opening-tree/stdout": {
+    "sha256": "9aa4cfc1a2b36ee3bfeac3d4bf3bccb2721fa661bc92609171ac0a946d104bb9",
+    "size": 784324,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/opening-tree/stdout"
+  },
+  "rejected-cpu-1/commands/proof-boundary/receipt.json": {
+    "sha256": "5c8b3802151de571d64af97eb76e0d5fc28844af9fb7d8962b770faf55aa1373",
+    "size": 1841,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/proof-boundary/receipt.json"
+  },
+  "rejected-cpu-1/commands/proof-boundary/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/proof-boundary/stderr"
+  },
+  "rejected-cpu-1/commands/proof-boundary/stdout": {
+    "sha256": "49bfe9041c77ea0c0287b0cc1f46f13be2bec60c1eb89b74aaca01e1dc60a4da",
+    "size": 1206,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/proof-boundary/stdout"
+  },
+  "rejected-cpu-1/commands/rustc-version/receipt.json": {
+    "sha256": "05ce57d1978ef6b2e887beb7257c6f1bee5ab169742f84b2eb6a4341fff8bd36",
+    "size": 1772,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/rustc-version/receipt.json"
+  },
+  "rejected-cpu-1/commands/rustc-version/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/rustc-version/stderr"
+  },
+  "rejected-cpu-1/commands/rustc-version/stdout": {
+    "sha256": "580dbecb7627e4e8ad67fd0b1d539727ba8d2651d04035c907b406d83200b4e2",
+    "size": 212,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/rustc-version/stdout"
+  },
+  "rejected-cpu-1/commands/source-controls/receipt.json": {
+    "sha256": "c7e573abde41049ddcd27cdc037efdafa7260449ff2fc731d1e69382142ce8f7",
+    "size": 2050,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/source-controls/receipt.json"
+  },
+  "rejected-cpu-1/commands/source-controls/stderr": {
+    "sha256": "da144ff120a7f6bdd47fb627ab7396ae64572e90df11857b7c43fc32f2351333",
+    "size": 2573,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/source-controls/stderr"
+  },
+  "rejected-cpu-1/commands/source-controls/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/commands/source-controls/stdout"
+  },
+  "rejected-cpu-1/environment.json": {
+    "sha256": "256d60a47cc3a9ad470a85fdc5c0f4990eed34b46cde3467a0a7bb3c903434d1",
+    "size": 2407,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/environment.json"
+  },
+  "rejected-cpu-1/example-elfs.json": {
+    "sha256": "27094ec99651f9e3b28e9f879cf92787b4236ebf1aa496a62226ec4409daa74e",
+    "size": 3731,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/example-elfs.json"
+  },
+  "rejected-cpu-1/fresh-census.json": {
+    "sha256": "95e77e5ea3849ddc0c43ea7b1d180d58f5cfba4bca8ad8503e86c1fb95ee477b",
+    "size": 11186,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/fresh-census.json"
+  },
+  "rejected-cpu-1/namespace-after.json": {
+    "sha256": "4bb3cdd663603f5697b593fdbaf2446996a7c30bd4be84dfeaf74deca6ad88db",
+    "size": 19,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/namespace-after.json"
+  },
+  "rejected-cpu-1/namespace-before.json": {
+    "sha256": "4bb3cdd663603f5697b593fdbaf2446996a7c30bd4be84dfeaf74deca6ad88db",
+    "size": 19,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/namespace-before.json"
+  },
+  "rejected-cpu-1/no-default-clippy-result.json": {
+    "sha256": "f5d0d22e31d2bab8fc687c555fd56d5cc40126f4f4152de5955868d09c3c7dfa",
+    "size": 388,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/no-default-clippy-result.json"
+  },
+  "rejected-cpu-1/no-default-elf.json": {
+    "sha256": "97ebf861902c71c0cd646e17f84a3db20de3c4d9c7cc8de3f9df35e2d46b5023",
+    "size": 1442,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/no-default-elf.json"
+  },
+  "rejected-cpu-1/no-default-focus-0-result.json": {
+    "sha256": "9279514c399e5696b90c9155c39d7326883ea52142078da9a41aa8c15024712e",
+    "size": 940,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/no-default-focus-0-result.json"
+  },
+  "rejected-cpu-1/no-default-focus-1-result.json": {
+    "sha256": "ec7c6407d5e483134a29186a8528a4f1a9040278696acd554e26c8159be746e5",
+    "size": 607,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/no-default-focus-1-result.json"
+  },
+  "rejected-cpu-1/no-default-focus-2-result.json": {
+    "sha256": "12f59c93be75a59afb2b293a52b63a0196a06daa2ba605a368693862077041dd",
+    "size": 598,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/no-default-focus-2-result.json"
+  },
+  "rejected-cpu-1/no-default-lib-build-result.json": {
+    "sha256": "55ad318c50842b854686ee9ca5591f0bbf97c15d713e7dbc62490eafa3a1d3bd",
+    "size": 383,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/no-default-lib-build-result.json"
+  },
+  "rejected-cpu-1/no-default-test-build-result.json": {
+    "sha256": "2c199260dbfc846f932646c854f94596d73496e05f8e5a060eeb6fa07d272081",
+    "size": 1905,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/no-default-test-build-result.json"
+  },
+  "rejected-cpu-1/no-default-test-list-result.json": {
+    "sha256": "8c7719565c684bcefa60a387b4f10c67a53228d8c1a25a7b53ee8165368e0af0",
+    "size": 222146,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/no-default-test-list-result.json"
+  },
+  "rejected-cpu-1/opening-head-result.json": {
+    "sha256": "ea89416f14b2448b3d640946347633696a406c470922a428577b3aad3e05b162",
+    "size": 375,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/opening-head-result.json"
+  },
+  "rejected-cpu-1/opening-tree-result.json": {
+    "sha256": "0a33cdfbcbe6f2e64622c5ba55992a42427605549adb8989026ec51fbedc1f3f",
+    "size": 375,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/opening-tree-result.json"
+  },
+  "rejected-cpu-1/plan.json": {
+    "sha256": "b5a662399a30bbbf7b3991e56593554d1c385d308949f08fcd0425979d78939b",
+    "size": 11611,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/plan.json"
+  },
+  "rejected-cpu-1/proof-boundary-result.json": {
+    "sha256": "cc7a5b0aae5c02bd0d7087f537d9e80b60d7a1cec3516b5f209d75f4e8237f18",
+    "size": 1786,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/proof-boundary-result.json"
+  },
+  "rejected-cpu-1/raw-after.json": {
+    "sha256": "56b6b9d29c7c85fa42798ce5809ffb149dc5ca043da863faac58f3ee40d0f88b",
+    "size": 342,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/raw-after.json"
+  },
+  "rejected-cpu-1/raw-before.json": {
+    "sha256": "56b6b9d29c7c85fa42798ce5809ffb149dc5ca043da863faac58f3ee40d0f88b",
+    "size": 342,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/raw-before.json"
+  },
+  "rejected-cpu-1/result.json": {
+    "sha256": "16f9724b412953918a72c9329f3191b23a030141b26ef11f1c4e4436c9638b77",
+    "size": 488357,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/result.json"
+  },
+  "rejected-cpu-1/rustc-version-result.json": {
+    "sha256": "5242635e330d4b3817f4d3ac1a70a88e5c4422ff6c7f0cd6886c36f072a002b0",
+    "size": 376,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/rustc-version-result.json"
+  },
+  "rejected-cpu-1/source-after.json": {
+    "sha256": "28dc194b6eb2c81fee0d0378c9eab34cd0882457f0a40aee5177d3b0faec7bda",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/source-after.json"
+  },
+  "rejected-cpu-1/source-before.json": {
+    "sha256": "28dc194b6eb2c81fee0d0378c9eab34cd0882457f0a40aee5177d3b0faec7bda",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/source-before.json"
+  },
+  "rejected-cpu-1/source-controls-result.json": {
+    "sha256": "2c8d342adddfffe465b46723e3dac74f4021f655aab68dd831735557f303a195",
+    "size": 378,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/source-controls-result.json"
+  },
+  "rejected-cpu-1/tools-after.json": {
+    "sha256": "69b38d4e68c8a316b3ea3272e9ff3418be8ddf0aa5df269eb336914beeccf4af",
+    "size": 194080,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/tools-after.json"
+  },
+  "rejected-cpu-1/tools-before.json": {
+    "sha256": "69b38d4e68c8a316b3ea3272e9ff3418be8ddf0aa5df269eb336914beeccf4af",
+    "size": 194080,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-1/tools-before.json"
+  },
+  "rejected-cpu-2/all-features-elf.json": {
+    "sha256": "107a6258c0ad0cd9fa07d28fe771e0210ac642ec320cf3ddca80a638b3d3e4e3",
+    "size": 1612,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/all-features-elf.json"
+  },
+  "rejected-cpu-2/all-features-focus-0-result.json": {
+    "sha256": "5ddc5dd05807f12d2d3892d1ab5d4445794ef2f530b6d2a615e90d79e4bbb161",
+    "size": 1129,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/all-features-focus-0-result.json"
+  },
+  "rejected-cpu-2/all-features-focus-1-result.json": {
+    "sha256": "a845a0fb8c47eb33d161cf23d9b79c902e9fdfcac4f564c5e5da716e78504e11",
+    "size": 796,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/all-features-focus-1-result.json"
+  },
+  "rejected-cpu-2/all-features-lib-build-result.json": {
+    "sha256": "3bc8f3a0440fe4de271522142f0dfeb5f74fb218541f82d15d9e15a6b5b61908",
+    "size": 393,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/all-features-lib-build-result.json"
+  },
+  "rejected-cpu-2/all-features-test-build-result.json": {
+    "sha256": "bb7e98f2b537c1395bf68ce9686b15918a5251e94b424dfcb5d3347c637330f0",
+    "size": 2089,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/all-features-test-build-result.json"
+  },
+  "rejected-cpu-2/all-features-test-list-result.json": {
+    "sha256": "6604d7e229593e37a1ed2c14ac23f04baa2e1497d9ad5bbefe45550814d4bdbe",
+    "size": 222792,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/all-features-test-list-result.json"
+  },
+  "rejected-cpu-2/base-tree.json": {
+    "sha256": "7d7b3f3febcb7d037cf5f8976c6423962cba659af795ceae8d57a7e7cdd73e12",
+    "size": 1017319,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/base-tree.json"
+  },
+  "rejected-cpu-2/cargo-version-result.json": {
+    "sha256": "49755160f64cfe37c6b13c810f0669a5777c9cc03f9f1effb10f442f9eb072be",
+    "size": 376,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/cargo-version-result.json"
+  },
+  "rejected-cpu-2/clippy-version-result.json": {
+    "sha256": "65e5d06b9b47e882ab27e754ac3bf69fa74c3ed6d81efe0db6eb66769b608ded",
+    "size": 377,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/clippy-version-result.json"
+  },
+  "rejected-cpu-2/commands/all-features-focus-0/receipt.json": {
+    "sha256": "f7035c397e260ed8a0b8fa8518ca225a910e2a04fe9de46b1188d8e3d22c7016",
+    "size": 1953,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-focus-0/receipt.json"
+  },
+  "rejected-cpu-2/commands/all-features-focus-0/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-focus-0/stderr"
+  },
+  "rejected-cpu-2/commands/all-features-focus-0/stdout": {
+    "sha256": "2aeb7e98d66cb487143cde8bc0998ea552ff98feecc014385854a385d0bec51f",
+    "size": 1371,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-focus-0/stdout"
+  },
+  "rejected-cpu-2/commands/all-features-focus-1/receipt.json": {
+    "sha256": "b2b58c1a0ed3cd522f47843d15ecb0debed6004e7dcbd39c8bc04b257c85fc26",
+    "size": 2038,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-focus-1/receipt.json"
+  },
+  "rejected-cpu-2/commands/all-features-focus-1/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-focus-1/stderr"
+  },
+  "rejected-cpu-2/commands/all-features-focus-1/stdout": {
+    "sha256": "d7051e144b9b00cf4c37329e572698083249e26af00c950748cc4b7a0bdb2061",
+    "size": 510,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-focus-1/stdout"
+  },
+  "rejected-cpu-2/commands/all-features-lib-build/receipt.json": {
+    "sha256": "e9c07602e3a73347c3cbb10f3b3f071b97be62fe116e65b30f60f3a25bc3163b",
+    "size": 1932,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-lib-build/receipt.json"
+  },
+  "rejected-cpu-2/commands/all-features-lib-build/stderr": {
+    "sha256": "50149bbfdad9debc33540aed881b2a5f90813422986fe9a73790ef3e4e7ff81e",
+    "size": 1853,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-lib-build/stderr"
+  },
+  "rejected-cpu-2/commands/all-features-lib-build/stdout": {
+    "sha256": "147e0d3039755c1ed8c380eef46fe6b46d42c0fedd7e4e6450f43ad76b22f399",
+    "size": 26646,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-lib-build/stdout"
+  },
+  "rejected-cpu-2/commands/all-features-test-build/receipt.json": {
+    "sha256": "468bd97a34ad185667a65fea5ad908d1a71e1b2337ebe2afe4d0644b09666d40",
+    "size": 1948,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-test-build/receipt.json"
+  },
+  "rejected-cpu-2/commands/all-features-test-build/stderr": {
+    "sha256": "793a24c5571fe2e87f7ec4e0446803b8e0822e1f6c853c735b38c0ecd9d4a8b5",
+    "size": 1852,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-test-build/stderr"
+  },
+  "rejected-cpu-2/commands/all-features-test-build/stdout": {
+    "sha256": "8accbba19331d2034218aff47aed42f5b1b47710f8e0cb107c776873ccd10add",
+    "size": 26643,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-test-build/stdout"
+  },
+  "rejected-cpu-2/commands/all-features-test-list/receipt.json": {
+    "sha256": "3ee9a184a02be8e71443bb56009bdbf1ec803265bb17bb2b7508ccbe7bcb2ee6",
+    "size": 1840,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-test-list/receipt.json"
+  },
+  "rejected-cpu-2/commands/all-features-test-list/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-test-list/stderr"
+  },
+  "rejected-cpu-2/commands/all-features-test-list/stdout": {
+    "sha256": "479b16d6c0471bf3298a9796de6fd8d04f9e286b8552055e8379bd47c4a3f4ee",
+    "size": 216912,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/all-features-test-list/stdout"
+  },
+  "rejected-cpu-2/commands/cargo-version/receipt.json": {
+    "sha256": "0fc29ad9a05e6c01beb046b12725be11872706d749ed5cc720a3b3dbc9a8a84c",
+    "size": 1781,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/cargo-version/receipt.json"
+  },
+  "rejected-cpu-2/commands/cargo-version/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/cargo-version/stderr"
+  },
+  "rejected-cpu-2/commands/cargo-version/stdout": {
+    "sha256": "ec757dbb82aca77f9d653bc3a3f1e69665ac3ea072fcfba984595bf479b17fcc",
+    "size": 44,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/cargo-version/stdout"
+  },
+  "rejected-cpu-2/commands/clippy-version/receipt.json": {
+    "sha256": "9fa23e13843d32fc3be1908ae46ced1234dbb731e1701d73214ffa8d1b43ae91",
+    "size": 1796,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/clippy-version/receipt.json"
+  },
+  "rejected-cpu-2/commands/clippy-version/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/clippy-version/stderr"
+  },
+  "rejected-cpu-2/commands/clippy-version/stdout": {
+    "sha256": "277d6656c55b61089493cc45b9530b59eb7bd1081416cbf352fefdafca9ad21d",
+    "size": 38,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/clippy-version/stdout"
+  },
+  "rejected-cpu-2/commands/no-default-clippy/receipt.json": {
+    "sha256": "b21e00745841ff7c2d380f19dfd870f62581c3e02c76eeb55acd738e51acd0d5",
+    "size": 1983,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-clippy/receipt.json"
+  },
+  "rejected-cpu-2/commands/no-default-clippy/stderr": {
+    "sha256": "335e61290ab28ceba99c35b580c2b9932b203d067db06b3bf1a1b5dfbb996998",
+    "size": 1853,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-clippy/stderr"
+  },
+  "rejected-cpu-2/commands/no-default-clippy/stdout": {
+    "sha256": "e6926aa9b5d0a779e0e6ef40acbe0fe3a3287da691b3eb533e007d4789c2fb2e",
+    "size": 36675,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-clippy/stdout"
+  },
+  "rejected-cpu-2/commands/no-default-focus-0/receipt.json": {
+    "sha256": "e6aa283cc04f8ae66708033403216c4442d7c3548598f330a49fe9798cfb6d3d",
+    "size": 1949,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-0/receipt.json"
+  },
+  "rejected-cpu-2/commands/no-default-focus-0/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-0/stderr"
+  },
+  "rejected-cpu-2/commands/no-default-focus-0/stdout": {
+    "sha256": "63c200be7fab35ac78f285ad5cad32b2286446c57bcda641fa3a6da0554d8091",
+    "size": 1371,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-0/stdout"
+  },
+  "rejected-cpu-2/commands/no-default-focus-1/receipt.json": {
+    "sha256": "08b2dfbd85e8644dc69444e5df5a2a41cb0c59f5a686900dff63bbcfe6b7ed5d",
+    "size": 2034,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-1/receipt.json"
+  },
+  "rejected-cpu-2/commands/no-default-focus-1/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-1/stderr"
+  },
+  "rejected-cpu-2/commands/no-default-focus-1/stdout": {
+    "sha256": "f24fb3d5eddf8e24259a62730d8de50eada3236e752fc8a91e04379430d168ca",
+    "size": 510,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-1/stdout"
+  },
+  "rejected-cpu-2/commands/no-default-focus-2/receipt.json": {
+    "sha256": "b08981b8a6d36c343de71f23f154d90f72eb810a9d24f1665c9b96d08948fcdc",
+    "size": 2025,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-2/receipt.json"
+  },
+  "rejected-cpu-2/commands/no-default-focus-2/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-2/stderr"
+  },
+  "rejected-cpu-2/commands/no-default-focus-2/stdout": {
+    "sha256": "d9aa268c22c81a150a13a47747a78b076e7f2c589b4a7a79aff251bf79bbc361",
+    "size": 492,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-focus-2/stdout"
+  },
+  "rejected-cpu-2/commands/no-default-lib-build/receipt.json": {
+    "sha256": "2ab359257e1f814c4a560374605d600e1347bad4a8bed7de9232aa860348550d",
+    "size": 1937,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-lib-build/receipt.json"
+  },
+  "rejected-cpu-2/commands/no-default-lib-build/stderr": {
+    "sha256": "90d00ae2005a0483a604619604c2bce4b2395814585074798e9699e9c3213fc8",
+    "size": 1853,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-lib-build/stderr"
+  },
+  "rejected-cpu-2/commands/no-default-lib-build/stdout": {
+    "sha256": "1371342c895f1a89a859d161df131e38af059c1792aef841bab4db1222f75b22",
+    "size": 26424,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-lib-build/stdout"
+  },
+  "rejected-cpu-2/commands/no-default-test-build/receipt.json": {
+    "sha256": "5221b4bfc2c25ed8492eb3a258e2ef97e0e97ea10fa5f57973e288e3185e01d6",
+    "size": 1953,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-test-build/receipt.json"
+  },
+  "rejected-cpu-2/commands/no-default-test-build/stderr": {
+    "sha256": "caf584b647ea70018865358c3d9f70fe6eabd755c1811baf1d3fec7574678678",
+    "size": 1852,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-test-build/stderr"
+  },
+  "rejected-cpu-2/commands/no-default-test-build/stdout": {
+    "sha256": "399c1988b206d51f45f754af3f3df64a25756bf1125bd8805c41474d4fdd20d2",
+    "size": 26421,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-test-build/stdout"
+  },
+  "rejected-cpu-2/commands/no-default-test-list/receipt.json": {
+    "sha256": "26b32de79eefe76a06c9974f1b844fb6a4967f68d9f345ee7712feda66e4340b",
+    "size": 1836,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-test-list/receipt.json"
+  },
+  "rejected-cpu-2/commands/no-default-test-list/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-test-list/stderr"
+  },
+  "rejected-cpu-2/commands/no-default-test-list/stdout": {
+    "sha256": "72fad2bd0181082f9d0e8cef3f40b8d45c75bdf3c392f9adaa3b17626bb1b0f9",
+    "size": 216286,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/no-default-test-list/stdout"
+  },
+  "rejected-cpu-2/commands/opening-head/receipt.json": {
+    "sha256": "551ddf8d9e52ff82f993a7174f5fd20cd6a9aa184526caffffad02b75fbdf7ab",
+    "size": 1783,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/opening-head/receipt.json"
+  },
+  "rejected-cpu-2/commands/opening-head/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/opening-head/stderr"
+  },
+  "rejected-cpu-2/commands/opening-head/stdout": {
+    "sha256": "83ca30f7ea51811690aa38c19569fcb249564841118cf46ce82d62edbf98b7d9",
+    "size": 41,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/opening-head/stdout"
+  },
+  "rejected-cpu-2/commands/opening-tree/receipt.json": {
+    "sha256": "94117720e72df1278231483c638a1f37c675cc9c75299e313c2a1305480d0e66",
+    "size": 2257,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/opening-tree/receipt.json"
+  },
+  "rejected-cpu-2/commands/opening-tree/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/opening-tree/stderr"
+  },
+  "rejected-cpu-2/commands/opening-tree/stdout": {
+    "sha256": "9aa4cfc1a2b36ee3bfeac3d4bf3bccb2721fa661bc92609171ac0a946d104bb9",
+    "size": 784324,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/opening-tree/stdout"
+  },
+  "rejected-cpu-2/commands/proof-boundary/receipt.json": {
+    "sha256": "5db7c7268bc007de3396ac1d7523d2fedfe4cc56dc351ac2d0e8aca2eea554e7",
+    "size": 1862,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/proof-boundary/receipt.json"
+  },
+  "rejected-cpu-2/commands/proof-boundary/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/proof-boundary/stderr"
+  },
+  "rejected-cpu-2/commands/proof-boundary/stdout": {
+    "sha256": "09b87a98888dc37836b833f14a3a26406c9d1c54849fc2808f2ce837a2f446b6",
+    "size": 1206,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/proof-boundary/stdout"
+  },
+  "rejected-cpu-2/commands/rustc-version/receipt.json": {
+    "sha256": "c56fcc46dca6aac26bb849e1676c3afda576f17c4a4d2309f6651040eca1b53c",
+    "size": 1782,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/rustc-version/receipt.json"
+  },
+  "rejected-cpu-2/commands/rustc-version/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/rustc-version/stderr"
+  },
+  "rejected-cpu-2/commands/rustc-version/stdout": {
+    "sha256": "580dbecb7627e4e8ad67fd0b1d539727ba8d2651d04035c907b406d83200b4e2",
+    "size": 212,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/rustc-version/stdout"
+  },
+  "rejected-cpu-2/commands/source-controls/receipt.json": {
+    "sha256": "d2b03d7024fd35f0290dd686a09e0e67ec27f92421c8375dab5cfd845e01ddaf",
+    "size": 2070,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/source-controls/receipt.json"
+  },
+  "rejected-cpu-2/commands/source-controls/stderr": {
+    "sha256": "65f5978b7e674239bc23da1a75c6cfe1e094271d8848f7faf53cfa653b688ba3",
+    "size": 2573,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/source-controls/stderr"
+  },
+  "rejected-cpu-2/commands/source-controls/stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/commands/source-controls/stdout"
+  },
+  "rejected-cpu-2/environment.json": {
+    "sha256": "6a8e584e9608a02d131df8ec1fac70458f9037953f99863aa776a9641d74937b",
+    "size": 2407,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/environment.json"
+  },
+  "rejected-cpu-2/fresh-census.json": {
+    "sha256": "19f8768b20c596e88a705493388bb697b92df7a0536e937ac7493d714329a7f2",
+    "size": 9243,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/fresh-census.json"
+  },
+  "rejected-cpu-2/namespace-after.json": {
+    "sha256": "4bb3cdd663603f5697b593fdbaf2446996a7c30bd4be84dfeaf74deca6ad88db",
+    "size": 19,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/namespace-after.json"
+  },
+  "rejected-cpu-2/namespace-before.json": {
+    "sha256": "4bb3cdd663603f5697b593fdbaf2446996a7c30bd4be84dfeaf74deca6ad88db",
+    "size": 19,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/namespace-before.json"
+  },
+  "rejected-cpu-2/no-default-clippy-result.json": {
+    "sha256": "4d5ee6186061f60d1d135538c643f6fbef8233d1dc2fc9fd549e3d9148ded6b6",
+    "size": 388,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/no-default-clippy-result.json"
+  },
+  "rejected-cpu-2/no-default-elf.json": {
+    "sha256": "8259528a4cf749f20b32f8af61d383af3ec159b3c32e8c7e7e427d5c61c8a4bb",
+    "size": 1472,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/no-default-elf.json"
+  },
+  "rejected-cpu-2/no-default-focus-0-result.json": {
+    "sha256": "1210406a86dae7b28a3dbff47b1df566ec17c4c35d4b3c7d88480d358539fa3c",
+    "size": 1127,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/no-default-focus-0-result.json"
+  },
+  "rejected-cpu-2/no-default-focus-1-result.json": {
+    "sha256": "92fc356753527f6e6964736d96cc184ab7a730557bb7e0f92362d2309355953c",
+    "size": 794,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/no-default-focus-1-result.json"
+  },
+  "rejected-cpu-2/no-default-focus-2-result.json": {
+    "sha256": "41942db3876f1e7dde36d5203b56a8c206baf80fc9babfcbf1f583008ed4018a",
+    "size": 785,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/no-default-focus-2-result.json"
+  },
+  "rejected-cpu-2/no-default-lib-build-result.json": {
+    "sha256": "e665922098a407eb674df0fc061c2831e43872141239f7437cbc773a38a7b517",
+    "size": 383,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/no-default-lib-build-result.json"
+  },
+  "rejected-cpu-2/no-default-test-build-result.json": {
+    "sha256": "1d378c8f05927463d7ba23498177ceb38fe6ef28a4cfaabbbb48ca23de7a2dde",
+    "size": 1935,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/no-default-test-build-result.json"
+  },
+  "rejected-cpu-2/no-default-test-list-result.json": {
+    "sha256": "db567ca07ed862ab94cca912aa9e89008e3223ff32d6f2ea61cdffda82b3b150",
+    "size": 222146,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/no-default-test-list-result.json"
+  },
+  "rejected-cpu-2/opening-head-result.json": {
+    "sha256": "c9f4e51f919bcafde1b3dfb015bb3d56e38331e2b4b205c12f7df6fa7b015a06",
+    "size": 375,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/opening-head-result.json"
+  },
+  "rejected-cpu-2/opening-tree-result.json": {
+    "sha256": "2aca6d403a468bef12644573f3a932d2df44701e01d6d903b07ecb9882ddfd62",
+    "size": 375,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/opening-tree-result.json"
+  },
+  "rejected-cpu-2/plan.json": {
+    "sha256": "a07e32749ee8ea6cee8ec0de2f21e448e136abbf07646da00d0adb62cd1b68a2",
+    "size": 11768,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/plan.json"
+  },
+  "rejected-cpu-2/proof-boundary-result.json": {
+    "sha256": "d164e0b09c22f9eacc80c08a87b5cb381eb2836a70dda4fce4ed3dcfc6644368",
+    "size": 1786,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/proof-boundary-result.json"
+  },
+  "rejected-cpu-2/raw-after.json": {
+    "sha256": "2377568b110a3ffa49d5b2d7251d051135aa121c6e7956776394dffef7746453",
+    "size": 364,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/raw-after.json"
+  },
+  "rejected-cpu-2/raw-before.json": {
+    "sha256": "2377568b110a3ffa49d5b2d7251d051135aa121c6e7956776394dffef7746453",
+    "size": 364,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/raw-before.json"
+  },
+  "rejected-cpu-2/result.json": {
+    "sha256": "dfb50491fefc4ddbf982c23d6e8c2238c8996b86934607000294a86ce235e302",
+    "size": 479707,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/result.json"
+  },
+  "rejected-cpu-2/rustc-version-result.json": {
+    "sha256": "cdd26325acbe3c8ae02262c3c76d97e8976857bdac64d1f700f1e6e9cde1ee03",
+    "size": 376,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/rustc-version-result.json"
+  },
+  "rejected-cpu-2/source-after.json": {
+    "sha256": "73ef7e432dea941606caa96ab815a91b326dca33dc0a2126a402dba1989af4f7",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/source-after.json"
+  },
+  "rejected-cpu-2/source-before.json": {
+    "sha256": "73ef7e432dea941606caa96ab815a91b326dca33dc0a2126a402dba1989af4f7",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/source-before.json"
+  },
+  "rejected-cpu-2/source-controls-result.json": {
+    "sha256": "c00332611a155d686c46d477133194f5c7791bc39f8f969a8eeeb3b08387d87d",
+    "size": 378,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/source-controls-result.json"
+  },
+  "rejected-cpu-2/tools-after.json": {
+    "sha256": "69b38d4e68c8a316b3ea3272e9ff3418be8ddf0aa5df269eb336914beeccf4af",
+    "size": 194080,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/tools-after.json"
+  },
+  "rejected-cpu-2/tools-before.json": {
+    "sha256": "69b38d4e68c8a316b3ea3272e9ff3418be8ddf0aa5df269eb336914beeccf4af",
+    "size": 194080,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/tools-before.json"
+  },
+  "rejected-format-1/artifacts-after.json": {
+    "sha256": "b5a3be974d0df816d970ba5e4a0930bb38d23ec6ba7adcb9ab638166dcc16f94",
+    "size": 565,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/artifacts-after.json"
+  },
+  "rejected-format-1/artifacts-before.json": {
+    "sha256": "b5a3be974d0df816d970ba5e4a0930bb38d23ec6ba7adcb9ab638166dcc16f94",
+    "size": 565,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/artifacts-before.json"
+  },
+  "rejected-format-1/commands/changed-rust-format-check/receipt.json": {
+    "sha256": "f822ce09c18f7ea802a048a61b7a7f817dca283038bee3988d8cb2bcdae52928",
+    "size": 2288,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/commands/changed-rust-format-check/receipt.json"
+  },
+  "rejected-format-1/commands/changed-rust-format-check/stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/commands/changed-rust-format-check/stderr"
+  },
+  "rejected-format-1/commands/changed-rust-format-check/stdout": {
+    "sha256": "8c5b45cff60245cda661637cd0f0bb3c05b482c772c6f1341fa9d5c701bcb683",
+    "size": 26482,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/commands/changed-rust-format-check/stdout"
+  },
+  "rejected-format-1/formatter-after.json": {
+    "sha256": "6cfe288c46b042b3408acd764772fd8cfe7f215ff6db3c0ad7d16c3a26cd4dbb",
+    "size": 293,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/formatter-after.json"
+  },
+  "rejected-format-1/formatter-before.json": {
+    "sha256": "6cfe288c46b042b3408acd764772fd8cfe7f215ff6db3c0ad7d16c3a26cd4dbb",
+    "size": 293,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/formatter-before.json"
+  },
+  "rejected-format-1/fresh-census.json": {
+    "sha256": "870b80ac71e8f997cb53a417dc747112bc74769508441205e3758a2b03ae24a7",
+    "size": 672,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/fresh-census.json"
+  },
+  "rejected-format-1/namespace-after.json": {
+    "sha256": "4bb3cdd663603f5697b593fdbaf2446996a7c30bd4be84dfeaf74deca6ad88db",
+    "size": 19,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/namespace-after.json"
+  },
+  "rejected-format-1/namespace-before.json": {
+    "sha256": "4bb3cdd663603f5697b593fdbaf2446996a7c30bd4be84dfeaf74deca6ad88db",
+    "size": 19,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/namespace-before.json"
+  },
+  "rejected-format-1/plan.json": {
+    "sha256": "83eb55097614cf99857e9af57a040d6a9e18448ebabcc011881409c0f60cc727",
+    "size": 5761,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/plan.json"
+  },
+  "rejected-format-1/prior-after.json": {
+    "sha256": "b2a3a484dccb1a07196822431e4a8c588d2a947ecc540fa43a865a286ee0ec9f",
+    "size": 10311,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/prior-after.json"
+  },
+  "rejected-format-1/prior-before.json": {
+    "sha256": "b2a3a484dccb1a07196822431e4a8c588d2a947ecc540fa43a865a286ee0ec9f",
+    "size": 10311,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/prior-before.json"
+  },
+  "rejected-format-1/raw-after.json": {
+    "sha256": "08e5c8e50e7ae97323e7f9f659a1450823e7adfe8edb4cbbf535a73d73033ea2",
+    "size": 1270,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/raw-after.json"
+  },
+  "rejected-format-1/raw-before.json": {
+    "sha256": "08e5c8e50e7ae97323e7f9f659a1450823e7adfe8edb4cbbf535a73d73033ea2",
+    "size": 1270,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/raw-before.json"
+  },
+  "rejected-format-1/result.json": {
+    "sha256": "0ec4eaaec20a5d91e4e43b3a5ede17114391e71199dc2d5f18686cc4ea40434e",
+    "size": 4791,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/result.json"
+  },
+  "rejected-format-1/source-after.json": {
+    "sha256": "73ef7e432dea941606caa96ab815a91b326dca33dc0a2126a402dba1989af4f7",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/source-after.json"
+  },
+  "rejected-format-1/source-before.json": {
+    "sha256": "73ef7e432dea941606caa96ab815a91b326dca33dc0a2126a402dba1989af4f7",
+    "size": 1186455,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/source-before.json"
+  },
+  "rejected-format-1/tools-after.json": {
+    "sha256": "69b38d4e68c8a316b3ea3272e9ff3418be8ddf0aa5df269eb336914beeccf4af",
+    "size": 194080,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/tools-after.json"
+  },
+  "rejected-format-1/tools-before.json": {
+    "sha256": "69b38d4e68c8a316b3ea3272e9ff3418be8ddf0aa5df269eb336914beeccf4af",
+    "size": 194080,
+    "source": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-continuation-1/tools-before.json"
+  }
+}

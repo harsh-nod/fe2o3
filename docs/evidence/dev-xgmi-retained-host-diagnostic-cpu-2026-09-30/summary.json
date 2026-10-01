@@ -1,0 +1,101 @@
+{
+  "all_features_full_suite": {
+    "failed": 0,
+    "filtered_out": 0,
+    "ignored": 0,
+    "passed": 1830
+  },
+  "archive": {
+    "logical_bytes": 25758844,
+    "members": 410,
+    "path": "raw.tar.xz",
+    "sha256": "f2e534117fa242cf7e41da14a060d4461588736a751b2d25ca36a1713ca354e2",
+    "size": 1102620
+  },
+  "archive_readback_verified": true,
+  "cpu_base_commit": "1c589082e8c76410ab3b5b2683468ca6a1932519",
+  "cpu_source_snapshot_sha256": "73ef7e432dea941606caa96ab815a91b326dca33dc0a2126a402dba1989af4f7",
+  "elf_payloads_included": false,
+  "formal_proof_acceptance": false,
+  "format_scope": "seven full Rust paths plus exact added diagnostic-test fragment",
+  "fresh_continuation_stages": 7,
+  "full_legacy_test_file_format_accepted": false,
+  "gpu_invocations": 0,
+  "hip_hsa_parity": false,
+  "historical_pid_probes": false,
+  "linked_cpu_result_sha256": "a8622e3ed86c18d3bd25db2c85571ab49cd52b30c730aacdadc690874855a747",
+  "new_solver_or_test_commands_executed_by_packager": false,
+  "no_default_full_suite_run": false,
+  "original_artifacts_unchanged_at_packaging": {
+    "all-features": {
+      "path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/target-all-features/debug/deps/fe2o3_kfd-2cbb4379c05cc281",
+      "sha256": "8beadffa6e6829ec20a3c473187a743b8a479bcdcd45b448f8f76d7fa9339dc9",
+      "size": 34079264
+    },
+    "kfd-sdma-xgmi-peer-benchmark": {
+      "path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/target-all-features/debug/examples/kfd-sdma-xgmi-peer-benchmark",
+      "sha256": "676563d13d719bf9d378ab16b3ed9718283c245ee0e9797b520c70b10eaa187c",
+      "size": 5502232
+    },
+    "kfd-xgmi-retained-host-diagnostic": {
+      "path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/target-all-features/debug/examples/kfd-xgmi-retained-host-diagnostic",
+      "sha256": "712f1a03eda13e32defed1d4993063693d680c4d915ce5a28eb6f90b22ecf5b8",
+      "size": 5452008
+    },
+    "no-default": {
+      "path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-cpu-20260930-attempt-2/target-no-default/debug/deps/fe2o3_kfd-f2d05cd57dc06000",
+      "sha256": "675a0e15c7871dd25fd352482dd475554d0c987009691d775de7184eb929acd2",
+      "size": 33241656
+    }
+  },
+  "original_records_unchanged": true,
+  "performance_acceptance": false,
+  "portable_helper_controls": {
+    "git_free_empty_path_tests": 26,
+    "native_qualification": false,
+    "result_sha256": "9bcfe0b9231787cfb45bd7285c04e973c02c59c620cf8a50c9d81e74fbc1e921",
+    "source_tests": 26
+  },
+  "prior_cpu_stages_replayed": 19,
+  "raw_index_sha256": "503413710e76542a5ae5a41a7d6eca055efab9e04b898e4a95ff8f16876201cc",
+  "rejections": {
+    "rejected-cpu-1": {
+      "accepted": false,
+      "failures": [
+        "RuntimeError: all-features-full-lib failed"
+      ],
+      "result_sha256": "16f9724b412953918a72c9329f3191b23a030141b26ef11f1c4e4436c9638b77"
+    },
+    "rejected-cpu-2": {
+      "accepted": false,
+      "failures": [
+        "ValueError: at least 4 GiB free before next stage"
+      ],
+      "result_sha256": "dfb50491fefc4ddbf982c23d6e8c2238c8996b86934607000294a86ce235e302"
+    },
+    "rejected-format-1": {
+      "accepted": false,
+      "failures": [
+        "RuntimeError: changed-rust-format-check failed"
+      ],
+      "result_sha256": "0ec4eaaec20a5d91e4e43b3a5ede17114391e71199dc2d5f18686cc4ea40434e"
+    }
+  },
+  "schema": "fe2o3.retained-host-diagnostic-cpu-publication.v1",
+  "signed_implementation_commit": "d6b1906d0d24b366ea4222fbca4ae4a6966fad6c",
+  "signed_source_verification": {
+    "binding_files": 6477,
+    "binding_sha256": "3ed563f470f37425da54a3ad7f34cae4696a3756adb84b27402a04fe1070488a",
+    "binding_uncompressed_sha256": "6f0879f8b0f0fc97750f8fba5665790d4c3584c1040c698898f542f19e826080",
+    "bundle_sha256": "4d7fdad71b7d0e31726f13804c1c9ff09329eeaf7a27d79c4deab778c29a5be6",
+    "bundle_size": 22504,
+    "bundle_verified": true,
+    "prerequisite_commit": "1c589082e8c76410ab3b5b2683468ca6a1932519",
+    "signature_verified": true,
+    "source_records_sha256": "2ef8610a9c5ed7ad31ee125285666c04586bd9f283babccf2f40bc1f3d7f4906",
+    "verification_sha256": "8d3a2628b17ebe70b0b794a595d542cdfdbe22f5c45a1a95d82587989cd56516"
+  },
+  "single_continuous_owner_or_deadline_claim": false,
+  "solver_invocations": 0,
+  "test_elfs_rebuilt_in_continuation": false
+}

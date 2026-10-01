@@ -2,11 +2,11 @@
 
 ## Milestone Snapshot
 
-Local qualification snapshot: 2026-09-30 UTC.
+Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
-refreshed on this date: the issue remains Open, with 32 comments and its latest
+refreshed on 2026-09-30: the issue remained Open, with 32 comments and its latest
 update at 19:46:57 UTC. Both runtime branch refs were confirmed through signed
-commit `69893f490`. GitHub and MI300X
+commit `bff0a1728` before the following diagnostic integration. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
@@ -28,6 +28,23 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [retained host-diagnostic CPU qualification](evidence/dev-xgmi-retained-host-diagnostic-cpu-2026-09-30/README.md)
+is integrated at `841c06b73`, with portable campaign helpers at `4ad64047b`.
+Signed implementation `d6b1906d0` passes the complete all-feature KFD library:
+1,830 tests, zero failures, ignores or filtering. This explicit linked record
+replays nineteen closed stages from a disk-gated build attempt and adds seven
+fresh continuation stages; it is not one continuous ownership/deadline window.
+Focused no-default tests, strict Clippy, scoped formatting and both example
+builds pass. The no-default full suite and GPU examples were not run. The
+compact public packet preserves rejected histories, raw records, the signed
+candidate bundle and a 6,477-file source binding. Independent readback verifies
+every archived original and signed source blob. Integration refreshes four
+reviewed source guards without changing their executable proof closures or
+claiming new solver acceptance. All seventeen local CI commands pass, including
+64 ordinary and 40 diagnostic harness tests. The matched 24-invocation native
+campaign remains pending; instrumentation is host-observed and supplies no
+device timeline, performance gain, HIP/HSA parity or milestone exit.
 
 The [native retained XGMI comparison](evidence/dev-xgmi-retained-series-2026-09-30/README.md)
 is integrated through `1c589082e`. Signed candidate `d5cfd8779` completes all
@@ -97,15 +114,17 @@ restricted-environment runs below remain separate histories. This run does not
 qualify the KFD suite; its separate retained-executable result is above.
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
-runs sixteen explicit commands covering the newer model, runtime, accounting,
-KFD and native harness source/classifier controls, including 64 offline native
-series tests. Those commands pass locally; workflow YAML and
+runs seventeen explicit commands covering the newer model, runtime, accounting,
+KFD and native harness source/classifier controls, including 64 ordinary native
+series and 40 separate diagnostic harness tests. All seventeen commands pass
+locally at `4ad64047b`; workflow YAML and
 command inventory checks also pass. The resource-domain command selects its six
 source-only controls, not its three subprocess lifecycle tests. This adds drift
 detection, not solver execution, Rust test execution, authenticated proof
-acceptance or a hosted CI result. Commit `69893f490` adds the shared native hot
-helper to both push and pull-request trigger paths; all 64 native harness tests
-pass again, and the sixteen commands and read-only permissions are unchanged.
+acceptance or a hosted CI result. The ordinary harness includes two CPU C++
+callback compile/run controls. Commit `69893f490` adds the shared native hot
+helper to both push and pull-request trigger paths; `877451ebf` adds the
+separate diagnostic command. Read-only workflow permissions are unchanged.
 
 The [portable retained-credit campaign](evidence/dev-retained-dispatch-portable-2026-09-30/README.md)
 is integrated at `0c38a20c6`. Signed candidate `b27f19993` passes all 33 public
