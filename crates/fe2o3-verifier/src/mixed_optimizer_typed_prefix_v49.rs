@@ -283,12 +283,14 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
     }
 
     fn check(&self, out: &mut Writer<'_, '_>) -> Result<()> {
-        self.bridge.check(out)?;
+        if let Some(error) = self.bridge.failure.get() {
+            return Err(error.into());
+        }
         if out.budget.storage() < self.required {
             self.bridge.failure.set(Some(Resource::Accounting));
             return Err(Resource::Accounting.into());
         }
-        Ok(())
+        self.bridge.check(out)
     }
 
     pub(super) fn segment(

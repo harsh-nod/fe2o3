@@ -193,96 +193,88 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
             out,
             "open spec fn typed_licm_cursor_related_{function}_v49(before_cursor: TypedPrefixCursorV49, after_cursor: TypedPrefixCursorV49, little_endian: bool) -> bool {{\n let before = before_cursor.micro.state; let after = after_cursor.micro.state;\n typed_prefix_cursor_valid_{function}_v49(before_cursor, little_endian) && typed_relocated_cursor_valid_{function}_v49(after_cursor, little_endian)\n && before_cursor.segment == after_cursor.segment && before.pc == after.pc\n && before.memory == after.memory && before.generations == after.generations && before.frames == after.frames\n && typed_allocation_environment_1_v48(before) == typed_allocation_environment_2_v48(after)\n && (if before.pc == -1 || before.pc == -2 {{ true }} else {{\n"
         );
-        let text = std::mem::take(&mut out.text);
-        let failure = out.failure.take();
-        let (text, failure) = with_flow(
-            input.owner(),
-            row.coordinate,
-            Default::default(),
-            out.budget,
-            |input_flow, budget| {
-                with_flow(
-                    output.owner(),
-                    row.coordinate,
-                    Default::default(),
-                    budget,
-                    |output_flow, budget| {
-                        let mut writer = Writer {
-                            text,
-                            budget,
-                            failure,
+        super::models::with_dominance(output, function, out, |output_flow, out| {
+            let text = std::mem::take(&mut out.text);
+            let failure = out.failure.take();
+            let (text, failure) = with_flow(
+                input.owner(),
+                row.coordinate,
+                Default::default(),
+                out.budget,
+                |input_flow, budget| {
+                    let mut writer = Writer {
+                        text,
+                        budget,
+                        failure,
+                    };
+                    let out = &mut writer;
+                    for (original, segment) in self.segments.iter().enumerate() {
+                        let Some(segment) = segment else {
+                            continue;
                         };
-                        let out = &mut writer;
-                        for (original, segment) in self.segments.iter().enumerate() {
-                            let Some(segment) = segment else {
-                                continue;
-                            };
-                            if !row.blocks.contains(&segment.output_block) {
-                                continue;
-                            }
-                            let actual = relocated[original].ok_or_else(mismatch)?;
-                            emit!(out, " if before_cursor.segment == {original} {{ true");
-                            for definition in row.definitions.clone() {
-                                let (target, moved) = relocated_definition(
-                                    input,
-                                    output,
-                                    self.bridge.licm,
-                                    definition,
-                                    out,
-                                )?;
-                                let present = super::models::available(
-                                    input,
-                                    input_flow,
-                                    input.definitions()[definition].coordinate,
-                                    segment.output_block,
-                                    segment.start,
-                                    out,
-                                )?;
-                                let target_present = super::models::available(
-                                    output,
-                                    output_flow,
-                                    output.definitions()[target].coordinate,
-                                    actual.output_block,
-                                    actual.start,
-                                    out,
-                                )?;
-                                if (!moved && present != target_present)
-                                    || (present && !target_present)
-                                {
-                                    return Err(mismatch());
-                                }
-                                if present {
-                                    emit!(
-                                        out,
-                                        "\n && before.values[{definition}] == after.values[{target}]"
-                                    );
-                                }
-                                if moved && target_present {
-                                    emit!(
-                                        out,
-                                        "\n && typed_relocation_result_0_v48({definition}, before, little_endian) == Some(after.values[{target}])"
-                                    );
-                                }
-                                if target_present {
-                                    emit!(out, " && ({{ let compared = after.values[{target}]; ");
-                                    super::super::super::byte_function_v30::emit_value_type(
-                                        output.definitions()[target].ty,
-                                        width,
-                                        "compared",
-                                        out,
-                                    )?;
-                                    emit!(out, " }})");
-                                }
-                            }
-                            emit!(out, " }} else\n");
+                        if !row.blocks.contains(&segment.output_block) {
+                            continue;
                         }
-                        Ok::<_, Error>((writer.text, writer.failure))
-                    },
-                )
-            },
-        )?;
-        out.text = text;
-        out.failure = failure;
+                        let actual = relocated[original].ok_or_else(mismatch)?;
+                        emit!(out, " if before_cursor.segment == {original} {{ true");
+                        for definition in row.definitions.clone() {
+                            let (target, moved) = relocated_definition(
+                                input,
+                                output,
+                                self.bridge.licm,
+                                definition,
+                                out,
+                            )?;
+                            let present = super::models::available(
+                                input,
+                                input_flow,
+                                input.definitions()[definition].coordinate,
+                                segment.output_block,
+                                segment.start,
+                                out,
+                            )?;
+                            let target_present = output_flow.available(
+                                output.definitions()[target].coordinate,
+                                actual.output_block,
+                                actual.start,
+                                out,
+                            )?;
+                            if (!moved && present != target_present) || (present && !target_present)
+                            {
+                                return Err(mismatch());
+                            }
+                            if present {
+                                emit!(
+                                    out,
+                                    "\n && before.values[{definition}] == after.values[{target}]"
+                                );
+                            }
+                            if moved && target_present {
+                                emit!(
+                                    out,
+                                    "\n && typed_relocation_result_0_v48({definition}, before, little_endian) == Some(after.values[{target}])"
+                                );
+                            }
+                            if target_present {
+                                emit!(out, " && ({{ let compared = after.values[{target}]; ");
+                                super::super::super::byte_function_v30::emit_value_type(
+                                    output.definitions()[target].ty,
+                                    width,
+                                    "compared",
+                                    out,
+                                )?;
+                                emit!(out, " }})");
+                            }
+                        }
+                        emit!(out, " }} else\n");
+                    }
+                    Ok::<_, Error>((writer.text, writer.failure))
+                },
+            )?;
+            out.text = text;
+            out.failure = failure;
+            Ok(())
+        })?;
         emit!(out, " {{ false }} }})\n}}\n");
         self.check(out)
     }
