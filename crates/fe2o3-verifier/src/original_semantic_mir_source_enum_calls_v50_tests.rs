@@ -61,9 +61,11 @@ fn call_fixture(
     let SemanticAbiPassModeV1::Direct(attributes) = old.abi().arguments()[0].mode() else {
         panic!("genuine word input ABI");
     };
+    assert_eq!(old.abi().canon_abi(), SemanticCanonAbiV1::Rust);
+    // The full-range u8 tag is not a bool or a foreign-ABI integer.
     let tag_attributes = SemanticAbiValueAttributesV1::new(
         attributes.regular(),
-        SemanticAbiExtensionV1::ZeroExtend,
+        SemanticAbiExtensionV1::None,
         0,
         None,
     )
