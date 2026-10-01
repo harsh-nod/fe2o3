@@ -102,7 +102,10 @@ fn source_stable_referent_endpoint_exact_and_one_short_complete_resources() {
             measured.1 - usize::from(short_work),
             measured.2 - usize::from(!short_work),
         );
-        let error = entrance_resource(result.0.expect_err("one-short account must be refused"));
+        let refusal = result.0.expect_err("one-short account must be refused");
+        let error =
+            crate::production_semantic_kir_v1::aggregate_source_owned_resource_v30(&refusal)
+                .unwrap_or_else(|| panic!("not a resource refusal: {refusal:?}"));
         assert!(
             matches!(error, ArgumentResourceV1::Work(_) if short_work)
                 || matches!(error, ArgumentResourceV1::Storage(_) if !short_work),

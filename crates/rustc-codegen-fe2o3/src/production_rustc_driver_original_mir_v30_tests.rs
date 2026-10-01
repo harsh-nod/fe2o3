@@ -71,7 +71,7 @@ fn original_observe(
             .contains(&MixedPublicationOpenGateV28::OriginalMirToKirRefinement)
     );
     assert_eq!(budget.storage(), floor);
-    assert_eq!(budget.work_ledger_identity_v1(), ledger);
+    assert!(budget.work_ledger_identity_v1() == ledger);
     Ok(OriginalObservation {
         census: subject.census(),
         statement: subject.statement_identity(),
