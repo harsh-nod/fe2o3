@@ -27,6 +27,21 @@ respect the checked-in policy in
 `scripts/workspace-dependency-policy.json`, which is enforced from generic CI
 by `scripts/workspace_dependency_policy.py`.
 
+Policy schema V2 additionally permits exact Cargo target conditions on reviewed
+package/kind exceptions. A target-scoped exception MUST NOT admit an unguarded
+dependency or a different target condition. V1 policies retain their previous
+unrestricted-target exception semantics; V1 checkers reject the V2 policy.
+
+The verifier's existing Linux x86-64 proof-helper bootstrap consumes
+`fe2o3-protected-service-spawn` for bounded bootstrap transport and
+`fe2o3-protected-static-executable` for sealed-image measurement. Only those two
+normal dependencies, under their exact existing Cargo target condition, cross
+the verification-to-host-runtime boundary. Other packages, dependency kinds,
+targets and unguarded declarations remain forbidden. This dependency allowance
+does not enable proof RPC or grant compiler, proof, artifact or GPU authority.
+The byte-only `fe2o3-static-executable-format` parser belongs to canonical
+contracts and MUST NOT depend on the host runtime.
+
 ## Workspace Topology
 
 Immediate crates are workspace members through `crates/*`. Nested test fixtures

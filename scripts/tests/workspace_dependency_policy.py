@@ -200,6 +200,7 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
 
     def test_verifier_helper_exceptions_are_exact_and_normal_only(self) -> None:
         reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        condition = 'cfg(all(target_os = "linux", target_arch = "x86_64"))'
         helpers = ("fe2o3-protected-service-spawn", "fe2o3-protected-static-executable")
         cases = [("fe2o3-verifier", target, kind, kind is None)
                  for target in helpers for kind in (None, "dev", "build")]
@@ -217,14 +218,15 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
             self.assertEqual("host-runtime", layers[helper])
         for source, target, kind, allowed in cases:
             with self.subTest(source=source, target=target, kind=kind):
-                packages = [package(source, f"crates/{source}", [
-                    dependency(target, f"crates/{target}", kind)]),
+                edge = dependency(target, f"crates/{target}", kind)
+                edge["target"] = condition
+                packages = [package(source, f"crates/{source}", [edge]),
                     package(target, f"crates/{target}")]
                 violations, stats = CHECKER.check_policy(metadata(packages), reviewed)
                 expected = [] if allowed else [
                     "forbidden dependency: "
                     f"{source} [{layers[source]}] -> {target} [host-runtime] "
-                    f"({kind or 'normal'}; crates/{source}/Cargo.toml)"
+                    f"({kind or 'normal'}, target {condition}; crates/{source}/Cargo.toml)"
                 ]
                 self.assertEqual(expected, violations)
                 self.assertEqual(1, stats["internal_dependencies"])
@@ -251,7 +253,8 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
         edges = [row for row in reviewed["allowed_dependency_edges"]
                  if row["from"] == "fe2o3-verifier" and row["to"] in host_packages]
         self.assertEqual(
-            [{"from": "fe2o3-verifier", "to": helper, "kinds": ["normal"]}
+            [{"from": "fe2o3-verifier", "to": helper, "kinds": ["normal"],
+              "target": helper_target}
              for helper in helpers], edges
         )
 
@@ -296,6 +299,109 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
             CHECKER.PolicyConfigurationError, "does not cross a forbidden layer direction"
         ):
             CHECKER.check_policy(metadata([]), invalid)
+
+    def test_target_scoped_exception_requires_exact_target_and_kind(self) -> None:
+        reviewed = policy()
+        reviewed["schema_version"] = 2
+        condition = 'cfg(all(target_os = "linux", target_arch = "x86_64"))'
+        reviewed["allowed_dependency_edges"] = [
+            {"from": "contract", "to": "runtime", "kinds": ["normal"],
+             "target": condition}
+        ]
+        for target in (condition, None, 'cfg(target_os = "linux")',
+                       'cfg(target_os = "windows")'):
+            for kind in (None, "build", "dev"):
+                with self.subTest(target=target, kind=kind):
+                    edge = dependency("runtime", "crates/runtime", kind)
+                    edge["target"] = target
+                    packages = [package("contract", "crates/contract", [edge]),
+                                package("runtime", "crates/runtime")]
+                    violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
+                    self.assertEqual(0 if target == condition and kind is None else 1,
+                                     len(violations))
+
+    def test_rejects_malformed_or_legacy_target_scoped_exception(self) -> None:
+        for target in (None, "", 7, [], {}):
+            with self.subTest(target=target):
+                reviewed = policy()
+                reviewed["schema_version"] = 2
+                reviewed["allowed_dependency_edges"] = [
+                    {"from": "contract", "to": "runtime", "kinds": ["normal"],
+                     "target": target}
+                ]
+                with self.assertRaises(CHECKER.PolicyConfigurationError):
+                    CHECKER.check_policy(metadata([]), reviewed)
+        reviewed["schema_version"] = 1
+        reviewed["allowed_dependency_edges"][0]["target"] = 'cfg(target_os = "linux")'
+        with self.assertRaisesRegex(CHECKER.PolicyConfigurationError, "schema_version 2"):
+            CHECKER.check_policy(metadata([]), reviewed)
+
+    def test_unrestricted_target_rules_keep_legacy_semantics(self) -> None:
+        for version in (1, 2):
+            for target in (None, 'cfg(target_os = "linux")', 'cfg(target_os = "windows")'):
+                with self.subTest(version=version, target=target):
+                    reviewed = policy()
+                    reviewed["schema_version"] = version
+                    reviewed["allowed_dependency_edges"] = [
+                        {"from": "contract", "to": "runtime", "kinds": ["normal"]}
+                    ]
+                    edge = dependency("runtime", "crates/runtime")
+                    edge["target"] = target
+                    packages = [package("contract", "crates/contract", [edge]),
+                                package("runtime", "crates/runtime")]
+                    violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
+                    self.assertEqual([], violations)
+
+    def test_rejects_duplicate_and_misspelled_target_rules(self) -> None:
+        reviewed = policy()
+        reviewed["schema_version"] = 2
+        edge = {"from": "contract", "to": "runtime", "kinds": ["normal"],
+                "target": 'cfg(target_os = "linux")'}
+        reviewed["allowed_dependency_edges"] = [edge, edge.copy()]
+        with self.assertRaisesRegex(CHECKER.PolicyConfigurationError, "duplicate allowed"):
+            CHECKER.check_policy(metadata([]), reviewed)
+        reviewed["allowed_dependency_edges"] = [dict(edge, targets=edge["target"])]
+        with self.assertRaisesRegex(CHECKER.PolicyConfigurationError, "unknown fields"):
+            CHECKER.check_policy(metadata([]), reviewed)
+
+    def test_proof_helper_runtime_edges_match_only_guarded_manifest_dependencies(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        condition = 'cfg(all(target_os = "linux", target_arch = "x86_64"))'
+        targets = ("fe2o3-protected-service-spawn", "fe2o3-protected-static-executable")
+        manifest = tomllib.loads(
+            (CHECKER_PATH.parents[1] / "crates/fe2o3-verifier/Cargo.toml")
+            .read_text(encoding="utf-8")
+        )
+        for target in targets:
+            self.assertEqual({"workspace": True}, manifest["target"][condition]["dependencies"][target])
+            self.assertNotIn(target, manifest["dependencies"])
+            rules = [row for row in reviewed["allowed_dependency_edges"]
+                     if row["from"] == "fe2o3-verifier" and row["to"] == target]
+            self.assertEqual([{"from": "fe2o3-verifier", "to": target,
+                               "kinds": ["normal"], "target": condition}], rules)
+        for source in ("fe2o3-verifier", "fe2o3-kernel-ir"):
+            for target in (*targets, "fe2o3-runtime"):
+                for guard in (condition, None, 'cfg(target_os = "windows")'):
+                    for kind in (None, "dev", "build"):
+                        with self.subTest(source=source, target=target, guard=guard, kind=kind):
+                            edge = dependency(target, f"crates/{target}", kind)
+                            edge["target"] = guard
+                            packages = [package(source, f"crates/{source}", [edge]),
+                                        package(target, f"crates/{target}")]
+                            violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
+                            allowed = (source == "fe2o3-verifier" and target in targets
+                                       and guard == condition and kind is None)
+                            self.assertEqual(0 if allowed else 1, len(violations))
+
+    def test_static_executable_format_is_a_canonical_contract(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        packages = [package("fe2o3-static-executable-format",
+                            "crates/fe2o3-static-executable-format", [
+                                dependency("fe2o3-runtime", "crates/fe2o3-runtime")]),
+                    package("fe2o3-runtime", "crates/fe2o3-runtime")]
+        violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
+        self.assertEqual(1, len(violations))
+        self.assertIn("fe2o3-static-executable-format [canonical-contracts]", violations[0])
 
     def test_rejects_duplicate_package_ownership(self) -> None:
         invalid = policy()

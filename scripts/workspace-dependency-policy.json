@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "layers": [
     {
       "name": "canonical-contracts",
@@ -168,14 +168,16 @@
       "to": "fe2o3-protected-service-spawn",
       "kinds": [
         "normal"
-      ]
+      ],
+      "target": "cfg(all(target_os = \"linux\", target_arch = \"x86_64\"))"
     },
     {
       "from": "fe2o3-verifier",
       "to": "fe2o3-protected-static-executable",
       "kinds": [
         "normal"
-      ]
+      ],
+      "target": "cfg(all(target_os = \"linux\", target_arch = \"x86_64\"))"
     },
     {
       "from": "fe2o3-verifier",
