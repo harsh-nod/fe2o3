@@ -580,6 +580,92 @@ class AttentionCfgSelectionTests(unittest.TestCase):
             self.check_ablation(document, runtime)
 
 
+    def fill_document(self):
+        """One current fill source display, not an execution or complete site claim."""
+        document = copy.deepcopy(self.original)
+        lesson = next(row for row in document["curriculum"]["lessons"]
+                      if row["lessonId"] == "first-fill")
+        tab = lesson["codeTabs"][0]
+        self.assertEqual(tab["sourceCommit"], "f84c2a59ba34c3e4c12e316cc9b30f14342e36cf")
+        self.assertEqual(tab["sourcePath"], "examples/fill/src/lib.rs")
+        self.assertEqual(tab["sourceDigestScope"], "file")
+        self.assertEqual(tab["sourceItemStatus"], "pending")
+        self.assertIsNone(tab["sourceItem"])
+        self.assertIsNone(tab["evidenceId"])
+        physical = (ROOT / tab["sourcePath"]).read_bytes()
+        self.assertEqual(len(physical), 680)
+        self.assertEqual(hashlib.sha256(physical).hexdigest(),
+                         "66593042d32204a35d4371de11387466c6eb553b54a24d21e370f47b3ee4789e")
+        fixture_id = "gfx942-fill-simulation"
+        document["compilerFixtures"] = [row for row in document["compilerFixtures"]
+                                        if row["fixtureId"] == fixture_id]
+        inventory = document["kernelInventory"]
+        inventory["kernels"] = [row for row in inventory["kernels"]
+                                 if row["kernelId"] == "fixture:gfx942-fill-simulation:fill"]
+        inventory["negativeCases"] = []
+        inventory["displayItems"] = [row for row in inventory["displayItems"]
+                                      if row["lessonId"] == "first-fill" and row["tabOrdinal"] == 0]
+        self.assertEqual([(row["kernelSymbol"], row["functionUtf8Offset"], row["classification"],
+                           row["bindingStatus"]) for row in inventory["displayItems"]], [
+            ("fill_reference", 152, "helper", "not-applicable"),
+            ("fill", 520, "kernel", "fixture-source-contract"),
+        ])
+        lesson["codeTabs"] = [tab]
+        document["curriculum"]["lessons"] = [lesson]
+        runtime = {"schema": self.parent.SITE_INVENTORY_SCHEMA, "site": document["curriculum"]["site"],
+                   "lessons": [{"id": lesson["lessonId"], "codeTabs": [
+                       {**tab, "displayedCode": physical.decode("utf-8"), "sourceFragments": None}]}]}
+        return document, runtime
+
+    def test_current_fill_display_binds_default_source_without_qualifying_pair(self):
+        document, runtime = self.fill_document()
+        before = copy.deepcopy((document, runtime))
+        report = self.check_ablation(document, runtime)
+        self.assertEqual((document, runtime), before)
+        self.assertEqual(report["unresolvedBindings"], [])
+        self.assertEqual(report["displayItemCount"], 2)
+        self.assertEqual(report["sourceBoundVariantCount"], 1)
+        self.assertEqual(report["pendingVariantCount"], 1)
+        self.assertEqual(report["sourceBoundPairCount"], 0)
+        fixture = document["compilerFixtures"][0]
+        self.assertEqual(fixture["compilerInput"]["features"], [])
+        self.assertIs(fixture["compilerInput"]["defaultFeatures"], True)
+        self.assertEqual(fixture["simulation"]["status"], "pending-reconciliation")
+
+    def test_fill_display_keeps_complete_helper_and_kernel_census(self):
+        for mutation in ("missing-helper", "duplicate", "offset", "misclassified"):
+            document, runtime = self.fill_document()
+            rows = document["kernelInventory"]["displayItems"]
+            if mutation == "missing-helper":
+                rows.pop(0)
+            elif mutation == "duplicate":
+                rows.append(copy.deepcopy(rows[1]))
+            elif mutation == "offset":
+                rows[1]["functionUtf8Offset"] = 148
+            else:
+                rows[1].update(classification="helper", bindingStatus="not-applicable", kernelIds=[])
+            with self.subTest(mutation=mutation), self.assertRaises(SystemExit):
+                self.check_ablation(document, runtime)
+
+    def test_fill_display_rejects_changed_bytes_path_and_reference_feature(self):
+        for mutation in ("rehashed-display", "path", "reference-feature"):
+            document, runtime = self.fill_document()
+            tab = document["curriculum"]["lessons"][0]["codeTabs"][0]
+            live = runtime["lessons"][0]["codeTabs"][0]
+            if mutation == "rehashed-display":
+                live["displayedCode"] = live["displayedCode"].replace("42.5", "43.5")
+                payload = live["displayedCode"].encode("utf-8")
+                digest = hashlib.sha256(payload).hexdigest()
+                for item in (tab, live):
+                    item.update(displayedUtf8Bytes=len(payload), displayedSha256=digest, sourceSha256=digest)
+            elif mutation == "path":
+                for item in (tab, live):
+                    item["sourcePath"] = "examples/fill/src/main.rs"
+            else:
+                document["compilerFixtures"][0]["compilerInput"]["features"] = ["reference-proof"]
+            with self.subTest(mutation=mutation), self.assertRaises(SystemExit):
+                self.check_ablation(document, runtime)
+
     def kda_baseline_document(self):
         """One isolated whole-file component, not a claim about the full live census."""
         document = copy.deepcopy(self.original)

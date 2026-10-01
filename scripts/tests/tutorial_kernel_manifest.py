@@ -690,7 +690,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                    for row in inventory["displayItems"]}
         fill = display[("first-fill", 0, "fill")]
         self.assertEqual(fill["kernelIds"], ["fixture:gfx942-fill-simulation:fill"])
-        self.assertEqual(fill["bindingStatus"], "pending")
+        self.assertEqual(fill["bindingStatus"], "fixture-source-contract")
+        helper = display[("first-fill", 0, "fill_reference")]
+        self.assertEqual(helper["functionUtf8Offset"], 152)
+        self.assertEqual(helper["classification"], "helper")
+        self.assertEqual(helper["bindingStatus"], "not-applicable")
+        self.assertEqual(helper["kernelIds"], [])
         self.assertEqual(display[("typed-vecadd", 3, "vecadd")]["bindingStatus"], "pending")
         mixed = display[("cpu-semantic-simulation", 7, "mixed_tile_probe")]
         self.assertEqual(mixed["functionUtf8Offset"], 468)
@@ -922,19 +927,37 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
     def test_historical_fill_display_does_not_bind_the_migrated_source(self):
         lesson = self.curriculum_lesson()
         tab = lesson["codeTabs"][0]
-        self.assertEqual(tab["sourceCommit"], "7a536e0a001202ac0bb9d8647c5395661f8fa1ec")
-        self.assertEqual(tab["displayedUtf8Bytes"], 308)
+        self.assertEqual(tab["sourceCommit"], "f84c2a59ba34c3e4c12e316cc9b30f14342e36cf")
+        self.assertEqual(tab["displayedUtf8Bytes"], 680)
         self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
         current = (ROOT / "examples/fill/src/lib.rs").read_bytes()
-        self.assertNotEqual(hashlib.sha256(current).hexdigest(), tab["sourceSha256"])
+        self.assertEqual(hashlib.sha256(current).hexdigest(), tab["sourceSha256"])
         display = next(row for row in self.manifest["kernelInventory"]["displayItems"]
                        if row["lessonId"] == "first-fill" and row["tabOrdinal"] == 0
                        and row["kernelSymbol"] == "fill")
-        self.assertEqual(display["bindingStatus"], "pending")
+        self.assertEqual(display["bindingStatus"], "fixture-source-contract")
         self.validator.validate_kernel_inventory(self.manifest, None, repo_root=ROOT)
-        display["bindingStatus"] = "fixture-source-contract"
+        # The exact previous whole-file identity must still fail as a current binding.
+        stale = copy.deepcopy(self.manifest)
+        stale_lesson = next(row for row in stale["curriculum"]["lessons"]
+                            if row["lessonId"] == "first-fill")
+        stale_lesson["codeTabs"][0].update(
+            sourceCommit="7a536e0a001202ac0bb9d8647c5395661f8fa1ec",
+            displayedUtf8Bytes=308,
+            displayedSha256="827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+            sourceSha256="827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213",
+        )
+        stale["kernelInventory"]["displayItems"] = [
+            row for row in stale["kernelInventory"]["displayItems"]
+            if not (row["lessonId"] == "first-fill" and row["tabOrdinal"] == 0
+                    and row["kernelSymbol"] == "fill_reference")
+        ]
+        stale_display = next(row for row in stale["kernelInventory"]["displayItems"]
+                             if row["lessonId"] == "first-fill" and row["tabOrdinal"] == 0
+                             and row["kernelSymbol"] == "fill")
+        stale_display["functionUtf8Offset"] = 148
         with self.assertRaisesRegex(SystemExit, "fixture display differs from the exact current source occurrence"):
-            self.validator.validate_kernel_inventory(self.manifest, None, repo_root=ROOT)
+            self.validator.validate_kernel_inventory(stale, None, repo_root=ROOT)
 
     def test_fill_reference_proof_is_opt_in_not_a_replacement_manifest_selection(self):
         fill = next(row for row in self.manifest["compilerFixtures"]
