@@ -208,7 +208,7 @@ pub fn check_inert_typed_source_receipt_v53<'a>(
         + size_of::<[&[u8]; 5]>()
         + 16 * size_of::<usize>();
     budget.with_prepaid_scope(floor, 0, 0, header, |budget| {
-        fe2o3_compiler_lineage::MixedMiddleEndLayoutV50::new(input)
+        fe2o3_compiler_lineage::MixedMiddleEndLayoutV50::new::<std::convert::Infallible>(input)
             .map_err(|_| refusal("bounded exact V50 input extents"))?;
         budget.charge_work(WIRE)?;
         let expected = decode(input.execution_receipt)?;
