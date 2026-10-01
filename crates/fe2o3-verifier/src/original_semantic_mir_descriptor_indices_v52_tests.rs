@@ -753,6 +753,7 @@ fn run_indexed_kind(
                         }
                     }
                 }
+                write!(out, "{SOURCE_BYTES_V36}").map_err(|_| out.error())?;
                 program.emit(out)?;
                 paired.emit(out)?;
                 assert!(
