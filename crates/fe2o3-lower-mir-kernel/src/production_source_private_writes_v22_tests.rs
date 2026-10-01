@@ -3,6 +3,9 @@ use super::*;
 #[path = "production_source_wrapping_value_v23_tests.rs"]
 mod wrapping_value_v23;
 
+#[path = "production_source_unary_expression_v39_tests.rs"]
+mod unary_expression_v39;
+
 fn with_private_expression_result_v24(
     factory: fn() -> ProductionSemanticSsaOwnerV1,
     consume: impl for<'scope, 'work> FnOnce(
@@ -474,130 +477,129 @@ enum ExpressionCutV22 {
 }
 
 fn expression_boundary_v22(cut: ExpressionCutV22) -> (usize, usize) {
+    expression_boundary_for_v39(private_cross_block_owner_v22, 4, cut)
+}
+
+fn expression_boundary_for_v39(
+    factory: fn() -> ProductionSemanticSsaOwnerV1,
+    child_boxes: usize,
+    cut: ExpressionCutV22,
+) -> (usize, usize) {
     let completed = std::cell::Cell::new(false);
     let observed = std::cell::Cell::new(None);
     let selected_resource = std::cell::Cell::new(None);
-    let result = with_private_expression_result_v24(
-        private_cross_block_owner_v22,
-        |original, optimized, budget| {
-            let floor = budget.storage();
-            scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
-                budget.reserve_storage(private_source_completion_headers_v20()?)?;
-                let index = OriginalEntryIndexV20::build(original, budget)?;
-                original.with_optimized_scalar_leaf_namespace_v18(
-                    optimized,
-                    0,
-                    &SourceScalarNamespaceV18::PrivateSourceWritesV22,
-                    budget,
-                    |leaves, budget| {
-                        leaves.with_checked_write_profile_v22(
-                            true,
-                            budget,
-                            |request, budget| {
-                                if !request.row.source_write {
-                                    let expression = index.expression(leaves, request, budget)?;
-                                    return request.check_expression(&expression, budget);
+    let result = with_private_expression_result_v24(factory, |original, optimized, budget| {
+        let floor = budget.storage();
+        scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
+            budget.reserve_storage(private_source_completion_headers_v20()?)?;
+            let index = OriginalEntryIndexV20::build(original, budget)?;
+            original.with_optimized_scalar_leaf_namespace_v18(
+                optimized,
+                0,
+                &SourceScalarNamespaceV18::PrivateSourceWritesV22,
+                budget,
+                |leaves, budget| {
+                    leaves.with_checked_write_profile_v22(
+                        true,
+                        budget,
+                        |request, budget| {
+                            if !request.row.source_write {
+                                let expression = index.expression(leaves, request, budget)?;
+                                return request.check_expression(&expression, budget);
+                            }
+                            let floor = budget.storage();
+                            match cut {
+                                ExpressionCutV22::Measure => {}
+                                ExpressionCutV22::Work { needed, short } => {
+                                    let room = needed - usize::from(short);
+                                    budget.charge_work(
+                                        OPTIMIZED_SOURCE_WORK_LIMIT_V18 - budget.work() - room,
+                                    )?;
                                 }
-                                let floor = budget.storage();
-                                match cut {
-                                    ExpressionCutV22::Measure => {}
-                                    ExpressionCutV22::Work { needed, short } => {
-                                        let room = needed - usize::from(short);
-                                        budget.charge_work(
-                                            OPTIMIZED_SOURCE_WORK_LIMIT_V18 - budget.work() - room,
-                                        )?;
+                                ExpressionCutV22::Storage { needed, short } => {
+                                    let room = needed - usize::from(short);
+                                    budget.reserve_storage(MODULE_LIMIT - floor - room)?;
+                                }
+                            }
+                            let start = (budget.work(), budget.storage());
+                            let expression =
+                                index.source_write_expression_v22(leaves, request, budget);
+                            let used = (budget.work() - start.0, budget.storage() - start.1);
+                            let selected = match (cut, expression) {
+                                (ExpressionCutV22::Work { short: true, .. }, Err(error)) => {
+                                    assert!(
+                                        matches!(
+                                            error,
+                                            ProductionSourceOwnedViewErrorV18::Resource(
+                                                ArgumentResourceV1::Work(_)
+                                            )
+                                        ),
+                                        "{error:?}"
+                                    );
+                                    error
+                                }
+                                (ExpressionCutV22::Storage { short: true, .. }, Err(error)) => {
+                                    assert!(
+                                        matches!(
+                                            error,
+                                            ProductionSourceOwnedViewErrorV18::Resource(
+                                                ArgumentResourceV1::Storage(_)
+                                            )
+                                        ),
+                                        "{error:?}"
+                                    );
+                                    error
+                                }
+                                (
+                                    ExpressionCutV22::Work { short: true, .. }
+                                    | ExpressionCutV22::Storage { short: true, .. },
+                                    Ok(_),
+                                ) => {
+                                    panic!("one-short expression budget accepted")
+                                }
+                                (_, Err(error)) => {
+                                    panic!("exact expression refused: {error:?}")
+                                }
+                                (_, Ok(expression)) => {
+                                    // Each fixture states its independently authored tree size.
+                                    assert_eq!(
+                                        used.1,
+                                        child_boxes * size_of::<ProductionSemanticExpressionV2>()
+                                    );
+                                    observed.set(Some(used));
+                                    drop(expression);
+                                    ProductionSourceOwnedViewErrorV18::Binding(
+                                        "test stops after exact source expression boundary",
+                                    )
+                                }
+                            };
+                            if let ProductionSourceOwnedViewErrorV18::Resource(error) = &selected {
+                                match error {
+                                    ArgumentResourceV1::Work(limit) => {
+                                        assert_eq!(limit.limit(), OPTIMIZED_SOURCE_WORK_LIMIT_V18);
                                     }
-                                    ExpressionCutV22::Storage { needed, short } => {
-                                        let room = needed - usize::from(short);
-                                        budget.reserve_storage(MODULE_LIMIT - floor - room)?;
+                                    ArgumentResourceV1::Storage(limit) => {
+                                        assert_eq!(limit.limit(), MODULE_LIMIT);
+                                    }
+                                    other => {
+                                        panic!("unexpected expression resource: {other:?}")
                                     }
                                 }
-                                let start = (budget.work(), budget.storage());
-                                let expression =
-                                    index.source_write_expression_v22(leaves, request, budget);
-                                let used = (budget.work() - start.0, budget.storage() - start.1);
-                                let selected = match (cut, expression) {
-                                    (ExpressionCutV22::Work { short: true, .. }, Err(error)) => {
-                                        assert!(
-                                            matches!(
-                                                error,
-                                                ProductionSourceOwnedViewErrorV18::Resource(
-                                                    ArgumentResourceV1::Work(_)
-                                                )
-                                            ),
-                                            "{error:?}"
-                                        );
-                                        error
-                                    }
-                                    (ExpressionCutV22::Storage { short: true, .. }, Err(error)) => {
-                                        assert!(
-                                            matches!(
-                                                error,
-                                                ProductionSourceOwnedViewErrorV18::Resource(
-                                                    ArgumentResourceV1::Storage(_)
-                                                )
-                                            ),
-                                            "{error:?}"
-                                        );
-                                        error
-                                    }
-                                    (
-                                        ExpressionCutV22::Work { short: true, .. }
-                                        | ExpressionCutV22::Storage { short: true, .. },
-                                        Ok(_),
-                                    ) => {
-                                        panic!("one-short expression budget accepted")
-                                    }
-                                    (_, Err(error)) => {
-                                        panic!("exact expression refused: {error:?}")
-                                    }
-                                    (_, Ok(expression)) => {
-                                        // The genuine fixture has two binary nodes, hence four
-                                        // individually allocated child expression boxes.
-                                        assert_eq!(
-                                            used.1,
-                                            4 * size_of::<ProductionSemanticExpressionV2>()
-                                        );
-                                        observed.set(Some(used));
-                                        drop(expression);
-                                        ProductionSourceOwnedViewErrorV18::Binding(
-                                            "test stops after exact source expression boundary",
-                                        )
-                                    }
-                                };
-                                if let ProductionSourceOwnedViewErrorV18::Resource(error) =
-                                    &selected
-                                {
-                                    match error {
-                                        ArgumentResourceV1::Work(limit) => {
-                                            assert_eq!(
-                                                limit.limit(),
-                                                OPTIMIZED_SOURCE_WORK_LIMIT_V18
-                                            );
-                                        }
-                                        ArgumentResourceV1::Storage(limit) => {
-                                            assert_eq!(limit.limit(), MODULE_LIMIT);
-                                        }
-                                        other => {
-                                            panic!("unexpected expression resource: {other:?}")
-                                        }
-                                    }
-                                    selected_resource.set(Some(*error));
-                                }
-                                // Test-owned padding and fully dropped expression scratch are
-                                // retired before the containing real attempt settles.
-                                budget.release_storage(budget.storage() - floor)?;
-                                assert_eq!(budget.storage(), floor);
-                                completed.set(true);
-                                Err(selected)
-                            },
-                            |_, _| panic!("boundary probe cannot complete a write request"),
-                        )
-                    },
-                )
-            })
-        },
-    );
+                                selected_resource.set(Some(*error));
+                            }
+                            // Test-owned padding and fully dropped expression scratch are
+                            // retired before the containing real attempt settles.
+                            budget.release_storage(budget.storage() - floor)?;
+                            assert_eq!(budget.storage(), floor);
+                            completed.set(true);
+                            Err(selected)
+                        },
+                        |_, _| panic!("boundary probe cannot complete a write request"),
+                    )
+                },
+            )
+        })
+    });
     assert!(
         completed.get(),
         "boundary assertions and cleanup must complete"

@@ -24,6 +24,11 @@ fn original_private_expression_headers_v22() -> Result<usize, ArgumentResourceV1
         size_of::<ProductionSourceScalarArgumentV18<'_>>(),
         size_of::<ProductionSemanticScalarTypeV2>(),
         size_of::<ProductionSemanticBinaryOpV2>(),
+        size_of::<SemanticUnaryOpV1>(),
+        size_of::<fe2o3_pliron::ProductionSemanticUnaryOpV2>(),
+        size_of::<Option<fe2o3_pliron::ProductionSemanticUnaryOpV2>>(),
+        size_of::<Type>(),
+        size_of::<Result<Type, ProductionSemanticKirErrorV1>>(),
         12 * size_of::<usize>(),
         8 * size_of::<&()>(),
     ])?;
@@ -46,6 +51,33 @@ fn private_binary_v22(operation: SemanticBinaryOpV1) -> Option<ProductionSemanti
         SemanticBinaryOpV1::BitXor => Out::BitXor,
         _ => return None,
     })
+}
+
+fn private_unary_v39(
+    operation: SemanticUnaryOpV1,
+    scalar: ProductionSemanticScalarTypeV2,
+) -> Option<fe2o3_pliron::ProductionSemanticUnaryOpV2> {
+    use ProductionSemanticScalarTypeV2 as Scalar;
+    use fe2o3_pliron::ProductionSemanticUnaryOpV2 as Out;
+    match (operation, scalar) {
+        (
+            SemanticUnaryOpV1::Not,
+            Scalar::Bool
+            | Scalar::Integer {
+                bits: 8 | 16 | 32 | 64,
+                ..
+            },
+        ) => Some(Out::Not),
+        (
+            SemanticUnaryOpV1::Negate,
+            Scalar::Integer {
+                signed: true,
+                bits: 8 | 16 | 32 | 64,
+            }
+            | Scalar::Float { bits: 32 | 64 },
+        ) => Some(Out::Negate),
+        _ => None,
+    }
 }
 
 fn store_source_expression_headers_v23() -> Result<usize, ArgumentResourceV1> {
@@ -648,9 +680,45 @@ impl OriginalEntryIndexV20<'_, '_> {
                             rhs: Box::new(rhs),
                         })
                     }
-                    SemanticRvalueKindV1::Unary { .. } => self.source.source.missing(
-                        "private source expression unsupported original unary derivation",
-                    ),
+                    SemanticRvalueKindV1::Unary { operation, operand } => {
+                        if *operation == SemanticUnaryOpV1::PointerMetadata {
+                            return self.source.source.missing(
+                                "private source expression pointer metadata needs authenticated descriptor length",
+                            );
+                        }
+                        budget.charge_work(6)?;
+                        let source = self.source.source.source_semantic(budget)?;
+                        if !function.blocks().get(block as usize)
+                            .and_then(|row| row.statements().get(statement as usize))
+                            .is_some_and(|row| matches!(row.kind(), SemanticStatementKindV1::Assign(assignment)
+                                if std::ptr::eq(assignment.value(), value)))
+                            || semantic_operand_type(operand) != ty
+                            || kir_semantic_scalar_v1(&lower_scalar_type(source.types(), ty)
+                                .map_err(source_emission_error_v18)?) != Some(scalar)
+                        {
+                            return self.source.source.missing(
+                                "private source unary expression owner or scalar type differs",
+                            );
+                        }
+                        let operation = private_unary_v39(*operation, scalar).ok_or(
+                            ProductionSourceOwnedViewErrorV18::Binding(
+                                "private source unary expression operator or scalar type unsupported",
+                            ),
+                        )?;
+                        budget.reserve_storage(size_of::<ProductionSemanticExpressionV2>())?;
+                        let operand = self.private_expression_v22(
+                            leaves, instance, ty, scalar,
+                            OriginalPrivateInputV22::Operand {
+                                site, role: EntryOperandV20::RvalueOperand(0), operand,
+                            },
+                            next, remaining, budget,
+                        )?;
+                        // Preserve the actual operator. Overflow/assert control
+                        // remains a separate original-source obligation.
+                        Ok(ProductionSemanticExpressionV2::Unary {
+                            operation, scalar, operand: Box::new(operand),
+                        })
+                    }
                     SemanticRvalueKindV1::Cast { .. } => self.source.source.missing(
                         "private source expression unsupported original cast derivation",
                     ),
