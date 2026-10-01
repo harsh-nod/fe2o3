@@ -493,24 +493,19 @@ fn an_ordinary_redefinition_or_storage_kill_cannot_reuse_a_borrow_occurrence() {
     ] {
         let function = two_occurrences(vec![test_borrow(2, 1), replacement]);
         let callables = [test_intrinsic_callable(function.abi().clone())];
-        let sites = transparent_borrow_sites_v1(&function, &callables);
+        let sites: BTreeSet<_> = transparent_borrow_sites_v1(&function, &callables)
+            .iter()
+            .map(SemanticTransparentBorrowSiteV1::test_coordinates)
+            .collect();
         let expected = if independent_fresh_borrow {
             // The Copy has a distinct, ungrounded definition. It cannot reuse
             // block 0's borrow, but need not poison block 1's fresh definition.
-            [SemanticTransparentBorrowSiteV1 {
-                block: 1,
-                statement: 0,
-            }]
-            .into_iter()
-            .collect()
+            [(1, 0)].into_iter().collect()
         } else {
             BTreeSet::new()
         };
         assert_eq!(sites, expected);
-        assert!(!sites.contains(&SemanticTransparentBorrowSiteV1 {
-            block: 0,
-            statement: 0,
-        }));
+        assert!(!sites.contains(&(0, 0)));
         assert!(!source_is_promotable(&function, &callables));
     }
 }

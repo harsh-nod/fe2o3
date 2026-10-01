@@ -159,6 +159,11 @@ fn emit_original_objects_v40(
         assert_eq!(enter.contains(&format!(
             "let entered = invocation_source_object_activate_v40(entered, {}, invocation_source_slot_{}_v36(), {local}, 0int, {root}, 0);",
             entry.descriptor, entry.descriptor)), !explicit);
+        let restart = if explicit {
+            Some(slots.object_activation(root, 0, 4, 1, out)?.unwrap())
+        } else {
+            None
+        };
         let events = out
             .text
             .split_once(&format!(
@@ -181,8 +186,7 @@ fn emit_original_objects_v40(
                 .count(),
             usize::from(explicit)
         );
-        if explicit {
-            let restart = slots.object_activation(root, 0, 4, 1, out)?.unwrap();
+        if let Some(restart) = restart {
             assert!(events.contains(&format!(
                 "ObjectLive {{ descriptor: {}int, slot: invocation_source_slot_{}_v36(), local: {local}int, activation: 1int }}",
                 restart.descriptor, restart.descriptor)));
