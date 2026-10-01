@@ -444,6 +444,14 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         Ok(self.abi.slice(ty, out)?.map(|class| class.metadata_bits))
     }
 
+    pub(super) fn descriptor_slice_class(
+        &self,
+        ty: fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<source_abi::SliceClass>> {
+        self.with_source_query_v42(out, |out| self.abi.slice(ty, out))
+    }
+
     pub(super) fn descriptor_parameter(
         &self,
         root: usize,

@@ -18,6 +18,9 @@ use fe2o3_pliron::ProductionSemanticSsaOwnerV1;
 
 const LIMIT: usize = 256 << 20;
 
+#[path = "original_semantic_mir_descriptor_loans_v51_tests.rs"]
+mod descriptor_loans_v51_tests;
+
 fn fixture(
     types: &mut Vec<Type>,
     functions: &mut Vec<Function>,

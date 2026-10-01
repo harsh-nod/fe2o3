@@ -1,5 +1,6 @@
 //! Dynamic witness obligations paired with exact owner-backed SSA locators.
 
+use super::super::source_bytes::descriptor_loans::Recipe as DescriptorRecipe;
 use super::*;
 use fe2o3_lower_mir_kernel::{
     ProductionSourceReferenceCarrierV38 as Carrier, ProductionSourceReferenceEndpointV38,
@@ -12,6 +13,7 @@ pub(super) enum LogicalBinding {
     Witness {
         source_type: u32,
     },
+    DescriptorReference(DescriptorRecipe),
     Reference {
         source_type: u32,
         origin: usize,
@@ -42,6 +44,11 @@ impl LogicalBinding {
         };
         match reference.carrier(out.budget)? {
             Carrier::MemoryPointer => return Ok(Self::Plain),
+            Carrier::DescriptorSlice => {
+                return Ok(Self::DescriptorReference(DescriptorRecipe::derive(
+                    slots, plan, root, endpoint, out,
+                )?));
+            }
             Carrier::StableScalar => (),
         }
         let origin_type = reference.origin_type(out.budget)?;

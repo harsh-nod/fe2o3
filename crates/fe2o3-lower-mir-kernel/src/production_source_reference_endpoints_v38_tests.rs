@@ -156,7 +156,7 @@ fn source_stable_referent_endpoint_replay_rejects_class_function_type_and_genera
             .rvalue_results
             .as_ref()
             .unwrap();
-        for fault in 0..5 {
+        for fault in 0..7 {
             let mut changed = OwnedSourceRvaluesV30 {
                 source: original.source,
                 ledger: original.ledger,
@@ -185,6 +185,8 @@ fn source_stable_referent_endpoint_replay_rejects_class_function_type_and_genera
                 2 => loan.origin_function = SemanticFunctionIdV1::from_index(u32::MAX),
                 3 => loan.origin_type = SemanticTypeIdV1::from_index(u32::MAX),
                 4 => loan.origin_generation ^= 1,
+                5 => loan.kind = SemanticBorrowKindV1::Mutable,
+                6 => loan.carrier = ProductionSourceReferenceCarrierV38::DescriptorSlice,
                 _ => unreachable!(),
             }
             assert_eq!(

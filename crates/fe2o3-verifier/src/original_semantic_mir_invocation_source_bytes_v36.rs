@@ -20,6 +20,8 @@ mod pointer_events;
 pub(super) use pointer_events::SOURCE_POINTERS_V36;
 #[path = "original_semantic_mir_source_aggregate_events_v42.rs"]
 mod aggregates;
+#[path = "original_semantic_mir_source_descriptor_loans_v51.rs"]
+pub(super) mod descriptor_loans;
 #[path = "original_semantic_mir_source_discriminants_v41.rs"]
 mod discriminants;
 #[path = "original_semantic_mir_source_enum_construction_v43.rs"]
@@ -205,6 +207,7 @@ pub(super) enum Event {
     Scalar,
     WitnessBorrow(witness_events::Borrow),
     WitnessTransfer(witness_transfers::Transfer),
+    Descriptor(descriptor_loans::DescriptorEvent),
     Pointer(pointer_events::Event),
     Discriminant(discriminants::Read),
     EnumConstruct(enum_construction::Construct),
@@ -466,10 +469,25 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                         assignment,
                         out,
                     )
+                    .map(|borrow| borrow.map(Event::WitnessBorrow))
                     .map_err(|error| {
                         statement_error(error, site, statement.kind(), context.types)
                     })?,
                     _ => None,
+                };
+                let borrowed = match (borrowed, statement.kind()) {
+                    (None, Statement::Assign(assignment)) => descriptor_loans::derive(
+                        &context,
+                        plan,
+                        row.function,
+                        block_ordinal,
+                        statement_ordinal,
+                        assignment,
+                        out,
+                    )
+                    .map_err(|error| statement_error(error, site, statement.kind(), context.types))?
+                    .map(Event::Descriptor),
+                    (other, _) => other,
                 };
                 let object_lifetime = match statement.kind() {
                     Statement::StorageLive(local) | Statement::StorageDead(local)
@@ -503,7 +521,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                 let event = match (borrowed, object_lifetime) {
                     (Some(_), Some(_)) => return Err(mismatch()),
                     (None, Some(event)) => event,
-                    (Some(borrow), None) => Event::WitnessBorrow(borrow),
+                    (Some(event), None) => event,
                     (None, None) => {
                         let logical = logical_enums::derive(
                             &context,
@@ -1089,6 +1107,16 @@ impl Context<'_, '_, '_> {
             if self.slots.witness_class(pointer.pointee(), out)?.is_some() {
                 return Err(unsupported());
             }
+            if pointer.kind() == PointerKind::Reference
+                && self
+                    .slots
+                    .descriptor_slice_class(pointer.pointee(), out)?
+                    .is_some()
+            {
+                return Err(Error::Statement(
+                    "original descriptor reference needs its logical loan operand",
+                ));
+            }
             let place = match operand {
                 Operand::Copy(place) | Operand::Move(place) => place,
                 Operand::Constant(_) => return Err(unsupported()),
@@ -1509,6 +1537,7 @@ fn emit_event(
         Event::ScalarOperands(operation) => operation.emit(out)?,
         Event::WitnessBorrow(borrow) => borrow.emit(out)?,
         Event::WitnessTransfer(transfer) => transfer.emit(out)?,
+        Event::Descriptor(event) => event.emit(out)?,
         Event::Scalar => {
             write!(out, "InvocationSourceByteEventV36::Scalar").map_err(|_| out.error())?
         }
@@ -1592,6 +1621,7 @@ fn headers() -> usize {
         + h::<Option<(u32, &'static str)>>()
         + pointer_events::headers()
         + witness_transfers::headers()
+        + descriptor_loans::headers()
         + slice_reads::headers()
         + discriminants::headers()
         + aggregates::headers()
@@ -1612,6 +1642,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_integer_casts_v43.vrs"),
     include_str!("original_semantic_mir_source_scalar_operands_v48.vrs"),
     include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
+    include_str!("original_semantic_mir_source_descriptor_loans_v51.vrs"),
     include_str!("original_semantic_mir_source_slice_reads_v41.vrs"),
     include_str!("original_semantic_mir_source_discriminants_v41.vrs"),
     include_str!("original_semantic_mir_source_enum_construction_v43.vrs"),
@@ -1637,6 +1668,9 @@ struct InvocationSourceObjectV40 {
 open spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
     byte_memory_well_formed_v30(source.machine.memory)
         && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len())
+        && (forall|local: int| source.logical.descriptor_references.contains_key(local) ==>
+            !source.objects.contains_key(local)
+                && matches!(source.machine.values[local], MemoryValueV30::Slice(_)))
         && (forall|local: int| source.logical.aggregates.contains_key(local) ==>
             source.machine.values[local] == MemoryValueV30::Undefined
                 && !source.objects.contains_key(local))
@@ -1724,6 +1758,7 @@ enum InvocationSourceByteEventV36 {
     WitnessBorrow { destination: int, origin: int, source_type: int, generation: int,
         instance: int, block: int, statement: int, parent: Option<InvocationSourceWitnessParentV43> },
     WitnessTransfer { destination: int, input: int, source_type: int, reference: bool, moved: bool },
+    Descriptor(InvocationSourceDescriptorEventV51),
     Pointer(InvocationSourcePointerEventV36),
     Transfer { destination: InvocationSourceByteDestinationV36,
         value: InvocationSourceByteValueV36, bits: int },
@@ -2060,6 +2095,8 @@ open spec fn invocation_source_byte_step_v36(
         InvocationSourceByteEventV36::WitnessTransfer { destination, input, source_type,
             reference, moved } => invocation_source_transfer_witness_v40(
                 source, destination, input, source_type, reference, moved),
+        InvocationSourceByteEventV36::Descriptor(event) =>
+            invocation_source_descriptor_step_v51(source, event),
         // A scalar marker is not a no-op. The exact statement's existing
         // primitive graph must run on the current values between byte events.
         InvocationSourceByteEventV36::Scalar => invocation_source_byte_refused_v36(source),

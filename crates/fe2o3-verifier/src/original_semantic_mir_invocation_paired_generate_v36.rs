@@ -129,6 +129,14 @@ fn binding(
     }
     match (row.source, row.logical) {
         (_, LogicalBinding::Plain) => (),
+        (SourceValue::Local(local), LogicalBinding::DescriptorReference(recipe)) => {
+            emit!(
+                out,
+                " && invocation_source_descriptor_reference_current_v51(source, {local}, "
+            );
+            recipe.emit(out)?;
+            emit!(out, ")");
+        }
         (SourceValue::Local(local), LogicalBinding::Witness { source_type }) => {
             emit!(
                 out,

@@ -1,11 +1,14 @@
 /// Interpretation obligation attached to one checked source-reference carrier.
-/// Neither variant grants allocation, dereference, or source-value authority.
+/// No variant grants allocation, dereference, or source-value authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionSourceReferenceCarrierV38 {
     /// An actual canonical pointer, with independently required memory semantics.
     MemoryPointer,
     /// A scalar payload of a shared stable referent, not an address or pointer.
     StableScalar,
+    /// An authenticated allocation descriptor loan carried by one actual Slice.
+    /// This is not a pointer to descriptor storage or a witness capability.
+    DescriptorSlice,
 }
 
 /// Borrowed original SingleLoan coordinates retained with the typed SSA archive.
@@ -16,6 +19,18 @@ pub struct ProductionSourceReferenceEndpointV38<'a, 'source> {
 }
 
 impl ProductionSourceReferenceEndpointV38<'_, '_> {
+    /// Returns the original checked loan kind, not rights inferred from its carrier.
+    pub fn borrow_kind(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<SemanticBorrowKindV1> {
+        self.owner.retain_query((|| {
+            self.owner.query(budget)?;
+            budget.charge_work(1)?;
+            Ok(self.loan.kind)
+        })())
+    }
+
     /// Returns the checked representation class without interpreting its value.
     pub fn carrier(
         &self,
@@ -53,7 +68,8 @@ impl ProductionSourceReferenceEndpointV38<'_, '_> {
     }
 
     /// Returns the original local at the root of the referent place. StableScalar
-    /// has no projections; MemoryPointer may still require a projected-place join.
+    /// and DescriptorSlice have no projections; MemoryPointer may still require
+    /// a projected-place join.
     pub fn origin_local(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,

@@ -1,5 +1,23 @@
 use super::*;
 
+#[test]
+fn source_descriptor_loan_archive_has_an_independent_nominal_field_layout() {
+    type Fields = (
+        usize,
+        SemanticBorrowKindV1,
+        SourceReferenceSiteV29,
+        usize,
+        ProductionCallInstanceIdV1,
+        SemanticLocalIdV1,
+        u32,
+        SemanticFunctionIdV1,
+        SemanticTypeIdV1,
+        ProductionSourceReferenceCarrierV38,
+    );
+    assert_eq!(size_of::<Fields>(), size_of::<SourceSsaLoanV36>());
+    assert_eq!(align_of::<Fields>(), align_of::<SourceSsaLoanV36>());
+}
+
 #[path = "production_source_ssa_results_v30_tests.rs"]
 mod ssa_tests;
 

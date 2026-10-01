@@ -14,13 +14,15 @@ struct InvocationSourceLogicalV38 {
     // Nominal original source types, never inferred from a scalar payload.
     witnesses: Map<int, int>,
     references: Map<int, InvocationSourceReferenceV38>,
+    descriptor_references: Map<int, InvocationSourceDescriptorReferenceV51>,
     aggregates: Map<int, InvocationSourceAggregateV42>,
     enums: Map<int, InvocationSourceEnumV47>,
 }
 
 open spec fn invocation_source_logical_initial_v38(count: nat) -> InvocationSourceLogicalV38 {
     InvocationSourceLogicalV38 { versions: Seq::new(count, |i: int| 0int),
-        witnesses: Map::empty(), references: Map::empty(), aggregates: Map::empty(), enums: Map::empty() }
+        witnesses: Map::empty(), references: Map::empty(), descriptor_references: Map::empty(),
+        aggregates: Map::empty(), enums: Map::empty() }
 }
 
 open spec fn invocation_source_logical_well_formed_v38(
@@ -29,6 +31,12 @@ open spec fn invocation_source_logical_well_formed_v38(
     logical.versions.len() == count
         && (forall|i: int| 0 <= i < count ==> logical.versions[i] >= 0)
         && logical.witnesses.dom().finite() && logical.references.dom().finite()
+        && logical.descriptor_references.dom().finite()
+        && (forall|i: int| logical.descriptor_references.contains_key(i) ==>
+            0 <= i < count
+                && invocation_source_descriptor_reference_shape_v51(logical.descriptor_references[i], count)
+                && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i)
+                && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i))
         && logical.aggregates.dom().finite()
         && logical.enums.dom().finite()
         && (forall|i: int| logical.enums.contains_key(i) ==>
@@ -58,6 +66,7 @@ open spec fn invocation_source_logical_write_v38(
         versions: logical.versions.update(local, logical.versions[local] + 1),
         witnesses: logical.witnesses.remove(local),
         references: logical.references.remove(local),
+        descriptor_references: logical.descriptor_references.remove(local),
         aggregates: logical.aggregates.remove(local),
         enums: logical.enums.remove(local),
     }
@@ -73,6 +82,8 @@ open spec fn invocation_source_logical_clear_v38(
             |i: int| logical.witnesses[i]),
         references: Map::new(|i: int| logical.references.contains_key(i) && !(begin <= i < end),
             |i: int| logical.references[i]),
+        descriptor_references: Map::new(|i: int| logical.descriptor_references.contains_key(i) && !(begin <= i < end),
+            |i: int| logical.descriptor_references[i]),
         aggregates: Map::new(|i: int| logical.aggregates.contains_key(i) && !(begin <= i < end),
             |i: int| logical.aggregates[i]),
         enums: Map::new(|i: int| logical.enums.contains_key(i) && !(begin <= i < end),

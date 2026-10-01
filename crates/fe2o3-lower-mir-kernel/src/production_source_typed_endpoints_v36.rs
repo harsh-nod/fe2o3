@@ -95,6 +95,7 @@ impl SourceSsaCarrierTypeV36 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceSsaLoanV36 {
     loan: usize,
+    kind: SemanticBorrowKindV1,
     site: SourceReferenceSiteV29,
     origin: usize,
     origin_instance: ProductionCallInstanceIdV1,
@@ -337,7 +338,8 @@ fn retain_source_carrier_leaf_v37(
                     SourceReferenceBindingOriginV29::SingleLoan(loan),
                     Some(
                         carrier_type @ (SourceSsaCarrierTypeV36::Pointer { .. }
-                        | SourceSsaCarrierTypeV36::Scalar(_)),
+                        | SourceSsaCarrierTypeV36::Scalar(_)
+                        | SourceSsaCarrierTypeV36::Slice { .. }),
                     ),
                 ) => {
                     references.check(budget)?;
@@ -372,9 +374,28 @@ fn retain_source_carrier_leaf_v37(
                         {
                             ProductionSourceReferenceCarrierV38::StableScalar
                         }
+                        SourceSsaCarrierTypeV36::Slice { .. }
+                            if matches!(
+                                record.representation,
+                                SourceReferenceRepresentationV29::ExistingAllocationBinding(_)
+                            ) && origin.projections.is_empty()
+                                && origin.ty == pointer.pointee()
+                                && matches!(
+                                    (record.kind, pointer.mutability()),
+                                    (
+                                        SemanticBorrowKindV1::Shared,
+                                        SemanticMutabilityV1::Immutable
+                                    ) | (
+                                        SemanticBorrowKindV1::Mutable,
+                                        SemanticMutabilityV1::Mutable
+                                    )
+                                ) =>
+                        {
+                            ProductionSourceReferenceCarrierV38::DescriptorSlice
+                        }
                         _ => return Ok(SourceSsaPhysicalV36::Unmodeled),
                     };
-                    budget.charge_work(3)?;
+                    budget.charge_work(4)?;
                     let origin_function = instances
                         .instance(origin.instance)
                         .ok_or_else(source_typed_endpoint_error_v36)?
@@ -384,6 +405,7 @@ fn retain_source_carrier_leaf_v37(
                         ty: carrier_type,
                         loan: Some(SourceSsaLoanV36 {
                             loan,
+                            kind: record.kind,
                             site: record.site,
                             origin: record.origin,
                             origin_instance: origin.instance,

@@ -130,6 +130,7 @@ open spec fn invocation_source_statement_effects_v36(
             | Some(InvocationSourceByteEventV36::AggregateReset { .. })
             | Some(InvocationSourceByteEventV36::WitnessBorrow { .. })
             | Some(InvocationSourceByteEventV36::WitnessTransfer { .. })
+            | Some(InvocationSourceByteEventV36::Descriptor(_))
             | Some(InvocationSourceByteEventV36::Pointer(_))
             | Some(InvocationSourceByteEventV36::Address { .. })
             | Some(InvocationSourceByteEventV36::Deinitialize(_))

@@ -12,7 +12,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
 use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct SliceClass {
+pub(in super::super) struct SliceClass {
     pub metadata_bits: u32,
     pub element: ScalarType,
     pub readable: bool,
