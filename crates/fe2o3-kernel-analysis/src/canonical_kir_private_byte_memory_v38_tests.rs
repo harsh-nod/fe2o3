@@ -1117,3 +1117,162 @@ fn private_bytes_obligation_visitor_is_complete_unique_and_stops_on_refusal() {
         .try_visit_obligations(|_| -> Result<(), ()> { panic!("empty fact") })
         .unwrap();
 }
+
+#[test]
+fn private_bytes_packed_field_formation_preserves_weaker_alignment_until_access() {
+    let mut aligned_read = read(41, 11);
+    let OperationKind::Storage(Storage::ReadValue { access, .. }) = &mut aligned_read.kind else {
+        unreachable!();
+    };
+    access.alignment = 4;
+    let fixture = module(
+        vec![
+            Layout {
+                alignment: 4,
+                ..scalar()
+            },
+            Layout {
+                size: 5,
+                alignment: 1,
+                kind: Kind::Record(
+                    vec![Field {
+                        offset: 1,
+                        layout: LayoutId(0),
+                    }]
+                    .into_boxed_slice(),
+                ),
+            },
+        ],
+        vec![block(
+            100,
+            vec![
+                allocation(10, 1, 1),
+                project(11, 10, 0, Projection::Field(0)),
+                write(11),
+                read(40, 11),
+                aligned_read,
+            ],
+            ret(),
+        )],
+    );
+    with_inventory(&fixture, |inventory, floor| {
+        probe(inventory, floor, WORK, STORAGE, BOUNDARIES, |proof| {
+            let projection = proof.operation(1).unwrap();
+            assert!(projection.is_proven());
+            let address = proof
+                .address(inventory.operations()[1].results.start)
+                .unwrap();
+            assert_eq!(address.alignment(), 1);
+            assert_eq!(address.range().byte_start(), 1);
+            assert_eq!(address.range().byte_length(), 4);
+            assert!(proof.operation(2).unwrap().is_proven());
+            assert_eq!(
+                proof.operation(3).unwrap().payload_initialized(),
+                Some(true)
+            );
+            assert!(proof.operation(3).unwrap().is_proven());
+            assert!(proof.operation(4).unwrap().requires(Obligation::Alignment));
+            assert!(!proof.operation(4).unwrap().is_proven());
+            assert_eq!(proof.operation(4).unwrap().payload_initialized(), None);
+        })
+        .0
+        .unwrap();
+    });
+}
+
+fn partition_chain(blocks: usize, elements: usize) -> Module {
+    assert!(blocks >= 2 && elements > 0);
+    let mut entry = vec![allocation(10, 1, 1)];
+    let mut reads = Vec::new();
+    for element in 0..elements {
+        let index = 3_000 + element as u32;
+        let address = 5_000 + element as u32;
+        entry.push(constant(index, element as u64));
+        entry.push(project(
+            address,
+            10,
+            0,
+            Projection::ArrayIndex(ValueId(index)),
+        ));
+        if element % 2 == 0 {
+            entry.push(write(address));
+        }
+        reads.push(read(9_000 + element as u32, address));
+    }
+    let mut body = vec![block(100, entry, branch(101))];
+    for index in 1..blocks - 1 {
+        body.push(block(
+            100 + index as u32,
+            vec![],
+            branch(101 + index as u32),
+        ));
+    }
+    body.push(block(99 + blocks as u32, reads, ret()));
+    module(
+        vec![
+            scalar(),
+            Layout {
+                size: 4 * elements as u64,
+                alignment: 1,
+                kind: Kind::Array {
+                    element: LayoutId(0),
+                    length: elements as u64,
+                    stride: 4,
+                },
+            },
+        ],
+        body,
+    )
+}
+
+#[test]
+fn private_bytes_cfg_and_partition_dimensions_have_independent_product_work_census() {
+    let blocks = [64usize, 128, 256];
+    let elements = [16usize, 64, 256];
+    let mut work = [[0usize; 3]; 3];
+    for (block_index, block_count) in blocks.into_iter().enumerate() {
+        for (element_index, element_count) in elements.into_iter().enumerate() {
+            let fixture = partition_chain(block_count, element_count);
+            with_inventory(&fixture, |inventory, floor| {
+                let check = |proof: &Analysis<'_, '_>| {
+                    let first_read = 1 + 2 * element_count + element_count.div_ceil(2);
+                    for element in 0..element_count {
+                        let fact = proof.operation(first_read + element).unwrap();
+                        let initialized = element % 2 == 0;
+                        assert_eq!(fact.payload_initialized(), Some(initialized));
+                        assert_eq!(fact.requires(Obligation::Initialization), !initialized);
+                        assert!(!fact.requires(Obligation::Reachability));
+                    }
+                };
+                let (result, used_work, peak) =
+                    probe(inventory, floor, WORK, STORAGE, BOUNDARIES, check);
+                result.unwrap();
+                work[block_index][element_index] = used_work;
+                // One sentinel boundary is retained with the element partitions.
+                assert!(peak - floor >= block_count * (element_count + 1));
+                if block_index == 2 && element_index == 2 {
+                    probe(inventory, floor, used_work, peak, BOUNDARIES, check)
+                        .0
+                        .unwrap();
+                    assert!(matches!(
+                        probe(inventory, floor, used_work - 1, peak, BOUNDARIES, |_| {}).0,
+                        Err(Error::Resource(Resource::Work(_)))
+                    ));
+                    assert!(matches!(
+                        probe(inventory, floor, used_work, peak - 1, BOUNDARIES, |_| {}).0,
+                        Err(Error::Resource(Resource::Storage(_)))
+                    ));
+                }
+            });
+        }
+    }
+    for block in 1..blocks.len() {
+        for element in 1..elements.len() {
+            // Per extra block/partition: matrix fill (1), two state copies (2),
+            // and one edge meet (4). Geometry and queue-only terms cancel.
+            let expected = 7 * (blocks[block] - blocks[0]) * (elements[element] - elements[0]);
+            let actual = work[block][element] + work[0][0] - work[block][0] - work[0][element];
+            assert_eq!(actual, expected);
+        }
+    }
+}

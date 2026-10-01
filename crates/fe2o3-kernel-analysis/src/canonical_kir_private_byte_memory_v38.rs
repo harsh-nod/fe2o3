@@ -243,6 +243,9 @@ impl CanonicalKirPrivateByteStorageV38 {
 
 /// Analyzes exact V18 private byte geometry and initialization. Unknown outcomes
 /// remain explicit per-operation obligations, not successful initialized reads.
+/// Geometry is sparse in byte boundaries, but each function's CFG fixed point
+/// retains a paid block-by-partition matrix. The work/storage ledger bounds that
+/// product independently of the structural `max_boundaries` ceiling.
 /// The existing scoped ledger contract drops scratch before refund and returns
 /// an unreserved receipt for the retained result. No caller-supplied graph or
 /// layout table is accepted, and legacy scalar consumers are unchanged.
