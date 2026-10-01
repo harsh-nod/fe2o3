@@ -41,8 +41,9 @@ Both public main branches were independently read back at
 That publication fixes target-scoped dependency policy, the missing codegen test
 shard assignment, and workspace formatting. All five codegen shards passed in
 the [CI run](https://github.com/harsh-nod/fe2o3/actions/runs/36826853167);
-generic-core was still running at the latest status check. This is not a
-passing release gate or publication of the local compiler candidate.
+generic-core subsequently failed, so the overall run failed. Diagnosis of that
+remaining job is pending. This is not a passing release gate or publication of
+the local compiler candidate.
 
 ## Compiler Evidence
 
