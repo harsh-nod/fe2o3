@@ -10,7 +10,6 @@ use fe2o3_kernel_descriptor::{
     MIXED_DESCRIPTOR_READER_STORAGE_V53, MixedDescriptorErrorV53, MixedDescriptorTableV53,
     decode_mixed_descriptor_v53, encode_mixed_descriptor_v53, encoded_mixed_descriptor_v53_len,
 };
-use sha2::{Digest, Sha256};
 use std::mem::size_of_val;
 
 fn target_identity(digest: &[u8; 32], length: u64) -> Result<TargetLineageIdentityV3, Error> {
@@ -163,69 +162,40 @@ impl ExecutedProtectedMixedPublicationV29<'_, '_, '_, '_, '_> {
         let features = layout
             .active_features()
             .ok_or_else(|| mismatch("authenticated target features"))?;
-        let target_name = bindings.rustc_target.device_target().to_string();
-        let row_size = size_of::<MultiRootTargetWorkgroupInputV2<'_>>();
-        let count = owner.module().kernels.len();
-        budget.reserve_storage(count.checked_mul(row_size).ok_or(Resource::Arithmetic)?)?;
-        let mut workgroups = Vec::new();
-        workgroups
-            .try_reserve_exact(count)
-            .map_err(|_| Resource::Allocation)?;
-        budget.reserve_storage(
-            workgroups
-                .capacity()
-                .checked_sub(count)
-                .and_then(|n| n.checked_mul(row_size))
-                .ok_or(Resource::Accounting)?,
-        )?;
-        for kernel in &owner.module().kernels {
-            budget.charge_work(4)?;
-            let group = kernel
-                .workgroup_size
-                .ok_or_else(|| mismatch("exact mixed workgroup"))?;
-            workgroups.push(MultiRootTargetWorkgroupInputV2 {
-                kernel: kernel.id.as_str(),
-                workgroup: [group.x, group.y, group.z],
-            });
+        let profile = fe2o3_amd_target::ProductionAmdTargetProfileV1::from_cpu(cpu)
+            .ok_or_else(|| mismatch("exact mixed target CPU profile"))?;
+        if profile.device_target() != bindings.rustc_target.device_target().to_string()
+            || profile.rustc_target() != layout.llvm_target()
+            || profile.rustc_features() != features
+        {
+            return Err(mismatch("authenticated mixed target profile"));
         }
-        let target_transcript =
-            MultiRootTargetBindingTranscriptV2::new(MultiRootTargetBindingInputsV2 {
-                protected_rustc_invocation: target_identity(
-                    invocation_digest.as_bytes(),
-                    invocation_bytes.len() as u64,
-                )?,
-                semantic_mir: target_identity(
-                    semantic.identity().sha256(),
-                    semantic.identity().byte_len(),
-                )?,
-                target_neutral_kir: target_identity(
-                    owner.identity().digest(),
-                    owner.canonical_bytes().len() as u64,
-                )?,
-                target_bound_kir: target_identity(
-                    owner.identity().digest(),
-                    owner.canonical_bytes().len() as u64,
-                )?,
-                configured_target: &target_name,
-                rustc_llvm_target: layout.llvm_target(),
-                target_cpu: cpu,
-                target_features: features,
-                roster_identity: Sha256::digest(descriptor).into(),
-                code_object_version: 6,
-                wave_width_bits: 64,
-                workgroups: &workgroups,
+        // V18 selection preserves the final graph. The historical V2/V3
+        // transformation schemas require a different graph and are not aliases.
+        let subject = fe2o3_verifier::MixedTargetSelectionSubjectV53 {
+            owner,
+            invocation: target_identity(
+                invocation_digest.as_bytes(),
+                invocation_bytes.len() as u64,
+            )?,
+            semantic_mir: semantic,
+            descriptor,
+            profile,
+        };
+        let target =
+            fe2o3_verifier::with_mixed_target_selection_v53(&subject, budget, |wire, _| {
+                InertTargetBindingReceiptV3::from_canonical_preimage(wire).map_err(|_| {
+                    fe2o3_verifier::MixedTargetSelectionValidationErrorV53::Binding(
+                        "mixed target receipt encoding",
+                    )
+                })
             })
-            .map_err(|_| mismatch("exact mixed target transcript"))?;
-        let retained = workgroups
-            .capacity()
-            .checked_mul(row_size)
-            .ok_or(Resource::Arithmetic)?;
-        drop(workgroups);
-        budget.release_storage(retained)?;
-        let target = InertTargetBindingReceiptV3::from_canonical_preimage(
-            target_transcript.canonical_bytes(),
-        )
-        .map_err(|_| mismatch("mixed target transcript encoding"))?;
+            .map_err(|error| match error {
+                fe2o3_verifier::MixedTargetSelectionValidationErrorV53::Resource(e) => {
+                    Error::Resource(e)
+                }
+                _ => mismatch("exact mixed target selection"),
+            })?;
         let layout_transcript = DataLayoutTranscriptV3::new(DataLayoutTranscriptInputsV3 {
             semantic_mir: target_identity(
                 semantic.identity().sha256(),
