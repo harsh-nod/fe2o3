@@ -12,7 +12,7 @@ use fe2o3_kernel_ir::FormalIndexWidth;
 #[path = "mixed_optimizer_typed_prefix_licm_v49.rs"]
 mod composition;
 #[path = "mixed_optimizer_typed_prefix_models_v49.rs"]
-mod models;
+pub(super) mod models;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct SegmentV49 {
