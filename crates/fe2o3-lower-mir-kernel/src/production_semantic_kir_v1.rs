@@ -79,6 +79,7 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+include!("production_helper_effect_diagnostic_v1.rs");
 include!("production_bf16_call_parameters_v1.rs");
 include!("production_bf16_call_capture_v1.rs");
 include!("production_bf16_call_full_wave_v1.rs");
@@ -876,6 +877,8 @@ pub enum ProductionSemanticKirErrorV1 {
         function: u32,
         /// Helper declaration provenance, not a caller or effect-operation span.
         declaration_source: Box<SemanticSourceProvenanceV1>,
+        /// Fixed categories from the actual already-computed decision, not admission.
+        effect_diagnostic: ProductionHelperEffectDiagnosticV1,
     },
     /// A later stage does not yet consume the checked source-local helper relation.
     LocalHelperSourceConsumerUnavailable {
@@ -1048,12 +1051,14 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
             Self::HelperEffectsUnavailable {
                 function,
                 declaration_source,
+                effect_diagnostic,
             } => {
                 write!(
                     formatter,
                     "semantic-to-Kernel-IR lowering rejected function {function}: reachable deterministic scalar helper is not interprocedurally complete and pure\n  = helper declaration at ",
                 )?;
                 fmt_semantic_source_location_v1(formatter, **declaration_source)?;
+                write!(formatter, "\n  = {effect_diagnostic}")?;
                 formatter.write_str("\n  = lowering stopped before target IR or artifact emission")
             }
             Self::LocalHelperSourceConsumerUnavailable { consumer } => write!(
@@ -12500,10 +12505,8 @@ fn lower_single_root_module(
             let effects = analyze_interprocedural_effects_v1(&module)
                 .map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
             for plan in plans.iter().skip(1) {
-                if !effects
-                    .function(&plan.kernel_ir_function)
-                    .is_some_and(|decision| decision.is_complete_and_pure())
-                {
+                let decision = effects.function(&plan.kernel_ir_function);
+                if !decision.is_some_and(|decision| decision.is_complete_and_pure()) {
                     // This private pending category is not an effect summary.
                     // The only producer holds the live checked BF16 relation,
                     // and cannot return an owner until exact nominal replay.
@@ -12544,6 +12547,9 @@ fn lower_single_root_module(
                     return Err(ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
                         function: plan.semantic_function.index(),
                         declaration_source: Box::new(declaration_source),
+                        effect_diagnostic: ProductionHelperEffectDiagnosticV1::from_decision(
+                            decision,
+                        ),
                     });
                 }
             }
