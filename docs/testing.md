@@ -68,6 +68,22 @@ phase separately as well as retaining the existing per-step deadlines; do not
 apply the per-step timeout as a deadline for an entire multi-step phase. The
 existing opt-in runtime/export subtarget lifecycle remains unchanged.
 
+The required `source-simulation` phase also selects six ignored production
+source-compiler controls explicitly: checked unsigned addition, core branch
+hints, and shared-slice `get`, with genuine-source and source-safety refusal
+parents for each family. These use the existing pinned nightly `rust-src`
+fixture and locked offline dependency graph, and run serially with
+`--ignored --exact --test-threads=1`. Cargo/libtest JSON must prove exactly one
+named test passed; an empty selection is a failure. Raw JSON receipts remain in
+private directories under external `TMPDIR` (or `/tmp` for a source-internal
+temporary directory), including on failure, and are mirrored into the existing
+CI step log. Each retained and logged JSON prefix is capped at 10 MiB;
+overflow fails the step without restricting compiler artifacts. They export real
+source and simulate on the CPU or check rejection diagnostics; they do not
+require ROCm or a GPU and do not establish native qualification. Default codegen
+shards still run separately;
+their non-ignored selection does not replace these required controls.
+
 The target-independent generic SSA planner has a focused executable lit-style
 corpus:
 

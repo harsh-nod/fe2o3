@@ -47,6 +47,24 @@ run_generic_core_source_simulation() {
   run_step tutorial-cpu-reference-tests \
     python3 -B scripts/tests/tutorial_cpu_reference.py
   run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
+  run_step source-core-branch-hints \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_checked_add_tests::genuine_core_branch_hints_preserve_boolean_values
+  run_step source-core-checked-add \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_checked_add_tests::genuine_unsigned_checked_add_preserves_option_boundaries
+  run_step source-core-slice-get \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_slice_get_tests::genuine_core_shared_slice_get_preserves_boundaries
+  run_step source-core-branch-hint-refusals \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_checked_add_tests::branch_hint_lookalikes_do_not_bypass_source_safety
+  run_step source-core-checked-add-refusals \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_checked_add_tests::checked_add_lookalikes_do_not_bypass_source_safety
+  run_step source-core-slice-get-refusals \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_slice_get_tests::slice_get_lookalikes_and_other_owners_do_not_bypass_source_safety
   run_step kir-sim-capability-matrix \
     cargo test --locked -p fe2o3-kir-sim --test capability_matrix
   run_step kir-sim-scalar-differential \
