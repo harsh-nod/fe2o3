@@ -402,6 +402,18 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
     fn emit_checked(&self, namespace: usize, out: &mut Writer<'_, '_>) -> Result<()> {
         self.check(out)?;
         let function = &self.inventory.functions()[self.function.0 as usize];
+        emit!(
+            out,
+            "open spec fn byte_inputs_{namespace}_v55(s: MemoryStateV30, little_endian: bool) -> bool {{ s.values.len() == {} && byte_state_memory_well_formed_v30(s) && ",
+            self.inventory.definitions().len()
+        );
+        self.interpretation.emit_state_predicate(
+            "s.memory",
+            "s.values",
+            Some("little_endian"),
+            out,
+        )?;
+        emit!(out, " }}\n");
         for plan in &self.operations {
             out.budget.charge_work(1)?;
             if let ByteOperationV30::Scalar(scalar) = plan {
@@ -458,19 +470,16 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 .ok_or(Resource::Arithmetic)?;
             emit!(
                 out,
-                " if m.state.pc == {block} && m.next_operation == {operation} && m.observations.len() == {prefix} {{ let result = byte_operation_{namespace}_{operation}_v30(m.state, little_endian); MemoryMicroResultV30 {{ next: MemoryMicroStateV30 {{ state: result.state, observations: m.observations.push(result.observation), next_operation: "
+                " if m.state.pc == {block} && m.next_operation == {operation} && m.observations.len() == {prefix} {{ byte_micro_result_v55(m, byte_operation_{namespace}_{operation}_v30(m.state, little_endian), "
             );
             if next == self.inventory.blocks()[block].operations.end {
                 emit!(out, "-1");
             } else {
                 emit!(out, "{next}");
             }
-            emit!(out, " }}, observation: result.observation }} }} else\n");
+            emit!(out, ") }} else\n");
         }
-        emit!(
-            out,
-            " {{ let state = MemoryStateV30 {{ valid: false, ..m.state }}; let observation = MemoryOperationObservationV30 {{ operation: MemorySourceOperationV30 {{ function: -1, block: -1, operation: -1 }}, before: m.state, after: state, valid_before: m.state.valid, valid_after: false, effect: MemoryOperationEffectV30::Refused }}; MemoryMicroResultV30 {{ next: MemoryMicroStateV30 {{ state, observations: m.observations.push(observation), next_operation: -1 }}, observation }} }}\n}}\n"
-        );
+        emit!(out, " {{ byte_micro_refused_v55(m) }}\n}}\n");
         emit!(
             out,
             "open spec fn byte_micro_finish_{namespace}_v30(m: MemoryMicroStateV30) -> MemoryBlockResultV30 {{\n"
@@ -520,24 +529,14 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         let row = &self.inventory.operations()[operation];
         let coordinate = row.coordinate;
         let block = block_index(self.inventory, coordinate.block)?;
-        let definitions = self.inventory.definitions().len();
         emit!(
             out,
-            "open spec fn byte_operation_{namespace}_{operation}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n if s.values.len() != {definitions} || s.pc != {block} || !byte_state_memory_well_formed_v30(s) || !",
+            "open spec fn byte_operation_{namespace}_{operation}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n if s.pc != {block} || !byte_inputs_{namespace}_v55(s, little_endian)",
             coordinate.block.function.0,
             coordinate.block.block,
             coordinate.operation
         );
-        self.interpretation.emit_state_predicate(
-            "s.memory",
-            "s.values",
-            Some("little_endian"),
-            out,
-        )?;
-        emit!(
-            out,
-            " {{ let state = MemoryStateV30 {{ valid: false, ..s }}; MemoryOperationResultV30 {{ state, observation: MemoryOperationObservationV30 {{ operation, before: s, after: state, valid_before: s.valid, valid_after: false, effect: MemoryOperationEffectV30::Refused }} }} }} else {{\n"
-        );
+        emit!(out, " {{ byte_refused_v55(s, operation) }} else {{\n");
         let before = ByteMemoryStateNamesV30 {
             values: "s.values",
             memory: "s.memory",
@@ -682,7 +681,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         };
         emit!(
             out,
-            ";\n let state = MemoryStateV30 {{ pc: {pc}, values, memory, generations, frames, valid }}; MemoryOperationResultV30 {{ state, observation: MemoryOperationObservationV30 {{ operation, before: s, after: state, valid_before: s.valid, valid_after: valid, effect }} }}\n }}\n}}\n"
+            ";\n let state = MemoryStateV30 {{ pc: {pc}, values, memory, generations, frames, valid }}; byte_result_v55(s, state, operation, effect)\n }}\n}}\n"
         );
         Ok(())
     }

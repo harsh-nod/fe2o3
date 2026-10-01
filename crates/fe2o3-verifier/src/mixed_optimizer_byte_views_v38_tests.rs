@@ -221,7 +221,12 @@ fn byte_view_actual_dispatch_refuses_supplied_contract_registries() {
         .0
         .unwrap();
         assert_eq!(
-            text.matches("!byte_native_view_inputs_v38(s.memory, s.values)")
+            text.matches("&& byte_native_view_inputs_v38(s.memory, s.values)")
+                .count(),
+            1
+        );
+        assert_eq!(
+            text.matches("|| !byte_inputs_38_v55(s, little_endian)")
                 .count(),
             3
         );
@@ -343,7 +348,12 @@ fn byte_view_classified_context_uses_one_closed_registry_at_every_actual_entranc
                 1
             );
             assert_eq!(
-                text.matches("!byte_target_view_contracts_match_73_v38(s.memory, little_endian)")
+                text.matches("&& byte_target_view_contracts_match_73_v38(s.memory, little_endian)")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                text.matches("|| !byte_inputs_38_v55(s, little_endian)")
                     .count(),
                 3
             );
@@ -500,24 +510,20 @@ fn byte_actual_observations_capture_exact_step_states_including_refusal() {
         .0
         .unwrap();
         assert_eq!(
-            text.matches("before: s, after: state, valid_before: s.valid")
-                .count(),
-            6
-        );
-        assert_eq!(
-            text.matches("before: m.state, after: state, valid_before: m.state.valid")
-                .count(),
-            1
-        );
-        assert_eq!(text.matches("let state = MemoryStateV30 { pc: s.pc, values, memory, generations, frames, valid }").count(), 3);
-        assert_eq!(
-            text.matches("let state = MemoryStateV30 { valid: false, ..s }")
+            text.matches("byte_result_v55(s, state, operation, effect)")
                 .count(),
             3
         );
+        assert_eq!(text.matches("byte_micro_refused_v55(m)").count(), 1);
+        assert_eq!(text.matches("let state = MemoryStateV30 { pc: s.pc, values, memory, generations, frames, valid }").count(), 3);
+        assert_eq!(text.matches("byte_refused_v55(s, operation)").count(), 3);
+        let shared = include_str!("mixed_optimizer_byte_results_v55.vrs");
+        assert!(shared.contains("valid_before: before.valid, valid_after: after.valid, effect"));
+        assert!(shared.contains("before, MemoryStateV30 { valid: false, ..before }"));
+        assert!(shared.contains("valid_before: before.state.valid, valid_after: false"));
         assert!(
-            text.contains(
-                "let state = MemoryStateV30 { valid: false, ..m.state }; let observation"
+            shared.contains(
+                "observations: before.observations.push(observation), next_operation: -1"
             )
         );
         assert!(

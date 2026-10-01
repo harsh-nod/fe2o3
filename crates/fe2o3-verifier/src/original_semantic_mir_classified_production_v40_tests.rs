@@ -59,6 +59,20 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
                 assert!(initial.find(&gate).unwrap() < initial.find(installed).unwrap());
                 assert!(initial.contains("valid: admitted"));
                 assert!(text.contains(&format!("open spec fn byte_block_step_{root}_v30(")));
+                let inputs = text
+                    .split(&format!("open spec fn byte_inputs_{root}_v55("))
+                    .nth(1)
+                    .unwrap()
+                    .split("open spec fn")
+                    .next()
+                    .unwrap();
+                assert!(inputs.contains("s.values.len() == "));
+                assert!(inputs.contains("byte_state_memory_well_formed_v30(s)"));
+                assert!(
+                    inputs.contains(
+                        "byte_target_view_contracts_match_1_v38(s.memory, little_endian)"
+                    )
+                );
             }
             let operations: Vec<_> = text
                 .split("open spec fn byte_operation_")
@@ -67,11 +81,20 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
                 .collect();
             assert_eq!(operations.len(), census[4]);
             for operation in operations {
-                let gate = "|| !byte_target_view_contracts_match_1_v38(s.memory, little_endian)";
-                let refused = "effect: MemoryOperationEffectV30::Refused";
+                let gate = "|| !byte_inputs_";
+                let refused = "byte_refused_v55(s, operation)";
                 assert!(operation.find(gate).unwrap() < operation.find(refused).unwrap());
-                assert!(operation.contains("let state = MemoryStateV30 { valid: false, ..s }"));
+                assert!(operation.contains("_v55(s, little_endian)"));
             }
+            let refused = text
+                .split("open spec fn byte_refused_v55(")
+                .nth(1)
+                .unwrap()
+                .split("open spec fn")
+                .next()
+                .unwrap();
+            assert!(refused.contains("MemoryStateV30 { valid: false, ..before }"));
+            assert!(refused.contains("operation, MemoryOperationEffectV30::Refused"));
             let controls: Vec<_> = text
                 .split("open spec fn byte_control_")
                 .skip(1)

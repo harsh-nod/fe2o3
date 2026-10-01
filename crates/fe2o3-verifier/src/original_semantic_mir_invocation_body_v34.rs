@@ -193,8 +193,12 @@ fn generate_refinement_inner_v49(
     contracts.emit(TARGET_TAG_NAMESPACE_V40, out)?;
     tag_pairs.emit(SOURCE_TAG_NAMESPACE_V40, TARGET_TAG_NAMESPACE_V40, out)?;
     slots.emit(out)?;
-    byte_source.emit(out)?;
-    byte_bindings.emit(out)?;
+    byte_source
+        .emit(out)
+        .map_err(|error| out.source_section_error(error, "original source byte program"))?;
+    byte_bindings
+        .emit(out)
+        .map_err(|error| out.source_section_error(error, "original source byte bindings"))?;
     let index_bytes = match width {
         fe2o3_kernel_ir::FormalIndexWidth::Bits32 => 4,
         fe2o3_kernel_ir::FormalIndexWidth::Bits64 => 8,
@@ -206,15 +210,20 @@ fn generate_refinement_inner_v49(
         let fe2o3_kernel_ir::ExplicitLaunchExtent::Exact { rank, extents } = launch else {
             return Err(mismatch());
         };
-        function.emit(root, out)?;
+        function.emit(root, out).map_err(|error| {
+            out.source_section_error(error, "original canonical byte functions")
+        })?;
         write!(out, "open spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ ({rank}, seq![{}, {}, {}]) }}\n", extents[0], extents[1], extents[2]).map_err(|_| out.error())?;
         emit_execution_v37(relation, root, out)?;
         write!(out, "open spec fn invocation_source_initial_runtime_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationSourceByteStateV36 {{ invocation_source_byte_initial_{root}_v36(arguments, external, execution, invocation_runtime_little_endian_v36()) }}\nopen spec fn invocation_source_block_runtime_{root}_v36(source: InvocationSourceByteStateV36) -> InvocationSourceBlockResultV36 {{ invocation_source_byte_block_{root}_v36(source, invocation_runtime_little_endian_v36()) }}\nopen spec fn invocation_actual_micro_runtime_{root}_v36(cursor: MemoryMicroStateV30) -> MemoryMicroResultV30 {{ byte_micro_step_{root}_v30(cursor, invocation_runtime_little_endian_v36()) }}\n").map_err(|_| out.error())?;
     }
-    paired.emit(out)?;
+    paired.emit(out).map_err(|error| {
+        out.source_section_error(error, "original paired invocation obligations")
+    })?;
     if let Some(tail) = tail {
         byte_bindings.emit_carrier_extensionality_v48(out)?;
-        tail.emit(relation, &slots, &physical, &contracts, width, out)?;
+        tail.emit(relation, &slots, &physical, &contracts, width, out)
+            .map_err(|error| out.source_section_error(error, "typed optimizer tail"))?;
     }
     write!(out, "}}\n").map_err(|_| out.error())?;
     drop(byte_actual);

@@ -85,9 +85,15 @@ fn byte_trap_dispatch_preserves_exact_terminal_observation_and_machine_data() {
             }
             assert!(text.contains("if trapped { MemoryBlockResultV30 { state: done, observations, returned: Seq::empty() } }"));
             assert!(text.contains("let trapped = false;"));
-            assert!(text.contains(
-                "before: s, after: state, valid_before: s.valid, valid_after: valid, effect"
-            ));
+            assert_eq!(
+                text.matches("byte_result_v55(s, state, operation, effect)")
+                    .count(),
+                3
+            );
+            assert!(
+                include_str!("mixed_optimizer_byte_results_v55.vrs")
+                    .contains("valid_before: before.valid, valid_after: after.valid, effect")
+            );
             assert!(!text.contains("byte_pop_frame_v30("));
             assert!(!text.contains("byte_end_lifetime_v30("));
         });
