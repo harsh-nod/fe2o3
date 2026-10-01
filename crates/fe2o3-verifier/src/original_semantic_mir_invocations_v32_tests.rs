@@ -162,7 +162,7 @@ fn prepared_root_variant(
         .unwrap();
         let mut locals = helper.locals().to_vec();
         locals[0] = SemanticLocalDeclV1::new(
-            SemanticLocalIdentityV1::from_sha256([52; 32]),
+            helper.locals()[0].identity(),
             unit,
             SemanticLocalRoleV1::Return,
             source,
@@ -230,7 +230,7 @@ fn prepared_root_variant(
         .unwrap();
         let mut locals = helper.locals().to_vec();
         locals[0] = SemanticLocalDeclV1::new(
-            SemanticLocalIdentityV1::from_sha256([tag + 2; 32]),
+            helper.locals()[0].identity(),
             unit,
             SemanticLocalRoleV1::Return,
             source,

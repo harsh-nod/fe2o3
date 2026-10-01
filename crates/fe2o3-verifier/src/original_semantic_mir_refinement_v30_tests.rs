@@ -132,7 +132,7 @@ fn prepared_roster(
         .unwrap();
         let mut locals = template.locals().to_vec();
         locals[0] = SemanticLocalDeclV1::new(
-            SemanticLocalIdentityV1::from_sha256([tag + 2; 32]),
+            template.locals()[0].identity(),
             unit,
             SemanticLocalRoleV1::Return,
             provenance,
