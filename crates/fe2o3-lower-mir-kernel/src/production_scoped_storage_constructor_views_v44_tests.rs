@@ -55,6 +55,86 @@ fn observe_storage_constructor_views_v44(
     let floor = budget.storage();
     let fault = STORAGE_CONSTRUCTOR_FAULT_V44.get();
     with_canonical_call_scratch_v1(budget, |budget| {
+        let mut scratch = 0;
+        let parts = ScopedDeferredScalarViewV29::for_instance(
+            instances,
+            anchors.subject.instance,
+            lowered,
+            budget,
+        )?;
+        let index = call_splice_index_with_deferred_parts_v29(
+            &lowered.function,
+            Some(&parts),
+            budget,
+            &mut scratch,
+        )
+        .map_err(source_address_call_error_v29)?;
+        let mut construction_views = 0;
+        let mut field_views = 0;
+        for anchor in &anchors.rows {
+            let ScopedMemoryAnchorKindV29::Object(_) = anchor.kind else {
+                continue;
+            };
+            let payload = anchors.object_payload(anchor, budget)?;
+            let (
+                ScopedObjectRoleV29::Project { source, projected },
+                ScopedObjectOperationV29::Project { step, .. },
+            ) = (payload.role, payload.operation)
+            else {
+                continue;
+            };
+            match step {
+                ScopedObjectProjectionV29::VariantForWrite { .. } => construction_views += 1,
+                ScopedObjectProjectionV29::Field(_) if source.path.count == 1 => field_views += 1,
+                _ => continue,
+            }
+            let operation = &lowered
+                .function
+                .body
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .find(|block| block.id == anchor.block)
+                .unwrap()
+                .operations[anchor.position];
+            let (inputs, result) =
+                scoped_storage_operand_types_v29(plan, anchors, payload, operation, &index, budget)
+                    .map_err(source_address_call_error_v29)?;
+            let Some(ScopedStorageTypeV29::Pointer(schema, space, access)) = result else {
+                panic!("constructor projection must retain its exact pointer result")
+            };
+            assert_eq!(schema, projected.projected_schema);
+            assert_eq!(access, AccessMode::WriteOnly);
+            assert!(matches!(
+                inputs[0],
+                Some((_, ScopedStorageTypeV29::Pointer(_, _, base_access)))
+                    if base_access == if matches!(step, ScopedObjectProjectionV29::VariantForWrite { .. }) {
+                        AccessMode::ReadWrite
+                    } else {
+                        AccessMode::WriteOnly
+                    }
+            ));
+            for changed_access in [AccessMode::ReadOnly, AccessMode::ReadWrite] {
+                let mut results = call_splice_vec_v1(1, budget, &mut scratch)
+                    .map_err(source_address_call_error_v29)?;
+                call_splice_charge_storage_v1(std::mem::size_of::<Type>(), budget, &mut scratch)
+                    .map_err(source_address_call_error_v29)?;
+                results.push(ValueDef::new(
+                    operation.results[0].id,
+                    Type::pointer(Type::StorageObject(schema), space, changed_access),
+                ));
+                let changed = Operation::new(results, OperationKind::Storage(payload.operation));
+                assert!(matches!(
+                    scoped_storage_operand_types_v29(
+                        plan, anchors, payload, &changed, &index, budget
+                    ),
+                    Err(CallInstanceEmissionErrorV1::StorageTransport)
+                ));
+            }
+        }
+        assert_eq!(construction_views, 2);
+        assert_eq!(field_views, 6);
         assert!(!scoped_storage_constructor_schema_v44(
             plan, anchors, root, budget
         )?);
@@ -212,4 +292,83 @@ fn scoped_storage_constructor_view_headers_have_an_independent_fixed_envelope() 
     let expected = std::mem::size_of::<Fields>()
         + 2 * std::mem::size_of::<Result<Fields, ProductionSemanticKirErrorV1>>();
     assert_eq!(scoped_storage_constructor_headers_v44().unwrap(), expected);
+}
+
+#[test]
+fn scoped_storage_construction_access_is_write_only_without_strengthening_other_views() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(100);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 17);
+    budget.reserve_storage(17).unwrap();
+    for space in [
+        AddressSpace::Private,
+        AddressSpace::Global,
+        AddressSpace::Constant,
+    ] {
+        for access in [
+            AccessMode::ReadOnly,
+            AccessMode::WriteOnly,
+            AccessMode::ReadWrite,
+        ] {
+            let before = budget.work();
+            let result = scoped_storage_project_access_v48(
+                ScopedObjectProjectionV29::VariantForWrite { index: 1 },
+                space,
+                access,
+                &mut budget,
+            );
+            let expected = if space == AddressSpace::Constant || access == AccessMode::ReadOnly {
+                Err(CallInstanceEmissionErrorV1::StorageTransport)
+            } else {
+                Ok(AccessMode::WriteOnly)
+            };
+            assert_eq!(result, expected);
+            assert_eq!(budget.work() - before, 2);
+            for step in [
+                ScopedObjectProjectionV29::Field(0),
+                ScopedObjectProjectionV29::ArrayIndex(ValueId(0)),
+                ScopedObjectProjectionV29::Variant {
+                    index: 1,
+                    access: fe2o3_kernel_ir::MemoryAccess::new(space, 1),
+                },
+            ] {
+                let before = budget.work();
+                assert_eq!(
+                    scoped_storage_project_access_v48(step, space, access, &mut budget),
+                    Ok(access)
+                );
+                assert_eq!(budget.work(), before);
+            }
+        }
+    }
+    assert_eq!(budget.storage(), 17);
+    assert_eq!(budget.peak_storage(), 17);
+}
+
+#[test]
+fn scoped_storage_construction_access_has_exact_work_and_no_storage_charge() {
+    for limit in [2, 1] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 17);
+        budget.reserve_storage(17).unwrap();
+        let result = scoped_storage_project_access_v48(
+            ScopedObjectProjectionV29::VariantForWrite { index: 0 },
+            AddressSpace::Private,
+            AccessMode::ReadWrite,
+            &mut budget,
+        );
+        if limit == 2 {
+            assert_eq!(result, Ok(AccessMode::WriteOnly));
+            assert_eq!(budget.work(), 2);
+        } else {
+            let Err(CallInstanceEmissionErrorV1::Resource(ArgumentResourceV1::Work(error))) =
+                result
+            else {
+                panic!("exact work refusal: {result:?}")
+            };
+            assert_eq!(error.limit(), 1);
+            assert_eq!(error.actual(), 2);
+        }
+        assert_eq!(budget.storage(), 17);
+        assert_eq!(budget.peak_storage(), 17);
+    }
 }

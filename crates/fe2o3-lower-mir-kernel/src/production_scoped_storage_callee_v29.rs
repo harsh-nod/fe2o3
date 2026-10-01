@@ -195,6 +195,29 @@ fn scoped_storage_actual_v29<'a>(
 
 include!("production_scoped_storage_constructor_views_v44.rs");
 
+fn scoped_storage_project_access_v48(
+    step: ScopedObjectProjectionV29,
+    space: AddressSpace,
+    access: AccessMode,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<AccessMode, CallInstanceEmissionErrorV1> {
+    match step {
+        ScopedObjectProjectionV29::VariantForWrite { .. } => {
+            budget.charge_work(2)?;
+            if space == AddressSpace::Constant
+                || !matches!(access, AccessMode::WriteOnly | AccessMode::ReadWrite)
+            {
+                return Err(CallInstanceEmissionErrorV1::StorageTransport);
+            }
+            // Construction narrows rights; it never grants an active-variant read.
+            Ok(AccessMode::WriteOnly)
+        }
+        ScopedObjectProjectionV29::Field(_)
+        | ScopedObjectProjectionV29::ArrayIndex(_)
+        | ScopedObjectProjectionV29::Variant { .. } => Ok(access),
+    }
+}
+
 fn scoped_storage_operand_types_v29(
     plan: &SourceReferencePlanV29<'_, '_>,
     anchors: &ScopedMemoryAnchorsV29,
@@ -328,6 +351,7 @@ fn scoped_storage_operand_types_v29(
             let ScopedStorageTypeV29::Pointer(_, space, access) = pointer else {
                 return Err(Refused);
             };
+            let result_access = scoped_storage_project_access_v48(step, space, access, budget)?;
             let index = match step {
                 ScopedObjectProjectionV29::ArrayIndex(value) => {
                     Some((value, ScopedStorageTypeV29::Scalar(ScalarType::Index)))
@@ -339,7 +363,7 @@ fn scoped_storage_operand_types_v29(
                 Some(ScopedStorageTypeV29::Pointer(
                     projected.projected_schema,
                     space,
-                    access,
+                    result_access,
                 )),
             )
         }
