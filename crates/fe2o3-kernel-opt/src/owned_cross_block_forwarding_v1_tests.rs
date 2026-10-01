@@ -1,6 +1,8 @@
 use super::*;
 #[path = "owned_store_consensus_v45_tests.rs"]
 mod consensus_v45;
+#[path = "owned_storage_scalar_forwarding_v54_tests.rs"]
+mod storage_v54;
 use fe2o3_kernel_ir::{
     BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, ComparePredicate, Constant,
     Function, Kernel, LaunchDomain, LaunchExtent, Module, Operation, Signature, Terminator,
@@ -327,7 +329,8 @@ fn cross_block_owned_escaping_volatile_and_unequal_alignment_cells_are_not_selec
     let Kind::Load { access, .. } = &mut blocks(&mut module)[3].operations[0].kind else {
         panic!("load")
     };
-    access.alignment = 1;
+    // Access annotations may differ, but neither may exceed the actual Alloca.
+    access.alignment = 8;
     assert_count(module, 0);
     let mut module = fixture(ScalarType::U32);
     blocks(&mut module)[1].parameters.push(ValueDef::new(

@@ -1,6 +1,8 @@
 use super::*;
 #[path = "canonical_kir_store_consensus_v45_tests.rs"]
 mod consensus_v45;
+#[path = "canonical_kir_storage_scalar_forwarding_v54_tests.rs"]
+mod storage_v54;
 use fe2o3_kernel_ir::{
     BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work,
     CanonicalKirFunctionCoordinateV1 as FunctionId, Function, Operation, Signature, Terminator,

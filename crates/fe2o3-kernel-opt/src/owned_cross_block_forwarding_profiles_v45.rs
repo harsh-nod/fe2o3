@@ -6,6 +6,10 @@ use fe2o3_kernel_ir::{
     with_canonical_kir_control_flow_v1, with_canonical_kir_control_flow_v18,
 };
 pub(super) trait Profile: Sized {
+    fn layout(
+        &self,
+        id: fe2o3_kernel_ir::StorageLayoutIdV1,
+    ) -> Option<&fe2o3_kernel_ir::StorageLayoutV1>;
     fn with_flow<'g, 'w, T>(
         &'g self,
         function: Function,
@@ -17,6 +21,12 @@ pub(super) trait Profile: Sized {
 macro_rules! profile {
     ($owner:ty, $flow:ident) => {
         impl Profile for $owner {
+            fn layout(
+                &self,
+                id: fe2o3_kernel_ir::StorageLayoutIdV1,
+            ) -> Option<&fe2o3_kernel_ir::StorageLayoutV1> {
+                self.module().storage_layouts.get(id.0 as usize)
+            }
             fn with_flow<'g, 'w, T>(
                 &'g self,
                 function: Function,

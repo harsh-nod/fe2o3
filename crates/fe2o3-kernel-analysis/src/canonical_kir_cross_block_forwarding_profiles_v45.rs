@@ -7,6 +7,10 @@ use fe2o3_kernel_ir::{
 };
 
 pub(super) trait Profile: Sized {
+    fn layout(
+        &self,
+        id: fe2o3_kernel_ir::StorageLayoutIdV1,
+    ) -> Option<&fe2o3_kernel_ir::StorageLayoutV1>;
     fn wire_len(&self) -> usize;
     fn headers(&self, output: &Self) -> Result<()>;
     fn inventory<'g>(
@@ -30,6 +34,12 @@ pub(super) trait Profile: Sized {
 macro_rules! profile {
     ($owner:ty, $derive:ident, $flow:ident, $headers:ident, $wire:expr) => {
         impl Profile for $owner {
+            fn layout(
+                &self,
+                id: fe2o3_kernel_ir::StorageLayoutIdV1,
+            ) -> Option<&fe2o3_kernel_ir::StorageLayoutV1> {
+                self.module().storage_layouts.get(id.0 as usize)
+            }
             fn wire_len(&self) -> usize {
                 ($wire)(self)
             }
