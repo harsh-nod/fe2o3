@@ -18,6 +18,8 @@ use std::{fmt::Write as _, mem::size_of, ops::Range};
 #[path = "original_semantic_mir_invocation_source_pointers_v36.rs"]
 mod pointer_events;
 pub(super) use pointer_events::SOURCE_POINTERS_V36;
+#[path = "original_semantic_mir_source_discriminants_v41.rs"]
+mod discriminants;
 #[path = "original_semantic_mir_source_slice_reads_v41.rs"]
 mod slice_reads;
 #[path = "original_semantic_mir_source_witness_borrows_v38.rs"]
@@ -98,6 +100,7 @@ pub(super) enum Event {
     WitnessBorrow(witness_events::Borrow),
     WitnessTransfer(witness_transfers::Transfer),
     Pointer(pointer_events::Event),
+    Discriminant(discriminants::Read),
     Transfer {
         destination: Destination,
         value: Value,
@@ -941,6 +944,11 @@ impl Context<'_, '_, '_> {
     fn statement(&self, statement: &Statement, out: &mut Writer<'_, '_>) -> Result<Event> {
         out.budget.charge_work(2)?;
         if let Statement::Assign(assignment) = statement
+            && let Some(read) = discriminants::Read::derive(self, assignment, out)?
+        {
+            return Ok(Event::Discriminant(read));
+        }
+        if let Statement::Assign(assignment) = statement
             && let Some(transfer) = witness_transfers::Transfer::derive(self, assignment, out)?
         {
             return Ok(Event::WitnessTransfer(transfer));
@@ -1175,6 +1183,7 @@ fn emit_event(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
             pointer_events::emit(event, out)?;
             write!(out, ")").map_err(|_| out.error())?;
         }
+        Event::Discriminant(read) => read.emit(out)?,
         Event::WitnessBorrow(borrow) => borrow.emit(out)?,
         Event::WitnessTransfer(transfer) => transfer.emit(out)?,
         Event::Scalar => {
@@ -1272,6 +1281,7 @@ fn headers() -> usize {
         + pointer_events::headers()
         + witness_transfers::headers()
         + slice_reads::headers()
+        + discriminants::headers()
         + 24 * size_of::<usize>()
         + 20 * size_of::<&()>()
 }
@@ -1279,6 +1289,7 @@ fn headers() -> usize {
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
     include_str!("original_semantic_mir_source_slice_reads_v41.vrs"),
+    include_str!("original_semantic_mir_source_discriminants_v41.vrs"),
     r#"
 struct InvocationSourceByteStateV36 {
     machine: MemoryStateV30,
@@ -1361,6 +1372,7 @@ enum InvocationSourceByteDestinationV36 {
 }
 
 enum InvocationSourceByteEventV36 {
+    Discriminant(InvocationSourceDiscriminantReadV41),
     Scalar,
     WitnessBorrow { destination: int, origin: int, source_type: int, generation: int,
         instance: int, block: int, statement: int },
@@ -1691,6 +1703,8 @@ open spec fn invocation_source_byte_step_v36(
         InvocationSourceByteEventV36::Scalar => invocation_source_byte_refused_v36(source),
         InvocationSourceByteEventV36::Pointer(event) =>
             invocation_source_pointer_step_v36(source, event, root, instance, little_endian),
+        InvocationSourceByteEventV36::Discriminant(read) =>
+            invocation_source_discriminant_read_v41(source, read, root, instance, little_endian).source,
         InvocationSourceByteEventV36::Transfer { destination, value, bits } => {
             let evaluated = invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian);
             if !evaluated.source.machine.valid { evaluated.source }

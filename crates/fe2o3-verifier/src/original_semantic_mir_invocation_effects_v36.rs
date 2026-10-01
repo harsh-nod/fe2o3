@@ -60,6 +60,12 @@ open spec fn invocation_source_statement_effects_v36(
     } else {
         match observation.event {
             None => seq![MemoryOperationEffectV30::Refused],
+            Some(InvocationSourceByteEventV36::Discriminant(read)) => {
+                let result = invocation_source_discriminant_read_v41(observation.before, read,
+                    observation.root, observation.instance, little_endian);
+                seq![if result.source == observation.after { result.effect }
+                    else { MemoryOperationEffectV30::Refused }]
+            }
             Some(InvocationSourceByteEventV36::Transfer { destination, value, bits }) => {
                 let read = invocation_source_read_effect_v36(observation.before, value, bits,
                     observation.root, observation.instance, little_endian);

@@ -33,9 +33,14 @@ open spec fn invocation_project_effect_v39(effect: MemoryOperationEffectV30)
                 else { Some(effect) },
             _ => Some(MemoryOperationEffectV30::Refused),
         },
-        // Validation versus visible discriminant reads need the independent
-        // source tag contract join. Until then neither purpose is erased.
-        MemoryOperationEffectV30::TagRead { .. } => Some(MemoryOperationEffectV30::Refused),
+        // A downcast needs its own original validation observation. It cannot
+        // be hidden merely because the tag is stored in private memory.
+        MemoryOperationEffectV30::TagRead { address, observation, purpose, .. } =>
+            match (address, observation, purpose) {
+                (MemoryValueV30::Pointer(_), Some(_),
+                    MemoryTagReadPurposeV39::DiscriminantRead) => Some(effect),
+                _ => Some(MemoryOperationEffectV30::Refused),
+            },
     }
 }
 
@@ -72,6 +77,13 @@ open spec fn invocation_source_statement_observations_v39(
         invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
             observation.before, observation.after)
     } else { match observation.event {
+        Some(InvocationSourceByteEventV36::Discriminant(read)) => {
+            let result = invocation_source_discriminant_read_v41(observation.before, read,
+                observation.root, observation.instance, little_endian);
+            invocation_source_observe_effects_v39(seq![
+                if result.source == observation.after { result.effect }
+                else { MemoryOperationEffectV30::Refused }], observation.before, observation.after)
+        },
         Some(InvocationSourceByteEventV36::Transfer { destination, value, bits }) => {
             let evaluated = invocation_source_byte_evaluate_v36(observation.before, value, bits,
                 observation.root, observation.instance, little_endian);
@@ -202,6 +214,27 @@ open spec fn invocation_observed_effect_related_v39(
     && byte_observation_snapshots_valid_v39(target) && target.valid_before && target.valid_after
     && byte_state_memory_well_formed_v30(target.before) && byte_state_memory_well_formed_v30(target.after)
     && match (source.effect, target.effect) {
+        (MemoryOperationEffectV30::TagRead { address: sa, width: sw, alignment: ss,
+            purpose: MemoryTagReadPurposeV39::DiscriminantRead, observation: Some(so) },
+         MemoryOperationEffectV30::TagRead { address: ta, width: tw, alignment: ts,
+            purpose: MemoryTagReadPurposeV39::DiscriminantRead, observation: Some(to) }) =>
+            sw == tw && ss == ts
+                && source.before.machine.memory == source.after.machine.memory
+                && target.before.memory == target.after.memory
+                && invocation_view_registries_related_v40(source.before.machine.memory, target.before.memory)
+                && invocation_value_related_v36(sa, ta, before_map,
+                    source.before.machine.memory, target.before.memory)
+                && match (so, to) {
+                    (MemoryTagObservationV39::Scalar { bits: source_bits },
+                     MemoryTagObservationV39::Scalar { bits: target_bits }) => source_bits == target_bits,
+                    (MemoryTagObservationV39::Null, MemoryTagObservationV39::Null) => true,
+                    (MemoryTagObservationV39::Pointer { pointer: source_pointer },
+                     MemoryTagObservationV39::Pointer { pointer: target_pointer }) =>
+                        invocation_value_related_v36(MemoryValueV30::Pointer(source_pointer),
+                            MemoryValueV30::Pointer(target_pointer), before_map,
+                            source.before.machine.memory, target.before.memory),
+                    _ => false,
+                },
         (MemoryOperationEffectV30::Trap, MemoryOperationEffectV30::Trap) =>
             source.before.machine.pc >= 0 && source.after.machine.pc == -2
             && target.before.pc >= 0 && target.after.pc == -2
