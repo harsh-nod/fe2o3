@@ -1086,3 +1086,11 @@ mod gfx942_bf16_generated_source_qualification_v1_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "production_rustc_driver_v1/source_bindings_checkpoint_v1_tests.rs"]
 mod source_bindings_checkpoint_v1_tests;
+
+#[cfg(target_os = "linux")]
+#[path = "production_rustc_driver_v1/bf16_tile_source_driver_v1.rs"]
+mod bf16_tile_source_driver_v1;
+#[cfg(target_os = "linux")]
+pub use bf16_tile_source_driver_v1::{
+    run_bf16_tile_source_inspection_driver_v1, run_bf16_tile_source_promotion_driver_v1,
+};
