@@ -639,3 +639,71 @@ Log SHA-256:
 
 M0 remains complete; M1-M7 are incomplete and strict end-to-end coverage remains
 **0/47**. These runs did not execute a protected proof runtime or a GPU kernel.
+
+### Indexed Receiver Follow-Up
+
+Candidate `5ff1ce616250ee639d3dc1f84439efdaa4b3daca` replaces repeated V23
+definition scans with one existing byte-indexed context per function/pass. It
+uses the existing all-predecessor provenance engine to retain both the actual
+slice receiver and its unique, exactly typed parameter root. Mixed roots,
+ungrounded cycles, unsupported transports and foreign function/account queries
+remain refusals. Legacy V18 passes do not construct the additional context.
+
+- r234: complete analysis **726 passed** and IR **1437 passed**, zero failures or
+  ignored tests. The eight new controls cover sparse IDs, bounded lookup work,
+  receiver joins, identity, exact/short resources and cleanup.
+- r236: complete documentation tests **79 analysis, 76 IR and 92 optimizer
+  passed**, zero failures or ignored tests. This includes compile-fail controls.
+- r235 was an invalid command naming the nonexistent package `fe2o3-opt`; it
+  executed no tests. r236 used the correct `fe2o3-kernel-opt` package.
+
+Both successful runs retained source/tool snapshots unchanged. Their runner
+hash, captured at startup, is
+`54c2508cc8d70abc613241482bbfd6179e542de532a0c9a5bddf2891345edd37`.
+Log SHA-256: r234
+`ede4a27dc8735cb466ffaa9c487432aa96493d6833c0566892dbb98b7a3f9a5c`;
+r236 `218f80392aec4b52f6b06c63a93ee294cd11e2c3f72116f6928bd35d2fd344e6`.
+These tests do not supply actual-source native completion or launch evidence;
+milestone and strict qualification counts are unchanged.
+
+### Original Rust and Shared Option Analysis
+
+r233 ran the actual Rust fill and vector-add optimizer parents against frozen
+candidate `24a1d84d494efc52f61823ac62b27e4c47621d33`. The compiler test binary
+built in 12 minutes 24 seconds. The fill parent failed; the vector-add parent
+was interrupted during its dependency build when the enclosing run reached its
+deadline. The runner recorded exit 124, unchanged source/tool snapshots, and
+the interval 2026-09-30 23:55:09 to 2026-10-01 00:15:26 UTC. Log SHA-256:
+`12a4cd9151ebf6edb9316925f5bccff13c3161b5e1b4d2dc100de01326ce4b3c`.
+
+While the fill parent was active, its gfx942 child responses reported
+`projected reference assignment requires exact cell state` for the unoptimized
+profile and `scoped source dependency differs from its original formation` for
+the optimized profile. These were interim child observations, not completed
+positive or intended-negative tests. Neither kernel receives source-completion,
+proof, or launch credit. The terminal parent's remaining dependency cache had
+no open files or live parent processes; `cargo clean` removed 259.4 MiB and the
+empty owned scratch directory was removed.
+
+r237 tested the shared Option producer classifier on candidate
+`217357028c4550272a56e1654fb63a66a1224c0c`: the complete MIR-model library passed
+**411 tests**, with no failures, ignored tests, or source/tool changes. The
+classifier now recognizes the exact `InvocationSliceGetMut` operation through
+the same producer/dominance analysis as existing checked slice operations.
+Its six new tests cover operation selection, destination refusal, Some-only
+dominance, bypass rejection, equivalent collector accounting, and exact/short
+resource limits. This does not establish helper transport or actual Rust
+lowering. Log SHA-256:
+`8af2eb2f49afc3abc208a34e1911f8197445195761eef4017459d5d9c4d93337`.
+
+The previously running MI350 deployment-bundle attempt 4 is terminal. It exited
+101 at 2026-10-01 00:04:21 UTC on a signed/unsigned libc `statfs.f_type`
+comparison in `native_compiler_personality.rs`. The 00:05:18 UTC custody check
+confirmed the supervisor/build processes absent, their process group and
+session empty, and the attempt's private caches removed. No bundle completed;
+no protected runtime was provisioned or activated. The build and cleanup reports
+were recovered locally. A checked-conversion repair and its separate validation
+must precede another bundle attempt.
+
+M0 is complete; M1-M7 remain incomplete and strict end-to-end coverage is
+**0/47**. None of these observations supplies protected proof or GPU execution.
