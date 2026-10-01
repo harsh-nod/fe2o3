@@ -5,6 +5,9 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 #[path = "original_semantic_mir_source_enum_calls_v50_tests.rs"]
 mod calls;
 
+#[path = "original_semantic_mir_source_enum_spill_lifetimes_v50_tests.rs"]
+mod spill_lifetimes;
+
 const LIMIT: usize = 256 * 1024 * 1024;
 
 fn logical_fixture(
