@@ -53,7 +53,7 @@ CHECK-AFTER: f0:b2 block-id=30 params=[]
 CHECK-AFTER: f0:b2:o0 [] Store v100,v2 Private align=4 volatile=false
 CHECK-AFTER: f0:b2 Branch bb40 []
 CHECK-AFTER: f0:b3 block-id=40 params=[]
-CHECK-AFTER: f0:b3:o0 [v101:U32] Load v100 Private align=2 volatile=false
+CHECK-AFTER: f0:b3:o0 [v101:U32] BitOr v2,v2
 CHECK-AFTER: f0:b3 Branch bb50 []
 CHECK-AFTER: f0:b4 block-id=50 params=[]
 CHECK-AFTER: f0:b4:o0 [v30:U64] Add v20,v10
@@ -61,7 +61,7 @@ CHECK-AFTER: f0:b4:o1 [v31:Bool] Constant Bool(false)
 CHECK-AFTER: f0:b4 Branch bb20 [v30]
 CHECK-AFTER: f0:b5 block-id=90 params=[]
 CHECK-AFTER: f0:b5 Return []
-CHECK-REMARK: splits=1 forwards=0 same-middle-owner=true independent-pairs=true authority=false
+CHECK-REMARK: splits=1 forwards=1 same-middle-owner=true independent-pairs=true authority=false
 CHECK-REMARK: R f0:b0:o0 unchanged f0:b0:o0
 CHECK-REMARK: R f0:b0:o1 unchanged f0:b0:o1
 CHECK-REMARK: R f0:b1:o0 unchanged f0:b1:o0
@@ -72,6 +72,6 @@ CHECK-REMARK: F f0:b0:o0 retained
 CHECK-REMARK: F f0:b0:o1 retained
 CHECK-REMARK: F f0:b1:o0 retained
 CHECK-REMARK: F f0:b2:o0 retained
-CHECK-REMARK: F f0:b3:o0 retained
+CHECK-REMARK: F f0:b3:o0 forwarded store=f0:b2:o0 value=v2
 CHECK-REMARK: F f0:b4:o0 retained
 CHECK-REMARK: F f0:b4:o1 retained
