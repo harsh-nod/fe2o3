@@ -132,3 +132,73 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
 #[cfg(test)]
 #[path = "retained_target_pipeline_v1_tests.rs"]
 mod tests;
+
+impl RetainedMaterializationPhaseV1<MaterializedNeutralProductionCompilation> {
+    /// Opt-in paid ordinary analysis/presentation on the original source account.
+    /// Exactly one root with no conditional/reference-effect request is admitted.
+    /// The existing projector account is retained separately; no constructor,
+    /// Context, Display or complete later-phase accounting is implied.
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn verify_with_paid_ranked_allowances_retained_v1(
+        self,
+        analysis: fe2o3_pliron::ProductionRankedAnalysisAllowanceV1,
+        snapshot: fe2o3_pliron::ProductionRankedSnapshotAllowanceV1,
+    ) -> Result<RetainedMaterializationPhaseV1<RankedVerifiedProductionCompilation>> {
+        // Shape refusal precedes the paid continuation. Actual authenticated
+        // source/launch/binding/replay checks still occur in the shared engine.
+        if self.payload.ranked_roots.len() != 1
+            || !self
+                .payload
+                .bindings
+                .reference_effect_bindings
+                .as_slice()
+                .is_empty()
+        {
+            return Err(Box::new(ProductionPipelineError::RankedProjection(
+                crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
+                    "paid ordinary verifier requires one root and no reference-effect bindings",
+                ),
+            )));
+        }
+        self.try_map_with_ranked_allowances(analysis, snapshot, |owner, permit, _original_account| {
+            let MaterializedNeutralProductionCompilation {
+                materialized, ranked_roots, bindings,
+            } = owner;
+            let ranked = crate::production_ranked_projection_v1::paid_ranked_compile_v1::project_owned_with_one_compile(
+                materialized,
+                &ranked_roots,
+                &bindings.reference_effect_bindings,
+                move |construction, coherent| {
+                    permit.compile_gfx942(
+                        construction, fe2o3_pliron::ProductionSessionLimitsV1::default(), coherent,
+                    )
+                },
+            ).map_err(ProductionPipelineError::RankedProjection)?;
+            Ok(RankedVerifiedProductionCompilation { ranked, bindings })
+        })
+    }
+}
+
+impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    /// Actual complete typed route with a narrowly selected paid verifier.
+    /// All defaults and the existing custody-only route remain unchanged.
+    /// Only analysis and presentation sink/hash allowances are newly prepaid;
+    /// import/recipe/Context/formal/optimizer/LLVM costs retain their old scope.
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn lower_target_with_paid_ranked_source_account_v1(
+        self,
+        target_budget: &mut Budget<'_>,
+        analysis: fe2o3_pliron::ProductionRankedAnalysisAllowanceV1,
+        snapshot: fe2o3_pliron::ProductionRankedSnapshotAllowanceV1,
+    ) -> Result<RetainedMaterializationPhaseV1<TargetLoweredProductionCompilation>> {
+        self.import_semantic_mir()?
+            .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
+            .materialize_target_neutral_retained_v1()?
+            .verify_with_paid_ranked_allowances_retained_v1(analysis, snapshot)?
+            .require_ordinary_target_route_retained_v1(target_budget)?
+            .attach_target_neutral_checks_retained_v1()?
+            .admit_formal_memory_retained_v1()?
+            .lower_production_target_retained_v1()
+    }
+}

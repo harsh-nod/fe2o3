@@ -2053,3 +2053,5 @@ pub use production::{
     ProductionRankedSnapshotAllowanceErrorV1, ProductionRankedSnapshotAllowanceV1,
     compile_ranked_kernel_for_lowering_with_analysis_and_snapshot_allowances_v1,
 };
+
+pub use production::compile_ranked_kernel_for_gfx942_lowering_with_analysis_and_snapshot_allowances_v1;

@@ -422,3 +422,155 @@ fn real_snapshot_refusal_uses_selected_policy_without_publishing_a_lowering_inpu
     assert_eq!(phase.account.ledger.work(), work);
     assert_eq!(phase.account.ledger.storage(), a.max_peak_storage());
 }
+
+#[test]
+fn paid_gfx942_session_matches_legacy_and_drops_before_original_account() {
+    let original = fe2o3_pliron::compile_ranked_kernel_for_gfx942_lowering_v1(
+        construction(0),
+        ProductionSessionLimitsV1::default(),
+        vec![1],
+    )
+    .unwrap();
+    let (events, _audit) = audit();
+    let a = Analysis::production_hard_ceiling();
+    let s = Presentation::production_hard_ceiling();
+    let (work, storage) = quote(a, s);
+    let phase = real_phase();
+    let address = Snapshot::of(&phase.account.ledger).address;
+    let phase = phase
+        .try_map_with_ranked_allowances(a, s, |construction, permit, budget| {
+            assert_eq!((budget.work(), budget.storage()), (work, storage));
+            let input = permit
+                .compile_gfx942(construction, ProductionSessionLimitsV1::default(), vec![1])
+                .unwrap();
+            assert_eq!(input.kernel(), original.kernel());
+            assert_eq!(
+                input.exact_graph_identity(),
+                original.exact_graph_identity()
+            );
+            assert!(input.all_mandatory_reports_are_clean());
+            assert!(!input.grants_artifact_or_launch_authority());
+            Ok(ObservedLoweringDrop {
+                input: Some(input),
+                events: events.clone(),
+            })
+        })
+        .unwrap();
+    drop(original);
+    let phase = phase
+        .try_map(|owned, budget| {
+            assert_eq!(
+                (budget.work(), budget.storage()),
+                (work, a.max_peak_storage())
+            );
+            Ok(owned)
+        })
+        .unwrap();
+    assert_eq!(Snapshot::of(&phase.account.ledger).address, address);
+    assert!(events.borrow().is_empty());
+    drop(phase);
+    assert_eq!(events.borrow()[0], Event::Payload("lowering-and-session"));
+    let account = last_account(&events);
+    assert_eq!(account.address, address);
+    assert_eq!(
+        (account.work, account.storage, account.peak),
+        (work, a.max_peak_storage(), storage)
+    );
+}
+
+#[test]
+fn paid_gfx942_inner_refusals_do_not_fallback_or_refund_original_quote() {
+    for (a, s, analysis_error) in [
+        (
+            Analysis::new(0, 0).unwrap(),
+            Presentation::production_hard_ceiling(),
+            true,
+        ),
+        (
+            Analysis::production_hard_ceiling(),
+            Presentation::new(0, 0).unwrap(),
+            false,
+        ),
+    ] {
+        let (events, _audit) = audit();
+        let (work, storage) = quote(a, s);
+        let phase = real_phase();
+        let result: Result<RetainedMaterializationPhaseV1<()>> =
+            phase.try_map_with_ranked_allowances(a, s, |construction, permit, _| {
+                let error = permit.compile_gfx942(
+                    construction, ProductionSessionLimitsV1::default(), vec![1],
+                ).unwrap_err();
+                if analysis_error {
+                    assert!(matches!(error, ProductionRankedCompileErrorV1::Session(
+                        ProductionSessionErrorV1::AnalysisResourceLimit { .. }
+                    )));
+                } else {
+                    assert!(matches!(error, ProductionRankedCompileErrorV1::Session(
+                        ProductionSessionErrorV1::Operation(
+                            fe2o3_pliron::OperationHandleError::OperationGraphSnapshotResourceLimit {
+                                resource: "presentation hash work"
+                            }
+                        )
+                    )));
+                }
+                Err(accounting())
+            });
+        assert!(result.is_err());
+        let account = last_account(&events);
+        assert_eq!(
+            (account.work, account.storage, account.peak),
+            (work, a.max_peak_storage(), storage)
+        );
+        assert_eq!((account.failed_work, account.failed_storage), (None, None));
+    }
+}
+
+#[test]
+fn paid_gfx942_original_one_short_denials_precede_compile_callback() {
+    let a = Analysis::production_hard_ceiling();
+    let s = Presentation::production_hard_ceiling();
+    let (work, storage) = quote(a, s);
+    for (work_limit, storage_limit, failed_work) in
+        [(work - 1, storage, true), (work, storage - 1, false)]
+    {
+        let (events, _audit) = audit();
+        let calls = Cell::new(0);
+        let phase = RetainedMaterializationPhaseV1::start(work_limit, storage_limit, |_| {
+            Ok(construction(0))
+        })
+        .unwrap();
+        let result = phase.try_map_with_ranked_allowances(a, s, |construction, permit, _| {
+            calls.set(calls.get() + 1);
+            let _ =
+                permit.compile_gfx942(construction, ProductionSessionLimitsV1::default(), vec![1]);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 0);
+        let account = last_account(&events);
+        assert_eq!(account.failed_work.is_some(), failed_work);
+        assert_eq!(account.failed_storage.is_some(), !failed_work);
+    }
+}
+
+#[test]
+fn actual_paid_typed_route_keeps_both_owning_return_types() {
+    // Compile-time type coverage only: no authenticated source owner is fabricated.
+    fn verify(
+        owner: RetainedMaterializationPhaseV1<MaterializedNeutralProductionCompilation>,
+        analysis: Analysis,
+        snapshot: Presentation,
+    ) -> Result<RetainedMaterializationPhaseV1<RankedVerifiedProductionCompilation>> {
+        owner.verify_with_paid_ranked_allowances_retained_v1(analysis, snapshot)
+    }
+    fn lower<'tcx>(
+        owner: ProductionCompilation<'tcx, CollectedRustStage<'tcx>>,
+        target_budget: &mut Budget<'_>,
+        analysis: Analysis,
+        snapshot: Presentation,
+    ) -> Result<RetainedMaterializationPhaseV1<TargetLoweredProductionCompilation>> {
+        owner.lower_target_with_paid_ranked_source_account_v1(target_budget, analysis, snapshot)
+    }
+    let _ = verify;
+    let _ = lower;
+}

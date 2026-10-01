@@ -51,3 +51,18 @@ fn combined_snapshot_allowance_endpoint_is_public_and_checked() {
     let error = ProductionRankedSnapshotAllowanceErrorV1::BytesAboveHardCeiling;
     let _: &dyn std::error::Error = &error;
 }
+
+#[test]
+fn gfx942_combined_allowance_endpoint_is_named_and_public() {
+    type Compile = fn(
+        fe2o3_pliron::ProductionConstructionV1,
+        fe2o3_pliron::ProductionSessionLimitsV1,
+        Vec<u64>,
+        fe2o3_pliron::ProductionRankedAnalysisAllowanceV1,
+        fe2o3_pliron::ProductionRankedSnapshotAllowanceV1,
+    ) -> Result<
+        fe2o3_pliron::ProductionRankedKernelLoweringInputV1,
+        fe2o3_pliron::ProductionRankedCompileErrorV1,
+    >;
+    let _: Compile = fe2o3_pliron::compile_ranked_kernel_for_gfx942_lowering_with_analysis_and_snapshot_allowances_v1;
+}

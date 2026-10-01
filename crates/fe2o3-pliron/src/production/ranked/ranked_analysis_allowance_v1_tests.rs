@@ -403,3 +403,138 @@ fn combined_endpoint_keeps_real_bounds_refusal() {
         ))
     ));
 }
+
+fn compile_gfx_both(
+    index: u64,
+    a: ProductionRankedAnalysisAllowanceV1,
+    s: ProductionRankedSnapshotAllowanceV1,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    compile_ranked_kernel_for_gfx942_lowering_with_analysis_and_snapshot_allowances_v1(
+        construction(index),
+        ProductionSessionLimitsV1::default(),
+        [1],
+        a,
+        s,
+    )
+}
+
+#[test]
+fn gfx942_both_policies_keep_default_kernel_graph_and_retained_target() {
+    let original = super::super::compile_ranked_kernel_for_gfx942_lowering_v1(
+        construction(0),
+        ProductionSessionLimitsV1::default(),
+        [1],
+    )
+    .unwrap();
+    let bounded = compile_gfx_both(
+        0,
+        ceiling(),
+        ProductionRankedSnapshotAllowanceV1::production_hard_ceiling(),
+    )
+    .unwrap();
+    assert_eq!(original.kernel(), bounded.kernel());
+    assert_eq!(
+        original.exact_graph_identity(),
+        bounded.exact_graph_identity()
+    );
+    assert!(original._session.inner.snapshot_policy.is_none());
+    assert!(bounded._session.atomic_target.is_some());
+    assert_eq!(
+        bounded._session.analysis_resource_limits(),
+        ceiling().limits
+    );
+    let (work, completed, failure) = bounded
+        ._session
+        .inner
+        .snapshot_policy
+        .as_ref()
+        .unwrap()
+        .observation();
+    assert!(work > 0 && completed > 0);
+    assert_eq!(failure, None);
+    assert!(bounded.all_mandatory_reports_are_clean());
+    assert!(!bounded.grants_artifact_or_launch_authority());
+    assert!(!bounded.grants_compiler_refinement_authority());
+}
+
+#[test]
+fn gfx942_both_policies_keep_real_analysis_work_and_storage_refusals() {
+    let s = ProductionRankedSnapshotAllowanceV1::production_hard_ceiling();
+    for a in [
+        ProductionRankedAnalysisAllowanceV1::new(0, ceiling().max_peak_storage()).unwrap(),
+        ProductionRankedAnalysisAllowanceV1::new(ceiling().max_work(), 0).unwrap(),
+    ] {
+        resource_refusal(compile_gfx_both(0, a, s));
+    }
+}
+
+#[test]
+fn gfx942_both_policies_keep_exact_and_one_short_analysis_envelopes() {
+    let s = ProductionRankedSnapshotAllowanceV1::production_hard_ceiling();
+    let observed = compile_gfx_both(0, ceiling(), s).unwrap();
+    let bindings = observed._session.ownership_binding_resources;
+    let work = bindings
+        .work_upper_bound()
+        .checked_add(observed.production_analysis_work_upper_bound_v1())
+        .unwrap();
+    let storage = bindings
+        .retained_storage_upper_bound()
+        .checked_add(observed.production_analysis_peak_storage_upper_bound_v1())
+        .unwrap();
+    drop(observed);
+    assert!(work > 0 && storage > 0);
+    assert!(
+        compile_gfx_both(
+            0,
+            ProductionRankedAnalysisAllowanceV1::new(work, storage).unwrap(),
+            s
+        )
+        .is_ok()
+    );
+    resource_refusal(compile_gfx_both(
+        0,
+        ProductionRankedAnalysisAllowanceV1::new(work - 1, storage).unwrap(),
+        s,
+    ));
+    resource_refusal(compile_gfx_both(
+        0,
+        ProductionRankedAnalysisAllowanceV1::new(work, storage - 1).unwrap(),
+        s,
+    ));
+}
+
+#[test]
+fn gfx942_both_policies_keep_snapshot_byte_and_work_refusals() {
+    for (snapshot, expected) in [
+        (
+            ProductionRankedSnapshotAllowanceV1::new(0, ceiling().max_work()).unwrap(),
+            "presentation UTF8 bytes",
+        ),
+        (
+            ProductionRankedSnapshotAllowanceV1::new(crate::HARD_MAX_OPERATION_IMPORT_BYTES, 0)
+                .unwrap(),
+            "presentation hash work",
+        ),
+    ] {
+        let result = compile_gfx_both(0, ceiling(), snapshot);
+        assert!(
+            matches!(result, Err(ProductionRankedCompileErrorV1::Session(
+            ProductionSessionErrorV1::Operation(crate::OperationHandleError::OperationGraphSnapshotResourceLimit { resource })
+        )) if resource == expected)
+        );
+    }
+}
+
+#[test]
+fn gfx942_both_policies_do_not_bypass_actual_bounds_refusal() {
+    assert!(matches!(
+        compile_gfx_both(
+            1,
+            ceiling(),
+            ProductionRankedSnapshotAllowanceV1::production_hard_ceiling()
+        ),
+        Err(ProductionRankedCompileErrorV1::Session(
+            ProductionSessionErrorV1::RankedBounds(_)
+        ))
+    ));
+}

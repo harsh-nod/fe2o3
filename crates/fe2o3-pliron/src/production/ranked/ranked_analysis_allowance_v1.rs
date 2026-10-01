@@ -255,3 +255,28 @@ pub fn compile_ranked_kernel_for_lowering_with_analysis_and_snapshot_allowances_
         Some(snapshot.into_policy()),
     )
 }
+
+/// Runs the existing gfx942 target builder and closed verifier with both caller
+/// restrictions. No target, capability, pass, or default is added or changed.
+///
+/// As with the target-neutral companion, the caller must prepay analysis work,
+/// presentation sink/hash work and overlapping analysis storage before entry,
+/// and retain that reservation with the returned session through lowering.
+/// Earlier recipe constructors/transforms, initial recipe hashing, target and
+/// Context creation, Display internals and the full owner heap are excluded.
+pub fn compile_ranked_kernel_for_gfx942_lowering_with_analysis_and_snapshot_allowances_v1(
+    construction: ProductionConstructionV1,
+    limits: ProductionSessionLimitsV1,
+    system_coherent_allocations: impl IntoIterator<Item = u64>,
+    analysis: ProductionRankedAnalysisAllowanceV1,
+    snapshot: ProductionRankedSnapshotAllowanceV1,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    let target = ranked_gfx942_atomic_target_v1(system_coherent_allocations)?;
+    super::compile_ranked_kernel_for_lowering_with_resource_policy_v1(
+        construction,
+        limits,
+        Some(target),
+        analysis.limits,
+        Some(snapshot.into_policy()),
+    )
+}

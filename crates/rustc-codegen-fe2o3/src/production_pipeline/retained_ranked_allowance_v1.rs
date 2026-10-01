@@ -115,3 +115,25 @@ impl<T> RetainedMaterializationPhaseV1<T> {
         })
     }
 }
+
+impl PaidRankedAllowancesV1 {
+    /// Consumes the same one-session permit using the existing gfx942 target
+    /// builder. The selected analysis/snapshot quote does not cover target
+    /// construction or the excluded recipe/Context/Display costs.
+    #[allow(dead_code)]
+    pub(in crate::production_pipeline) fn compile_gfx942(
+        self,
+        construction: ProductionConstructionV1,
+        limits: ProductionSessionLimitsV1,
+        system_coherent_allocations: Vec<u64>,
+    ) -> std::result::Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1>
+    {
+        fe2o3_pliron::compile_ranked_kernel_for_gfx942_lowering_with_analysis_and_snapshot_allowances_v1(
+            construction,
+            limits,
+            system_coherent_allocations,
+            self.analysis,
+            self.snapshot,
+        )
+    }
+}

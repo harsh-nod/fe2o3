@@ -192,6 +192,9 @@ fn complete_retained_route_keeps_every_existing_gate_in_order() {
             "pub(in crate::production_pipeline) fn lower_target_with_retained_source_account_v1(",
         )
         .nth(1)
+        .unwrap()
+        .split("\n#[cfg(test)]")
+        .next()
         .unwrap();
     let mut prior = 0;
     for name in [
@@ -254,4 +257,30 @@ fn terminal_audit_observes_one_actual_account_after_payload_destruction() {
     })
     .unwrap();
     assert_eq!(result, 42);
+}
+
+#[test]
+fn complete_paid_route_keeps_every_existing_gate_and_changes_only_verifier_selection() {
+    let source = include_str!("retained_target_pipeline_v1.rs");
+    let route = source.split(
+        "pub(in crate::production_pipeline) fn lower_target_with_paid_ranked_source_account_v1("
+    ).nth(1).unwrap().split("\n}\n").next().unwrap();
+    let mut prior = 0;
+    for name in [
+        ".import_semantic_mir()?",
+        ".construct_semantic_middle_end()?",
+        ".construct_semantic_ssa()?",
+        ".materialize_target_neutral_retained_v1()?",
+        ".verify_with_paid_ranked_allowances_retained_v1(analysis, snapshot)?",
+        ".require_ordinary_target_route_retained_v1(target_budget)?",
+        ".attach_target_neutral_checks_retained_v1()?",
+        ".admit_formal_memory_retained_v1()?",
+        ".lower_production_target_retained_v1()",
+    ] {
+        assert_eq!(route.matches(name).count(), 1);
+        let at = route.find(name).unwrap();
+        assert!(at >= prior);
+        prior = at + name.len();
+    }
+    assert!(!route.contains(".verify_general_kernel_checks_retained_v1()"));
 }
