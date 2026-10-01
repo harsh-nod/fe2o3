@@ -182,8 +182,11 @@ impl RetainedMaterializationPhaseV1<MaterializedNeutralProductionCompilation> {
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// Actual complete typed route with a narrowly selected paid verifier.
     /// All defaults and the existing custody-only route remain unchanged.
-    /// Only analysis and presentation sink/hash allowances are newly prepaid;
-    /// import/recipe/Context/formal/optimizer/LLVM costs retain their old scope.
+    /// Analysis and presentation sink/hash allowances are prepaid. Neutral
+    /// attachment and both formal semantic replays also charge their existing
+    /// helper translation scan/cache/expansion to this same original account.
+    /// Import/recipe/Context, formal extraction, reconstruction, optimizer and
+    /// LLVM work retain their old scope; no whole-phase bound is claimed.
     #[allow(dead_code)]
     pub(in crate::production_pipeline) fn lower_target_with_paid_ranked_source_account_v1(
         self,
@@ -197,8 +200,40 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .materialize_target_neutral_retained_v1()?
             .verify_with_paid_ranked_allowances_retained_v1(analysis, snapshot)?
             .require_ordinary_target_route_retained_v1(target_budget)?
-            .attach_target_neutral_checks_retained_v1()?
-            .admit_formal_memory_retained_v1()?
+            .attach_target_neutral_checks_with_source_translation_budget_v1()?
+            .admit_formal_memory_with_source_translation_budget_v1()?
             .lower_production_target_retained_v1()
     }
 }
+
+impl RetainedMaterializationPhaseV1<RankedVerifiedProductionCompilation> {
+    /// Uses the existing caller-budgeted attachment engine with the exact
+    /// retained source ledger. No new account, copy or detached receipt.
+    pub(in crate::production_pipeline) fn attach_target_neutral_checks_with_source_translation_budget_v1(
+        self,
+    ) -> Result<RetainedMaterializationPhaseV1<TargetNeutralProductionCompilation>> {
+        self.try_map(|owner, original_account| {
+            owner
+                .attach_target_neutral_checks_with_translation_budget_v1(Some(original_account))
+                .map_err(Box::new)
+        })
+    }
+}
+
+impl RetainedMaterializationPhaseV1<TargetNeutralProductionCompilation> {
+    /// Only the existing helper translation work/scratch inside both semantic
+    /// replays is metered here, not formal obligation extraction or replay.
+    pub(in crate::production_pipeline) fn admit_formal_memory_with_source_translation_budget_v1(
+        self,
+    ) -> Result<RetainedMaterializationPhaseV1<FormalMemoryAdmittedProductionCompilation>> {
+        self.try_map(|owner, original_account| {
+            owner
+                .admit_formal_memory_with_translation_budget_v1(Some(original_account))
+                .map_err(Box::new)
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "retained_translation_budget_v1_tests.rs"]
+mod translation_budget_tests;

@@ -1116,13 +1116,24 @@ impl TargetNeutralProductionCompilation {
     fn admit_formal_memory(
         self,
     ) -> Result<FormalMemoryAdmittedProductionCompilation, ProductionPipelineError> {
+        self.admit_formal_memory_with_translation_budget_v1(None)
+    }
+
+    // Formal obligation derivation is unchanged and is NOT charged here.
+    fn admit_formal_memory_with_translation_budget_v1(
+        self,
+        budget: Option<&mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>>,
+    ) -> Result<FormalMemoryAdmittedProductionCompilation, ProductionPipelineError> {
         let Self {
             lowered,
             ranked_verification,
             bindings,
         } = self;
-        let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered)
-            .map_err(ProductionPipelineError::FormalMemoryAdmission)?;
+        let admitted = match budget {
+            Some(budget) => fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::
+                try_admit_with_bounded_translation_budget_v1(lowered, budget),
+            None => fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered),
+        }.map_err(ProductionPipelineError::FormalMemoryAdmission)?;
         Ok(FormalMemoryAdmittedProductionCompilation {
             admitted,
             ranked_verification,
@@ -4030,6 +4041,15 @@ impl RankedVerifiedProductionCompilation {
     fn attach_target_neutral_checks(
         self,
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
+        self.attach_target_neutral_checks_with_translation_budget_v1(None)
+    }
+
+    // Only the helper translation scan/cache/expansion selects this caller
+    // ledger. Receipt conversion and the other checks keep their old scope.
+    fn attach_target_neutral_checks_with_translation_budget_v1(
+        self,
+        budget: Option<&mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>>,
+    ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self.replay_conditional_for_target_v1()?;
         let roster_receipt = ranked
             .into_verified_roster_receipt()
@@ -4044,11 +4064,14 @@ impl RankedVerifiedProductionCompilation {
             .into_module_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert!(ranked_verification.every_functional_verification_is_coherent());
-        let lowered =
-            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(
-                receipt,
-            )
-            .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        let lowered = match budget {
+            Some(budget) =>
+                fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::
+                    try_attach_materialized_ranked_checks_with_bounded_translation_budget_v1(receipt, budget),
+            None =>
+                fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::
+                    try_attach_materialized_ranked_checks(receipt),
+        }.map_err(ProductionPipelineError::TargetNeutralLowering)?;
         let exact_translation_roster = {
             let mut translations = lowered.mir_pliron_translation_validations();
             translations.len() == lowered.module().kernels.len()
