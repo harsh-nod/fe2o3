@@ -194,6 +194,14 @@ fn moved_loop() -> ProductionSemanticSsaOwnerV1 {
 }
 
 fn projected_failure_loop(moved: bool, retained: bool) -> ProductionSemanticSsaOwnerV1 {
+    projected_failure_loop_with_constructor(moved, retained, false)
+}
+
+fn projected_failure_loop_with_constructor(
+    moved: bool,
+    retained: bool,
+    constructor: bool,
+) -> ProductionSemanticSsaOwnerV1 {
     use fe2o3_mir_model::semantic_mir_v1::*;
     let base = add_loop();
     let source = base.source_semantic();
@@ -217,6 +225,24 @@ fn projected_failure_loop(moved: bool, retained: bool) -> ProductionSemanticSsaO
     let mut types = source.types().to_vec();
     let mut locals = old.locals().to_vec();
     let mut statements = old.blocks()[2].statements().to_vec();
+    if constructor {
+        assert!(retained);
+        // The exact scalar-field constructor is supported independently of a
+        // retained CheckedBinary result. Keep that earlier boundary distinct.
+        statements[0] = assign(
+            place(4, pair),
+            SemanticRvalueKindV1::Aggregate(
+                SemanticAggregateRvalueV1::new(
+                    SemanticAggregateKindV1::Tuple,
+                    vec![
+                        SemanticOperandV1::Copy(place(2, U32)),
+                        SemanticOperandV1::Copy(place(3, old.locals()[3].ty())),
+                    ],
+                )
+                .unwrap(),
+            ),
+        );
+    }
     if retained {
         let pointer = SemanticTypeIdV1::from_index(types.len() as u32);
         types.push(SemanticTypeDeclV1::new(
@@ -290,6 +316,10 @@ fn retained_projected_failure_loop() -> ProductionSemanticSsaOwnerV1 {
     projected_failure_loop(true, true)
 }
 
+fn retained_constructed_failure_loop() -> ProductionSemanticSsaOwnerV1 {
+    projected_failure_loop_with_constructor(true, true, true)
+}
+
 #[test]
 fn promoted_failure_components_preserve_copy_and_failure_only_move_in_production() {
     for factory in [
@@ -350,30 +380,80 @@ fn promoted_failure_components_preserve_copy_and_failure_only_move_in_production
 
 #[test]
 fn promoted_failure_components_do_not_bypass_real_retained_aggregate_history() {
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
-    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
-    budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let reached = std::cell::Cell::new(false);
-    with_pending_api_owner_v18(
-        ModuleFixture::Ordinary,
-        false,
-        &mut budget,
-        retained_projected_failure_loop,
-        |owner, launch, input, _, budget| {
-            assert!(owner.source_semantic().functions()[0].blocks()[2].statements().iter()
+    for (factory, constructor, expected) in [
+        (
+            retained_projected_failure_loop as fn() -> ProductionSemanticSsaOwnerV1,
+            false,
+            "typed allocation identity or representation requires its exact source contract",
+        ),
+        (
+            retained_constructed_failure_loop as fn() -> ProductionSemanticSsaOwnerV1,
+            true,
+            "failure history requires an exact whole scalar diagnostic",
+        ),
+    ] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        budget.reserve_storage(MODULE_FLOOR).unwrap();
+        let reached = std::cell::Cell::new(false);
+        with_pending_api_owner_v18(
+            ModuleFixture::Ordinary,
+            false,
+            &mut budget,
+            factory,
+            |owner, launch, input, _, budget| {
+                let original = &owner.source_semantic().functions()[0];
+                let SemanticStatementKindV1::Assign(assignment) =
+                    original.blocks()[2].statements()[0].kind()
+                else {
+                    panic!("original tuple assignment")
+                };
+                assert_eq!(
+                    matches!(
+                        assignment.value().kind(),
+                        SemanticRvalueKindV1::Aggregate(_)
+                    ),
+                    constructor
+                );
+                assert_eq!(
+                    matches!(
+                        assignment.value().kind(),
+                        SemanticRvalueKindV1::CheckedBinary(_)
+                    ),
+                    !constructor
+                );
+                let SemanticTerminatorKindV1::Assert {
+                    message:
+                        SemanticAssertMessageV1::DivisionByZero(SemanticOperandV1::Move(diagnostic)),
+                    ..
+                } = original.blocks()[2].terminator().kind()
+                else {
+                    panic!("failure-only projected Move")
+                };
+                assert_eq!(diagnostic.local().index(), 4);
+                assert_eq!(
+                    diagnostic.projections()[0].kind(),
+                    SemanticProjectionKindV1::Field(0)
+                );
+                assert!(
+                    matches!(original.blocks().last().unwrap().statements()[0].kind(),
+                SemanticStatementKindV1::Assign(success)
+                if matches!(success.value().kind(), SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place)) if place == diagnostic))
+                );
+                assert!(owner.source_semantic().functions()[0].blocks()[2].statements().iter()
                 .any(|row| matches!(row.kind(), SemanticStatementKindV1::Assign(assignment)
                     if matches!(assignment.value().kind(), SemanticRvalueKindV1::AddressOf { place, .. }
                         if place.local().index() == 4 && place.projections().is_empty()))));
-            assert!(
-                !owner.plans()[0]
-                    .plan()
-                    .promoted_variables()
-                    .iter()
-                    .any(|local| local.get() == 4)
-            );
-            let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
-            let roots = fixture.roots();
-            let prepared =
+                assert!(
+                    !owner.plans()[0]
+                        .plan()
+                        .promoted_variables()
+                        .iter()
+                        .any(|local| local.get() == 4)
+                );
+                let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
+                let roots = fixture.roots();
+                let prepared =
                 ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
                     owner,
                     launch,
@@ -383,26 +463,28 @@ fn promoted_failure_components_do_not_bypass_real_retained_aggregate_history() {
                     budget,
                 )
                 .unwrap();
-            let consumed = std::cell::Cell::new(false);
-            let error = prepared
-                .with_source_consumer_v18(budget, |_, _| -> SourceOwnedResultV18<()> {
-                    consumed.set(true);
-                    Ok(())
-                })
-                .err()
-                .expect("memory-backed diagnostics need their exact history");
-            assert!(!consumed.get());
-            assert!(
-                error
-                    .to_string()
-                    .contains("failure history requires an exact whole scalar diagnostic"),
-                "{error:?}"
-            );
-            reached.set(true);
-        },
-    );
-    assert!(reached.get());
-    assert_eq!(budget.storage(), MODULE_FLOOR);
+                let consumed = std::cell::Cell::new(false);
+                let error = prepared
+                    .with_source_consumer_v18(budget, |_, _| -> SourceOwnedResultV18<()> {
+                        consumed.set(true);
+                        Ok(())
+                    })
+                    .err()
+                    .expect("memory-backed diagnostics need every exact preceding source contract");
+                assert!(!consumed.get());
+                assert!(
+                    matches!(&error, ProductionSourceOwnedViewErrorV18::Source(
+                    ProductionPendingScopedSourceErrorV29::Source(ProductionSemanticKirErrorV1::Unsupported {
+                        function: 0, block: None, statement: None, detail,
+                    })) if *detail == expected),
+                    "{error:?}"
+                );
+                reached.set(true);
+            },
+        );
+        assert!(reached.get());
+        assert_eq!(budget.storage(), MODULE_FLOOR);
+    }
 }
 
 #[test]
