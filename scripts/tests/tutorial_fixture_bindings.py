@@ -724,12 +724,19 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
                 self.select(sources)
 
     def test_duplicate_macros_and_import_aliases_or_globs_reject_in_include_closure(self):
-        for hazard in ("macro_rules! include { () => {}; }", self.definition,
-                       "use other::include;", "use other::thing as include;", "use other::thing as alias;",
-                       "use other::*;", "use other::{thing, nested::*};"):
+        scope_error = "ambiguous macro or import scope"
+        item_error = "unsupported fixture item or module selection"
+        # Plain include names already reject in the legacy item check; braced
+        # imports and other aliases/globs exercise the new closure-scope check.
+        for hazard, error in (
+                ("macro_rules! include { () => {}; }", scope_error), (self.definition, scope_error),
+                ("use other::include;", item_error), ("use other::thing as include;", item_error),
+                ("use other::{include};", scope_error), ("use other::{thing as include};", scope_error),
+                ("use other::thing as alias;", scope_error), ("use other::*;", scope_error),
+                ("use other::{thing, nested::*};", scope_error)):
             for prefix in (hazard + '\ninclude!("body.rs");\n', 'include!("body.rs");\n' + hazard):
                 with self.subTest(prefix=prefix), self.assertRaisesRegex(
-                        self.identities.KernelInventoryError, "ambiguous macro or import scope"):
+                        self.identities.KernelInventoryError, error):
                     self.select(self.sources(prefix))
         with self.assertRaisesRegex(self.identities.KernelInventoryError, "ambiguous macro or import scope"):
             self.select(self.sources(body="macro_rules! include { () => {}; }"))
