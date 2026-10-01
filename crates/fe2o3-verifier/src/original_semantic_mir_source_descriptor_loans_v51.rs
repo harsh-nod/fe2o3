@@ -137,7 +137,7 @@ fn endpoint<'a, 'source>(
     place: &Place,
     define: bool,
     out: &mut Writer<'_, '_>,
-) -> Result<Endpoint<'a, 'source>> {
+) -> Result<Endpoint<'a, 'a>> {
     let value = witness_events::original_value(
         context.slots,
         function,
