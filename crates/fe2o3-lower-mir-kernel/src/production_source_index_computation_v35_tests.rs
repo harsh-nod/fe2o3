@@ -3,7 +3,12 @@ use super::*;
 mod reference_endpoint_tests;
 
 fn index_production_owner_v35() -> ProductionSemanticSsaOwnerV1 {
-    let component = index_reader_owner();
+    index_production_owner_from_component_v40(index_reader_owner())
+}
+
+fn index_production_owner_from_component_v40(
+    component: ProductionSemanticSsaOwnerV1,
+) -> ProductionSemanticSsaOwnerV1 {
     let semantic = component.source_semantic();
     let mut functions = semantic.functions().to_vec();
     for root in semantic.roots() {
@@ -71,7 +76,23 @@ fn index_relation_probe_v35(
         &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<()>,
 ) -> (SourceOwnedResultV18<()>, usize, usize, usize) {
-    let owner = index_production_owner_v35();
+    index_relation_probe_owner_v40(
+        index_production_owner_v35(),
+        work_limit,
+        storage_limit,
+        consume,
+    )
+}
+
+fn index_relation_probe_owner_v40(
+    owner: ProductionSemanticSsaOwnerV1,
+    work_limit: usize,
+    storage_limit: usize,
+    consume: impl FnOnce(
+        &ProductionSourceCorrespondenceV18<'_>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<()>,
+) -> (SourceOwnedResultV18<()>, usize, usize, usize) {
     assert!(owner.occurrence_storage().is_none());
     let semantic = owner.source_semantic();
     let inputs: Vec<_> = semantic
@@ -142,6 +163,57 @@ fn index_relation_probe_v35(
         budget.peak_storage(),
         budget.storage(),
     )
+}
+
+#[test]
+fn production_index_reader_correspondence_accepts_witness_moves_and_shared_reference_copies() {
+    for (moves, copies) in [(true, false), (false, true), (true, true)] {
+        let owner = index_production_owner_from_component_v40(
+            index_reader_owner_with_transfers_v40(moves, copies),
+        );
+        let completed = std::cell::Cell::new(false);
+        let (result, _, _, retained) =
+            index_relation_probe_owner_v40(owner, 1_000_000_000, 256 << 20, |relation, budget| {
+                source_scalar_normalization_scratch_v18(budget, |budget| {
+                    let retained = relation
+                        .source
+                        .root_row(0)?
+                        .rvalue_results
+                        .as_ref()
+                        .unwrap();
+                    assert_eq!(retained.index_readers.len(), 2);
+                    for block in [1, 3] {
+                        let reader = relation
+                            .index_reader_computation_v35(
+                                0,
+                                0,
+                                SemanticBlockIdV1::from_index(block),
+                                budget,
+                            )?
+                            .unwrap();
+                        assert_eq!(
+                            reader.expression(budget)?,
+                            ProductionSemanticExpressionV2::GlobalInvocation1d {
+                                scalar: ProductionSemanticScalarTypeV2::Integer {
+                                    signed: false,
+                                    bits: 64,
+                                },
+                            }
+                        );
+                        let definition = reader.original_definition(budget)?;
+                        assert_eq!(
+                            relation.inventory.definitions()[definition].ty,
+                            &Type::INDEX
+                        );
+                    }
+                    completed.set(true);
+                    Ok(())
+                })
+            });
+        result.unwrap_or_else(|error| panic!("moves={moves} copies={copies}: {error:?}"));
+        assert!(completed.get());
+        assert_eq!(retained, 0);
+    }
 }
 
 #[test]

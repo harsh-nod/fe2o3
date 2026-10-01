@@ -136,6 +136,13 @@ fn index_call(
 }
 
 fn index_reader_owner() -> ProductionSemanticSsaOwnerV1 {
+    index_reader_owner_with_transfers_v40(false, false)
+}
+
+fn index_reader_owner_with_transfers_v40(
+    move_witnesses: bool,
+    copy_references: bool,
+) -> ProductionSemanticSsaOwnerV1 {
     let base = owner(Case::Shared);
     let mut types = base.source_semantic().types()[..2].to_vec();
     for (tag, witness) in [(3, THREAD), (5, DISJOINT)] {
@@ -191,7 +198,7 @@ fn index_reader_owner() -> ProductionSemanticSsaOwnerV1 {
             ),
         );
     }
-    let blocks = vec![
+    let mut blocks = vec![
         block(10, vec![], index_call(1, vec![], 1, THREAD, 1)),
         block(
             11,
@@ -240,6 +247,95 @@ fn index_reader_owner() -> ProductionSemanticSsaOwnerV1 {
         ),
         block(14, vec![unit()], SemanticTerminatorKindV1::Return),
     ];
+    if copy_references {
+        blocks[1] = block(
+            11,
+            vec![
+                assign(
+                    place(2, THREAD_REF),
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Shared,
+                        place: place(1, THREAD),
+                    },
+                ),
+                assign(
+                    place(7, THREAD_REF),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(2, THREAD_REF))),
+                ),
+            ],
+            index_call(
+                2,
+                vec![SemanticOperandV1::Copy(place(7, THREAD_REF))],
+                3,
+                INDEX,
+                2,
+            ),
+        );
+    }
+    if move_witnesses {
+        blocks[2] = block(
+            12,
+            vec![assign(
+                place(8, THREAD),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(1, THREAD))),
+            )],
+            index_call(
+                3,
+                vec![SemanticOperandV1::Move(place(8, THREAD))],
+                4,
+                DISJOINT,
+                3,
+            ),
+        );
+    }
+    if move_witnesses || copy_references {
+        let mut statements = vec![];
+        if move_witnesses {
+            statements.push(assign(
+                place(9, DISJOINT),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(4, DISJOINT))),
+            ));
+        }
+        statements.push(assign(
+            place(5, DISJOINT_REF),
+            SemanticRvalueKindV1::Borrow {
+                kind: SemanticBorrowKindV1::Shared,
+                place: place(if move_witnesses { 9 } else { 4 }, DISJOINT),
+            },
+        ));
+        if copy_references {
+            statements.push(assign(
+                place(10, DISJOINT_REF),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(5, DISJOINT_REF))),
+            ));
+        }
+        blocks[3] = block(
+            13,
+            statements,
+            index_call(
+                4,
+                vec![SemanticOperandV1::Copy(place(
+                    if copy_references { 10 } else { 5 },
+                    DISJOINT_REF,
+                ))],
+                6,
+                INDEX,
+                4,
+            ),
+        );
+    }
+    let mut local_types = vec![
+        UNIT,
+        THREAD,
+        THREAD_REF,
+        INDEX,
+        DISJOINT,
+        DISJOINT_REF,
+        INDEX,
+    ];
+    if move_witnesses || copy_references {
+        local_types.extend([THREAD_REF, THREAD, DISJOINT, DISJOINT_REF]);
+    }
     let function = SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256([10; 32]),
         SemanticFunctionRoleV1::KernelRoot,
@@ -249,29 +345,21 @@ fn index_reader_owner() -> ProductionSemanticSsaOwnerV1 {
         SemanticConstGenericArgumentsIdentityV1::from_sha256([10; 32]),
         source(),
         index_abi(10, &[], UNIT),
-        [
-            UNIT,
-            THREAD,
-            THREAD_REF,
-            INDEX,
-            DISJOINT,
-            DISJOINT_REF,
-            INDEX,
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, ty)| {
-            local(
-                10 + index as u8,
-                ty,
-                if index == 0 {
-                    SemanticLocalRoleV1::Return
-                } else {
-                    SemanticLocalRoleV1::Temporary
-                },
-            )
-        })
-        .collect(),
+        local_types
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                local(
+                    10 + index as u8,
+                    ty,
+                    if index == 0 {
+                        SemanticLocalRoleV1::Return
+                    } else {
+                        SemanticLocalRoleV1::Temporary
+                    },
+                )
+            })
+            .collect(),
         SemanticBlockIdV1::from_index(0),
         blocks,
     )
@@ -634,6 +722,32 @@ fn original_shared_index_readers_emit_checked_scalar_values_and_reject_forged_re
         },
     )
     .unwrap();
+}
+
+#[test]
+fn original_index_witness_moves_and_shared_reference_copies_preserve_reader_receipts() {
+    let _guard = ObserverGuard;
+    for (moves, copies) in [(true, false), (false, true), (true, true)] {
+        READER_CHECKS.set(0);
+        SOURCE_INDEX_READER_OBSERVER_V29.set(Some(reader_checks));
+        cell_emission_tests::with_cell_source_lowered(
+            index_reader_owner_with_transfers_v40(moves, copies),
+            |plan, references, emitted, _| {
+                assert_eq!(plan.loans.len(), 2);
+                assert_eq!(references.index_witnesses.len(), 2);
+                assert!(
+                    references
+                        .index_witnesses
+                        .iter()
+                        .all(|proof| proof.get().is_some())
+                );
+                assert_eq!(emitted.len(), 1);
+                assert_eq!(READER_CHECKS.get(), 2);
+                Ok(())
+            },
+        )
+        .unwrap_or_else(|error| panic!("moves={moves} copies={copies}: {error:?}"));
+    }
 }
 
 fn corrupt_borrow(
