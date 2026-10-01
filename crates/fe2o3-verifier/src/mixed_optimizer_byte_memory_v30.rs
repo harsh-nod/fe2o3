@@ -116,6 +116,11 @@ struct MemoryStateV30 {
     valid: bool,
 }
 
+enum MemoryTagReadPurposeV39 {
+    VariantValidation,
+    DiscriminantRead,
+}
+
 enum MemoryOperationEffectV30 {
     Refused,
     Pure,
@@ -124,15 +129,24 @@ enum MemoryOperationEffectV30 {
     Write { address: MemoryValueV30, width: int, alignment: int, value: MemoryValueV30 },
     Copy { source: MemoryValueV30, destination: MemoryValueV30, width: int,
         source_alignment: int, destination_alignment: int, nonoverlapping: bool },
+    TagRead { address: MemoryValueV30, width: int, alignment: int,
+        purpose: MemoryTagReadPurposeV39, observation: Option<MemoryTagObservationV39> },
 }
 
 // Every executed operation retains its exact locator and intermediate validity.
 // A rejected read cannot disappear merely because final heaps happen to agree.
 struct MemoryOperationObservationV30 {
     operation: MemorySourceOperationV30,
+    before: MemoryStateV30,
+    after: MemoryStateV30,
     valid_before: bool,
     valid_after: bool,
     effect: MemoryOperationEffectV30,
+}
+
+open spec fn byte_observation_snapshots_valid_v39(observation: MemoryOperationObservationV30) -> bool {
+    observation.valid_before == observation.before.valid
+        && observation.valid_after == observation.after.valid
 }
 
 struct MemoryOperationResultV30 {

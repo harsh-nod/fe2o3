@@ -1,6 +1,7 @@
 //! All active original bodies share the exact source-owned invocation roster.
 //! Logical local ranges are not an allocation namespace. This source model
 //! does not discharge actual call splicing or any memory interpretation.
+use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInterpretationContextV39 as ByteContext;
 
 use super::{
     Error, Resource, Result, Writer,
@@ -111,7 +112,7 @@ pub(crate) fn generate_refinement_v36(
             fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
                 u32::try_from(function).map_err(|_| Resource::Arithmetic)?,
             ),
-            width,
+            ByteContext::native(width),
             &slots,
             out,
         )?);

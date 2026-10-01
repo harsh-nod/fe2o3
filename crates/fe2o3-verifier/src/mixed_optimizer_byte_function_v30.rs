@@ -29,6 +29,10 @@ mod control;
 #[path = "mixed_optimizer_private_byte_obligations_v38.rs"]
 mod physical;
 
+#[path = "mixed_optimizer_byte_interpretation_context_v39.rs"]
+mod interpretation;
+pub(crate) use interpretation::ByteInterpretationContextV39;
+
 /// The original canonical Alloca occurrence and its physical root's original
 /// MIR declaration. A declaring callee is deliberately not the physical owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,7 +67,7 @@ pub(super) struct ByteFunctionV30<'a, 'owner, R> {
     allocations: &'a R,
     function: Function,
     operations: Vec<ByteOperationV30<'a, 'owner>>,
-    width: FormalIndexWidth,
+    interpretation: ByteInterpretationContextV39<'a, 'owner>,
     required: usize,
     slot: usize,
     ledger: Ledger,
@@ -157,11 +161,13 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         inventory: &'a Inventory<'owner>,
         physical: &'a Physical<'a, 'owner>,
         function: Function,
-        width: FormalIndexWidth,
+        interpretation: ByteInterpretationContextV39<'a, 'owner>,
         allocations: &'a R,
         out: &mut Writer<'_, '_>,
     ) -> Result<Self> {
         allocations.check_owner(inventory.owner(), out)?;
+        interpretation.check_owner(inventory.owner(), out)?;
+        let width = interpretation.width;
         out.budget.reserve_storage(headers::<R>())?;
         out.budget.charge_work(4)?;
         if !physical.is_for(inventory) {
@@ -269,7 +275,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             allocations,
             function,
             operations,
-            width,
+            interpretation,
             required: out.budget.storage(),
             slot: std::ptr::from_ref(&*out.budget) as usize,
             ledger: out.budget.work_ledger_identity_v1(),
@@ -288,7 +294,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             self.failure.set(Some(Resource::Accounting));
             return Err(Resource::Accounting.into());
         }
-        let result = self.allocations.check_owner(self.inventory.owner(), out);
+        let result = self
+            .allocations
+            .check_owner(self.inventory.owner(), out)
+            .and_then(|()| self.interpretation.check_owner(self.inventory.owner(), out));
         if let Err(Error::Resource(error)) = &result {
             self.failure.set(Some(*error));
         }
@@ -402,7 +411,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         }
         emit!(
             out,
-            " {{ let observation = MemoryOperationObservationV30 {{ operation: MemorySourceOperationV30 {{ function: -1, block: -1, operation: -1 }}, valid_before: m.state.valid, valid_after: false, effect: MemoryOperationEffectV30::Refused }}; MemoryMicroResultV30 {{ next: MemoryMicroStateV30 {{ state: MemoryStateV30 {{ valid: false, ..m.state }}, observations: m.observations.push(observation), next_operation: -1 }}, observation }} }}\n}}\n"
+            " {{ let state = MemoryStateV30 {{ valid: false, ..m.state }}; let observation = MemoryOperationObservationV30 {{ operation: MemorySourceOperationV30 {{ function: -1, block: -1, operation: -1 }}, before: m.state, after: state, valid_before: m.state.valid, valid_after: false, effect: MemoryOperationEffectV30::Refused }}; MemoryMicroResultV30 {{ next: MemoryMicroStateV30 {{ state, observations: m.observations.push(observation), next_operation: -1 }}, observation }} }}\n}}\n"
         );
         emit!(
             out,
@@ -451,10 +460,20 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         let definitions = self.inventory.definitions().len();
         emit!(
             out,
-            "open spec fn byte_operation_{namespace}_{operation}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n if s.values.len() != {definitions} || s.pc != {block} || !byte_state_memory_well_formed_v30(s) || !byte_native_view_inputs_v38(s.memory, s.values) {{ MemoryOperationResultV30 {{ state: MemoryStateV30 {{ valid: false, ..s }}, observation: MemoryOperationObservationV30 {{ operation, valid_before: s.valid, valid_after: false, effect: MemoryOperationEffectV30::Refused }} }} }} else {{\n",
+            "open spec fn byte_operation_{namespace}_{operation}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n if s.values.len() != {definitions} || s.pc != {block} || !byte_state_memory_well_formed_v30(s) || !",
             coordinate.block.function.0,
             coordinate.block.block,
             coordinate.operation
+        );
+        self.interpretation.emit_state_predicate(
+            "s.memory",
+            "s.values",
+            Some("little_endian"),
+            out,
+        )?;
+        emit!(
+            out,
+            " {{ let state = MemoryStateV30 {{ valid: false, ..s }}; MemoryOperationResultV30 {{ state, observation: MemoryOperationObservationV30 {{ operation, before: s, after: state, valid_before: s.valid, valid_after: false, effect: MemoryOperationEffectV30::Refused }} }} }} else {{\n"
         );
         let before = ByteMemoryStateNamesV30 {
             values: "s.values",
@@ -555,7 +574,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         }
         emit!(
             out,
-            ";\n MemoryOperationResultV30 {{ state: MemoryStateV30 {{ pc: s.pc, values, memory, generations, frames, valid }}, observation: MemoryOperationObservationV30 {{ operation, valid_before: s.valid, valid_after: valid, effect }} }}\n }}\n}}\n"
+            ";\n let state = MemoryStateV30 {{ pc: s.pc, values, memory, generations, frames, valid }}; MemoryOperationResultV30 {{ state, observation: MemoryOperationObservationV30 {{ operation, before: s, after: state, valid_before: s.valid, valid_after: valid, effect }} }}\n }}\n}}\n"
         );
         Ok(())
     }
@@ -568,6 +587,7 @@ fn headers<R>() -> usize {
         + super::index_byte_operations_v37::headers()
         + control::headers()
         + physical::headers()
+        + interpretation::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()
         + size_of::<ByteOperationV30<'_, '_>>()

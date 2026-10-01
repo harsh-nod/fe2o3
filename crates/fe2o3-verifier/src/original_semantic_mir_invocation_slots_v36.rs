@@ -4,6 +4,7 @@
 use super::super::super::byte_function_v30::{ByteAllocationResolverV30, ByteAllocationSiteV30};
 use super::super::invocations::InvocationPlan;
 use super::{Error, Resource, Result, Writer, vector};
+use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInterpretationContextV39 as ByteContext;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKirOperationCoordinateV1 as Operation,
@@ -868,7 +869,7 @@ mod tests {
                                 &inventory,
                                 &physical,
                                 row.coordinate,
-                                FormalIndexWidth::Bits64,
+                                ByteContext::native(FormalIndexWidth::Bits64),
                                 &slots,
                                 &mut writer,
                             )?;

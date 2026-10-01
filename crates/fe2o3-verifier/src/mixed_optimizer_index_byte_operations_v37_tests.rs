@@ -51,8 +51,15 @@ fn byte_index_dispatch_requires_explicit_context_for_all_axes_and_hierarchies() 
         let allocations = NoAllocations(inventory.owner());
         for (width, bytes) in [(FormalIndexWidth::Bits32, 4), (FormalIndexWidth::Bits64, 8)] {
             let text = run(floor, LIMIT, LIMIT, |out| {
-                ByteFunctionV30::derive(inventory, physical, Function(0), width, &allocations, out)?
-                    .emit(81, out)
+                ByteFunctionV30::derive(
+                    inventory,
+                    physical,
+                    Function(0),
+                    ByteContext::native(width),
+                    &allocations,
+                    out,
+                )?
+                .emit(81, out)
             })
             .0
             .unwrap();
@@ -104,7 +111,7 @@ fn byte_index_derivation_resources_scale_linearly_without_hidden_kernel_coordina
                     inventory,
                     physical,
                     Function(0),
-                    FormalIndexWidth::Bits64,
+                    ByteContext::native(FormalIndexWidth::Bits64),
                     &allocations,
                     out,
                 )

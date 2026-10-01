@@ -1,4 +1,5 @@
 use super::*;
+use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInterpretationContextV39 as ByteContext;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work,
@@ -57,7 +58,7 @@ fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
                     inventory,
                     physical,
                     Function(0),
-                    FormalIndexWidth::Bits64,
+                    ByteContext::native(FormalIndexWidth::Bits64),
                     &allocations,
                     out,
                 )?
@@ -135,7 +136,7 @@ fn byte_function_private_generic_cast_preserves_tag_without_allocating_or_ending
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?
@@ -275,7 +276,7 @@ fn byte_function_consumes_all_operations_and_preserves_exact_global_observations
                 inventory,
                 physical,
                 Function(1),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?;
@@ -339,7 +340,7 @@ fn byte_function_edges_read_immutable_preedge_values_in_operand_order() {
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?
@@ -383,7 +384,7 @@ fn byte_function_unused_and_unreachable_unsupported_operations_refuse_before_tex
                     inventory,
                     physical,
                     Function(0),
-                    FormalIndexWidth::Bits64,
+                    ByteContext::native(FormalIndexWidth::Bits64),
                     &allocations,
                     out,
                 );
@@ -429,7 +430,7 @@ fn byte_function_volatile_and_pointer_payloads_refuse_before_text() {
                     inventory,
                     physical,
                     Function(0),
-                    FormalIndexWidth::Bits64,
+                    ByteContext::native(FormalIndexWidth::Bits64),
                     &allocations,
                     out,
                 );
@@ -456,7 +457,7 @@ fn byte_function_foreign_owner_and_unknown_index_width_refuse_before_text() {
                         inventory,
                         physical,
                         Function(0),
-                        width,
+                        ByteContext::native(width),
                         &allocations,
                         out,
                     );
@@ -480,7 +481,7 @@ fn byte_function_derivation_has_independent_function_local_resource_oracle() {
                     inventory,
                     physical,
                     Function((functions - 1) as u32),
-                    FormalIndexWidth::Bits64,
+                    ByteContext::native(FormalIndexWidth::Bits64),
                     &allocations,
                     out,
                 )
@@ -519,7 +520,7 @@ fn byte_function_emission_retains_resolver_and_budget_custody() {
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?;
@@ -563,7 +564,7 @@ fn byte_function_funded_foreign_ledger_poison_is_retained_after_original_restore
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?;
@@ -604,7 +605,7 @@ fn byte_function_full_emission_has_independent_work_and_exact_capacity_boundary(
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?
@@ -642,7 +643,7 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
         &'a R<'a>,
         Function,
         Vec<ByteOperationV30<'a, 'b>>,
-        FormalIndexWidth,
+        ByteContext<'a, 'b>,
         usize,
         usize,
         Ledger,
@@ -731,6 +732,18 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
     )>() + 2 * size_of::<physical::Guard>()
         + size_of::<Result<physical::Guard>>()
         + size_of::<(Kind, Obligation, [usize; 2], [bool; 2], [Result<()>; 2])>();
+    type Contracts<'a, 'b> =
+        super::super::target_view_contracts_v38::TargetByteViewContractsV38<'a, 'b>;
+    type ViewFields<'a, 'b> = Option<(&'a Contracts<'a, 'b>, usize)>;
+    type ContextFields<'a, 'b> = (FormalIndexWidth, ViewFields<'a, 'b>);
+    assert_eq!(
+        size_of::<ByteContext<'_, '_>>(),
+        size_of::<ContextFields<'_, '_>>()
+    );
+    let interpretation = size_of::<ContextFields<'_, '_>>()
+        + size_of::<ViewFields<'_, '_>>()
+        + size_of::<(&Contracts<'_, '_>, &Owner, &mut Writer<'_, '_>)>()
+        + size_of::<([&str; 3], Option<&str>, usize, std::fmt::Result, Result<()>)>();
     assert_eq!(
         super::super::pointer_byte_operations_v30::headers(),
         pointer
@@ -746,9 +759,10 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
     );
     assert_eq!(super::super::index_byte_operations_v37::headers(), index);
     assert_eq!(physical::headers(), physical);
+    assert_eq!(interpretation::headers(), interpretation);
     assert_eq!(
         headers::<R<'_>>(),
-        pointer + private + storage + index + control + physical + model
+        pointer + private + storage + index + control + physical + interpretation + model
     );
 }
 
@@ -843,7 +857,7 @@ fn byte_function_typed_pointer_storage_uses_layout_width_not_index_width() {
                         inventory,
                         physical,
                         Function(0),
-                        width,
+                        ByteContext::native(width),
                         &allocations,
                         out,
                     )?
@@ -875,7 +889,7 @@ fn byte_function_copy_observation_preserves_ordered_snapshot_and_overlap_contrac
                         inventory,
                         physical,
                         Function(0),
-                        FormalIndexWidth::Bits64,
+                        ByteContext::native(FormalIndexWidth::Bits64),
                         &allocations,
                         out,
                     )?
@@ -905,7 +919,7 @@ fn byte_function_typed_pointer_copy_has_exact_and_one_short_resources() {
                     inventory,
                     physical,
                     Function(0),
-                    FormalIndexWidth::Bits64,
+                    ByteContext::native(FormalIndexWidth::Bits64),
                     &allocations,
                     out,
                 )?

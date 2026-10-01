@@ -13,7 +13,7 @@ fn byte_function_physical_analysis_rejects_equal_bytes_from_a_foreign_inventory(
                     inventory,
                     physical,
                     Function(0),
-                    FormalIndexWidth::Bits64,
+                    ByteContext::native(FormalIndexWidth::Bits64),
                     &allocations,
                     out,
                 )
@@ -63,7 +63,7 @@ fn byte_function_unknown_external_initialization_keeps_complete_dynamic_guards()
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?
@@ -123,7 +123,7 @@ fn byte_function_incomplete_physical_copy_closure_is_not_silently_admitted() {
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )

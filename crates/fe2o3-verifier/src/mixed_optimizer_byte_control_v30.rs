@@ -150,7 +150,7 @@ fn emit_edge<R: ByteAllocationResolverV30>(
         );
         emit_value_type(
             model.inventory.definitions()[binding.target_definition].ty,
-            model.width,
+            model.interpretation.width,
             "transferred",
             out,
         )?;
@@ -194,7 +194,14 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
     );
     emit!(
         out,
-        "open spec fn byte_control_{namespace}_{block}_v30(done: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>) -> MemoryBlockResultV30 {{\n if done.values.len() != {definitions} || done.pc != {block} || !byte_state_memory_well_formed_v30(done) || !byte_native_view_inputs_v38(done.memory, done.values) {{ MemoryBlockResultV30 {{ state: MemoryStateV30 {{ valid: false, ..done }}, observations, returned: Seq::empty() }} }} else {{\n"
+        "open spec fn byte_control_{namespace}_{block}_v30(done: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>) -> MemoryBlockResultV30 {{\n if done.values.len() != {definitions} || done.pc != {block} || !byte_state_memory_well_formed_v30(done) || !"
+    );
+    model
+        .interpretation
+        .emit_state_predicate("done.memory", "done.values", None, out)?;
+    emit!(
+        out,
+        " {{ MemoryBlockResultV30 {{ state: MemoryStateV30 {{ valid: false, ..done }}, observations, returned: Seq::empty() }} }} else {{\n"
     );
     let uses = &model.inventory.uses()[row.terminator_uses.clone()];
     match row.terminator {
@@ -243,7 +250,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
                 );
                 emit_value_type(
                     model.inventory.definitions()[value.definition].ty,
-                    model.width,
+                    model.interpretation.width,
                     "returned",
                     out,
                 )?;
@@ -280,7 +287,7 @@ fn emit_switch_prefix<R>(
     );
     emit_value_type(
         model.inventory.definitions()[selector].ty,
-        model.width,
+        model.interpretation.width,
         "selector_value",
         out,
     )?;

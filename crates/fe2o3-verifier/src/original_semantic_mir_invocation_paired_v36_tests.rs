@@ -1,5 +1,6 @@
 use super::super::source_function::tests::with_slots;
 use super::*;
+use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInterpretationContextV39 as ByteContext;
 
 const LIMIT: usize = 256 * 1024 * 1024;
 
@@ -119,7 +120,7 @@ fn original_mir_paired_consumer_uses_real_scalar_storage_and_same_byte_dispatche
                         inventory,
                         &physical_analysis,
                         fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(physical as u32),
-                        FormalIndexWidth::Bits64,
+                        ByteContext::native(FormalIndexWidth::Bits64),
                         slots,
                         out,
                     )?

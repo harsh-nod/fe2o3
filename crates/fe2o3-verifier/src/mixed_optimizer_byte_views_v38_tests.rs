@@ -212,7 +212,7 @@ fn byte_view_actual_dispatch_refuses_supplied_contract_registries() {
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?
@@ -259,7 +259,7 @@ fn byte_view_unused_values_and_objects_remain_in_the_entry_census() {
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?
@@ -286,7 +286,7 @@ fn byte_view_address_formation_preserves_views_instead_of_rebuilding_naked_point
                 inventory,
                 physical,
                 Function(0),
-                FormalIndexWidth::Bits64,
+                ByteContext::native(FormalIndexWidth::Bits64),
                 &allocations,
                 out,
             )?
@@ -313,4 +313,220 @@ fn byte_view_native_inputs_check_initialized_fragments_but_not_uninitialized_his
     assert!(native.contains("MemoryByteV37::PointerFragment { pointer, .. }"));
     assert!(native.contains("object.relocations.contains_key(at) ==>"));
     assert!(native.contains("byte_pointer_has_no_guards_v38(object.relocations[at].pointer)"));
+}
+
+#[test]
+fn byte_view_classified_context_uses_one_closed_registry_at_every_actual_entrance() {
+    with_inventory(
+        &tag_module_v38(1, None, true),
+        |inventory, physical, floor| {
+            let allocations = NoAllocations(inventory.owner());
+            let text = run(floor, LIMIT, LIMIT, |out| {
+                let contracts = Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+                contracts.emit(73, out)?;
+                let context = ByteContext::classified(FormalIndexWidth::Bits64, &contracts, 73);
+                let body = ByteFunctionV30::derive(
+                    inventory,
+                    physical,
+                    Function(0),
+                    context,
+                    &allocations,
+                    out,
+                )?;
+                body.emit(38, out)
+            })
+            .0
+            .unwrap();
+            assert_eq!(
+                text.matches("open spec fn byte_target_view_contracts_73_v38(")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                text.matches("!byte_target_view_contracts_match_73_v38(s.memory, little_endian)")
+                    .count(),
+                3
+            );
+            assert_eq!(text.matches("!(byte_target_view_contracts_match_73_v38(done.memory, true) || byte_target_view_contracts_match_73_v38(done.memory, false))").count(), 1);
+            assert!(!text.contains("byte_native_view_inputs_v38(s.memory"));
+            assert!(!text.contains("byte_native_view_inputs_v38(done.memory"));
+            assert!(text.contains("MemoryTagEncodingV38::PointerNullNiche"));
+            // Registry availability does not itself admit a Variant opcode or
+            // install arbitrary native-entry guard metadata.
+            assert!(!text.contains("byte_capture_tag_guard_v38("));
+        },
+    );
+}
+
+#[test]
+fn byte_view_classified_context_rejects_foreign_inventory_and_index_contracts_before_text() {
+    let module = tag_module_v38(1, None, true);
+    with_inventory(&module, |inventory, _, floor| {
+        with_inventory(&module, |other, physical, _| {
+            let allocations = NoAllocations(other.owner());
+            let result = run(floor, LIMIT, LIMIT, |out| {
+                let contracts = Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+                ByteFunctionV30::derive(
+                    other,
+                    physical,
+                    Function(0),
+                    ByteContext::classified(FormalIndexWidth::Bits64, &contracts, 75),
+                    &allocations,
+                    out,
+                )
+                .map(|_| ())
+            });
+            assert!(matches!(
+                result.0,
+                Err(Error::Statement("target tag contract owner differs"))
+            ));
+        });
+    });
+    with_inventory(&module, |inventory, physical, floor| {
+        let allocations = NoAllocations(inventory.owner());
+        let result = run(floor, LIMIT, LIMIT, |out| {
+            let contracts = Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+            ByteFunctionV30::derive(
+                inventory,
+                physical,
+                Function(0),
+                ByteContext::classified(FormalIndexWidth::Bits32, &contracts, 75),
+                &allocations,
+                out,
+            )
+            .map(|_| ())
+        });
+        assert!(matches!(
+            result.0,
+            Err(Error::Statement("target tag formal INDEX width differs"))
+        ));
+    });
+}
+
+#[test]
+fn byte_view_classified_context_preserves_registry_custody_on_caught_foreign_budget() {
+    with_inventory(
+        &tag_module_v38(1, None, true),
+        |inventory, physical, floor| {
+            let allocations = NoAllocations(inventory.owner());
+            run(floor, LIMIT, LIMIT, |out| {
+                let contracts = Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+                let context = ByteContext::classified(FormalIndexWidth::Bits64, &contracts, 77);
+                let before = out.budget.work();
+                let mut foreign_work = Work::new(LIMIT);
+                let mut foreign_budget = Budget::new(&mut foreign_work, LIMIT);
+                foreign_budget.reserve_storage(out.budget.storage())?;
+                let mut foreign = Writer::new(&mut foreign_budget)?;
+                assert!(matches!(
+                    ByteFunctionV30::derive(
+                        inventory,
+                        physical,
+                        Function(0),
+                        context,
+                        &allocations,
+                        &mut foreign,
+                    ),
+                    Err(Error::Resource(Resource::Accounting))
+                ));
+                assert_eq!(foreign.budget.work(), 0);
+                assert!(foreign.finish()?.is_empty());
+                assert!(matches!(
+                    ByteFunctionV30::derive(
+                        inventory,
+                        physical,
+                        Function(0),
+                        context,
+                        &allocations,
+                        out,
+                    ),
+                    Err(Error::Resource(Resource::Accounting))
+                ));
+                assert_eq!(out.budget.work(), before);
+                Ok(())
+            })
+            .0
+            .unwrap();
+        },
+    );
+}
+
+#[test]
+fn byte_view_classified_context_has_exact_and_one_short_complete_emission_resources() {
+    with_inventory(
+        &tag_module_v38(1, None, true),
+        |inventory, physical, floor| {
+            let allocations = NoAllocations(inventory.owner());
+            let emit = |out: &mut Writer<'_, '_>| {
+                let contracts = Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+                contracts.emit(79, out)?;
+                ByteFunctionV30::derive(
+                    inventory,
+                    physical,
+                    Function(0),
+                    ByteContext::classified(FormalIndexWidth::Bits64, &contracts, 79),
+                    &allocations,
+                    out,
+                )?
+                .emit(80, out)
+            };
+            let measured = run(floor, LIMIT, LIMIT, emit);
+            let text = measured.0.unwrap();
+            let exact = run(floor, measured.1, measured.2, emit);
+            assert_eq!(exact.0.unwrap(), text);
+            assert_eq!((exact.1, exact.2), (measured.1, measured.2));
+            assert!(matches!(run(floor, measured.1 - 1, measured.2, emit).0,
+            Err(Error::Resource(Resource::Work(error))) if error.limit() == measured.1 - 1 && error.actual() == measured.1));
+            assert!(matches!(run(floor, measured.1, measured.2 - 1, emit).0,
+            Err(Error::Resource(Resource::Storage(error))) if error.limit() == measured.2 - 1 && error.actual() == measured.2));
+        },
+    );
+}
+
+#[test]
+fn byte_actual_observations_capture_exact_step_states_including_refusal() {
+    with_inventory(&memory_module(1), |inventory, physical, floor| {
+        let allocations = NoAllocations(inventory.owner());
+        let text = run(floor, LIMIT, LIMIT, |out| {
+            ByteFunctionV30::derive(
+                inventory,
+                physical,
+                Function(0),
+                ByteContext::native(FormalIndexWidth::Bits64),
+                &allocations,
+                out,
+            )?
+            .emit(81, out)
+        })
+        .0
+        .unwrap();
+        assert_eq!(
+            text.matches("before: s, after: state, valid_before: s.valid")
+                .count(),
+            6
+        );
+        assert_eq!(
+            text.matches("before: m.state, after: state, valid_before: m.state.valid")
+                .count(),
+            1
+        );
+        assert_eq!(text.matches("let state = MemoryStateV30 { pc: s.pc, values, memory, generations, frames, valid }").count(), 3);
+        assert_eq!(
+            text.matches("let state = MemoryStateV30 { valid: false, ..s }")
+                .count(),
+            3
+        );
+        assert!(
+            text.contains(
+                "let state = MemoryStateV30 { valid: false, ..m.state }; let observation"
+            )
+        );
+        assert!(
+            view_spec_body_v38("byte_observation_snapshots_valid_v39")
+                .contains("observation.valid_before == observation.before.valid")
+        );
+        assert!(
+            view_spec_body_v38("byte_observation_snapshots_valid_v39")
+                .contains("observation.valid_after == observation.after.valid")
+        );
+    });
 }

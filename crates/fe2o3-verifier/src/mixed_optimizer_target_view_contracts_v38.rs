@@ -184,6 +184,19 @@ impl<'a, 'owner> TargetByteViewContractsV38<'a, 'owner> {
         self.retain(classify(rows, row, self.width, out))
     }
 
+    pub(super) fn check_owner_width_v39(
+        &self,
+        owner: &Owner,
+        width: FormalIndexWidth,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.check_owner(owner, out)?;
+        if self.width != width {
+            return Err(Error::Statement("target tag formal INDEX width differs"));
+        }
+        Ok(())
+    }
+
     /// Emit one closed owner-qualified physical registry. Unsupported rows are
     /// absent, not approximated; callers must inspect row_class before admission.
     pub(super) fn emit(&self, namespace: usize, out: &mut Writer<'_, '_>) -> Result<()> {
