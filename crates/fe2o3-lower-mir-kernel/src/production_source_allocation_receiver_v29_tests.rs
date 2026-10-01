@@ -802,6 +802,19 @@ fn allocation_receiver_full_pending_access_v29(
         SourceTypeDescriptorV1, SourceTypeDescriptorV3, SourceTypeRecordV1, ValidName,
     };
     let owner = owner_with_carrier_access(live, observation);
+    if matches!(observation, 5 | 6) {
+        assert_eq!(
+            owner
+                .plan_for_function(ROOT)
+                .unwrap()
+                .plan()
+                .entry_definitions()
+                .iter()
+                .any(|entry| entry.variable().get() == 1),
+            !live,
+            "only the single-borrow owner uses the promoted SSA entry"
+        );
+    }
     let occurrences = owner.occurrence_storage().unwrap().retained_storage();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000_000);
     let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000_000);
@@ -901,6 +914,11 @@ fn allocation_receiver_full_pending_access_v29(
             // holds its shared loan. Source lifetime checking must refuse
             // before a backing choice or physical entry initialization.
             "source reference referent storage dies with a live loan"
+        } else if observation == 6 && !live {
+            // The promoted native Slice has no aggregate-field binding in
+            // its SSA archive. This path fails before retained object entry
+            // initialization; the reborrowed owner below is instead retained.
+            "execution availability differs from its source SSA instance"
         } else {
             "typed entry allocation requires source-bound object materialization"
         };
@@ -908,7 +926,7 @@ fn allocation_receiver_full_pending_access_v29(
             matches!(error, ProductionPendingScopedSourceErrorV29::Source(
             ProductionSemanticKirErrorV1::Unsupported { detail, .. })
             if detail == expected),
-            "observation {observation}: {error:?}"
+            "observation {observation}, live={live}: {error:?}"
         );
         assert_eq!(budget.storage(), FLOOR + occurrences);
         budget.release_storage(occurrences).unwrap();
@@ -969,9 +987,18 @@ fn allocation_receiver_existing_entry_keeps_original_restarts_raw_and_field_borr
 fn allocation_receiver_whole_owner_moves_preserve_the_native_slice_without_wrapper_storage() {
     for live in [false, true] {
         allocation_receiver_full_pending_access_v29(live, false, 5);
-        allocation_receiver_full_pending_access_v29(live, false, 6);
         allocation_receiver_full_pending_access_v29(live, true, 5);
     }
+}
+
+#[test]
+fn allocation_receiver_promoted_moved_wrapper_field_requires_an_archived_aggregate() {
+    allocation_receiver_full_pending_access_v29(false, false, 6);
+}
+
+#[test]
+fn allocation_receiver_retained_moved_wrapper_field_requires_object_materialization() {
+    allocation_receiver_full_pending_access_v29(true, false, 6);
 }
 
 #[test]

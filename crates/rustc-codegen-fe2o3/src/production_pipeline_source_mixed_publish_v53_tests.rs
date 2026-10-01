@@ -42,7 +42,7 @@ fn typed_capsule_association_is_not_an_integer_or_nominal_v5_substitution() {
         .split_once("fn check_strict_handoff_v53(")
         .unwrap()
         .1
-        .split_once("impl ")
+        .split_once("\nimpl<'tcx> ProductionCompilation")
         .unwrap()
         .0;
     for required in [
