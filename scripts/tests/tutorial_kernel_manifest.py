@@ -457,8 +457,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         identities = report["kernelInventory"]
         for counts in (report, identities):
             self.assertEqual(counts["knownVariantObligationCount"], 123)
-            self.assertEqual(counts["pendingVariantCount"], 121)
-            self.assertEqual(counts["unregisteredDisplayItemCount"], 27)
+            self.assertEqual(counts["pendingVariantCount"], 106)
+            self.assertEqual(counts["unregisteredDisplayItemCount"], 24)
         self.assertIs(identities["runtimeCensusValidated"], False)
         self.assertEqual(identities["knownKernelIdentityCount"], 61)
         self.assertEqual(identities["negativeCaseCount"], 3)
@@ -477,7 +477,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                             for row in report["displayObservations"]))
         self.assertEqual(report["stageStatus"], "not-evaluated")
         self.assertEqual(report["variantBindingStatus"], "partial")
-        self.assertEqual(report["sourceBoundVariantCount"], 2)
+        self.assertEqual(report["sourceBoundVariantCount"], 17)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["productionContract"], self.original["productionContract"])
 
@@ -638,12 +638,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "865e97d1e76b5fa4a8c38d06e9e019189cbb4d2a5c9a4e88369b982879ec83d5")
+                         "a336502182904a2009c6e204b6690faea60a735a1d3acc4513ed731c5701fefd")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 75, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 28, "source-driver-contract": 14, "fixture-source-contract": 36,
+                         {"pending": 25, "source-driver-contract": 14, "fixture-source-contract": 39,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
@@ -651,11 +651,26 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                  if variant["status"] == "source-bound"]
         self.assertEqual(bound, [
             ("fixture:gfx942-fill-simulation:fill", "simt"),
+            ("fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate", "simt"),
+            ("fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate", "simt"),
+            ("fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention", "simt"),
+            ("fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention", "simt"),
+            ("fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention", "simt"),
+            ("fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention", "simt"),
+            ("fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention", "simt"),
+            ("fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual", "simt"),
+            ("fixture:gfx950-four-branch-residual:gfx950_four_branch_residual", "simt"),
+            ("fixture:gfx950-kda-decode-baseline:gfx950_kda_decode", "simt"),
+            ("fixture:gfx950-kda-decode:gfx950_kda_decode", "simt"),
+            ("fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill", "simt"),
+            ("fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill", "simt"),
+            ("fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix", "simt"),
+            ("fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix", "simt"),
             ("source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1", "simt"),
         ])
         pending = [variant for row in inventory["kernels"] for variant in row["variants"]
                    if variant["status"] == "pending"]
-        self.assertEqual(len(pending), 121)
+        self.assertEqual(len(pending), 106)
         self.assertTrue(all(variant["source"] is None for variant in pending))
         display = {(row["lessonId"], row["tabOrdinal"], row["kernelSymbol"]): row
                    for row in inventory["displayItems"]}
@@ -875,7 +890,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(self.manifest, before)
         self.assertEqual(expected["sourcePath"], "examples/fill/src/lib.rs")
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 2)
+        self.assertEqual(report["sourceBoundVariantCount"], 17)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertEqual(report["stageStatus"], "not-evaluated")
@@ -926,7 +941,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
         binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 3)
+        self.assertEqual(report["sourceBoundVariantCount"], 18)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["variantBindingStatus"], "partial")
         self.assertIs(report["qualified"], False)
