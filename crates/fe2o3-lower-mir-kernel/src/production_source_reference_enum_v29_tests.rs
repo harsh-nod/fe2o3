@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_source_enum_helper_abi_v55_tests.rs"]
+mod helper_abi_tests;
+
 #[path = "production_source_reference_enum_resources_v29_tests.rs"]
 mod resource_tests;
 

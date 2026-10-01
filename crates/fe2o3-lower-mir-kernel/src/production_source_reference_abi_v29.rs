@@ -1,5 +1,7 @@
 // Original reference words validate the captured Rust ABI only. They never
 // become KIR pointer/word parameters; physical payload comes from the same loan.
+include!("production_source_enum_helper_abi_v55.rs");
+
 fn source_reference_abi_scalar_v29(
     plan: &SourceReferencePlanV29<'_, '_>,
     loan: usize,
@@ -323,6 +325,9 @@ fn check_source_reference_parameter_v29(
             return Err(execution_call_error_v29());
         }
         node = plan.children[argument_sum_v1(&[first, field as usize])?];
+    }
+    if check_source_enum_helper_parameter_v55(plan, instance, mapped, node, budget)? {
+        return Ok(true);
     }
     if !source_reference_node_has_loan_v29(plan, node, budget)?
         && !source_reference_node_has_selected_pointer_v29(plan, node, budget)?
