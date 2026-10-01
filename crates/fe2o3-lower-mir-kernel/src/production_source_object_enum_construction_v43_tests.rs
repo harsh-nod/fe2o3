@@ -298,6 +298,24 @@ fn observe_original_enum_construction_v43(
                         }
                     ));
                     assert!(matches!(projected.path.count, 1 | 2));
+                    let result = row.result.expect("constructor projection result");
+                    let definition = lowered
+                        .function
+                        .body
+                        .as_ref()
+                        .unwrap()
+                        .blocks
+                        .iter()
+                        .flat_map(|block| &block.operations)
+                        .flat_map(|operation| &operation.results)
+                        .find(|definition| definition.id == result)
+                        .expect("emitted constructor projection definition");
+                    assert!(
+                        matches!(&definition.ty, Type::Pointer(pointer)
+                        if pointer.access == AccessMode::WriteOnly
+                            && *pointer.pointee == Type::StorageObject(projected.projected_schema)),
+                        "unfinished enum payloads must remain write-only"
+                    );
                     views += 1;
                 }
                 ScopedObjectRoleV29::WriteValue { destination, .. } => {

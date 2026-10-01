@@ -447,7 +447,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                             Type::pointer(
                                 Type::StorageObject(schema),
                                 access.address_space,
-                                AccessMode::ReadWrite,
+                                AccessMode::WriteOnly,
                             ),
                             OperationKind::Storage(ScopedObjectOperationV29::Project {
                                 base: address,
@@ -508,7 +508,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                                 Type::pointer(
                                     Type::StorageObject(field.schema),
                                     access.address_space,
-                                    AccessMode::ReadWrite,
+                                    AccessMode::WriteOnly,
                                 ),
                                 OperationKind::Storage(ScopedObjectOperationV29::Project {
                                     base,
