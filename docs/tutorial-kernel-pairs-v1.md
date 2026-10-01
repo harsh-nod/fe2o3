@@ -202,7 +202,13 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   Here `test` is false, including for the inner source library selected by a
   host-side test driver. This is an expected source contract, not authentication
   of a rustc invocation or inference that every Cargo library build is non-test.
-  Unknown cfg, item macros, transforming attributes,
+  Ordinary brace-delimited `macro_rules! name { ... }` definitions are inert
+  textual items: their bodies do not contribute functions or modules and are
+  not expanded or checked as Rust. Function-body macro calls remain opaque;
+  they may invoke other macros or reference helpers. The complete source/Cargo
+  closure remains identity-bearing, but neither resolved expansion dependencies
+  nor a compiler-expanded entry roster is inferred. Kernel attributes on macro
+  definitions reject. Unknown cfg, item macro calls, `include!`, transforming attributes,
   build-script cfg, dependency features, nested/inline/path-selected modules,
   duplicate modules or selected symbols reject a claimed binding. Such sources
   retain `pending` until an exact selection can be established. This bounded

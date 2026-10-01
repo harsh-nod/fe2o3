@@ -576,7 +576,7 @@ class FixtureDisplayTests(unittest.TestCase):
             with self.subTest(attributes=attributes), self.assertRaises(IDENTITIES.KernelInventoryError):
                 self.selected_attributes(attributes)
         for source in (
-            "#[cfg_attr(not(test), allow(unused))] macro_rules! m { () => {} }",
+            "#[cfg_attr(not(test), allow(unused))] m! { () => {} }",
             "#[cfg_attr(not(test), allow(unused))] include!(\"other.rs\");",
         ):
             with self.subTest(source=source), self.assertRaisesRegex(

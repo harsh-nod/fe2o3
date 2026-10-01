@@ -425,11 +425,23 @@ def _fixture_attribute(source: str, code: str, pairs: dict[int, int], start: int
     return True, int(name == "kernel")
 
 
+def _fixture_macro_definition(source: str, start: int, end: int) -> bool:
+    """Recognize an inert definition header without accepting masked literals."""
+    if not source.startswith("macro_rules", start):
+        return False
+    cursor = _fixture_trivia_end(source, start + len("macro_rules"), end)
+    if cursor == end or source[cursor] != "!":
+        return False
+    cursor = _fixture_trivia_end(source, cursor + 1, end)
+    name = IDENTIFIER.match(source, cursor, end)
+    return name is not None and _fixture_trivia_end(source, name.end(), end) == end
+
+
 def _fixture_declarations(
     source: str, features: set[str], scan_functions: Callable,
     rust_syntax: Callable, budget: _Budget,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Select top-level functions and ordinary external modules only."""
+    """Select physical functions/modules; macro definitions are never expanded."""
     _utf8(source, "fixture source")
     functions = budget.rows(scan_functions(source), "fixture function items")
     code, pairs = rust_syntax(source)
@@ -474,15 +486,20 @@ def _fixture_declarations(
         last_byte = first_byte + len(source[start:boundary].encode("utf-8"))
         end_byte = last_byte + len(source[boundary:cursor].encode("utf-8"))
         previous_character, previous_byte = cursor, end_byte
+        inert_macro = code[boundary] == "{" and _fixture_macro_definition(source, start, boundary)
+        if inert_macro and kernels:
+            _fail("kernel attribute on an inert fixture macro definition")
         item_functions = []
         while function_index < len(functions) and functions[function_index]["functionUtf8Offset"] < end_byte:
             function = functions[function_index]
             function_index += 1
-            if enabled and function["attributedKernel"]:
+            if enabled and not inert_macro and function["attributedKernel"]:
                 if not first_byte <= function["functionUtf8Offset"] < last_byte:
                     _fail("nested fixture kernel declaration is unsupported")
                 item_functions.append(function)
-        if not enabled:
+        # The scanner and item budgets still include the complete definition;
+        # apparent function tokens in its body are not physical declarations.
+        if not enabled or inert_macro:
             continue
         if kernels > 1:
             _fail("duplicate active fixture kernel attributes")

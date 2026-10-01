@@ -10,6 +10,7 @@ import itertools
 from pathlib import Path
 import tomllib
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -327,13 +328,31 @@ class SystemsFixtureBindingTests(FixtureBindingTests):
 
 
 class AttentionCfgSelectionTests(unittest.TestCase):
-    """Validate real library selection, without claiming its macro-bearing closure."""
+    """Bind physical source declarations, never Rust macro expansion or execution."""
 
     base_features = (
         "kernel-kda-decode", "kernel-kda-prefill", "kernel-content-sparse-attention",
         "kernel-deepseek-sparse-attention", "kernel-compressed-hybrid-attention",
         "kernel-attnres-aggregate", "kernel-four-branch-residual", "kernel-mhc-sinkhorn-mix",
     )
+    # Independent physical coordinates include feature-distinct same-name entries.
+    coordinates = {
+        "gfx950-attnres-aggregate": ("kernel.rs", 66151),
+        "gfx950-attnres-aggregate-explicit-reuse": ("ablation.rs", 1111),
+        "gfx950-compressed-hybrid-attention": ("kernel.rs", 55423),
+        "gfx950-compressed-hybrid-attention-division-baseline": ("kernel.rs", 55423),
+        "gfx950-content-sparse-attention": ("kernel.rs", 24024),
+        "gfx950-content-sparse-attention-reciprocal-reuse": ("kernel.rs", 24024),
+        "gfx950-deepseek-sparse-attention": ("kernel.rs", 42129),
+        "gfx950-four-branch-residual": ("kernel.rs", 69970),
+        "gfx950-four-branch-residual-explicit": ("ablation.rs", 3730),
+        "gfx950-kda-decode": ("kernel.rs", 10324),
+        "gfx950-kda-decode-baseline": ("kda_baseline.rs", 1610),
+        "gfx950-kda-prefill": ("kernel.rs", 15126),
+        "gfx950-kda-prefill-baseline": ("kda_baseline.rs", 4908),
+        "gfx950-mhc-sinkhorn-mix": ("kernel.rs", 73034),
+        "gfx950-mhc-sinkhorn-mix-scalar": ("ablation.rs", 5895),
+    }
 
     @classmethod
     def setUpClass(cls):
@@ -347,14 +366,15 @@ class AttentionCfgSelectionTests(unittest.TestCase):
         cls.cargo = tomllib.loads((package / "Cargo.toml").read_text())
         cls.library = (package / "src/lib.rs").read_text()
         cls.kernel = (package / "src/kernel.rs").read_text()
+        cls.original = cls.parent.load_manifest(ROOT / "config/tutorial-kernel-manifest-v1.json")
 
-    def declarations(self, source, direct):
+    def declarations(self, source, direct=(), budget=None):
         enabled = self.parent.cargo_feature_closure(self.cargo, list(direct), False, "attention cfg test")
         code = self.parent._rust_code_without_comments_and_literals(source)
         pairs = self.parent._rust_delimiters(code)
         return self.identities._fixture_declarations(
             source, set(enabled), self.parent.ordinary_rust_function_items,
-            lambda _: (code, pairs), self.identities._Budget(4096))
+            lambda _: (code, pairs), budget if budget is not None else self.identities._Budget(4096))
 
     def test_real_library_selects_each_single_base_feature(self):
         for feature in self.base_features:
@@ -389,11 +409,156 @@ class AttentionCfgSelectionTests(unittest.TestCase):
             self.declarations(self.library, ["kernel-kda-decode-baseline-v1",
                                              "kernel-kda-prefill-baseline-v1"])
 
-    def test_real_kernel_module_macros_still_prevent_source_binding(self):
+    def test_real_kernel_macro_definitions_preserve_selected_functions(self):
         for feature in self.base_features:
-            with self.subTest(feature=feature), self.assertRaisesRegex(
-                    self.identities.KernelInventoryError, "unsupported fixture item or module selection"):
-                self.declarations(self.kernel, [feature])
+            with self.subTest(feature=feature):
+                functions, modules = self.declarations(self.kernel, [feature])
+                fixture_id = "gfx950-" + feature.removeprefix("kernel-")
+                self.assertEqual(len(functions), 1)
+                self.assertEqual(functions[0]["functionUtf8Offset"], self.coordinates[fixture_id][1])
+                self.assertEqual(modules, [])
+
+    def source_document(self, fixture_id):
+        document = copy.deepcopy(self.original)
+        fixture = next(row for row in document["compilerFixtures"] if row["fixtureId"] == fixture_id)
+        symbol, = fixture["compilerInput"]["kernelSymbols"]
+        kernel = next(row for row in document["kernelInventory"]["kernels"]
+                      if row["kernelId"] == f"fixture:{fixture_id}:{symbol}")
+        filename, offset = self.coordinates[fixture_id]
+        path = "examples/gfx950_advanced_attention/src/" + filename
+        binding = {
+            "implementationKernelId": kernel["kernelId"], "selection": kernel["selections"][0],
+            "selectionSha256": self.identities._selection_identity(
+                fixture["compilerInput"], symbol, self.identities._Budget(4096)),
+            "sourcePath": path, "sourceSha256": hashlib.sha256((ROOT / path).read_bytes()).hexdigest(),
+            "functionUtf8Offset": offset,
+        }
+        kernel["variants"][0].update(status="source-bound", source=binding)
+        return document, fixture, binding
+
+    def test_all_registered_attention_selections_use_the_authenticated_parent(self):
+        registered = {row["fixtureId"] for row in self.original["compilerFixtures"]
+                      if row["compilerInput"]["packageManifest"]
+                      == "examples/gfx950_advanced_attention/Cargo.toml"}
+        self.assertEqual(registered, self.coordinates.keys())
+        identities = {}
+        for fixture_id in sorted(registered):
+            with self.subTest(fixture_id=fixture_id):
+                document, fixture, binding = self.source_document(fixture_id)
+                before = copy.deepcopy(document)
+                result = self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
+                self.assertEqual(document, before)
+                expected = sum(variant["source"] is not None
+                               for row in document["kernelInventory"]["kernels"] for variant in row["variants"])
+                self.assertEqual(result["sourceBoundVariantCount"], expected)
+                self.assertEqual(result["sourceBoundPairCount"], 0)
+                self.assertFalse(result["inventoryComplete"])
+                self.assertIsNone(result["requiredPairCount"])
+                symbol, = fixture["compilerInput"]["kernelSymbols"]
+                identities.setdefault(symbol, []).append(binding["selectionSha256"])
+        self.assertEqual(sorted(map(len, identities.values())), [1, 2, 2, 2, 2, 2, 2, 2])
+        self.assertTrue(all(len(values) == len(set(values)) for values in identities.values()))
+
+    def test_same_named_host_fallback_cannot_replace_the_selected_source(self):
+        document, _, binding = self.source_document("gfx950-attnres-aggregate")
+        binding["functionUtf8Offset"] = 68105
+        with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
+            self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
+
+    def test_cached_macro_and_helper_bytes_must_match_the_physical_closure(self):
+        for before, after in (("let bits = $value;", "let bits = $value ^ 1;"),
+                              ("let mut result = 1.0_f32;", "let mut result = 2.0_f32;")):
+            with self.subTest(before=before):
+                document, fixture, _ = self.source_document("gfx950-attnres-aggregate")
+                cache = {}
+                self.parent.validate_compiler_input(ROOT, fixture, "macro closure test", cache)
+                package = cache[fixture["compilerInput"]["packageManifest"]]
+                sources = package["packageSources"]
+                index = next(index for index, (path, _) in enumerate(sources)
+                             if path.as_posix().endswith("gfx950_advanced_attention/src/kernel.rs"))
+                path, source = sources[index]
+                self.assertIn(before, source)
+                package["packageSources"] = [*sources[:index], (path, source.replace(before, after)),
+                                             *sources[index + 1:]]
+                with self.assertRaisesRegex(SystemExit, "physical source differs from its validated closure"):
+                    self.parent.validate_kernel_inventory(document, None, repo_root=ROOT, package_cache=cache)
+
+    def test_macro_bodies_are_inert_even_with_apparent_nested_kernel_items(self):
+        for definition in (
+            "macro_rules! local { () => { #[kernel] fn visible() {} }; }",
+            "macro_rules /* outer /* inner */ end */ ! /* gap */ local {\n"
+            " () => { mod nested { #[kernel] fn fake() {} } }; }",
+            "macro_rules! local { ($value:expr) => {{ other!($value); helper($value) }}; };",
+        ):
+            source = "// UTF-8: \u03bb\n" + definition + "\n#[kernel] fn visible() { local!(helper()); }"
+            with self.subTest(definition=definition):
+                functions, modules = self.declarations(source)
+                self.assertEqual(functions, [{"kernelSymbol": "visible", "attributedKernel": True,
+                                             "functionUtf8Offset": source.encode().rindex(b"visible")}])
+                self.assertEqual(modules, [])
+
+    def test_macro_definitions_preserve_cfg_without_selecting_body_tokens(self):
+        definition = "macro_rules! local { () => { #[kernel] fn fake() {} }; }"
+        for cfg in ("test", "not(test)", 'feature = "kernel-kda-decode"'):
+            for features in ((), ("kernel-kda-decode",)):
+                source = f"#[cfg({cfg})] {definition}\n#[kernel] fn visible() {{}}"
+                with self.subTest(cfg=cfg, features=features):
+                    functions, modules = self.declarations(source, features)
+                    self.assertEqual([row["kernelSymbol"] for row in functions], ["visible"])
+                    self.assertEqual(modules, [])
+
+    def test_kernel_attributes_on_macro_definitions_reject_even_when_cfg_inactive(self):
+        for attributes in ("#[kernel]", "#[cfg(test)] #[kernel]",
+                           "#[cfg_attr(not(test), kernel)]", "#[kernel] #[kernel]"):
+            with self.subTest(attributes=attributes), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "kernel attribute on an inert fixture macro"):
+                self.declarations(attributes + " macro_rules! local { () => {} }")
+
+    def test_only_exact_braced_definition_headers_are_inert(self):
+        for item in (
+            'macro_rules! "hidden" local {}', 'macro_rules! local "hidden" {}',
+            'macro_rules "hidden" ! local {}', 'macro_rules! r#"hidden"# local {}',
+            "macro_rules! local() {};", "macro_rules! local [() => {}];",
+            "macro_rules! local (() => {});", "pub macro_rules! local {}",
+            "macro_rules! {}", "macro_rulesX! local {}",
+        ):
+            with self.subTest(item=item), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "unsupported fixture item"):
+                self.declarations(item + "\n#[kernel] fn visible() {}")
+        for item in ("macro_rules! r#local {}", "macro_rules! local extra {}", "macro_rules! local;"):
+            with self.subTest(item=item), self.assertRaisesRegex(SystemExit, "unterminated macro_rules body"):
+                self.declarations(item + "\n#[kernel] fn visible() {}")
+
+    def test_item_calls_includes_derives_and_actual_nested_kernels_stay_unsupported(self):
+        definition = "macro_rules! local { () => {}; }\n"
+        for item, error in (
+            ("local!();", "unsupported fixture item"),
+            ("local! { #[kernel] fn fake() {} }", "nested fixture kernel"),
+            ("crate::local!();", "unsupported fixture item"),
+            ('include!("body.rs");', "unsupported fixture item"),
+            ("#[derive(Clone)] struct Value;", "selection attribute"),
+            ("#[macro_export] macro_rules! other {}", "selection attribute"),
+            ("#[unknown] macro_rules! other {}", "selection attribute"),
+            ("#[cfg(unknown)] macro_rules! other {}", "cfg predicate"),
+            ("fn outer() { #[kernel] fn fake() {} }", "nested fixture kernel"),
+        ):
+            with self.subTest(item=item), self.assertRaisesRegex(self.identities.KernelInventoryError, error):
+                self.declarations(definition + item)
+
+    def test_inert_definitions_keep_exact_record_and_source_byte_budgets(self):
+        source = "macro_rules! local { () => { #[kernel] fn fake() {} }; }\n#[kernel] fn visible() {}"
+        budget = self.identities._Budget(3)  # One scanned function and two physical items.
+        self.declarations(source, budget=budget)
+        self.assertEqual(budget.used, 3)
+        with self.assertRaisesRegex(self.identities.KernelInventoryError, "record bound"):
+            self.declarations(source, budget=self.identities._Budget(2))
+        for byte_limit, succeeds in ((len(source.encode()), True), (len(source.encode()) - 1, False)):
+            with patch.object(self.identities, "MAX_TEXT_BYTES", byte_limit):
+                if succeeds:
+                    self.declarations(source)
+                else:
+                    with self.assertRaisesRegex(self.identities.KernelInventoryError, "byte bound"):
+                        self.declarations(source)
 
 
 class RowSourceBindingTests(unittest.TestCase):
