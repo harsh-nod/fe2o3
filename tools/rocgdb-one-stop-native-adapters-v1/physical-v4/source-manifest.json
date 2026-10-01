@@ -432,8 +432,8 @@
         },
         {
           "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
-          "bytes": 26297,
-          "sha256": "37ff3cc9aa99da6fed9d65dcdfb1400f814a9b046aa145d5b68f2a0e8f465d39"
+          "bytes": 26663,
+          "sha256": "91b0a6c7ab2678f302f4e33f13c834fa76758669a46131e1a7d251ddeb3fb584"
         },
         {
           "path": "gdb/amd-dbgapi-one-stop-native-snapshot-v1.inc",
@@ -442,8 +442,8 @@
         },
         {
           "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
-          "bytes": 11432,
-          "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
+          "bytes": 11369,
+          "sha256": "8da53f55e01bb959f6ad8dcec6c22e66498fe62d7a469d18156ad00dd61570ea"
         },
         {
           "path": "gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc",
@@ -751,8 +751,8 @@
     },
     {
       "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
-      "bytes": 26297,
-      "sha256": "37ff3cc9aa99da6fed9d65dcdfb1400f814a9b046aa145d5b68f2a0e8f465d39"
+      "bytes": 26663,
+      "sha256": "91b0a6c7ab2678f302f4e33f13c834fa76758669a46131e1a7d251ddeb3fb584"
     },
     {
       "path": "gdb/amd-dbgapi-one-stop-native-snapshot-v1.inc",
@@ -761,8 +761,8 @@
     },
     {
       "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
-      "bytes": 11432,
-      "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
+      "bytes": 11369,
+      "sha256": "8da53f55e01bb959f6ad8dcec6c22e66498fe62d7a469d18156ad00dd61570ea"
     },
     {
       "path": "gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc",
@@ -1028,8 +1028,8 @@
   "patches": [
     {
       "path": "patches/0001-disabled-loaded-maintenance.patch",
-      "bytes": 26726,
-      "sha256": "fc5516ae78059308b2d58efc1ebc4a746d8a6c24289e3c390698c85f27e2c8d7",
+      "bytes": 29206,
+      "sha256": "9c4f6b0c20cf9f5b12aff078fe868550392d24f8187efc13708dac3e74593535",
       "changes": [
         {
           "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
@@ -1066,8 +1066,8 @@
           },
           "postimage": {
             "path": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
-            "bytes": 26297,
-            "sha256": "37ff3cc9aa99da6fed9d65dcdfb1400f814a9b046aa145d5b68f2a0e8f465d39"
+            "bytes": 26663,
+            "sha256": "91b0a6c7ab2678f302f4e33f13c834fa76758669a46131e1a7d251ddeb3fb584"
           }
         },
         {
@@ -1079,8 +1079,8 @@
           },
           "postimage": {
             "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
-            "bytes": 11432,
-            "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
+            "bytes": 11369,
+            "sha256": "8da53f55e01bb959f6ad8dcec6c22e66498fe62d7a469d18156ad00dd61570ea"
           }
         },
         {
@@ -1120,14 +1120,14 @@
     {
       "path": "src/amd-dbgapi-one-stop-native-resume-v1.inc",
       "source": "gdb/amd-dbgapi-one-stop-native-resume-v1.inc",
-      "bytes": 26297,
-      "sha256": "37ff3cc9aa99da6fed9d65dcdfb1400f814a9b046aa145d5b68f2a0e8f465d39"
+      "bytes": 26663,
+      "sha256": "91b0a6c7ab2678f302f4e33f13c834fa76758669a46131e1a7d251ddeb3fb584"
     },
     {
       "path": "src/amd-dbgapi-one-stop-native-v1.h",
       "source": "gdb/amd-dbgapi-one-stop-native-v1.h",
-      "bytes": 11432,
-      "sha256": "b821dcedecd23477b5d2878d12d9c5aa81fcaf39eab7d8f0ba761f43c0b7fec5"
+      "bytes": 11369,
+      "sha256": "8da53f55e01bb959f6ad8dcec6c22e66498fe62d7a469d18156ad00dd61570ea"
     },
     {
       "path": "src/amd-dbgapi-owned-one-stop-v1.h",
@@ -1153,8 +1153,8 @@
   },
   "transforms": {
     "path": "ordinary-transforms.json",
-    "bytes": 60770,
-    "sha256": "d0a087688b991e0521cb59147f6ad975e685443e83df387604457c824de51b14"
+    "bytes": 65190,
+    "sha256": "5327338ebc107b461a8b1a3f7283efd34a3b04e362c6100b1633cff4a94eb9d2"
   },
   "test_payloads": [
     {
@@ -1169,8 +1169,8 @@
     },
     {
       "path": "tests/helper-extraction.json",
-      "bytes": 5108,
-      "sha256": "d2484db9b740f17e306970cd9c51b0bc8366447dbe08b7db5d276f395efcda65"
+      "bytes": 5711,
+      "sha256": "5a6545b2663d96d8356ce65d29a9f434cd8722d92f18188cdcfab67d14873e86"
     },
     {
       "path": "tests/loaded-scratch.inc",
@@ -1190,7 +1190,7 @@
     {
       "path": "tests/source-files-tests.mjs",
       "bytes": 6517,
-      "sha256": "79555faeac7778ac5751ab2b9a9d933a71312c48d08dfb9e48cda9be72b84d1d"
+      "sha256": "bf1856e39c7c27cfdbc1d48c7300190ad21e3ee89c2580bd126bb9e89610e441"
     },
     {
       "path": "tests/initialization-tests.mjs",
@@ -1209,8 +1209,28 @@
     },
     {
       "path": "tests/maintenance-placement-tests.mjs",
-      "bytes": 10061,
-      "sha256": "b1bdaedd137662f86f258d83fb5c37584db17474508fe4abe7af451a551f8235"
+      "bytes": 10461,
+      "sha256": "913c3e75c6c5226e372b33cc7efaa8787ca3844f6116ad9dd373e62db902efff"
+    },
+    {
+      "path": "tests/actual-finish-step-bodies.inc",
+      "bytes": 2251,
+      "sha256": "fd9fa8dc6657384309249a7db88484dda7453d002dad055e41153595946efe90"
+    },
+    {
+      "path": "tests/finish-event-context.cc",
+      "bytes": 10436,
+      "sha256": "b94f1bd7fbd474d7f810c08e225292350844ec09b39d3adb416444d247c651a9"
+    },
+    {
+      "path": "tests/finish-event-context-tests.mjs",
+      "bytes": 4726,
+      "sha256": "b6b3bf8d3ca0d3f6db10b43dcd9ce90b0756b142004c6a366e59625555723f38"
+    },
+    {
+      "path": "tests/finish-event-context-extraction.json",
+      "bytes": 1987,
+      "sha256": "b813669ec53ac9736922173ffa2a794337e055502aca8fce048f7db075e34e0b"
     }
   ]
 }
