@@ -1455,6 +1455,16 @@ run_rocm_compile() {
         --test production_neutral_workgroup_reduce_driver_v1 \
         ordinary_row_affine_source_matches_oracle_and_replay -- \
         --ignored --exact
+  run_step rocm-production-mixed-tile-host-oracle \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml \
+        --no-default-features --test mixed_tile -- --test-threads=1
+  run_step rocm-production-scoped-tile-public-cpu-cli \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_scoped_tile_cpu_driver_v1 \
+        ordinary_mixed_tile_source_executes_public_cpu_cli_paths -- \
+        --ignored --exact --test-threads=1
   run_step rocm-production-simulation-bundle-v3-typed-layouts \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

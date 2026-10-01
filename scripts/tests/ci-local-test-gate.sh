@@ -1258,6 +1258,8 @@ for production_step in \
   rocm-production-simulation-bundle-v5-wave-debugger \
   rocm-production-simulation-bundle-v5-workgroup-cpu \
   rocm-production-row-affine-source-sim \
+  rocm-production-mixed-tile-host-oracle \
+  rocm-production-scoped-tile-public-cpu-cli \
   rocm-production-simulation-bundle-v6-nested-control-flow; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
@@ -1271,6 +1273,14 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_neutral_workgroup_reduce_driver_v1 ordinary_row_affine_source_matches_oracle_and_replay -- --ignored --exact' \
   "$(step_command rocm-production-row-affine-source-sim)" \
   'ROCm compile omitted the exact row-affine source/SIM regression'
+assert_equals \
+  'env cargo test --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml --no-default-features --test mixed_tile -- --test-threads=1' \
+  "$(step_command rocm-production-mixed-tile-host-oracle)" \
+  'ROCm compile omitted the separate mixed-tile host oracle tests'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_scoped_tile_cpu_driver_v1 ordinary_mixed_tile_source_executes_public_cpu_cli_paths -- --ignored --exact --test-threads=1' \
+  "$(step_command rocm-production-scoped-tile-public-cpu-cli)" \
+  'ROCm compile omitted the exact public scoped-tile CPU CLI regression'
 assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 write_only_witness_mappings_retain_exact_ranked_predicates -- --ignored --exact' \
   "$(step_command rocm-production-write-only-witness-mappings)" \
