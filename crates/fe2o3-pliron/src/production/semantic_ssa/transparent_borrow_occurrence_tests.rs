@@ -473,13 +473,44 @@ fn overwriting_a_borrow_does_not_give_the_old_occurrence_a_consumer() {
 
 #[test]
 fn an_ordinary_redefinition_or_storage_kill_cannot_reuse_a_borrow_occurrence() {
-    for replacement in [
-        test_assign(2, SemanticOperandV1::Copy(test_scalar_place(3))),
-        test_storage_dead(2),
+    for (replacement, independent_fresh_borrow) in [
+        (
+            test_assign(2, SemanticOperandV1::Copy(test_scalar_place(3))),
+            true,
+        ),
+        (
+            test_assign(2, SemanticOperandV1::Move(test_scalar_place(3))),
+            false,
+        ),
+        (test_storage_dead(2), false),
+        (
+            SemanticStatementV1::new(
+                fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
+                SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(2)),
+            ),
+            false,
+        ),
     ] {
         let function = two_occurrences(vec![test_borrow(2, 1), replacement]);
         let callables = [test_intrinsic_callable(function.abi().clone())];
-        assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+        let sites = transparent_borrow_sites_v1(&function, &callables);
+        let expected = if independent_fresh_borrow {
+            // The Copy has a distinct, ungrounded definition. It cannot reuse
+            // block 0's borrow, but need not poison block 1's fresh definition.
+            [SemanticTransparentBorrowSiteV1 {
+                block: 1,
+                statement: 0,
+            }]
+            .into_iter()
+            .collect()
+        } else {
+            BTreeSet::new()
+        };
+        assert_eq!(sites, expected);
+        assert!(!sites.contains(&SemanticTransparentBorrowSiteV1 {
+            block: 0,
+            statement: 0,
+        }));
         assert!(!source_is_promotable(&function, &callables));
     }
 }
