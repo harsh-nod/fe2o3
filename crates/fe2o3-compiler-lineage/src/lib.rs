@@ -8,6 +8,7 @@ mod capsule_v4;
 mod capsule_v5;
 mod error;
 mod mixed_middle_end_v29;
+mod mixed_middle_end_v50;
 mod multi_root_correspondence_payload_v2;
 mod multi_root_proof_roster_v2;
 mod multi_root_target_lineage_v2;
@@ -39,6 +40,7 @@ pub use capsule_v4::*;
 pub use capsule_v5::*;
 pub use error::{LineageDecodeErrorV3, LineageErrorV3};
 pub use mixed_middle_end_v29::*;
+pub use mixed_middle_end_v50::*;
 pub use multi_root_correspondence_payload_v2::{
     MULTI_ROOT_CORRESPONDENCE_PAYLOAD_MAGIC_V2, MULTI_ROOT_CORRESPONDENCE_PAYLOAD_POLICY_V2,
     MULTI_ROOT_CORRESPONDENCE_PAYLOAD_VERSION_V2, MultiRootCorrespondenceBlockV2,
