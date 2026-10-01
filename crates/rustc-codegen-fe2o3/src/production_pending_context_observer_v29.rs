@@ -1,8 +1,6 @@
 //! Test-only observation of a consuming source constructor; no executable continuation.
 use super::*;
-use fe2o3_lower_mir_kernel::{
-    ProductionPendingScopedSourceOwnerV29 as Pending, ProductionSemanticKirLimitsV1,
-};
+use fe2o3_lower_mir_kernel::ProductionPendingScopedSourceOwnerV29 as Pending;
 use std::convert::Infallible;
 
 fn observe_pending_v29(
@@ -15,20 +13,7 @@ fn observe_pending_v29(
         &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<(), ProductionPipelineError>,
 ) -> Result<Infallible, ProductionPipelineError> {
-    let source = execution_source_v29(entries, &ssa, budget)?.ok_or(
-        ProductionPipelineError::ContextHandoff(ProductionContextRootErrorV29::RootCensus),
-    )?;
-    let owner = with_projected_execution_source_v29(&source, budget, |input, budget| {
-        Ok(Pending::try_materialize_with_budget(
-            ssa,
-            launch,
-            input,
-            ProductionSemanticKirLimitsV1::default(),
-            budget,
-        ))
-    })
-    .map_err(ProductionPipelineError::ContextHandoff)?
-    .map_err(ProductionPipelineError::PendingScopedSource)?;
+    let owner = pending_source_owner_v29(entries, ssa, launch, budget)?;
     // Projection vectors are gone before replay or inspection; adopted storage stays live.
     let ledger = budget.work_ledger_identity_v1();
     let adopted = owner.adopted_storage();

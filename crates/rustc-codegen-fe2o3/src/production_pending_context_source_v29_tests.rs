@@ -9,6 +9,12 @@ const PENDING_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v
 #[path = "production_context_vecadd_source_v29_tests.rs"]
 mod vecadd_tests;
 
+#[path = "production_scoped_tile_cpu_source_v29_tests.rs"]
+mod tile_cpu_tests;
+
+#[path = "production_scoped_tile_mixed_cpu_source_v29_tests.rs"]
+mod mixed_tile_cpu_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct PendingObservation {
     source: [u8; 32],
@@ -18,6 +24,9 @@ struct PendingObservation {
     context_issues: usize,
     derives: usize,
     scope_ends: usize,
+    masked_tile_loads: usize,
+    tile_fragments: usize,
+    fragment_parts: usize,
     global_stores: usize,
     literals: [u32; 32],
     literal_count: usize,
@@ -45,6 +54,9 @@ fn inspect(owner: &Pending, budget: &mut Budget<'_>) -> Result<PendingObservatio
         context_issues: 0,
         derives: 0,
         scope_ends: 0,
+        masked_tile_loads: 0,
+        tile_fragments: 0,
+        fragment_parts: 0,
         global_stores: 0,
         literals: [0; 32],
         literal_count: 0,
@@ -68,6 +80,15 @@ fn inspect(owner: &Pending, budget: &mut Budget<'_>) -> Result<PendingObservatio
                         }
                         OperationKind::Execution(Execution::ScopeEnd { .. }) => {
                             result.scope_ends += 1
+                        }
+                        OperationKind::Execution(Execution::MaskedTileLoadU32 { .. }) => {
+                            result.masked_tile_loads += 1
+                        }
+                        OperationKind::Execution(Execution::TileIntoFragmentU32 { .. }) => {
+                            result.tile_fragments += 1
+                        }
+                        OperationKind::Execution(Execution::FragmentIntoPartsU32 { .. }) => {
+                            result.fragment_parts += 1
                         }
                         OperationKind::Store { access, .. }
                         | OperationKind::GuardedStore { access, .. }
@@ -164,6 +185,9 @@ fn check_pending_sources(cases: &[(&str, &str)], profiles: &[(u8, u8)]) {
             let derives = usize::from(label != "plain");
             assert_eq!(observation.derives, derives);
             assert_eq!(observation.scope_ends, derives);
+            assert_eq!(observation.masked_tile_loads, 0);
+            assert_eq!(observation.tile_fragments, 0);
+            assert_eq!(observation.fragment_parts, 0);
             assert_eq!(observation.global_stores, 1);
             assert!(observation.replay_storage_stable);
             assert!(observation.canonical_bytes > 0);
@@ -211,6 +235,107 @@ fn actual_workgroup_sources_construct_and_replay_pending_owner() {
 
 #[test]
 #[ignore = "requires pinned nightly rust-src, authentic AMD SDK dependencies and source compilation"]
+fn actual_shared_slice_entry_constructs_and_replays_pending_owner() {
+    const SOURCE: &str = r#"use fe2o3_device::{kernel, thread, DisjointSlice, KernelContext};
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn shared_input_probe(
+    _ctx: KernelContext<'_>,
+    input: &[u32],
+    mut output: DisjointSlice<u32>,
+    seed: u32,
+) {
+    let _ = input;
+    if let Some(slot) = output.get_mut(thread::index_1d()) {
+        *slot = seed;
+    }
+}
+"#;
+    run_actual_sources::<PendingObservation>(
+        &[("shared_input", SOURCE), ("shared_input", SOURCE)],
+        &[(0, 0), (0, 2), (3, 0), (3, 2)],
+        PENDING_CHILD,
+        "PENDING_SHARED_SLICE_ENTRY_OBSERVATION",
+        str::to_owned,
+        |_, _, label, observation, observations| {
+            assert_eq!(observation.kernels, 1);
+            assert_eq!(observation.context_issues, 1);
+            assert_eq!(observation.derives, 0);
+            assert_eq!(observation.scope_ends, 0);
+            assert_eq!(observation.masked_tile_loads, 0);
+            assert_eq!(observation.tile_fragments, 0);
+            assert_eq!(observation.fragment_parts, 0);
+            assert_eq!(observation.global_stores, 1);
+            assert!(observation.replay_storage_stable);
+            assert!(observation.canonical_bytes > 0);
+            if let Some(previous) = observations.get(label) {
+                assert_eq!(
+                    &observation, previous,
+                    "fresh-process shared-slice entry replay"
+                );
+            } else {
+                observations.insert(label.to_owned(), observation);
+            }
+        },
+    );
+}
+
+const MASKED_TILE_SOURCE: &str = r#"use fe2o3_device::{kernel, thread, DisjointSlice, KernelContext, MaskedTile1D};
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn masked_tile_probe(
+    mut ctx: KernelContext<'_>,
+    input: &[u32],
+    base: usize,
+    mut output: DisjointSlice<u32>,
+) {
+    let ([value], [active]) = ctx.with_workgroup(move |workgroup| {
+        let tile = MaskedTile1D::<u32, 64, 1, _>::load_masked(&workgroup, input, base);
+        tile.into_fragment().into_parts()
+    });
+    if active {
+        if let Some(slot) = output.get_mut(thread::index_1d()) {
+            *slot = value;
+        }
+    }
+}
+"#;
+
+#[test]
+#[ignore = "requires pinned nightly rust-src, authentic AMD SDK dependencies and source compilation"]
+fn actual_masked_tile_source_constructs_and_replays_pending_owner() {
+    run_actual_sources::<PendingObservation>(
+        &[
+            ("masked_tile", MASKED_TILE_SOURCE),
+            ("masked_tile", MASKED_TILE_SOURCE),
+        ],
+        &[(0, 0), (0, 2), (3, 0), (3, 2)],
+        PENDING_CHILD,
+        "PENDING_MASKED_TILE_SOURCE_OBSERVATION",
+        str::to_owned,
+        |_, _, label, observation, observations| {
+            assert_eq!(observation.kernels, 1);
+            assert_eq!(observation.context_issues, 1);
+            assert_eq!(observation.derives, 1);
+            assert_eq!(observation.scope_ends, 1);
+            assert_eq!(observation.masked_tile_loads, 1);
+            assert_eq!(observation.tile_fragments, 1);
+            assert_eq!(observation.fragment_parts, 1);
+            assert_eq!(observation.global_stores, 1);
+            assert!(observation.replay_storage_stable);
+            assert!(observation.canonical_bytes > 0);
+            if let Some(previous) = observations.get(label) {
+                assert_eq!(
+                    &observation, previous,
+                    "fresh-process masked-tile owner replay"
+                );
+            } else {
+                observations.insert(label.to_owned(), observation);
+            }
+        },
+    );
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src, authentic AMD SDK dependencies and source compilation"]
 fn actual_scalar_source_constructs_and_replays_pending_owner() {
     run_actual_sources::<PendingObservation>(
         &[("scalar", "let _ = seed;"), ("scalar", "let _ = seed;")],
@@ -232,6 +357,9 @@ pub fn callback_probe(_ctx: KernelContext<'_>, seed: u32) {{
             assert_eq!(observation.context_issues, 1);
             assert_eq!(observation.derives, 0);
             assert_eq!(observation.scope_ends, 0);
+            assert_eq!(observation.masked_tile_loads, 0);
+            assert_eq!(observation.tile_fragments, 0);
+            assert_eq!(observation.fragment_parts, 0);
             assert_eq!(observation.global_stores, 0);
             assert!(observation.replay_storage_stable);
             assert!(observation.canonical_bytes > 0);

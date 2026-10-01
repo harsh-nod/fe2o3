@@ -12676,6 +12676,7 @@ include!("production_pending_scoped_source_v29.rs");
 include!("production_scoped_tile_schedule_v29.rs");
 include!("production_scoped_tile_materialization_v29.rs");
 include!("production_scoped_tile_materialization_replay_v29.rs");
+include!("production_scoped_tile_observation_v29.rs");
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped source replay remains gated")

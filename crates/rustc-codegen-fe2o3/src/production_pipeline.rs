@@ -91,8 +91,11 @@ pub(crate) enum ProductionPipelineError {
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     SemanticSsa(fe2o3_pliron::ProductionSemanticSsaErrorV1),
     ContextHandoff(fe2o3_lower_mir_kernel::ProductionContextRootErrorV29),
-    #[cfg(test)]
     PendingScopedSource(fe2o3_lower_mir_kernel::ProductionPendingScopedSourceErrorV29),
+    ScopedTileObservation(
+        fe2o3_lower_mir_kernel::ProductionScopedTileObservationErrorV29<std::convert::Infallible>,
+    ),
+    ScopedTileObservationIncomplete,
     #[cfg(test)]
     PendingScopedObservationIncomplete,
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
@@ -211,8 +214,9 @@ impl fmt::Display for ProductionPipelineError {
                 write!(formatter, "production compilation semantic SSA planning failed: {error}")
             }
             Self::ContextHandoff(error) => write!(formatter, "production compilation context root handoff failed: {error}"),
-            #[cfg(test)]
             Self::PendingScopedSource(error) => write!(formatter, "production pending scoped observation failed: {error}"),
+            Self::ScopedTileObservation(error) => write!(formatter, "production scoped tile observation failed: {error}"),
+            Self::ScopedTileObservationIncomplete => formatter.write_str("scoped tile CPU candidate observation is incomplete and grants no execution authority"),
             #[cfg(test)]
             Self::PendingScopedObservationIncomplete => formatter.write_str("pending scoped observation is incomplete and grants no execution authority"),
             Self::RankedProjection(error) => {
@@ -378,8 +382,9 @@ impl std::error::Error for ProductionPipelineError {
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::ContextHandoff(error) => Some(error),
-            #[cfg(test)]
             Self::PendingScopedSource(error) => Some(error),
+            Self::ScopedTileObservation(error) => Some(error),
+            Self::ScopedTileObservationIncomplete => None,
             #[cfg(test)]
             Self::PendingScopedObservationIncomplete => None,
             Self::RankedProjection(error) => Some(error),

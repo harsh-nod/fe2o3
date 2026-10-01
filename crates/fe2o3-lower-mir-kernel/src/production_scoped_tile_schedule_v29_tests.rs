@@ -4,6 +4,9 @@ use crate::ProductionScopeEventCandidateV29;
 #[path = "production_scoped_tile_materialization_v29_tests.rs"]
 mod materialization_v29_tests;
 
+#[path = "production_scoped_tile_observation_v29_tests.rs"]
+mod observation_v29_tests;
+
 const SCHEDULE_LIMIT: usize = 100_000_000;
 const SCHEDULE_FLOOR: usize = 37;
 
