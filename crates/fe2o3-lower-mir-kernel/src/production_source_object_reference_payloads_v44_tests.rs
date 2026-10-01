@@ -3,6 +3,11 @@ thread_local! {
     static REFERENCE_ENUM_QUERIES_V44: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+mod demand_backing_v45_tests {
+    use super::*;
+    include!("production_source_reference_enum_demand_backing_v45_tests.rs");
+}
+
 fn original_reference_enum_owner_v44() -> ProductionSemanticSsaOwnerV1 {
     ENUM_CONSTRUCTION_FIELDS_V43.set(0);
     let base = original_enum_construction_owner_v43();
