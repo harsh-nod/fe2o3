@@ -60,7 +60,63 @@ test compilation, at `d39c35e2ae35e571c39654af02a24fb8b42d79a8`. Its independent
 source/tool/runner/raw-log audit passed; raw log SHA-256 is
 `9875f9f8bf9940a8b9a175f040807ad54f565dcddfe7e590fd31df865508700f`.
 This did not execute tests, protected proof or hardware. Component execution
-**r343 is running** on that same frozen candidate.
+**r343 finished with 369 artifact-transaction tests passed and two failed** on
+that same frozen candidate; Cargo stopped before the remaining suites. One
+failure is an independent peak-storage oracle mismatch; the crossed-receipt
+fixture exceeds the unchanged 256 MiB limit before reaching its intended guard.
+The subsequent test repairs preserve that limit.
+
+The remaining five suites **r344 finished with 1,186 passed, four failed and
+71 ignored**: closure capability 293/0/4, coordinator 327/0/23, FFI 152/0/0,
+lineage 82/0/0, protected spawn 332/4/44 (passed/failed/ignored). The four spawn
+failures concern obsolete retained-frame expectations, late funding and the
+expected first refusal. Combined top-level totals are **1,555 passed, six failed,
+71 ignored**; nested subprocess summaries are not counted twice. Both independent
+source/tool/runner/raw audits passed. Raw log SHA-256:
+r343 `8cf7fb323b8a1f805429649963606713ccdae68e63f34d5531ff7be07fafc204`;
+r344 `1247afcfcac27edccf52f6b7b33b82f8f04a793757b3b8282d53c661b0815ac7`.
+Ignored native controls and the newer compiler repairs receive no execution
+credit from these runs.
+
+The newer ten-package **r345 failed** at
+`f865a5b67164a1a99c19aaf5def19317ca2f3d3c`: two new LICM test sites called a
+nonexistent `StorageLayoutLimitsV1::default()`. No tests executed. The independent
+source/tool/runner/raw audit passed; raw log SHA-256 is
+`13cd9a0582ecced52a485c9d9b6e7a5d1b328fdce62099dc84e645a9ec62641b`.
+The reviewed test correction uses the existing explicit two-row layout contract,
+without increasing the work or storage limits.
+
+Local integration at `d111e0d45dfb817c6c4f725aa3844dc0ca329d91` also includes
+the artifact and spawn test repairs, original call-custody veto controls,
+nonconstant scalar-call/input-map controls, and the complete original-source
+currentness transport chain. This retains the original Cargo capture/watch owner
+through the broker and a mandatory V5 root-intake role. Sampled currentness is
+not immutable compiler-read protection, generated dependency provenance, or
+source publication authority. Existing execution refusal remains. The focused
+lowerer run **r346 failed before test execution** on that frozen candidate:
+the new scalar-call fixture repeated a non-`Copy` type in an array and left a
+generic error type ambiguous, producing three diagnostics. Its independent
+audit passed; raw log SHA-256 is
+`db699570c29abe1531778525358d868d196e8d879a06bb1cc3ab6ad86affde52`.
+The two-line test correction is reviewed and integrated locally. New lowerer
+and verifier controls remain unexecuted. Four-library run **r347 passed** on
+the same frozen candidate, without the lowerer test target: artifact transaction
+371/0/0, coordinator 333/0/23, protocol 133/0/0 and protected spawn 337/0/44
+(passed/failed/ignored). Combined top-level totals are **1,174 passed, zero
+failed and 67 ignored**; nested subprocess summaries are not counted twice.
+All six earlier artifact/spawn failures now pass, along with the new protocol
+and coordinator currentness controls. Ignored native tests remain unexecuted.
+The independent source/tool/runner/raw audit passed; raw log SHA-256 is
+`c30bb53881f2091b0a26ac420a7730e435111e5fe4616c358a9cece41b8a605d`.
+No protected proof or GPU execution occurred.
+
+The runtime staging adapter passed **28 local controls**, including ELF W+X
+rejection, nonblocking FIFO rejection, detached-descendant cleanup, and reached
+post-spawn initialization/SIGINT/SIGTERM failures with original signal-mask and
+subreaper restoration. An independent review found the initialization cleanup
+gap after the earlier 26-test run; the two additional tests cover its correction.
+These controls execute local test children, not the compiler, protected proof or
+a GPU kernel. No actual runtime assembly or approval is credited.
 
 Subsequent reviewed local integration at
 `1e0a09788a6ce886a5d4370b860a801283b407c5` preserves original typed storage at
@@ -94,8 +150,10 @@ Earlier successful V3 provisioning below remains prerequisite evidence for its
 own older bundle, not current compiler or proof execution.
 
 Both public mains were independently read at
-`d125dd02b91f60756c052f5d9f734d24731765cc`. Their concurrent BF16 source
-authoring workflow and retained helper accounting are preserved. The workflow's
+`8b382d7c4c812b3fcfcbd70191ee401cc1905132`. Their concurrent basic-assembly
+milestone documentation is preserved and does not complete issue #272. The
+earlier BF16 source authoring workflow and retained helper accounting are also
+preserved. The workflow's
 27 local Node controls passed in this integration; they test diagnostic
 transport and do not establish compiler, simulator or GPU qualification.
 The unfinished implementation remains local. Its full pending-range audit at
