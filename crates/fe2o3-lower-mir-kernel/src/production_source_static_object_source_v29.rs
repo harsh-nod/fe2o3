@@ -246,6 +246,7 @@ fn source_static_object_expected_location_inner_v29(
     if !matches!(
         access,
         SourceReferenceAccessV29::Read
+            | SourceReferenceAccessV29::ReadDiscriminant
             | SourceReferenceAccessV29::Write
             | SourceReferenceAccessV29::Address
     ) {

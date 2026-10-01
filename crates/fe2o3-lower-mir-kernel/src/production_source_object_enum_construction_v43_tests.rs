@@ -6,6 +6,64 @@ thread_local! {
 include!("production_scoped_storage_constructor_views_v44_tests.rs");
 include!("production_source_object_reference_payloads_v44_tests.rs");
 
+#[test]
+fn constructor_payload_terminal_requires_exact_enum_type_and_variant() {
+    use source_storage_v29::SourceSelectedProjectionV29 as Terminal;
+    let ty = SemanticTypeIdV1::from_index(17);
+    let other_ty = SemanticTypeIdV1::from_index(18);
+    let schema = fe2o3_kernel_ir::StorageLayoutIdV1(31);
+    for variant in [0, 2] {
+        let payload = Terminal::Payload {
+            ty,
+            schema,
+            variant,
+        };
+        assert!(source_object_projection_terminal_matches_v46(
+            payload,
+            ty,
+            Some(variant),
+        ));
+        assert!(!source_object_projection_terminal_matches_v46(
+            payload,
+            other_ty,
+            Some(variant),
+        ));
+        assert!(!source_object_projection_terminal_matches_v46(
+            payload,
+            ty,
+            Some(variant + 1),
+        ));
+        assert!(!source_object_projection_terminal_matches_v46(
+            payload, ty, None
+        ));
+    }
+}
+
+#[test]
+fn constructor_payload_terminal_cannot_substitute_physical_or_omitted_views() {
+    use source_storage_v29::SourceSelectedProjectionV29 as Terminal;
+    let ty = SemanticTypeIdV1::from_index(17);
+    let physical = Terminal::Physical {
+        ty,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1(31),
+    };
+    assert!(source_object_projection_terminal_matches_v46(
+        physical, ty, None
+    ));
+    assert!(!source_object_projection_terminal_matches_v46(
+        physical,
+        ty,
+        Some(0)
+    ));
+    for expected in [None, Some(0)] {
+        assert!(!source_object_projection_terminal_matches_v46(
+            Terminal::OmittedNominal { ty, position: 0 },
+            ty,
+            expected,
+        ));
+    }
+}
+
 fn original_enum_construction_owner_v43() -> ProductionSemanticSsaOwnerV1 {
     let fields = ENUM_CONSTRUCTION_FIELDS_V43.get();
     let base = original_tag_emission_owner();

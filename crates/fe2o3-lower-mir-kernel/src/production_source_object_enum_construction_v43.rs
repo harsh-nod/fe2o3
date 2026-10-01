@@ -166,8 +166,18 @@ fn source_enum_construction_location_v43(
             .map_err(|_| ArgumentResourceV1::Accounting)?,
     ];
     let path = &projections[..if operand.is_some() { 2 } else { 1 }];
-    let components =
-        budget.source_object_projection_v29(plan, place.ty(), endpoint.root_schema, path)?;
+    let components = if operand.is_some() {
+        budget.source_object_projection_v29(plan, place.ty(), endpoint.root_schema, path)?
+    } else {
+        source_object_projection_terminal_v46(
+            plan,
+            place.ty(),
+            endpoint.root_schema,
+            path,
+            Some(*variant),
+            budget,
+        )?
+    };
     let sidecar = index.sidecar(instance, budget)?;
     let anchors = sidecar
         .scoped_memory_anchors

@@ -1025,8 +1025,52 @@ fn source_object_projection_v29<'path>(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Vec<source_storage_v29::SourceSelectedComponentV29<'path>>, ProductionSemanticKirErrorV1>
 {
+    source_object_projection_terminal_v46(plan, ty, schema, path, None, budget)
+}
+
+fn source_object_projection_terminal_matches_v46(
+    actual: source_storage_v29::SourceSelectedProjectionV29,
+    ty: SemanticTypeIdV1,
+    payload_variant: Option<u32>,
+) -> bool {
+    use source_storage_v29::SourceSelectedProjectionV29 as Terminal;
+    match (actual, payload_variant) {
+        (Terminal::Physical { .. }, None) => true,
+        (
+            Terminal::Payload {
+                ty: actual_ty,
+                variant,
+                ..
+            },
+            Some(expected),
+        ) => actual_ty == ty && variant == expected,
+        _ => false,
+    }
+}
+
+// A constructor may inspect its exact variant payload before storing fields.
+// This does not turn a payload into a pointer ABI or establish an active tag.
+fn source_object_projection_terminal_v46<'path>(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    ty: SemanticTypeIdV1,
+    schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    path: &'path [SemanticProjectionV1],
+    payload_variant: Option<u32>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<Vec<source_storage_v29::SourceSelectedComponentV29<'path>>, ProductionSemanticKirErrorV1>
+{
     let result = (|| {
         plan.check_owner(plan.instances, budget)?;
+        if let Some(variant) = payload_variant {
+            source_reference_owned_prepay_v29::<Option<u32>>(plan, budget)?;
+            budget.source_reference_charge_v29(plan, 3)?;
+            if path.len() != 1
+                || path[0].kind() != SemanticProjectionKindV1::Downcast(variant)
+                || path[0].result_type() != ty
+            {
+                return Err(ArgumentResourceV1::Accounting.into());
+            }
+        }
         plan.charge(path.len(), budget)?;
         if path.iter().any(|projection| {
             matches!(
@@ -1054,10 +1098,7 @@ fn source_object_projection_v29<'path>(
                 source_reference_owned_push_v29(plan, &mut components, component, budget)
             },
         )?;
-        if !matches!(
-            result,
-            source_storage_v29::SourceSelectedProjectionV29::Physical { .. }
-        ) {
+        if !source_object_projection_terminal_matches_v46(result, ty, payload_variant) {
             return Err(ArgumentResourceV1::Accounting.into());
         }
         Ok(components)
