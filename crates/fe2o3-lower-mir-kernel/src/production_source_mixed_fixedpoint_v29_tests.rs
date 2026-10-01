@@ -1,4 +1,5 @@
 include!("production_source_checked_licm_v44_tests.rs");
+include!("production_source_mixed_store_consensus_v50_tests.rs");
 
 fn with_mixed_fixedpoint_prefix_v28(
     looping: bool,

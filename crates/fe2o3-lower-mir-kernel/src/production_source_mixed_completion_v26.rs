@@ -412,7 +412,8 @@ mod mixed_licm_v28;
 pub use mixed_licm_v28::{
     ProductionConditionalMixedFixedpointLicmOutputHandoffV29,
     ProductionConditionalMixedLicmOutputHandoffV28, ProductionMixedFixedpointLicmRelocationV29,
-    ProductionMixedLicmCompletionErrorV28, ProductionMixedLicmDefinitionProjectionV28,
-    ProductionMixedLicmRelocationErrorV28, ProductionMixedLicmRelocationV28,
-    ProductionMixedLicmRuntimeOccurrenceV28,
+    ProductionMixedFixedpointStoreConsensusV46, ProductionMixedLicmCompletionErrorV28,
+    ProductionMixedLicmDefinitionProjectionV28, ProductionMixedLicmRelocationErrorV28,
+    ProductionMixedLicmRelocationV28, ProductionMixedLicmRuntimeOccurrenceV28,
+    ProductionMixedStoreConsensusV46,
 };

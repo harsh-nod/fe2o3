@@ -1,4 +1,4 @@
-//! Fixed Rust -> Policy11 fixed point -> LICM -> native/composed CFG -> V3 -> Worker input.
+//! Fixed Rust -> Policy11 -> LICM -> Store consensus -> typed source proof -> V3.
 //! Prepared inputs remain inert: this module cannot publish, finalize or launch.
 
 use super::*;
@@ -8,11 +8,9 @@ use fe2o3_lower_mir_kernel::{
     ProductionConditionalMixedFixedpointLicmOutputHandoffV29 as Native,
     ProductionConditionalMixedFixedpointOutputHandoffV29 as Prefix,
     ProductionMixedFixedpointLicmRelocationV29 as Relocation,
+    ProductionMixedFixedpointStoreConsensusV46 as Consensus,
 };
-use fe2o3_verifier::{
-    PreparedMixedFixedpointComposedRelocationCfgRefinementV29 as Composed,
-    PreparedMixedFixedpointRelocationExpressionsV29 as Expressions,
-};
+use fe2o3_verifier::PreparedTypedSourceTailV50 as Composed;
 use target_result::mixed_licm_v28::{
     ConditionalMixedTargetLlvmV26 as TargetOwner, check_and_lower_mixed_target_llvm_v26,
     worker_input_v26::{
@@ -70,6 +68,14 @@ where
 }
 type AdapterCapture<'a, 'bindings, F> = (&'a SourceBindingContextV29<'bindings>, F);
 type Pending<F> = formal_context_v19::PendingConsumerV19<F>;
+type ForwardCapture<'a, 'bindings, 'v, 's, 'abi, 'w, F> = (
+    &'v Source<'s>,
+    &'a Consensus<'a, 'a, 'v, 's>,
+    &'a [AbiRoot<'abi>],
+    &'a SourceBindingContextV29<'bindings>,
+    &'a mut Budget<'w>,
+    F,
+);
 type NativeCapture<'a, 'bindings, 'v, 's, 'abi, 'w, F> = (
     &'v Source<'s>,
     &'a Native<'a, 'a, 'v, 's>,
@@ -130,12 +136,13 @@ fn headers<R, F, P: FinalConsumer<R, F>>() -> Result<usize, Resource> {
         size_of::<FinalInputs<'_, '_, '_, '_>>(),
         align_of::<FinalInputs<'_, '_, '_, '_>>(),
         frame_headers::<NativeCapture<'_, '_, '_, '_, '_, '_, F>>()?,
+        frame_headers::<ForwardCapture<'_, '_, '_, '_, '_, '_, F>>()?,
         frame_headers::<ComposedCapture<'_, '_, '_, '_, '_, '_, F>>()?,
         frame_headers::<TargetCapture<'_, '_, '_, '_, '_, '_, F>>()?,
         frame_headers::<DescriptorCapture<'_, '_, '_, '_, '_, '_, F>>()?,
         frame_headers::<WorkerCapture<'_, '_, '_, '_, '_, F>>()?,
-        5 * size_of::<std::thread::Result<Result<R, Error>>>(),
-        5 * size_of::<Result<(), Error>>(),
+        6 * size_of::<std::thread::Result<Result<R, Error>>>(),
+        6 * size_of::<Result<(), Error>>(),
         size_of::<
             Result<
                 Native<'_, '_, '_, '_>,
@@ -144,8 +151,8 @@ fn headers<R, F, P: FinalConsumer<R, F>>() -> Result<usize, Resource> {
         >(),
         size_of::<
             Result<
-                Expressions<'_, '_, '_, '_, '_>,
-                fe2o3_verifier::MixedOptimizerRelocationErrorV28,
+                Consensus<'_, '_, '_, '_>,
+                fe2o3_lower_mir_kernel::ProductionMixedLicmRelocationErrorV28,
             >,
         >(),
         size_of::<
@@ -196,22 +203,28 @@ fn check_fixedpoint_chain(inputs: &FinalInputs<'_, '_, '_, '_>, budget: &mut Bud
     let relocation = inputs.native.relocation(budget).unwrap();
     let prefix = relocation.prefix(budget).unwrap().output(budget).unwrap();
     let subject = inputs.composed.subject(budget).unwrap();
-    let expressions = subject.expressions();
     assert_eq!(prefix.execution().policy_version(), 11);
     assert!((1..=32).contains(&prefix.execution().rounds()));
-    assert_eq!(expressions.prefix_policy_version(), 11);
     let digest: [u8; 32] = sha2::Sha256::digest(prefix.execution().canonical_bytes()).into();
-    assert_eq!(expressions.prefix_execution_identity(), digest);
+    assert_eq!(subject.prefix_execution_identity(), digest);
     assert_eq!(
-        expressions.input(),
+        subject.graph_identities()[0],
         *inputs.source.canonical(budget).unwrap().identity()
     );
-    assert_eq!(expressions.prefix(), *prefix.owner().identity());
+    assert_eq!(subject.graph_identities()[1], *prefix.owner().identity());
     assert_eq!(
-        expressions.output(),
+        subject.graph_identities()[2],
+        *relocation.tail(budget).unwrap().output().identity()
+    );
+    assert_eq!(
+        subject.graph_identities()[3],
         *inputs.native.output(budget).unwrap().identity()
     );
-    assert!(subject.models_original_to_final_composition());
+    assert!(inputs.native.store_consensus_v46(budget).unwrap().is_some());
+    let generated = std::str::from_utf8(inputs.composed.generated_source(budget).unwrap()).unwrap();
+    assert!(generated.contains("mod forwarding_v46 {"));
+    assert!(generated.contains("proof fn typed_final_native_source_trace_"));
+    assert!(!generated.contains("op: spec_fn(int, int, Seq<int>, int) -> int"));
     assert!(!inputs.composed.authenticates_executed_proof());
     assert!(!inputs.worker.grants_worker_or_artifact_authority());
 }
@@ -224,9 +237,33 @@ fn consume_final<R, F, P: FinalConsumer<R, F>>(
     budget: &mut Budget<'_>,
     consume: F,
 ) -> Result<R, Error> {
+    let forwarding = relocation
+        .prepare_store_consensus_v46(budget)
+        .map_err(Error::MixedLicm)?;
+    let capture: ForwardCapture<'_, '_, '_, '_, '_, '_, F> =
+        (source, &forwarding, roots, context, &mut *budget, consume);
+    let with_forwarding = move || {
+        let (source, forwarding, roots, context, budget, consume) = std::convert::identity(capture);
+        consume_forwarded::<R, F, P>(source, forwarding, roots, context, budget, consume)
+    };
+    #[cfg(test)]
+    check_capture::<ForwardCapture<'_, '_, '_, '_, '_, '_, F>, _>(&with_forwarding);
+    let selected = catch_unwind(AssertUnwindSafe(with_forwarding));
+    let released = forwarding.discard(budget);
+    settled(selected, released)
+}
+
+fn consume_forwarded<R, F, P: FinalConsumer<R, F>>(
+    source: &Source<'_>,
+    forwarding: &Consensus<'_, '_, '_, '_>,
+    roots: &[AbiRoot<'_>],
+    context: &SourceBindingContextV29<'_>,
+    budget: &mut Budget<'_>,
+    consume: F,
+) -> Result<R, Error> {
     let mut pending = Pending::new(consume);
-    let native = relocation
-        .complete_native_v28(budget)
+    let native = forwarding
+        .complete_native_v46(budget)
         .map_err(Error::MixedLicmCompletion)?;
     let capture: NativeCapture<'_, '_, '_, '_, '_, '_, F> =
         (source, &native, roots, context, &mut *budget, &mut pending);
@@ -237,13 +274,12 @@ fn consume_final<R, F, P: FinalConsumer<R, F>>(
             ProductionKernelArgumentAbiInputV18 { roots },
             budget,
         )?;
-        let expressions = fe2o3_verifier::prepare_mixed_fixedpoint_relocation_expressions_v29(
-            source, native, budget,
-        )
-        .map_err(Error::MixedRelocationExpressions)?;
-        let composed = expressions
-            .prepare_composed_cfg_refinement(budget)
-            .map_err(Error::MixedRelocationExpressions)?;
+        let (_, _, endian) = publication::original_mir_v30::checked_runtime_for_native(
+            source, native, context, budget,
+        )?;
+        let composed =
+            fe2o3_verifier::prepare_typed_source_tail_v50(source, native, endian, budget)
+                .map_err(Error::MixedRelocationExpressions)?;
         let capture: ComposedCapture<'_, '_, '_, '_, '_, '_, F> = (
             source,
             native,
@@ -484,7 +520,12 @@ mod tests {
         );
         type InputFields<'a> = (&'a (), &'a (), &'a (), &'a (), &'a ());
         type WorkerFields<'a> = (InputFields<'a>, &'a mut (), &'a mut ());
+        type ForwardFields<'a> = (&'a (), &'a (), &'a [()], &'a (), &'a mut (), Consumer);
         let frames = [
+            (
+                size_of::<ForwardFields<'_>>(),
+                align_of::<ForwardFields<'_>>(),
+            ),
             (
                 size_of::<NativeFields<'_>>(),
                 align_of::<NativeFields<'_>>(),
@@ -516,8 +557,8 @@ mod tests {
             + size_of::<InputFields<'_>>()
             + align_of::<InputFields<'_>>()
             + captures
-            + 5 * size_of::<std::thread::Result<Result<usize, Error>>>()
-            + 5 * size_of::<Result<(), Error>>()
+            + 6 * size_of::<std::thread::Result<Result<usize, Error>>>()
+            + 6 * size_of::<Result<(), Error>>()
             + size_of::<
                 Result<
                     Native<'_, '_, '_, '_>,
@@ -526,8 +567,8 @@ mod tests {
             >()
             + size_of::<
                 Result<
-                    Expressions<'_, '_, '_, '_, '_>,
-                    fe2o3_verifier::MixedOptimizerRelocationErrorV28,
+                    Consensus<'_, '_, '_, '_>,
+                    fe2o3_lower_mir_kernel::ProductionMixedLicmRelocationErrorV28,
                 >,
             >()
             + size_of::<

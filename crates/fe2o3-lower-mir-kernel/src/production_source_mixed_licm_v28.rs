@@ -13,6 +13,12 @@ use std::mem::{align_of, size_of};
 mod coordinates;
 pub use coordinates::ProductionMixedLicmDefinitionProjectionV28;
 
+#[path = "production_source_mixed_store_consensus_v46.rs"]
+mod store_consensus;
+pub use store_consensus::{
+    ProductionMixedFixedpointStoreConsensusV46, ProductionMixedStoreConsensusV46,
+};
+
 #[path = "production_source_mixed_licm_native_v28.rs"]
 mod native;
 pub use native::{
@@ -28,6 +34,8 @@ pub enum ProductionMixedLicmRelocationErrorV28 {
     Source(ProductionSourceOwnedViewErrorV18),
     /// Actual LICM preparation or independent motion replay was refused.
     Motion(MotionError),
+    /// Actual post-LICM private-load forwarding or its independent replay failed.
+    Forwarding(fe2o3_kernel_opt::OwnedCrossBlockForwardingErrorV1),
     /// An exact endpoint inventory could not be derived.
     Inventory(InventoryError),
     /// MemorySSA construction or endpoint memory correspondence was refused.
@@ -50,6 +58,11 @@ impl From<ArgumentResourceV1> for Error {
 impl From<MotionError> for Error {
     fn from(error: MotionError) -> Self {
         Self::Motion(error)
+    }
+}
+impl From<fe2o3_kernel_opt::OwnedCrossBlockForwardingErrorV1> for Error {
+    fn from(error: fe2o3_kernel_opt::OwnedCrossBlockForwardingErrorV1) -> Self {
+        Self::Forwarding(error)
     }
 }
 impl From<InventoryError> for Error {
@@ -81,6 +94,7 @@ impl std::error::Error for Error {
         match self {
             Self::Source(error) => Some(error),
             Self::Motion(error) => Some(error),
+            Self::Forwarding(error) => Some(error),
             Self::Inventory(error) => Some(error),
             Self::Memory(error) => Some(error),
             Self::Binding(_) => None,

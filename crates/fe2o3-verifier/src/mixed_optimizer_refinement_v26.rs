@@ -50,14 +50,17 @@ mod receipt;
 #[path = "mixed_optimizer_relocation_plan_v28.rs"]
 mod relocation_plan_v28;
 pub use relocation_plan_v28::{
-    ExecutedMixedComposedRefinementV29, MixedOptimizerRelocationCfgSubjectV28,
-    MixedOptimizerRelocationErrorV28, MixedOptimizerRelocationSubjectV28,
-    PreparedMixedComposedExecutionV29, PreparedMixedComposedRelocationCfgRefinementV28,
+    ExecutedMixedComposedRefinementV29, ExecutedTypedSourceTailV50,
+    MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,
+    MixedOptimizerRelocationSubjectV28, PreparedMixedComposedExecutionV29,
+    PreparedMixedComposedRelocationCfgRefinementV28,
     PreparedMixedFixedpointComposedRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationCfgRefinementV29,
     PreparedMixedFixedpointRelocationExpressionsV29, PreparedMixedRelocationCfgRefinementV28,
-    PreparedMixedRelocationExpressionsV28, prepare_mixed_fixedpoint_relocation_expressions_v29,
-    prepare_mixed_relocation_expressions_v28,
+    PreparedMixedRelocationExpressionsV28, PreparedTypedSourceTailExecutionV50,
+    PreparedTypedSourceTailV50, TypedSourceTailSubjectV50,
+    prepare_mixed_fixedpoint_relocation_expressions_v29, prepare_mixed_relocation_expressions_v28,
+    prepare_typed_source_tail_v50,
 };
 #[path = "mixed_optimizer_semantics_v26.rs"]
 mod semantics;

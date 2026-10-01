@@ -7,11 +7,11 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 use fe2o3_artifact_transaction::BuildAttempt;
-use fe2o3_verifier::MixedOptimizerRelocationCfgSubjectV28 as Subject;
 use fe2o3_verifier::PreparedOriginalSemanticMirRefinementV36 as OriginalMir;
+use fe2o3_verifier::TypedSourceTailSubjectV50 as Subject;
 
 #[path = "production_pipeline_source_original_mir_v30.rs"]
-mod original_mir_v30;
+pub(super) mod original_mir_v30;
 
 #[path = "production_pipeline_source_mixed_publication_execution_v29.rs"]
 mod execution;
@@ -39,7 +39,7 @@ pub(crate) enum MixedPublicationErrorV28 {
     ExtractionOnly,
     LiveInvocation(ProtectedRustcInvocationErrorV1),
     Binding(&'static str),
-    Lineage(fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29),
+    Lineage(fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50),
 }
 impl std::fmt::Display for MixedPublicationErrorV28 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -119,14 +119,13 @@ impl<'a, 'v, 's> PreparedMixedPublicationV28<'a, 'v, 's> {
             .inputs
             .composed
             .subject(budget)
-            .map_err(Error::MixedRelocationExpressions)?
-            .expressions();
+            .map_err(Error::MixedRelocationExpressions)?;
         budget
             .charge_work(3 * 32 + 8)
             .map_err(|error| self.inputs.source.retain_query_resource_error_v18(error))?;
         if original.semantic_identity() != composed.source_semantic_identity()
             || original.ssa_identity() != composed.source_ssa_identity()
-            || original.canonical_identity() != composed.input()
+            || original.canonical_identity() != composed.graph_identities()[0]
         {
             return Err(MixedPublicationErrorV28::Binding(
                 "original MIR proof endpoint differs from the retained optimizer input",
@@ -135,7 +134,7 @@ impl<'a, 'v, 's> PreparedMixedPublicationV28<'a, 'v, 's> {
         }
         self.inputs
             .composed
-            .check_original_source(self.inputs.source.source_ssa(budget)?, budget)
+            .check_original_source(self.inputs.source, budget)
             .map_err(Error::MixedRelocationExpressions)?;
         self.inputs
             .composed

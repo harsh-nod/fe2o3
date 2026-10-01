@@ -45,6 +45,13 @@ macro_rules! emit {
     };
 }
 
+#[path = "mixed_optimizer_allocation_bridge_v48.rs"]
+mod allocation_bridge_v48;
+#[path = "mixed_optimizer_store_consensus_plan_v46.rs"]
+mod store_consensus_plan_v46;
+#[path = "mixed_optimizer_store_consensus_typed_v46.rs"]
+mod store_consensus_typed_v46;
+
 #[path = "mixed_optimizer_cfg_graph_v26.rs"]
 mod cfg_graph;
 #[path = "mixed_optimizer_cfg_relation_v26.rs"]

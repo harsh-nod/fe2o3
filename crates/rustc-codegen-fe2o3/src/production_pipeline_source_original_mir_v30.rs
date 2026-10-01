@@ -14,7 +14,7 @@ fn runtime_headers() -> Result<usize, Resource> {
         size_of::<crate::semantic_layout_bridge::SemanticLayoutTargetV1>(),
         size_of::<sha2::Sha256>(),
         size_of::<Box<[u8]>>(),
-        8 * size_of::<&()>(),
+        9 * size_of::<&()>(),
         10 * size_of::<usize>(),
         size_of::<(Vec<Launch>, FormalIndexWidth)>(),
         size_of::<Result<(Vec<Launch>, FormalIndexWidth), Error>>(),
@@ -105,21 +105,25 @@ fn runtime<'a>(
     inputs: &'a FinalInputs<'_, '_, '_, '_>,
     budget: &mut Budget<'_>,
 ) -> Result<(&'a [ExplicitLaunchExtent], FormalIndexWidth, EndiannessV2), Error> {
-    inputs
-        .native
-        .check_original_source(inputs.source.source_ssa(budget)?, budget)?;
-    let (retained, width) = inputs.native.launch_context(budget)?;
+    checked_runtime_for_native(inputs.source, inputs.native, inputs.context, budget)
+}
+
+pub(in super::super) fn checked_runtime_for_native<'a>(
+    source: &Source<'_>,
+    native: &'a Native<'_, '_, '_, '_>,
+    context: &SourceBindingContextV29<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(&'a [ExplicitLaunchExtent], FormalIndexWidth, EndiannessV2), Error> {
+    native.check_original_source(source.source_ssa(budget)?, budget)?;
+    let (retained, width) = native.launch_context(budget)?;
     let floor = budget.storage();
     let endianness = budget.with_prepaid_scope(floor, 1, 1, runtime_headers()?, |budget| {
-        let (checked, checked_width) = inputs.context.launches(inputs.source, budget)?;
+        let (checked, checked_width) = context.launches(source, budget)?;
         match_launches(retained, width, &checked, checked_width, budget)?;
-        let source_target = inputs
-            .source
-            .source_semantic(budget)?
-            .target_layout_identity();
+        let source_target = source.source_semantic(budget)?.target_layout_identity();
         let endian = target_byte_order(
             source_target,
-            inputs.context.bindings.rustc_target.rustc_layout(),
+            context.bindings.rustc_target.rustc_layout(),
             budget,
         )?;
         drop(checked);

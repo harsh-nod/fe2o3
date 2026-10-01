@@ -3,13 +3,13 @@
 use super::*;
 use fe2o3_compiler_ffi::{CompilerModuleKindV1, InertSemanticCompilerModuleHandoffV3 as Handoff};
 use fe2o3_compiler_lineage::{
-    MixedMiddleEndIdentityV29 as Identity, MixedMiddleEndLayoutV29 as Layout,
+    MixedMiddleEndIdentityV50 as Identity, MixedMiddleEndLayoutV50 as Layout,
 };
 use fe2o3_hsaco_finalize::{
     InertProtectedFirstBuildWorkerV3EvidenceV1 as FirstBuild,
-    PreparedFinalizedMixedContentV29 as Content, PreparedFinalizedNominalWorkerHsacoV3 as Artifact,
+    PreparedFinalizedNominalWorkerHsacoV3 as Artifact, PreparedFinalizedTypedContentV50 as Content,
 };
-use fe2o3_verifier::ExecutedMixedComposedRefinementV29 as Executed;
+use fe2o3_verifier::ExecutedTypedSourceTailV50 as Executed;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 fn mismatch(detail: &'static str) -> Error {
@@ -45,8 +45,8 @@ fn frames<R, F, P, E>() -> Result<usize, Resource> {
         sum.checked_add(bytes).ok_or(Resource::Arithmetic)
     })
 }
-fn content_error(error: fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29) -> Error {
-    use fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29 as ContentError;
+fn content_error(error: fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50) -> Error {
+    use fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50 as ContentError;
     match error {
         ContentError::Resource(error) => Error::Resource(error),
         ContentError::Refinement(error) => Error::MixedRelocationExpressions(error),
@@ -114,14 +114,14 @@ fn finalize_frames<R, F>() -> Result<usize, Resource> {
         align_of::<InvokeCapture<'_, '_, F>>(),
         size_of::<AssertUnwindSafe<InvokeCapture<'_, '_, F>>>(),
         size_of::<StaticContent>(),
-        size_of::<Result<StaticContent, fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29>>(),
+        size_of::<Result<StaticContent, fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50>>(),
         size_of::<Result<R, Error>>(),
         2 * size_of::<std::thread::Result<Result<R, Error>>>(),
         3 * size_of::<Result<(), Error>>(),
-        size_of::<Result<(), fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29>>(),
+        size_of::<Result<(), fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50>>(),
         size_of::<Result<Identity, Error>>(),
         size_of::<Identity>(),
-        size_of::<Result<&Artifact, fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29>>(),
+        size_of::<Result<&Artifact, fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50>>(),
         size_of::<Result<&Artifact, Error>>(),
     ]
     .into_iter()
@@ -146,7 +146,7 @@ impl<'e, 'r, 'a, 'v, 's> ExecutedProtectedMixedPublicationV29<'e, 'r, 'a, 'v, 's
     ) -> Result<Self, Error> {
         candidate.revalidate(budget)?;
         executed
-            .check_lineage_request_v29(candidate.prepared.inputs.composed, budget)
+            .check_lineage_request_v50(candidate.prepared.inputs.composed, budget)
             .map_err(Error::MixedRelocationExpressions)?;
         Ok(Self {
             candidate,
@@ -196,7 +196,7 @@ impl<'e, 'r, 'a, 'v, 's> ExecutedProtectedMixedPublicationV29<'e, 'r, 'a, 'v, 's
                 source.handoff(),
                 budget,
             )?;
-            let content = fe2o3_hsaco_finalize::finalize_protected_worker_mixed_content_v29(
+            let content = fe2o3_hsaco_finalize::finalize_protected_worker_typed_content_v50(
                 source,
                 owner.executed,
                 budget,
@@ -301,12 +301,12 @@ impl<'a, 'v, 's> ProtectedMixedPublicationV28<'a, 'v, 's> {
             let (owner, executed, visit) = std::convert::identity(capture);
             owner.revalidate(budget)?;
             executed
-                .check_lineage_request_v29(owner.prepared.inputs.composed, budget)
+                .check_lineage_request_v50(owner.prepared.inputs.composed, budget)
                 .map_err(Error::MixedRelocationExpressions)?;
             let result = visit(budget)?;
             owner.revalidate(budget)?;
             executed
-                .check_lineage_request_v29(owner.prepared.inputs.composed, budget)
+                .check_lineage_request_v50(owner.prepared.inputs.composed, budget)
                 .map_err(Error::MixedRelocationExpressions)?;
             Ok(result)
         };
@@ -338,7 +338,7 @@ impl<'a, 'v, 's> ProtectedMixedPublicationV28<'a, 'v, 's> {
     ) -> Result<Layout, Error> {
         self.with_lineage(executed, 0, budget, |budget| {
             executed
-                .lineage_layout_v29(budget)
+                .lineage_layout_v50(budget)
                 .map_err(Error::MixedRelocationExpressions)
         })
     }
@@ -352,7 +352,7 @@ impl<'a, 'v, 's> ProtectedMixedPublicationV28<'a, 'v, 's> {
     ) -> Result<Identity, Error> {
         self.with_lineage(executed, bytes.len(), budget, |budget| {
             executed
-                .encode_lineage_content_v29(bytes, budget)
+                .encode_lineage_content_v50(bytes, budget)
                 .map_err(Error::MixedRelocationExpressions)
         })
     }
@@ -401,7 +401,7 @@ impl<'a, 'v, 's> ProtectedMixedPublicationV28<'a, 'v, 's> {
                     equal(actual, expected, budget)?;
                 }
                 executed
-                    .replay_lineage_capsule_v29(receipts, budget)
+                    .replay_lineage_capsule_v50(receipts, budget)
                     .map_err(Error::MixedRelocationExpressions)
             },
         )
@@ -436,14 +436,14 @@ mod tests {
             + align_of::<((&StaticFinalized, &mut Pending<F>), &mut Budget<'_>)>()
             + size_of::<AssertUnwindSafe<((&StaticFinalized, &mut Pending<F>), &mut Budget<'_>)>>()
             + size_of::<StaticContent>()
-            + size_of::<Result<StaticContent, fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29>>()
+            + size_of::<Result<StaticContent, fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50>>()
             + size_of::<Result<R, Error>>()
             + 2 * size_of::<std::thread::Result<Result<R, Error>>>()
             + 3 * size_of::<Result<(), Error>>()
-            + size_of::<Result<(), fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29>>()
+            + size_of::<Result<(), fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50>>()
             + size_of::<Result<Identity, Error>>()
             + size_of::<Identity>()
-            + size_of::<Result<&Artifact, fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29>>()
+            + size_of::<Result<&Artifact, fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50>>()
             + size_of::<Result<&Artifact, Error>>();
         assert_eq!(finalize_frames::<R, F>().unwrap(), expected);
         assert_ne!(
@@ -462,13 +462,13 @@ mod tests {
         let mut budget = Budget::new(&mut work, 0);
         let error = budget.charge_work(3).unwrap_err();
         assert!(matches!(
-            content_error(fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29::Resource(error)),
+            content_error(fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50::Resource(error)),
             Error::Resource(Resource::Work(error)) if error.actual() == 3 && error.limit() == 2
         ));
         assert!(matches!(
-            content_error(fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29::Binding),
+            content_error(fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50::Binding),
             Error::MixedPublication(MixedPublicationErrorV28::Lineage(
-                fe2o3_hsaco_finalize::MixedWorkerLineageErrorV29::Binding
+                fe2o3_hsaco_finalize::TypedWorkerLineageErrorV50::Binding
             ))
         ));
     }

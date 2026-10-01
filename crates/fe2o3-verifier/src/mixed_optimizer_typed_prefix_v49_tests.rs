@@ -1,0 +1,413 @@
+use super::super::prefix_v49::PrefixSegmentsV49;
+use super::*;
+use fe2o3_kernel_ir::FormalIndexWidth;
+
+#[test]
+fn typed_prefix_checked_segments_partition_merged_operations_and_keep_empty_cuts() {
+    with_chain(|prefix, licm, output, floor| {
+        let origins = Origins {
+            inventory: prefix.input(),
+            duplicate: false,
+        };
+        run(floor, LIMIT, LIMIT, |out| {
+            let bridge = AllocationBridgeV48::derive(prefix, licm, output, &origins, out)?;
+            let plan = PrefixSegmentsV49::derive(&bridge, out)?;
+            let mut merged = false;
+            let mut empty = false;
+            for row in prefix.rows().blocks {
+                let block = block_index(prefix.output(), row.output)?;
+                let start = row.segments.start as usize;
+                let end = start + row.segments.len as usize;
+                merged |= row.segments.len > 1;
+                let mut next_operation = prefix.output().blocks()[block].operations.start;
+                for position in start..end {
+                    let original =
+                        block_index(prefix.input(), prefix.rows().segments[position].input)?;
+                    let segment = plan.segment(original, out)?.unwrap();
+                    assert_eq!(segment.output_block, block);
+                    assert_eq!(segment.start, next_operation);
+                    assert!(segment.start <= segment.end);
+                    empty |= segment.start == segment.end;
+                    next_operation = segment.end;
+                    let next = if position + 1 < end {
+                        Some(block_index(
+                            prefix.input(),
+                            prefix.rows().segments[position + 1].input,
+                        )?)
+                    } else {
+                        None
+                    };
+                    assert_eq!(segment.next_original, next);
+                    for operation in segment.start..segment.end {
+                        if let Origin::Retained(site) = prefix.rows().operations[operation].origin {
+                            assert_eq!(site.block, prefix.input().blocks()[original].coordinate);
+                        }
+                    }
+                }
+                assert_eq!(
+                    next_operation,
+                    prefix.output().blocks()[block].operations.end
+                );
+            }
+            assert!(
+                merged,
+                "genuine fixed-policy fixture must merge a source chain"
+            );
+            assert!(
+                empty,
+                "removed source constant must leave an empty original cut"
+            );
+            assert!(matches!(
+                plan.segment(prefix.input().blocks().len(), out),
+                Err(Error::Statement(_))
+            ));
+            plan.segment(0, out)?;
+            Ok(())
+        })
+        .0
+        .unwrap();
+    });
+}
+
+#[test]
+fn typed_prefix_segment_custody_precedes_queries_and_sticks_after_restore() {
+    with_chain(|prefix, licm, output, floor| {
+        let origins = Origins {
+            inventory: prefix.input(),
+            duplicate: false,
+        };
+        for foreign in [false, true] {
+            run(floor, LIMIT, LIMIT, |out| {
+                let bridge = AllocationBridgeV48::derive(prefix, licm, output, &origins, out)?;
+                let bridge_floor = out.budget.storage();
+                let plan = PrefixSegmentsV49::derive(&bridge, out)?;
+                let plan_floor = out.budget.storage();
+                assert!(plan_floor > bridge_floor);
+                if foreign {
+                    let mut work = Work::new(LIMIT);
+                    let mut budget = Budget::new(&mut work, LIMIT);
+                    budget.reserve_storage(plan_floor)?;
+                    let mut other = Writer::new(&mut budget)?;
+                    let before = (other.budget.work(), other.budget.storage());
+                    assert!(matches!(
+                        plan.segment(0, &mut other),
+                        Err(Error::Resource(Resource::Accounting))
+                    ));
+                    assert_eq!((other.budget.work(), other.budget.storage()), before);
+                } else {
+                    out.budget.release_storage(1)?;
+                    let before = out.budget.work();
+                    assert!(matches!(
+                        plan.segment(0, out),
+                        Err(Error::Resource(Resource::Accounting))
+                    ));
+                    assert_eq!(out.budget.work(), before);
+                    out.budget.reserve_storage(1)?;
+                }
+                let before = (out.budget.work(), out.budget.storage());
+                assert!(matches!(
+                    plan.segment(0, out),
+                    Err(Error::Resource(Resource::Accounting))
+                ));
+                assert_eq!((out.budget.work(), out.budget.storage()), before);
+                Ok(())
+            })
+            .0
+            .unwrap();
+        }
+    });
+}
+
+#[test]
+fn typed_prefix_removed_original_block_has_no_fabricated_cursor_or_runtime_state() {
+    let mut module = fixture();
+    module.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks
+        .push(block(
+            5,
+            vec![Instruction::effect_free(
+                ValueDef::new(ValueId(20), Type::Scalar(ScalarType::U32)),
+                OperationKind::Constant(Constant::U32(17)),
+            )],
+            Terminator::Return {
+                values: vec![ValueId(20)],
+            },
+        ));
+    with_chain_module(&module, |prefix, licm, output, floor| {
+        let origins = Origins {
+            inventory: prefix.input(),
+            duplicate: false,
+        };
+        run(floor, LIMIT, LIMIT, |out| {
+            let bridge = AllocationBridgeV48::derive(prefix, licm, output, &origins, out)?;
+            let plan = PrefixSegmentsV49::derive(&bridge, out)?;
+            let removed = prefix.input().functions()[0].blocks.end - 1;
+            assert!(
+                !prefix
+                    .rows()
+                    .segments
+                    .iter()
+                    .any(|row| row.input == prefix.input().blocks()[removed].coordinate)
+            );
+            assert_eq!(plan.segment(removed, out)?, None);
+            Ok(())
+        })
+        .0
+        .unwrap();
+    });
+}
+
+#[test]
+fn typed_prefix_licm_composition_uses_one_middle_cursor_and_both_checked_results() {
+    let mut module = fixture();
+    let body = &mut module.functions[0].body.as_mut().unwrap().blocks[3];
+    body.operations.insert(
+        0,
+        Instruction::new(
+            vec![
+                ValueDef::new(ValueId(14), Type::Scalar(ScalarType::U32)),
+                ValueDef::new(ValueId(15), Type::BOOL),
+            ],
+            OperationKind::Binary {
+                op: BinaryOp::Checked(fe2o3_kernel_ir::CheckedBinaryOperator::Add),
+                lhs: ValueId(0),
+                rhs: ValueId(0),
+            },
+        ),
+    );
+    body.operations.push(Instruction::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(2),
+            value: ValueId(14),
+            access: MemoryAccess::new(AddressSpace::Private, 4),
+        },
+    ));
+    body.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(15),
+        then_target: BlockId(4),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    with_chain_module(&module, |prefix, licm, output, floor| {
+        let origins = Origins {
+            inventory: prefix.input(),
+            duplicate: false,
+        };
+        let generate = |out: &mut Writer<'_, '_>| -> Result<()> {
+            let limits = fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 {
+                max_boundaries: 4096,
+            };
+            let (original_physical, storage) =
+                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                    prefix.input(),
+                    limits,
+                    out.budget,
+                )?;
+            out.budget.reserve_storage(storage.retained_storage())?;
+            let (prefix_physical, storage) =
+                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                    prefix.output(),
+                    limits,
+                    out.budget,
+                )?;
+            out.budget.reserve_storage(storage.retained_storage())?;
+            let (output_physical, storage) =
+                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                    output, limits, out.budget,
+                )?;
+            out.budget.reserve_storage(storage.retained_storage())?;
+            let original_contracts = target_view_contracts_v38::TargetByteViewContractsV38::derive(
+                prefix.input(),
+                FormalIndexWidth::Bits64,
+                out,
+            )?;
+            let prefix_contracts = target_view_contracts_v38::TargetByteViewContractsV38::derive(
+                prefix.output(),
+                FormalIndexWidth::Bits64,
+                out,
+            )?;
+            let output_contracts = target_view_contracts_v38::TargetByteViewContractsV38::derive(
+                output,
+                FormalIndexWidth::Bits64,
+                out,
+            )?;
+            let bridge = AllocationBridgeV48::derive(prefix, licm, output, &origins, out)?;
+            bridge.emit_typed_prefix_licm_v49(
+                &original_physical,
+                &prefix_physical,
+                &output_physical,
+                &original_contracts,
+                &prefix_contracts,
+                &output_contracts,
+                FormalIndexWidth::Bits64,
+                7,
+                out,
+            )?;
+            let mut checked = 0;
+            for (operation, row) in prefix.output().operations().iter().enumerate() {
+                if matches!(
+                    row.operation.kind,
+                    OperationKind::Binary {
+                        op: BinaryOp::Checked(_),
+                        ..
+                    }
+                ) && licm.origins()[operation].hoist.is_some()
+                {
+                    checked += 1;
+                    assert_eq!(row.results.len(), 2);
+                    for result in row.results.clone() {
+                        assert!(out.text.contains(&format!(
+                            "typed_relocation_result_0_v48({result}, before, little_endian)"
+                        )));
+                    }
+                }
+            }
+            assert_eq!(checked, 1);
+            Ok(())
+        };
+        let measured = run(floor, LIMIT, LIMIT, generate);
+        let expected = measured.0.unwrap();
+        for text in [
+            "typed_composed_entry_relation_0_v49",
+            "typed_composed_step_0_v49",
+            "typed_composed_trace_0_v49",
+            "typed_licm_cursor_related_0_v49(middle, actual, little_endian)",
+            "before_cursor.segment == after_cursor.segment",
+            "typed_relocated_event_v49(right).observations.is_some()",
+        ] {
+            assert!(expected.contains(text), "missing {text}");
+        }
+        assert_eq!(
+            expected.matches("struct TypedMemoryObservationV48").count(),
+            1
+        );
+        assert_eq!(
+            expected
+                .matches("open spec fn typed_relocated_event_v49(")
+                .count(),
+            1
+        );
+        assert!(!expected.contains("assume("));
+        assert!(!expected.contains("external_body"));
+        let exact = run(floor, measured.1, measured.2, generate);
+        assert_eq!(exact.0.unwrap(), expected);
+        assert_eq!((exact.1, exact.2), (measured.1, measured.2));
+        for work in [true, false] {
+            let work_limit = measured.1 - usize::from(work);
+            let storage_limit = measured.2 - usize::from(!work);
+            match run(floor, work_limit, storage_limit, generate)
+                .0
+                .err()
+                .unwrap()
+            {
+                Error::Resource(Resource::Work(error)) if work => {
+                    assert_eq!(error.limit(), work_limit);
+                    assert_eq!(error.actual(), measured.1);
+                }
+                Error::Resource(Resource::Storage(error)) if !work => {
+                    assert_eq!(error.limit(), storage_limit);
+                    assert_eq!(error.actual(), measured.2);
+                }
+                other => panic!("wrong exact composed resource boundary: {other:?}"),
+            }
+        }
+    });
+}
+
+#[test]
+fn typed_prefix_segment_interpreter_preserves_event_suffixes_and_exact_entry_resources() {
+    with_chain(|prefix, licm, output, floor| {
+        let origins = Origins {
+            inventory: prefix.input(),
+            duplicate: false,
+        };
+        let generate = |out: &mut Writer<'_, '_>| -> Result<()> {
+            let limits = fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 {
+                max_boundaries: 4096,
+            };
+            let (before_physical, storage) =
+                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                    prefix.input(),
+                    limits,
+                    out.budget,
+                )?;
+            out.budget.reserve_storage(storage.retained_storage())?;
+            let (after_physical, storage) =
+                fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                    prefix.output(),
+                    limits,
+                    out.budget,
+                )?;
+            out.budget.reserve_storage(storage.retained_storage())?;
+            let before_contracts = target_view_contracts_v38::TargetByteViewContractsV38::derive(
+                prefix.input(),
+                FormalIndexWidth::Bits64,
+                out,
+            )?;
+            let after_contracts = target_view_contracts_v38::TargetByteViewContractsV38::derive(
+                prefix.output(),
+                FormalIndexWidth::Bits64,
+                out,
+            )?;
+            let bridge = AllocationBridgeV48::derive(prefix, licm, output, &origins, out)?;
+            bridge.emit_typed_prefix_v49(
+                &before_physical,
+                &after_physical,
+                &before_contracts,
+                &after_contracts,
+                FormalIndexWidth::Bits64,
+                7,
+                out,
+            )
+        };
+        let measured = run(floor, LIMIT, LIMIT, generate);
+        let expected = measured.0.unwrap();
+        for text in [
+            "TypedPrefixCursorV49",
+            "byte_micro_step_",
+            "byte_micro_finish_",
+            "subrange(initial_count as int",
+            "typed_prefix_cursor_valid_0_v49",
+            "m.observations[i - 1].after == m.observations[i].before",
+            "typed_prefix_entry_relation_0_v49",
+            "typed_prefix_input_defined_0_v49",
+            "typed_allocation_environment_0_v48(before) == typed_allocation_environment_1_v48(after)",
+            "typed_prefix_actual_event_v49(actual).observations.is_some()",
+            "returned: result.returned",
+            "MemoryOperationEffectV30::Trap",
+            "MemoryOperationEffectV30::Refused",
+        ] {
+            assert!(expected.contains(text), "missing {text}");
+        }
+        for forbidden in ["Seq<int>", "spec_fn(", "assume(", "external_body"] {
+            assert!(!expected.contains(forbidden), "unexpected {forbidden}");
+        }
+        let exact = run(floor, measured.1, measured.2, generate);
+        assert_eq!(exact.0.unwrap(), expected);
+        assert_eq!((exact.1, exact.2), (measured.1, measured.2));
+        for work in [true, false] {
+            let work_limit = measured.1 - usize::from(work);
+            let storage_limit = measured.2 - usize::from(!work);
+            match run(floor, work_limit, storage_limit, generate)
+                .0
+                .err()
+                .unwrap()
+            {
+                Error::Resource(Resource::Work(error)) if work => {
+                    assert_eq!(error.limit(), work_limit);
+                    assert_eq!(error.actual(), measured.1);
+                }
+                Error::Resource(Resource::Storage(error)) if !work => {
+                    assert_eq!(error.limit(), storage_limit);
+                    assert_eq!(error.actual(), measured.2);
+                }
+                other => panic!("wrong exact prefix resource boundary: {other:?}"),
+            }
+        }
+    });
+}

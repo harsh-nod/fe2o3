@@ -164,8 +164,18 @@ fn original_observe(
     assert!(!source.contains("assume("));
     assert_eq!(&subject.census()[..2], &[2, 2]);
     assert!(subject.census()[3] >= 4);
-    let optimized = candidate.refinement_subject(budget)?.expressions();
-    assert_eq!(subject.canonical_identity(), optimized.input());
+    let optimized = candidate.refinement_subject(budget)?;
+    assert_eq!(
+        subject.canonical_identity(),
+        optimized.graph_identities()[0]
+    );
+    let composed = std::str::from_utf8(candidate.generated_source(budget)?).unwrap();
+    assert!(composed.contains("proof fn typed_final_native_source_trace_"));
+    assert!(composed.contains("mod forwarding_v46 {"));
+    assert_eq!(
+        optimized.graph_identities()[3],
+        *candidate.native(budget)?.output(budget)?.identity()
+    );
     assert_eq!(
         subject.semantic_identity(),
         optimized.source_semantic_identity()

@@ -27,6 +27,13 @@ use std::{
     mem::{align_of, size_of},
 };
 
+#[path = "mixed_optimizer_typed_source_request_v50.rs"]
+mod typed_source_v50;
+pub use typed_source_v50::{
+    ExecutedTypedSourceTailV50, PreparedTypedSourceTailExecutionV50, PreparedTypedSourceTailV50,
+    TypedSourceTailSubjectV50, prepare_typed_source_tail_v50,
+};
+
 #[path = "mixed_optimizer_relocation_cfg_refinement_v28.rs"]
 mod cfg;
 pub use cfg::{

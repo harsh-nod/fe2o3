@@ -1,9 +1,11 @@
 //! Fresh final-owner native policies joined to the genuine source prefix.
 use super::*;
 use fe2o3_kernel_analysis::{
+    CanonicalKirCrossBlockForwardingStorageV1 as ForwardPairStorage,
     CanonicalKirPrivateMemoryErrorV1 as PhysicalError,
     CanonicalKirPrivateMemoryLimitsV1 as PhysicalLimits, CanonicalRankedMetadataV18 as Metadata,
-    CanonicalRankedViewErrorV1 as RankedError, CheckedCanonicalKirLicmV18 as Pair,
+    CanonicalRankedViewErrorV1 as RankedError,
+    CheckedCanonicalKirCrossBlockForwardingV18 as ForwardPair, CheckedCanonicalKirLicmV18 as Pair,
     CheckedCanonicalKirPrivateMemoryV18 as Physical, check_canonical_kir_private_memory_v18,
 };
 use fe2o3_kernel_ir::{
@@ -56,6 +58,11 @@ impl From<InventoryError> for Error {
 }
 impl From<MotionError> for Error {
     fn from(error: MotionError) -> Self {
+        Self::Relocation(error.into())
+    }
+}
+impl From<fe2o3_kernel_opt::OwnedCrossBlockForwardingErrorV1> for Error {
+    fn from(error: fe2o3_kernel_opt::OwnedCrossBlockForwardingErrorV1) -> Self {
         Self::Relocation(error.into())
     }
 }
@@ -197,6 +204,7 @@ impl ProductionMixedLicmRuntimeOccurrenceV28 {
 pub struct ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source,
     P: ProductionMixedPrefixOwnerV29<'view, 'source> = ProductionConditionalMixedPureCseOutputHandoffV26<'view, 'source>> {
     relocation: &'native ProductionMixedLicmRelocationV28<'prefix, 'view, 'source, P>,
+    forwarding: Option<&'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P>>,
     occurrences: Vec<ProductionMixedLicmRuntimeOccurrenceV28>,
     histories: Vec<Option<History>>,
     retained: usize,
@@ -230,11 +238,17 @@ impl<'native, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, '
             source.cleanup.deny_refund();
             return source.retain_query(Err(ArgumentResourceV1::Accounting.into()));
         }
-        self.relocation.custody(budget)
+        self.relocation.custody(budget)?;
+        if let Some(forwarding) = self.forwarding {
+            forwarding.custody(budget)?;
+        }
+        Ok(())
     }
     fn check(&self, budget: &ArgumentBudgetV1<'_>) -> SourceOwnedResultV18<()> {
         let custody = self.custody(budget);
-        self.relocation.check(budget).and(custody)
+        let selected = self.relocation.check(budget).and(custody);
+        let forwarded = self.forwarding.map_or(Ok(()), |owner| owner.check(budget));
+        selected.and(forwarded)
     }
     /// Borrows the genuine source-prefix and LICM owner retained by this handoff.
     pub fn relocation(
@@ -251,7 +265,21 @@ impl<'native, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, '
         budget: &ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18> {
         self.check(budget)?;
-        Ok(self.relocation.tail.output())
+        Ok(self.forwarding.map_or_else(
+            || self.relocation.tail.output(),
+            |owner| owner.tail.output(),
+        ))
+    }
+    /// Exact optional post-motion stage. Current production requires this stage;
+    /// historical LICM-only callers retain their distinct intermediate output.
+    pub fn store_consensus_v46(
+        &self,
+        budget: &ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<
+        Option<&'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P>>,
+    > {
+        self.check(budget)?;
+        Ok(self.forwarding)
     }
     /// Rejoins this handoff to the exact original semantic SSA owner.
     pub fn check_original_source(
@@ -442,6 +470,74 @@ fn replay_physical(
     Ok(())
 }
 
+fn replay_forwarded_physical_v46(
+    pair: &ForwardPair<'_>,
+    input: &Inventory<'_>,
+    output: &Inventory<'_>,
+    before: &Physical<'_, '_>,
+    after: &Physical<'_, '_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<()> {
+    budget.charge_work(9)?;
+    if !std::ptr::eq(pair.input(), input.owner())
+        || !std::ptr::eq(pair.output(), output.owner())
+        || !before.is_for(input)
+        || !after.is_for(output)
+        || input.definitions().len() != output.definitions().len()
+        || input.operations().len() != output.operations().len()
+        || pair.origins().len() != input.operations().len()
+        || before.latest_stores().len() != input.operations().len()
+        || after.latest_stores().len() != output.operations().len()
+    {
+        return Err(mismatch("store consensus physical endpoint/census differs"));
+    }
+    for (index, (a, b)) in input
+        .definitions()
+        .iter()
+        .zip(output.definitions())
+        .enumerate()
+    {
+        budget.charge_work(4)?;
+        if a.coordinate != b.coordinate
+            || a.value != b.value
+            || before.address(index) != after.address(index)
+        {
+            return Err(mismatch("store consensus private address identity changed"));
+        }
+    }
+    for (index, row) in pair.origins().iter().enumerate() {
+        budget.charge_work(7)?;
+        if row.input != input.operations()[index].coordinate
+            || row.output != output.operations()[index].coordinate
+            || row.input != row.output
+        {
+            return Err(mismatch("store consensus physical occurrence moved"));
+        }
+        if row.store.is_some() {
+            // A removed direct private read cannot remove a global/native role.
+            // Complete Store consensus is established by the actual pair, not
+            // by the physical checker's optional single latest-Store hint.
+            if !before.operation(index)
+                || after.operation(index)
+                || after.latest_stores()[index].is_some()
+                || !matches!(
+                    input.operations()[index].operation.kind,
+                    OperationKind::Load { .. }
+                )
+            {
+                return Err(mismatch("store consensus removed a nonprivate read"));
+            }
+        } else if before.operation(index) != after.operation(index)
+            || before.latest_stores()[index] != after.latest_stores()[index]
+        {
+            return Err(mismatch(
+                "store consensus changed another private memory occurrence",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn with_pending(
     inventory: &Inventory<'_>,
     layouts: fe2o3_kernel_ir::StorageLayoutLimitsV1,
@@ -452,6 +548,26 @@ fn with_pending(
     ) -> Result<()>,
 ) -> Result<()> {
     with_source_pending_native_v30(inventory, layouts, budget, mismatch, |_| {}, consume)
+}
+
+impl<'motion, 'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
+    ProductionMixedStoreConsensusV46<'motion, 'prefix, 'view, 'source, P>
+{
+    /// Replays both actual transformations and reruns all final native stages
+    /// on the forwarding output. This does not execute either refinement proof.
+    pub fn complete_native_v46<'native>(
+        &'native self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
+    {
+        self.check(budget)?;
+        self.relocation.complete_native_inner_v28(
+            Some(self),
+            budget,
+            #[cfg(test)]
+            None,
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -470,12 +586,12 @@ fn join_final<'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>(
 ) -> Result<()> {
     relocated.check(budget)?;
     budget.charge_work(9)?;
-    if !std::ptr::eq(native.owner(budget)?, relocated.tail.output())
+    if !std::ptr::eq(native.owner(budget)?, output.owner())
         || !std::ptr::eq(
             globals
                 .owner(budget)
                 .map_err(NativeError::ConditionalGlobalsV26)?,
-            relocated.tail.output(),
+            output.owner(),
         )
         || native.function_count(budget)? != output.functions().len()
         || globals
@@ -635,6 +751,7 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
     ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
     {
         self.complete_native_inner_v28(
+            None,
             budget,
             #[cfg(test)]
             None,
@@ -648,16 +765,25 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
     {
-        self.complete_native_inner_v28(budget, Some(fault))
+        self.complete_native_inner_v28(None, budget, Some(fault))
     }
 
-    fn complete_native_inner_v28<'native>(
+    pub(super) fn complete_native_inner_v28<'native>(
         &'native self,
+        forwarding: Option<
+            &'native ProductionMixedStoreConsensusV46<'native, 'prefix, 'view, 'source, P>,
+        >,
         budget: &mut ArgumentBudgetV1<'_>,
         #[cfg(test)] fault: Option<u8>,
     ) -> Result<ProductionConditionalMixedLicmOutputHandoffV28<'native, 'prefix, 'view, 'source, P>>
     {
         self.check(budget)?;
+        if let Some(forwarding) = forwarding {
+            forwarding.check(budget)?;
+            if !std::ptr::eq(forwarding.relocation, self) {
+                return Err(mismatch("store consensus belongs to another LICM owner"));
+            }
+        }
         let source = self.prefix.source_owned_v29();
         let floor = budget.storage();
         let (occurrences, histories, retained) =
@@ -688,6 +814,19 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                     size_of::<[usize; 64]>(),
                     size_of::<[&(); 64]>(),
                     size_of::<fe2o3_kernel_ir::StorageLayoutLimitsV1>(),
+                    size_of::<Option<(ForwardPair<'_>, ForwardPairStorage)>>(),
+                    size_of::<
+                        Option<(
+                            Inventory<'_>,
+                            fe2o3_kernel_analysis::CanonicalKirInventoryStorageV1,
+                        )>,
+                    >(),
+                    size_of::<
+                        Option<(
+                            Physical<'_, '_>,
+                            fe2o3_kernel_analysis::CanonicalKirPrivateMemoryStorageV1,
+                        )>,
+                    >(),
                 ])?;
                 budget.reserve_storage(argument_sum_v1(&[owner_header, scratch_header])?)?;
                 self.replay(budget)?;
@@ -697,9 +836,9 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                 budget.reserve_storage(ps.retained_storage())?;
                 let (input, is) = Inventory::derive_v18(prefix, budget)?;
                 budget.reserve_storage(is.retained_storage())?;
-                let (output, os) = Inventory::derive_v18(self.tail.output(), budget)?;
+                let (motion, os) = Inventory::derive_v18(self.tail.output(), budget)?;
                 budget.reserve_storage(os.retained_storage())?;
-                self.projection.replay(&pair, &input, &output, budget)?;
+                self.projection.replay(&pair, &input, &motion, budget)?;
                 let (before, bs) = check_canonical_kir_private_memory_v18(
                     &input,
                     PhysicalLimits {
@@ -708,15 +847,60 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                     budget,
                 )?;
                 budget.reserve_storage(bs.retained_storage())?;
-                let (after, as_) = check_canonical_kir_private_memory_v18(
-                    &output,
+                let (motion_memory, as_) = check_canonical_kir_private_memory_v18(
+                    &motion,
                     PhysicalLimits {
-                        max_cells: output.definitions().len(),
+                        max_cells: motion.definitions().len(),
                     },
                     budget,
                 )?;
                 budget.reserve_storage(as_.retained_storage())?;
-                replay_physical(&pair, &input, &output, &before, &after, budget)?;
+                replay_physical(&pair, &input, &motion, &before, &motion_memory, budget)?;
+                let forward_pair = forwarding
+                    .map(|owner| {
+                        let (pair, storage) = owner.replay(budget)?;
+                        budget.reserve_storage(storage.retained_storage())?;
+                        Ok::<_, Error>((pair, storage))
+                    })
+                    .transpose()?;
+                let final_inventory = forwarding
+                    .map(|owner| {
+                        let (inventory, storage) =
+                            Inventory::derive_v18(owner.tail.output(), budget)?;
+                        budget.reserve_storage(storage.retained_storage())?;
+                        Ok::<_, Error>((inventory, storage))
+                    })
+                    .transpose()?;
+                let final_memory = final_inventory
+                    .as_ref()
+                    .map(|(inventory, _)| {
+                        let (physical, storage) = check_canonical_kir_private_memory_v18(
+                            inventory,
+                            PhysicalLimits {
+                                max_cells: inventory.definitions().len(),
+                            },
+                            budget,
+                        )?;
+                        budget.reserve_storage(storage.retained_storage())?;
+                        Ok::<_, Error>((physical, storage))
+                    })
+                    .transpose()?;
+                let output = final_inventory
+                    .as_ref()
+                    .map_or(&motion, |(inventory, _)| inventory);
+                let after = final_memory
+                    .as_ref()
+                    .map_or(&motion_memory, |(physical, _)| physical);
+                if let Some((forward_pair, _)) = forward_pair.as_ref() {
+                    replay_forwarded_physical_v46(
+                        forward_pair,
+                        &motion,
+                        output,
+                        &motion_memory,
+                        after,
+                        budget,
+                    )?;
+                }
 
                 let scratch_start = budget.storage();
                 let mut roles = vector(output.operations().len(), budget)?;
@@ -782,6 +966,24 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                         budget.charge_work(6)?;
                         let at = coordinates::operation(&pair, &input, role.coordinate(), budget)?;
                         let index = coordinates::operation_index(&output, at)?;
+                        if let Some((forward_pair, _)) = forward_pair.as_ref() {
+                            budget.charge_work(3)?;
+                            let row = forward_pair
+                                .origins()
+                                .get(index)
+                                .ok_or_else(|| mismatch("store consensus source role census"))?;
+                            if row.input != at || row.output != at {
+                                return Err(mismatch("store consensus source role coordinate"));
+                            }
+                            if row.store.is_some() {
+                                if role.requirement() != Requirement::Memory {
+                                    return Err(mismatch(
+                                        "store consensus removed a non-memory source role",
+                                    ));
+                                }
+                                continue;
+                            }
+                        }
                         if roles[index].replace(role.requirement()).is_some() {
                             return Err(mismatch("LICM repeated prefix source role"));
                         }
@@ -869,12 +1071,12 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                     let mut selected = None;
                     let mut native_result = None;
                     let family = fe2o3_kernel_ir::with_canonical_guarded_global_reads_v18(
-                        self.tail.output(),
+                        output.owner(),
                         Default::default(),
                         budget,
                         |reads, budget| {
                             fe2o3_kernel_ir::with_canonical_guarded_global_stores_v24(
-                                self.tail.output(),
+                                output.owner(),
                                 Default::default(),
                                 budget,
                                 |stores, budget| {
@@ -934,11 +1136,28 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                     Ok(())
                 })?;
                 self.check(budget)?;
+                if let Some(forwarding) = forwarding {
+                    forwarding.check(budget)?;
+                }
                 drop((roles, parameters, seen, roots_seen, launches));
+                let forward_storage = argument_sum_v1(&[
+                    forward_pair
+                        .as_ref()
+                        .map_or(0, |(_, storage)| storage.retained_storage()),
+                    final_inventory
+                        .as_ref()
+                        .map_or(0, |(_, storage)| storage.retained_storage()),
+                    final_memory
+                        .as_ref()
+                        .map_or(0, |(_, storage)| storage.retained_storage()),
+                ])?;
+                drop(final_memory);
+                drop(final_inventory);
+                drop(forward_pair);
                 drop(before);
-                drop(after);
+                drop(motion_memory);
                 drop(input);
-                drop(output);
+                drop(motion);
                 drop(pair);
                 budget.release_storage(argument_sum_v1(&[
                     scratch_header,
@@ -948,6 +1167,7 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
                     os.retained_storage(),
                     bs.retained_storage(),
                     as_.retained_storage(),
+                    forward_storage,
                 ])?)?;
                 let retained = argument_sum_v1(&[owner_header, payload])?;
                 if entry.checked_add(retained) != Some(budget.storage()) {
@@ -958,6 +1178,7 @@ impl<'prefix, 'view, 'source, P: ProductionMixedPrefixOwnerV29<'view, 'source>>
             })?;
         Ok(ProductionConditionalMixedLicmOutputHandoffV28 {
             relocation: self,
+            forwarding,
             occurrences,
             histories,
             retained,

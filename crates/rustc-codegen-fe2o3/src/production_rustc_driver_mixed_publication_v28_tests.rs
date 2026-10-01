@@ -124,8 +124,7 @@ fn observe(
     CALLBACKS.with(|n| n.set(n.get() + 1));
     candidate.replay(budget)?;
     let subject = candidate.refinement_subject(budget)?;
-    assert!(subject.models_original_to_final_composition());
-    let expressions = subject.expressions();
+    let expressions = subject;
     assert_eq!(
         candidate
             .source(budget)?
@@ -144,10 +143,29 @@ fn observe(
     );
     assert_eq!(
         *candidate.native(budget)?.output(budget)?.identity(),
-        expressions.output()
+        expressions.graph_identities()[3]
     );
     let generated_bytes = candidate.generated_source(budget)?.len();
     assert!(generated_bytes > 0);
+    let typed = std::str::from_utf8(candidate.generated_source(budget)?).unwrap();
+    assert!(typed.contains("proof fn typed_final_native_source_trace_"));
+    assert!(typed.contains("mod typed_prefix_v49 {"));
+    assert!(typed.contains("mod forwarding_v46 {"));
+    assert!(
+        candidate
+            .native(budget)?
+            .store_consensus_v46(budget)?
+            .is_some()
+    );
+    assert_eq!(
+        expressions.graph_identities()[2],
+        *candidate
+            .native(budget)?
+            .relocation(budget)?
+            .tail(budget)?
+            .output()
+            .identity()
+    );
     assert!(!candidate.grants_publication_or_artifact_authority());
     assert_eq!(
         candidate.open_gates(),
@@ -171,11 +189,11 @@ fn observe(
         let contract = decode_mixed_contract_v26(bytes, &mut |n| budget.charge_work(n)).unwrap();
         assert_eq!(
             contract.subjects().original_graph_identity,
-            *expressions.input().digest()
+            *expressions.graph_identities()[0].digest()
         );
         assert_eq!(
             contract.subjects().output_graph_identity,
-            *expressions.output().digest()
+            *expressions.graph_identities()[3].digest()
         );
     }
     let result = candidate.into_protected(budget);
@@ -188,8 +206,8 @@ fn observe(
     Ok(PublicationObservation {
         roots,
         generated_bytes,
-        original: *expressions.input().digest(),
-        output: *expressions.output().digest(),
+        original: *expressions.graph_identities()[0].digest(),
+        output: *expressions.graph_identities()[3].digest(),
         statement: subject.statement_identity(),
         exact_storage: budget.peak_storage(),
         extraction_refused: true,
@@ -215,7 +233,7 @@ fn observe_execution_preparation(
     assert!(witness.len() > 352);
     assert_eq!(
         <[u8; 32]>::from(sha2::Sha256::digest(witness)),
-        subject.expressions().prefix_execution_identity(),
+        subject.prefix_execution_identity(),
     );
     prepared
         .discard(budget)

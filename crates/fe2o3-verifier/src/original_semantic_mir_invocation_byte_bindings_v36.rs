@@ -7,6 +7,9 @@ use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_kernel_ir::{FunctionRole, OperationKind};
 use std::{fmt::Write as _, mem::size_of, ops::Range};
 
+#[path = "original_semantic_mir_byte_map_extensionality_v48.rs"]
+mod extensionality;
+
 #[derive(Clone, Copy, Debug)]
 struct Binding {
     descriptor: usize,

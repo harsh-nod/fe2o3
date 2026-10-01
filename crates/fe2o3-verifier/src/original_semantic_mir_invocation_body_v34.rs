@@ -48,6 +48,13 @@ mod effects;
 #[path = "original_semantic_mir_invocation_paired_v36.rs"]
 mod paired;
 
+#[path = "original_semantic_mir_invocation_typed_tail_v49.rs"]
+mod typed_tail;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_typed_tail_v49_tests.rs"]
+mod typed_tail_tests;
+
 pub(super) struct Body {
     root: usize,
     instance: usize,
@@ -80,6 +87,41 @@ pub(crate) fn generate_refinement_v36(
     launches: &[fe2o3_kernel_ir::ExplicitLaunchExtent],
     width: fe2o3_kernel_ir::FormalIndexWidth,
     endianness: fe2o3_kernel_ir::EndiannessV2,
+    out: &mut Writer<'_, '_>,
+) -> Result<[usize; 6]> {
+    generate_refinement_inner_v49(relation, launches, width, endianness, None, out)
+}
+
+pub(crate) fn generate_refinement_typed_v49<'a, 'owner, 'rows>(
+    relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
+    prefix: &'a fe2o3_kernel_analysis::CheckedCanonicalKirTransitionV18<'a, 'owner, 'owner, 'rows>,
+    licm: &'a fe2o3_kernel_analysis::CheckedCanonicalKirLicmV18<'owner>,
+    relocated: &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'owner>,
+    forwarding: &'a fe2o3_kernel_analysis::CheckedCanonicalKirCrossBlockForwardingV18<'owner>,
+    final_inventory: &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'owner>,
+    launches: &[fe2o3_kernel_ir::ExplicitLaunchExtent],
+    width: fe2o3_kernel_ir::FormalIndexWidth,
+    endianness: fe2o3_kernel_ir::EndiannessV2,
+    out: &mut Writer<'_, '_>,
+) -> Result<[usize; 6]> {
+    let tail = typed_tail::Tail::derive_final(
+        relation,
+        prefix,
+        licm,
+        relocated,
+        forwarding,
+        final_inventory,
+        out,
+    )?;
+    generate_refinement_inner_v49(relation, launches, width, endianness, Some(tail), out)
+}
+
+fn generate_refinement_inner_v49(
+    relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
+    launches: &[fe2o3_kernel_ir::ExplicitLaunchExtent],
+    width: fe2o3_kernel_ir::FormalIndexWidth,
+    endianness: fe2o3_kernel_ir::EndiannessV2,
+    tail: Option<typed_tail::Tail<'_, '_, '_>>,
     out: &mut Writer<'_, '_>,
 ) -> Result<[usize; 6]> {
     use std::fmt::Write as _;
@@ -170,6 +212,10 @@ pub(crate) fn generate_refinement_v36(
         write!(out, "open spec fn invocation_source_initial_runtime_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationSourceByteStateV36 {{ invocation_source_byte_initial_{root}_v36(arguments, external, execution, invocation_runtime_little_endian_v36()) }}\nopen spec fn invocation_source_block_runtime_{root}_v36(source: InvocationSourceByteStateV36) -> InvocationSourceBlockResultV36 {{ invocation_source_byte_block_{root}_v36(source, invocation_runtime_little_endian_v36()) }}\nopen spec fn invocation_actual_micro_runtime_{root}_v36(cursor: MemoryMicroStateV30) -> MemoryMicroResultV30 {{ byte_micro_step_{root}_v30(cursor, invocation_runtime_little_endian_v36()) }}\n").map_err(|_| out.error())?;
     }
     paired.emit(out)?;
+    if let Some(tail) = tail {
+        byte_bindings.emit_carrier_extensionality_v48(out)?;
+        tail.emit(relation, &slots, &physical, &contracts, width, out)?;
+    }
     write!(out, "}}\n").map_err(|_| out.error())?;
     drop(byte_actual);
     drop(physical);

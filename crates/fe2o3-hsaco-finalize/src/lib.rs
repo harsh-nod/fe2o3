@@ -33,6 +33,11 @@ mod first_build_worker_native_resources;
 mod first_build_worker_v3;
 mod link_plan;
 mod mixed_worker_lineage_v29;
+mod typed_worker_lineage_v50;
+pub use typed_worker_lineage_v50::{
+    PreparedFinalizedTypedContentV50, TypedWorkerLineageErrorV50,
+    finalize_protected_worker_typed_content_v50,
+};
 mod native_worker_compact_replay;
 mod native_worker_engine;
 mod native_worker_finalization;

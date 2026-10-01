@@ -3,8 +3,7 @@
 
 use super::*;
 use fe2o3_verifier::{
-    ExecutedMixedComposedRefinementV29 as Executed,
-    FunctionalRefinementVerusRuntimeLeaseV1 as Runtime,
+    ExecutedTypedSourceTailV50 as Executed, FunctionalRefinementVerusRuntimeLeaseV1 as Runtime,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -44,12 +43,12 @@ impl<'a, 'v, 's> PreparedMixedPublicationV28<'a, 'v, 's> {
     pub(crate) fn prepare_execution_for_test<'r>(
         &'r self,
         budget: &mut Budget<'_>,
-    ) -> Result<fe2o3_verifier::PreparedMixedComposedExecutionV29<'r, 'a, 'v, 'v, 'v, 's>, Error>
+    ) -> Result<fe2o3_verifier::PreparedTypedSourceTailExecutionV50<'r, 'a, 'v, 'v, 'v, 's>, Error>
     {
         self.check(budget)?;
         self.inputs
             .composed
-            .prepare_composed_execution_v29(budget, 1)
+            .prepare_typed_execution_v50(budget, 1)
             .map_err(Error::MixedRelocationExpressions)
     }
 }
@@ -89,7 +88,7 @@ impl<'a, 'v, 's> ProtectedMixedPublicationV28<'a, 'v, 's> {
                 .prepared
                 .inputs
                 .composed
-                .prepare_composed_execution_v29(budget, *timeout_seconds)
+                .prepare_typed_execution_v50(budget, *timeout_seconds)
                 .map_err(Error::MixedRelocationExpressions)?;
             let executed = pending
                 .execute(runtime, budget)
