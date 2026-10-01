@@ -34,6 +34,8 @@ mod conditional_ranked_output;
 mod fixed_census_lifecycle;
 #[path = "production_rustc_driver_fixed_census_observation_v1_tests.rs"]
 mod fixed_census_observation;
+#[path = "production_rustc_driver_formal_memory_diagnostic_v1_tests.rs"]
+mod formal_memory_diagnostic;
 #[path = "production_rustc_driver_helper_reference_source_v1_tests.rs"]
 mod helper_reference_source;
 #[path = "production_rustc_driver_integer_identity_source_v1_tests.rs"]
