@@ -39,7 +39,10 @@ mod supported {
             .ok_or_else(|| "non-UTF8 command argument".into())
     }
     fn digest(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     fn read_regular(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
