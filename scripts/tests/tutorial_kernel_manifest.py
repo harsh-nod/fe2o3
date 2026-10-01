@@ -154,13 +154,23 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         lessons = curriculum["lessons"]
         self.assertEqual(len(lessons), 56)
         self.assertEqual(Counter(lesson["role"] for lesson in lessons), {"executable": 46, "conceptual": 10})
-        self.assertEqual(sum(len(lesson["codeTabs"]) for lesson in lessons), 307)
+        self.assertEqual(sum(len(lesson["codeTabs"]) for lesson in lessons), 311)
         self.assertEqual(
             [lesson["lessonId"] for lesson in lessons if any(v["kind"] == "mixed" for v in lesson["variants"])],
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "997fbb7123c335417150a3e9eab5b2725cc0783af3666bab18980584dd1c7faa")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "4c84447dc3e7bc692fb9d75f7e1e3dd0c9ae42ada71c9818beffdd192e931d26")
+        mixed_tabs = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][7:]
+        self.assertEqual([tab["label"] for tab in mixed_tabs], [
+            "Mixed tile source", "Mixed tile oracle", "Public CLI workflow",
+            "Recorded mixed CPU observations",
+        ])
+        self.assertEqual([tab["sourceItemStatus"] for tab in mixed_tabs],
+                         ["pending", "not-applicable", "not-applicable", "not-applicable"])
+        self.assertTrue(all(tab["sourceItem"] is None for tab in mixed_tabs))
+        self.assertEqual([tab["sourceCommit"] for tab in mixed_tabs[:2]],
+                         ["fed6998b1a5eaf2530e94664a1ede650382a8990"] * 2)
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -285,9 +295,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         gaps = {}
         self.validator.validate_manifest(ROOT, self.manifest, curriculum_gaps=gaps)
         self.assertEqual(gaps, {
+            "cpu-semantic-simulation": ["examples/workgroup_sync_v1/src/kernel_mixed_tile_u32.rs"],
             "gemm-proof-plan": ["examples/tiled_gemm_v1/src/kernel.rs"],
         })
-        tab = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0]
+        lesson = self.curriculum_lesson("cpu-semantic-simulation")
+        lesson["sourceBindingGap"] = None
+        tab = lesson["codeTabs"][0]
         tab.update(sourceItem=None, sourceItemStatus="pending")
         with self.assertRaisesRegex(SystemExit, "sourceBindingGap.*production-ranked-bounds-device"):
             self.validate_curriculum()
@@ -458,7 +471,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         for counts in (report, identities):
             self.assertEqual(counts["knownVariantObligationCount"], 123)
             self.assertEqual(counts["pendingVariantCount"], 106)
-            self.assertEqual(counts["unregisteredDisplayItemCount"], 24)
+            self.assertEqual(counts["unregisteredDisplayItemCount"], 25)
         self.assertIs(identities["runtimeCensusValidated"], False)
         self.assertEqual(identities["knownKernelIdentityCount"], 61)
         self.assertEqual(identities["negativeCaseCount"], 3)
@@ -470,9 +483,9 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(report["requiredModes"], ["simt", "tile"])
         self.assertEqual(len(report["fixtureSelections"]), 50)
         self.assertEqual(len(report["sourceDriverCases"]), 14)
-        self.assertEqual(len(report["displayObservations"]), 54)
+        self.assertEqual(len(report["displayObservations"]), 55)
         self.assertEqual(sum(row["sourceItemStatus"] == "pending"
-                             for row in report["displayObservations"]), 52)
+                             for row in report["displayObservations"]), 53)
         self.assertTrue(all(row["lexicalKernelNames"] is None
                             for row in report["displayObservations"]))
         self.assertEqual(report["stageStatus"], "not-evaluated")
@@ -638,12 +651,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "22469acd99815133e00b377ef95747bd4ce09fb99bb0607ab2bb1f2075041a06")
+                         "a09f3fe28e0d189ab23cf3ee2c0a65cf151c22b085b3599c49452edea3ff96e7")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
-                         {"kernel": 75, "required-negative": 3, "conceptual": 26, "helper": 18})
+                         {"kernel": 76, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 25, "source-driver-contract": 14, "fixture-source-contract": 39,
+                         {"pending": 26, "source-driver-contract": 14, "fixture-source-contract": 39,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
@@ -678,6 +691,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(fill["kernelIds"], ["fixture:gfx942-fill-simulation:fill"])
         self.assertEqual(fill["bindingStatus"], "pending")
         self.assertEqual(display[("typed-vecadd", 3, "vecadd")]["bindingStatus"], "pending")
+        mixed = display[("cpu-semantic-simulation", 7, "mixed_tile_probe")]
+        self.assertEqual(mixed["functionUtf8Offset"], 468)
+        self.assertEqual(mixed["classification"], "kernel")
+        self.assertEqual(mixed["bindingStatus"], "pending")
+        self.assertEqual(mixed["kernelIds"], [])
+        self.assertEqual(mixed["negativeCases"], [])
         for row in inventory["displayItems"]:
             if row["lessonId"] == "typed-vecadd" and row["classification"] == "kernel":
                 self.assertEqual(row["kernelIds"], [])

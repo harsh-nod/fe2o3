@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "2ee23b1fe2a2c4e448cf40d0143009d748ceb0cf",
-      "tree": "977e763899d2bb6a43d2f7c3ecb1bf6b5a8478a4"
+      "commit": "fec72ed40255fb490bfc0a74e5ff5d24cc2218ea",
+      "tree": "94799b73e7481d7de4ad96a09c17ca4441040d0b"
     },
     "status": "pending",
     "lessons": [
@@ -392,7 +392,7 @@
         "sourceEntryIds": [
           "cpu-semantic-simulation"
         ],
-        "sourceBindingGap": null,
+        "sourceBindingGap": "The mixed tile display is not covered by an existing source-driver or fixture contract; its per-variant source binding and native qualification remain pending.",
         "variants": [
           {
             "kind": "simt",
@@ -806,6 +806,74 @@
               "contractSha256": "913fe84a5cea9d7aefc7db4f738c1aa9af87e9cf5740f286baf2e0669c24e11c"
             },
             "sourceItemStatus": "contract-bound"
+          },
+          {
+            "ordinal": 7,
+            "kind": "kernel",
+            "label": "Mixed tile source",
+            "language": "rust",
+            "displayedUtf8Bytes": 1247,
+            "displayedSha256": "e8aad7f11d63371e7d97e915dcbb5e35a6f44b885750a621696895f7d8810ee5",
+            "sourcePath": "examples/workgroup_sync_v1/src/kernel_mixed_tile_u32.rs",
+            "sourceCommit": "fed6998b1a5eaf2530e94664a1ede650382a8990",
+            "sourceSha256": "e8aad7f11d63371e7d97e915dcbb5e35a6f44b885750a621696895f7d8810ee5",
+            "sourceDigestScope": "file",
+            "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
+          },
+          {
+            "ordinal": 8,
+            "kind": "reference",
+            "label": "Mixed tile oracle",
+            "language": "rust",
+            "displayedUtf8Bytes": 3084,
+            "displayedSha256": "e7f6db79016e7fa1f559294c292817802c0466b608f060448e5e5e58601230cf",
+            "sourcePath": "examples/workgroup_sync_v1/src/mixed_tile_oracle.rs",
+            "sourceCommit": "fed6998b1a5eaf2530e94664a1ede650382a8990",
+            "sourceSha256": "e7f6db79016e7fa1f559294c292817802c0466b608f060448e5e5e58601230cf",
+            "sourceDigestScope": "file",
+            "sourceFragmentsSha256": null,
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 9,
+            "kind": "host",
+            "label": "Public CLI workflow",
+            "language": "bash",
+            "displayedUtf8Bytes": 4709,
+            "displayedSha256": "7f93ce81aa9f1e1c9b25d8df20546bc897679fcd63ce7de17f0e5ff5457f06fa",
+            "sourcePath": null,
+            "sourceCommit": null,
+            "sourceSha256": null,
+            "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
+            "explanatory": true,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 10,
+            "kind": "result",
+            "label": "Recorded mixed CPU observations",
+            "language": "text",
+            "displayedUtf8Bytes": 1140,
+            "displayedSha256": "fc73006a8ba9ec2ccecc8fdd7164901b011f409e9b0964fb4b5209c45aaf83bb",
+            "sourcePath": null,
+            "sourceCommit": null,
+            "sourceSha256": null,
+            "sourceDigestScope": null,
+            "sourceFragmentsSha256": null,
+            "explanatory": true,
+            "evidenceId": null,
+            "sourceItem": null,
+            "sourceItemStatus": "not-applicable"
           }
         ]
       },
@@ -1707,12 +1775,12 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 3963,
-            "displayedSha256": "8b4775baafb5ebc3e92ebb249e8362d06a64c33dbba96028802a529ec3b003c3",
+            "displayedUtf8Bytes": 3979,
+            "displayedSha256": "b7f65c16395ea89c590aaee800167a9dceea620e55765044f423eadf9360e04d",
             "sourcePath": "examples/row_softmax_general_v1/src/kernel.rs",
-            "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
-            "sourceSha256": "8b4775baafb5ebc3e92ebb249e8362d06a64c33dbba96028802a529ec3b003c3",
-            "sourceDigestScope": null,
+            "sourceCommit": "bfa616c996fa529da67f2f6c32e7829213914e3e",
+            "sourceSha256": "b7f65c16395ea89c590aaee800167a9dceea620e55765044f423eadf9360e04d",
+            "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": null,
@@ -15040,7 +15108,7 @@
       {
         "lessonId": "softmax-invariant",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 3810,
+        "functionUtf8Offset": 3826,
         "kernelSymbol": "accessed_extent_excludes_trailing_padding",
         "classification": "helper",
         "kernelIds": [],
@@ -15093,6 +15161,17 @@
         "negativeCases": [],
         "bindingStatus": "source-driver-contract",
         "reason": "The whole-file SIMT row display binds the exact production source-driver selection only; tile/mixed implementations and native/generated-host/direct-KFD stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 7,
+        "functionUtf8Offset": 468,
+        "kernelSymbol": "mixed_tile_probe",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "CPU diagnostic observations are pinned separately; an exact declared SIMT/tile variant binding and native qualification remain pending."
       }
     ]
   }
