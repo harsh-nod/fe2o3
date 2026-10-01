@@ -30,6 +30,15 @@ fn mapped(
         ExpressionV30::Argument(argument) => ExpressionV30::Argument(argument),
         ExpressionV30::Constant(bits) => ExpressionV30::Constant(bits),
         ExpressionV30::Not(input) => ExpressionV30::Not(edge(input)?),
+        ExpressionV30::Select {
+            condition,
+            true_value,
+            false_value,
+        } => ExpressionV30::Select {
+            condition: edge(condition)?,
+            true_value: edge(true_value)?,
+            false_value: edge(false_value)?,
+        },
         ExpressionV30::Binary {
             operation,
             left,

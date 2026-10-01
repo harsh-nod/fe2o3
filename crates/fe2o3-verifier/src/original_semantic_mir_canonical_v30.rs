@@ -58,7 +58,10 @@ impl CanonicalProgramV30 {
             .checked_add(arguments)
             .ok_or(Resource::Arithmetic)?;
         out.budget.reserve_storage(
-            size_of::<Self>() + size_of::<Result<Self>>() + operation_headers_v31(),
+            size_of::<Self>()
+                + size_of::<Result<Self>>()
+                + size_of::<[usize; 3]>()
+                + operation_headers_v31(),
         )?;
         let mut result = Self {
             nodes: vector(count, out)?,
@@ -128,11 +131,14 @@ impl CanonicalProgramV30 {
                     ));
                 }
                 let ty = scalar(inventory.definitions()[operation.results.start].ty)?;
-                let mut input = [0usize; 2];
+                let mut input = [0usize; 3];
                 if operation.operands.len() > input.len() {
                     return Err(Error::Statement("original MIR target scalar arity differs"));
                 }
                 for (position, at) in operation.operands.clone().enumerate() {
+                    if position == 2 {
+                        out.budget.charge_work(1)?;
+                    }
                     input[position] = result.value(inventory.uses()[at].definition)?;
                 }
                 let expression = operation_expression(
@@ -252,6 +258,22 @@ pub(super) fn operation_expression(
     Ok(match kind {
         Kind::Constant(value) if input.is_empty() => {
             ExpressionV30::Constant(super::super::bits(value))
+        }
+        Kind::Select { .. } if input.len() == 3 => {
+            if nodes.get(input[0]).map(|node| node.scalar) != Some(ScalarV30::Bool)
+                || nodes.get(input[1]).map(|node| node.scalar) != Some(ty)
+                || nodes.get(input[2]).map(|node| node.scalar) != Some(ty)
+                || ty == ScalarV30::Unit
+            {
+                return Err(Error::Statement(
+                    "original MIR target select scalar types differ",
+                ));
+            }
+            ExpressionV30::Select {
+                condition: input[0],
+                true_value: input[1],
+                false_value: input[2],
+            }
         }
         Kind::Unary {
             op: UnaryOp::Not, ..
