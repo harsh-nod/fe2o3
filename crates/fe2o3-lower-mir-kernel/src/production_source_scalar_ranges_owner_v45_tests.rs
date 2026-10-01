@@ -47,7 +47,9 @@ fn original_scalar_range_query_has_exact_geometry_independent_headers_and_resour
             assert_eq!(budget.storage(), MODULE_FLOOR);
             (result, budget.work(), budget.peak_storage())
         };
-        let exact = run(21, MODULE_FLOOR + headers);
+        // Two units belong to the custody-preserving scratch wrapper.
+        let exact_work = 2 + 6 + 9 + 6;
+        let exact = run(exact_work, MODULE_FLOOR + headers);
         assert_eq!(
             exact.0.unwrap(),
             (
@@ -55,11 +57,11 @@ fn original_scalar_range_query_has_exact_geometry_independent_headers_and_resour
                 SourceScalarByteRangeV45 { start, end }
             )
         );
-        assert_eq!((exact.1, exact.2), (6 + 9 + 6, MODULE_FLOOR + headers));
-        assert!(matches!(run(20, MODULE_FLOOR + headers).0,
+        assert_eq!((exact.1, exact.2), (exact_work, MODULE_FLOOR + headers));
+        assert!(matches!(run(exact_work - 1, MODULE_FLOOR + headers).0,
             Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(error)))
-            if error.limit() == 20 && error.actual() == 21));
-        assert!(matches!(run(21, MODULE_FLOOR + headers - 1).0,
+            if error.limit() == exact_work - 1 && error.actual() == exact_work));
+        assert!(matches!(run(exact_work, MODULE_FLOOR + headers - 1).0,
             Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Storage(error)))
             if error.limit() == MODULE_FLOOR + headers - 1 && error.actual() == MODULE_FLOOR + headers));
     }
@@ -103,7 +105,7 @@ fn scalar_move_kill_order_headers_cover_the_full_original_key() {
         source_reference_emission_headers_v29::<SourceAddressKillOrderFrameV45<'_>>().unwrap();
     assert_eq!(actual, expected);
     for limit in [expected, expected - 1] {
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(2);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_FLOOR + limit);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
@@ -120,8 +122,28 @@ fn scalar_move_kill_order_headers_cover_the_full_original_key() {
                     ArgumentResourceV1::Storage(error)))
                 if error.limit() == MODULE_FLOOR + limit && error.actual() == MODULE_FLOOR + expected));
         }
-        assert_eq!((budget.work(), budget.storage()), (0, MODULE_FLOOR));
+        assert_eq!((budget.work(), budget.storage()), (2, MODULE_FLOOR));
     }
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(1);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_FLOOR + expected);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let reached = std::cell::Cell::new(false);
+    let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
+        reached.set(true);
+        budget
+            .reserve_storage(actual)
+            .map_err(ProductionSemanticKirErrorV1::from)
+    });
+    assert!(matches!(result,
+        Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+            ArgumentResourceV1::Work(error)))
+        if error.limit() == 1 && error.actual() == 2));
+    assert!(
+        !reached.get(),
+        "work denial must precede the storage callback"
+    );
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+    assert_eq!(budget.peak_storage(), MODULE_FLOOR);
 }
 
 #[test]
@@ -200,7 +222,7 @@ fn original_scalar_windows_follow_nested_array_stride_reverse_indices_and_exact_
                     }
                 )
             );
-            assert_eq!(budget.work() - before, 6 + 2 * 9 + 6);
+            assert_eq!(budget.work() - before, 2 + 6 + 2 * 9 + 6);
             assert_eq!(budget.storage(), MODULE_FLOOR);
         }
     }
@@ -244,6 +266,12 @@ enum RangeCaseV45 {
 }
 
 fn scalar_range_owner_v45(case: RangeCaseV45) -> ProductionSemanticSsaOwnerV1 {
+    try_scalar_range_owner_v45(case).unwrap()
+}
+
+fn try_scalar_range_owner_v45(
+    case: RangeCaseV45,
+) -> Result<ProductionSemanticSsaOwnerV1, fe2o3_pliron::ProductionSemanticSsaErrorV1> {
     let base = retained_checked_owner(SemanticCheckedBinaryOpV1::Add);
     let source = base.source_semantic();
     let original = &source.functions()[0];
@@ -344,8 +372,7 @@ fn scalar_range_owner_v45(case: RangeCaseV45) -> ProductionSemanticSsaOwnerV1 {
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap(),
         ProductionSemanticSsaLimitsV1::default(),
-    )
-    .unwrap();
+    )?;
     assert!(
         !owner.plans()[0]
             .plan()
@@ -353,7 +380,7 @@ fn scalar_range_owner_v45(case: RangeCaseV45) -> ProductionSemanticSsaOwnerV1 {
             .iter()
             .any(|local| local.get() == 4)
     );
-    owner
+    Ok(owner)
 }
 
 fn run_scalar_range_owner_v45(
@@ -391,7 +418,7 @@ fn run_scalar_range_owner_mode_v45(
                     return with_production_optimized_consumer_v18(prepared, budget,
                         |original, optimized, budget| {
                             let expected = original.source(budget)?.root_count(budget)?;
-                            assert_eq!(expected, 1);
+                            assert_eq!(expected, 2, "both original entry roots remain mandatory");
                             let floor = budget.storage();
                             assert_eq!(original.check_optimized_source_currentness_v18(
                                 optimized, budget,
@@ -441,35 +468,32 @@ fn retained_scalar_range_moves_reach_exact_original_byte_history() {
     ] {
         let observed =
             run_scalar_range_owner_v45(case, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
-        observed.0.unwrap();
+        observed
+            .0
+            .unwrap_or_else(|error| panic!("{case:?}: {error:?}"));
         assert!(observed.3, "{case:?}");
     }
 }
 
 #[test]
 fn retained_scalar_range_moves_reject_failure_and_success_reads_after_consumption() {
-    for case in [RangeCaseV45::FailureMoveThenRead, RangeCaseV45::ReadMoved] {
-        let observed =
-            run_scalar_range_owner_v45(case, OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
-        assert!(!observed.3, "{case:?}");
-        let error = observed.0.expect_err("consumed original scalar range");
-        let mut current: Option<&(dyn std::error::Error + 'static)> = Some(&error);
-        let mut exact = false;
-        while let Some(part) = current {
-            assert!(
-                part.downcast_ref::<ArgumentResourceV1>().is_none(),
-                "{error:?}"
-            );
-            exact |= matches!(
-                part.downcast_ref::<ProductionSemanticKirErrorV1>(),
-                Some(ProductionSemanticKirErrorV1::Unsupported {
-                    detail: "scoped source-slot allocation census is incomplete or mismatched",
-                    ..
-                })
-            );
-            current = part.source();
-        }
-        assert!(exact, "{case:?}: {error:?}");
+    // The original owner rejects these illegal reads before a lowerer history
+    // can be constructed. Do not mistake that refusal for a byte-census test.
+    for (case, expected_block, expected_statement) in [
+        (RangeCaseV45::FailureMoveThenRead, 2, None),
+        (RangeCaseV45::ReadMoved, 4, Some(0)),
+    ] {
+        let Err(error) = try_scalar_range_owner_v45(case) else {
+            panic!("{case:?}: consumed original scalar range was admitted");
+        };
+        assert!(
+            matches!(error,
+            fe2o3_pliron::ProductionSemanticSsaErrorV1::PartialMove {
+                function, block, statement, local: 4,
+                violation: fe2o3_pliron::SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+            } if function.index() == 0 && block == expected_block && statement == expected_statement),
+            "{case:?}: {error:?}"
+        );
     }
 }
 
@@ -487,7 +511,9 @@ fn retained_scalar_range_moves_rejoin_checked_optimized_memory_and_order() {
             MODULE_LIMIT,
             true,
         );
-        observed.0.unwrap();
+        observed
+            .0
+            .unwrap_or_else(|error| panic!("{case:?}: {error:?}"));
         assert!(observed.3, "{case:?}");
     }
 }

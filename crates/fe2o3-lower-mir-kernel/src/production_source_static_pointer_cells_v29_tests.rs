@@ -205,6 +205,7 @@ fn observed_pointer_subcells_expire_all_contents_on_kill_and_pointee_restart() {
     assert!(!completed);
     for slot in [0, 1, 2] {
         let lifetime = [SourceAddressLifetimeV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 9,
             sequence: 0,

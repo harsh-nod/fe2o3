@@ -942,7 +942,7 @@ fn source_address_lifetimes_v29(
                 .clone()
                 .ok_or_else(source_raw_physical_error_v29)?
             {
-                budget.charge_work(1)?;
+                budget.charge_work(6)?;
                 if lifetimes.len() == capacity {
                     return Err(ArgumentResourceV1::Accounting.into());
                 }
@@ -950,6 +950,7 @@ fn source_address_lifetimes_v29(
                     block: block.id,
                     gap: block.operations.len(),
                     sequence: argument_sum_v1(&[return_sequence, lifetimes.len()])?,
+                    source_order: [0, 0, 2, control.instance.index(), lifetimes.len()],
                     slot,
                     live: false,
                 });
@@ -997,7 +998,7 @@ fn source_address_lifetimes_v29(
             return Err(source_raw_physical_error_v29());
         }
         for slot in range {
-            budget.charge_work(1)?;
+            budget.charge_work(6)?;
             if lifetimes.len() == capacity {
                 return Err(ArgumentResourceV1::Accounting.into());
             }
@@ -1005,6 +1006,7 @@ fn source_address_lifetimes_v29(
                 block: preheader.physical_block,
                 gap: 0,
                 sequence: lifetimes.len(),
+                source_order: [0, 0, 0, instance.index(), 0],
                 slot,
                 live: match slots.slots[slot].origin.identity {
                     ScopedAllocationIdentityV29::OriginalObject { generation, .. } => {
@@ -1078,10 +1080,12 @@ fn source_address_lifetimes_v29(
             if lifetimes.len() == capacity {
                 return Err(ArgumentResourceV1::Accounting.into());
             }
+            budget.charge_work(5)?;
             lifetimes.push(SourceAddressLifetimeV29 {
                 block: row.block,
                 gap: row.gap,
                 sequence: argument_sum_v1(&[capacity, lifetimes.len()])?,
+                source_order: [0, 0, 1, row.instance.index(), row.anchor],
                 slot: row.slot,
                 live,
             });

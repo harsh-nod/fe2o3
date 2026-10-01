@@ -361,6 +361,7 @@ fn an_initialized_tag_does_not_waive_the_original_allocation_lifetime() {
             )?;
             let events = [
                 SourceAddressLifetimeV29 {
+                    source_order: [0; 5],
                     block: BlockId(77),
                     gap: 3,
                     sequence: 0,
@@ -368,6 +369,7 @@ fn an_initialized_tag_does_not_waive_the_original_allocation_lifetime() {
                     live: false,
                 },
                 SourceAddressLifetimeV29 {
+                    source_order: [0; 5],
                     block: BlockId(77),
                     gap: 3,
                     sequence: 1,
@@ -417,6 +419,7 @@ fn restarted_tag_backing_requires_fresh_initialization_not_a_stale_tag() {
             slot: 0,
         }];
         let lifetimes = [false, true].map(|live| SourceAddressLifetimeV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 2,
             sequence: usize::from(live),

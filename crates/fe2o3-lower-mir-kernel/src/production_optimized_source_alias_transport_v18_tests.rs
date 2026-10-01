@@ -241,6 +241,7 @@ fn event(
 
 fn lifetime(sequence: usize, live: bool) -> SourceAddressLifetimeV29 {
     SourceAddressLifetimeV29 {
+        source_order: [0; 5],
         block: BlockId(3),
         gap: 0,
         sequence,

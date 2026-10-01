@@ -983,6 +983,7 @@ mod retained_index_equations_v29 {
                         recheck
                     );
                     let restart = [SourceAddressLifetimeV29 {
+                        source_order: [0; 5],
                         block: BlockId(100),
                         gap: 0,
                         sequence: 0,

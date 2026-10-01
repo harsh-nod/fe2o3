@@ -347,6 +347,7 @@ fn physical_currentness_restarts_expire_saved_registers_and_pointer_cells() {
                 &accesses(),
                 &[],
                 &[SourceAddressLifetimeV29 {
+                    source_order: [0; 5],
                     block: BlockId(77),
                     gap,
                     sequence: 0,
@@ -366,6 +367,7 @@ fn physical_currentness_restarts_expire_saved_registers_and_pointer_cells() {
         &accesses(),
         &[],
         &[SourceAddressLifetimeV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 7,
             sequence: 0,
@@ -378,6 +380,136 @@ fn physical_currentness_restarts_expire_saved_registers_and_pointer_cells() {
     )
     .0
     .unwrap();
+}
+
+fn range_lifetime_currentness_v51(
+    death: usize,
+    restart: Option<usize>,
+    explicit_boundaries: bool,
+    work_limit: usize,
+    storage_limit: usize,
+) -> (Result<(), ProductionSemanticKirErrorV1>, usize, usize, bool) {
+    let function = fixture();
+    let accesses = accesses();
+    let slots = candidates(&function);
+    let gap = function.body.as_ref().unwrap().blocks[0].operations.len();
+    // Inert equation rows only. Genuine-owner tests separately authenticate
+    // these source-order keys and the actual Move and StorageDead occurrences.
+    let mut lifetimes = vec![SourceAddressLifetimeV29 {
+        block: BlockId(77),
+        gap,
+        sequence: 0,
+        source_order: [0, 0, 1, 0, death],
+        slot: 0,
+        live: false,
+    }];
+    if let Some(anchor) = restart {
+        lifetimes.push(SourceAddressLifetimeV29 {
+            block: BlockId(77),
+            gap,
+            sequence: 1,
+            source_order: [0, 0, 1, 0, anchor],
+            slot: 0,
+            live: true,
+        });
+    }
+    let events = (0..lifetimes.len())
+        .map(|index| SourceAddressBoundaryEventV29 {
+            block: BlockId(77),
+            gap,
+            kind: SourceAddressBoundaryKindV29::Lifetime(index),
+        })
+        .collect::<Vec<_>>();
+    let reads = [SourceIndexFailureV29 {
+        instance: ProductionCallInstanceIdV1(0),
+        anchor: 1,
+        slot: 0,
+        block: BlockId(77),
+        gap,
+        move_after: true,
+        range: SourceScalarByteRangeV45 { start: 0, end: 4 },
+        failure_only: false,
+        source_order: [0, 0, 1, 0, 1],
+    }];
+    let initial = vec![true; slots.len()];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+    let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+    budget.reserve_storage(FLOOR).unwrap();
+    let mut completed = false;
+    let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
+        let graph = SourceAddressMemoryV29::new(&function, &slots, None, &accesses, &[], budget)?;
+        let before = budget.storage();
+        check_source_address_currentness_transport_v29(
+            &function,
+            &graph,
+            &slots,
+            &accesses,
+            &[],
+            &initial,
+            &lifetimes,
+            &[],
+            &reads,
+            SourceAddressGeometryV29::Scalar,
+            SourceAddressAliasTransportV29 {
+                aliases: &[],
+                uses: &[],
+                boundaries: explicit_boundaries.then_some(events.as_slice()),
+            },
+            budget,
+        )?;
+        assert_eq!(budget.storage(), before);
+        completed = true;
+        Ok(())
+    });
+    assert_eq!(budget.storage(), FLOOR);
+    (result, budget.work(), budget.peak_storage(), completed)
+}
+
+#[test]
+fn scalar_move_currentness_precedes_later_same_gap_lifetime_but_not_earlier_death() {
+    for explicit in [false, true] {
+        let positive = range_lifetime_currentness_v51(2, None, explicit, LIMIT, LIMIT);
+        positive.0.unwrap();
+        assert!(positive.3);
+        for (death, restart) in [(0, None), (0, Some(2))] {
+            let result = range_lifetime_currentness_v51(death, restart, explicit, LIMIT, LIMIT);
+            assert!(!result.3);
+            assert!(matches!(result.0,
+                Err(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
+                if detail == "physical raw access crosses a storage activation or unresolved alias"));
+        }
+        let ambiguous = range_lifetime_currentness_v51(1, None, explicit, LIMIT, LIMIT);
+        assert!(!ambiguous.3);
+        assert!(matches!(
+            ambiguous.0,
+            Err(ProductionSemanticKirErrorV1::Unsupported { .. })
+        ));
+    }
+}
+
+#[test]
+fn scalar_move_same_gap_currentness_has_exact_and_one_short_resources() {
+    let (result, work, storage, completed) =
+        range_lifetime_currentness_v51(2, None, false, LIMIT, LIMIT);
+    result.unwrap();
+    assert!(completed);
+    let exact = range_lifetime_currentness_v51(2, None, false, work, storage);
+    exact.0.unwrap();
+    assert!(exact.3);
+    assert_eq!((exact.1, exact.2), (work, storage));
+    for (w, s, is_work) in [(work - 1, storage, true), (work, storage - 1, false)] {
+        let result = range_lifetime_currentness_v51(2, None, false, w, s);
+        assert!(!result.3);
+        match result.0 {
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Work(bound),
+            )) if is_work => assert_eq!((bound.actual(), bound.limit()), (work, w)),
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(bound),
+            )) if !is_work => assert_eq!((bound.actual(), bound.limit()), (storage, s)),
+            other => panic!("exact same-gap currentness resource refusal: {other:?}"),
+        }
+    }
 }
 
 fn typed_currentness_fixture() -> (
@@ -518,6 +650,7 @@ fn typed_cell_currentness_expires_saved_values_and_only_admits_a_fresh_birth() {
     run_typed_currentness(&function, &slots, &layouts, &accesses(), &[], &[]).unwrap();
     for (gap, live) in [(7, false), (7, true), (6, true)] {
         let lifetime = [SourceAddressLifetimeV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap,
             sequence: 0,
@@ -534,6 +667,7 @@ fn typed_cell_currentness_expires_saved_values_and_only_admits_a_fresh_birth() {
         ));
     }
     let other = [SourceAddressLifetimeV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: 7,
         sequence: 0,
@@ -542,6 +676,7 @@ fn typed_cell_currentness_expires_saved_values_and_only_admits_a_fresh_birth() {
     }];
     run_typed_currentness(&function, &slots, &layouts, &accesses(), &other, &[]).unwrap();
     let restart = [SourceAddressLifetimeV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: 7,
         sequence: 0,
@@ -609,6 +744,7 @@ fn typed_select_birth_requires_the_original_object_not_a_saved_alias() {
     let mut rows = accesses();
     rows[2].operation = 8;
     let restart = [SourceAddressLifetimeV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: 7,
         sequence: 0,
@@ -671,6 +807,7 @@ fn typed_select_birth_requires_the_original_object_not_a_saved_alias() {
         ));
     }
     let dead = [SourceAddressLifetimeV29 {
+        source_order: [0; 5],
         live: false,
         ..restart[0]
     }];
@@ -740,6 +877,7 @@ fn checked_zero_gep_distinguishes_saved_private_alias_from_reactivated_backing()
     let mut function = private_formation_fixture();
     run(&function, &accesses(), &[], LIMIT, LIMIT).0.unwrap();
     let lifetime = [SourceAddressLifetimeV29 {
+        source_order: [0; 5],
         block: BlockId(77),
         gap: 7,
         sequence: 0,
@@ -883,6 +1021,7 @@ fn activation_loop(
 #[test]
 fn same_static_activation_in_a_loop_requires_actual_fresh_alias_reassignment() {
     let lifecycle = [SourceAddressLifetimeV29 {
+        source_order: [0; 5],
         block: BlockId(88),
         gap: 0,
         sequence: 0,
@@ -906,6 +1045,7 @@ fn one_expired_alternative_in_a_same_object_join_cannot_be_dropped() {
             &rows,
             &[],
             &[SourceAddressLifetimeV29 {
+                source_order: [0; 5],
                 block: BlockId(88),
                 gap: 0,
                 sequence: 0,

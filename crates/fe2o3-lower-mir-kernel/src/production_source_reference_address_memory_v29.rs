@@ -115,6 +115,7 @@ struct SourceAddressLifetimeV29 {
     block: BlockId,
     gap: usize,
     sequence: usize,
+    source_order: [usize; 5],
     slot: usize,
     live: bool,
 }
@@ -309,6 +310,22 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                     match event {
                         SourceAddressBoundaryKindV29::Lifetime(index) => {
                             let row = &lifetimes[index];
+                            // A Move read precedes its range clear and any later
+                            // storage marker, even when they share one MIR gap.
+                            while let Some(read) = failures.get(next_failure)
+                                && (read.block, read.gap) == (block.id, gap)
+                            {
+                                budget.charge_work(5)?;
+                                if read.source_order >= row.source_order {
+                                    if read.source_order == row.source_order {
+                                        return Err(source_raw_physical_error_v29());
+                                    }
+                                    break;
+                                }
+                                budget.charge_work(1)?;
+                                check(current[self.object(read.slot)?], budget)?;
+                                next_failure += 1;
+                            }
                             budget.charge_work(argument_sum_v1(&[
                                 self.objects.len(),
                                 self.graph.pointer_cell_count,
@@ -701,6 +718,10 @@ fn source_address_currentness_headers_v29() -> Result<usize, ArgumentResourceV1>
         std::mem::size_of::<[usize; 4]>(),
         std::mem::size_of::<Result<usize, usize>>(),
         std::mem::size_of::<Option<usize>>(),
+        std::mem::size_of::<Option<(BlockId, usize, [usize; 5])>>(),
+        std::mem::size_of::<(BlockId, usize, [usize; 5])>(),
+        std::mem::size_of::<Option<[usize; 7]>>(),
+        std::mem::size_of::<[usize; 7]>(),
     ])
 }
 
@@ -797,10 +818,13 @@ fn check_source_address_currentness_transport_v29(
         transport,
     };
     let mut previous = None;
+    let mut previous_order = None;
     for row in lifetimes {
-        budget.charge_work(3)?;
+        budget.charge_work(8)?;
         let key = (row.block, row.gap, row.sequence);
+        let order = (row.block, row.gap, row.source_order);
         if previous.is_some_and(|previous| previous >= key)
+            || previous_order.is_some_and(|previous| previous > order)
             || row.slot >= slots.len()
             || row.gap
                 > graph.blocks[graph.block(row.block, budget)?]
@@ -811,6 +835,7 @@ fn check_source_address_currentness_transport_v29(
             return Err(source_raw_physical_error_v29());
         }
         previous = Some(key);
+        previous_order = Some(order);
     }
     let mut previous = None;
     for row in births {
@@ -878,8 +903,8 @@ fn check_source_address_currentness_transport_v29(
     let mut links = 0;
     let mut previous = None;
     for row in failures {
-        budget.charge_work(3)?;
-        let key = (row.block, row.gap, row.instance.index(), row.anchor);
+        budget.charge_work(7)?;
+        let key = row.key_v45();
         if previous.is_some_and(|prior| prior >= key)
             || row.slot >= slots.len()
             || row.gap

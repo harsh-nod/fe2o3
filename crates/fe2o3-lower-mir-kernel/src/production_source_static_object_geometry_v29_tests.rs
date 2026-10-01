@@ -302,6 +302,7 @@ fn typed_project_checks_stale_unused_base_at_its_execution_point() {
         let lifetimes: Vec<_> = state
             .into_iter()
             .map(|live| SourceAddressLifetimeV29 {
+                source_order: [0; 5],
                 block: BlockId(77),
                 gap: 3,
                 sequence: 0,
@@ -425,6 +426,7 @@ fn typed_project_backing_reuse_is_current_after_explicit_reactivation() {
             &[],
             &[true],
             &[SourceAddressLifetimeV29 {
+                source_order: [0; 5],
                 block: BlockId(77),
                 gap: 1,
                 sequence: 0,

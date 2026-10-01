@@ -271,6 +271,7 @@ fn typed_scalar_index_bounds_do_not_survive_a_holder_restart_or_skipped_recheck(
                 recheck
             );
             let restart = [SourceAddressLifetimeV29 {
+                source_order: [0; 5],
                 block: BlockId(100),
                 gap: 0,
                 sequence: 0,

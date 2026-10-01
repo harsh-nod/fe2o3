@@ -967,21 +967,28 @@ fn optimized_source_alias_transport_v18(
             &mut SourceCorrespondenceWorkV18(budget),
         )?;
         let mapped = lifetimes
-            .get(index)
+            .get_mut(index)
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                 "logical alias lifetime missing mapped original row",
             ))?;
-        budget.charge_work(5)?;
+        budget.charge_work(10)?;
         if mapped.block != block
             || mapped.gap != gap
             || mapped.sequence != source_ordinal
             || mapped.slot != row.slot
             || mapped.live != row.live
+            || mapped.source_order != row.source_order
         {
             return relation
                 .source
                 .missing("logical alias lifetime changed exact source transition");
         }
+        let [0, 0, phase, instance, anchor] = row.source_order else {
+            return relation
+                .source
+                .missing("logical alias original lifetime order");
+        };
+        mapped.source_order = [segment.ordinal, input_gap, phase, instance, anchor];
         if ordered.len() >= capacity {
             return relation
                 .source

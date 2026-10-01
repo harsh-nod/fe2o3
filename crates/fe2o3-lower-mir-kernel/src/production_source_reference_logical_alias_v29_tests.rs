@@ -29,6 +29,7 @@ fn logical_alias_equation_run_v29(
     }
     let mut lifetimes = [
         SourceAddressLifetimeV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 6,
             sequence: 0,
@@ -36,6 +37,7 @@ fn logical_alias_equation_run_v29(
             live: false,
         },
         SourceAddressLifetimeV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 6,
             sequence: 1,
@@ -345,7 +347,11 @@ fn logical_alias_currentness_header_matches_independent_live_shapes() {
         + std::mem::size_of::<[usize; 3]>()
         + std::mem::size_of::<[usize; 4]>()
         + std::mem::size_of::<Result<usize, usize>>()
-        + std::mem::size_of::<Option<usize>>();
+        + std::mem::size_of::<Option<usize>>()
+        + std::mem::size_of::<Option<(BlockId, usize, [usize; 5])>>()
+        + std::mem::size_of::<(BlockId, usize, [usize; 5])>()
+        + std::mem::size_of::<Option<[usize; 7]>>()
+        + std::mem::size_of::<[usize; 7]>();
     assert_eq!(source_address_currentness_headers_v29().unwrap(), expected);
     for limit in [expected, expected - 1] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
@@ -385,6 +391,7 @@ fn logical_alias_gap_kill_run_v29(
     }
     let lifetimes = [
         SourceAddressLifetimeV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 4,
             sequence: 0,
@@ -392,6 +399,7 @@ fn logical_alias_gap_kill_run_v29(
             live: false,
         },
         SourceAddressLifetimeV29 {
+            source_order: [0; 5],
             block: BlockId(77),
             gap: 4,
             sequence: 1,
