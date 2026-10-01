@@ -115,7 +115,9 @@ fn oracle(program: &Program) -> bool {
             let mut next = initialized;
             let mut failure_next = failure;
             match event.kind {
-                EventKind::FailureRead | EventKind::FailureKillSlot => {
+                EventKind::FailureRead
+                | EventKind::FailureKillSlot
+                | EventKind::FailureKillCell => {
                     // Every diagnostic event begins the same failure branch,
                     // even when this particular event addresses another cell.
                     let mut shadow = failure.unwrap_or(initialized);
@@ -123,6 +125,9 @@ fn oracle(program: &Program) -> bool {
                         return false;
                     }
                     if event.kind == EventKind::FailureKillSlot && event.cell.slot == cell.slot {
+                        shadow = false;
+                    }
+                    if event.kind == EventKind::FailureKillCell && event.cell == cell {
                         shadow = false;
                     }
                     failure_next = Some(shadow);
@@ -737,6 +742,40 @@ fn failure_slot_kills_cover_sparse_siblings_but_preserve_success_and_other_slots
         p.events[2].cell = other;
         p.cells.push(other);
         differential_failure_history(&p, true);
+    }
+}
+
+#[test]
+fn failure_cell_kills_preserve_sparse_siblings_and_success_state() {
+    for high in [1, 1_u64 << 40] {
+        let first = Cell {
+            slot: 40,
+            index: CellIndex::Literal(0),
+        };
+        let sibling = Cell {
+            slot: 40,
+            index: CellIndex::Literal(high),
+        };
+        let other = Cell {
+            slot: 41,
+            index: CellIndex::Literal(0),
+        };
+        let mut p = program(&[
+            (&[W, W, W, EventKind::FailureKillCell, FR, FR], &[1]),
+            (&[R, R, R, FR], &[1]),
+        ]);
+        p.cells = vec![first, sibling, other];
+        for (event, cell) in p.events.iter_mut().zip([
+            first, sibling, other, first, sibling, other, first, sibling, other, first,
+        ]) {
+            event.cell = cell;
+        }
+        differential_failure_history(&p, true);
+        p.events[4].cell = first;
+        differential_failure_history(&p, false);
+        p.events[4].cell = sibling;
+        p.events[3].kind = EventKind::FailureKillSlot;
+        differential_failure_history(&p, false);
     }
 }
 

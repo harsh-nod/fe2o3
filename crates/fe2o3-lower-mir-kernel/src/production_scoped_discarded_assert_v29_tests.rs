@@ -426,6 +426,9 @@ fn check_assertion(
                 assert_eq!(row.position, start + usize::from(!folded));
                 failures.push((original.operand(), local));
             }
+            ScopedMemoryAnchorKindV29::ScalarMove { .. } => {
+                panic!("whole-local assertion fixture cannot issue a projected scalar move");
+            }
         }
     }
     assert_eq!(kills, expected);

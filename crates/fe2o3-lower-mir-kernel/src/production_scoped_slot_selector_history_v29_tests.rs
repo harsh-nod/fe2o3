@@ -124,6 +124,11 @@ fn concrete(p: &Program, length: usize) -> bool {
                 memory[..length].fill(false);
                 shadow = Some(memory);
             }
+            EventKind::FailureKillCell => {
+                let mut memory = shadow.unwrap_or(memory);
+                memory[index.expect("failure cell kill has an exact element")] = false;
+                shadow = Some(memory);
+            }
             EventKind::Preserve => {
                 let mut written = memory;
                 written[index.unwrap()] = true;
@@ -269,6 +274,32 @@ fn sparse_failure_whole_reads_and_kills_keep_success_state() {
         2,
         false,
     );
+}
+
+#[test]
+fn sparse_failure_cell_kills_preserve_siblings_and_success_selectors() {
+    for (read, accepted) in [
+        (CellIndex::Literal(1), true),
+        (CellIndex::Literal(0), false),
+        (CellIndex::Whole, false),
+    ] {
+        expect(
+            &program(&[
+                (
+                    &[
+                        (CellIndex::Literal(0), W),
+                        (CellIndex::Literal(1), W),
+                        (CellIndex::Literal(0), EventKind::FailureKillCell),
+                        (read, EventKind::FailureRead),
+                    ],
+                    &[1],
+                ),
+                (&[(S, R), (T, R), (S, EventKind::FailureRead)], &[1]),
+            ]),
+            2,
+            accepted,
+        );
+    }
 }
 
 #[test]
