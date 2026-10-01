@@ -123,7 +123,14 @@ pub(super) struct PairedInvocations<'slots, 'view, 'source> {
     required: usize,
 }
 
+#[cfg_attr(test, track_caller)]
 fn mismatch() -> Error {
+    #[cfg(test)]
+    eprintln!(
+        "paired source-cut refusal at {}\n{}",
+        std::panic::Location::caller(),
+        std::backtrace::Backtrace::force_capture(),
+    );
     Error::Statement("original MIR paired byte relation differs from its exact source cuts")
 }
 
