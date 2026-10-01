@@ -209,6 +209,7 @@ fn run_loans(work: usize, storage: usize, hostile: bool) -> (Result<()>, usize, 
                     fe2o3_kernel_ir::FormalIndexWidth::Bits64,
                     out,
                 )?;
+                write!(out, "{SOURCE_BYTES_V36}").map_err(|_| out.error())?;
                 program.emit(out)?;
                 paired.emit(out)?;
                 assert!(
@@ -483,6 +484,7 @@ fn original_mutable_descriptor_loans_move_and_reborrow_without_shared_copy_autho
                     fe2o3_kernel_ir::FormalIndexWidth::Bits64,
                     out,
                 )?;
+                write!(out, "{SOURCE_BYTES_V36}").map_err(|_| out.error())?;
                 program.emit(out)?;
                 paired.emit(out)
             })
