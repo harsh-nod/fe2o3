@@ -6,7 +6,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCompilerIntrinsicOperationV1 as Intrinsic, SemanticDirectCallV1 as Call,
     SemanticDisjointIndexSpaceV1 as IndexSpace, SemanticMutabilityV1 as Mutability,
     SemanticOperandV1 as Operand, SemanticPointerKindV1 as PointerKind,
-    SemanticPointerMetadataV1 as Metadata,
+    SemanticPointerMetadataV1 as Metadata, SemanticTypeShapeV1 as Shape,
 };
 use fe2o3_pliron::ProductionSemanticSsaOperandRoleV1 as Role;
 
