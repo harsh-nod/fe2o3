@@ -336,37 +336,77 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                             (usize::BITS - entries.len().max(1).leading_zeros()) as usize + 2,
                         )?;
                         let at = entries
-                            .binary_search_by_key(&(local as u32), |row| row.variable().get())
-                            .map_err(|_| mismatch())?;
-                        let binding = result.binding(
-                            plan,
-                            root,
-                            instance,
-                            local,
-                            entries[at].value(),
-                            frame,
-                            &physical.definitions,
-                            None,
-                            out,
-                        )?;
-                        if instance == 0 {
-                            if let Some(parameter) = result.slots.descriptor_parameter(
+                            .binary_search_by_key(&(local as u32), |row| row.variable().get());
+                        let parameter = if instance == 0 {
+                            result.slots.descriptor_parameter(
                                 root,
                                 argument as usize,
                                 fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(
                                     u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
                                 ),
                                 out,
-                            )? {
-                                out.budget.charge_work(2)?;
-                                if binding
-                                    .definition
-                                    .and_then(|index| inventory.definitions().get(index))
-                                    .map(|row| row.coordinate)
-                                    != Some(parameter)
-                                {
-                                    return Err(mismatch());
-                                }
+                            )?
+                        } else {
+                            None
+                        };
+                        let binding = if let Ok(at) = at {
+                            result.binding(
+                                plan,
+                                root,
+                                instance,
+                                local,
+                                entries[at].value(),
+                                frame,
+                                &physical.definitions,
+                                None,
+                                out,
+                            )?
+                        } else {
+                            // An address-observable source descriptor need not
+                            // have an SSA entry. Its exact nominal ABI recipe,
+                            // not an invented SSA value, binds the native Slice.
+                            out.budget.charge_work(10)?;
+                            let coordinate = parameter.ok_or_else(mismatch)?;
+                            let Definition::FunctionArgument { function, argument } = coordinate
+                            else {
+                                return Err(mismatch());
+                            };
+                            let index = add(physical.definitions.start, argument as usize)?;
+                            let definition =
+                                inventory.definitions().get(index).ok_or_else(mismatch)?;
+                            if function != physical.coordinate
+                                || !physical.definitions.contains(&index)
+                                || definition.coordinate != coordinate
+                                || !matches!(definition.ty, fe2o3_kernel_ir::Type::Slice(_))
+                                || result.slots.has_original_object(
+                                    root,
+                                    instance,
+                                    local as u32,
+                                    out,
+                                )?
+                                || result
+                                    .slots
+                                    .legacy_descriptor_by_source(root, instance, local as u32, out)?
+                                    .is_some()
+                            {
+                                return Err(mismatch());
+                            }
+                            Binding {
+                                source: SourceValue::Local(add(row.locals.start, local)?),
+                                logical: LogicalBinding::Plain,
+                                definition: Some(index),
+                                frame,
+                            }
+                        };
+                        if let Some(parameter) = parameter {
+                            out.budget.charge_work(2)?;
+                            if binding
+                                .definition
+                                .and_then(|index| inventory.definitions().get(index))
+                                .map(|row| row.coordinate)
+                                != Some(parameter)
+                            {
+                                return Err(mismatch());
                             }
                         }
                         *place = Some(binding);
@@ -1018,6 +1058,8 @@ fn headers() -> usize {
         + h::<FunctionRole>()
         + h::<Range<usize>>()
         + h::<Option<usize>>()
+        + h::<Option<Definition>>()
+        + h::<std::result::Result<usize, usize>>()
         + h::<Value>()
         + h::<Variable>()
         + h::<Edge>()

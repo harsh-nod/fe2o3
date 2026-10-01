@@ -114,6 +114,29 @@ fn run_loans(work: usize, storage: usize, hostile: bool) -> (Result<()>, usize, 
                 for root in 0..2 {
                     let body = SourceByteBody::derive(plan, slots, root, 0, out)?;
                     let context = body.context(out)?;
+                    let relation = slots.correspondence(out)?;
+                    let original = relation.source(out.budget)?;
+                    let archive = original.source_ssa(out.budget)?;
+                    let owner = plan.instance(root, 0, out)?.function;
+                    let entries = archive
+                        .plan_for_function(owner)
+                        .unwrap()
+                        .plan()
+                        .entry_definitions();
+                    assert!(
+                        entries.iter().all(|entry| entry.variable().get() != 4),
+                        "the borrowed descriptor is genuinely absent from promoted source SSA"
+                    );
+                    assert!(
+                        slots
+                            .descriptor_parameter(root, 2, SemanticLocalIdV1::from_index(4), out)?
+                            .is_some(),
+                        "the exact nominal ABI still owns its physical parameter"
+                    );
+                    assert!(
+                        !slots.has_original_object(root, 0, 4, out)?,
+                        "the native Slice is not an invented private wrapper object"
+                    );
                     let mut first = None;
                     for (statement, local, mutable) in
                         [(2, 6, false), (3, 9, false), (4, 10, false), (5, 9, false)]
