@@ -226,7 +226,7 @@ fn byte_integral_cast_derivation_has_independent_linear_resource_boundaries() {
 fn byte_integral_cast_consumes_actual_u128_discriminant_results_without_new_authority() {
     use fe2o3_kernel_ir::CastKind;
     let mut module = storage_view_module_v39(64, None, true, 1);
-    module.functions[0].blocks[0]
+    module.functions[0].body.as_mut().unwrap().blocks[0]
         .operations
         .push(KirOperation::effect_free(
             ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U32)),
@@ -266,7 +266,7 @@ fn byte_integral_cast_consumes_actual_u128_discriminant_results_without_new_auth
 fn byte_integral_cast_keeps_float_conversions_explicitly_unsupported() {
     let mut module = integral_cast_module_v40(ScalarType::U32, ScalarType::U64, 1);
     module.functions[0].signature.parameters[0] = Type::Scalar(ScalarType::F32);
-    module.functions[0].blocks[0].operations[0] = KirOperation::effect_free(
+    module.functions[0].body.as_mut().unwrap().blocks[0].operations[0] = KirOperation::effect_free(
         ValueDef::new(ValueId(1), Type::Scalar(ScalarType::F64)),
         OperationKind::Cast {
             kind: fe2o3_kernel_ir::CastKind::FloatExtend,
