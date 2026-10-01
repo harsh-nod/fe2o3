@@ -1,5 +1,6 @@
 // Actual layout-relative equations. These rows do not grant source, lifetime,
 // initialization, active-variant or complete memory-effect authority.
+include!("production_source_tag_geometry_v43.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SourceStaticObjectLocationV29 {
     slot: usize,
@@ -18,6 +19,10 @@ struct SourceStaticObjectLayoutV29 {
 enum SourceStaticObjectValueV29 {
     Scalar(ScalarType),
     Pointer(fe2o3_kernel_ir::StoragePointerV1),
+    Variants {
+        encoding: fe2o3_kernel_ir::StorageVariantEncodingV1,
+        count: usize,
+    },
     Aggregate,
 }
 
@@ -36,8 +41,21 @@ fn source_static_object_layouts_v29(
                     SourceStaticObjectValueV29::Scalar(scalar)
                 }
                 fe2o3_kernel_ir::StorageLayoutKindV1::Pointer(pointer) => {
+                    budget.charge_work(2)?;
+                    if !matches!(pointer.stored_bits, 8 | 16 | 32 | 64 | 128)
+                        || row.size != u64::from(pointer.stored_bits / 8)
+                    {
+                        return Err(source_raw_physical_error_v29());
+                    }
                     SourceStaticObjectValueV29::Pointer(pointer)
                 }
+                fe2o3_kernel_ir::StorageLayoutKindV1::Variants {
+                    encoding,
+                    ref variants,
+                } => SourceStaticObjectValueV29::Variants {
+                    encoding,
+                    count: variants.len(),
+                },
                 _ => SourceStaticObjectValueV29::Aggregate,
             },
         });
@@ -230,8 +248,15 @@ fn source_static_object_transfer_with_index_v29(
                     .ok_or(ArgumentResourceV1::Arithmetic)?,
             )
         }
-        // Variant views also observe or constrain the current tag. A geometric
-        // offset is insufficient until that independent history is connected.
+        (ScopedObjectProjectionV29::VariantForWrite { index }, Kind::Variants { variants, .. }) => {
+            budget.charge_work(2)?;
+            let variant = variants
+                .get(index as usize)
+                .filter(|variant| !variant.uninhabited)
+                .ok_or_else(source_raw_physical_error_v29)?;
+            (variant.layout, 0)
+        }
+        // Active variant reads still need an independent tag-history join.
         (
             ScopedObjectProjectionV29::Variant { .. }
             | ScopedObjectProjectionV29::VariantForWrite { .. }
@@ -247,7 +272,13 @@ fn source_static_object_transfer_with_index_v29(
         .ok_or_else(source_raw_physical_error_v29)?;
     if !matches!(child_row.kind, Kind::Scalar(_))
         && !(matches!(child_row.kind, Kind::Pointer(_))
-            && matches!(step, ScopedObjectProjectionV29::ArrayIndex(_)))
+            && matches!(
+                step,
+                ScopedObjectProjectionV29::ArrayIndex(_)
+                    | ScopedObjectProjectionV29::VariantForWrite { .. }
+            ))
+        && !(matches!(child_row.kind, Kind::Record(_))
+            && matches!(step, ScopedObjectProjectionV29::VariantForWrite { .. }))
     {
         return Err(scoped_object_pending_v29());
     }

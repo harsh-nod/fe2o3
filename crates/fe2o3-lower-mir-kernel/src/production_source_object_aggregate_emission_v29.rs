@@ -1,5 +1,6 @@
 // Generated field views are not original Rust projections. They retain the
 // aggregate assignment and its actual operand coordinates as inert recipes.
+include!("production_source_object_enum_construction_v43.rs");
 #[derive(Clone, Copy)]
 struct SourceObjectAggregateFieldV29 {
     operand: u32,

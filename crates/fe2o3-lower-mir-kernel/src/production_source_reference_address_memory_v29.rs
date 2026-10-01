@@ -40,9 +40,16 @@ fn source_address_value_access_v29(
             access,
         }) => (address, access, Some(value), true),
         OperationKind::Storage(ScopedObjectOperationV29::Project {
-            step: ScopedObjectProjectionV29::Field(_) | ScopedObjectProjectionV29::ArrayIndex(_),
+            step:
+                ScopedObjectProjectionV29::Field(_)
+                | ScopedObjectProjectionV29::ArrayIndex(_)
+                | ScopedObjectProjectionV29::VariantForWrite { .. },
             ..
         }) => return Ok(None),
+        OperationKind::Storage(
+            ScopedObjectOperationV29::ReadDiscriminant { .. }
+            | ScopedObjectOperationV29::SetDiscriminant { .. },
+        ) => return Ok(None),
         OperationKind::Storage(_) => return Err(scoped_object_pending_v29()),
         _ => return Ok(None),
     };
@@ -358,9 +365,13 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                 }
                 let access = SourceAddressMemoryV29::access(accesses, block.id, gap, budget)?;
                 if let Some(access) = access {
-                    let pointer = source_address_value_access_v29(operation)?
-                        .ok_or_else(source_raw_physical_error_v29)?
-                        .pointer;
+                    let pointer = if let Some(tag) = source_address_tag_access_v43(operation)? {
+                        tag.pointer
+                    } else {
+                        source_address_value_access_v29(operation)?
+                            .ok_or_else(source_raw_physical_error_v29)?
+                            .pointer
+                    };
                     let register = self
                         .use_register(
                             block.id,
@@ -517,6 +528,19 @@ impl SourceAddressCurrentnessV29<'_, '_> {
                         None => self.constant(true),
                     };
                     cell_origins[cell] = self.graph.value(value, budget)?;
+                }
+                if let Some(tag) = source_address_tag_access_v43(operation)? {
+                    let row = access.ok_or_else(source_raw_physical_error_v29)?;
+                    self.graph.visit_tag_overwritten_pointer_cells_v43(
+                        tag,
+                        row.slot,
+                        budget,
+                        |cell, _| {
+                            current[self.objects.len() + cell] = self.constant(false);
+                            cell_origins[cell] = self.graph.unknown();
+                            Ok(())
+                        },
+                    )?;
                 }
             }
             for (component, &value) in current.iter().enumerate() {
@@ -1240,6 +1264,7 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
         layouts: &[fe2o3_kernel_ir::StorageLayoutV1],
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        budget.reserve_storage(source_tag_geometry_headers_v43()?)?;
         let body = function
             .body
             .as_ref()
@@ -1816,6 +1841,23 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                             }
                         }
                     }
+                    OperationKind::Storage(ScopedObjectOperationV29::SetDiscriminant {
+                        ..
+                    }) => {
+                        let tag = source_address_tag_access_v43(operation)?
+                            .ok_or_else(source_raw_physical_error_v29)?;
+                        let row = Self::access(accesses, block.id, gap, budget)?
+                            .ok_or_else(source_raw_physical_error_v29)?;
+                        self.visit_tag_overwritten_pointer_cells_v43(
+                            tag,
+                            row.slot,
+                            budget,
+                            |cell, _| {
+                                current[cell] = self.unknown();
+                                Ok(())
+                            },
+                        )?;
+                    }
                     _ => {}
                 }
             }
@@ -1970,6 +2012,30 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                         _ => self.check_gep_type(operation, budget)?,
                     }
                 }
+                if let Some(tag) = source_address_tag_access_v43(operation)? {
+                    let row = Self::access(accesses, block.id, ordinal, budget)?
+                        .ok_or_else(source_raw_physical_error_v29)?;
+                    if self.exact(tag.pointer, budget)? != Some(row.slot) {
+                        return Err(source_raw_physical_error_v29());
+                    }
+                    let location = self.object_location(tag.pointer, budget)?;
+                    if location.slot != row.slot
+                        || location.offset != 0
+                        || location.schema != self.object_schemas.get(row.slot).copied().flatten()
+                    {
+                        return Err(scoped_object_pending_v29());
+                    }
+                    let slot = slots
+                        .get(row.slot)
+                        .ok_or_else(source_raw_physical_error_v29)?;
+                    if self.object_tag_root_range_v43(tag, row.slot, budget)?
+                        != self.object_tag_range_v43(tag, slot, budget)?
+                    {
+                        return Err(source_raw_physical_error_v29());
+                    }
+                    claimed = argument_sum_v1(&[claimed, 1])?;
+                    continue;
+                }
                 let Some(SourceAddressValueAccessV29 {
                     pointer,
                     access,
@@ -2108,6 +2174,10 @@ impl<'kir> SourceAddressMemoryV29<'kir> {
                         }
                         | OperationKind::Load { .. }
                         | OperationKind::Storage(ScopedObjectOperationV29::ReadValue { .. })
+                        | OperationKind::Storage(
+                            ScopedObjectOperationV29::ReadDiscriminant { .. }
+                            | ScopedObjectOperationV29::SetDiscriminant { .. },
+                        )
                         | OperationKind::Storage(ScopedObjectOperationV29::Project { .. })
                         | OperationKind::GetElementPointer { .. } => component == 0,
                         OperationKind::Select { .. } => component == 1 || component == 2,

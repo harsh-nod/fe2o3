@@ -272,7 +272,7 @@ fn source_address_object_payload_v29(
         }
         (
             ScopedObjectIdentityV29::Local { .. },
-            ScopedObjectSourceV29::AggregateComponent { variant: None, .. },
+            ScopedObjectSourceV29::AggregateComponent { variant, .. },
         ) if matches!(
             role,
             ScopedMemoryPayloadV29::Store {
@@ -280,7 +280,7 @@ fn source_address_object_payload_v29(
                 ..
             }
         ) && endpoint.source_path.count == 0
-            && endpoint.path.count == 1 => {}
+            && endpoint.path.count == if variant.is_some() { 2 } else { 1 } => {}
         (
             ScopedObjectIdentityV29::Reference {
                 dereference_prefix, ..
@@ -734,7 +734,7 @@ fn check_source_object_effect_census_v29(
             site,
             operand,
             destination,
-            variant: None,
+            variant: _,
         } = endpoint.source
         {
             let original = instances
@@ -1039,6 +1039,15 @@ fn check_source_object_effect_census_v29(
                     }
                 }
                 count
+            } else if let SemanticAggregateKindV1::EnumVariant(variant) = aggregate.kind() {
+                source_object_enum_field_types_v43(
+                    types,
+                    assignment.destination().ty(),
+                    *variant,
+                    aggregate.operands(),
+                    budget,
+                )?
+                .len()
             } else {
                 source_object_aggregate_field_types_v29(
                     types,

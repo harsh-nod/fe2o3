@@ -731,6 +731,15 @@ impl ScopedMemoryAnchorsV29 {
                             || anchor.source != Some(ScopedMemoryFrameV29::operand(site, Some(ExecutionOperandV29::Destination)))
                             || aggregate.operands()[operand as usize].ty() != endpoint.projected_type
                         { return Err(scoped_object_error_v29()); }
+                    } else if !assignment.destination().projections().is_empty()
+                        || anchor.source != Some(ScopedMemoryFrameV29::operand(site, Some(ExecutionOperandV29::Destination)))
+                        || aggregate.operands()[operand as usize].ty() != endpoint.projected_type
+                        || !matches!(view_path, [
+                            ScopedObjectComponentV29::View { projection: ScopedObjectViewProjectionV29::Variant(actual), ty },
+                            ScopedObjectComponentV29::View { projection: ScopedObjectViewProjectionV29::Field(_), ty: field_ty },
+                        ] if Some(*actual) == variant && *ty == endpoint.root_type && *field_ty == endpoint.projected_type)
+                    {
+                        return Err(scoped_object_error_v29());
                     }
                     Some((site, ExecutionOperandV29::Destination, assignment.destination().projections()))
                 }
@@ -1059,12 +1068,8 @@ impl ScopedMemoryAnchorsV29 {
             ScopedObjectRoleV29::WriteValue { destination, value } => match value {
                 ScopedObjectValueOriginV29::Original(original)
                 | ScopedObjectValueOriginV29::Component { original, .. } => {
-                    if let ScopedObjectSourceV29::AggregateComponent {
-                        site,
-                        operand,
-                        variant: None,
-                        ..
-                    } = destination.source
+                    if let ScopedObjectSourceV29::AggregateComponent { site, operand, .. } =
+                        destination.source
                     {
                         if !matches!(value, ScopedObjectValueOriginV29::Original(ScopedMemoryStoreSourceV29::Operand {
                             site: original_site, role: ExecutionOperandV29::RvalueOperand(original_operand), ..

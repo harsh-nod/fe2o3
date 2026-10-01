@@ -56,6 +56,9 @@ impl SourceAddressMemoryV29<'_> {
         let Some(row) = row else {
             return Ok(None);
         };
+        if source_address_tag_access_v43(operation)?.is_some() {
+            return Ok(None);
+        }
         let access = source_address_value_access_v29(operation)?
             .ok_or_else(source_raw_physical_error_v29)?;
         self.pointer_cell(row.slot, access.pointer, budget)
@@ -216,6 +219,9 @@ impl SourceAddressMemoryV29<'_> {
                 .operations
                 .get(row.operation)
                 .ok_or_else(source_raw_physical_error_v29)?;
+            if source_address_tag_access_v43(operation)?.is_some() {
+                continue;
+            }
             let access = source_address_value_access_v29(operation)?
                 .ok_or_else(source_raw_physical_error_v29)?;
             if !access.object || !matches!(self.ty(access.value, budget)?, Type::Pointer(_)) {

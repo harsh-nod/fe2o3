@@ -75,6 +75,16 @@ fn source_static_object_expected_location_inner_v29(
         }
         return Ok(None);
     };
+    if let Some(location) = source_enum_construction_location_v43(
+        instances,
+        plan,
+        source_index,
+        slots,
+        endpoint,
+        budget,
+    )? {
+        return Ok(Some(location));
+    }
     if matches!(endpoint.source, ScopedObjectSourceV29::EntryArgument { .. }) {
         source_index.sidecar(instance, budget)?;
         let slot =
@@ -378,12 +388,28 @@ fn check_source_static_object_projects_v29(
                     budget,
                 )?;
                 let (site, role, generated, component) = match projected.source {
-                    ScopedObjectSourceV29::AggregateComponent {
+                    ScopedObjectSourceV29::Place {
                         site,
-                        operand,
-                        variant: None,
+                        role: ExecutionOperandV29::Destination,
+                        prefix: 0,
                         ..
-                    } => (site, ExecutionOperandV29::Destination, true, operand),
+                    } if projected.path.count == 1
+                        && projected.source_path.count == 0
+                        && source_enum_construction_location_v43(
+                            instances,
+                            plan,
+                            source_index,
+                            slots,
+                            projected,
+                            budget,
+                        )?
+                        .is_some() =>
+                    {
+                        (site, ExecutionOperandV29::Destination, true, u32::MAX)
+                    }
+                    ScopedObjectSourceV29::AggregateComponent { site, operand, .. } => {
+                        (site, ExecutionOperandV29::Destination, true, operand)
+                    }
                     ScopedObjectSourceV29::Place {
                         site, role, prefix, ..
                     } if prefix != 0

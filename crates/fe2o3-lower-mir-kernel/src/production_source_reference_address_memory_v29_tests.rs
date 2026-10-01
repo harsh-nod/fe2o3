@@ -3,6 +3,7 @@ use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1;
 
 include!("production_source_static_object_geometry_v29_tests.rs");
 include!("production_source_failure_history_v29_tests.rs");
+include!("production_source_tag_geometry_v43_tests.rs");
 
 const LIMIT: usize = 20_000_000;
 const FLOOR: usize = 37;

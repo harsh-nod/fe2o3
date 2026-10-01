@@ -2476,7 +2476,7 @@ fn prepared_source_rejects_forged_object_allocation_rosters_and_releases_test_cl
 }
 
 #[test]
-fn observed_tag_only_object_emission_cannot_admit_a_final_source_artifact() {
+fn observed_tag_only_object_emission_requires_and_completes_actual_currentness() {
     struct Restore(Option<ScopedSlotObserverV29>, bool);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -2489,22 +2489,22 @@ fn observed_tag_only_object_emission_cannot_admit_a_final_source_artifact() {
         TAG_EMISSION_CONTINUE.replace(true),
     );
     TAG_EMISSION_OBSERVED.set(0);
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
     let prepared = scalar_payload_prepared_from_v18(original_tag_emission_owner, &mut budget);
+    let completed = std::cell::Cell::new(false);
     let result =
         prepared.with_source_consumer_v18(&mut budget, |_, _| -> SourceOwnedResultV18<()> {
-            panic!("unqualified typed memory reached final artifact admission");
+            completed.set(true);
+            Ok(())
         });
     assert!(
         TAG_EMISSION_OBSERVED.get() > 0,
         "actual source must first emit typed allocations and tags"
     );
-    assert!(
-        result.is_err(),
-        "allocation/tag observation is not final currentness qualification"
-    );
+    assert!(result.is_ok(), "{result:?}");
+    assert!(completed.get(), "the full production consumer must finish");
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
@@ -4180,3 +4180,8 @@ include!("production_source_partial_array_read_v29_tests.rs");
 
 #[path = "production_source_static_raw_holders_v42_tests.rs"]
 mod static_raw_holders_v42_tests;
+mod tag_census_v43_tests {
+    use super::*;
+    include!("production_source_tag_census_v43_tests.rs");
+}
+include!("production_source_object_enum_construction_v43_tests.rs");

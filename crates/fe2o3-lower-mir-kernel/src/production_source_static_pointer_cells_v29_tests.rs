@@ -664,6 +664,7 @@ fn static_projection_classification_keeps_value_and_tag_effects_distinct() {
     for step in [
         ScopedObjectProjectionV29::Field(0),
         ScopedObjectProjectionV29::ArrayIndex(ValueId(40)),
+        ScopedObjectProjectionV29::VariantForWrite { index: 0 },
     ] {
         let operation = Operation::new(
             vec![],
@@ -675,29 +676,45 @@ fn static_projection_classification_keeps_value_and_tag_effects_distinct() {
                 .is_none()
         );
     }
-    for operation in [
-        ScopedObjectOperationV29::Project {
-            base: CELL,
-            step: ScopedObjectProjectionV29::Variant { index: 0, access },
-        },
-        ScopedObjectOperationV29::Project {
-            base: CELL,
-            step: ScopedObjectProjectionV29::VariantForWrite { index: 0 },
-        },
-        ScopedObjectOperationV29::ReadDiscriminant {
-            address: CELL,
-            access,
-        },
-        ScopedObjectOperationV29::SetDiscriminant {
-            address: CELL,
-            variant: 0,
-            access,
-        },
-    ] {
+    for operation in [ScopedObjectOperationV29::Project {
+        base: CELL,
+        step: ScopedObjectProjectionV29::Variant { index: 0, access },
+    }] {
         let operation = Operation::new(vec![], OperationKind::Storage(operation));
         assert!(
             matches!(source_address_value_access_v29(&operation), Err(error)
             if error.to_string() == scoped_object_pending_v29().to_string())
+        );
+    }
+    for (operation, results, written_variant) in [
+        (
+            ScopedObjectOperationV29::ReadDiscriminant {
+                address: CELL,
+                access,
+            },
+            vec![ValueDef::new(ValueId(71), Type::Scalar(ScalarType::U128))],
+            None,
+        ),
+        (
+            ScopedObjectOperationV29::SetDiscriminant {
+                address: CELL,
+                variant: 0,
+                access,
+            },
+            vec![],
+            Some(0),
+        ),
+    ] {
+        let operation = Operation::new(results, OperationKind::Storage(operation));
+        assert!(
+            source_address_value_access_v29(&operation)
+                .unwrap()
+                .is_none()
+        );
+        let tag = source_address_tag_access_v43(&operation).unwrap().unwrap();
+        assert_eq!(
+            (tag.pointer, tag.access, tag.written_variant),
+            (CELL, access, written_variant)
         );
     }
     let (function, _, _, _) = pointer_subcell_fixture_v29(2);

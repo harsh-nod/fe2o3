@@ -2105,6 +2105,20 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             )?;
             return Ok(true);
         }
+        if matches!(value, SemanticValueBindingV1::Enum { .. }) {
+            self.write_source_object_enum_v43(
+                block,
+                statement,
+                place,
+                destination,
+                address,
+                access,
+                value,
+                volatility,
+                operations,
+            )?;
+            return Ok(true);
+        }
         let expected = self.source_object_leaf_type_v29(
             block,
             statement,
