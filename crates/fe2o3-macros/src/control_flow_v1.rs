@@ -23,6 +23,9 @@ const MAX_NODES_V1: usize = 4096;
 const MAX_BYTES_V1: usize = 1024 * 1024;
 const MAX_LITERAL_FOR_UNROLL_V1: u32 = 32;
 
+#[path = "rustc_resolved_match_v49.rs"]
+mod rustc_resolved_match;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedIntegerSwitchTypeV1 {
     width: u16,
@@ -169,6 +172,7 @@ pub(crate) fn parse_control_flow_options_v1(
 #[derive(Default)]
 struct DirectControlFlowUseVisitor {
     first: Option<(Span, &'static str)>,
+    rustc_patterns: bool,
 }
 
 impl DirectControlFlowUseVisitor {
@@ -196,7 +200,9 @@ impl<'ast> Visit<'ast> for DirectControlFlowUseVisitor {
     }
 
     fn visit_expr_match(&mut self, expression: &'ast ExprMatch) {
-        self.record(expression.match_token.span, "match");
+        if !self.rustc_patterns || !rustc_resolved_match::accepts(expression) {
+            self.record(expression.match_token.span, "match");
+        }
         syn::visit::visit_expr_match(self, expression);
     }
 
@@ -215,7 +221,10 @@ pub(crate) fn analyze_kernel_control_flow_v1(
     input: &ItemFn,
     declaration: Option<&ParsedControlFlowOptionsV1>,
 ) -> syn::Result<Option<Vec<u8>>> {
-    let mut visitor = DirectControlFlowUseVisitor::default();
+    let mut visitor = DirectControlFlowUseVisitor {
+        rustc_patterns: declaration.is_none(),
+        ..DirectControlFlowUseVisitor::default()
+    };
     visitor.visit_block(&input.block);
     let Some(declaration) = declaration else {
         if let Some((span, kind)) = visitor.first {
