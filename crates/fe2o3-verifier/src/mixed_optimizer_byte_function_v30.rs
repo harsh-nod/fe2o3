@@ -9,6 +9,7 @@ use super::pointer_byte_operations_v30::{
 use super::private_byte_operations_v30::AllocaByteOperationV30;
 use super::storage_byte_operations_v37::StorageByteOperationV37;
 use super::{Error, Inventory, Resource, Result, Writer, block_index};
+use fe2o3_kernel_analysis::CanonicalKirPrivateByteAnalysisV38 as Physical;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirFunctionCoordinateV1 as Function,
@@ -24,6 +25,9 @@ macro_rules! emit {
 
 #[path = "mixed_optimizer_byte_control_v30.rs"]
 mod control;
+
+#[path = "mixed_optimizer_private_byte_obligations_v38.rs"]
+mod physical;
 
 /// The original canonical Alloca occurrence and its physical root's original
 /// MIR declaration. A declaring callee is deliberately not the physical owner.
@@ -54,6 +58,8 @@ enum ByteOperationV30<'inventory, 'owner> {
 /// Complete supported operation census over the exact retained Inventory.
 pub(super) struct ByteFunctionV30<'a, 'owner, R> {
     inventory: &'a Inventory<'owner>,
+    // Keep the exact analyzed inventory borrowed through emission.
+    _physical: &'a Physical<'a, 'owner>,
     allocations: &'a R,
     function: Function,
     operations: Vec<ByteOperationV30<'a, 'owner>>,
@@ -149,6 +155,7 @@ pub(super) fn emit_value_type(
 impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
     pub(super) fn derive(
         inventory: &'a Inventory<'owner>,
+        physical: &'a Physical<'a, 'owner>,
         function: Function,
         width: FormalIndexWidth,
         allocations: &'a R,
@@ -156,7 +163,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
     ) -> Result<Self> {
         allocations.check_owner(inventory.owner(), out)?;
         out.budget.reserve_storage(headers::<R>())?;
-        out.budget.charge_work(3)?;
+        out.budget.charge_work(4)?;
+        if !physical.is_for(inventory) {
+            return Err(mismatch());
+        }
         scalar_bytes(ScalarType::Index, width)?;
         let row = inventory
             .functions()
@@ -197,6 +207,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                     inventory, operation, width, out,
                 )?)
             };
+            physical::check(physical, operation, &plan, &actual.operation.kind, out)?;
             // This census includes unused results and unreachable blocks.
             if let OperationKind::Storage(storage) = actual.operation.kind {
                 let mut ordinal = 0usize;
@@ -254,6 +265,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         }
         Ok(Self {
             inventory,
+            _physical: physical,
             allocations,
             function,
             operations,
@@ -555,6 +567,7 @@ fn headers<R>() -> usize {
         + super::storage_byte_operations_v37::headers()
         + super::index_byte_operations_v37::headers()
         + control::headers()
+        + physical::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()
         + size_of::<ByteOperationV30<'_, '_>>()

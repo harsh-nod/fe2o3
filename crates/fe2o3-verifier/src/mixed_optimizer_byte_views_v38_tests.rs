@@ -104,11 +104,12 @@ fn byte_view_guards_require_actual_tag_bytes_owner_and_captured_epochs() {
 
 #[test]
 fn byte_view_actual_dispatch_refuses_supplied_contract_registries() {
-    with_inventory(&memory_module(1), |inventory, floor| {
+    with_inventory(&memory_module(1), |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         let text = run(floor, LIMIT, LIMIT, |out| {
             ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(0),
                 FormalIndexWidth::Bits64,
                 &allocations,
@@ -150,11 +151,12 @@ fn byte_view_unused_values_and_objects_remain_in_the_entry_census() {
         vec![ValueId(0), ValueId(1)],
         vec![entry],
     ));
-    with_inventory(&module, |inventory, floor| {
+    with_inventory(&module, |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         let text = run(floor, LIMIT, LIMIT, |out| {
             ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(0),
                 FormalIndexWidth::Bits64,
                 &allocations,
@@ -176,11 +178,12 @@ fn byte_view_unused_values_and_objects_remain_in_the_entry_census() {
 
 #[test]
 fn byte_view_address_formation_preserves_views_instead_of_rebuilding_naked_pointers() {
-    with_inventory(&memory_module(1), |inventory, floor| {
+    with_inventory(&memory_module(1), |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         let text = run(floor, LIMIT, LIMIT, |out| {
             ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(0),
                 FormalIndexWidth::Bits64,
                 &allocations,

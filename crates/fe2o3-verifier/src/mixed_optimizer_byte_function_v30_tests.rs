@@ -16,6 +16,7 @@ const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
 
 include!("mixed_optimizer_index_byte_operations_v37_tests.rs");
 include!("mixed_optimizer_byte_views_v38_tests.rs");
+include!("mixed_optimizer_private_byte_obligations_v38_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
@@ -48,11 +49,12 @@ fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
             vec![ValueId(0)],
             vec![entry, selected, otherwise],
         ));
-        with_inventory(&module, |inventory, floor| {
+        with_inventory(&module, |inventory, physical, floor| {
             let allocations = NoAllocations(inventory.owner());
             let emit = |out: &mut Writer<'_, '_>| {
                 ByteFunctionV30::derive(
                     inventory,
+                    physical,
                     Function(0),
                     FormalIndexWidth::Bits64,
                     &allocations,
@@ -125,11 +127,12 @@ fn byte_function_private_generic_cast_preserves_tag_without_allocating_or_ending
         vec![ValueId(0)],
         vec![entry],
     ));
-    with_inventory(&module, |inventory, floor| {
+    with_inventory(&module, |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         let (result, _, _) = run(floor, LIMIT, LIMIT, |out| {
             ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(0),
                 FormalIndexWidth::Bits64,
                 &allocations,
@@ -217,7 +220,15 @@ fn memory_module(functions: usize) -> Module {
     module
 }
 
-fn with_inventory(module: &Module, run: impl FnOnce(&Inventory<'_>, usize)) {
+fn with_inventory(module: &Module, run: impl FnOnce(&Inventory<'_>, &Physical<'_, '_>, usize)) {
+    with_inventory_byte_limit(module, 4096, run);
+}
+
+fn with_inventory_byte_limit(
+    module: &Module,
+    max_boundaries: usize,
+    run: impl FnOnce(&Inventory<'_>, &Physical<'_, '_>, usize),
+) {
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
     let (owner, stored) =
@@ -225,7 +236,14 @@ fn with_inventory(module: &Module, run: impl FnOnce(&Inventory<'_>, usize)) {
     budget.reserve_storage(stored.retained_storage()).unwrap();
     let (inventory, retained) = Inventory::derive_v18(&owner, &mut budget).unwrap();
     budget.reserve_storage(retained.retained_storage()).unwrap();
-    run(&inventory, budget.storage());
+    let (physical, retained) = fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+        &inventory,
+        fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 { max_boundaries },
+        &mut budget,
+    )
+    .unwrap();
+    budget.reserve_storage(retained.retained_storage()).unwrap();
+    run(&inventory, &physical, budget.storage());
 }
 
 fn run(
@@ -249,11 +267,12 @@ fn run(
 
 #[test]
 fn byte_function_consumes_all_operations_and_preserves_exact_global_observations() {
-    with_inventory(&memory_module(2), |inventory, floor| {
+    with_inventory(&memory_module(2), |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         let text = run(floor, LIMIT, LIMIT, |out| {
             let model = ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(1),
                 FormalIndexWidth::Bits64,
                 &allocations,
@@ -312,11 +331,12 @@ fn byte_function_edges_read_immutable_preedge_values_in_operand_order() {
         vec![ValueId(0), ValueId(1), ValueId(2)],
         vec![entry, loop_block, exit],
     ));
-    with_inventory(&module, |inventory, floor| {
+    with_inventory(&module, |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         let text = run(floor, LIMIT, LIMIT, |out| {
             ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(0),
                 FormalIndexWidth::Bits64,
                 &allocations,
@@ -355,11 +375,12 @@ fn byte_function_unused_and_unreachable_unsupported_operations_refuse_before_tex
         } else {
             body.blocks[0].operations.push(operation);
         }
-        with_inventory(&module, |inventory, floor| {
+        with_inventory(&module, |inventory, physical, floor| {
             let allocations = NoAllocations(inventory.owner());
             let result = run(floor, LIMIT, LIMIT, |out| {
                 let result = ByteFunctionV30::derive(
                     inventory,
+                    physical,
                     Function(0),
                     FormalIndexWidth::Bits64,
                     &allocations,
@@ -400,11 +421,12 @@ fn byte_function_volatile_and_pointer_payloads_refuse_before_text() {
         {
             access.volatile = true;
         }
-        with_inventory(&module, |inventory, floor| {
+        with_inventory(&module, |inventory, physical, floor| {
             let allocations = NoAllocations(inventory.owner());
             let result = run(floor, LIMIT, LIMIT, |out| {
                 let result = ByteFunctionV30::derive(
                     inventory,
+                    physical,
                     Function(0),
                     FormalIndexWidth::Bits64,
                     &allocations,
@@ -421,16 +443,22 @@ fn byte_function_volatile_and_pointer_payloads_refuse_before_text() {
 
 #[test]
 fn byte_function_foreign_owner_and_unknown_index_width_refuse_before_text() {
-    with_inventory(&memory_module(1), |inventory, floor| {
-        with_inventory(&memory_module(1), |foreign, _| {
+    with_inventory(&memory_module(1), |inventory, physical, floor| {
+        with_inventory(&memory_module(1), |foreign, _, _| {
             for (owner, width) in [
                 (foreign.owner(), FormalIndexWidth::Bits64),
                 (inventory.owner(), FormalIndexWidth::Unknown),
             ] {
                 let allocations = NoAllocations(owner);
                 let result = run(floor, LIMIT, LIMIT, |out| {
-                    let result =
-                        ByteFunctionV30::derive(inventory, Function(0), width, &allocations, out);
+                    let result = ByteFunctionV30::derive(
+                        inventory,
+                        physical,
+                        Function(0),
+                        width,
+                        &allocations,
+                        out,
+                    );
                     assert!(out.text.is_empty());
                     result.map(|_| ())
                 })
@@ -444,11 +472,12 @@ fn byte_function_foreign_owner_and_unknown_index_width_refuse_before_text() {
 #[test]
 fn byte_function_derivation_has_independent_function_local_resource_oracle() {
     for functions in [1, 8, 32] {
-        with_inventory(&memory_module(functions), |inventory, floor| {
+        with_inventory(&memory_module(functions), |inventory, physical, floor| {
             let allocations = NoAllocations(inventory.owner());
             let derive = |out: &mut Writer<'_, '_>| {
                 ByteFunctionV30::derive(
                     inventory,
+                    physical,
                     Function((functions - 1) as u32),
                     FormalIndexWidth::Bits64,
                     &allocations,
@@ -456,9 +485,11 @@ fn byte_function_derivation_has_independent_function_local_resource_oracle() {
                 )
                 .map(|_| ())
             };
-            // Owner1 + shape3 + definitions5 + three fixed dispatch/probe/parser
-            // frames42 + five pointer operands8 + two effects2 + return block9.
-            const WORK: usize = 1 + 3 + 5 + 3 * (4 + 6 + 6 + 2 + 24) + 5 * 8 + 2 * 2 + 5 + 3 + 1;
+            // Owner1 + shape/analysis owner4 + definitions5 + three fixed
+            // dispatch/probe/parser frames42 + physical census19 per operation,
+            // five pointer operands8 + two effects2 + return block9.
+            const WORK: usize =
+                1 + 4 + 5 + 3 * (4 + 6 + 6 + 2 + 24 + 19) + 5 * 8 + 2 * 2 + 5 + 3 + 1;
             let expected_storage = floor
                 + super::super::super::SOURCE_LIMIT
                 + headers::<NoAllocations<'_>>()
@@ -480,11 +511,12 @@ fn byte_function_derivation_has_independent_function_local_resource_oracle() {
 
 #[test]
 fn byte_function_emission_retains_resolver_and_budget_custody() {
-    with_inventory(&memory_module(1), |inventory, floor| {
+    with_inventory(&memory_module(1), |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         run(floor, LIMIT, LIMIT, |out| {
             let model = ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(0),
                 FormalIndexWidth::Bits64,
                 &allocations,
@@ -523,11 +555,12 @@ fn byte_function_emission_retains_resolver_and_budget_custody() {
 
 #[test]
 fn byte_function_funded_foreign_ledger_poison_is_retained_after_original_restore() {
-    with_inventory(&memory_module(1), |inventory, floor| {
+    with_inventory(&memory_module(1), |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         run(floor, LIMIT, LIMIT, |out| {
             let model = ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(0),
                 FormalIndexWidth::Bits64,
                 &allocations,
@@ -563,11 +596,12 @@ fn byte_function_funded_foreign_ledger_poison_is_retained_after_original_restore
 
 #[test]
 fn byte_function_full_emission_has_independent_work_and_exact_capacity_boundary() {
-    with_inventory(&memory_module(1), |inventory, floor| {
+    with_inventory(&memory_module(1), |inventory, physical, floor| {
         let allocations = NoAllocations(inventory.owner());
         let emit = |out: &mut Writer<'_, '_>| {
             ByteFunctionV30::derive(
                 inventory,
+                physical,
                 Function(0),
                 FormalIndexWidth::Bits64,
                 &allocations,
@@ -577,10 +611,10 @@ fn byte_function_full_emission_has_independent_work_and_exact_capacity_boundary(
         };
         let measured = run(floor, LIMIT, LIMIT, emit);
         let text = measured.0.unwrap();
-        // Derivation188; two owner checks2, scalar-plan scan3, operation scan6,
+        // Derivation246; two owner checks2, scalar-plan scan3, operation scan6,
         // pointer emission3, block frame2, ordered operation/observation scans6,
         // return operands2, micro begin1/step6/finish1, dispatcher1; text bytes.
-        let work = 188 + 2 + 3 + 6 + 3 + 2 + 6 + 2 + 1 + 6 + 1 + 1 + text.len();
+        let work = 246 + 2 + 3 + 6 + 3 + 2 + 6 + 2 + 1 + 6 + 1 + 1 + text.len();
         let storage = floor
             + super::super::super::SOURCE_LIMIT
             + headers::<NoAllocations<'_>>()
@@ -603,6 +637,7 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
     type R<'a> = NoAllocations<'a>;
     type FunctionFields<'a, 'b> = (
         &'a Inventory<'b>,
+        &'a Physical<'a, 'b>,
         &'a R<'a>,
         Function,
         Vec<ByteOperationV30<'a, 'b>>,
@@ -682,6 +717,19 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
             [&str; 8],
             [Option<usize>; 3],
         )>();
+    use fe2o3_kernel_analysis::{
+        CanonicalKirPrivateByteObligationV38 as Obligation,
+        CanonicalKirPrivateByteOperationKindV38 as Kind,
+        CanonicalKirPrivateByteOperationV38 as Fact,
+    };
+    let physical = size_of::<(
+        &Physical<'_, '_>,
+        &Fact,
+        &OperationKind,
+        &ByteOperationV30<'_, '_>,
+    )>() + 2 * size_of::<physical::Guard>()
+        + size_of::<Result<physical::Guard>>()
+        + size_of::<(Kind, Obligation, [usize; 2], [bool; 2], [Result<()>; 2])>();
     assert_eq!(
         super::super::pointer_byte_operations_v30::headers(),
         pointer
@@ -696,9 +744,10 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
         storage
     );
     assert_eq!(super::super::index_byte_operations_v37::headers(), index);
+    assert_eq!(physical::headers(), physical);
     assert_eq!(
         headers::<R<'_>>(),
-        pointer + private + storage + index + control + model
+        pointer + private + storage + index + control + physical + model
     );
 }
 
@@ -784,20 +833,32 @@ fn pointer_storage_module_v37(nonoverlapping: bool, copies: usize) -> Module {
 #[test]
 fn byte_function_typed_pointer_storage_uses_layout_width_not_index_width() {
     for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
-        with_inventory(&pointer_storage_module_v37(false, 1), |inventory, floor| {
-            let allocations = NoAllocations(inventory.owner());
-            let text = run(floor, LIMIT, LIMIT, |out| {
-                ByteFunctionV30::derive(inventory, Function(0), width, &allocations, out)?
+        with_inventory(
+            &pointer_storage_module_v37(false, 1),
+            |inventory, physical, floor| {
+                let allocations = NoAllocations(inventory.owner());
+                let text = run(floor, LIMIT, LIMIT, |out| {
+                    ByteFunctionV30::derive(
+                        inventory,
+                        physical,
+                        Function(0),
+                        width,
+                        &allocations,
+                        out,
+                    )?
                     .emit(17, out)
-            })
-            .0
-            .unwrap();
-            assert!(text.contains("byte_pointer_store_v37(s.memory, p, 8, v, little_endian)"));
-            assert!(text.contains("byte_pointer_load_valid_v37(s.memory, p, 8, little_endian)"));
-            assert!(text.contains("byte_pointer_load_v37(s.memory, p, 8, little_endian)"));
-            assert!(text.contains("byte_pointer_type_v30(v, 0, 8)"));
-            assert!(!text.contains("byte_store_v30(s.memory, p, 8, v, little_endian)"));
-        });
+                })
+                .0
+                .unwrap();
+                assert!(text.contains("byte_pointer_store_v37(s.memory, p, 8, v, little_endian)"));
+                assert!(
+                    text.contains("byte_pointer_load_valid_v37(s.memory, p, 8, little_endian)")
+                );
+                assert!(text.contains("byte_pointer_load_v37(s.memory, p, 8, little_endian)"));
+                assert!(text.contains("byte_pointer_type_v30(v, 0, 8)"));
+                assert!(!text.contains("byte_store_v30(s.memory, p, 8, v, little_endian)"));
+            },
+        );
     }
 }
 
@@ -806,11 +867,12 @@ fn byte_function_copy_observation_preserves_ordered_snapshot_and_overlap_contrac
     for nonoverlapping in [false, true] {
         with_inventory(
             &pointer_storage_module_v37(nonoverlapping, 1),
-            |inventory, floor| {
+            |inventory, physical, floor| {
                 let allocations = NoAllocations(inventory.owner());
                 let text = run(floor, LIMIT, LIMIT, |out| {
                     ByteFunctionV30::derive(
                         inventory,
+                        physical,
                         Function(0),
                         FormalIndexWidth::Bits64,
                         &allocations,
@@ -833,24 +895,28 @@ fn byte_function_copy_observation_preserves_ordered_snapshot_and_overlap_contrac
 
 #[test]
 fn byte_function_typed_pointer_copy_has_exact_and_one_short_resources() {
-    with_inventory(&pointer_storage_module_v37(false, 1), |inventory, floor| {
-        let allocations = NoAllocations(inventory.owner());
-        let emit = |out: &mut Writer<'_, '_>| {
-            ByteFunctionV30::derive(
-                inventory,
-                Function(0),
-                FormalIndexWidth::Bits64,
-                &allocations,
-                out,
-            )?
-            .emit(17, out)
-        };
-        let (text, work, peak) = run(floor, LIMIT, LIMIT, emit);
-        let text = text.unwrap();
-        let (exact, used, storage) = run(floor, work, peak, emit);
-        assert_eq!(exact.unwrap(), text);
-        assert_eq!((used, storage), (work, peak));
-        assert!(run(floor, work - 1, peak, emit).0.is_err());
-        assert!(run(floor, work, peak - 1, emit).0.is_err());
-    });
+    with_inventory(
+        &pointer_storage_module_v37(false, 1),
+        |inventory, physical, floor| {
+            let allocations = NoAllocations(inventory.owner());
+            let emit = |out: &mut Writer<'_, '_>| {
+                ByteFunctionV30::derive(
+                    inventory,
+                    physical,
+                    Function(0),
+                    FormalIndexWidth::Bits64,
+                    &allocations,
+                    out,
+                )?
+                .emit(17, out)
+            };
+            let (text, work, peak) = run(floor, LIMIT, LIMIT, emit);
+            let text = text.unwrap();
+            let (exact, used, storage) = run(floor, work, peak, emit);
+            assert_eq!(exact.unwrap(), text);
+            assert_eq!((used, storage), (work, peak));
+            assert!(run(floor, work - 1, peak, emit).0.is_err());
+            assert!(run(floor, work, peak - 1, emit).0.is_err());
+        },
+    );
 }
