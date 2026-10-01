@@ -271,7 +271,24 @@ fn original_mir_pointer_semantics_keep_formation_and_move_checks_at_the_event() 
     );
     assert!(SOURCE_POINTERS_V36.contains("0 <= index < slice.length"));
     assert!(SOURCE_POINTERS_V36.contains("forall|index: int| 0 <= index < slice.length"));
-    assert!(SOURCE_POINTERS_V36.contains("slice.pointer.allocation"));
+    let (slice_borrow, index_borrow) = SOURCE_POINTERS_V36
+        .split_once("InvocationSourcePointerEventV36::SliceBorrow { destination, local, metadata_bits, width, alignment, bits } =>")
+        .unwrap()
+        .1
+        .split_once("InvocationSourcePointerEventV36::IndexBorrow { destination, local, index, index_bits, metadata_bits, width, alignment, bits } =>")
+        .unwrap();
+    // Struct update retains both allocation identity and the enclosing view.
+    for branch in [slice_borrow, index_borrow] {
+        assert_eq!(branch.matches("..slice.pointer").count(), 1);
+        assert!(
+            branch.contains(
+                "byte_offset: slice.pointer.byte_offset + index * width, ..slice.pointer"
+            )
+        );
+        assert!(!branch.contains("allocation:"));
+        assert!(!branch.contains("view:"));
+        assert!(branch.contains("invocation_source_borrow_enabled_v36"));
+    }
     assert!(!SOURCE_POINTERS_V36.contains("byte_store_v30"));
     assert!(!SOURCE_POINTERS_V36.contains("byte_pop_frame_v30"));
     assert!(!SOURCE_POINTERS_V36.contains("byte_allocate_v30"));
