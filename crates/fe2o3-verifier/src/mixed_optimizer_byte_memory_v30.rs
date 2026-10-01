@@ -62,6 +62,7 @@ enum MemoryAllocationV30 {
 struct MemoryPointerV30 {
     allocation: MemoryAllocationV30,
     byte_offset: int,
+    view: Option<MemoryStorageViewV38>,
 }
 
 struct MemorySliceV30 {
@@ -93,6 +94,8 @@ struct MemoryBytesV30 {
     bytes: Seq<MemoryByteV37>,
     initialized: Seq<bool>,
     relocations: Map<int, MemoryRelocationV37>,
+    write_clock: int,
+    write_epochs: Seq<int>,
     // A checked guaranteed base-alignment multiple, not a numeric address.
     base_alignment: int,
 }
@@ -101,6 +104,7 @@ struct MemoryBytesV30 {
 // absent from keys: two checked runtime parameters may name the same bytes.
 struct ByteMemoryV30 {
     live: Map<MemoryAllocationV30, MemoryBytesV30>,
+    view_contracts: MemoryViewContractsV38,
 }
 
 struct MemoryStateV30 {
@@ -262,13 +266,18 @@ open spec fn byte_end_frame_v30(
         |allocation: MemoryAllocationV30| memory.live.contains_key(allocation)
             && !byte_allocation_in_frame_v30(allocation, frame),
         |allocation: MemoryAllocationV30| memory.live[allocation],
-    ) }
+    ), view_contracts: memory.view_contracts }
 }
 
 open spec fn byte_memory_well_formed_v30(memory: ByteMemoryV30) -> bool {
-    forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) ==>
+    byte_view_contracts_shape_v38(memory.view_contracts)
+    && forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) ==>
         0 < memory.live[allocation].base_alignment
         && memory.live[allocation].bytes.len() == memory.live[allocation].initialized.len()
+        && memory.live[allocation].write_epochs.len() == memory.live[allocation].bytes.len()
+        && 0 <= memory.live[allocation].write_clock
+        && (forall|i: int| 0 <= i < memory.live[allocation].write_epochs.len() ==>
+            0 <= memory.live[allocation].write_epochs[i] <= memory.live[allocation].write_clock)
         && byte_object_relocations_well_formed_v37(memory.live[allocation])
 }
 
@@ -279,9 +288,8 @@ open spec fn ordinary_memory_width_v30(width: int) -> bool {
 open spec fn byte_range_live_v30(
     memory: ByteMemoryV30, pointer: MemoryPointerV30, width: int,
 ) -> bool {
-    memory.live.contains_key(pointer.allocation)
-        && 0 <= pointer.byte_offset && 0 <= width
-        && pointer.byte_offset + width <= memory.live[pointer.allocation].bytes.len()
+    byte_raw_range_live_v38(memory, pointer.allocation, pointer.byte_offset, width)
+        && byte_pointer_view_current_v38(memory, pointer, width)
 }
 
 // Space codes are emitted from checked canonical types: private0, global1,
@@ -289,7 +297,8 @@ open spec fn byte_range_live_v30(
 open spec fn byte_pointer_type_v30(
     pointer: MemoryPointerV30, space: int, index_bytes: int,
 ) -> bool {
-    0 <= pointer.byte_offset < memory_value_modulus_v30(index_bytes)
+    byte_pointer_view_shape_v38(pointer)
+        && 0 <= pointer.byte_offset < memory_value_modulus_v30(index_bytes)
         && match pointer.allocation {
             MemoryAllocationV30::External { identity: _, generation: _ } =>
                 space == 1 || space == 2,
@@ -399,8 +408,10 @@ open spec fn byte_store_v30(
         previous.initialized[i] || pointer.byte_offset <= i < pointer.byte_offset + width);
     ByteMemoryV30 { live: memory.live.insert(pointer.allocation, MemoryBytesV30 {
         bytes, initialized, base_alignment: previous.base_alignment,
+        write_clock: byte_write_clock_v38(previous, width),
+        write_epochs: byte_overwrite_epochs_v38(previous, pointer.byte_offset, width),
         relocations: byte_relocations_without_overlap_v37(previous.relocations, pointer.byte_offset, width),
-    }) }
+    }), view_contracts: memory.view_contracts }
 }
 
 open spec fn vector_lane_shape_v30(lanes: int, factor: int) -> bool {
@@ -435,6 +446,7 @@ open spec fn byte_vector_load_v30(
     Seq::new(lanes as nat, |lane: int| byte_load_v30(memory, MemoryPointerV30 {
         allocation: pointer.allocation,
         byte_offset: pointer.byte_offset + vector_physical_lane_v30(lane, lanes, factor) * lane_width,
+        view: pointer.view,
     }, lane_width, little_endian))
 }
 
@@ -461,8 +473,10 @@ open spec fn byte_vector_store_v30(
         previous.initialized[i] || pointer.byte_offset <= i < pointer.byte_offset + lane_width * values.len());
     ByteMemoryV30 { live: memory.live.insert(pointer.allocation, MemoryBytesV30 {
         bytes, initialized, base_alignment: previous.base_alignment,
+        write_clock: byte_write_clock_v38(previous, lane_width * values.len()),
+        write_epochs: byte_overwrite_epochs_v38(previous, pointer.byte_offset, lane_width * values.len()),
         relocations: byte_relocations_without_overlap_v37(previous.relocations, pointer.byte_offset, lane_width * values.len()),
-    }) }
+    }), view_contracts: memory.view_contracts }
 }
 
 // A static Alloca site may execute repeatedly. The generated allocator step
@@ -477,14 +491,16 @@ open spec fn byte_allocate_v30(
         bytes: Seq::new(extent as nat, |i: int| MemoryByteV37::Octet(0)),
         initialized: Seq::new(extent as nat, |i: int| false),
         relocations: Map::empty(),
+        write_clock: 0,
+        write_epochs: Seq::new(extent as nat, |i: int| 0),
         base_alignment: alignment,
-    }) }
+    }), view_contracts: memory.view_contracts }
 }
 
 open spec fn byte_end_lifetime_v30(
     memory: ByteMemoryV30, allocation: MemoryAllocationV30,
 ) -> ByteMemoryV30 {
-    ByteMemoryV30 { live: memory.live.remove(allocation) }
+    ByteMemoryV30 { live: memory.live.remove(allocation), view_contracts: memory.view_contracts }
 }
 
 open spec fn private_generation_v30(
@@ -532,5 +548,6 @@ open spec fn byte_state_memory_well_formed_v30(state: MemoryStateV30) -> bool {
         && private_generation_counters_valid_v30(state.generations, state.memory)
 }
 "#,
-    include_str!("mixed_optimizer_byte_relocations_v37.vrs")
+    include_str!("mixed_optimizer_byte_relocations_v37.vrs"),
+    include_str!("mixed_optimizer_byte_views_v38.vrs")
 );

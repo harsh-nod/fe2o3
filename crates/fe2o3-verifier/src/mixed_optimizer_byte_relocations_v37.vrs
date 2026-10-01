@@ -15,7 +15,7 @@ open spec fn byte_token_well_formed_v37(byte: MemoryByteV37) -> bool {
         MemoryByteV37::Octet(value) => 0 <= value < 256,
         MemoryByteV37::PointerFragment { pointer, width, ordinal } =>
             ordinary_memory_width_v30(width) && 0 <= ordinal < width
-                && 0 <= pointer.byte_offset,
+                && 0 <= pointer.byte_offset && byte_pointer_view_shape_v38(pointer),
     }
 }
 
@@ -123,7 +123,9 @@ open spec fn byte_pointer_store_v37(
     ).insert(address.byte_offset, relocation);
     ByteMemoryV30 { live: memory.live.insert(address.allocation, MemoryBytesV30 {
         bytes, initialized, relocations, base_alignment: previous.base_alignment,
-    }) }
+        write_clock: byte_write_clock_v38(previous, width),
+        write_epochs: byte_overwrite_epochs_v38(previous, address.byte_offset, width),
+    }), view_contracts: memory.view_contracts }
 }
 
 // Source StorageDead/Deinit uses this representation transform only after its
@@ -141,7 +143,9 @@ open spec fn byte_deinitialize_v37(
                 && !(address.byte_offset <= i < address.byte_offset + width)),
         relocations: byte_relocations_without_overlap_v37(previous.relocations, address.byte_offset, width),
         base_alignment: previous.base_alignment,
-    }) }
+        write_clock: byte_write_clock_v38(previous, width),
+        write_epochs: byte_overwrite_epochs_v38(previous, address.byte_offset, width),
+    }), view_contracts: memory.view_contracts }
 }
 
 open spec fn byte_copy_object_valid_v37(
@@ -187,5 +191,7 @@ open spec fn byte_copy_object_v37(
             } else { previous.initialized[i] }),
         relocations,
         base_alignment: previous.base_alignment,
-    }) }
+        write_clock: byte_write_clock_v38(previous, width),
+        write_epochs: byte_overwrite_epochs_v38(previous, destination.byte_offset, width),
+    }), view_contracts: memory.view_contracts }
 }

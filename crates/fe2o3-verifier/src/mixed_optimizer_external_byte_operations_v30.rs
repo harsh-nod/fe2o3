@@ -425,12 +425,12 @@ impl PointerByteOperationV30 {
                 // Formation is checked here, never against a later access guard.
                 emit!(
                     out,
-                    " let {} = {valid} && match ({values}[{base}], {values}[{index}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(i)) => 0 <= i < memory_value_modulus_v30({index_bytes}) && byte_pointer_type_v30(p, {space}, {index_bytes}) && byte_range_live_v30({memory}, p, 0) && byte_range_live_v30({memory}, MemoryPointerV30 {{ allocation: p.allocation, byte_offset: p.byte_offset + i * {bytes} }}, 0) && p.byte_offset + i * {bytes} < memory_value_modulus_v30({index_bytes}), _ => false }};\n",
+                    " let {} = {valid} && match ({values}[{base}], {values}[{index}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(i)) => 0 <= i < memory_value_modulus_v30({index_bytes}) && byte_pointer_type_v30(p, {space}, {index_bytes}) && byte_range_live_v30({memory}, p, 0) && byte_range_live_v30({memory}, MemoryPointerV30 {{ allocation: p.allocation, byte_offset: p.byte_offset + i * {bytes}, view: p.view }}, 0) && p.byte_offset + i * {bytes} < memory_value_modulus_v30({index_bytes}), _ => false }};\n",
                     after.valid
                 );
                 emit!(
                     out,
-                    " let {} = {values}.update({output}, if {} {{ match ({values}[{base}], {values}[{index}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(i)) => MemoryValueV30::Pointer(MemoryPointerV30 {{ allocation: p.allocation, byte_offset: p.byte_offset + i * {bytes} }}), _ => MemoryValueV30::Undefined }} }} else {{ MemoryValueV30::Undefined }});\n let {} = {memory};\n",
+                    " let {} = {values}.update({output}, if {} {{ match ({values}[{base}], {values}[{index}]) {{ (MemoryValueV30::Pointer(p), MemoryValueV30::Scalar(i)) => MemoryValueV30::Pointer(MemoryPointerV30 {{ allocation: p.allocation, byte_offset: p.byte_offset + i * {bytes}, view: p.view }}), _ => MemoryValueV30::Undefined }} }} else {{ MemoryValueV30::Undefined }});\n let {} = {memory};\n",
                     after.values,
                     after.valid,
                     after.memory

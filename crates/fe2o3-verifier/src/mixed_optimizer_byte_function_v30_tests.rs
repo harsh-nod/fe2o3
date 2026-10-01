@@ -15,6 +15,7 @@ const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
 };
 
 include!("mixed_optimizer_index_byte_operations_v37_tests.rs");
+include!("mixed_optimizer_byte_views_v38_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {

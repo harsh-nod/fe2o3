@@ -439,7 +439,7 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         let definitions = self.inventory.definitions().len();
         emit!(
             out,
-            "open spec fn byte_operation_{namespace}_{operation}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n if s.values.len() != {definitions} || s.pc != {block} || !byte_state_memory_well_formed_v30(s) {{ MemoryOperationResultV30 {{ state: MemoryStateV30 {{ valid: false, ..s }}, observation: MemoryOperationObservationV30 {{ operation, valid_before: s.valid, valid_after: false, effect: MemoryOperationEffectV30::Refused }} }} }} else {{\n",
+            "open spec fn byte_operation_{namespace}_{operation}_v30(s: MemoryStateV30, little_endian: bool) -> MemoryOperationResultV30 {{\n let operation = MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }};\n if s.values.len() != {definitions} || s.pc != {block} || !byte_state_memory_well_formed_v30(s) || !byte_native_view_inputs_v38(s.memory, s.values) {{ MemoryOperationResultV30 {{ state: MemoryStateV30 {{ valid: false, ..s }}, observation: MemoryOperationObservationV30 {{ operation, valid_before: s.valid, valid_after: false, effect: MemoryOperationEffectV30::Refused }} }} }} else {{\n",
             coordinate.block.function.0,
             coordinate.block.block,
             coordinate.operation

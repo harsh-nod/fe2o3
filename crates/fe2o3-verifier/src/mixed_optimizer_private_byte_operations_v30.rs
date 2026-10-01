@@ -144,7 +144,7 @@ impl AllocaByteOperationV30 {
         );
         emit!(
             out,
-            " let {} = {values}.update({result}, if {} {{ MemoryValueV30::Pointer(MemoryPointerV30 {{ allocation: allocation_v30, byte_offset: 0 }}) }} else {{ MemoryValueV30::Undefined }});\n let {} = {frames};\n",
+            " let {} = {values}.update({result}, if {} {{ MemoryValueV30::Pointer(MemoryPointerV30 {{ allocation: allocation_v30, byte_offset: 0, view: None }}) }} else {{ MemoryValueV30::Undefined }});\n let {} = {frames};\n",
             after.values,
             after.valid,
             after.frames

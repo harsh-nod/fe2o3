@@ -1,0 +1,287 @@
+
+// These contracts are inert data. A generated owner-qualified classifier must
+// authenticate the entire registry at the interpreter entrance. Until those
+// source/target classifiers exist, both entrances require an empty registry.
+enum MemoryTagEncodingV38 {
+    Direct { tags: Seq<int> },
+    Niche { untagged: int, first: int, last: int, start: int },
+    Unsupported,
+}
+
+struct MemoryTagContractV38 {
+    object_bytes: int,
+    tag_offset: int,
+    tag_width: int,
+    little_endian: bool,
+    inhabited: Seq<bool>,
+    discriminants: Seq<int>,
+    untagged_valid_bits: Seq<(int, int)>,
+    encoding: MemoryTagEncodingV38,
+}
+
+struct MemoryViewContractsV38 {
+    owner: int,
+    rows: Map<int, MemoryTagContractV38>,
+}
+
+struct MemoryTagGuardV38 {
+    owner: int,
+    contract: int,
+    allocation: MemoryAllocationV30,
+    object_start: int,
+    variant: int,
+    epochs: Seq<int>,
+}
+
+struct MemoryStorageViewV38 {
+    lower: int,
+    upper: int,
+    guards: Seq<MemoryTagGuardV38>,
+}
+
+open spec fn byte_empty_view_contracts_v38() -> MemoryViewContractsV38 {
+    MemoryViewContractsV38 { owner: 0, rows: Map::empty() }
+}
+
+open spec fn byte_default_view_contracts_v38(memory: ByteMemoryV30) -> bool {
+    memory.view_contracts == byte_empty_view_contracts_v38()
+}
+
+open spec fn byte_pointer_view_shape_v38(pointer: MemoryPointerV30) -> bool {
+    match pointer.view {
+        None => true,
+        Some(view) => 0 <= view.lower <= pointer.byte_offset <= view.upper
+            && (forall|i: int| 0 <= i < view.guards.len() ==>
+                0 <= view.guards[i].owner && 0 <= view.guards[i].contract
+                && 0 <= view.guards[i].object_start && 0 <= view.guards[i].variant
+                && view.guards[i].allocation == pointer.allocation),
+    }
+}
+
+open spec fn byte_tag_contract_shape_v38(contract: MemoryTagContractV38) -> bool {
+    0 <= contract.object_bytes && 0 <= contract.tag_offset
+    && ordinary_memory_width_v30(contract.tag_width)
+    && contract.tag_offset + contract.tag_width <= contract.object_bytes
+    && 0 < contract.inhabited.len()
+    && contract.inhabited.len() == contract.discriminants.len()
+    && (forall|i: int| 0 <= i < contract.untagged_valid_bits.len() ==>
+        0 <= contract.untagged_valid_bits[i].0 <= contract.untagged_valid_bits[i].1
+            < memory_value_modulus_v30(contract.tag_width))
+    && match contract.encoding {
+        MemoryTagEncodingV38::Direct { tags } =>
+            tags.len() == contract.inhabited.len()
+            && (forall|i: int| 0 <= i < tags.len() ==>
+                0 <= tags[i] < memory_value_modulus_v30(contract.tag_width))
+            && (forall|i: int, j: int| 0 <= i < j < tags.len() ==> tags[i] != tags[j]),
+        MemoryTagEncodingV38::Niche { untagged, first, last, start } =>
+            0 <= untagged < contract.inhabited.len()
+            && 0 <= first <= last < contract.inhabited.len()
+            && !(first <= untagged <= last)
+            && last - first < memory_value_modulus_v30(contract.tag_width)
+            && 0 <= start < memory_value_modulus_v30(contract.tag_width),
+        MemoryTagEncodingV38::Unsupported => true,
+    }
+}
+
+open spec fn byte_view_contracts_shape_v38(contracts: MemoryViewContractsV38) -> bool {
+    0 <= contracts.owner
+    && forall|row: int| contracts.rows.contains_key(row) ==>
+        0 <= row && byte_tag_contract_shape_v38(contracts.rows[row])
+}
+
+open spec fn byte_tag_selects_v38(contract: MemoryTagContractV38, bits: int, variant: int) -> bool {
+    byte_tag_contract_shape_v38(contract)
+    && 0 <= bits < memory_value_modulus_v30(contract.tag_width)
+    && 0 <= variant < contract.inhabited.len() && contract.inhabited[variant]
+    && match contract.encoding {
+        MemoryTagEncodingV38::Direct { tags } => tags[variant] == bits,
+        MemoryTagEncodingV38::Niche { untagged, first, last, start } => {
+            let delta = (bits + memory_value_modulus_v30(contract.tag_width) - start)
+                % memory_value_modulus_v30(contract.tag_width);
+            if delta <= last - first { variant == first + delta }
+            else { variant == untagged && exists|i: int| 0 <= i < contract.untagged_valid_bits.len()
+                && contract.untagged_valid_bits[i].0 <= bits <= contract.untagged_valid_bits[i].1 }
+        },
+        MemoryTagEncodingV38::Unsupported => false,
+    }
+}
+
+open spec fn byte_raw_range_live_v38(
+    memory: ByteMemoryV30, allocation: MemoryAllocationV30, offset: int, width: int,
+) -> bool {
+    memory.live.contains_key(allocation) && 0 <= offset && 0 <= width
+        && offset + width <= memory.live[allocation].bytes.len()
+}
+
+// Raw tag inspection cannot recurse through pointer-view access checks. The
+// caller authenticates the contract, initialization and ordinary-octet payload.
+open spec fn byte_tag_term_v38(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool, ordinal: int,
+) -> int {
+    if 0 <= ordinal < width && 0 <= offset + ordinal < object.bytes.len() {
+        byte_octet_v37(object.bytes[offset + ordinal])
+            * byte_scale_v30(if little_endian { ordinal } else { width - 1 - ordinal })
+    } else { 0 }
+}
+
+open spec fn byte_tag_bits_v38(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool,
+) -> int {
+    byte_tag_term_v38(object, offset, width, little_endian, 0)
+        + byte_tag_term_v38(object, offset, width, little_endian, 1)
+        + byte_tag_term_v38(object, offset, width, little_endian, 2)
+        + byte_tag_term_v38(object, offset, width, little_endian, 3)
+        + byte_tag_term_v38(object, offset, width, little_endian, 4)
+        + byte_tag_term_v38(object, offset, width, little_endian, 5)
+        + byte_tag_term_v38(object, offset, width, little_endian, 6)
+        + byte_tag_term_v38(object, offset, width, little_endian, 7)
+        + byte_tag_term_v38(object, offset, width, little_endian, 8)
+        + byte_tag_term_v38(object, offset, width, little_endian, 9)
+        + byte_tag_term_v38(object, offset, width, little_endian, 10)
+        + byte_tag_term_v38(object, offset, width, little_endian, 11)
+        + byte_tag_term_v38(object, offset, width, little_endian, 12)
+        + byte_tag_term_v38(object, offset, width, little_endian, 13)
+        + byte_tag_term_v38(object, offset, width, little_endian, 14)
+        + byte_tag_term_v38(object, offset, width, little_endian, 15)
+}
+
+open spec fn byte_tag_guard_current_v38(memory: ByteMemoryV30, guard: MemoryTagGuardV38) -> bool {
+    guard.owner == memory.view_contracts.owner
+    && memory.view_contracts.rows.contains_key(guard.contract)
+    && {
+        let contract = memory.view_contracts.rows[guard.contract];
+        let tag = guard.object_start + contract.tag_offset;
+        byte_tag_contract_shape_v38(contract)
+        && byte_raw_range_live_v38(memory, guard.allocation, guard.object_start, contract.object_bytes)
+        && guard.epochs.len() == contract.tag_width
+        && memory.live[guard.allocation].initialized.len() == memory.live[guard.allocation].bytes.len()
+        && memory.live[guard.allocation].write_epochs.len() == memory.live[guard.allocation].bytes.len()
+        && (forall|i: int| 0 <= i < contract.tag_width ==>
+            memory.live[guard.allocation].initialized[tag + i]
+            && matches!(memory.live[guard.allocation].bytes[tag + i], MemoryByteV37::Octet(_))
+            && memory.live[guard.allocation].write_epochs[tag + i] == guard.epochs[i])
+        && byte_tag_selects_v38(contract, byte_tag_bits_v38(memory.live[guard.allocation],
+            tag, contract.tag_width, contract.little_endian), guard.variant)
+    }
+}
+
+open spec fn byte_pointer_view_current_v38(
+    memory: ByteMemoryV30, pointer: MemoryPointerV30, width: int,
+) -> bool {
+    byte_pointer_view_shape_v38(pointer) && 0 <= width
+    && match pointer.view {
+        None => true,
+        Some(view) => pointer.byte_offset + width <= view.upper
+            && memory.live.contains_key(pointer.allocation)
+            && view.upper <= memory.live[pointer.allocation].bytes.len()
+            && (forall|i: int| 0 <= i < view.guards.len() ==>
+                byte_tag_guard_current_v38(memory, view.guards[i])),
+    }
+}
+
+open spec fn byte_write_clock_v38(previous: MemoryBytesV30, width: int) -> int {
+    previous.write_clock + if 0 < width { 1 } else { 0 }
+}
+
+open spec fn byte_overwrite_epochs_v38(previous: MemoryBytesV30, offset: int, width: int) -> Seq<int> {
+    Seq::new(previous.write_epochs.len(), |i: int|
+        if offset <= i < offset + width { byte_write_clock_v38(previous, width) }
+        else { previous.write_epochs[i] })
+}
+
+// Narrowing can never drop an enclosing guard or widen an existing view.
+open spec fn byte_narrow_view_v38(
+    pointer: MemoryPointerV30, lower: int, upper: int,
+) -> MemoryPointerV30
+    recommends 0 <= lower <= pointer.byte_offset <= upper,
+        match pointer.view { None => true,
+            Some(view) => view.lower <= lower && upper <= view.upper },
+{
+    MemoryPointerV30 { allocation: pointer.allocation, byte_offset: pointer.byte_offset,
+        view: Some(MemoryStorageViewV38 { lower, upper, guards: match pointer.view {
+            None => Seq::empty(), Some(view) => view.guards,
+        } }),
+    }
+}
+
+// Formation checks both the old and new ranges even for a zero-sized field.
+// Existing enclosing guards are retained exactly; none are synthesized here.
+open spec fn byte_project_view_v38(
+    memory: ByteMemoryV30, parent: MemoryPointerV30, relative: int, extent: int,
+) -> Option<MemoryPointerV30> {
+    let pointer = MemoryPointerV30 { allocation: parent.allocation,
+        byte_offset: parent.byte_offset + relative, view: parent.view };
+    if relative < 0 || !byte_range_live_v30(memory, parent, 0)
+        || !byte_range_live_v30(memory, pointer, extent) { None }
+    else { Some(byte_narrow_view_v38(pointer, pointer.byte_offset, pointer.byte_offset + extent)) }
+}
+
+open spec fn byte_capture_tag_guard_v38(
+    memory: ByteMemoryV30, contract_row: int, allocation: MemoryAllocationV30,
+    object_start: int, variant: int,
+) -> Option<MemoryTagGuardV38> {
+    if !memory.view_contracts.rows.contains_key(contract_row) { None }
+    else {
+        let contract = memory.view_contracts.rows[contract_row];
+        if !byte_tag_contract_shape_v38(contract)
+            || !byte_raw_range_live_v38(memory, allocation, object_start, contract.object_bytes)
+            || memory.live[allocation].write_epochs.len() != memory.live[allocation].bytes.len() {
+            None
+        } else {
+            let guard = MemoryTagGuardV38 { owner: memory.view_contracts.owner, contract: contract_row,
+                allocation, object_start, variant,
+                epochs: Seq::new(contract.tag_width as nat, |i: int|
+                    memory.live[allocation].write_epochs[object_start + contract.tag_offset + i]),
+            };
+            if byte_tag_guard_current_v38(memory, guard) { Some(guard) } else { None }
+        }
+    }
+}
+
+open spec fn byte_extend_view_guard_v38(
+    memory: ByteMemoryV30, pointer: MemoryPointerV30, guard: MemoryTagGuardV38,
+) -> Option<MemoryPointerV30> {
+    if !byte_range_live_v30(memory, pointer, 0) || !byte_tag_guard_current_v38(memory, guard)
+        || pointer.allocation != guard.allocation { None }
+    else {
+        match pointer.view {
+            None => None,
+            Some(view) => {
+                let contract = memory.view_contracts.rows[guard.contract];
+                if guard.object_start > view.lower || view.upper > guard.object_start + contract.object_bytes {
+                    None
+                } else { Some(MemoryPointerV30 { allocation: pointer.allocation, byte_offset: pointer.byte_offset,
+                    view: Some(MemoryStorageViewV38 { lower: view.lower, upper: view.upper,
+                        guards: view.guards.push(guard) }),
+                }) }
+            },
+        }
+    }
+}
+
+open spec fn byte_pointer_has_no_guards_v38(pointer: MemoryPointerV30) -> bool {
+    match pointer.view { None => true, Some(view) => view.guards.len() == 0 }
+}
+
+open spec fn byte_value_has_no_guards_v38(value: MemoryValueV30) -> bool {
+    match value {
+        MemoryValueV30::Pointer(pointer) => byte_pointer_has_no_guards_v38(pointer),
+        MemoryValueV30::Slice(slice) => byte_pointer_has_no_guards_v38(slice.pointer),
+        _ => true,
+    }
+}
+
+// Native inputs cannot encode this internal guarded-view state. Uninitialized
+// historical fragments are deliberately ignored; they grant no readable value.
+open spec fn byte_native_view_inputs_v38(memory: ByteMemoryV30, values: Seq<MemoryValueV30>) -> bool {
+    byte_default_view_contracts_v38(memory)
+    && (forall|i: int| 0 <= i < values.len() ==> byte_value_has_no_guards_v38(values[i]))
+    && (forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) ==> {
+        let object = memory.live[allocation];
+        (forall|i: int| 0 <= i < object.bytes.len() && object.initialized[i] ==>
+            match object.bytes[i] { MemoryByteV37::PointerFragment { pointer, .. } =>
+                byte_pointer_has_no_guards_v38(pointer), _ => true })
+        && (forall|at: int| object.relocations.contains_key(at) ==>
+            byte_pointer_has_no_guards_v38(object.relocations[at].pointer))
+    })
+}
