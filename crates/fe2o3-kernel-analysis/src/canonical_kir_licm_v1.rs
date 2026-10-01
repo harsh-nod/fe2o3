@@ -9,8 +9,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirControlFlowScopeErrorV1 as FlowError,
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirOperationCoordinateV1 as Site,
-    OperationKind, ScalarType, Type, UnaryOp, VerifiedCanonicalKernelIrModuleV12 as Owner,
-    VerifiedCanonicalKernelIrModuleV18 as Owner18,
+    CheckedBinaryOperator, OperationKind, ScalarType, Type, UnaryOp,
+    VerifiedCanonicalKernelIrModuleV12 as Owner, VerifiedCanonicalKernelIrModuleV18 as Owner18,
 };
 use std::{fmt, mem::size_of};
 
@@ -153,8 +153,9 @@ impl<'a, O> CheckedCanonicalKirLicmV1<'a, O> {
 /// Checks actual graph payloads and independently establishes every moved
 /// operation's total scalar contract, natural-loop membership and preheader,
 /// original availability and final SSA placement. Never calls a producer.
-/// Constants/Not/bitwise/comparison/Select over Bool and fixed integers only;
-/// Index, arithmetic, shifts, casts, floating point, memory, calls, intrinsic,
+/// Constants/Not/bitwise/comparison/Select over Bool and fixed integers, plus
+/// checked Add/Subtract/Multiply with both fixed-integer and Bool results.
+/// Index, ordinary arithmetic, shifts, casts, floating point, memory, calls, intrinsic,
 /// convergent and all other operations are excluded. CFG and ValueIds cannot
 /// change. Fresh endpoint admission is required by the owner argument types.
 ///
@@ -472,24 +473,39 @@ fn total_scalar<O>(a: &Inventory<'_, O>, at: usize, budget: &mut Budget<'_>) -> 
     budget.charge_work(4)?;
     let row = &a.operations()[at];
     let operation = row.operation;
-    if operation.results.len() != 1 || !scalar(&operation.results[0].ty) {
-        return Ok(false);
-    }
     // This allowlist is deliberately independent of the optimizer's selector.
-    let allowed = match &operation.kind {
-        OperationKind::Constant(value) => scalar(&value.ty()),
-        OperationKind::Unary {
-            op: UnaryOp::Not, ..
+    let allowed = if let OperationKind::Binary {
+        op:
+            BinaryOp::Checked(
+                CheckedBinaryOperator::Add
+                | CheckedBinaryOperator::Subtract
+                | CheckedBinaryOperator::Multiply,
+            ),
+        ..
+    } = &operation.kind
+    {
+        budget.charge_work(4)?;
+        matches!(operation.results.as_slice(), [value, overflow]
+            if scalar(&value.ty) && value.ty != Type::BOOL && overflow.ty == Type::BOOL)
+    } else {
+        if operation.results.len() != 1 || !scalar(&operation.results[0].ty) {
+            return Ok(false);
         }
-        | OperationKind::Binary {
-            op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor,
-            ..
+        match &operation.kind {
+            OperationKind::Constant(value) => scalar(&value.ty()),
+            OperationKind::Unary {
+                op: UnaryOp::Not, ..
+            }
+            | OperationKind::Binary {
+                op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor,
+                ..
+            }
+            | OperationKind::Compare { .. }
+            | OperationKind::Select { .. } => true,
+            // Includes Index/ordinary arithmetic/shift/cast/float/memory/call/intrinsic,
+            // atomics/barriers/execution/tile/wave/matrix and any future operation.
+            _ => false,
         }
-        | OperationKind::Compare { .. }
-        | OperationKind::Select { .. } => true,
-        // Includes Index/arithmetic/shift/cast/float/memory/call/intrinsic,
-        // atomics/barriers/execution/tile/wave/matrix and any future operation.
-        _ => false,
     };
     if !allowed {
         return Ok(false);

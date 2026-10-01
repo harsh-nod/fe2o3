@@ -1,4 +1,6 @@
 use super::*;
+#[path = "canonical_kir_checked_licm_v44_tests.rs"]
+mod checked_v44_tests;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work,
     CanonicalKirFunctionCoordinateV1 as FunctionCoordinate, ComparePredicate, Constant, Function,

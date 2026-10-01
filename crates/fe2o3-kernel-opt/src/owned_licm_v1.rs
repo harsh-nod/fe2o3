@@ -15,8 +15,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirControlFlowScopeErrorV1 as FlowError,
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirOperationCoordinateV1 as Site,
-    CanonicalKirUseCoordinateV1 as Use, Module, Operation, OperationKind, ScalarType, Type,
-    UnaryOp, VerifiedCanonicalKernelIrIdentityV12 as Identity,
+    CanonicalKirUseCoordinateV1 as Use, CheckedBinaryOperator, Module, Operation, OperationKind,
+    ScalarType, Type, UnaryOp, VerifiedCanonicalKernelIrIdentityV12 as Identity,
     VerifiedCanonicalKernelIrModuleV12 as Owner, with_canonical_kir_control_flow_v1,
 };
 use std::{fmt, mem::size_of};
@@ -170,8 +170,10 @@ impl OwnedLicmContinuationV1 {
     }
 }
 
-/// Hoists only total one-result Bool/fixed-width-integer constants, Not,
-/// BitAnd/BitOr/BitXor, comparisons and Select. Index, all arithmetic, shifts,
+/// Hoists total one-result Bool/fixed-width-integer constants, Not,
+/// BitAnd/BitOr/BitXor, comparisons and Select, plus fixed-width checked
+/// Add/Subtract/Multiply with their value and overflow results kept together.
+/// Index, ordinary arithmetic, shifts,
 /// casts, floating point, memory, calls, intrinsics, atomics, barriers and
 /// convergent/unknown operations are not selected. Preserves ValueIds and CFG.
 /// Natural loops use original header order and actual dedicated unconditional
@@ -661,23 +663,38 @@ fn fixed_scalar(ty: &Type) -> bool {
 fn candidate<O>(a: &Inventory<'_, O>, at: usize, budget: &mut Budget<'_>) -> Result<bool> {
     budget.charge_work(4)?;
     let row = &a.operations()[at];
-    if row.operation.results.len() != 1 || !fixed_scalar(&row.operation.results[0].ty) {
-        return Ok(false);
-    }
-    let selected = match &row.operation.kind {
-        OperationKind::Constant(value) => fixed_scalar(&value.ty()),
-        OperationKind::Unary {
-            op: UnaryOp::Not, ..
+    let selected = if let OperationKind::Binary {
+        op:
+            BinaryOp::Checked(
+                CheckedBinaryOperator::Add
+                | CheckedBinaryOperator::Subtract
+                | CheckedBinaryOperator::Multiply,
+            ),
+        ..
+    } = &row.operation.kind
+    {
+        budget.charge_work(4)?;
+        matches!(row.operation.results.as_slice(), [value, overflow]
+            if fixed_scalar(&value.ty) && value.ty != Type::BOOL && overflow.ty == Type::BOOL)
+    } else {
+        if row.operation.results.len() != 1 || !fixed_scalar(&row.operation.results[0].ty) {
+            return Ok(false);
         }
-        | OperationKind::Binary {
-            op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor,
-            ..
+        match &row.operation.kind {
+            OperationKind::Constant(value) => fixed_scalar(&value.ty()),
+            OperationKind::Unary {
+                op: UnaryOp::Not, ..
+            }
+            | OperationKind::Binary {
+                op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor,
+                ..
+            }
+            | OperationKind::Compare { .. }
+            | OperationKind::Select { .. } => true,
+            // Excludes Index/ordinary arithmetic/shifts/casts/float/memory/calls/intrinsics,
+            // atomics/barriers/execution/tile/wave/matrix and every unknown opcode.
+            _ => false,
         }
-        | OperationKind::Compare { .. }
-        | OperationKind::Select { .. } => true,
-        // Excludes Index/arithmetic/shifts/casts/float/memory/calls/intrinsics,
-        // atomics/barriers/execution/tile/wave/matrix and every unknown opcode.
-        _ => false,
     };
     if !selected {
         return Ok(false);

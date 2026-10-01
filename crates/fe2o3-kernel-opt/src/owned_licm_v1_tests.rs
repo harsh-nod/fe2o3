@@ -1,4 +1,6 @@
 use super::*;
+#[path = "owned_checked_licm_v44_tests.rs"]
+mod checked_v44_tests;
 #[path = "owned_licm_v18_tests.rs"]
 mod storage_v18_tests;
 use fe2o3_kernel_ir::{
@@ -488,7 +490,7 @@ fn excluded_index_float_arithmetic_cast_shift_and_memory_stay_at_original_sites(
             ValueDef::new(ValueId(51), u32_ty()),
             ValueDef::new(ValueId(52), Type::BOOL),
             CheckedBinaryOperator::Add,
-            ValueId(1),
+            ValueId(20),
             ValueId(11),
         ),
         op(
