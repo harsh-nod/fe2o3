@@ -45,6 +45,9 @@ run_pre_split_generic_core_reference() {
   run_step source-core-scalar-enum-payload \
     bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
       core_scalar_enum_payload_tests::genuine_scalar_enum_payload_elision_preserves_source_semantics
+  run_step source-core-typed-indirect-constants \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      typed_indirect_constant_tests::genuine_typed_indirect_constants_preserve_source_semantics
   run_step kir-sim-capability-matrix \
     cargo test --locked -p fe2o3-kir-sim --test capability_matrix
   run_step kir-sim-scalar-differential \
@@ -164,6 +167,7 @@ assert_core_source_auth_steps() {
     source-core-checked-add-refusals
     source-core-slice-get-refusals
     source-core-scalar-enum-payload
+    source-core-typed-indirect-constants
   )
   local -a parents=(
     core_checked_add_tests::genuine_core_branch_hints_preserve_boolean_values
@@ -173,6 +177,7 @@ assert_core_source_auth_steps() {
     core_checked_add_tests::checked_add_lookalikes_do_not_bypass_source_safety
     core_slice_get_tests::slice_get_lookalikes_and_other_owners_do_not_bypass_source_safety
     core_scalar_enum_payload_tests::genuine_scalar_enum_payload_elision_preserves_source_semantics
+    typed_indirect_constant_tests::genuine_typed_indirect_constants_preserve_source_semantics
   )
   local -a actual=()
   local step index expected
@@ -198,7 +203,8 @@ assert_core_source_auth_fail_fast() {
   for step in \
     source-core-branch-hints source-core-checked-add source-core-slice-get \
     source-core-branch-hint-refusals source-core-checked-add-refusals \
-    source-core-slice-get-refusals source-core-scalar-enum-payload; do
+    source-core-slice-get-refusals source-core-scalar-enum-payload \
+    source-core-typed-indirect-constants; do
     trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
     status=0
     # Exercise the real phase body in its own shell, retaining errexit semantics.
@@ -227,7 +233,7 @@ assert_codegen_lib_steps() {
   assert_equals \
     "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
     "$(step_command rustc-codegen-lib-tests)" 'backend library test command changed'
-  local expected="bash scripts/ci-cargo-test-json.sh --lib rlib,dylib ${RUSTC_CODEGEN_TEST_PACKAGE} rustc_codegen_fe2o3"
+  local expected="bash scripts/ci-cargo-test-json.sh --lib rlib\\,dylib ${RUSTC_CODEGEN_TEST_PACKAGE} rustc_codegen_fe2o3"
   expected+=" production_rustc_driver_v1::checked_output_source_v1_tests::formal_memory_diagnostic::ordinary_lds_source_retains_owner_bound_execution_discharge"
   assert_equals "${expected}" "$(step_command source-formal-execution-discharge)" \
     'formal source parent lost its exact library-kind/name/ignored selection'
