@@ -421,8 +421,8 @@ pub fn slice_get_shared(input: &[{element}], index: u64, mut output: DisjointSli
                 "Some(unsafe { input.get_unchecked(index as usize) })",
                 "*value as u64",
                 "",
-                "reaches unsafe function instance",
-                "::get_unchecked",
+                "device code reaches a panic path",
+                "::get_unchecked::precondition_check",
             ),
             (
                 "local-unsafe-body",
