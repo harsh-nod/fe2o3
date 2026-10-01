@@ -42,6 +42,7 @@ pub(in super::super) enum Event {
         destination: usize,
         local: usize,
         metadata_bits: u32,
+        moved: bool,
     },
 }
 
@@ -207,6 +208,51 @@ pub(super) fn derive(
                 destination: local_destination(context, assignment.destination(), out)?,
                 local,
                 metadata_bits,
+                moved: false,
+            }))
+        }
+        Rvalue::Unary {
+            operation: fe2o3_mir_model::semantic_mir_v1::SemanticUnaryOpV1::PointerMetadata,
+            operand,
+        } => {
+            let original = pointer(context, operand.ty(), out)?;
+            if original.kind() != PointerKind::Reference
+                || original.metadata() != PointerMetadata::SliceLength
+                || !matches!(
+                    context
+                        .types
+                        .get(original.pointee().index() as usize)
+                        .map(Type::shape),
+                    Some(Shape::Slice { .. })
+                )
+                || context.scalar(ty, out)?
+                    != (ScalarV30::Integer {
+                        signed: false,
+                        width: 64,
+                    })
+            {
+                return Err(unsupported());
+            }
+            let TypedOperand {
+                kind:
+                    OperandKind::Slice {
+                        local,
+                        moved,
+                        metadata_bits,
+                    },
+                ..
+            } = context.typed_operand(operand, out)?
+            else {
+                return Err(unsupported());
+            };
+            if metadata_bits != 64 {
+                return Err(unsupported());
+            }
+            Ok(Some(Event::Length {
+                destination: local_destination(context, assignment.destination(), out)?,
+                local,
+                metadata_bits,
+                moved,
             }))
         }
         Rvalue::Borrow { kind, place } => {
@@ -319,8 +365,8 @@ pub(super) fn emit(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
             "InvocationSourcePointerEventV36::SliceBorrow {{ destination: {destination}int, local: {local}int, metadata_bits: {metadata_bits}int, width: {bytes}int, alignment: {alignment}int, bits: {bits}int }}").map_err(|_| out.error()),
         Event::IndexBorrow { destination, local, index, index_bits, metadata_bits, bytes, alignment, bits } => write!(out,
             "InvocationSourcePointerEventV36::IndexBorrow {{ destination: {destination}int, local: {local}int, index: {index}int, index_bits: {index_bits}int, metadata_bits: {metadata_bits}int, width: {bytes}int, alignment: {alignment}int, bits: {bits}int }}").map_err(|_| out.error()),
-        Event::Length { destination, local, metadata_bits } => write!(out,
-            "InvocationSourcePointerEventV36::Length {{ destination: {destination}int, local: {local}int, metadata_bits: {metadata_bits}int }}").map_err(|_| out.error()),
+        Event::Length { destination, local, metadata_bits, moved } => write!(out,
+            "InvocationSourcePointerEventV36::Length {{ destination: {destination}int, local: {local}int, metadata_bits: {metadata_bits}int, moved: {moved} }}").map_err(|_| out.error()),
     }
 }
 
@@ -333,6 +379,7 @@ pub(super) fn headers() -> usize {
         + h::<&PointerType>()
         + h::<(usize, TypeId, u32)>()
         + h::<(u64, u64, u32)>()
+        + h::<TypedOperand>()
         + 18 * size_of::<usize>()
         + 10 * size_of::<&()>()
 }
@@ -343,7 +390,7 @@ enum InvocationSourcePointerEventV36 {
     Borrow { destination: int, access: InvocationSourceByteAccessV36, bits: int },
     SliceBorrow { destination: int, local: int, metadata_bits: int, width: int, alignment: int, bits: int },
     IndexBorrow { destination: int, local: int, index: int, index_bits: int, metadata_bits: int, width: int, alignment: int, bits: int },
-    Length { destination: int, local: int, metadata_bits: int },
+    Length { destination: int, local: int, metadata_bits: int, moved: bool },
 }
 
 open spec fn invocation_source_pointer_carrier_v36(value: MemoryValueV30, metadata_bits: int) -> bool {
@@ -390,14 +437,17 @@ open spec fn invocation_source_pointer_step_v36(
                 None => invocation_source_byte_refused_v36(source),
             }
         }
-        InvocationSourcePointerEventV36::Length { destination, local, metadata_bits } => {
-            if 0 <= local < source.machine.values.len()
-                && invocation_source_pointer_carrier_v36(source.machine.values[local], metadata_bits) {
-                match source.machine.values[local] {
-                    MemoryValueV30::Slice(slice) => invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Scalar(slice.length)),
-                    _ => invocation_source_byte_refused_v36(source),
+        InvocationSourcePointerEventV36::Length { destination, local, metadata_bits, moved } => {
+            // Metadata comes from the current original carrier. The scalar
+            // normalizer's descriptor name is never a runtime input or premise.
+            let evaluated = invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits);
+            if evaluated.source.machine.valid
+                && invocation_source_pointer_carrier_v36(evaluated.value, metadata_bits) {
+                match evaluated.value {
+                    MemoryValueV30::Slice(slice) => invocation_source_byte_put_local_v36(evaluated.source, destination, MemoryValueV30::Scalar(slice.length)),
+                    _ => invocation_source_byte_refused_v36(evaluated.source),
                 }
-            } else { invocation_source_byte_refused_v36(source) }
+            } else { invocation_source_byte_refused_v36(evaluated.source) }
         }
         InvocationSourcePointerEventV36::SliceBorrow { destination, local, metadata_bits, width, alignment, bits } => {
             if 0 <= local < source.machine.values.len() && width > 0
@@ -444,3 +494,7 @@ open spec fn invocation_source_pointer_step_v36(
 #[cfg(test)]
 #[path = "original_semantic_mir_invocation_source_pointers_v36_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_source_metadata_v40_tests.rs"]
+mod metadata_tests;
