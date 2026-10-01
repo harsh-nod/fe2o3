@@ -18,6 +18,7 @@ TESTING = ROOT / "docs/testing.md"
 ROADMAP = ROOT / "docs/implementation-roadmap-v2.md"
 EXAMPLE = ROOT / "examples/moe_expert_v1/README.md"
 CI_LOCAL = ROOT / "scripts/ci-local.sh"
+GENERIC_CORE = ROOT / "scripts/ci-generic-core.sh"
 COMPACT_PLAN_RUNNER = ROOT / "scripts/test-moe-expert-compact-plan-verus.sh"
 PRODUCTION_ABSENCE = (
     ROOT
@@ -59,11 +60,11 @@ def local_links(markdown: Path) -> list[Path]:
     return links
 
 
-def function_body(source: str, name: str, next_name: str) -> str:
+def function_body(source: str, name: str, next_name: str | None) -> str:
     start = f"{name}() {{\n"
     require(source.count(start) == 1, f"{name} CI function is absent or duplicated")
     remainder = source.split(start, 1)[1]
-    boundary = re.search(r"\n}\n\n([A-Za-z_][A-Za-z0-9_]*)\(\) \{", remainder)
+    boundary = re.search(r"\n}\n(?:\n([A-Za-z_][A-Za-z0-9_]*)\(\) \{|\Z)", remainder)
     require(boundary is not None, f"{name} CI function boundary is absent")
     require(
         boundary.group(1) == next_name,
@@ -72,16 +73,38 @@ def function_body(source: str, name: str, next_name: str) -> str:
     return remainder[: boundary.start()]
 
 
-def validate_ci_dispatch(ci_local: str) -> None:
+def validate_ci_dispatch(ci_local: str, generic_core: str) -> None:
     docs_command = (
         "  run_step bounded-moe-docs \\\n"
         "    python3 scripts/test-bounded-moe-docs.py"
     )
-    core = function_body(ci_local, "run_generic_core", "run_generic")
+    helper_source = 'source "${SCRIPT_DIR}/ci-generic-core.sh"\n'
+    require(ci_local.count(helper_source) == 1, "CI must source the generic-core helper exactly once")
+    phases = ("policy", "build", "source-simulation", "cpu", "codegen-lib", "auxiliary")
+    roster = "readonly -a GENERIC_CORE_PHASES=(\n" + "".join(f"  {phase}\n" for phase in phases) + ")\n"
+    require(generic_core.count(roster) == 1, "generic-core must retain its complete ordered phase roster")
+    for name in ("run_generic_core", "run_generic_core_phase", "run_generic_core_policy"):
+        require(f"{name}() {{\n" not in ci_local, f"CI must not shadow the helper's {name}")
+    core = function_body(generic_core, "run_generic_core", None)
+    require(
+        core == (
+            "  local phase\n"
+            '  for phase in "${GENERIC_CORE_PHASES[@]}"; do\n'
+            '    run_generic_core_phase "${phase}"\n'
+            "  done"
+        ),
+        "generic-core must dispatch every required phase once in order",
+    )
+    dispatch = function_body(generic_core, "run_generic_core_phase", "run_generic_core")
+    require(
+        dispatch.count("    policy) run_generic_core_policy ;;\n") == 1,
+        "the policy phase must delegate once to its actual owner",
+    )
+    policy = function_body(generic_core, "run_generic_core_policy", "run_generic_core_build")
     generic = function_body(ci_local, "run_generic", "run_rocm_compile")
     require(generic.count("  run_generic_core\n") == 1, "generic CI must delegate once through generic-core")
-    require(ci_local.count(docs_command) == 1, "CI must own one MoE docs check")
-    require(docs_command in core, "generic-core CI must run the MoE docs check")
+    require((ci_local + generic_core).count(docs_command) == 1, "CI must own one MoE docs check")
+    require(docs_command in policy, "the generic-core policy phase must run the MoE docs check")
     require(docs_command not in generic, "generic CI must delegate through generic-core")
     require(
         generic.count("  run_generic_core\n") == 1,
@@ -101,7 +124,10 @@ def main() -> None:
         "MoE example": EXAMPLE.read_text(encoding="utf-8"),
     }
 
-    validate_ci_dispatch(CI_LOCAL.read_text(encoding="utf-8"))
+    validate_ci_dispatch(
+        CI_LOCAL.read_text(encoding="utf-8"),
+        GENERIC_CORE.read_text(encoding="utf-8"),
+    )
 
 
     require(

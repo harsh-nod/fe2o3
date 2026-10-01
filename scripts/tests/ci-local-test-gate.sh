@@ -1020,6 +1020,9 @@ for core_step in "${STEP_NAMES[@]}"; do
 done
 assert_no_codegen_test_driver
 
+source "${TEST_SCRIPT_DIR}/ci-local-generic-core-phases.sh"
+assert_generic_core_phases
+
 STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver

@@ -36,6 +36,38 @@ This lane does not require ROCm or a GPU:
 scripts/ci-local.sh generic
 ```
 
+`generic-core` runs the same core without the separately required codegen
+integration shards. For resource-constrained hosts, its complete ordered phase
+roster and a single partial phase are available through:
+
+```text
+scripts/ci-local.sh generic-core-phases
+scripts/ci-local.sh generic-core-phase <id>
+```
+
+The phases are `policy`, `build`, `source-simulation`, `cpu`, `codegen-lib`, and
+`auxiliary`. The default `generic-core` command still executes all six in that
+order, with unchanged commands and per-step timeouts. A successful individual
+phase is not a generic-core pass. A split qualification must retain successful
+results for every phase, in order, at the same source, toolchain and
+configuration; codegen integration shards remain separately required. Use a
+distinct retained `CI_LOG_DIR` for each independent invocation.
+
+Fresh `build` invocations recheck standalone locks, and fresh `cpu` invocations
+bootstrap and authenticate the production driver. The CPU phase keeps its
+initial package partition, all selected tests and final source-projection
+rescans together. Splitting does not change package selection, test filters or
+profiles, and does not establish that a cold phase fits a particular disk cap.
+
+No new phase command performs cache cleanup. A host supervisor may reclaim
+owned reproducible Cargo caches only between complete invocations, after it
+has reaped the entire owned process tree and checked that no users remain.
+Preserve logs, source and raw evidence outside the cache being retired. A shell
+exit alone is not evidence that descendants have stopped. Bound each whole
+phase separately as well as retaining the existing per-step deadlines; do not
+apply the per-step timeout as a deadline for an entire multi-step phase. The
+existing opt-in runtime/export subtarget lifecycle remains unchanged.
+
 The target-independent generic SSA planner has a focused executable lit-style
 corpus:
 

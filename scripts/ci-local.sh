@@ -9,6 +9,7 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
 source "${SCRIPT_DIR}/ci-phase-target.sh"
+source "${SCRIPT_DIR}/ci-generic-core.sh"
 DEFAULT_CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
 if [[ "${DEFAULT_CARGO_TARGET_ROOT}" != /* ]]; then
   DEFAULT_CARGO_TARGET_ROOT="${REPO_ROOT}/${DEFAULT_CARGO_TARGET_ROOT}"
@@ -153,6 +154,8 @@ Usage: scripts/ci-local.sh <command>
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
   generic-core    Run generic validation except codegen integration shards
+  generic-core-phases  List all required generic-core phases in order
+  generic-core-phase <id>  Run one partial generic-core phase, not the full gate
   workspace-policy  Validate workspace ownership and dependency directions
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
@@ -1240,46 +1243,6 @@ run_parity_matrix_checks() {
     bash scripts/tests/hosted-parity-ci.sh
 }
 
-run_generic_core() {
-  run_workspace_dependency_policy
-  run_standalone_lockfiles
-  run_runtime_pure_rust_policy
-  run_step example-manifest \
-    cargo run --quiet --locked -p cargo-fe2o3 -- examples check
-  run_step bounded-moe-docs \
-    python3 scripts/test-bounded-moe-docs.py
-  run_shard_policy
-  run_parity_matrix_checks
-  run_format
-  run_check
-  run_backend_build
-  run_step simulation-expectation-tests \
-    python3 -I -B scripts/tests/simulation_expectation.py
-  run_step tutorial-scalar-gemm-corpus-tests \
-    python3 -I -B scripts/tests/tutorial_scalar_gemm_corpus.py
-  run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
-  run_step kernel-compile-matrix-shell-tests \
-    bash scripts/tests/kernel-compile-matrix.sh
-  run_step tutorial-cpu-reference-tests \
-    python3 -B scripts/tests/tutorial_cpu_reference.py
-  run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
-  run_step kir-sim-capability-matrix \
-    cargo test --locked -p fe2o3-kir-sim --test capability_matrix
-  run_step kir-sim-scalar-differential \
-    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
-      --seed-start 0 --cases 256
-  run_step kir-sim-semantic-differential \
-    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
-      semantic-run-v2 --seed 0
-  run_step kir-sim-f32-differential \
-    cargo run --quiet --locked -p fe2o3-sim-differential --bin fe2o3-sim-differential -- \
-      f32-run-v3
-  run_step ci-local-test-gate bash scripts/tests/ci-local-test-gate.sh
-  run_cpu_tests
-  run_rustc_codegen_lib_tests
-  run_auxiliary_tests
-}
-
 run_generic() {
   run_generic_core
   run_all_rustc_codegen_shards
@@ -1613,6 +1576,8 @@ main() {
   case "${1:-}" in
     generic) run_generic ;;
     generic-core) run_generic_core ;;
+    generic-core-phases) shift; list_generic_core_phases "$@" ;;
+    generic-core-phase) shift; run_generic_core_phase "$@" ;;
     workspace-policy) run_workspace_dependency_policy ;;
     hygiene-delta)
       if (($# != 3)); then
