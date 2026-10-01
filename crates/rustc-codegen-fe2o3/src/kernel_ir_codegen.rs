@@ -124,6 +124,10 @@ impl InertCompilerModuleTextV1 {
                 // fe2o3-hygiene: allow-panic - the V1-only accessor is cfg(test).
                 panic!("V5 binding requires the closed-tag test view")
             }
+            Some(DescriptorSourceIdentity::Mixed53(_)) => {
+                // fe2o3-hygiene: allow-panic - the V1-only accessor is cfg(test).
+                panic!("Mixed V53 binding requires the closed-tag test view")
+            }
         }
     }
 }
