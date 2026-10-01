@@ -8,7 +8,7 @@ fn source_index_reborrow_headers_v43() -> Result<usize, ArgumentResourceV1> {
         Option<usize>,
         ValueDef,
         Option<SemanticCapabilityAvailabilityV1>,
-        [&'static (); 8],
+        [&'static (); 9],
         [usize; 8],
     )>()
 }
@@ -22,7 +22,7 @@ fn source_index_reborrow_proof_v43(
 ) -> Result<Option<SourceIndexWitnessBorrowV29>, ProductionSemanticKirErrorV1> {
     references.check(budget)?;
     budget.source_reference_reserve_v29(references.plan, source_index_reborrow_headers_v43()?)?;
-    budget.source_reference_charge_v29(references.plan, 24)?;
+    budget.source_reference_charge_v29(references.plan, 32)?;
     let plan = references.plan;
     let record = plan
         .loans
@@ -45,6 +45,10 @@ fn source_index_reborrow_proof_v43(
     let origin = plan
         .origins
         .get(record.origin)
+        .ok_or_else(source_index_witness_error_v29)?;
+    let parent_origin = plan
+        .origins
+        .get(parent_record.origin)
         .ok_or_else(source_index_witness_error_v29)?;
     let function = plan
         .instances
@@ -82,12 +86,17 @@ fn source_index_reborrow_proof_v43(
         || parent_record.kind != SemanticBorrowKindV1::Shared
         || record.representation != SourceReferenceRepresentationV29::StableReferent
         || parent_record.representation != SourceReferenceRepresentationV29::StableReferent
-        || record.origin != parent_record.origin
-        || proof.origin != record.origin
+        || proof.origin != parent_record.origin
         || proof.site != parent_record.site
+        || origin.instance != parent_origin.instance
+        || origin.local != parent_origin.local
+        || origin.generation != parent_origin.generation
+        || origin.ty != parent_origin.ty
+        || origin.anchor != parent_origin.anchor
         || proof.ty != origin.ty
         || proof.ty != place.ty()
         || !origin.projections.is_empty()
+        || !parent_origin.projections.is_empty()
         || !references
             .claimed
             .get(parent)
@@ -103,7 +112,13 @@ fn source_index_reborrow_proof_v43(
     {
         return Err(source_index_witness_error_v29());
     }
-    Ok(Some(SourceIndexWitnessBorrowV29 { site, ..proof }))
+    // Each original loan owns a distinct origin row, even when a reborrow
+    // resolves to the same exact referent. Keep the child's row identity.
+    Ok(Some(SourceIndexWitnessBorrowV29 {
+        site,
+        origin: record.origin,
+        ..proof
+    }))
 }
 
 impl SourceReferenceEmissionV29<'_, '_> {

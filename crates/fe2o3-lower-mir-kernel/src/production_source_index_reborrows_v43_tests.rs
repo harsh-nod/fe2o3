@@ -1,5 +1,24 @@
 use super::*;
 
+#[test]
+fn witness_reborrow_frame_accounts_for_both_distinct_origin_rows() {
+    type Fields = (
+        Option<SourceIndexWitnessBorrowV29>,
+        Option<SemanticValueBindingV1>,
+        SourceReferenceSiteV29,
+        Option<usize>,
+        ValueDef,
+        Option<SemanticCapabilityAvailabilityV1>,
+        [&'static (); 9],
+        [usize; 8],
+    );
+    assert_eq!(
+        source_index_reborrow_headers_v43().unwrap(),
+        std::mem::size_of::<Fields>()
+            + 2 * std::mem::size_of::<Result<Fields, ProductionSemanticKirErrorV1>>()
+    );
+}
+
 fn reborrow_checks(
     references: &SourceReferenceEmissionV29<'_, '_>,
     binding: &SemanticSourceReferenceBindingV29,
@@ -15,7 +34,29 @@ fn reborrow_checks(
     );
     if let Some(parent) = record.parent {
         let parent_proof = references.index_witnesses[parent].get().unwrap();
-        assert_eq!(proof.origin, parent_proof.origin);
+        assert_eq!(proof.origin, record.origin);
+        assert_eq!(parent_proof.origin, references.plan.loans[parent].origin);
+        assert_ne!(proof.origin, parent_proof.origin);
+        let origin = &references.plan.origins[proof.origin];
+        let parent_origin = &references.plan.origins[parent_proof.origin];
+        assert_eq!(
+            (
+                origin.instance,
+                origin.local,
+                origin.generation,
+                origin.ty,
+                origin.anchor
+            ),
+            (
+                parent_origin.instance,
+                parent_origin.local,
+                parent_origin.generation,
+                parent_origin.ty,
+                parent_origin.anchor
+            )
+        );
+        assert!(origin.projections.is_empty());
+        assert!(parent_origin.projections.is_empty());
         assert_eq!(proof.availability, parent_proof.availability);
         let function = references
             .plan
@@ -45,6 +86,17 @@ fn reborrow_checks(
         let denied = source_index_reborrow_proof_v43(references, record.site, place, loan, budget);
         references.claimed[parent].set(claimed);
         assert!(denied.is_err());
+        references.index_witnesses[parent].set(Some(SourceIndexWitnessBorrowV29 {
+            origin: proof.origin,
+            ..parent_proof
+        }));
+        let substituted =
+            source_index_reborrow_proof_v43(references, record.site, place, loan, budget);
+        references.index_witnesses[parent].set(Some(parent_proof));
+        assert!(
+            substituted.is_err(),
+            "equal referent coordinates do not authorize a different loan receipt"
+        );
         for access in [
             SourceReferenceAccessV29::Read,
             SourceReferenceAccessV29::Borrow(SemanticBorrowKindV1::Mutable),
