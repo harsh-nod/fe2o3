@@ -78,10 +78,70 @@ fn exact_enum_event(body: Option<&str>, block: usize, statement: usize, kind: us
     }
     let tail = &body[offset + prefix.len()..];
     match kind {
-        0 | 1 => tail.starts_with("InvocationSourceByteEventV36::EnumConstruct("),
-        2 => tail.starts_with("InvocationSourceByteEventV36::Discriminant("),
+        0 | 1 => {
+            tail.starts_with("InvocationSourceByteEventV36::EnumConstruct(")
+                || tail.starts_with(
+                    "InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Construct {",
+                )
+        }
+        2 => {
+            tail.starts_with("InvocationSourceByteEventV36::Discriminant(")
+                || tail.starts_with(
+                    "InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Discriminant {",
+                )
+        }
         _ => false,
     }
+}
+
+#[test]
+fn original_logical_enum_census_preserves_exact_root_site_and_event_kind() {
+    let definition = |root, instance| {
+        format!(
+            "open spec fn invocation_source_byte_event_{root}_{instance}_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 1 && statement == 2 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Construct {{ variant: 0 }})) }} else if block == 2 && statement == 3 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Construct {{ variant: 1 }})) }} else if block == 4 && statement == 5 {{ Some(InvocationSourceByteEventV36::LogicalEnum(InvocationSourceLogicalEnumEventV47::Discriminant {{ source: 4 }})) }} else {{ None }}\n}}\n"
+        )
+    };
+    let complete = |source: &str| {
+        (0..2).all(|root| {
+            let body = root_events(source, root);
+            exact_enum_event(body, 1, 2, 0)
+                && exact_enum_event(body, 2, 3, 1)
+                && exact_enum_event(body, 4, 5, 2)
+        })
+    };
+    let first = definition(0, 0);
+    let both = format!("{first}{}", definition(1, 0));
+    assert!(complete(&both));
+    assert!(!complete(&first));
+    assert!(!complete(&format!("{first}{}", definition(2, 0))));
+    assert!(!complete(&format!(
+        "{}{}",
+        definition(0, 1),
+        definition(1, 1)
+    )));
+    assert!(!complete(&format!("{both}{first}")));
+    assert!(!complete(&both.replace("statement == 5", "statement == 6")));
+    assert!(!complete(&both.replace("block == 4", "block == 3")));
+    assert!(!complete(&both.replace(
+        " else { None }",
+        " else if block == 4 && statement == 5 { Some(InvocationSourceByteEventV36::Pure) } else { None }",
+    )));
+    for wrong in ["Transfer", "Extract", "Discriminant"] {
+        assert!(!complete(&both.replace(
+            "InvocationSourceLogicalEnumEventV47::Construct {",
+            &format!("InvocationSourceLogicalEnumEventV47::{wrong} {{"),
+        )));
+    }
+    for wrong in ["Transfer", "Extract", "Construct"] {
+        assert!(!complete(&both.replace(
+            "InvocationSourceLogicalEnumEventV47::Discriminant {",
+            &format!("InvocationSourceLogicalEnumEventV47::{wrong} {{"),
+        )));
+    }
+    assert!(!complete(&both.replace(
+        "Some(InvocationSourceByteEventV36::LogicalEnum(",
+        "Some(InvocationSourceByteEventV36::Pure) /* InvocationSourceByteEventV36::LogicalEnum(",
+    )));
 }
 
 pub(super) fn observe_reference_enums(
