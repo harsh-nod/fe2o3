@@ -4900,3 +4900,6 @@ mod bindings_typed_descriptor_retained_storage_v1;
 
 #[path = "production_bindings_reference_retained_storage_v1.rs"]
 mod reference_retained_storage_v1;
+
+#[path = "production_bindings_retained_storage_v1.rs"]
+pub(crate) mod bindings_retained_storage_v1;
