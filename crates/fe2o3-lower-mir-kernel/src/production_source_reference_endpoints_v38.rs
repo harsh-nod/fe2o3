@@ -126,7 +126,10 @@ impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
                 SourceSsaPhysicalV36::Value { loan: None, .. } | SourceSsaPhysicalV36::Unit => {
                     Ok(None)
                 }
-                SourceSsaPhysicalV36::Aggregate { .. } | SourceSsaPhysicalV36::Unmodeled => self
+                SourceSsaPhysicalV36::Aggregate { .. }
+                | SourceSsaPhysicalV36::Enum { .. }
+                | SourceSsaPhysicalV36::EnumVariant { .. }
+                | SourceSsaPhysicalV36::Unmodeled => self
                     .owner
                     .source
                     .missing("source reference query requires an exact modeled leaf"),

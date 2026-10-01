@@ -256,6 +256,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         }
         match endpoint.carrier_shape(out.budget)? {
             Carrier::Value => Ok(false),
+            Carrier::Enum { .. } => Err(mismatch()),
             Carrier::Unit | Carrier::Aggregate { .. } => {
                 self.slots
                     .aggregate_leaf_count(ty, out)?

@@ -12,6 +12,8 @@ struct SourceCarrierFrameV37<'a> {
     destination: Option<usize>,
 }
 
+include!("production_source_enum_carriers_v47.rs");
+
 fn source_carrier_field_type_v37(
     shape: &SemanticTypeShapeV1,
     count: usize,
@@ -114,6 +116,15 @@ fn retain_source_carrier_tree_v37(
                     start,
                     length: count,
                 }
+            } else if let Some(physical) = retain_source_enum_carriers_v47(
+                instances,
+                frame.ty,
+                frame.binding,
+                carriers,
+                &mut pending,
+                budget,
+            )? {
+                physical
             } else {
                 retain_source_carrier_leaf_v37(
                     instances,
@@ -164,6 +175,25 @@ fn source_carrier_definition_v37(
             .source
             .missing("original SSA binding has no typed carrier"),
         SourceSsaPhysicalV36::Unit => Ok(None),
+        SourceSsaPhysicalV36::Enum {
+            discriminant,
+            start,
+            length,
+            ..
+        } => {
+            let end = start
+                .checked_add(length)
+                .ok_or(ArgumentResourceV1::Arithmetic)?;
+            if carriers.get(discriminant).is_none() || carriers.get(start..end).is_none() {
+                return owner
+                    .source
+                    .missing("original enum SSA carrier range differs");
+            }
+            Ok(None)
+        }
+        SourceSsaPhysicalV36::EnumVariant { .. } => owner
+            .source
+            .missing("enum variant field roster is not a source SSA value"),
         SourceSsaPhysicalV36::Aggregate { start, length } => {
             let end = start
                 .checked_add(length)
@@ -209,6 +239,13 @@ pub enum ProductionSourceSsaCarrierShapeV37 {
         /// Number of immediate original fields, not the flattened leaf count.
         components: usize,
     },
+    /// An original enum's logical discriminant and retained payload rosters.
+    Enum {
+        /// Number of physically retained variant rosters, not all source variants.
+        payloads: usize,
+        /// Original emission refinement; not a source validity assertion.
+        known_variant: Option<u32>,
+    },
 }
 
 impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
@@ -226,7 +263,15 @@ impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
                 SourceSsaPhysicalV36::Aggregate { length, .. } => {
                     Ok(ProductionSourceSsaCarrierShapeV37::Aggregate { components: length })
                 }
-                SourceSsaPhysicalV36::Unmodeled => {
+                SourceSsaPhysicalV36::Enum {
+                    length,
+                    known_variant,
+                    ..
+                } => Ok(ProductionSourceSsaCarrierShapeV37::Enum {
+                    payloads: length,
+                    known_variant,
+                }),
+                SourceSsaPhysicalV36::EnumVariant { .. } | SourceSsaPhysicalV36::Unmodeled => {
                     self.owner.source.missing("unmodeled SSA carrier shape")
                 }
             }
@@ -295,6 +340,7 @@ fn source_carrier_tree_headers_v37() -> Result<usize, ArgumentResourceV1> {
     }
     argument_sum_v1(&[
         h::<SourceSsaComponentV37>()?,
+        source_enum_carrier_headers_v47()?,
         h::<SourceCarrierFrameV37<'_>>()?,
         h::<ProductionSourceSsaCarrierShapeV37>()?,
         h::<Vec<SourceSsaComponentV37>>()?,

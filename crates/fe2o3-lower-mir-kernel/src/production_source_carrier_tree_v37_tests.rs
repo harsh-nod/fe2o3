@@ -1,5 +1,10 @@
 use super::*;
 
+mod enum_carriers_v47_tests {
+    use super::*;
+    include!("production_source_enum_carriers_v47_tests.rs");
+}
+
 fn nested_owner() -> ProductionSemanticSsaOwnerV1 {
     let previous = typed_root_entry_rhs_owner_v18();
     let semantic = previous.source_semantic();

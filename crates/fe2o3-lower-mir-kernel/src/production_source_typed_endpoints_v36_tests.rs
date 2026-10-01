@@ -120,6 +120,20 @@ fn checked_rows(
                         endpoint.component(field, budget)?;
                     }
                 }
+                SourceSsaPhysicalV36::Enum {
+                    length,
+                    known_variant,
+                    ..
+                } => {
+                    assert_eq!(
+                        endpoint.carrier_shape(budget)?,
+                        ProductionSourceSsaCarrierShapeV37::Enum {
+                            payloads: length,
+                            known_variant
+                        }
+                    );
+                    endpoint.enum_discriminant_v47(budget)?;
+                }
                 SourceSsaPhysicalV36::Value {
                     value,
                     ty: carrier,
@@ -138,7 +152,9 @@ fn checked_rows(
                     }
                     counts[3] += usize::from(loan.is_some());
                 }
-                SourceSsaPhysicalV36::Unmodeled => unreachable!(),
+                SourceSsaPhysicalV36::EnumVariant { .. } | SourceSsaPhysicalV36::Unmodeled => {
+                    unreachable!()
+                }
             }
         }
     }

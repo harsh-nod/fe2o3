@@ -112,6 +112,17 @@ enum SourceSsaPhysicalV36 {
         start: usize,
         length: usize,
     },
+    Enum {
+        discriminant: usize,
+        start: usize,
+        length: usize,
+        known_variant: Option<u32>,
+    },
+    EnumVariant {
+        variant: u32,
+        start: usize,
+        length: usize,
+    },
     Value {
         value: ValueId,
         ty: SourceSsaCarrierTypeV36,
@@ -413,7 +424,7 @@ impl ProductionSourceSsaEndpointV36<'_, '_> {
         })())
     }
     /// Returns the exact original canonical definition, or `None` for Unit.
-    /// Aggregate endpoints require a component query and are refused here.
+    /// Structured endpoints require a component query and are refused here.
     pub fn original_definition(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -421,7 +432,12 @@ impl ProductionSourceSsaEndpointV36<'_, '_> {
         self.owner.retain_query((|| {
             self.owner.query(budget)?;
             budget.charge_work(1)?;
-            if matches!(self.physical, SourceSsaPhysicalV36::Aggregate { .. }) {
+            if matches!(
+                self.physical,
+                SourceSsaPhysicalV36::Aggregate { .. }
+                    | SourceSsaPhysicalV36::Enum { .. }
+                    | SourceSsaPhysicalV36::EnumVariant { .. }
+            ) {
                 return self
                     .owner
                     .source
@@ -438,7 +454,12 @@ impl ProductionSourceSsaEndpointV36<'_, '_> {
         self.owner.retain_query((|| {
             self.owner.query(budget)?;
             budget.charge_work(1)?;
-            if matches!(self.physical, SourceSsaPhysicalV36::Aggregate { .. }) {
+            if matches!(
+                self.physical,
+                SourceSsaPhysicalV36::Aggregate { .. }
+                    | SourceSsaPhysicalV36::Enum { .. }
+                    | SourceSsaPhysicalV36::EnumVariant { .. }
+            ) {
                 return self
                     .owner
                     .source

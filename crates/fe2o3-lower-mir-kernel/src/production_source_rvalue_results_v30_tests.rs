@@ -291,6 +291,7 @@ fn carrier_tree_header_oracle_v37() -> usize {
             + 2 * size_of::<SourceOwnedResultV18<T>>()
     }
     h::<SourceSsaComponentV37>()
+        + enum_carrier_header_oracle_v47()
         + h::<SourceCarrierFrameV37<'_>>()
         + h::<ProductionSourceSsaCarrierShapeV37>()
         + h::<Vec<SourceSsaComponentV37>>()
@@ -312,6 +313,34 @@ fn carrier_tree_header_oracle_v37() -> usize {
             &mut ArgumentBudgetV1<'_>,
         )>()
         + 10 * h::<usize>()
+}
+
+fn enum_carrier_header_oracle_v47() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    h::<Option<SourceSsaPhysicalV36>>()
+        + h::<Option<(usize, usize)>>()
+        + h::<(SemanticTypeIdV1, usize)>()
+        + h::<std::cmp::Ordering>()
+        + h::<std::collections::btree_map::Iter<'_, u32, Vec<SemanticValueBindingV1>>>()
+        + h::<
+            std::iter::Enumerate<
+                std::collections::btree_map::Iter<'_, u32, Vec<SemanticValueBindingV1>>,
+            >,
+        >()
+        + h::<std::slice::Iter<'_, SemanticTypeIdV1>>()
+        + h::<(
+            &ExecutionInstancesV29<'_>,
+            SemanticTypeIdV1,
+            &SemanticValueBindingV1,
+            &mut Vec<SourceSsaComponentV37>,
+            &mut Vec<SourceCarrierFrameV37<'_>>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()
+        + 16 * h::<usize>()
 }
 
 fn index_reader_header_oracle_v35() -> usize {
