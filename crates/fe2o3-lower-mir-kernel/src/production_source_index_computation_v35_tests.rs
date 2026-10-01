@@ -42,17 +42,14 @@ fn index_production_owner_v35() -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
-    let mut owner = ProductionSemanticSsaOwnerV1::try_new(
+    // The production entrance captures occurrences in its own paid ledger.
+    // A fixture-local capture would require an existing live reservation there.
+    ProductionSemanticSsaOwnerV1::try_new(
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap(),
         ProductionSemanticSsaLimitsV1::default(),
     )
-    .unwrap();
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
-    owner
-        .try_capture_occurrences_with_budget_v1(&mut ArgumentBudgetV1::new(&mut work, usize::MAX))
-        .unwrap();
-    owner
+    .unwrap()
 }
 
 fn with_index_relation_v35(
@@ -73,6 +70,7 @@ fn index_relation_probe_v35(
     ) -> SourceOwnedResultV18<()>,
 ) -> (SourceOwnedResultV18<()>, usize, usize, usize) {
     let owner = index_production_owner_v35();
+    assert!(owner.occurrence_storage().is_none());
     let semantic = owner.source_semantic();
     let inputs: Vec<_> = semantic
         .roots()
