@@ -1,5 +1,39 @@
 # fe2o3-kir-sim
 
+## Discover diagnostic V18 kernels
+
+Inspect the actual serialized input before constructing a simulation or debugger
+request:
+
+    fe2o3-kir-sim inspect --diagnostic-kir-v18 kernel-v18.kir
+    fe2o3-kir-sim inspect --diagnostic-kir-v18 kernel-v18.kir --output inventory.json
+
+The `fe2o3-kernel-inventory-v1` JSON report lists every canonical kernel ID,
+entry function, ordered request parameters, recursive type descriptors, results,
+declared capabilities and optional exact workgroup size. Use the reported
+`kernels[].id` in the request, not a guessed Rust function name. Request
+parameters are the canonical entry signature, not flattened native ABI
+parameters; source parameter names and additional source launch requirements
+are unavailable. `Index` remains distinct from `u64`. Null workgroup metadata
+does not imply a default, and structural argument encodings do not establish
+simulator support.
+
+The report binds the exact V18 domain-separated identity, raw-file SHA-256 and
+byte length, and reports the retained storage-layout count without projecting
+to an older IR. This route performs canonical verification only. It does not
+run simulator preflight, execute a kernel, authenticate source, infer a target,
+or grant proof, native ABI or launch authority. Unsupported versions fail
+without fallback; no request file or compiler is needed.
+
+Input uses the existing secure regular-file reader and 16 MiB cap. The original
+verification ledger remains live through metadata serialization and owner drop:
+work is capped at 2^27 units and logical storage at 256 MiB, with at most 64
+nested pointer/slice levels. Secure IO allocation remains separately bounded;
+these are not whole-process RSS limits. Escaped JSON is measured and its output
+work prepaid before publication, with a 1 MiB report cap. File output uses the
+existing durable no-replace boundary; a preflight or size refusal emits no
+report prefix. IO failure after writing stdout may leave a partial stream.
+
 ## Read-only ordered-program inspector
 
 Build or install the normal diagnostic inspection command:
@@ -372,3 +406,26 @@ and required masks. Divergent waves identify the nonparticipating local lane;
 mismatched waves identify the expected operation site; invalid tiled shuffles
 include source lane and tile width. These are logical KIR diagnostics, not GPU
 `EXEC` state, ISA simulation, or hardware-wave claims.
+
+## Diagnostic V18 CPU Input
+
+`fe2o3-kir-sim --diagnostic-kir-v18 kernel-v18.kir --request request.json`
+uses the existing generic CPU engine after exact, budgeted canonical V18
+admission. The original layout table, function roles, version, digest and byte
+length are preserved. Inert layout metadata is accepted; executable storage
+operations and storage-object types still produce explicit preflight refusals.
+
+This opt-in diagnostic path grants no source, compiler, proof, launch or hardware
+authority. It does not predict GPU performance. Persisted schedule recording,
+replay, exploration and reduction are rejected before file IO; existing formats
+and input routes are unchanged. New `kir_v18_*` error codes add precise diagnostic
+work, storage, allocation, arithmetic and accounting refusals to the existing
+error-document shape.
+
+The path/byte library loaders take the caller's verification budget and return
+an unreserved CPU-view receipt. Reserve it immediately on that same ledger and
+retain it until the entire input, or a backend consuming its module, is dropped.
+The CLI does this inside a scope that also handles errors and unwinding. File
+capture, request parsing and execution retain their separate existing limits;
+the receipt is not combined allocation or RSS accounting. Layout admission is
+bounded to 4,096 rows, 32,768 edges, depth 64 and 256 MiB objects.

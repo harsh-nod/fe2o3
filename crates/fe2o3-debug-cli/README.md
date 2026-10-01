@@ -746,3 +746,22 @@ No canonical or debugger schema version changes are made by this route.
 Existing V20 configuration/page domains and response bytes remain unchanged.
 These implementation and test descriptions are not successful-run evidence;
 actual-source CLI qualification is [recorded separately](../../../docs/physical-global-copy-cpu-debug-qualification-20260924.md).
+
+## Diagnostic V18 CPU Debugging
+
+`fe2o3-debug sim --diagnostic-kir-v18 kernel-v18.kir --request request.json --protocol jsonl --wave-width 64`
+uses the ordinary simulator capture and JSONL debugger backend. Generic scalar
+and memory kernels support logical stepping, dispatch/workgroup/wave/lane
+inspection and checkpoint memory inspection while retaining exact V18 identity
+and inert layout metadata. Configuration identity binds the typed request,
+target and capture limits, not merely input file names.
+
+The original admission ledger remains live until the input and backend have
+dropped, including stream errors and unwinding. Request, capture and protocol
+allocations retain their existing separate bounds; no process-wide accounting
+claim is made. Raw V18 carries no authenticated source-variable mapping,
+persisted replay or GPU authority. Source maps, runtime-observation mode and
+Wave32 are rejected before input IO; diagnosis V2 reports unavailable rather
+than presenting V18 as a legacy source-bound graph. Executable storage operations
+remain explicit preflight refusals. This adds V18 diagnostic admission error
+codes but does not change debugger protocol or KIR formats.
