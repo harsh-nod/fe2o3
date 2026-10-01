@@ -17,13 +17,13 @@ class Calibration(unittest.TestCase):
 
     def test_exact_production_closure_and_schemas(self):
         check.audit(self.sources)
-        self.assertEqual(check.FILES, [check.PROOF, check.BODY])
-        self.assertNotIn("producer_input_fold_body!(", self.sources[check.PROOF])
-        self.assertIn("producer_input_validate_body!(", self.sources[check.PROOF])
+        self.assertEqual(check.FILES, [check.PROOF, check.DEFINITIONS, check.BODY])
+        self.assertNotIn("producer_input_fold_body!(", self.sources[check.DEFINITIONS])
+        self.assertIn("producer_input_validate_body!(", self.sources[check.DEFINITIONS])
         check.controller_source()
 
     def test_complete_fields_and_native_forwarders(self):
-        proof = self.sources[check.PROOF]
+        proof = self.sources[check.DEFINITIONS]
         for old, new in (
             ("content_lineage: u64", "content_lineage: u32"),
             ("backend_submission: u64", "backend_submission: u32"),
@@ -32,7 +32,7 @@ class Calibration(unittest.TestCase):
         ):
             self.assertEqual(proof.count(old), 1)
             altered = dict(self.sources, **{})
-            altered[check.PROOF] = proof.replace(old, new)
+            altered[check.DEFINITIONS] = proof.replace(old, new)
             with self.assertRaises(ValueError):
                 check.schemas(altered)
         for name in ("observe_active_lookup", "observe_active_status", "observe_queued_lookup", "observe_queued_status", "observe_live", "observe_expected_credit"):
@@ -95,7 +95,7 @@ class Calibration(unittest.TestCase):
             changed[check.OWNER] = changed[check.OWNER].replace(old, new)
             with self.assertRaises(ValueError):
                 check.scan_bridges(changed)
-        proof = self.sources[check.PROOF]
+        proof = self.sources[check.DEFINITIONS]
         self.assertEqual(proof.count("decreases "), 2)
         self.assertIn("dependencies@.contains(*dependency)", proof)
         self.assertIn("sources@[j].region == source.region && sources@[j].record == source.record", proof)
@@ -103,21 +103,22 @@ class Calibration(unittest.TestCase):
     def test_measured_count_and_exact_selector_policy(self):
         self.assertEqual(check.EXPECTED_VERIFIED, 42)
         leaf = types.SimpleNamespace(LOGICAL_ERRORS={"postcondition not satisfied"})
-        self.assertEqual(set(check.SELECTION_NOTES), {check.SELECTOR, *check.SCAN_SELECTORS})
+        self.assertIsNone(check.SELECTION_NOTES)
         for focus in (check.SELECTOR, *check.SCAN_SELECTORS):
-            notes = check.selection_notes(leaf, focus)
-            self.assertEqual(notes.SELECTION_NOTES, {"verifying root module (selected functions)"})
-            self.assertEqual(notes.LOGICAL_ERRORS, leaf.LOGICAL_ERRORS)
+            with self.assertRaises(ValueError):
+                check.selection_notes(leaf, focus)
         for focus in ("*", "validate", "*Observations::reconcile", "*other_helper"):
             with self.assertRaises(ValueError):
                 check.selection_notes(leaf, focus)
-        self.assertEqual(check.campaign().EXPECTED["verified"], 42)
+        with self.assertRaises(ValueError):
+            check.campaign()
+        self.assertEqual(check.controller().EXPECTED["verified"], 42)
         original = check.EXPECTED_VERIFIED
         try:
             for value in (None, True, 0, -1, 41, 43, "42"):
                 check.EXPECTED_VERIFIED = value
                 with self.assertRaises(ValueError):
-                    check.campaign()
+                    check.controller()
         finally:
             check.EXPECTED_VERIFIED = original
 

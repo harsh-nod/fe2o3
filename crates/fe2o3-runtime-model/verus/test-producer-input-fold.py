@@ -44,14 +44,14 @@ for path, before, after in (
     (check.OWNER, ".has_expected_credit(id, device, byte_len)", ".has_expected_credit(id, device, 0)"),
     (check.PROOF, 'include!("../../fe2o3-runtime/src/context/versions/producer_input_fold_body.rs");', '// disconnected model'),
     (check.PROOF, "owner: C,", "owner: (),"),
-    (check.PROOF, "result: Result<ContextProducerReadStatusV1, E>,", "result: Result<ContextProducerReadStatusV1, ()>,"),
+    (check.SPEC, "result: Result<ContextProducerReadStatusV1, E>,", "result: Result<ContextProducerReadStatusV1, ()>,"),
     (check.PROOF, "self.records[index].take().unwrap()", "self.records[0].take().unwrap()"),
     (check.PROOF, "final(self).consumed == reached(old(self).original, 0),", "true,"),
     (check.PROOF, "out == fold_result(old(self).original, 0, ContextProducerReadStatusV1::Success,", "out == fold_result(old(self).original, 0, ContextProducerReadStatusV1::Unknown,"),
     (check.PROOF, "before == *old(self),", "before == *self,"),
 ):
     hostile(path, before, after)
-for missing in (check.OWNER, check.PROOF, check.BODY):
+for missing in (check.OWNER, check.PROOF, check.SPEC, check.BODY):
     changed = dict(sources)
     del changed[missing]
     refused(lambda: check.audit(changed), "missing required source accepted")
@@ -87,9 +87,7 @@ for name, (body, focus) in cases.items():
     need(focus == check.SELECTOR and ".clone()" not in body and "assume(" not in body and "admit(" not in body,
          "no duplicate opaque owners, invented authority, or proof-only mutation")
     refused(lambda: check.audit({**sources, check.BODY: body}), "mutant accepted as positive source")
-    notes = check.selection_notes(leaf, focus)
-    need(notes.LOGICAL_ERRORS == leaf.LOGICAL_ERRORS and len(notes.SELECTION_NOTES) == 2,
-         "unchanged logical/selection diagnostic boundary")
+    refused(lambda: check.selection_notes(leaf, focus), "uncalibrated extracted selector accepted")
 refused(lambda: check.change(original, "not a source site", "replacement"), "absent mutation accepted")
 refused(lambda: check.change(original, "return Err(E::InvalidReference);", "return Ok(status);"),
         "native validator selected as controller mutation")
@@ -100,26 +98,29 @@ for focus in ("reconcile", "*", "*Observations::validate", "*NativeOwner::quaran
     refused(lambda: check.selection_notes(leaf, focus), "out-of-scope function selector accepted")
 
 base = (check.ROOT / check.BASE).read_bytes()
-need(hashlib.sha256(base).hexdigest() == check.BASE_SHA and check.controller_source().encode() == base,
-     "campaign controller is byte-for-byte inherited")
+need(hashlib.sha256(base).hexdigest() == check.BASE_SHA
+     and check.controller_source().replace('"--multiple-errors", "1"', '"--multiple-errors", "0"').encode() == base,
+     "campaign controller has only the reporting-threshold adaptation")
 ast.parse(check.controller_source())
-need('"--no-cheating"' in check.controller_source() and '"--multiple-errors", "0"' in check.controller_source(),
-     "original strict proof command flags")
-campaign = check.campaign()
-need(campaign.FILES == [check.PROOF, check.BODY] and campaign.EXPECTED["verified"] == 13,
+need('"--no-cheating"' in check.controller_source() and '"--multiple-errors", "1"' in check.controller_source(),
+     "strict proof command flags with reporting threshold one")
+need(check.SELECTION_NOTES is None, "fresh selector calibration is pending")
+refused(check.campaign, "uncalibrated campaign launched")
+campaign = check.controller()
+need(campaign.FILES == [check.PROOF, check.SPEC, check.BODY] and campaign.EXPECTED["verified"] == 13,
      "exact accepted positive closure/count")
 count = check.EXPECTED_VERIFIED
 try:
     for value in (None, 0, -1, True, "13", 12, 14):
         check.EXPECTED_VERIFIED = value
-        refused(check.campaign, "unmeasured or malformed positive count accepted")
+        refused(check.controller, "unmeasured or malformed positive count accepted")
 finally:
     check.EXPECTED_VERIFIED = count
 
 classifier = campaign.inherited()
 verifier = {"fixture": "source-calibration-only"}
 paths = {str(check.ROOT / path) for path in check.FILES}
-notes = check.selection_notes(leaf, check.SELECTOR)
+notes = types.SimpleNamespace(LOGICAL_ERRORS=leaf.LOGICAL_ERRORS, SELECTION_NOTES={"synthetic selection note"})
 negative = {"verus": verifier, "verification-results": {
     "encountered-error": True, "encountered-vir-error": False, "verified": 0,
     "errors": 1, "is-verifying-entire-crate": False}}

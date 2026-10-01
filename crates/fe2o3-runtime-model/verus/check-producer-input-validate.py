@@ -23,7 +23,8 @@ MODEL = Path("crates/fe2o3-runtime-model/src")
 OWNER = SRC / "context/versions/producer_readers.rs"
 BODY = SRC / "context/versions/producer_input_fold_body.rs"
 PROOF = V / "context_producer_input_validate_v1.rs"
-FILES = [PROOF, BODY]
+DEFINITIONS = V / "producer_input_validate_definitions_v1.rs"
+FILES = [PROOF, DEFINITIONS, BODY]
 DECLARATIONS = [MODEL / name for name in (
     "context_version_journal/declarations.rs",
     "context_version_journal/enrollment_declarations.rs",
@@ -35,15 +36,14 @@ BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
 SOURCE_TREE_SHA = "74c99e4ce41f591fe74e6ed9af89c5b24883af40efda7546ba62531714f476bf"
 SOURCE_FILES = 332
-PROOF_SHA = "8f0b816a5d9e4e08e5598a538273a9f25bb918633543a2b71a8f778ae0727c4d"
+PROOF_SHA = "750a1ae6be20bed3c6dc9b3ebaa6cca4a869713b3187da8dabe32091b8fa5817"
+DEFINITIONS_SHA = "18628bbcab588eeae7302fe39f2ade8bbc27f8506cc9ee440bc35381e17aa58b"
 EXPECTED_VERIFIED = 42
 SELECTOR = "*Observations::validate"
 SCAN_SELECTORS = ("*producer_dependency_contains_v1", "*producer_source_pair_contains_v1")
-SELECTION_NOTES = {
-    focus: {"verifying root module (selected functions)"}
-    for focus in (SELECTOR, *SCAN_SELECTORS)
-}
+SELECTION_NOTES = None  # Extraction requires fresh selector calibration.
 MUTANT_COUNT = 38
+MUTATION_ROSTER_SHA = "d93b43692de73a490b43149b4f6016542980aa68e069775a364bd67f9b757703"
 
 
 def need(value, message):
@@ -61,7 +61,7 @@ def tree_hash(sources):
 
 
 def snapshot():
-    paths = {PROOF, *DECLARATIONS} | {p.relative_to(ROOT) for p in (ROOT / SRC).rglob("*.rs")}
+    paths = {PROOF, DEFINITIONS, *DECLARATIONS} | {p.relative_to(ROOT) for p in (ROOT / SRC).rglob("*.rs")}
     result = {}
     for path in paths:
         selected = ROOT / path
@@ -91,7 +91,7 @@ def normalized(text):
 
 
 def schemas(sources):
-    proof = sources[PROOF]
+    proof = sources[DEFINITIONS]
     pairs = {
         SRC / "context.rs": ["RuntimeMemoryKindV1", "RuntimeAccessV1", "RuntimeMemoryRegionV1", "AllocationRecordV1"],
         SRC / "context/peer_custody.rs": ["ScalarPeerDependencyV1"],
@@ -131,7 +131,7 @@ def scan_bridges(sources):
         native = block(sources[OWNER], "fn " + name + "(")
         expected = "{" + macro + "!(completion_journal_rust_syntax," + values + "," + needle + ",index,[])}"
         need(normalized(native) == expected, "one private actual scan body: " + name)
-        need(sources[PROOF].count(macro + "!(verus_exec_expr, " + values + ", " + needle + ", index,") == 1,
+        need(sources[DEFINITIONS].count(macro + "!(verus_exec_expr, " + values + ", " + needle + ", index,") == 1,
              "proof invokes the identical scan macro: " + name)
     need(".any(" not in sources[BODY], "membership no longer depends on concrete iterator default contracts")
     need(sources[BODY].count("producer_dependency_contains_v1(") == 2
@@ -140,12 +140,13 @@ def scan_bridges(sources):
 
 
 def audit(sources):
-    implementation = {p: text for p, text in sources.items() if p != PROOF}
-    need(set(sources) == ({p for p in sources if p.is_relative_to(SRC)} | set(DECLARATIONS) | {PROOF}),
+    implementation = {p: text for p, text in sources.items() if p not in (PROOF, DEFINITIONS)}
+    need(set(sources) == ({p for p in sources if p.is_relative_to(SRC)} | set(DECLARATIONS) | {PROOF, DEFINITIONS}),
          "exact runtime plus schema plus proof roster")
     need(len(implementation) == SOURCE_FILES and tree_hash(implementation) == SOURCE_TREE_SHA,
          "reviewed whole runtime and exact native value schema source")
     need(sha(sources[PROOF]) == PROOF_SHA, "reviewed exact per-input proof and contracts")
+    need(sha(sources[DEFINITIONS]) == DEFINITIONS_SHA, "reviewed complete shared validator definitions")
     schemas(sources)
     scan_bridges(sources)
     forwarders = {
@@ -162,10 +163,15 @@ def audit(sources):
     need(sources[OWNER].count('include!("producer_input_fold_body.rs");') == 1
          and sources[OWNER].count("producer_input_validate_body!(") == 1,
          "actual production includes and invokes validator")
-    proof = sources[PROOF]
+    need(sources[PROOF].count('include!("producer_input_validate_definitions_v1.rs");') == 1
+         and len(re.findall(r"\binclude!\(", sources[PROOF])) == 1,
+         "thin leaf root includes exact shared definitions")
+    proof = sources[DEFINITIONS]
     need(proof.count('include!("../../fe2o3-runtime/src/context/versions/producer_input_fold_body.rs");') == 1
          and len(re.findall(r"\binclude!\(", proof)) == 1
-         and not re.search(r"\binclude!\(", sources[BODY]), "exact two-file executable proof closure")
+         and not re.search(r"\binclude!\(", sources[BODY]), "exact three-file executable proof closure")
+    need(not re.search(r"\bmod\s+\w+\s*;", sources[PROOF] + proof + sources[BODY]),
+         "no undeclared proof module")
     need(proof.count("producer_input_validate_body!(") == 1 and "producer_input_fold_body!(" not in proof,
          "actual validator, not the earlier abstract fold theorem")
     need(not re.search(r"\b(?:assume|admit|assume_specification)\b|verifier::external|\buninterp\b", proof),
@@ -244,6 +250,9 @@ def mutations(body):
              "$index += 1;", "$index += 1;\n                if $index < $sources.len() { return false; }")
     need(len(result) == MUTANT_COUNT and len({value for value, _focus in result.values()}) == MUTANT_COUNT,
          "exact distinct actual-body mutation roster")
+    roster = {name: {"body": sha(text), "selector": focus} for name, (text, focus) in result.items()}
+    need(sha(json.dumps(roster, sort_keys=True, separators=(",", ":"))) == MUTATION_ROSTER_SHA,
+         "all 38 original native mutation names, bytes and selectors preserved")
     return result
 
 
@@ -255,13 +264,14 @@ def selection_notes(leaf, focus):
 def controller_source():
     data = (ROOT / BASE).read_bytes()
     need(hashlib.sha256(data).hexdigest() == BASE_SHA, "unchanged authenticated campaign owner")
-    return data.decode("utf-8")
+    text = data.decode("utf-8")
+    need(text.count('"--multiple-errors", "0"') == 1, "unique reporting-only profile adaptation")
+    return text.replace('"--multiple-errors", "0"', '"--multiple-errors", "1"')
 
 
-def campaign():
+def controller():
     audit(snapshot())
     need(type(EXPECTED_VERIFIED) is int and EXPECTED_VERIFIED == 42, "exact measured full positive count")
-    need(SELECTION_NOTES is not None, "selection policy not yet measured")
     module = types.ModuleType("producer_input_validate_campaign")
     module.__file__ = str(ROOT / BASE)
     sys.modules[module.__name__] = module
@@ -270,6 +280,11 @@ def campaign():
     module.EXPECTED = dict(module.EXPECTED, verified=EXPECTED_VERIFIED)
     module.mutations, module.selection_notes = mutations, selection_notes
     return module
+
+
+def campaign():
+    need(SELECTION_NOTES is not None, "selection policy not yet measured")
+    return controller()
 
 
 if __name__ == "__main__":
