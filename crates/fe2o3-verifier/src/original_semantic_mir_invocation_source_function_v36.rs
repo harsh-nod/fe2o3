@@ -435,7 +435,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                         let mut arguments = vector(call.arguments().len(), out)?;
                         for (argument, ty) in callee.abi().source_input_types().iter().enumerate() {
                             out.budget.charge_work(2)?;
-                            let operand = body.call_argument(block, argument, out)?;
+                            let operand = body.invocation_argument(plan, block, argument, out)?;
                             if operand.ty() != *ty {
                                 return Err(mismatch());
                             }

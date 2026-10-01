@@ -1,6 +1,7 @@
 //! Source entry lifetimes come from the archive, never from target Alloca order.
 
 use super::super::{Function, LocalRole, ScalarV30, Shape, Statement, invocations::InvocationPlan};
+use super::source_bytes::{descriptor_helpers, descriptor_loans::Recipe};
 use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::semantic_mir_v1::SemanticPointerMetadataV1 as Metadata;
 use std::{fmt::Write as _, mem::size_of, ops::Range};
@@ -12,6 +13,7 @@ enum Class {
     Slice(u32),
     Aggregate(u32),
     Enum(u32),
+    Descriptor(Recipe),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -177,42 +179,56 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 .types()
                 .get(declaration.ty().index() as usize)
                 .ok_or_else(mismatch)?;
-            let class = match ty.shape() {
-                Shape::Enum { .. } => {
-                    out.budget.charge_work(2)?;
-                    if instance == 0 || row.incoming.is_none() {
-                        return Err(unsupported());
-                    }
-                    Class::Enum(declaration.ty().index())
-                }
-                Shape::Pointer(pointer) => {
-                    if slots.witness_class(pointer.pointee(), out)?.is_some() {
-                        return Err(unsupported());
-                    }
-                    match pointer.metadata() {
-                        Metadata::None => Class::Pointer,
-                        Metadata::SliceLength => {
-                            Class::Slice(super::source_bytes::slice_metadata_bits_v36(ty, out)?)
+            let class = if let Some(recipe) = descriptor_helpers::entry_recipe(
+                slots,
+                plan,
+                root,
+                instance,
+                fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(
+                    u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                ),
+                out,
+            )? {
+                Class::Descriptor(recipe)
+            } else {
+                match ty.shape() {
+                    Shape::Enum { .. } => {
+                        out.budget.charge_work(2)?;
+                        if instance == 0 || row.incoming.is_none() {
+                            return Err(unsupported());
                         }
-                        _ => return Err(unsupported()),
+                        Class::Enum(declaration.ty().index())
                     }
-                }
-                _ => match slots.descriptor_slice_bits(declaration.ty(), out)? {
-                    Some(bits) => Class::Slice(bits),
-                    None => {
-                        if matches!(
-                            ty.shape(),
-                            Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. }
-                        ) && slots.aggregate_leaf_count(declaration.ty(), out)?.is_some()
-                        {
-                            Class::Aggregate(declaration.ty().index())
-                        } else {
-                            Class::Scalar(
-                                ScalarV30::from_source(semantic.types(), declaration.ty())?.width(),
-                            )
+                    Shape::Pointer(pointer) => {
+                        if slots.witness_class(pointer.pointee(), out)?.is_some() {
+                            return Err(unsupported());
+                        }
+                        match pointer.metadata() {
+                            Metadata::None => Class::Pointer,
+                            Metadata::SliceLength => {
+                                Class::Slice(super::source_bytes::slice_metadata_bits_v36(ty, out)?)
+                            }
+                            _ => return Err(unsupported()),
                         }
                     }
-                },
+                    _ => match slots.descriptor_slice_bits(declaration.ty(), out)? {
+                        Some(bits) => Class::Slice(bits),
+                        None => {
+                            if matches!(
+                                ty.shape(),
+                                Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. }
+                            ) && slots.aggregate_leaf_count(declaration.ty(), out)?.is_some()
+                            {
+                                Class::Aggregate(declaration.ty().index())
+                            } else {
+                                Class::Scalar(
+                                    ScalarV30::from_source(semantic.types(), declaration.ty())?
+                                        .width(),
+                                )
+                            }
+                        }
+                    },
+                }
             };
             let slot = slots.legacy_descriptor_by_source(
                 root,
@@ -367,6 +383,11 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             out.budget.charge_work(1)?;
             write!(out, " || !(").map_err(|_| out.error())?;
             match argument.ok_or_else(mismatch)?.class {
+                Class::Descriptor(recipe) => {
+                    write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Descriptor(value) => invocation_source_descriptor_snapshot_current_v53(source, value, ").map_err(|_| out.error())?;
+                    recipe.emit(out)?;
+                    write!(out, "), _ => false }}")
+                }
                 Class::Scalar(bits) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(value) => invocation_source_byte_value_typed_v36(value, {bits}), _ => false }}"),
                 Class::Pointer => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Pointer(_)) => true, _ => false }}"),
                 Class::Slice(bits) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Slice(slice)) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
@@ -400,6 +421,16 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         for (i, argument) in self.arguments.iter().enumerate() {
             out.budget.charge_work(1)?;
             let argument = argument.ok_or_else(mismatch)?;
+            if let Class::Descriptor(recipe) = argument.class {
+                write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Descriptor(value) => invocation_source_descriptor_snapshot_install_v53(entered, {}, ", argument.local).map_err(|_| out.error())?;
+                recipe.emit(out)?;
+                write!(
+                    out,
+                    ", value), _ => invocation_source_byte_refused_v36(entered) }};\n"
+                )
+                .map_err(|_| out.error())?;
+                continue;
+            }
             if matches!(argument.class, Class::Enum(_)) {
                 write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Enum(value) => if invocation_source_enum_snapshot_current_v50(entered, value, little_endian) {{ invocation_source_enum_install_v47(entered, {}, value) }} else {{ invocation_source_byte_refused_v36(entered) }}, _ => invocation_source_byte_refused_v36(entered) }};\n", argument.local).map_err(|_| out.error())?;
                 continue;
@@ -432,6 +463,7 @@ fn headers() -> usize {
         + h::<Option<Argument>>()
         + h::<Range<usize>>()
         + h::<Class>()
+        + descriptor_helpers::headers()
         + h::<super::slots::ObjectActivation>()
         + h::<Option<super::slots::ObjectActivation>>()
         + 32 * size_of::<usize>()

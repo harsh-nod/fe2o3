@@ -20,6 +20,8 @@ mod pointer_events;
 pub(super) use pointer_events::SOURCE_POINTERS_V36;
 #[path = "original_semantic_mir_source_aggregate_events_v42.rs"]
 mod aggregates;
+#[path = "original_semantic_mir_source_descriptor_helpers_v53.rs"]
+pub(super) mod descriptor_helpers;
 #[path = "original_semantic_mir_source_descriptor_loans_v51.rs"]
 pub(super) mod descriptor_loans;
 #[path = "original_semantic_mir_source_discriminants_v41.rs"]
@@ -162,6 +164,7 @@ pub(super) enum Value {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperandKind {
+    Descriptor(descriptor_helpers::DescriptorOperand),
     Enum {
         local: usize,
         source_type: TypeId,
@@ -642,6 +645,30 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         };
         let operand = call.arguments().get(argument).ok_or_else(mismatch)?;
         context.typed_operand(operand, out)
+    }
+
+    pub(super) fn invocation_argument(
+        &self,
+        plan: &InvocationPlan<'_, '_>,
+        block: usize,
+        argument: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<TypedOperand> {
+        match descriptor_helpers::call_argument(
+            self.slots,
+            plan,
+            self.root,
+            self.instance,
+            block,
+            argument,
+            out,
+        )? {
+            Some(operand) => Ok(TypedOperand {
+                ty: TypeId::from_index(operand.recipe.reference_type),
+                kind: OperandKind::Descriptor(operand),
+            }),
+            None => self.call_argument(block, argument, out),
+        }
     }
 
     pub(super) fn switch_operand(
@@ -1389,6 +1416,12 @@ impl TypedOperand {
     pub(super) fn emit(self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.charge_work(1)?;
         match self.kind {
+            OperandKind::Descriptor(operand) => {
+                write!(out, "InvocationSourceOperandV36::Descriptor {{ local: {}int, recipe: ", operand.local)
+                    .map_err(|_| out.error())?;
+                operand.recipe.emit(out)?;
+                write!(out, ", moved: {} }}", operand.moved).map_err(|_| out.error())
+            }
             OperandKind::Enum { local, source_type, moved } => write!(out,
                 "InvocationSourceOperandV36::Enum {{ local: {local}int, source_type: {}int, moved: {moved} }}",
                 source_type.index()).map_err(|_| out.error()),
@@ -1622,6 +1655,7 @@ fn headers() -> usize {
         + pointer_events::headers()
         + witness_transfers::headers()
         + descriptor_loans::headers()
+        + descriptor_helpers::headers()
         + slice_reads::headers()
         + discriminants::headers()
         + aggregates::headers()
@@ -1644,6 +1678,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_scalar_operands_v48.vrs"),
     include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
     include_str!("original_semantic_mir_source_descriptor_loans_v51.vrs"),
+    include_str!("original_semantic_mir_source_descriptor_snapshots_v53.vrs"),
     include_str!("original_semantic_mir_source_slice_reads_v41.vrs"),
     include_str!("original_semantic_mir_source_discriminants_v41.vrs"),
     include_str!("original_semantic_mir_source_enum_construction_v43.vrs"),
@@ -1729,6 +1764,7 @@ enum InvocationSourceByteValueV36 {
 }
 
 enum InvocationSourceOperandV36 {
+    Descriptor { local: int, recipe: InvocationSourceDescriptorRecipeV51, moved: bool },
     Enum { local: int, source_type: int, moved: bool },
     Aggregate { place: InvocationSourceAggregatePlaceV42, moved: bool },
     Scalar { value: InvocationSourceByteValueV36, bits: int },
@@ -1980,7 +2016,8 @@ open spec fn invocation_source_operand_evaluate_v36(
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteEvaluationV36 {
     match operand {
-        InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. } => InvocationSourceByteEvaluationV36 {
+        InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
+        | InvocationSourceOperandV36::Descriptor { .. } => InvocationSourceByteEvaluationV36 {
             source: invocation_source_byte_refused_v36(source), value: MemoryValueV30::Undefined },
         InvocationSourceOperandV36::Scalar { value, bits } =>
             invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian),

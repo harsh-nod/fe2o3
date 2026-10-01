@@ -3,6 +3,7 @@
 
 use super::super::{LocalRole, ScalarV30, Shape, Terminator, invocations::InvocationPlan};
 use super::source_bytes::Access;
+use super::source_bytes::{descriptor_helpers, descriptor_loans::Recipe};
 use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCallableDeclV1 as Callable, SemanticEdgeRoleV1 as EdgeRole,
@@ -19,6 +20,7 @@ enum ReturnClass {
     Slice(u32),
     Aggregate(u32),
     Enum(u32),
+    Descriptor,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -35,6 +37,8 @@ pub(super) struct SourceFrameReturn<'slots, 'view, 'source> {
     instance: usize,
     owners: Vec<u32>,
     returns: Vec<usize>,
+    descriptor_returns: Vec<Recipe>,
+    descriptor_destination: Option<Recipe>,
     locals: Range<usize>,
     returned: Option<usize>,
     destination: Option<usize>,
@@ -76,49 +80,58 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             return Err(mismatch());
         }
         let ty = function.abi().return_type();
-        let class = match semantic
-            .types()
-            .get(ty.index() as usize)
-            .map(|ty| ty.shape())
-        {
-            Some(Shape::Unit) => ReturnClass::Unit,
-            Some(Shape::Enum { .. }) => {
-                out.budget.charge_work(2)?;
-                if instance == 0 || row.incoming.is_none() {
-                    return Err(mismatch());
-                }
-                ReturnClass::Enum(ty.index())
+        let class = if descriptor_helpers::nominal_reference(slots, ty, out)? {
+            if instance == 0 || row.incoming.is_none() {
+                return Err(mismatch());
             }
-            Some(Shape::Pointer(pointer)) => match pointer.metadata() {
-                Metadata::None => ReturnClass::Pointer,
-                Metadata::SliceLength => {
-                    ReturnClass::Slice(super::source_bytes::slice_metadata_bits_v36(
-                        semantic
-                            .types()
-                            .get(ty.index() as usize)
-                            .ok_or_else(mismatch)?,
-                        out,
-                    )?)
-                }
-                _ => return Err(mismatch()),
-            },
-            _ => match slots.descriptor_slice_bits(ty, out)? {
-                Some(bits) => ReturnClass::Slice(bits),
-                None => {
-                    if matches!(
-                        semantic
-                            .types()
-                            .get(ty.index() as usize)
-                            .map(|ty| ty.shape()),
-                        Some(Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. })
-                    ) && slots.aggregate_leaf_count(ty, out)?.is_some()
-                    {
-                        ReturnClass::Aggregate(ty.index())
-                    } else {
-                        ReturnClass::Scalar(ScalarV30::from_source(semantic.types(), ty)?.width())
+            ReturnClass::Descriptor
+        } else {
+            match semantic
+                .types()
+                .get(ty.index() as usize)
+                .map(|ty| ty.shape())
+            {
+                Some(Shape::Unit) => ReturnClass::Unit,
+                Some(Shape::Enum { .. }) => {
+                    out.budget.charge_work(2)?;
+                    if instance == 0 || row.incoming.is_none() {
+                        return Err(mismatch());
                     }
+                    ReturnClass::Enum(ty.index())
                 }
-            },
+                Some(Shape::Pointer(pointer)) => match pointer.metadata() {
+                    Metadata::None => ReturnClass::Pointer,
+                    Metadata::SliceLength => {
+                        ReturnClass::Slice(super::source_bytes::slice_metadata_bits_v36(
+                            semantic
+                                .types()
+                                .get(ty.index() as usize)
+                                .ok_or_else(mismatch)?,
+                            out,
+                        )?)
+                    }
+                    _ => return Err(mismatch()),
+                },
+                _ => match slots.descriptor_slice_bits(ty, out)? {
+                    Some(bits) => ReturnClass::Slice(bits),
+                    None => {
+                        if matches!(
+                            semantic
+                                .types()
+                                .get(ty.index() as usize)
+                                .map(|ty| ty.shape()),
+                            Some(Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. })
+                        ) && slots.aggregate_leaf_count(ty, out)?.is_some()
+                        {
+                            ReturnClass::Aggregate(ty.index())
+                        } else {
+                            ReturnClass::Scalar(
+                                ScalarV30::from_source(semantic.types(), ty)?.width(),
+                            )
+                        }
+                    }
+                },
+            }
         };
         let mut returned = None;
         for (local, declaration) in function.locals().iter().enumerate() {
@@ -162,9 +175,37 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             }
         }
         let mut returns = vector(count, out)?;
+        let mut descriptor_returns = vector(
+            if class == ReturnClass::Descriptor {
+                count
+            } else {
+                0
+            },
+            out,
+        )?;
         for (block, declaration) in function.blocks().iter().enumerate() {
             out.budget.charge_work(1)?;
             if matches!(declaration.terminator().kind(), Terminator::Return) {
+                if class == ReturnClass::Descriptor {
+                    let local = returned
+                        .ok_or_else(mismatch)?
+                        .checked_sub(row.locals.start)
+                        .ok_or_else(mismatch)?;
+                    descriptor_returns.push(
+                        descriptor_helpers::return_recipe(
+                            slots,
+                            plan,
+                            root,
+                            instance,
+                            block,
+                            fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(
+                                u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                            ),
+                            out,
+                        )?
+                        .ok_or_else(mismatch)?,
+                    );
+                }
                 returns.push(
                     row.blocks
                         .start
@@ -178,6 +219,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
         }
         let mut destination_component = None;
         let mut destination_memory = None;
+        let mut descriptor_destination = None;
         let (destination, continuation) = if let Some((parent, block)) = row.incoming {
             if parent >= instance {
                 return Err(mismatch());
@@ -211,6 +253,16 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 .get(local as usize)
                 .ok_or_else(mismatch)?
                 .ty();
+            if class == ReturnClass::Descriptor {
+                descriptor_destination = Some(descriptor_helpers::destination_recipe(
+                    slots,
+                    plan,
+                    root,
+                    parent,
+                    block.index() as usize,
+                    out,
+                )?);
+            }
             if let Some(access) = super::source_bytes::object_call_destination_v42(
                 plan,
                 slots,
@@ -238,7 +290,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                         return Err(mismatch());
                     }
                 } else {
-                    if matches!(class, ReturnClass::Enum(_)) {
+                    if matches!(class, ReturnClass::Enum(_) | ReturnClass::Descriptor) {
                         return Err(mismatch());
                     }
                     let (range, result_type) = slots
@@ -323,6 +375,8 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             instance,
             owners,
             returns,
+            descriptor_returns,
+            descriptor_destination,
             locals: row.locals.clone(),
             returned,
             destination,
@@ -357,7 +411,10 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
         }
         write!(out, ")").map_err(|_| out.error())?;
         if self.class != ReturnClass::Unit
-            && !matches!(self.class, ReturnClass::Aggregate(_) | ReturnClass::Enum(_))
+            && !matches!(
+                self.class,
+                ReturnClass::Aggregate(_) | ReturnClass::Enum(_) | ReturnClass::Descriptor
+            )
         {
             let local = self.returned.ok_or_else(mismatch)?;
             write!(out, " || source.machine.values.len() <= {local} || !(")
@@ -367,7 +424,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 ReturnClass::Pointer => write!(out, "match source.machine.values[{local}] {{ MemoryValueV30::Pointer(_) => true, _ => false }}"),
                 ReturnClass::Slice(bits) => write!(out, "match source.machine.values[{local}] {{ MemoryValueV30::Slice(slice) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
                 ReturnClass::Unit => unreachable!(),
-                ReturnClass::Aggregate(_) | ReturnClass::Enum(_) => unreachable!(),
+                ReturnClass::Aggregate(_) | ReturnClass::Enum(_) | ReturnClass::Descriptor => unreachable!(),
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
@@ -380,6 +437,21 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             write!(
                 out,
                 "InvocationSourceValueV42::Carrier(MemoryValueV30::Unit)"
+            )
+            .map_err(|_| out.error())?;
+        } else if self.class == ReturnClass::Descriptor {
+            if self.descriptor_returns.len() != self.returns.len() {
+                return Err(mismatch());
+            }
+            for (block, recipe) in self.returns.iter().zip(&self.descriptor_returns) {
+                out.budget.charge_work(1)?;
+                write!(out, "if source.machine.pc == {block} {{ match invocation_source_descriptor_snapshot_v53(source, {}, ", self.returned.ok_or_else(mismatch)?).map_err(|_| out.error())?;
+                recipe.emit(out)?;
+                write!(out, ") {{ Some(value) => InvocationSourceValueV42::Descriptor(value), None => InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }} }} else ").map_err(|_| out.error())?;
+            }
+            write!(
+                out,
+                "{{ InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }}"
             )
             .map_err(|_| out.error())?;
         } else if let ReturnClass::Aggregate(ty) = self.class {
@@ -445,6 +517,14 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 } else {
                     write!(out, "None").map_err(|_| out.error())?;
                 }
+                write!(out, ", descriptor: ").map_err(|_| out.error())?;
+                if let Some(recipe) = self.descriptor_destination {
+                    write!(out, "Some(").map_err(|_| out.error())?;
+                    recipe.emit(out)?;
+                    write!(out, ")").map_err(|_| out.error())?;
+                } else {
+                    write!(out, "None").map_err(|_| out.error())?;
+                }
                 write!(out, " }})").map_err(|_| out.error())?;
             }
             None => write!(out, "None").map_err(|_| out.error())?,
@@ -464,6 +544,9 @@ fn headers() -> usize {
     h::<SourceFrameReturn<'_, '_, '_>>()
         + h::<Vec<u32>>()
         + h::<Vec<usize>>()
+        + h::<Vec<Recipe>>()
+        + h::<Option<Recipe>>()
+        + descriptor_helpers::headers()
         + h::<Range<usize>>()
         + h::<ReturnClass>()
         + h::<Option<DestinationComponent>>()
@@ -483,6 +566,7 @@ struct InvocationSourceReturnDestinationV42 {
     local: int,
     component: Option<(int, int, Seq<int>)>,
     memory: Option<(InvocationSourceByteAccessV36, int, int, int)>,
+    descriptor: Option<InvocationSourceDescriptorRecipeV51>,
 }
 
 open spec fn invocation_source_return_refused_v36(source: InvocationSourceByteStateV36)
@@ -498,6 +582,7 @@ open spec fn invocation_source_return_value_defined_v42(value: InvocationSourceV
             MemoryValueV30::Undefined => false, _ => true },
         InvocationSourceValueV42::Aggregate(value) => invocation_source_aggregate_complete_v42(value),
         InvocationSourceValueV42::Enum(value) => invocation_source_enum_complete_v47(value),
+        InvocationSourceValueV42::Descriptor(value) => matches!(value.value, MemoryValueV30::Slice(_)),
     }
 }
 
@@ -505,7 +590,15 @@ open spec fn invocation_source_return_install_v42(
     source: InvocationSourceByteStateV36, destination: InvocationSourceReturnDestinationV42,
     value: InvocationSourceValueV42, little_endian: bool,
 ) -> InvocationSourceByteStateV36 {
-    if let Some((access, root, instance, bits)) = destination.memory {
+    if let Some(recipe) = destination.descriptor {
+        if destination.component.is_some() || destination.memory.is_some() {
+            invocation_source_byte_refused_v36(source)
+        } else { match value {
+            InvocationSourceValueV42::Descriptor(value) =>
+                invocation_source_descriptor_snapshot_install_v53(source, destination.local, recipe, value),
+            _ => invocation_source_byte_refused_v36(source),
+        } }
+    } else if let Some((access, root, instance, bits)) = destination.memory {
         if destination.component.is_some()
             || access.base != InvocationSourceByteBaseV36::ObjectLocal(destination.local)
             || bits <= 0 || !(bits == 1 && access.width == 1 || bits == access.width * 8) {
@@ -527,7 +620,7 @@ open spec fn invocation_source_return_install_v42(
                 InvocationSourceValueV42::Carrier(value) => Some(InvocationSourceAggregateV42 {
                     source_type: result_type, leaves: Map::empty().insert(seq![], value) }),
                 InvocationSourceValueV42::Aggregate(value) => Some(value),
-                InvocationSourceValueV42::Enum(_) => None,
+                InvocationSourceValueV42::Enum(_) | InvocationSourceValueV42::Descriptor(_) => None,
             };
             match aggregate {
                 Some(aggregate) => if aggregate.source_type == result_type {
@@ -546,6 +639,7 @@ open spec fn invocation_source_return_install_v42(
                 if invocation_source_enum_snapshot_current_v50(source, value, little_endian) {
                     invocation_source_enum_install_v47(source, destination.local, value)
                 } else { invocation_source_byte_refused_v36(source) },
+            InvocationSourceValueV42::Descriptor(_) => invocation_source_byte_refused_v36(source),
         },
     } }
 }
@@ -559,6 +653,7 @@ open spec fn invocation_source_snapshot_escapes_frame_v42(
             value.leaves.contains_key(path) && invocation_source_value_escapes_frame_v36(value.leaves[path], frame),
         InvocationSourceValueV42::Enum(value) => exists|field: int|
             value.fields.contains_key(field) && invocation_source_value_escapes_frame_v36(value.fields[field], frame),
+        InvocationSourceValueV42::Descriptor(value) => invocation_source_descriptor_snapshot_escapes_frame_v53(value, frame),
     }
 }
 
@@ -641,6 +736,8 @@ open spec fn invocation_source_return_v36(
                 && logical.enums[local].fields.contains_key(field)
                 && invocation_source_value_escapes_frame_v36(logical.enums[local].fields[field], frame))
             || invocation_source_memory_escapes_frame_v37(source.machine.memory, frame)
+            || (exists|i: int| logical.descriptor_references.contains_key(i)
+                && logical.descriptor_references[i].loan.frame == frame)
             || (exists|i: int| logical.references.contains_key(i)
                 && logical.references[i].frame == frame);
         if escapes {
@@ -868,6 +965,8 @@ mod tests {
             usize,
             Vec<u32>,
             Vec<usize>,
+            Vec<Recipe>,
+            Option<Recipe>,
             Range<usize>,
             Option<usize>,
             Option<usize>,
@@ -890,6 +989,9 @@ mod tests {
                 + 2 * size_of::<Result<SourceFrameReturn<'_, '_, '_>>>()
                 + h::<Vec<u32>>()
                 + h::<Vec<usize>>()
+                + h::<Vec<Recipe>>()
+                + h::<Option<Recipe>>()
+                + descriptor_helpers::header_oracle()
                 + h::<Range<usize>>()
                 + h::<ReturnClass>()
                 + h::<Option<DestinationComponent>>()
