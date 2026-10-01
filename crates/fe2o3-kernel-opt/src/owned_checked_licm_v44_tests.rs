@@ -278,8 +278,11 @@ fn checked_licm_moves_overflow_only_users_and_preserves_unused_value_result() {
             with_input(module, |input, budget| {
                 let tail = prepare_owned_licm_v1(input, budget).unwrap();
                 budget.reserve_storage(tail.retained_storage()).unwrap();
-                assert_eq!(tail.input_identity(), input.identity());
-                assert_ne!(tail.output().identity(), input.identity());
+                assert_eq!(tail.input_identity(), input.canonical().identity());
+                assert_ne!(
+                    tail.output().canonical().identity(),
+                    input.canonical().identity()
+                );
                 assert_eq!(
                     tail.origins()
                         .iter()
@@ -492,7 +495,13 @@ fn checked_licm_keeps_loop_carried_pairs_and_undefined_division_at_original_site
                 &mut new,
             );
             if enabled {
-                let (x, y) = (x.unwrap_err(), y.unwrap_err());
+                let (
+                    fe2o3_kir_sim::SimulationErrorV1::Execution(x),
+                    fe2o3_kir_sim::SimulationErrorV1::Execution(y),
+                ) = (x.unwrap_err(), y.unwrap_err())
+                else {
+                    panic!("division must fail during execution, not preflight");
+                };
                 assert_eq!(x.kind, y.kind);
                 assert!(matches!(
                     x.kind,
@@ -561,8 +570,16 @@ fn checked_licm_preserves_conditional_overflow_trap_and_pretrap_effects() {
                         &mut new,
                     );
                     if enabled && trips != 0 && a + b > u32::MAX as u128 {
-                        let x = x.err().expect("original overflow traps");
-                        let y = y.err().expect("relocated overflow traps");
+                        let (
+                            fe2o3_kir_sim::SimulationErrorV1::Execution(x),
+                            fe2o3_kir_sim::SimulationErrorV1::Execution(y),
+                        ) = (
+                            x.err().expect("original overflow traps"),
+                            y.err().expect("relocated overflow traps"),
+                        )
+                        else {
+                            panic!("overflow trap must occur during execution, not preflight");
+                        };
                         assert_eq!(x.kind, y.kind);
                         assert!(matches!(
                             x.kind,
