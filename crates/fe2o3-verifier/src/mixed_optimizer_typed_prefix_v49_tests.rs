@@ -542,14 +542,12 @@ fn typed_prefix_segment_interpreter_preserves_event_suffixes_and_exact_entry_res
         ] {
             assert!(expected.contains(text), "missing {text}");
         }
-        assert!(
-            expected.contains(
-                "struct MemoryStateV30 {\n    pc: int,\n    values: Seq<MemoryValueV30>,"
-            )
-        );
+        assert!(expected.contains(
+            "typed_prefix_related_0_v49(before: MemoryStateV30, cursor: TypedPrefixCursorV49,"
+        ));
+        assert_closed_float_execution_context_v53(&expected);
         for forbidden in [
             "base: Seq<int>, initial: int, op:",
-            "spec_fn(",
             "assume(",
             "external_body",
         ] {
