@@ -13,11 +13,16 @@ fn nominal_move_fixture_v48(
     assert!(matches!(original.shape(), Shape::Aggregate(_)));
     let plain = TypeId::from_index(types.len() as u32);
     types.push(Type::new(
-        SemanticTypeIdentityV1::from_sha256([181; 32]),
-        SemanticLayoutIdentityV1::from_sha256([181; 32]),
+        SemanticTypeIdentityV1::from_sha256([233; 32]),
+        SemanticLayoutIdentityV1::from_sha256([233; 32]),
         original.layout().clone(),
         original.shape().clone(),
     ));
+    assert!(
+        types
+            .windows(2)
+            .all(|pair| { pair[0].identity().as_bytes() < pair[1].identity().as_bytes() })
+    );
     let mut locals = helper.locals().to_vec();
     let moved = locals.len() as u32;
     for (ordinal, ty) in [witness, plain].into_iter().enumerate() {
