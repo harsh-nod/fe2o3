@@ -193,8 +193,11 @@ fn scoped_storage_actual_v29<'a>(
     Ok(actual)
 }
 
+include!("production_scoped_storage_constructor_views_v44.rs");
+
 fn scoped_storage_operand_types_v29(
     plan: &SourceReferencePlanV29<'_, '_>,
+    anchors: &ScopedMemoryAnchorsV29,
     payload: &ScopedObjectPayloadV29,
     operation: &Operation,
     index: &CallSpliceIndexV1<'_>,
@@ -216,6 +219,9 @@ fn scoped_storage_operand_types_v29(
     payload
         .role
         .visit_endpoints(|endpoint| {
+            if scoped_storage_constructor_schema_v44(plan, anchors, endpoint, budget)? {
+                return Ok(());
+            }
             layouts.check_selected_schema(
                 plan.instances.owner(),
                 endpoint.root_type,
@@ -635,6 +641,7 @@ impl ScopedStorageTransportV29 {
                         payload.check_operation(row.operation, budget)?;
                         let (inputs, output) = scoped_storage_operand_types_v29(
                             references,
+                            anchors,
                             payload,
                             row.operation,
                             &index,

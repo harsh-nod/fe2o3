@@ -3,6 +3,8 @@ thread_local! {
     static ENUM_CONSTRUCTION_OBSERVED_V43: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+include!("production_scoped_storage_constructor_views_v44_tests.rs");
+
 fn original_enum_construction_owner_v43() -> ProductionSemanticSsaOwnerV1 {
     let fields = ENUM_CONSTRUCTION_FIELDS_V43.get();
     let base = original_tag_emission_owner();
