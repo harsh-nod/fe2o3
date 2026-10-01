@@ -44,9 +44,7 @@ impl RosterFixture {
                 }
             })
             .collect::<Vec<_>>();
-        let order = (0..roots.len())
-            .map(|ordinal| ordinal as u32)
-            .collect::<Vec<_>>();
+        let order = (0..roots.len()).collect::<Vec<_>>();
         let bytes = build_lineage_roster_v2(
             &[31; 32],
             neutral,
