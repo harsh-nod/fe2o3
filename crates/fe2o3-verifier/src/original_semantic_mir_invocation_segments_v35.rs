@@ -376,6 +376,18 @@ fn call_arguments(
             }
             ExpressionV30::Constant(value) => ExpressionV30::Constant(value),
             ExpressionV30::Not(input) => ExpressionV30::Not(edge(input)?),
+            ExpressionV30::Select {
+                condition,
+                true_value,
+                false_value,
+            } => {
+                out.budget.charge_work(1)?;
+                ExpressionV30::Select {
+                    condition: edge(condition)?,
+                    true_value: edge(true_value)?,
+                    false_value: edge(false_value)?,
+                }
+            }
             ExpressionV30::Binary {
                 operation,
                 left,

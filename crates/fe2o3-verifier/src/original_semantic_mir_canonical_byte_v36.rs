@@ -22,9 +22,9 @@ const EMPTY: NodeV30 = NodeV30 {
 pub(crate) struct CanonicalByteScalarV30<'inventory, 'owner> {
     inventory: &'inventory Inventory<'owner>,
     operation: usize,
-    inputs: [(usize, ScalarV30); 2],
+    inputs: [(usize, ScalarV30); 3],
     arguments: usize,
-    nodes: [NodeV30; 3],
+    nodes: [NodeV30; 4],
     destination: usize,
     required: usize,
     slot: usize,
@@ -46,7 +46,7 @@ impl<'inventory, 'owner> CanonicalByteScalarV30<'inventory, 'owner> {
         out.budget.reserve_storage(headers())?;
         out.budget.charge_work(2)?;
         let row = inventory.operations().get(operation).ok_or_else(mismatch)?;
-        if row.results.len() != 1 || !row.effects.is_empty() || row.operands.len() > 2 {
+        if row.results.len() != 1 || !row.effects.is_empty() || row.operands.len() > 3 {
             #[cfg(test)]
             eprintln!(
                 "canonical byte scalar rejected operation {operation} at {:?}: kind {:?}, results {:?}, operands {:?}, effects {:?}",
@@ -77,8 +77,8 @@ impl<'inventory, 'owner> CanonicalByteScalarV30<'inventory, 'owner> {
             return Err(mismatch());
         }
         let scalar = scalar_type(destination.ty, width)?;
-        let mut nodes = [EMPTY; 3];
-        let mut inputs = [(0, ScalarV30::Unit); 2];
+        let mut nodes = [EMPTY; 4];
+        let mut inputs = [(0, ScalarV30::Unit); 3];
         for (ordinal, index) in row.operands.clone().enumerate() {
             let input = inventory.uses().get(index).ok_or_else(mismatch)?;
             let definition = inventory
@@ -104,7 +104,7 @@ impl<'inventory, 'owner> CanonicalByteScalarV30<'inventory, 'owner> {
         let arguments = row.operands.len();
         let expression = canonical::operation_expression(
             &row.operation.kind,
-            &[0, 1][..arguments],
+            &[0, 1, 2][..arguments],
             scalar,
             &nodes[..arguments],
         )?;
@@ -265,8 +265,8 @@ fn graph_key(namespace: usize, operation: usize) -> Result<usize> {
 fn headers() -> usize {
     size_of::<CanonicalByteScalarV30<'_, '_>>()
         + size_of::<Result<CanonicalByteScalarV30<'_, '_>>>()
-        + size_of::<[NodeV30; 3]>()
-        + size_of::<[(usize, ScalarV30); 2]>()
+        + size_of::<[NodeV30; 4]>()
+        + size_of::<[(usize, ScalarV30); 3]>()
         + 2 * size_of::<ByteMemoryStateNamesV30<'_>>()
         + size_of::<std::ops::Range<usize>>()
         + size_of::<std::iter::Enumerate<std::ops::Range<usize>>>()
@@ -282,6 +282,9 @@ fn headers() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod select_v54 {
+        include!("original_semantic_mir_canonical_select_v54_tests.rs");
+    }
     use fe2o3_kernel_ir::{
         BasicBlock, BinaryOp, BlockId, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work, ComparePredicate, Constant, Function, Module,
@@ -668,8 +671,8 @@ mod tests {
         )>();
         let expected = size_of::<CanonicalByteScalarV30<'_, '_>>()
             + size_of::<Result<CanonicalByteScalarV30<'_, '_>>>()
-            + size_of::<[NodeV30; 3]>()
-            + size_of::<[(usize, ScalarV30); 2]>()
+            + size_of::<[NodeV30; 4]>()
+            + size_of::<[(usize, ScalarV30); 3]>()
             + 2 * size_of::<ByteMemoryStateNamesV30<'_>>()
             + size_of::<std::ops::Range<usize>>()
             + size_of::<std::iter::Enumerate<std::ops::Range<usize>>>()

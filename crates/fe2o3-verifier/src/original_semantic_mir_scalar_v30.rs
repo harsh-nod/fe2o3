@@ -152,6 +152,11 @@ pub(super) enum ExpressionV30 {
     Argument(u32),
     Constant(u128),
     Not(usize),
+    Select {
+        condition: usize,
+        true_value: usize,
+        false_value: usize,
+    },
     Binary {
         operation: OperatorV30,
         left: usize,
@@ -226,6 +231,29 @@ fn emit_graph_v30<I: Iterator<Item = Result<Option<usize>>>>(
         match node.expression {
             ExpressionV30::Argument(argument) => emit!(out, "base[{argument}]"),
             ExpressionV30::Constant(bits) => emit!(out, "{bits}int"),
+            ExpressionV30::Select {
+                condition,
+                true_value,
+                false_value,
+            } => {
+                out.budget.charge_work(4)?;
+                if condition >= index
+                    || true_value >= index
+                    || false_value >= index
+                    || nodes[condition].scalar != ScalarV30::Bool
+                    || nodes[true_value].scalar != node.scalar
+                    || nodes[false_value].scalar != node.scalar
+                    || node.scalar == ScalarV30::Unit
+                {
+                    return Err(Error::Statement(
+                        "original MIR select types or dependency order differ",
+                    ));
+                }
+                emit!(
+                    out,
+                    "if m{condition} == 1int {{ m{true_value} }} else {{ m{false_value} }}"
+                );
+            }
             ExpressionV30::Not(input) => {
                 if node.scalar == ScalarV30::Bool {
                     emit!(out, "if m{input} == 1int {{ 0int }} else {{ 1int }}");

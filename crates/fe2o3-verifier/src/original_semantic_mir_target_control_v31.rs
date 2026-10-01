@@ -71,13 +71,13 @@ impl TargetBlock {
             let operation = &inventory.operations()[at];
             if operation.results.len() != 1
                 || !operation.effects.is_empty()
-                || operation.operands.len() > 2
+                || operation.operands.len() > 3
             {
                 return Err(Error::Statement(
                     "original MIR target control operation effect or arity is not modeled",
                 ));
             }
-            let mut inputs = [0usize; 2];
+            let mut inputs = [0usize; 3];
             for (ordinal, operand) in operation.operands.clone().enumerate() {
                 inputs[ordinal] = read(
                     &mut program,
@@ -337,7 +337,7 @@ fn headers() -> usize {
         + size_of::<Vec<(u128, usize)>>()
         + size_of::<TargetEdge>()
         + size_of::<TargetBranch>()
-        + size_of::<[usize; 2]>()
+        + size_of::<[usize; 3]>()
         + size_of::<NodeV30>()
         + size_of::<Option<usize>>()
         + size_of::<&Inventory<'_>>()
