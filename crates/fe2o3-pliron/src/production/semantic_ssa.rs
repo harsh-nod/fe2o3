@@ -994,3 +994,5 @@ use partial_moves::{projected_local_move_metrics_v1, validate_partial_moves_v1};
 
 #[cfg(test)]
 mod tests;
+
+mod function_plan_storage_v1;
