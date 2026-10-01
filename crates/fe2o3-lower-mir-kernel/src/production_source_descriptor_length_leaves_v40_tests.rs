@@ -108,17 +108,36 @@ fn descriptor_length_leaf_run_v40(
                                     .map_err(source_pointer_inventory_error_v18)?
                                     .unwrap();
                                 assert_eq!(input.ty, &Type::INDEX);
-                                let element = descriptor_length_source_scalar_v30(
-                                    original, archived, budget,
-                                )?
-                                .unwrap();
-                                let (_, receiver) = descriptor_length_operation_v30(
-                                    original,
+                                let SliceDefinition::Result {
+                                    operation,
+                                    result: 0,
+                                } = input.coordinate
+                                else {
+                                    panic!("exact metadata result coordinate");
+                                };
+                                let operation = source_operation_row_v18(
                                     original.inventory,
-                                    input.coordinate,
-                                    element,
+                                    operation,
                                     budget,
-                                )?;
+                                )?
+                                .operation;
+                                let OperationKind::SliceLength { slice: receiver } = operation.kind
+                                else {
+                                    panic!("exact metadata operation");
+                                };
+                                assert_eq!(operation.results.len(), 1);
+                                let receiver_type = original
+                                    .inventory
+                                    .definition_for_value(
+                                        original.inventory.functions()[physical].coordinate,
+                                        receiver,
+                                        budget,
+                                    )
+                                    .map_err(source_pointer_inventory_error_v18)?
+                                    .unwrap()
+                                    .ty;
+                                assert!(matches!(receiver_type, Type::Slice(slice)
+                                    if slice.element.as_ref() == &Type::Scalar(ScalarType::U32)));
                                 original
                                     .check_descriptor_operand_v30(0, locator, receiver, budget)?;
                                 let expected =
