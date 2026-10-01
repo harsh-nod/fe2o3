@@ -30,8 +30,9 @@ use std::{
 #[path = "mixed_optimizer_typed_source_request_v50.rs"]
 mod typed_source_v50;
 pub use typed_source_v50::{
-    ExecutedTypedSourceTailV50, PreparedTypedSourceTailExecutionV50, PreparedTypedSourceTailV50,
-    TypedSourceTailSubjectV50, prepare_typed_source_tail_v50,
+    ExecutedTypedSourceTailV50, InertTypedSourceReceiptV53, PreparedTypedSourceTailExecutionV50,
+    PreparedTypedSourceTailV50, TypedSourceTailSubjectV50, check_inert_typed_source_receipt_v53,
+    prepare_typed_source_tail_v50,
 };
 
 #[path = "mixed_optimizer_relocation_cfg_refinement_v28.rs"]

@@ -12,6 +12,9 @@ use fe2o3_hsaco_finalize::{
 use fe2o3_verifier::ExecutedTypedSourceTailV50 as Executed;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
+#[path = "production_pipeline_source_mixed_publish_v53.rs"]
+mod publish_v53;
+
 fn mismatch(detail: &'static str) -> Error {
     MixedPublicationErrorV28::Binding(detail).into()
 }

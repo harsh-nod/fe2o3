@@ -5,6 +5,10 @@
 #[path = "mixed_optimizer_typed_source_lineage_v50.rs"]
 mod lineage;
 
+#[path = "mixed_optimizer_typed_source_receipt_view_v53.rs"]
+mod inert_view;
+pub use inert_view::{InertTypedSourceReceiptV53, check_inert_typed_source_receipt_v53};
+
 use super::*;
 use crate::functional_refinement_receipt_v2::{
     MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2 as OUTPUT_LIMIT,

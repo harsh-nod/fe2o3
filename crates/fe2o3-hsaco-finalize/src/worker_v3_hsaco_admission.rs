@@ -1298,6 +1298,7 @@ fn inspect_descriptor_section(
             .map_err(|_| WorkerV3HsacoInspectionError::DefinedSymbolInspection)?;
         if name == DEVICE_DESCRIPTOR_SECTION_NAME
             || name == fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V3
+            || name == fe2o3_kernel_descriptor::COMPILER_MIXED_DESCRIPTOR_SECTION_V53
         {
             return Ok(
                 CanonicalDescriptorSectionObservationV1::PresentButNotFinalizedByThisInspection,

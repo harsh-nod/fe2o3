@@ -4,8 +4,8 @@ use crate::{
     InspectedProtectedWorkerV3HsacoV1, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
     NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V5,
     PreparedFinalizedNominalWorkerHsacoV3, PreparedFinalizedNominalWorkerHsacoV4,
-    PreparedFinalizedNominalWorkerHsacoV5, PreparedFinalizedProtectedWorkerV3HsacoV1,
-    WorkerV3HsacoPublicationErrorV1 as E,
+    PreparedFinalizedNominalWorkerHsacoV5, PreparedFinalizedNominalWorkerHsacoV53,
+    PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoPublicationErrorV1 as E,
 };
 use fe2o3_kernel_descriptor::{CanonicalCodeObjectDigest, DEVICE_DESCRIPTOR_MAGIC};
 
@@ -15,11 +15,15 @@ pub(crate) enum DescriptorSchema {
     NominalV3,
     NominalV4,
     NominalV5,
+    MixedV53,
 }
 impl DescriptorSchema {
     pub(crate) fn from_abi(bytes: &[u8]) -> Result<Self, E> {
         // This selects the strict codec only. The finalizer still validates the
         // complete receipt against the actual descriptor and artifact.
+        if bytes.get(..10) == Some(b"FE2O3D53\x35\x00".as_slice()) {
+            return Ok(Self::MixedV53);
+        }
         if bytes.get(..8) != Some(DEVICE_DESCRIPTOR_MAGIC.as_slice()) {
             return Err(E::DescriptorSchemaMismatch);
         }
@@ -52,6 +56,20 @@ impl DescriptorSchema {
                 &mut |_| Ok::<_, std::convert::Infallible>(()),
             )
             .map_err(E::NominalArtifactV5),
+            Self::MixedV53 => crate::mixed_worker_resources_v53::derive_raw_default(bytes)
+                .map_err(E::MixedArtifactV53),
+        }
+    }
+
+    pub(crate) fn derive_raw_on_mixed_budget(
+        self,
+        bytes: &[u8],
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<Vec<u8>, E> {
+        match self {
+            Self::MixedV53 => crate::derive_unfinalized_nominal_hsaco_on_budget_v53(bytes, budget)
+                .map_err(E::MixedArtifactV53),
+            _ => self.derive_raw(bytes),
         }
     }
 
@@ -61,7 +79,7 @@ impl DescriptorSchema {
         match Self::from_abi(bytes)? {
             Self::V1 => Ok(Self::V1),
             Self::NominalV3 => Ok(Self::NominalV3),
-            Self::NominalV4 | Self::NominalV5 => Err(E::DescriptorSchemaMismatch),
+            Self::NominalV4 | Self::NominalV5 | Self::MixedV53 => Err(E::DescriptorSchemaMismatch),
         }
     }
 }
@@ -72,6 +90,7 @@ pub(crate) enum FinalizedOwner {
     NominalV3(PreparedFinalizedNominalWorkerHsacoV3),
     NominalV4(PreparedFinalizedNominalWorkerHsacoV4),
     NominalV5(PreparedFinalizedNominalWorkerHsacoV5),
+    MixedV53(PreparedFinalizedNominalWorkerHsacoV53),
 }
 impl FinalizedOwner {
     pub(crate) fn view(&self) -> FinalizedRef<'_> {
@@ -80,6 +99,7 @@ impl FinalizedOwner {
             Self::NominalV3(v) => FinalizedRef::NominalV3(v),
             Self::NominalV4(v) => FinalizedRef::NominalV4(v),
             Self::NominalV5(v) => FinalizedRef::NominalV5(v),
+            Self::MixedV53(v) => FinalizedRef::MixedV53(v),
         }
     }
     pub(crate) fn into_v1(self) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, E> {
@@ -115,6 +135,14 @@ impl FinalizedOwner {
             Self::NominalV3(v) => v.into_compact_replay_parts(),
             Self::NominalV4(v) => v.into_compact_replay_parts(),
             Self::NominalV5(v) => v.into_compact_replay_parts(),
+            Self::MixedV53(v) => v.into_compact_replay_parts(),
+        }
+    }
+
+    pub(crate) fn into_mixed_v53(self) -> Result<PreparedFinalizedNominalWorkerHsacoV53, E> {
+        match self {
+            Self::MixedV53(value) => Ok(value),
+            _ => Err(E::DescriptorSchemaMismatch),
         }
     }
 }
@@ -125,6 +153,7 @@ pub(crate) enum FinalizedRef<'a> {
     NominalV3(&'a PreparedFinalizedNominalWorkerHsacoV3),
     NominalV4(&'a PreparedFinalizedNominalWorkerHsacoV4),
     NominalV5(&'a PreparedFinalizedNominalWorkerHsacoV5),
+    MixedV53(&'a PreparedFinalizedNominalWorkerHsacoV53),
 }
 impl<'a> FinalizedRef<'a> {
     pub(crate) fn schema(self) -> DescriptorSchema {
@@ -133,6 +162,7 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(_) => DescriptorSchema::NominalV3,
             Self::NominalV4(_) => DescriptorSchema::NominalV4,
             Self::NominalV5(_) => DescriptorSchema::NominalV5,
+            Self::MixedV53(_) => DescriptorSchema::MixedV53,
         }
     }
     pub(crate) fn raw(self) -> &'a InspectedProtectedWorkerV3HsacoV1 {
@@ -141,6 +171,7 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.raw(),
             Self::NominalV4(v) => v.raw(),
             Self::NominalV5(v) => v.raw(),
+            Self::MixedV53(v) => v.raw(),
         }
     }
     pub(crate) fn identity(self) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
@@ -149,6 +180,7 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.identity(),
             Self::NominalV4(v) => v.identity(),
             Self::NominalV5(v) => v.identity(),
+            Self::MixedV53(v) => v.identity(),
         }
     }
     pub(crate) fn output_identity(self) -> ContentIdentityV1 {
@@ -157,6 +189,7 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.output_identity(),
             Self::NominalV4(v) => v.output_identity(),
             Self::NominalV5(v) => v.output_identity(),
+            Self::MixedV53(v) => v.output_identity(),
         }
     }
     pub(crate) fn descriptor_identity(self) -> ContentIdentityV1 {
@@ -165,6 +198,7 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.descriptor_identity(),
             Self::NominalV4(v) => v.descriptor_identity(),
             Self::NominalV5(v) => v.descriptor_identity(),
+            Self::MixedV53(v) => v.descriptor_identity(),
         }
     }
     pub(crate) fn canonical_digest(self) -> CanonicalCodeObjectDigest {
@@ -173,6 +207,7 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.finalized().digest(),
             Self::NominalV4(v) => v.finalized().digest(),
             Self::NominalV5(v) => v.finalized().digest(),
+            Self::MixedV53(v) => v.finalized().digest(),
         }
     }
     pub(crate) fn bytes(self) -> &'a [u8] {
@@ -181,6 +216,7 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.finalized().as_bytes(),
             Self::NominalV4(v) => v.finalized().as_bytes(),
             Self::NominalV5(v) => v.finalized().as_bytes(),
+            Self::MixedV53(v) => v.finalized().as_bytes(),
         }
     }
 }

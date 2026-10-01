@@ -1,14 +1,15 @@
-//! Typed nominal facades over the existing durable replay and publication gate.
+//! Exact mixed-contract facades over durable Worker replay and publication.
+//! Artifact publication preserves conditional premises; it is not proof or launch admission.
 use super::*;
-use crate::PreparedFinalizedNominalWorkerHsacoV3;
+use crate::PreparedFinalizedNominalWorkerHsacoV53;
 type E = WorkerV3HsacoPublicationErrorV1;
 
 /// Move-only nominal intent; cannot be passed to the descriptor-V1 persistence API.
 #[derive(Debug)]
-pub struct PreparedNominalWorkerPublicationV3 {
+pub struct PreparedMixedWorkerPublicationV53 {
     prepared: PreparedProtectedWorkerV3HsacoPublicationV1,
 }
-impl PreparedNominalWorkerPublicationV3 {
+impl PreparedMixedWorkerPublicationV53 {
     pub fn publication_intent(&self) -> SealedProtectedWorkerV3HsacoPublicationIntentV1 {
         self.prepared.intent
     }
@@ -28,17 +29,17 @@ impl PreparedNominalWorkerPublicationV3 {
 
 /// Independently reconstructed nominal lineage. Recovery is not compiler/proof authority.
 /// ```compile_fail
-/// use fe2o3_hsaco_finalize::RecoveredNominalWorkerPublicationV3;
-/// fn duplicate(value: RecoveredNominalWorkerPublicationV3) { let _ = value.clone(); }
+/// use fe2o3_hsaco_finalize::RecoveredMixedWorkerPublicationV53;
+/// fn duplicate(value: RecoveredMixedWorkerPublicationV53) { let _ = value.clone(); }
 /// ```
 #[derive(Debug)]
-pub struct RecoveredNominalWorkerPublicationV3 {
+pub struct RecoveredMixedWorkerPublicationV53 {
     outcome: WorkerV3PublicationIntentOutcomeV1,
-    record: WorkerV3PublicationIntentRecordV1,
-    finalized: PreparedFinalizedNominalWorkerHsacoV3,
-    intent: SealedProtectedWorkerV3HsacoPublicationIntentV1,
+    pub(super) record: WorkerV3PublicationIntentRecordV1,
+    pub(super) finalized: PreparedFinalizedNominalWorkerHsacoV53,
+    pub(super) intent: SealedProtectedWorkerV3HsacoPublicationIntentV1,
 }
-impl RecoveredNominalWorkerPublicationV3 {
+impl RecoveredMixedWorkerPublicationV53 {
     pub const fn outcome(&self) -> WorkerV3PublicationIntentOutcomeV1 {
         self.outcome
     }
@@ -51,7 +52,7 @@ impl RecoveredNominalWorkerPublicationV3 {
     pub fn exact_finalized_hsaco(&self) -> &[u8] {
         self.finalized.finalized().as_bytes()
     }
-    pub fn finalized_evidence(&self) -> &PreparedFinalizedNominalWorkerHsacoV3 {
+    pub fn finalized_evidence(&self) -> &PreparedFinalizedNominalWorkerHsacoV53 {
         &self.finalized
     }
     pub fn compiler_execution_subject_v1(
@@ -69,7 +70,7 @@ impl RecoveredNominalWorkerPublicationV3 {
         &self,
         closure: CompilerClosureV2,
     ) -> Result<WorkerV3PublicationBindingV1, E> {
-        RecoveredPublicationRef::NominalV3(self).publication_binding(closure)
+        RecoveredPublicationRef::MixedV53(self).publication_binding(closure)
     }
     pub const fn grants_publication_authority(&self) -> bool {
         false
@@ -85,12 +86,12 @@ impl RecoveredNominalWorkerPublicationV3 {
 /// Exact published nominal occurrence with its non-clone current-publication lease.
 /// Publication does not authenticate compiler execution or grant GPU launch authority.
 #[derive(Debug)]
-pub struct PublishedNominalWorkerHsacoV3 {
-    recovered: RecoveredNominalWorkerPublicationV3,
+pub struct PublishedMixedWorkerHsacoV53 {
+    recovered: RecoveredMixedWorkerPublicationV53,
     publication: AttemptScopedHsacoPublicationResultV3,
 }
-impl PublishedNominalWorkerHsacoV3 {
-    pub const fn recovered_evidence(&self) -> &RecoveredNominalWorkerPublicationV3 {
+impl PublishedMixedWorkerHsacoV53 {
+    pub const fn recovered_evidence(&self) -> &RecoveredMixedWorkerPublicationV53 {
         &self.recovered
     }
     pub const fn publication_result(&self) -> &AttemptScopedHsacoPublicationResultV3 {
@@ -123,7 +124,7 @@ impl PublishedNominalWorkerHsacoV3 {
         let claim = self.publication.published_claim().clone();
         let current_lease = self.publication.into_current_lease();
         let replay =
-            crate::prepare_nominal_worker_compact_finalizer_replay_v3(self.recovered.finalized)?
+            crate::prepare_mixed_worker_compact_finalizer_replay_v53(self.recovered.finalized)?
                 .into_parts();
         Ok(PublishedProtectedWorkerV3LoadEnvelopePartsV1 {
             replay,
@@ -134,47 +135,47 @@ impl PublishedNominalWorkerHsacoV3 {
     }
 }
 
-pub fn prepare_nominal_worker_publication_v3(
+pub fn prepare_mixed_worker_publication_v53(
     producer: &ProducerIdentity,
-    finalized: PreparedFinalizedNominalWorkerHsacoV3,
-) -> Result<PreparedNominalWorkerPublicationV3, E> {
-    Ok(PreparedNominalWorkerPublicationV3 {
-        prepared: prepare_versioned_publication(producer, FinalizedOwner::NominalV3(finalized))?,
+    finalized: PreparedFinalizedNominalWorkerHsacoV53,
+) -> Result<PreparedMixedWorkerPublicationV53, E> {
+    Ok(PreparedMixedWorkerPublicationV53 {
+        prepared: prepare_versioned_publication(producer, FinalizedOwner::MixedV53(finalized))?,
     })
 }
-pub fn persist_prepared_nominal_worker_publication_v3(
+pub fn persist_prepared_mixed_worker_publication_v53(
     output_dir: &Path,
     producer: &ProducerIdentity,
-    prepared: PreparedNominalWorkerPublicationV3,
-) -> Result<RecoveredNominalWorkerPublicationV3, E> {
+    prepared: PreparedMixedWorkerPublicationV53,
+) -> Result<RecoveredMixedWorkerPublicationV53, E> {
     validate_nominal_recovery(
         producer,
         persist_versioned_publication(output_dir, producer, prepared.prepared)?,
     )
 }
-pub fn recover_nominal_worker_publication_v3(
+pub fn recover_mixed_worker_publication_v53(
     output_dir: &Path,
     producer: &ProducerIdentity,
     attempt: BuildAttempt,
-) -> Result<RecoveredNominalWorkerPublicationV3, E> {
+) -> Result<RecoveredMixedWorkerPublicationV53, E> {
     validate_nominal_recovery(
         producer,
         recover_worker_v3_publication_intent_v1(output_dir, producer, attempt)?,
     )
 }
-pub fn publish_recovered_nominal_worker_hsaco_v3(
+pub fn publish_recovered_mixed_worker_hsaco_v53(
     output_dir: &Path,
     producer: &ProducerIdentity,
     compiler_closure: CompilerClosureV2,
-    recovered: RecoveredNominalWorkerPublicationV3,
-) -> Result<PublishedNominalWorkerHsacoV3, E> {
+    recovered: RecoveredMixedWorkerPublicationV53,
+) -> Result<PublishedMixedWorkerHsacoV53, E> {
     let publication = publish_recovered_versioned(
         output_dir,
         producer,
         compiler_closure,
-        RecoveredPublicationRef::NominalV3(&recovered),
+        RecoveredPublicationRef::MixedV53(&recovered),
     )?;
-    Ok(PublishedNominalWorkerHsacoV3 {
+    Ok(PublishedMixedWorkerHsacoV53 {
         recovered,
         publication,
     })
@@ -183,78 +184,17 @@ pub fn publish_recovered_nominal_worker_hsaco_v3(
 fn validate_nominal_recovery(
     producer: &ProducerIdentity,
     recovered: RecoveredWorkerV3PublicationIntentV1,
-) -> Result<RecoveredNominalWorkerPublicationV3, E> {
+) -> Result<RecoveredMixedWorkerPublicationV53, E> {
     let ValidatedRecoveredPublication {
         outcome,
         record,
         finalized,
         intent,
     } = validate_recovered_versioned(producer, recovered)?;
-    Ok(RecoveredNominalWorkerPublicationV3 {
+    Ok(RecoveredMixedWorkerPublicationV53 {
         outcome,
         record,
-        finalized: finalized.into_nominal()?,
+        finalized: finalized.into_mixed_v53()?,
         intent,
     })
-}
-
-/// Only complete typed recovery owners reach the one publication authority bridge.
-#[derive(Clone, Copy)]
-pub(super) enum RecoveredPublicationRef<'a> {
-    V1(&'a RecoveredProtectedWorkerV3HsacoPublicationV1),
-    NominalV3(&'a RecoveredNominalWorkerPublicationV3),
-    MixedV53(&'a super::mixed_v53::RecoveredMixedWorkerPublicationV53),
-}
-impl<'a> RecoveredPublicationRef<'a> {
-    pub(super) fn intent(self) -> SealedProtectedWorkerV3HsacoPublicationIntentV1 {
-        match self {
-            Self::V1(v) => v.intent,
-            Self::NominalV3(v) => v.intent,
-            Self::MixedV53(v) => v.intent,
-        }
-    }
-    fn record(self) -> WorkerV3PublicationIntentRecordV1 {
-        match self {
-            Self::V1(v) => v.record,
-            Self::NominalV3(v) => v.record,
-            Self::MixedV53(v) => v.record,
-        }
-    }
-    pub(super) fn finalized(self) -> FinalizedRef<'a> {
-        match self {
-            Self::V1(v) => FinalizedRef::V1(&v.finalized),
-            Self::NominalV3(v) => FinalizedRef::NominalV3(&v.finalized),
-            Self::MixedV53(v) => FinalizedRef::MixedV53(&v.finalized),
-        }
-    }
-    pub(super) fn publication_binding(
-        self,
-        compiler_closure: CompilerClosureV2,
-    ) -> Result<WorkerV3PublicationBindingV1, E> {
-        if compiler_closure
-            != self
-                .finalized()
-                .raw()
-                .binding_expectation()
-                .compiler_closure()
-        {
-            return Err(E::CompilerClosureMismatch);
-        }
-        let intent = self.intent();
-        let raw = intent.raw_output_identity();
-        let finalized = intent.finalized_output_identity();
-        WorkerV3PublicationBindingV1::new(
-            compiler_closure,
-            self.record().identity().as_bytes(),
-            *intent.finalization_identity().as_bytes(),
-            *intent.source_evidence_identity().as_bytes(),
-            *intent.binding_identity().as_bytes(),
-            *intent.raw_inspection_identity().as_bytes(),
-            *raw.sha256(),
-            raw.byte_len(),
-            *finalized.sha256(),
-            finalized.byte_len(),
-        )
-        .map_err(E::PublicationBinding)
-    }
 }

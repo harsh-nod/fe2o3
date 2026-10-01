@@ -1,4 +1,6 @@
 //! Synthetic, inert strict-worker transactions. No native or proof authority.
+#[path = "mixed_v53.rs"]
+mod mixed_v53;
 use super::nominal_v3::with_descriptor_section_version;
 use super::*;
 use fe2o3_hsaco_finalize::{

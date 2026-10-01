@@ -709,6 +709,23 @@ pub(crate) fn calculate_nominal_worker_finalized_identity_v5(
     )
 }
 
+pub(crate) fn calculate_nominal_worker_finalized_identity_v53(
+    raw: &InspectedProtectedWorkerV3HsacoV1,
+    finalized: &crate::FinalizedNominalHsacoV53,
+    output: ContentIdentityV1,
+    descriptor: ContentIdentityV1,
+) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
+    calculate_worker_finalized_identity(
+        raw,
+        finalized.as_bytes(),
+        finalized.digest(),
+        output,
+        finalized.descriptor_bytes(),
+        descriptor,
+        b"FE2O3/MIXED-WORKER-FINALIZED/V53\0",
+    )
+}
+
 fn calculate_worker_finalized_identity(
     raw: &InspectedProtectedWorkerV3HsacoV1,
     finalized_bytes: &[u8],
