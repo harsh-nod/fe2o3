@@ -178,7 +178,7 @@ open spec fn invocation_copy_windows_related_v39(
             == target.live[actual.allocation].initialized[actual.byte_offset + i]
         && (source.live[original.allocation].initialized[original.byte_offset + i] ==>
             invocation_byte_token_related_v37(source.live[original.allocation].bytes[original.byte_offset + i],
-                target.live[actual.allocation].bytes[actual.byte_offset + i], map)))
+                target.live[actual.allocation].bytes[actual.byte_offset + i], map, source, target)))
     && (forall|i: int| 0 <= i < width ==> {
         let source_cells = source.live[original.allocation].relocations;
         let target_cells = target.live[actual.allocation].relocations;
@@ -188,7 +188,7 @@ open spec fn invocation_copy_windows_related_v39(
             && i + target_cells[actual.byte_offset + i].width <= width;
         source_complete == target_complete && (source_complete ==>
             invocation_relocation_related_v37(source_cells[original.byte_offset + i],
-                target_cells[actual.byte_offset + i], map))
+                target_cells[actual.byte_offset + i], map, source, target))
     })
 }
 
@@ -209,19 +209,25 @@ open spec fn invocation_observed_effect_related_v39(
             && target.after == (MemoryStateV30 { pc: -2, ..target.before }),
         (MemoryOperationEffectV30::Read { address: sa, width: sw, alignment: ss, value: sv },
          MemoryOperationEffectV30::Read { address: ta, width: tw, alignment: ts, value: tv }) =>
-            sw == tw && ss == ts && invocation_value_related_v36(sa, ta, before_map)
-                && invocation_value_related_v36(sv, tv, before_map),
+            sw == tw && ss == ts && invocation_value_related_v36(sa, ta, before_map,
+                source.before.machine.memory, target.before.memory)
+                && invocation_value_related_v36(sv, tv, before_map,
+                    source.before.machine.memory, target.before.memory),
         (MemoryOperationEffectV30::Write { address: sa, width: sw, alignment: ss, value: sv },
          MemoryOperationEffectV30::Write { address: ta, width: tw, alignment: ts, value: tv }) =>
-            sw == tw && ss == ts && invocation_value_related_v36(sa, ta, before_map)
-                && invocation_value_related_v36(sv, tv, before_map),
+            sw == tw && ss == ts && invocation_value_related_v36(sa, ta, before_map,
+                source.before.machine.memory, target.before.memory)
+                && invocation_value_related_v36(sv, tv, before_map,
+                    source.before.machine.memory, target.before.memory),
         (MemoryOperationEffectV30::Copy { source: ss, destination: sd, width: sw,
             source_alignment: ssa, destination_alignment: sda, nonoverlapping: sn },
          MemoryOperationEffectV30::Copy { source: ts, destination: td, width: tw,
             source_alignment: tsa, destination_alignment: tda, nonoverlapping: tn }) =>
             sw == tw && ssa == tsa && sda == tda && sn == tn
-            && invocation_value_related_v36(ss, ts, before_map)
-            && invocation_value_related_v36(sd, td, before_map)
+            && invocation_value_related_v36(ss, ts, before_map,
+                source.before.machine.memory, target.before.memory)
+            && invocation_value_related_v36(sd, td, before_map,
+                source.before.machine.memory, target.before.memory)
             && match (ss, sd, ts, td) {
                 (MemoryValueV30::Pointer(ss), MemoryValueV30::Pointer(sd),
                  MemoryValueV30::Pointer(ts), MemoryValueV30::Pointer(td)) =>

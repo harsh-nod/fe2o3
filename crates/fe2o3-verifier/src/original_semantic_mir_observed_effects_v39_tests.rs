@@ -93,7 +93,7 @@ fn original_mir_effect_relation_uses_nominal_payloads_and_independent_copy_snaps
     for required in [
         "source.before.machine.valid && source.after.machine.valid",
         "byte_observation_snapshots_valid_v39(target)",
-        "invocation_value_related_v36(sv, tv, before_map)",
+        "invocation_value_related_v36(sv, tv, before_map,\n                    source.before.machine.memory, target.before.memory)",
         "source.before.machine.memory, ss, sd, sw, ssa, sda, sn",
         "target.before.memory, ts, td, tw, tsa, tda, tn",
         "target.before.memory, ss, ts, sw, before_map)",
@@ -109,6 +109,8 @@ fn original_mir_effect_relation_uses_nominal_payloads_and_independent_copy_snaps
         "invocation_byte_token_related_v37",
         "source_complete == target_complete",
         "invocation_relocation_related_v37",
+        "target.live[actual.allocation].bytes[actual.byte_offset + i], map, source, target)",
+        "target_cells[actual.byte_offset + i], map, source, target)",
     ] {
         assert!(copied.contains(required), "{required}");
     }

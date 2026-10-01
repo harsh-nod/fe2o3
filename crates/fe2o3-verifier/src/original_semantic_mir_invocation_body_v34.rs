@@ -2,6 +2,7 @@
 //! Logical local ranges are not an allocation namespace. This source model
 //! does not discharge actual call splicing or any memory interpretation.
 use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInterpretationContextV39 as ByteContext;
+use crate::mixed_optimizer_refinement_v26::semantics::target_view_contracts_v38::TargetByteViewContractsV38 as TargetContracts;
 
 use super::{
     Error, Resource, Result, Writer,
@@ -71,6 +72,8 @@ fn mismatch() -> Error {
 // An explicit policy ceiling on sparse partition boundaries, not object bytes
 // or a claim that an incomplete copy closure has been proved complete.
 const MAX_PRIVATE_BYTE_BOUNDARIES_V38: usize = 1 << 20;
+const SOURCE_TAG_NAMESPACE_V40: usize = 0;
+const TARGET_TAG_NAMESPACE_V40: usize = 1;
 
 pub(crate) fn generate_refinement_v36(
     relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
@@ -84,10 +87,12 @@ pub(crate) fn generate_refinement_v36(
     let source = relation.source(out.budget)?;
     let plan = super::invocations::InvocationPlan::derive(source, out)?;
     let slots = slots::SourceSlots::derive(&plan, relation, out)?;
+    let inventory = relation.inventory(out.budget)?;
+    let contracts = TargetContracts::derive(inventory, width, out)?;
+    let tag_pairs = slots::SourceTagPairsV40::derive(&slots, &contracts, out)?;
     let mut byte_source = source_function::SourceByteProgram::derive(&plan, &slots, out)?;
     let byte_bindings = byte_bindings::SourceByteBindings::derive(&slots, out)?;
     let paired = paired::PairedInvocations::derive(&plan, &byte_source, width, out)?;
-    let inventory = relation.inventory(out.budget)?;
     let (physical, physical_storage) =
         fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
             inventory,
@@ -104,6 +109,7 @@ pub(crate) fn generate_refinement_v36(
     }
     let mut byte_actual = vector(roots, out)?;
     for root in 0..roots {
+        tag_pairs.check(out)?;
         let (_, function) = source.root(root, out.budget)?;
         out.budget.charge_work(1)?;
         byte_actual.push(super::super::byte_function_v30::ByteFunctionV30::derive(
@@ -112,7 +118,7 @@ pub(crate) fn generate_refinement_v36(
             fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
                 u32::try_from(function).map_err(|_| Resource::Arithmetic)?,
             ),
-            ByteContext::native(width),
+            ByteContext::classified(width, &contracts, TARGET_TAG_NAMESPACE_V40),
             &slots,
             out,
         )?);
@@ -126,12 +132,13 @@ pub(crate) fn generate_refinement_v36(
     super::relation::emit_prelude(out)?;
     write!(
         out,
-        "{}{}{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}{}{}",
         super::super::structured_state_v30::STATE,
         super::control_generate::SOURCE_STATE,
         super::super::cfg_trace::PRELUDE,
         super::super::byte_memory_v30::BYTE_MEMORY_V30,
         bytes::INVOCATION_BYTES_V36,
+        bytes::CLASSIFIED_VIEW_LAWS_V40,
         source_bytes::SOURCE_BYTES_V36,
         source_bytes::SOURCE_POINTERS_V36,
         source_frames::SOURCE_FRAMES_V36,
@@ -139,6 +146,10 @@ pub(crate) fn generate_refinement_v36(
         effects::INVOCATION_EFFECTS_V36,
     )
     .map_err(|_| out.error())?;
+    tag_pairs.check(out)?;
+    slots.emit_source_tag_contracts(SOURCE_TAG_NAMESPACE_V40, out)?;
+    contracts.emit(TARGET_TAG_NAMESPACE_V40, out)?;
+    tag_pairs.emit(SOURCE_TAG_NAMESPACE_V40, TARGET_TAG_NAMESPACE_V40, out)?;
     slots.emit(out)?;
     byte_source.emit(out)?;
     byte_bindings.emit(out)?;
@@ -212,6 +223,10 @@ fn generation_headers_v36() -> usize {
         + h::<&mut Writer<'_, '_>>()
         + h::<super::invocations::InvocationPlan<'_, '_>>()
         + h::<slots::SourceSlots<'_, '_>>()
+        + h::<TargetContracts<'_, '_>>()
+        + h::<slots::SourceTagPairsV40<'_, '_, '_, '_, '_>>()
+        + h::<&TargetContracts<'_, '_>>()
+        + h::<&slots::SourceTagPairsV40<'_, '_, '_, '_, '_>>()
         + h::<source_function::SourceByteProgram<'_, '_, '_>>()
         + h::<byte_bindings::SourceByteBindings<'_, '_, '_>>()
         + h::<
@@ -243,7 +258,7 @@ fn generation_headers_v36() -> usize {
         + h::<Option<fe2o3_mir_model::semantic_mir_v1::SemanticKernelLaunchBoundsV1>>()
         + h::<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>()
         + h::<[u32; 3]>()
-        + 6 * size_of::<&()>()
+        + 7 * size_of::<&()>()
         + 8 * size_of::<usize>()
 }
 
@@ -428,3 +443,7 @@ fn headers() -> usize {
 #[cfg(test)]
 #[path = "original_semantic_mir_invocation_body_v34_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_classified_production_v40_tests.rs"]
+mod classified_tests;

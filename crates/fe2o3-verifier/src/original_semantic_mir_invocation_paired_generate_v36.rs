@@ -83,7 +83,7 @@ fn actual_value(
             )?;
             emit!(
                 out,
-                " && invocation_value_related_v36(original, actual, map)"
+                " && invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory)"
             );
         }
         None => emit!(out, " original == MemoryValueV30::Unit"),
@@ -245,7 +245,7 @@ fn observed(
                 } else {
                     emit!(
                         out,
-                        " if original == MemoryValueV30::Unit {{ target_result.returned.len() == 0 }} else {{ target_result.returned.len() == 1 && invocation_value_related_v36(original, target_result.returned[0], map) }}"
+                        " if original == MemoryValueV30::Unit {{ target_result.returned.len() == 0 }} else {{ target_result.returned.len() == 1 && invocation_value_related_v36(original, target_result.returned[0], map, source.machine.memory, target.memory) }}"
                     );
                 }
                 emit!(out, " }}, None => false }}");
@@ -307,7 +307,7 @@ fn initial(
     }
     emit!(
         out,
-        ";\n MemoryStateV30 {{ pc: {}, values, memory: external, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({}, execution), valid: invocation_paired_native_inputs_{root}_v38(arguments, external, execution) }}\n}}\nopen spec fn invocation_paired_ready_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationActualBoundaryV36 {{ invocation_byte_follow_{root}_v36(invocation_paired_raw_initial_{root}_v36(arguments, external, execution), {}nat) }}\nproof fn invocation_paired_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)\n requires invocation_paired_native_inputs_{root}_v38(arguments, external, execution),\n ensures invocation_paired_related_{root}_v36(invocation_source_initial_runtime_{root}_v36(arguments, external, execution), invocation_paired_ready_{root}_v36(arguments, external, execution).state),\n invocation_actual_observations_v39(invocation_paired_ready_{root}_v36(arguments, external, execution).observations).len() == 0,\n{{ invocation_paired_source_ready_{root}_v38(arguments, external, execution); }}\n",
+        ";\n let admitted = invocation_paired_native_inputs_{root}_v38(arguments, external, execution);\n let memory = if admitted {{ ByteMemoryV30 {{ view_contracts: byte_target_view_contracts_1_v38(invocation_runtime_little_endian_v36()), ..external }} }} else {{ external }};\n MemoryStateV30 {{ pc: {}, values, memory, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({}, execution), valid: admitted }}\n}}\nopen spec fn invocation_paired_ready_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationActualBoundaryV36 {{ invocation_byte_follow_{root}_v36(invocation_paired_raw_initial_{root}_v36(arguments, external, execution), {}nat) }}\nproof fn invocation_paired_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)\n requires invocation_paired_native_inputs_{root}_v38(arguments, external, execution),\n ensures invocation_paired_related_{root}_v36(invocation_source_initial_runtime_{root}_v36(arguments, external, execution), invocation_paired_ready_{root}_v36(arguments, external, execution).state),\n invocation_actual_observations_v39(invocation_paired_ready_{root}_v36(arguments, external, execution).observations).len() == 0,\n{{ invocation_paired_source_ready_{root}_v38(arguments, external, execution); }}\n",
         row.blocks.start,
         row.owner,
         row.blocks.len()

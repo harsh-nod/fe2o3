@@ -42,15 +42,24 @@ open spec fn invocation_binding_disjoint_v36(
         || b.target.byte_offset + b.extent <= a.target.byte_offset
 }
 
+open spec fn invocation_view_registries_related_v40(
+    source: ByteMemoryV30, target: ByteMemoryV30,
+) -> bool {
+    source.view_contracts == invocation_source_view_contracts_0_v39(invocation_runtime_little_endian_v36())
+        && target.view_contracts == byte_target_view_contracts_1_v38(invocation_runtime_little_endian_v36())
+        && byte_view_contracts_shape_v38(source.view_contracts)
+        && byte_view_contracts_shape_v38(target.view_contracts)
+}
+
 open spec fn invocation_byte_heaps_related_v36(
     source: ByteMemoryV30, target: ByteMemoryV30, map: InvocationByteMapV36,
 ) -> bool {
     byte_memory_well_formed_v30(source) && byte_memory_well_formed_v30(target)
-    && byte_default_view_contracts_v38(source) && byte_default_view_contracts_v38(target)
+    && invocation_view_registries_related_v40(source, target)
     && (forall|a: MemoryAllocationV30| !invocation_private_allocation_v36(a) ==>
         (source.live.contains_key(a) == target.live.contains_key(a))
         && (source.live.contains_key(a) ==>
-            invocation_external_bytes_related_v38(source.live[a], target.live[a], map)))
+            invocation_external_bytes_related_v38(source.live[a], target.live[a], map, source, target)))
     && (forall|a: MemoryAllocationV30| map.private.contains_key(a) <==>
         source.live.contains_key(a) && invocation_private_allocation_v36(a))
     && (forall|a: MemoryAllocationV30| map.private.contains_key(a) ==> {
@@ -62,13 +71,13 @@ open spec fn invocation_byte_heaps_related_v36(
             && (forall|i: int| 0 <= i < binding.extent && source.live[a].initialized[i] ==>
                 target.live[binding.target.allocation].initialized[binding.target.byte_offset + i]
                 && invocation_byte_token_related_v37(source.live[a].bytes[i],
-                    target.live[binding.target.allocation].bytes[binding.target.byte_offset + i], map))
+                    target.live[binding.target.allocation].bytes[binding.target.byte_offset + i], map, source, target))
             && (forall|at: int| source.live[a].relocations.contains_key(at) ==> {
                 let source_cell = source.live[a].relocations[at];
                 let target_at = binding.target.byte_offset + at;
                 target.live[binding.target.allocation].relocations.contains_key(target_at)
                 && invocation_relocation_related_v37(source_cell,
-                    target.live[binding.target.allocation].relocations[target_at], map)
+                    target.live[binding.target.allocation].relocations[target_at], map, source, target)
             })
     })
     && (forall|a: MemoryAllocationV30, b: MemoryAllocationV30|
@@ -92,7 +101,7 @@ open spec fn invocation_byte_states_related_v36(
         && invocation_byte_heaps_related_v36(source.memory, target.memory, map)
 }
 
-open spec fn invocation_pointer_related_v36(
+open spec fn invocation_pointer_coordinates_related_v40(
     source: MemoryPointerV30, target: MemoryPointerV30, map: InvocationByteMapV36,
 ) -> bool {
     if invocation_private_allocation_v36(source.allocation) {
@@ -100,78 +109,126 @@ open spec fn invocation_pointer_related_v36(
             && 0 <= source.byte_offset <= map.private[source.allocation].extent
             && target.allocation == map.private[source.allocation].target.allocation
             && target.byte_offset == map.private[source.allocation].target.byte_offset + source.byte_offset
-            && invocation_pointer_views_related_v38(source, target,
-                map.private[source.allocation].target.byte_offset)
-    } else { source.allocation == target.allocation && source.byte_offset == target.byte_offset
-        && invocation_pointer_views_related_v38(source, target, 0) }
+    } else { source.allocation == target.allocation && source.byte_offset == target.byte_offset }
 }
 
-// Epochs number writes in each independent execution. They are not heap bytes
-// or cross-execution identities. Authenticated guarded views need a separate
-// source/physical tag-contract relation and are deliberately not admitted here.
-open spec fn invocation_pointer_views_related_v38(
-    source: MemoryPointerV30, target: MemoryPointerV30, offset: int,
+open spec fn invocation_pointer_related_v36(
+    source: MemoryPointerV30, target: MemoryPointerV30, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
+) -> bool {
+    invocation_pointer_coordinates_related_v40(source, target, map)
+        && invocation_pointer_views_related_v40(source, target, map, source_memory, target_memory)
+}
+
+// The generated predicate is closed over the original owner-backed endpoint
+// census. Numeric type/layout equality, equal bytes and equal epochs are not
+// source/target correspondence evidence.
+open spec fn invocation_tag_guards_related_v40(
+    source: MemoryTagGuardV38, target: MemoryTagGuardV38, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
+) -> bool {
+    invocation_view_registries_related_v40(source_memory, target_memory)
+        && source.owner == source_memory.view_contracts.owner
+        && target.owner == target_memory.view_contracts.owner
+        && source_memory.view_contracts.rows.contains_key(source.contract)
+        && target_memory.view_contracts.rows.contains_key(target.contract)
+        && invocation_source_target_tag_pair_0_1_v40(source.contract, target.contract)
+        && source.variant == target.variant
+        && source.epochs.len() == source_memory.view_contracts.rows[source.contract].tag_width
+        && target.epochs.len() == target_memory.view_contracts.rows[target.contract].tag_width
+        && invocation_pointer_coordinates_related_v40(
+            MemoryPointerV30 { allocation: source.allocation, byte_offset: source.object_start, view: None },
+            MemoryPointerV30 { allocation: target.allocation, byte_offset: target.object_start, view: None }, map)
+        && (byte_tag_guard_current_v38(source_memory, source)
+            == byte_tag_guard_current_v38(target_memory, target))
+}
+
+// Every enclosing guard is retained in both directions. Repeated equivalent
+// guards may differ in count, but no independent obligation can disappear.
+// Epochs are compared only to their own execution's current heap.
+open spec fn invocation_pointer_views_related_v40(
+    source: MemoryPointerV30, target: MemoryPointerV30, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
     byte_pointer_view_shape_v38(source) && byte_pointer_view_shape_v38(target)
         && match (source.view, target.view) {
             (None, None) => true,
-            (Some(a), Some(b)) => a.guards.len() == 0 && b.guards.len() == 0
-                && b.lower == a.lower + offset && b.upper == a.upper + offset,
+            (Some(a), Some(b)) => {
+                let offset = target.byte_offset - source.byte_offset;
+                b.lower == a.lower + offset && b.upper == a.upper + offset
+                    && (forall|i: int| 0 <= i < a.guards.len() ==>
+                        exists|j: int| 0 <= j < b.guards.len()
+                            && invocation_tag_guards_related_v40(a.guards[i], b.guards[j], map,
+                                source_memory, target_memory))
+                    && (forall|j: int| 0 <= j < b.guards.len() ==>
+                        exists|i: int| 0 <= i < a.guards.len()
+                            && invocation_tag_guards_related_v40(a.guards[i], b.guards[j], map,
+                                source_memory, target_memory))
+            },
             _ => false,
         }
 }
 
 open spec fn invocation_external_bytes_related_v38(
     source: MemoryBytesV30, target: MemoryBytesV30, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
     source.base_alignment == target.base_alignment
         && source.bytes.len() == target.bytes.len()
         && source.initialized == target.initialized
         && (forall|i: int| 0 <= i < source.bytes.len() && source.initialized[i] ==>
-            invocation_byte_token_related_v37(source.bytes[i], target.bytes[i], map))
+            invocation_byte_token_related_v37(source.bytes[i], target.bytes[i], map, source_memory, target_memory))
         && source.relocations.dom() == target.relocations.dom()
         && (forall|i: int| source.relocations.contains_key(i) ==>
-            invocation_relocation_related_v37(source.relocations[i], target.relocations[i], map))
+            invocation_relocation_related_v37(source.relocations[i], target.relocations[i], map, source_memory, target_memory))
 }
 
+// This is component metadata irrelevance with the two interpretation heaps
+// fixed. Renaming a live heap's epochs also requires transporting its guards.
 proof fn invocation_external_epoch_renaming_v38(
     source: MemoryBytesV30, target: MemoryBytesV30, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
     clock: int, epochs: Seq<int>,
 )
-    ensures invocation_external_bytes_related_v38(source, target, map)
+    ensures invocation_external_bytes_related_v38(source, target, map, source_memory, target_memory)
         == invocation_external_bytes_related_v38(source,
-            MemoryBytesV30 { write_clock: clock, write_epochs: epochs, ..target }, map),
+            MemoryBytesV30 { write_clock: clock, write_epochs: epochs, ..target }, map, source_memory, target_memory),
 { }
 
 open spec fn invocation_byte_token_related_v37(
     source: MemoryByteV37, target: MemoryByteV37, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
     match (source, target) {
         (MemoryByteV37::Octet(a), MemoryByteV37::Octet(b)) => a == b,
         (MemoryByteV37::PointerFragment { pointer: a, width: aw, ordinal: ai },
          MemoryByteV37::PointerFragment { pointer: b, width: bw, ordinal: bi }) =>
-            aw == bw && ai == bi && invocation_pointer_related_v36(a, b, map),
+            aw == bw && ai == bi && invocation_pointer_related_v36(a, b, map, source_memory, target_memory),
         _ => false,
     }
 }
 
 open spec fn invocation_relocation_related_v37(
     source: MemoryRelocationV37, target: MemoryRelocationV37, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
     source.width == target.width && source.little_endian == target.little_endian
-        && invocation_pointer_related_v36(source.pointer, target.pointer, map)
+        && invocation_pointer_related_v36(source.pointer, target.pointer, map, source_memory, target_memory)
 }
 
 open spec fn invocation_value_related_v36(
     source: MemoryValueV30, target: MemoryValueV30, map: InvocationByteMapV36,
+    source_memory: ByteMemoryV30, target_memory: ByteMemoryV30,
 ) -> bool {
     match (source, target) {
         (MemoryValueV30::Unit, MemoryValueV30::Unit) => true,
         (MemoryValueV30::Scalar(a), MemoryValueV30::Scalar(b)) => a == b,
         (MemoryValueV30::Vector(a), MemoryValueV30::Vector(b)) => a == b,
-        (MemoryValueV30::Pointer(a), MemoryValueV30::Pointer(b)) => invocation_pointer_related_v36(a, b, map),
+        (MemoryValueV30::Pointer(a), MemoryValueV30::Pointer(b)) =>
+            invocation_pointer_related_v36(a, b, map, source_memory, target_memory),
         (MemoryValueV30::Slice(a), MemoryValueV30::Slice(b)) =>
-            0 <= a.length && a.length == b.length && invocation_pointer_related_v36(a.pointer, b.pointer, map),
+            0 <= a.length && a.length == b.length
+                && invocation_pointer_related_v36(a.pointer, b.pointer, map, source_memory, target_memory),
         _ => false,
     }
 }
@@ -223,7 +280,7 @@ open spec fn invocation_read_related_v36(
 ) -> bool {
     invocation_source_read_enabled_v36(source, source_pointer, width, alignment)
         && invocation_byte_states_related_v36(source, target, map)
-        && invocation_pointer_related_v36(source_pointer, target_pointer, map)
+        && invocation_pointer_related_v36(source_pointer, target_pointer, map, source.memory, target.memory)
         && byte_range_aligned_v30(target.memory, target_pointer, width, alignment)
         && byte_scalar_range_initialized_v37(target.memory, target_pointer, width)
 }
@@ -358,9 +415,56 @@ open spec fn invocation_frame_end_witness_v36(
 }
 "#;
 
+pub(super) const CLASSIFIED_VIEW_LAWS_V40: &str =
+    include_str!("original_semantic_mir_classified_view_laws_v40.vrs");
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_mir_classified_views_use_exact_registries_and_owner_derived_pairs() {
+        let text = INVOCATION_BYTES_V36;
+        for required in [
+            "source.view_contracts == invocation_source_view_contracts_0_v39(invocation_runtime_little_endian_v36())",
+            "target.view_contracts == byte_target_view_contracts_1_v38(invocation_runtime_little_endian_v36())",
+            "source.owner == source_memory.view_contracts.owner",
+            "target.owner == target_memory.view_contracts.owner",
+            "invocation_source_target_tag_pair_0_1_v40(source.contract, target.contract)",
+            "source.epochs.len() == source_memory.view_contracts.rows[source.contract].tag_width",
+            "target.epochs.len() == target_memory.view_contracts.rows[target.contract].tag_width",
+            "byte_offset: source.object_start, view: None",
+            "byte_offset: target.object_start, view: None",
+        ] {
+            assert!(text.contains(required), "{required}");
+        }
+        assert!(!text.contains("source.contract == target.contract"));
+        assert!(!text.contains("source.epochs == target.epochs"));
+        assert!(!text.contains("source.live[a] == target.live[a]"));
+    }
+
+    #[test]
+    fn original_mir_classified_views_keep_both_nested_obligation_sets_and_event_heaps() {
+        let text = INVOCATION_BYTES_V36;
+        for required in [
+            "forall|i: int| 0 <= i < a.guards.len() ==>",
+            "exists|j: int| 0 <= j < b.guards.len()",
+            "forall|j: int| 0 <= j < b.guards.len() ==>",
+            "exists|i: int| 0 <= i < a.guards.len()",
+            "byte_tag_guard_current_v38(source_memory, source)",
+            "byte_tag_guard_current_v38(target_memory, target)",
+            "invocation_pointer_related_v36(source_pointer, target_pointer, map, source.memory, target.memory)",
+        ] {
+            assert!(text.contains(required), "{required}");
+        }
+        let laws = CLASSIFIED_VIEW_LAWS_V40;
+        assert_eq!(laws.matches("proof fn ").count(), 8);
+        assert!(laws.contains("invocation_guard_pair_never_refreshes_stale_source_v40"));
+        assert!(laws.contains("invocation_guard_pair_uses_side_local_epoch_status_v40"));
+        assert!(laws.contains("invocation_zero_width_keeps_stale_guard_refusal_v40"));
+        assert!(!laws.contains("assume("));
+        assert!(!laws.contains("external_body"));
+    }
 
     #[test]
     fn original_mir_external_heap_relation_ignores_epoch_numbers_but_translates_pointer_cells() {
@@ -376,15 +480,19 @@ mod tests {
         assert!(relation.contains("source.initialized == target.initialized"));
         assert!(
             relation.contains(
-                "invocation_byte_token_related_v37(source.bytes[i], target.bytes[i], map)"
+                "invocation_byte_token_related_v37(source.bytes[i], target.bytes[i], map, source_memory, target_memory)"
             )
         );
         assert!(relation.contains(
-            "invocation_relocation_related_v37(source.relocations[i], target.relocations[i], map)"
+            "invocation_relocation_related_v37(source.relocations[i], target.relocations[i], map, source_memory, target_memory)"
         ));
         assert!(!relation.contains("write_epochs"));
         assert!(!relation.contains("write_clock"));
-        assert!(text.contains("a.guards.len() == 0 && b.guards.len() == 0"));
+        assert!(text.contains(
+            "invocation_source_target_tag_pair_0_1_v40(source.contract, target.contract)"
+        ));
+        assert!(text.contains("byte_tag_guard_current_v38(source_memory, source)\n            == byte_tag_guard_current_v38(target_memory, target)"));
+        assert!(!text.contains("source.epochs == target.epochs"));
         assert!(text.contains("b.lower == a.lower + offset && b.upper == a.upper + offset"));
     }
 
@@ -393,12 +501,12 @@ mod tests {
         let text = INVOCATION_BYTES_V36;
         assert!(text.contains("invocation_byte_token_related_v37(source.live[a].bytes[i]"));
         assert!(text.contains("invocation_relocation_related_v37(source_cell"));
-        assert!(text.contains("aw == bw && ai == bi && invocation_pointer_related_v36(a, b, map)"));
+        assert!(text.contains("aw == bw && ai == bi && invocation_pointer_related_v36(a, b, map, source_memory, target_memory)"));
         assert!(text.contains(
             "source.width == target.width && source.little_endian == target.little_endian"
         ));
         assert!(
-            text.contains("invocation_pointer_related_v36(source.pointer, target.pointer, map)")
+            text.contains("invocation_pointer_related_v36(source.pointer, target.pointer, map, source_memory, target_memory)")
         );
         assert!(text.contains("byte_scalar_range_initialized_v37(source.memory, pointer, width)"));
         assert!(
