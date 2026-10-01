@@ -65,6 +65,9 @@ fn fixture(
                 SemanticLocalRoleV1::Temporary,
                 SemanticSourceProvenanceV1::new(Some(origin(11, 7)), Some(origin(12, 9))),
             ),
+            local(3, READ_VIEW_USIZE, SemanticLocalRoleV1::Temporary),
+            local(4, READ_VIEW_SLICE_REF, SemanticLocalRoleV1::Temporary),
+            local(5, ARRAY, SemanticLocalRoleV1::Temporary),
         ],
         SemanticStatementKindV1::Deinitialize(
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), projections, result).unwrap(),
