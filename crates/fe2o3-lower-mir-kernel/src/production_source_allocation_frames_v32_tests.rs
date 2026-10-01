@@ -347,12 +347,19 @@ fn source_allocation_frames_unwind_drops_callback_before_refunding_headers() {
                 ))
             })
         });
-    assert!(matches!(
-        result,
-        Err(ProductionSourceOptimizationErrorV18::Source(
-            ProductionSourceOwnedViewErrorV18::Binding("observed allocation visitor unwind")
-        ))
-    ));
+    assert!(
+        matches!(
+            result,
+            Err(ProductionSourceOptimizationErrorV18::Adoption(
+                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+                    ProductionSourceOwnedViewErrorV18::Binding(
+                        "observed allocation visitor unwind"
+                    )
+                )
+            ))
+        ),
+        "callback refusal must retain its exact adoption boundary: {result:?}"
+    );
     assert!(caught.get());
     assert!(reached.get());
     assert_eq!(drops.get(), 1);

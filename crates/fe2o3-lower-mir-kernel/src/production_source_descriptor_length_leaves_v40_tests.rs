@@ -80,16 +80,47 @@ fn descriptor_length_leaf_run_v40(
                                         .descriptor_length_symbol_v40(symbol, scalar, budget)?
                                 );
                                 symbols.push(symbol);
-                                let definition_index = original
-                                    .assignment_scalar_definition_v30(
-                                        0,
-                                        0,
-                                        SemanticBlockIdV1::from_index(0),
-                                        statement,
+                                // Metadata's source u64 result is the exact Index
+                                // endpoint of SliceLength, not a scalar-program row.
+                                let (locator, archived) = original.assignment_result_row_v30(
+                                    0,
+                                    0,
+                                    SemanticBlockIdV1::from_index(0),
+                                    statement,
+                                    budget,
+                                )?;
+                                assert!(std::ptr::eq(archived, assignment));
+                                let SourceRvalueEndpointV30::Scalar {
+                                    value,
+                                    scalar: ScalarType::Index,
+                                } = locator.endpoint
+                                else {
+                                    panic!("exact descriptor length endpoint");
+                                };
+                                let physical = original.source.root(0, budget)?.1;
+                                let input = original
+                                    .inventory
+                                    .definition_for_value(
+                                        original.inventory.functions()[physical].coordinate,
+                                        value,
                                         budget,
-                                    )?
+                                    )
+                                    .map_err(source_pointer_inventory_error_v18)?
                                     .unwrap();
-                                let input = &original.inventory.definitions()[definition_index];
+                                assert_eq!(input.ty, &Type::INDEX);
+                                let element = descriptor_length_source_scalar_v30(
+                                    original, archived, budget,
+                                )?
+                                .unwrap();
+                                let (_, receiver) = descriptor_length_operation_v30(
+                                    original,
+                                    original.inventory,
+                                    input.coordinate,
+                                    element,
+                                    budget,
+                                )?;
+                                original
+                                    .check_descriptor_operand_v30(0, locator, receiver, budget)?;
                                 let expected =
                                     Some(NormalizedScalarExpressionV1::Symbol { symbol, scalar });
                                 assert_eq!(
