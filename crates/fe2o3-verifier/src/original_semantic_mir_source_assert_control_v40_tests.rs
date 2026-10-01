@@ -185,14 +185,10 @@ fn original_mir_assert_executes_both_polarities_and_failure_only_ordered_moves()
                     .unwrap();
                 let failed = text[success..].find("} else {").unwrap() + success;
                 let first = text
-                    .find(
-                        "let assertion_failure_0 = invocation_source_operand_evaluate_v36(source,",
-                    )
+                    .find("let assertion_failure_0 = invocation_source_value_evaluate_v42(source,")
                     .unwrap();
                 let second = text
-                    .find(
-                        "let assertion_failure_1 = invocation_source_operand_evaluate_v36(source,",
-                    )
+                    .find("let assertion_failure_1 = invocation_source_value_evaluate_v42(source,")
                     .unwrap();
                 let trap = text
                     .find("source: invocation_source_byte_trap_v40(source)")

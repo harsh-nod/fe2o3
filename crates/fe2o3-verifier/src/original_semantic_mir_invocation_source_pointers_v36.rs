@@ -77,7 +77,7 @@ fn local_destination(
 ) -> Result<usize> {
     match context.destination(place, out)? {
         Destination::Local(local) => Ok(local),
-        Destination::Memory(_) => Err(unsupported()),
+        Destination::Memory(_) | Destination::Component(_) => Err(unsupported()),
     }
 }
 

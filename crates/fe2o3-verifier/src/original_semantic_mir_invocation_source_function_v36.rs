@@ -179,7 +179,7 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
         for (root, (range, owner, entry)) in self.roots.iter().enumerate() {
             out.budget.charge_work(1)?;
             let locals = self.locals;
-            write!(out, "open spec fn invocation_source_byte_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let native = invocation_runtime_execution_{root}_v37(execution) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments) && (forall|argument: int| 0 <= argument < arguments.len() ==> invocation_source_external_argument_v36(arguments[argument]));\n let entered_memory = if native {{ ByteMemoryV30 {{ view_contracts: invocation_source_view_contracts_0_v39(little_endian), ..external }} }} else {{ external }};\n let source = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {entry}, values: Seq::new({locals}nat, |i: int| MemoryValueV30::Undefined), memory: entered_memory, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({owner}, execution), valid: native }}, slots: Map::empty(), objects: Map::empty(), logical: invocation_source_logical_initial_v38({locals}nat) }};\n invocation_source_enter_{root}_0_v36(source, arguments, little_endian)\n}}\nopen spec fn invocation_source_byte_block_{root}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{\n").map_err(|_| out.error())?;
+            write!(out, "open spec fn invocation_source_byte_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let native = invocation_runtime_execution_{root}_v37(execution) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments) && (forall|argument: int| 0 <= argument < arguments.len() ==> invocation_source_external_argument_v36(arguments[argument]));\n let entered_memory = if native {{ ByteMemoryV30 {{ view_contracts: invocation_source_view_contracts_0_v39(little_endian), ..external }} }} else {{ external }};\n let source = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {entry}, values: Seq::new({locals}nat, |i: int| MemoryValueV30::Undefined), memory: entered_memory, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({owner}, execution), valid: native }}, slots: Map::empty(), objects: Map::empty(), logical: invocation_source_logical_initial_v38({locals}nat) }};\n let source_arguments = Seq::new(arguments.len(), |i: int| InvocationSourceValueV42::Carrier(arguments[i]));\n invocation_source_enter_{root}_0_v36(source, source_arguments, little_endian)\n}}\nopen spec fn invocation_source_byte_block_{root}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{\n").map_err(|_| out.error())?;
             for (instance, function) in self.functions[range.clone()].iter().enumerate() {
                 out.budget.charge_work(1)?;
                 if let Some(function) = function {
@@ -495,13 +495,13 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                     }
                     write!(out, "{{ {otherwise}int }}), _ => invocation_source_byte_refused_v36(evaluated.source) }};\n let operands = seq![InvocationSourceOperandObservationV36 {{ root: {r}, instance: {i}, block: {block}, role: InvocationSourceOperandRoleV36::Switch, operand: ").map_err(|_| out.error())?;
                     operand.emit(out)?;
-                    write!(out, ", before: cursor.source, after: evaluated.source, value: evaluated.value }}];\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands, returned: None }}\n").map_err(|_| out.error())?;
+                    write!(out, ", before: cursor.source, after: evaluated.source, value: InvocationSourceValueV42::Carrier(evaluated.value) }}];\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands, returned: None }}\n").map_err(|_| out.error())?;
                 }
                 End::Call { child, arguments } => {
                     write!(out, " let source = cursor.source;\n").map_err(|_| out.error())?;
                     for (argument, operand) in arguments.iter().enumerate() {
                         out.budget.charge_work(1)?;
-                        write!(out, " let evaluated_{argument} = invocation_source_operand_evaluate_v36(source, ").map_err(|_| out.error())?;
+                        write!(out, " let evaluated_{argument} = invocation_source_value_evaluate_v42(source, ").map_err(|_| out.error())?;
                         operand.emit(out)?;
                         write!(out, ", {r}, {i}, little_endian);\n let source = evaluated_{argument}.source;\n").map_err(|_| out.error())?;
                     }
@@ -530,7 +530,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                     write!(out, "];\n let source = invocation_source_enter_{r}_{child}_v36(source, arguments, little_endian);\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands, returned: None }}\n").map_err(|_| out.error())?;
                 }
                 End::Return => {
-                    write!(out, " let result = invocation_source_return_{r}_{i}_v36(cursor.source);\n InvocationSourceBlockResultV36 {{ source: result.source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: Some(result.returned) }}\n").map_err(|_| out.error())?;
+                    write!(out, " let result = invocation_source_return_{r}_{i}_v36(cursor.source, little_endian);\n InvocationSourceBlockResultV36 {{ source: result.source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: Some(result.returned) }}\n").map_err(|_| out.error())?;
                 }
                 End::Unreachable => unreachable!(),
             }
@@ -594,14 +594,14 @@ struct InvocationSourceOperandObservationV36 {
     operand: InvocationSourceOperandV36,
     before: InvocationSourceByteStateV36,
     after: InvocationSourceByteStateV36,
-    value: MemoryValueV30,
+    value: InvocationSourceValueV42,
 }
 struct InvocationSourceBlockResultV36 {
     source: InvocationSourceByteStateV36,
     before_control: InvocationSourceByteStateV36,
     observations: Seq<InvocationSourceStatementObservationV36>,
     operands: Seq<InvocationSourceOperandObservationV36>,
-    returned: Option<MemoryValueV30>,
+    returned: Option<InvocationSourceValueV42>,
 }
 open spec fn invocation_source_byte_pc_v36(source: InvocationSourceByteStateV36, pc: int) -> InvocationSourceByteStateV36 {
     if !source.machine.valid || source.machine.pc < 0
@@ -675,8 +675,8 @@ pub(super) mod tests {
                 program.emit(out)?;
                 assert!(out.text.contains("let source = evaluated_0.source;"));
                 assert!(out.text.contains("let source = evaluated_1.source;"));
-                let first = out.text.find("let evaluated_0 = invocation_source_operand_evaluate_v36(source,").unwrap();
-                let second = out.text[first..].find("let evaluated_1 = invocation_source_operand_evaluate_v36(source,").unwrap() + first;
+                let first = out.text.find("let evaluated_0 = invocation_source_value_evaluate_v42(source,").unwrap();
+                let second = out.text[first..].find("let evaluated_1 = invocation_source_value_evaluate_v42(source,").unwrap() + first;
                 let enter = out.text[second..].find("let source = invocation_source_enter_0_1_v36(source, arguments, little_endian);").unwrap() + second;
                 assert!(first < second && second < enter);
                 assert!(out.text.contains("let arguments = seq![evaluated_0.value, evaluated_1.value]"));
@@ -698,7 +698,7 @@ pub(super) mod tests {
                     }
                 }
                 assert!(out.text.contains("cursor.next_statement != cursor.observations.len()"));
-                assert!(out.text.contains("let result = invocation_source_return_0_1_v36(cursor.source)"));
+                assert!(out.text.contains("let result = invocation_source_return_0_1_v36(cursor.source, little_endian)"));
                 assert!(!out.text.contains("assume("));
                 assert!(!out.text.contains("target"));
                 Ok(())

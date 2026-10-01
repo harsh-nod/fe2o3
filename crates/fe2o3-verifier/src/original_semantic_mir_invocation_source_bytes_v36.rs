@@ -18,6 +18,8 @@ use std::{fmt::Write as _, mem::size_of, ops::Range};
 #[path = "original_semantic_mir_invocation_source_pointers_v36.rs"]
 mod pointer_events;
 pub(super) use pointer_events::SOURCE_POINTERS_V36;
+#[path = "original_semantic_mir_source_aggregate_events_v42.rs"]
+mod aggregates;
 #[path = "original_semantic_mir_source_discriminants_v41.rs"]
 mod discriminants;
 #[path = "original_semantic_mir_source_slice_reads_v41.rs"]
@@ -55,15 +57,101 @@ pub(super) struct Access {
     alignment: u64,
 }
 
+impl Access {
+    pub(super) fn emit(&self, out: &mut Writer<'_, '_>) -> Result<()> {
+        emit_access(*self, out)
+    }
+}
+
+// The original call destination is fetched here rather than supplied by a
+// consumer. Type-wide aggregate schemas cannot grant a local storage identity.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn object_call_destination_v42(
+    plan: &InvocationPlan<'_, '_>,
+    slots: &SourceSlots<'_, '_>,
+    root: usize,
+    instance: usize,
+    block: usize,
+    expected_type: TypeId,
+    out: &mut Writer<'_, '_>,
+) -> Result<Option<Access>> {
+    slots.with_source_query_v42(out, |out| {
+        out.budget.reserve_storage(headers())?;
+        let source = slots.correspondence(out)?.source(out.budget)?;
+        if !std::ptr::eq(source, plan.source(out)?) {
+            return Err(mismatch());
+        }
+        let row = plan.instance(root, instance, out)?;
+        let semantic = source.source_semantic(out.budget)?;
+        let function = semantic
+            .functions()
+            .get(row.function.index() as usize)
+            .ok_or_else(mismatch)?;
+        out.budget.charge_work(5)?;
+        if !row.active
+            || row.locals.len() != function.locals().len()
+            || row.blocks.len() != function.blocks().len()
+        {
+            return Err(mismatch());
+        }
+        let Some(Terminator::Call(call)) = function
+            .blocks()
+            .get(block)
+            .map(|body| body.terminator().kind())
+        else {
+            return Err(mismatch());
+        };
+        let destination = call.destination().ok_or_else(mismatch)?.place();
+        if destination.ty() != expected_type {
+            return Err(mismatch());
+        }
+        if !slots.has_original_object(root, instance, destination.local().index(), out)? {
+            return Ok(None);
+        }
+        let context = Context {
+            slots,
+            types: semantic.types(),
+            function,
+            root,
+            instance,
+            locals: row.locals.clone(),
+        };
+        if context.scalar(expected_type, out)? == ScalarV30::Unit {
+            return Err(unsupported());
+        }
+        let access = context.access(destination, out)?;
+        if !matches!(access.address, Address::Object { .. }) || access.ty != expected_type {
+            return Err(mismatch());
+        }
+        Ok(Some(access))
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Value {
     Constant(u128),
-    Local { local: usize, moved: bool },
-    Read { access: Access, moved: bool },
+    Local {
+        local: usize,
+        moved: bool,
+    },
+    Read {
+        access: Access,
+        moved: bool,
+    },
+    Component {
+        local: usize,
+        source_type: TypeId,
+        ordinal: usize,
+        moved: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperandKind {
+    Aggregate {
+        place: aggregates::AggregatePlace,
+        moved: bool,
+    },
     Scalar {
         value: Value,
         scalar: ScalarV30,
@@ -91,6 +179,7 @@ pub(super) struct TypedOperand {
 pub(super) enum Destination {
     Local(usize),
     Memory(Access),
+    Component(aggregates::AggregatePlace),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +190,12 @@ pub(super) enum Event {
     WitnessTransfer(witness_transfers::Transfer),
     Pointer(pointer_events::Event),
     Discriminant(discriminants::Read),
+    Checked(aggregates::Checked),
+    AggregateTransfer(aggregates::Transfer),
+    AggregateDeinitialize(aggregates::AggregatePlace),
+    AggregateReset {
+        local: usize,
+    },
     Transfer {
         destination: Destination,
         value: Value,
@@ -804,6 +899,11 @@ impl Context<'_, '_, '_> {
 
     fn destination(&self, place: &Place, out: &mut Writer<'_, '_>) -> Result<Destination> {
         out.budget.charge_work(2)?;
+        if !place.projections().is_empty()
+            && let Some(component) = aggregates::AggregatePlace::derive(self, place, out)?
+        {
+            return Ok(Destination::Component(component));
+        }
         let declaration = self
             .function
             .locals()
@@ -858,6 +958,38 @@ impl Context<'_, '_, '_> {
             }
             Operand::Copy(place) | Operand::Move(place) => {
                 let moved = matches!(operand, Operand::Move(_));
+                let root_type = self
+                    .function
+                    .locals()
+                    .get(place.local().index() as usize)
+                    .ok_or_else(mismatch)?
+                    .ty();
+                if !place.projections().is_empty()
+                    && !self.slots.has_original_object(
+                        self.root,
+                        self.instance,
+                        place.local().index(),
+                        out,
+                    )?
+                    && self.descriptor(place.local().index(), out)?.is_none()
+                    && let Some((range, ty)) =
+                        self.slots
+                            .aggregate_component_range(root_type, place.projections(), out)?
+                {
+                    if range.len() != 1 || ty != place.ty() {
+                        return Err(mismatch());
+                    }
+                    let leaf = self.slots.aggregate_leaf(root_type, range.start, out)?;
+                    if leaf.source_type(out)? != ty || leaf.scalar(out)? != scalar {
+                        return Err(mismatch());
+                    }
+                    return Ok(Value::Component {
+                        local: self.local(place.local().index())?,
+                        source_type: root_type,
+                        ordinal: range.start,
+                        moved,
+                    });
+                }
                 if !moved && !place.projections().is_empty() && scalar != ScalarV30::Unit {
                     return Ok(Value::Read {
                         access: self.read_access(place, out)?,
@@ -932,6 +1064,18 @@ impl Context<'_, '_, '_> {
                 moved: matches!(operand, Operand::Move(_)),
                 metadata_bits,
             }
+        } else if matches!(
+            declaration.shape(),
+            Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. }
+        ) {
+            let (Operand::Copy(place) | Operand::Move(place)) = operand else {
+                return Err(unsupported());
+            };
+            OperandKind::Aggregate {
+                place: aggregates::AggregatePlace::derive(self, place, out)?
+                    .ok_or_else(unsupported)?,
+                moved: matches!(operand, Operand::Move(_)),
+            }
         } else {
             OperandKind::Scalar {
                 value: self.value(operand, out)?,
@@ -943,6 +1087,21 @@ impl Context<'_, '_, '_> {
 
     fn statement(&self, statement: &Statement, out: &mut Writer<'_, '_>) -> Result<Event> {
         out.budget.charge_work(2)?;
+        if let Statement::Assign(assignment) = statement
+            && let Some(transfer) = aggregates::Transfer::derive(self, assignment, out)?
+        {
+            return Ok(Event::AggregateTransfer(transfer));
+        }
+        if let Statement::Deinitialize(place) = statement
+            && let Some(place) = aggregates::AggregatePlace::derive(self, place, out)?
+        {
+            return Ok(Event::AggregateDeinitialize(place));
+        }
+        if let Statement::Assign(assignment) = statement
+            && let Some(checked) = aggregates::Checked::derive(self, assignment, out)?
+        {
+            return Ok(Event::Checked(checked));
+        }
         if let Statement::Assign(assignment) = statement
             && let Some(read) = discriminants::Read::derive(self, assignment, out)?
         {
@@ -1058,9 +1217,25 @@ impl Context<'_, '_, '_> {
             Statement::Deinitialize(place) => match self.destination(place, out)? {
                 Destination::Local(_) => Ok(Event::Scalar),
                 Destination::Memory(access) => Ok(Event::Deinitialize(access)),
+                Destination::Component(place) => Ok(Event::AggregateDeinitialize(place)),
             },
             Statement::StorageLive(local) | Statement::StorageDead(local) => {
                 let Some(descriptor) = self.descriptor(local.index(), out)? else {
+                    let ty = self
+                        .function
+                        .locals()
+                        .get(local.index() as usize)
+                        .ok_or_else(mismatch)?
+                        .ty();
+                    if matches!(
+                        self.types.get(ty.index() as usize).map(Type::shape),
+                        Some(Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. })
+                    ) && self.slots.aggregate_leaf_count(ty, out)?.is_some()
+                    {
+                        return Ok(Event::AggregateReset {
+                            local: self.local(local.index())?,
+                        });
+                    }
                     return Ok(Event::Scalar);
                 };
                 let local = self.local(local.index())?;
@@ -1091,6 +1266,11 @@ impl TypedOperand {
     pub(super) fn emit(self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.charge_work(1)?;
         match self.kind {
+            OperandKind::Aggregate { place, moved } => {
+                write!(out, "InvocationSourceOperandV36::Aggregate {{ place: ").map_err(|_| out.error())?;
+                place.emit(out)?;
+                write!(out, ", moved: {moved} }}").map_err(|_| out.error())
+            }
             OperandKind::Scalar { value, scalar } => {
                 write!(out, "InvocationSourceOperandV36::Scalar {{ value: ")
                     .map_err(|_| out.error())?;
@@ -1114,6 +1294,8 @@ impl TypedOperand {
 fn emit_value(value: Value, out: &mut Writer<'_, '_>) -> Result<()> {
     out.budget.charge_work(1)?;
     match value {
+        Value::Component { local, source_type, ordinal, moved } => write!(out,
+            "InvocationSourceByteValueV36::Component {{ local: {local}int, source_type: {}int, ordinal: {ordinal}int, moved: {moved} }}", source_type.index()).map_err(|_| out.error()),
         Value::Constant(bits) => write!(out, "InvocationSourceByteValueV36::Constant({bits}int)")
             .map_err(|_| out.error()),
         Value::Local { local, moved } => write!(
@@ -1164,6 +1346,21 @@ fn emit_access(access: Access, out: &mut Writer<'_, '_>) -> Result<()> {
 fn emit_event(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
     out.budget.charge_work(1)?;
     match event {
+        Event::Checked(checked) => checked.emit(out)?,
+        Event::AggregateTransfer(transfer) => transfer.emit(out)?,
+        Event::AggregateDeinitialize(place) => {
+            write!(out, "InvocationSourceByteEventV36::AggregateDeinitialize(")
+                .map_err(|_| out.error())?;
+            place.emit(out)?;
+            write!(out, ")").map_err(|_| out.error())?;
+        }
+        Event::AggregateReset { local } => {
+            write!(
+                out,
+                "InvocationSourceByteEventV36::AggregateReset {{ local: {local}int }}"
+            )
+            .map_err(|_| out.error())?;
+        }
         Event::ObjectLive {
             descriptor,
             local,
@@ -1200,6 +1397,12 @@ fn emit_event(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
             )
             .map_err(|_| out.error())?;
             match destination {
+                Destination::Component(place) => {
+                    write!(out, "InvocationSourceByteDestinationV36::Component(")
+                        .map_err(|_| out.error())?;
+                    place.emit(out)?;
+                    write!(out, ")").map_err(|_| out.error())?;
+                }
                 Destination::Local(local) => {
                     write!(out, "InvocationSourceByteDestinationV36::Local({local}int)")
                         .map_err(|_| out.error())?
@@ -1282,11 +1485,14 @@ fn headers() -> usize {
         + witness_transfers::headers()
         + slice_reads::headers()
         + discriminants::headers()
+        + aggregates::headers()
         + 24 * size_of::<usize>()
         + 20 * size_of::<&()>()
 }
 
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
+    include_str!("original_semantic_mir_source_aggregate_values_v42.vrs"),
+    include_str!("original_semantic_mir_source_aggregate_laws_v42.vrs"),
     include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
     include_str!("original_semantic_mir_source_slice_reads_v41.vrs"),
     include_str!("original_semantic_mir_source_discriminants_v41.vrs"),
@@ -1311,6 +1517,9 @@ struct InvocationSourceObjectV40 {
 open spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
     byte_memory_well_formed_v30(source.machine.memory)
         && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len())
+        && (forall|local: int| source.logical.aggregates.contains_key(local) ==>
+            source.machine.values[local] == MemoryValueV30::Undefined
+                && !source.objects.contains_key(local))
         && byte_frame_runtime_well_formed_v30(source.machine.frames)
         && byte_private_frames_live_v30(source.machine.memory, source.machine.frames)
         && private_generation_counters_valid_v30(source.machine.generations, source.machine.memory)
@@ -1355,23 +1564,32 @@ struct InvocationSourceByteAccessV36 {
 }
 
 enum InvocationSourceByteValueV36 {
+    Component { local: int, source_type: int, ordinal: int, moved: bool },
     Constant(int),
     Local { local: int, moved: bool },
     Read { access: InvocationSourceByteAccessV36, moved: bool },
 }
 
 enum InvocationSourceOperandV36 {
+    Aggregate { place: InvocationSourceAggregatePlaceV42, moved: bool },
     Scalar { value: InvocationSourceByteValueV36, bits: int },
     Pointer { local: int, moved: bool },
     Slice { local: int, moved: bool, metadata_bits: int },
 }
 
 enum InvocationSourceByteDestinationV36 {
+    Component(InvocationSourceAggregatePlaceV42),
     Local(int),
     Memory(InvocationSourceByteAccessV36),
 }
 
 enum InvocationSourceByteEventV36 {
+    AggregateDeinitialize(InvocationSourceAggregatePlaceV42),
+    AggregateReset { local: int },
+    AggregateTransfer { destination: InvocationSourceAggregatePlaceV42,
+        source: InvocationSourceAggregatePlaceV42, moved: bool },
+    Checked { destination: int, source_type: int, operation: int, bits: int, signed: bool,
+        left: InvocationSourceByteValueV36, right: InvocationSourceByteValueV36 },
     Discriminant(InvocationSourceDiscriminantReadV41),
     Scalar,
     WitnessBorrow { destination: int, origin: int, source_type: int, generation: int,
@@ -1509,6 +1727,18 @@ open spec fn invocation_source_byte_evaluate_v36(
     bits: int, root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteEvaluationV36 {
     let evaluated = match value {
+        InvocationSourceByteValueV36::Component { local, source_type, ordinal, moved } => {
+            if !(0 <= ordinal < invocation_source_aggregate_leaf_count_v42(source_type)) {
+                InvocationSourceByteEvaluationV36 { source: invocation_source_byte_refused_v36(source), value: MemoryValueV30::Undefined }
+            } else {
+                let component = invocation_source_aggregate_leaf_evaluate_v42(source, local, source_type,
+                    invocation_source_aggregate_leaf_path_v42(source_type, ordinal), moved);
+                match component.value {
+                    Some(InvocationSourceValueV42::Carrier(value)) => InvocationSourceByteEvaluationV36 { source: component.source, value },
+                    _ => InvocationSourceByteEvaluationV36 { source: invocation_source_byte_refused_v36(component.source), value: MemoryValueV30::Undefined },
+                }
+            }
+        },
         InvocationSourceByteValueV36::Constant(value) => InvocationSourceByteEvaluationV36 {
             source, value: if bits == 0 && value == 0 { MemoryValueV30::Unit }
                 else { MemoryValueV30::Scalar(value) } },
@@ -1585,6 +1815,8 @@ open spec fn invocation_source_operand_evaluate_v36(
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteEvaluationV36 {
     match operand {
+        InvocationSourceOperandV36::Aggregate { .. } => InvocationSourceByteEvaluationV36 {
+            source: invocation_source_byte_refused_v36(source), value: MemoryValueV30::Undefined },
         InvocationSourceOperandV36::Scalar { value, bits } =>
             invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian),
         InvocationSourceOperandV36::Pointer { local, moved } =>
@@ -1705,10 +1937,22 @@ open spec fn invocation_source_byte_step_v36(
             invocation_source_pointer_step_v36(source, event, root, instance, little_endian),
         InvocationSourceByteEventV36::Discriminant(read) =>
             invocation_source_discriminant_read_v41(source, read, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::Checked { destination, source_type, operation, bits, signed, left, right } =>
+            invocation_source_checked_v42(source, destination, source_type, operation, bits, signed, left, right, root, instance, little_endian),
+        InvocationSourceByteEventV36::AggregateTransfer { destination, source: input, moved } =>
+            invocation_source_aggregate_transfer_v42(source, destination, input, moved),
+        InvocationSourceByteEventV36::AggregateDeinitialize(place) =>
+            invocation_source_aggregate_place_deinitialize_v42(source, place),
+        InvocationSourceByteEventV36::AggregateReset { local } =>
+            invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined),
         InvocationSourceByteEventV36::Transfer { destination, value, bits } => {
             let evaluated = invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian);
             if !evaluated.source.machine.valid { evaluated.source }
             else { match destination {
+                InvocationSourceByteDestinationV36::Component(place) =>
+                    invocation_source_aggregate_place_replace_v42(evaluated.source, place,
+                        InvocationSourceAggregateV42 { source_type: place.result_type,
+                            leaves: Map::empty().insert(seq![], evaluated.value) }),
                 InvocationSourceByteDestinationV36::Local(local) =>
                     invocation_source_byte_put_local_v36(evaluated.source, local, evaluated.value),
                 InvocationSourceByteDestinationV36::Memory(access) => {

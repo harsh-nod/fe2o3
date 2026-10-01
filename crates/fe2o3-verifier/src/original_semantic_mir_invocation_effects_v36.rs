@@ -48,7 +48,8 @@ open spec fn invocation_source_read_effect_v36(
             }
         }
         InvocationSourceByteValueV36::Constant(_)
-        | InvocationSourceByteValueV36::Local { .. } => seq![],
+        | InvocationSourceByteValueV36::Local { .. }
+        | InvocationSourceByteValueV36::Component { .. } => seq![],
     }
 }
 
@@ -81,12 +82,17 @@ open spec fn invocation_source_statement_effects_v36(
                                     alignment: access.alignment, value: evaluated.value }] },
                             None => seq![MemoryOperationEffectV30::Refused],
                         },
-                    InvocationSourceByteDestinationV36::Local(_) => seq![],
+                    InvocationSourceByteDestinationV36::Local(_)
+                    | InvocationSourceByteDestinationV36::Component(_) => seq![],
                 };
                 read + write
             }
             // Borrow formation checks initialized bytes but is not a Load.
             Some(InvocationSourceByteEventV36::Scalar)
+            | Some(InvocationSourceByteEventV36::Checked { .. })
+            | Some(InvocationSourceByteEventV36::AggregateTransfer { .. })
+            | Some(InvocationSourceByteEventV36::AggregateDeinitialize(_))
+            | Some(InvocationSourceByteEventV36::AggregateReset { .. })
             | Some(InvocationSourceByteEventV36::WitnessBorrow { .. })
             | Some(InvocationSourceByteEventV36::WitnessTransfer { .. })
             | Some(InvocationSourceByteEventV36::Pointer(_))
@@ -125,7 +131,8 @@ open spec fn invocation_source_operands_effects_v36(
                 invocation_source_read_effect_v36(head.before, value, bits,
                     head.root, head.instance, little_endian),
             InvocationSourceOperandV36::Pointer { .. }
-            | InvocationSourceOperandV36::Slice { .. } => seq![],
+            | InvocationSourceOperandV36::Slice { .. }
+            | InvocationSourceOperandV36::Aggregate { .. } => seq![],
         } };
         effects + invocation_source_operands_effects_v36(observations.drop_first(), little_endian)
     }

@@ -31,6 +31,10 @@ pub(super) use source_tags::{SourceTagFixtureV40, source_tag_fixture_v40};
 mod source_objects;
 pub(super) use source_objects::ObjectActivation;
 
+#[path = "original_semantic_mir_source_aggregate_types_v42.rs"]
+mod source_aggregates;
+pub(super) use source_aggregates::SourceAggregateLeafV42;
+
 pub(super) struct SourceSlots<'a, 'source> {
     relation: &'a Correspondence<'source>,
     operations: Vec<Operation>,
@@ -39,6 +43,7 @@ pub(super) struct SourceSlots<'a, 'source> {
     abi: source_abi::SourceAbi,
     tags: source_tags::SourceTagIndexV39,
     objects: source_objects::SourceObjects,
+    aggregates: source_aggregates::SourceAggregateTypesV42,
     required: usize,
 }
 
@@ -229,6 +234,55 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         let tags = source_tags::SourceTagIndexV39::derive(semantic.types(), out)?;
         let objects =
             source_objects::SourceObjects::derive(plan, relation, &operations, &frames, out)?;
+        // Only original locals without physical backing require value-component
+        // expansion. Retained arrays stay in the separately checked memory domain.
+        let mut requested = vector(semantic.types().len(), out)?;
+        out.budget.charge_work(semantic.types().len())?;
+        requested.resize(semantic.types().len(), false);
+        let mut storage_at = 0;
+        for root in 0..roots {
+            for instance in 0..plan.root(root, out)?.instances.len() {
+                let row = plan.instance(root, instance, out)?;
+                if !row.active {
+                    continue;
+                }
+                let original = semantic
+                    .functions()
+                    .get(row.function.index() as usize)
+                    .ok_or_else(mismatch)?;
+                for (local, declaration) in original.locals().iter().enumerate() {
+                    out.budget.charge_work(3)?;
+                    let key = [root, instance, local];
+                    while let Some((candidate, _)) = source_order.get(storage_at) {
+                        out.budget.charge_work(1)?;
+                        if candidate[..3] >= key[..] {
+                            break;
+                        }
+                        storage_at += 1;
+                    }
+                    if !source_order
+                        .get(storage_at)
+                        .is_some_and(|(candidate, _)| candidate[..3] == key)
+                    {
+                        *requested
+                            .get_mut(declaration.ty().index() as usize)
+                            .ok_or_else(mismatch)? = true;
+                    }
+                }
+            }
+        }
+        let aggregates = source_aggregates::SourceAggregateTypesV42::derive(
+            semantic.types(),
+            &abi,
+            &requested,
+            out,
+        )?;
+        let requested_credit = requested
+            .capacity()
+            .checked_mul(size_of::<bool>())
+            .ok_or(Resource::Arithmetic)?;
+        drop(requested);
+        out.budget.release_storage(requested_credit)?;
         Ok(Self {
             relation,
             operations,
@@ -237,6 +291,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             abi,
             tags,
             objects,
+            aggregates,
             required: out.budget.storage(),
         })
     }
@@ -271,6 +326,38 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
     ) -> Result<&'a Correspondence<'source>> {
         self.check_source(self.relation, out)?;
         Ok(self.relation)
+    }
+
+    pub(super) fn with_source_query_v42<T>(
+        &self,
+        out: &mut Writer<'_, '_>,
+        query: impl FnOnce(&mut Writer<'_, '_>) -> Result<T>,
+    ) -> Result<T> {
+        self.relation.check_query_v18(out.budget)?;
+        if out.budget.storage() < self.required {
+            return Err(self
+                .relation
+                .retain_query_resource_error_v18(Resource::Accounting)
+                .into());
+        }
+        let result = self
+            .check_source(self.relation, out)
+            .and_then(|()| query(out));
+        let result = match result {
+            Err(Error::Resource(resource)) => Err(self
+                .relation
+                .retain_query_resource_error_v18(resource)
+                .into()),
+            other => other,
+        };
+        self.relation.check_query_v18(out.budget)?;
+        if out.budget.storage() < self.required {
+            return Err(self
+                .relation
+                .retain_query_resource_error_v18(Resource::Accounting)
+                .into());
+        }
+        result
     }
 
     pub(super) fn has_original_object(
@@ -506,7 +593,8 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             self.frames.len()
         )
         .map_err(|_| out.error())?;
-        self.objects.emit(out)
+        self.objects.emit(out)?;
+        self.aggregates.emit(out)
     }
 }
 
@@ -562,6 +650,8 @@ pub(super) fn headers() -> usize {
         + h::<Vec<Operation>>()
         + h::<Vec<Option<Frame>>>()
         + h::<Vec<(SourceKey, usize)>>()
+        + h::<Vec<bool>>()
+        + h::<[usize; 3]>()
         + h::<SourceKey>()
         + h::<Operation>()
         + h::<ByteAllocationSiteV30>()
@@ -1034,6 +1124,7 @@ mod tests {
             source_abi::SourceAbi,
             source_tags::SourceTagIndexV39,
             source_objects::SourceObjects,
+            source_aggregates::SourceAggregateTypesV42,
             usize,
         );
         fn h<T>() -> usize {
@@ -1051,6 +1142,8 @@ mod tests {
                 + h::<Vec<Operation>>()
                 + h::<Vec<Option<Frame>>>()
                 + h::<Vec<(SourceKey, usize)>>()
+                + h::<Vec<bool>>()
+                + h::<[usize; 3]>()
                 + h::<SourceKey>()
                 + h::<Operation>()
                 + h::<ByteAllocationSiteV30>()
