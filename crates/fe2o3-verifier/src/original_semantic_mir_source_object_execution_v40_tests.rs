@@ -125,10 +125,6 @@ fn emit_original_objects_v40(
                 .count(),
             2
         );
-        assert!(
-            !out.text
-                .contains("let entered = invocation_source_object_activate_v40(")
-        );
     } else {
         assert_eq!(
             out.text
@@ -140,6 +136,58 @@ fn emit_original_objects_v40(
             !out.text
                 .contains("InvocationSourceByteEventV36::ObjectLive {")
         );
+    }
+    for root in 0..2 {
+        let local = plan.instance(root, 0, out)?.locals.start + 4;
+        let entry = slots.object_activation(root, 0, 4, 0, out)?.unwrap();
+        let enter = out
+            .text
+            .split_once(&format!(
+                "open spec fn invocation_source_enter_{root}_0_v36("
+            ))
+            .unwrap()
+            .1
+            .split_once("\n}\n")
+            .unwrap()
+            .0;
+        assert_eq!(
+            enter
+                .matches("let entered = invocation_source_object_activate_v40(")
+                .count(),
+            usize::from(!explicit)
+        );
+        assert_eq!(enter.contains(&format!(
+            "let entered = invocation_source_object_activate_v40(entered, {}, invocation_source_slot_{}_v36(), {local}, 0int, {root}, 0);",
+            entry.descriptor, entry.descriptor)), !explicit);
+        let events = out
+            .text
+            .split_once(&format!(
+                "open spec fn invocation_source_byte_event_{root}_0_v36("
+            ))
+            .unwrap()
+            .1
+            .split_once("\n}\n")
+            .unwrap()
+            .0;
+        assert_eq!(
+            events
+                .matches("InvocationSourceByteEventV36::ObjectLive {")
+                .count(),
+            usize::from(explicit)
+        );
+        assert_eq!(
+            events
+                .matches("InvocationSourceByteEventV36::ObjectDead {")
+                .count(),
+            usize::from(explicit)
+        );
+        if explicit {
+            let restart = slots.object_activation(root, 0, 4, 1, out)?.unwrap();
+            assert!(events.contains(&format!(
+                "ObjectLive {{ descriptor: {}int, slot: invocation_source_slot_{}_v36(), local: {local}int, activation: 1int }}",
+                restart.descriptor, restart.descriptor)));
+            assert!(events.contains(&format!("ObjectDead {{ local: {local}int }}")));
+        }
     }
     assert!(!out.text.contains("byte_target_view_contracts"));
     Ok(())
@@ -154,6 +202,44 @@ fn original_object_lifetimes_are_consumed_by_complete_source_program_entry_and_s
         .0
         .unwrap();
     }
+}
+
+#[test]
+fn original_object_dead_only_marker_does_not_activate_catalogued_entry_storage() {
+    super::super::super::invocations::tests::run_original_object_dead_only_variant_v42(
+        LIMIT, LIMIT, |plan, out| {
+            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let original = plan.source(out)?.source_semantic(out.budget)?;
+                let mut program = super::super::source_function::SourceByteProgram::derive(plan, slots, out)?;
+                program.emit(out)?;
+                for root in 0..2 {
+                    let instance = plan.instance(root, 0, out)?;
+                    let function = &original.functions()[instance.function.index() as usize];
+                    assert!(!function.blocks().iter().flat_map(|block| block.statements()).any(|statement|
+                        matches!(statement.kind(), Statement::StorageLive(local) if local.index() == 4)));
+                    assert!(matches!(function.blocks()[0].statements()[4].kind(),
+                        Statement::StorageDead(local) if local.index() == 4));
+                    assert!(slots.object_activation(root, 0, 4, 0, out)?.is_some(),
+                        "a catalogued Entry identity is not permission to activate it");
+                    let body = SourceByteBody::derive(plan, slots, root, 0, out)?;
+                    let local = instance.locals.start + 4;
+                    assert_eq!(body.event_at(0, 4, out)?, Event::ObjectDead { local });
+                    assert!(matches!(body.event_at(0, 2, out)?, Event::Transfer {
+                        value: Value::Read { access: Access { address: Address::Object { local: found, .. }, .. }, .. }, ..
+                    } if found == local));
+                    let enter = out.text.split_once(&format!("open spec fn invocation_source_enter_{root}_0_v36("))
+                        .unwrap().1.split_once("\n}\n").unwrap().0;
+                    assert!(!enter.contains("invocation_source_object_activate_v40("));
+                    assert!(!enter.contains("invocation_source_byte_activate_v36("));
+                }
+                let object_address = SOURCE_BYTES_V36.split_once("InvocationSourceByteBaseV36::ObjectLocal(local) =>")
+                    .unwrap().1.split_once("InvocationSourceByteBaseV36::Slot").unwrap().0;
+                assert!(object_address.contains("if source.objects.contains_key(local)"));
+                assert!(object_address.contains("} else { None }"));
+                Ok(())
+            })
+        },
+    ).0.unwrap();
 }
 
 #[test]

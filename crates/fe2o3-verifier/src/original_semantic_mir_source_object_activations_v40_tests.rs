@@ -44,15 +44,36 @@ fn check(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     let source = plan.source(out)?.source_semantic(out.budget)?;
-    assert_eq!(slots.objects.rows.len(), 2, "one original object per root");
+    let activations_per_root = if explicit { 2 } else { 1 };
+    assert_eq!(slots.objects.rows.len(), 2 * activations_per_root);
     for root in 0..2 {
         let instance = plan.instance(root, 0, out)?;
         let original = &source.functions()[instance.function.index() as usize];
+        assert_eq!(
+            slots
+                .objects
+                .rows
+                .iter()
+                .filter(|row| row.key[..3] == [root, 0, 4])
+                .count(),
+            activations_per_root,
+            "entry activation plus each original StorageLive"
+        );
+        let entry = slots.object_activation(root, 0, 4, 0, out)?.unwrap();
+        assert_eq!(
+            (entry.key, entry.origin),
+            ([root, 0, 4, 0], Activation::Entry)
+        );
+        assert_eq!(entry.flat_local, instance.locals.start + 4);
+        assert_eq!(entry.ty, original.locals()[4].ty());
         let row = slots
             .objects
             .rows
             .iter()
-            .find(|row| row.key[0] == root)
+            .find(|row| {
+                row.key[..3] == [root, 0, 4]
+                    && matches!(row.origin, Activation::StorageLive { .. }) == explicit
+            })
             .unwrap();
         assert_eq!(&row.key[..3], &[root, 0, 4]);
         assert_eq!(row.flat_local, instance.locals.start + 4);
@@ -103,7 +124,10 @@ fn check(
             .count(),
         1
     );
-    assert_eq!(out.text.matches("object.activation == ").count(), 2);
+    assert_eq!(
+        out.text.matches("object.activation == ").count(),
+        2 * activations_per_root
+    );
     for row in &slots.objects.rows {
         let expected = format!(
             "local == {}int && object.descriptor == {}int && object.activation == {}int && object.slot == invocation_source_slot_{}_v36()",

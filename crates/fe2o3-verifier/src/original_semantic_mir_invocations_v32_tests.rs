@@ -708,6 +708,24 @@ pub(in super::super) fn run_original_object_variant_v41(
     storage: usize,
     examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
 ) -> (Result<()>, usize, usize, usize) {
+    run_original_object_markers_v42(explicit, explicit, work, storage, examine)
+}
+
+pub(in super::super) fn run_original_object_dead_only_variant_v42(
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_original_object_markers_v42(false, true, work, storage, examine)
+}
+
+fn run_original_object_markers_v42(
+    explicit: bool,
+    dead: bool,
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
     run_source_transform(
         work,
         storage,
@@ -808,7 +826,7 @@ pub(in super::super) fn run_original_object_variant_v41(
                         SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(5)),
                     ),
                 ]);
-                if explicit {
+                if dead {
                     statements.push(SemanticStatementV1::new(
                         source,
                         SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4)),

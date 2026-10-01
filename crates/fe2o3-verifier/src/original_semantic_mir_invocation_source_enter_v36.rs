@@ -137,10 +137,13 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 return Err(mismatch());
             }
             let object = slot.source_generation().is_some();
+            // Entry recipes catalogue identities; explicit storage markers
+            // still determine when the original storage becomes active.
             let implicit = if object {
-                slots
-                    .object_activation(root, instance, slot.local(), 0, out)?
-                    .is_some_and(|activation| activation.descriptor == descriptor)
+                !*explicit.get(local).ok_or_else(mismatch)?
+                    && slots
+                        .object_activation(root, instance, slot.local(), 0, out)?
+                        .is_some_and(|activation| activation.descriptor == descriptor)
             } else {
                 !*explicit.get(local).ok_or_else(mismatch)?
             };
