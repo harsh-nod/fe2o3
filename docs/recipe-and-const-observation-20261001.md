@@ -66,3 +66,25 @@ Each campaign used a separate fresh dependency tree of 459 files and 360,634,279
 For #282 U4, the result supports the named positive replay-latency subcriterion and corroborates the already accepted U3 deterministic replay path. Complete owner accounting, refusal and rebind workloads, small and tiled end-to-end workflows, independent correctness, target coverage and curriculum integration still need their own evidence. The const observations support #280 M0 baseline work but do not close its generation and validation budgets. Neither compiler campaign directly qualifies #281 debugger milestones. Accepted milestones remain six of eighteen.
 
 In particular, live compiler artifacts coexist with copied output bytes, and source rechecking temporarily retains another source buffer. Complete ownership walkers are still required; adding reservation maxima or measuring only returned attempts would not establish the active-pipeline memory target.
+
+## Later retained storage components
+
+The following additive changes were published on 2026-10-01 after the timing campaigns above. They observe actual retained component allocations: vector and string capacity, boxed-slice extent, and each separately owned nested allocation. They do not turn stored reservation limits into measurements or deduplicate independent owners merely because their bytes match.
+
+| Component batch | Compiler commit | Passing debug executions | Passing optimized executions | New distinct tests |
+| --- | --- | ---: | ---: | ---: |
+| Supported Policy3–6 ownership tree and formal-memory reports | [5c67d62](https://github.com/harsh-nod/fe2o3/commit/5c67d6289fd6d3bb77bf987fe0a703913bbd0165) | 4,019 | 67 | 25 |
+| MIR locator trees, V5 evidence, parallel contracts and induction reports | [d3627ab](https://github.com/harsh-nod/fe2o3/commit/d3627abb60c3431077ebcd8441b9b0010f09c90c) | 3,018 | 33 | 28 |
+| MIR semantic contracts and their nested domain and output payloads | [97ddc6c](https://github.com/harsh-nod/fe2o3/commit/97ddc6c8424f797d767828df3737f0d2d103bed1) | 1,824 | 8 | 8 |
+
+The debug runs respectively had eight, three and zero ignored executions. Counts are executions, not a deduplicated total across batches. The locator suite ran under both default and explicit Pliron test commands; development-dependency feature unification enabled Pliron in both. A separate library check covered the no-default-features configuration. Every new distinct test also passed optimized validation. [The component evidence record](evidence/retained-compiler-storage-20261001.json) retains source, review, publication and execution pins.
+
+The policy observer composes the supported V11 module ownership grammar and refuses unsupported owners. Its distinct canonical outputs and audit copies remain distinct allocations. Formal-memory reports include their two strings and five vector backings. Evidence observers cover one canonical V5 box, parallel relation and hierarchy boxes, and induction certificates with the optional reachability vector. The semantic-contract visitor includes all five outer boxes plus nested domain extents and output auxiliary roots.
+
+These methods preserve constructors, admission, canonical bytes and proof/provenance behavior. Lower-level crates expose fallible count-and-width callbacks without adding an upward dependency. Their enclosing consumer must apply checked arithmetic and explicit byte/item limits using the same counter, count headers and root visits according to each method's contract, and discard the entire incomplete observation on refusal. A permissive callback or a successful leaf observer does not establish a complete parent total.
+
+Complete action accounting is still open. The retained semantic graph and fresh compiler context, remaining ranked/binding owners, source rechecking and output overlap must all be covered at the actual observation boundary. Fresh contexts created inside the action are not pre-existing exclusions. New allocations alone can also miss logical objects placed in pre-existing arena or container storage.
+
+A separate static inspection ruled out assuming that an executable-only Rust allocator hook covers the pinned compiler driver: the driver's allocator shims have protected ELF visibility, and inspected paths call C allocation routines directly. This was not a runtime allocation measurement, a proof of actual missed bytes, or a complete inspection of every allocation path.
+
+No timing campaign was rerun on these later commits. The earlier latency values retain their original source and executable bindings. The 128 MiB action target, peak heap, RSS and complete pipeline storage remain unqualified; accepted milestones remain six of eighteen.
