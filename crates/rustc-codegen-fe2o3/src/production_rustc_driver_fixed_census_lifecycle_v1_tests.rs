@@ -362,6 +362,8 @@ fn parse_fatal(workspace: &Path, scratch: &Path, original: &CapturedCase) -> Cap
     let broken = stamp(path);
     CapturedCase {
         captured: corpus_cargo::Captured {
+            original_args: original.captured.original_args.clone(),
+            explicit_sysroot: original.captured.explicit_sysroot.clone(),
             args,
             environment: original.captured.environment.clone(),
             cwd: original.captured.cwd.clone(),
