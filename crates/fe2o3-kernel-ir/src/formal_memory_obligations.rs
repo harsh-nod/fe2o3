@@ -27,6 +27,10 @@ mod receipt_v1;
 
 pub use complete_body_v19::derive_complete_body_memory_obligations_v19;
 pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;
+pub use guarded_access_v1::execution_condition_v1::{
+    FormalAccessExecutionAnalysisV1, FormalAccessExecutionConditionV1, FormalSingletonExecutionV1,
+    derive_formal_access_execution_conditions_v1,
+};
 pub use ordered_composition_v1::*;
 pub use physical_entry_v20::{
     PhysicalEntryKernargAbiRequirementV20, PhysicalEntryKernargReadV20,
