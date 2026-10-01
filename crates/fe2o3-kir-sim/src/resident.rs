@@ -2,6 +2,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
 use std::mem::{align_of, size_of};
 
+#[cfg(test)]
+#[path = "resident_storage_v18_tests.rs"]
+mod storage_tests;
+
 use fe2o3_kernel_ir::{
     AddressSpace, AssemblyEffect, AssemblyOption, BarrierSemantics, BasicBlock, Function,
     FunctionBody, InlineAssembly, IntegerSwitchCase, Kernel, MatrixFrontendBindingV2,
@@ -158,11 +162,27 @@ fn hash_map_bucket_bytes<K, V>(buckets: usize) -> Option<usize> {
 /// Returns heap bytes retained by a decoded module, excluding the inline
 /// `Module` value itself.
 pub(crate) fn module_retained_heap_bytes(module: &Module) -> Option<usize> {
-    if !module.storage_layouts.is_empty() {
-        return None;
-    }
     let mut resident = ResidentLedger::new(0);
     resident.add_vec::<fe2o3_kernel_ir::StorageLayoutV1>(module.storage_layouts.capacity())?;
+    for layout in &module.storage_layouts {
+        use fe2o3_kernel_ir::StorageLayoutKindV1;
+        match &layout.kind {
+            StorageLayoutKindV1::Record(fields) | StorageLayoutKindV1::Union(fields) => {
+                resident.add_product(fields.len(), size_of::<fe2o3_kernel_ir::StorageFieldV1>())?;
+            }
+            StorageLayoutKindV1::Variants { variants, .. } => {
+                resident.add_product(
+                    variants.len(),
+                    size_of::<fe2o3_kernel_ir::StorageVariantV1>(),
+                )?;
+            }
+            StorageLayoutKindV1::Scalar(_)
+            | StorageLayoutKindV1::Vector(_)
+            | StorageLayoutKindV1::Pointer(_)
+            | StorageLayoutKindV1::Array { .. }
+            | StorageLayoutKindV1::Slice { .. } => {}
+        }
+    }
     resident.add_bytes(module.id.retained_capacity_bytes())?;
     resident.add_vec::<Function>(module.functions.capacity())?;
     for function in &module.functions {
@@ -414,7 +434,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn storage_legacy_resident_census_checks_eligibility_and_empty_capacity() {
+    fn storage_resident_census_counts_empty_capacity_and_inert_scalar_rows() {
         use fe2o3_kernel_ir::{StorageLayoutIdV1, StorageLayoutKindV1, StorageLayoutV1};
         let mut module = Module::new("storage_census");
         let old = module_retained_heap_bytes(&module).unwrap();
@@ -432,7 +452,10 @@ mod tests {
             alignment: 4,
             kind: StorageLayoutKindV1::Scalar(fe2o3_kernel_ir::ScalarType::U32),
         });
-        assert_eq!(module_retained_heap_bytes(&module), None);
+        assert_eq!(
+            module_retained_heap_bytes(&module),
+            Some(old + module.storage_layouts.capacity() * size_of::<StorageLayoutV1>())
+        );
     }
     use fe2o3_kernel_ir::{
         AccessMode, BasicBlock, BlockId, Function, FunctionId, Gfx950LdsTransposeFormatV1,
