@@ -23,6 +23,7 @@ include!("mixed_optimizer_storage_view_byte_operations_v39_tests.rs");
 include!("mixed_optimizer_integral_byte_casts_v40_tests.rs");
 include!("mixed_optimizer_checked_byte_operations_v48_tests.rs");
 include!("mixed_optimizer_float_byte_operations_v52_tests.rs");
+include!("mixed_optimizer_tagged_select_v55_tests.rs");
 include!("mixed_optimizer_byte_trap_v40_tests.rs");
 
 #[test]
@@ -774,6 +775,8 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
     assert_eq!(checked::headers(), checked);
     let floating = float_byte_header_oracle_v52();
     assert_eq!(floating::headers(), floating);
+    let tagged_select = tagged_select_header_oracle_v55();
+    assert_eq!(tagged_select::headers(), tagged_select);
     let trap = trap_header_oracle_v40();
     assert_eq!(trap::headers(), trap);
     assert_eq!(
@@ -789,6 +792,7 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
             + integral
             + checked
             + floating
+            + tagged_select
             + trap
             + model
     );

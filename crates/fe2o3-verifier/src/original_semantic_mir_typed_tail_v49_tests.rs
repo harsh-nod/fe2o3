@@ -317,6 +317,7 @@ fn consensus_transform(
 fn original_source_typed_tail_forwards_genuine_same_value_branch_stores() {
     let mut complete = false;
     let result = run_mode(LIMIT, LIMIT, false, true, |text| {
+        assert!(text.contains("tagged_select_value"));
         assert!(text.contains("forwarding_store_fact_v46"));
         assert!(text.contains("proof fn typed_final_native_source_trace_"));
         assert!(text.contains("typed_source_observation_transport_"));

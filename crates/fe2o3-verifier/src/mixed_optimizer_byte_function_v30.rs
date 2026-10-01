@@ -49,6 +49,10 @@ use checked::CheckedByteOperationV48;
 mod floating;
 use floating::FloatByteOperationV52;
 
+#[path = "mixed_optimizer_tagged_select_v55.rs"]
+mod tagged_select;
+use tagged_select::TaggedSelectV55;
+
 #[path = "mixed_optimizer_byte_trap_v40.rs"]
 mod trap;
 use trap::TrapByteOperationV40;
@@ -79,6 +83,7 @@ enum ByteOperationV30<'inventory, 'owner> {
     IntegralCast(IntegralByteCastV40),
     Checked(CheckedByteOperationV48),
     Float(FloatByteOperationV52),
+    TaggedSelect(TaggedSelectV55<'inventory>),
     Index(IndexByteOperationV37),
     Scalar(CanonicalByteScalarV30<'inventory, 'owner>),
     Trap(TrapByteOperationV40),
@@ -258,6 +263,9 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 ByteOperationV30::Trap(trap)
             } else if let Some(float) = FloatByteOperationV52::derive(inventory, operation, out)? {
                 ByteOperationV30::Float(float)
+            } else if let Some(select) = TaggedSelectV55::derive(inventory, operation, width, out)?
+            {
+                ByteOperationV30::TaggedSelect(select)
             } else {
                 ByteOperationV30::Scalar(CanonicalByteScalarV30::derive(
                     inventory, operation, width, out,
@@ -569,6 +577,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 float.emit_step(before, after, out)?;
                 PointerByteEffectV30::None
             }
+            ByteOperationV30::TaggedSelect(select) => {
+                select.emit_step(before, after, out)?;
+                PointerByteEffectV30::None
+            }
             ByteOperationV30::Pointer(pointer) => {
                 pointer.emit_step(
                     before,
@@ -726,6 +738,7 @@ fn headers<R>() -> usize {
         + integral::headers()
         + checked::headers()
         + floating::headers()
+        + tagged_select::headers()
         + trap::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()

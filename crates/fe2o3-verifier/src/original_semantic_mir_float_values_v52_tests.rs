@@ -211,6 +211,7 @@ fn original_float_load_add_store_reaches_the_complete_typed_production_generator
     ] {
         let mut completed = false;
         let result = run_transform(LIMIT, LIMIT, false, false, Some(transform), |text| {
+            assert!(text.contains("tagged_select_value"));
             for root in 0..2 {
                 assert!(text.contains(&format!("proof fn typed_final_source_step_{root}_v49")));
                 assert!(text.contains(&format!(
