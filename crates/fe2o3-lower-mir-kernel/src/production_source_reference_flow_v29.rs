@@ -1,6 +1,7 @@
 // Exact source-instance transfers consumed by the finite checked CFG worklist.
 
 include!("production_source_reference_array_assignment_v29.rs");
+include!("production_source_reference_static_assignment_v43.rs");
 include!("production_source_direct_volatile_v29.rs");
 include!("production_source_raw_volatile_v29.rs");
 include!("production_source_ordered_issued_v29.rs");
@@ -1092,6 +1093,8 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             )
             && self.install_plain_array_element_v29(target, node, budget)?
         {
+            Ok(())
+        } else if self.install_nested_static_components_v43(target, node, budget)? {
             Ok(())
         } else if target.loan.is_some()
             || self.contains_loan(node, budget)?

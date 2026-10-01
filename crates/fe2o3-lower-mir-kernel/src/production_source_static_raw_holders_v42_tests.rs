@@ -116,10 +116,168 @@ fn original_static_raw_holders_join_nested_fields_arrays_and_from_end_bounds() {
                 completed = true;
                 Ok(())
             })
-            .unwrap();
+            .unwrap_or_else(|error| panic!("immutable={immutable}, mode={mode}: {error:?}"));
             assert!(completed, "immutable={immutable}, mode={mode}");
         }
     }
+}
+
+fn nested_holder_overwrite_owner_v43(
+    immutable: bool,
+    rewrite: bool,
+    expire: bool,
+) -> ProductionSemanticSsaOwnerV1 {
+    let owner = projected_pointer_test_owner_v29(entrance_control_owner(false), immutable, 8);
+    let semantic = owner.source_semantic();
+    let old = &semantic.functions()[0];
+    let mut statements = old.blocks()[0].statements().to_vec();
+    if !rewrite {
+        statements.retain(|statement| {
+            let destination = match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => Some(assignment.destination()),
+                SemanticStatementKindV1::Store(store) => Some(store.destination()),
+                _ => None,
+            };
+            !destination.is_some_and(|place| {
+                place.local().index() == 4
+                    && place.projections().first().is_some_and(|projection| {
+                        projection.kind() == SemanticProjectionKindV1::Dereference
+                    })
+            })
+        });
+    }
+    if expire {
+        let before = statements
+            .iter()
+            .position(|statement| {
+                matches!(statement.kind(), SemanticStatementKindV1::Assign(assignment)
+                if assignment.destination().local().index() == 7)
+            })
+            .unwrap();
+        statements.insert(
+            before,
+            SemanticStatementV1::new(
+                old.source(),
+                SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(if rewrite {
+                    2
+                } else {
+                    9
+                })),
+            ),
+        );
+    }
+    let root = SemanticFunctionDeclV1::new(
+        old.identity(),
+        old.role(),
+        old.item_definition_identity(),
+        old.monomorphization_identity(),
+        old.generic_type_arguments_identity(),
+        old.const_generic_arguments_identity(),
+        old.source(),
+        old.abi().clone(),
+        old.locals().to_vec(),
+        old.entry(),
+        vec![
+            SemanticBasicBlockV1::new(
+                old.blocks()[0].identity(),
+                old.blocks()[0].source(),
+                statements,
+                old.blocks()[0].terminator().clone(),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+    .with_kernel_entry(old.kernel_entry().unwrap().clone());
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        semantic.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        vec![root],
+        semantic.callables().to_vec(),
+        semantic.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn nested_static_holder_writes_keep_exact_current_origins_and_do_not_revive_dead_targets() {
+    for immutable in [false, true] {
+        for rewrite in [false, true] {
+            let owner = nested_holder_overwrite_owner_v43(immutable, rewrite, false);
+            let mut completed = false;
+            with_selected_pointer_test_plan_v29(owner, |plan, budget| {
+                let (site, place) = original_read(plan);
+                let access = source_static_raw_holder_v42(
+                    plan,
+                    site,
+                    place,
+                    SourceReferenceAccessV29::Read,
+                    place.projections().len() - 1,
+                    budget,
+                )?;
+                let set = &plan.raw_sets[access.set];
+                assert_eq!(set.local.index(), if rewrite { 2 } else { 9 });
+                assert_eq!(set.mutable, !immutable);
+                assert!(set.count > 0);
+                for choice in &plan.raw_choices[set.first..set.first + set.count] {
+                    assert!(!choice.expired);
+                    let origin = &plan.raw_origins[choice.origin];
+                    assert_eq!(origin.local, set.local);
+                    assert_eq!(origin.mutable, !immutable);
+                }
+                completed = true;
+                Ok(())
+            })
+            .unwrap();
+            assert!(completed);
+            let owner = nested_holder_overwrite_owner_v43(immutable, rewrite, true);
+            let mut accepted = false;
+            let result = with_selected_pointer_test_plan_v29(owner, |_, _| {
+                accepted = true;
+                Ok(())
+            });
+            assert!(!accepted && result.is_err());
+            assert!(
+                format!("{:?}", result.unwrap_err())
+                    .contains("source raw pointer outlived its storage activation")
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_static_assignment_header_accounts_for_the_retained_parent_walk() {
+    type Fields<'a> = (
+        (usize, usize, usize),
+        Vec<SourceReferenceStaticParentV43>,
+        SourceReferenceLocalV29,
+        SourceReferenceNodeV29,
+        SemanticProjectionV1,
+        (usize, usize, SemanticTypeIdV1),
+        Option<usize>,
+        [usize; 8],
+        [&'a (); 8],
+    );
+    assert_eq!(
+        std::mem::size_of::<SourceReferenceStaticParentV43>(),
+        std::mem::size_of::<(usize, usize, usize)>()
+    );
+    assert_eq!(
+        source_reference_static_assignment_headers_v43().unwrap(),
+        std::mem::size_of::<Fields<'_>>()
+            + 2 * std::mem::size_of::<Result<Fields<'_>, ProductionSemanticKirErrorV1>>()
+    );
 }
 
 #[test]
