@@ -398,3 +398,151 @@ fn source_driver_corpus_report_preserves_refusal_without_artifact_authority() {
     assert_eq!(json["default_pipeline_activated"], false);
     assert_eq!(json["grants_artifact_or_launch_authority"], false);
 }
+
+fn diagnostic_expectation() -> serde_json::Value {
+    serde_json::json!({
+        "kind":"diagnostic-kir-export-v1", "canonicalKirVersion":18,
+        "diagnosticTileOrders":["blocked","striped"], "authority":"observation_only"
+    })
+}
+
+fn append_diagnostic_contract(document: &mut serde_json::Value) -> usize {
+    // Synthetic metadata exercises census separation, not source acceptance.
+    let mut tab = document["curriculum"]["lessons"][4]["codeTabs"][6].clone();
+    let tabs = document["curriculum"]["lessons"][4]["codeTabs"]
+        .as_array_mut()
+        .unwrap();
+    let ordinal = tabs.len();
+    tab["ordinal"] = serde_json::json!(ordinal);
+    let row = &mut tab["sourceItem"]["cases"][0];
+    row["kernelSymbol"] = serde_json::json!("diagnostic_generic");
+    row["features"] = serde_json::json!(["diagnostic_generic"]);
+    row["expectation"] = diagnostic_expectation();
+    tabs.push(tab);
+    document["kernelInventory"]["kernels"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "kernelId":format!("source-driver:cpu-semantic-simulation:{ordinal}:diagnostic_generic"),
+            "selections":[source_selection(ordinal, 0)]
+        }));
+    ordinal
+}
+
+#[test]
+fn diagnostic_source_associations_do_not_enter_the_eleven_verified_p4_cases() {
+    let mut document = original();
+    append_diagnostic_contract(&mut document);
+    let before = document.clone();
+    let observed = selected(&document).unwrap();
+    assert_eq!(observed.len(), POSITIVES);
+    assert_eq!(
+        serde_json::to_value(&observed).unwrap(),
+        serde_json::to_value(selected(&original()).unwrap()).unwrap()
+    );
+    assert!(observed.iter().all(|row| matches!(
+        row.original_expectation,
+        Expectation::VerifiedBundleExport { .. }
+    )));
+    assert_eq!(document, before);
+}
+
+#[test]
+fn diagnostic_expectation_retains_exact_version_orders_and_observation_authority() {
+    for orders in [
+        serde_json::json!(["blocked"]),
+        serde_json::json!(["striped"]),
+        serde_json::json!(["blocked", "striped"]),
+    ] {
+        let mut document = original();
+        let ordinal = append_diagnostic_contract(&mut document);
+        document["curriculum"]["lessons"][4]["codeTabs"][ordinal]["sourceItem"]["cases"][0]["expectation"]
+            ["diagnosticTileOrders"] = orders;
+        assert_eq!(selected(&document).unwrap().len(), POSITIVES);
+    }
+    for (key, value) in [
+        ("canonicalKirVersion", serde_json::json!(true)),
+        ("canonicalKirVersion", serde_json::json!(17)),
+        ("canonicalKirVersion", serde_json::json!(19)),
+        ("diagnosticTileOrders", serde_json::json!([])),
+        (
+            "diagnosticTileOrders",
+            serde_json::json!(["striped", "blocked"]),
+        ),
+        (
+            "diagnosticTileOrders",
+            serde_json::json!(["blocked", "blocked"]),
+        ),
+        ("diagnosticTileOrders", serde_json::json!(["other"])),
+        ("authority", serde_json::json!("verified")),
+        ("authority", serde_json::json!(true)),
+        ("bundleVersion", serde_json::json!(18)),
+        ("sourceAuthentication", serde_json::json!(true)),
+        ("kind", serde_json::json!("diagnostic-kir-export-v2")),
+    ] {
+        let mut document = original();
+        let ordinal = append_diagnostic_contract(&mut document);
+        document["curriculum"]["lessons"][4]["codeTabs"][ordinal]["sourceItem"]["cases"][0]["expectation"]
+            [key] = value;
+        assert!(selected(&document).is_err(), "accepted diagnostic {key}");
+    }
+}
+
+#[test]
+fn diagnostic_kind_cannot_replace_verified_or_required_negative_selections() {
+    for ordinal in [0, 6] {
+        let mut document = original();
+        item(&mut document)["cases"][ordinal]["expectation"] = diagnostic_expectation();
+        assert!(selected(&document).is_err());
+    }
+}
+
+#[test]
+fn diagnostic_selections_require_complete_distinct_inventory_and_input_identity() {
+    for mutation in 0..7 {
+        let mut document = original();
+        let ordinal = append_diagnostic_contract(&mut document);
+        match mutation {
+            0 => {
+                document["kernelInventory"]["kernels"]
+                    .as_array_mut()
+                    .unwrap()
+                    .pop();
+            }
+            1 => {
+                document["kernelInventory"]["negativeCases"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::to_value(source_selection(ordinal, 0)).unwrap());
+            }
+            2 => {
+                document["curriculum"]["lessons"][4]["codeTabs"][ordinal]["sourceItem"]["compilerInput"]
+                    ["sourcePaths"] = serde_json::json!(["different.rs"]);
+            }
+            3 => {
+                document["curriculum"]["lessons"][4]["codeTabs"][ordinal]["sourceItem"]["sourceRanges"]
+                    [0]["byteLength"] = serde_json::json!(0);
+            }
+            4 => {
+                document["curriculum"]["lessons"][4]["codeTabs"][ordinal]["sourceItem"]["driver"]
+                    ["path"] = serde_json::json!("different.rs");
+            }
+            5 => {
+                let kernels = document["kernelInventory"]["kernels"]
+                    .as_array_mut()
+                    .unwrap();
+                let extra = kernels.last().unwrap().clone();
+                kernels.push(extra);
+            }
+            6 => {
+                document["curriculum"]["lessons"][4]["codeTabs"][ordinal]["sourceItem"]["contractSha256"] =
+                    serde_json::json!("stale");
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            selected(&document).is_err(),
+            "accepted diagnostic mutation {mutation}"
+        );
+    }
+}
