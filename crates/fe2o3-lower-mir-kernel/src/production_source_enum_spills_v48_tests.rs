@@ -1,3 +1,73 @@
+fn transported_enum_owner_v50() -> ProductionSemanticSsaOwnerV1 {
+    let previous = promoted_enum_owner_v47();
+    let semantic = previous.source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let original = &functions[0];
+    let statements = original.blocks()[0].statements();
+    let prefix = statements.len() - 4;
+    let jump = |target| {
+        SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::Goto,
+            SemanticBlockIdV1::from_index(target),
+        ))
+    };
+    // The original entry copy is dynamic; both enum locals must cross CFG edges.
+    let select = SemanticTerminatorKindV1::SwitchInt {
+        discriminant: SemanticOperandV1::Copy(place(3, U32)),
+        targets: SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                0,
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::SwitchValue,
+                    SemanticBlockIdV1::from_index(1),
+                ),
+            )],
+            SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::SwitchOtherwise,
+                SemanticBlockIdV1::from_index(2),
+            ),
+        )
+        .unwrap(),
+    };
+    functions[0] = function(
+        233,
+        original.role(),
+        original.abi().clone(),
+        original.locals().to_vec(),
+        vec![
+            block(234, statements[..prefix].to_vec(), select),
+            block(235, vec![statements[prefix].clone()], jump(3)),
+            block(236, vec![statements[prefix + 1].clone()], jump(3)),
+            block(237, vec![statements[prefix + 2].clone()], jump(4)),
+            block(
+                238,
+                vec![statements[prefix + 3].clone()],
+                SemanticTerminatorKindV1::Return,
+            ),
+        ],
+    )
+    .with_kernel_entry(original.kernel_entry().unwrap().clone());
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        semantic.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        semantic.callables().to_vec(),
+        semantic.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
 fn enum_spill_header_oracle_v48() -> usize {
     fn h<T>() -> usize {
         size_of::<T>()
@@ -23,6 +93,7 @@ fn inspect_enum_spills_v48(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<()> {
     let semantic = relation.source.source_semantic(budget)?;
+    assert_eq!(semantic.functions()[0].blocks().len(), 5);
     let enumeration = SemanticTypeIdV1::from_index((semantic.types().len() - 1) as u32);
     let first = (semantic.functions()[0].locals().len() - 3) as u32;
     let count = relation.enum_spill_count_v48(0, budget)?;
@@ -87,7 +158,7 @@ fn inspect_enum_spills_v48(
 fn compiler_enum_spills_retain_exact_nominal_fields_and_actual_allocas_not_source_frames() {
     let completed = std::cell::Cell::new(false);
     probe(
-        promoted_enum_owner_v47,
+        transported_enum_owner_v50,
         MODULE_LIMIT,
         MODULE_LIMIT,
         |relation, budget| {
@@ -105,7 +176,7 @@ fn compiler_enum_spills_retain_exact_nominal_fields_and_actual_allocas_not_sourc
 fn compiler_enum_spill_roster_detects_missing_duplicate_and_substituted_origins() {
     let completed = std::cell::Cell::new(false);
     probe(
-        promoted_enum_owner_v47,
+        transported_enum_owner_v50,
         MODULE_LIMIT,
         MODULE_LIMIT,
         |relation, budget| {
@@ -176,7 +247,7 @@ fn compiler_enum_spill_queries_preserve_sticky_ordinal_floor_and_foreign_ledger_
         let reached = std::cell::Cell::new(false);
         let attacked = std::cell::Cell::new(false);
         let result = probe(
-            promoted_enum_owner_v47,
+            transported_enum_owner_v50,
             MODULE_LIMIT,
             MODULE_LIMIT,
             |relation, budget| {
@@ -265,14 +336,14 @@ fn compiler_enum_spill_queries_preserve_sticky_ordinal_floor_and_foreign_ledger_
 #[test]
 fn compiler_enum_spill_capture_and_query_have_exact_complete_resource_boundaries() {
     let measured = probe(
-        promoted_enum_owner_v47,
+        transported_enum_owner_v50,
         MODULE_LIMIT,
         MODULE_LIMIT,
         inspect_enum_spills_v48,
     );
     measured.0.unwrap();
     let exact = probe(
-        promoted_enum_owner_v47,
+        transported_enum_owner_v50,
         measured.1,
         measured.2,
         inspect_enum_spills_v48,
@@ -284,7 +355,7 @@ fn compiler_enum_spill_capture_and_query_have_exact_complete_resource_boundaries
         let storage = measured.2 - usize::from(!is_work);
         let error = entrance_resource(
             probe(
-                promoted_enum_owner_v47,
+                transported_enum_owner_v50,
                 work,
                 storage,
                 inspect_enum_spills_v48,
@@ -305,6 +376,25 @@ fn compiler_enum_spill_capture_and_query_have_exact_complete_resource_boundaries
             other => panic!("wrong boundary: {other:?}"),
         }
     }
+}
+
+#[test]
+fn single_block_known_enum_carriers_do_not_require_compiler_spills() {
+    let completed = std::cell::Cell::new(false);
+    probe(
+        promoted_enum_owner_v47,
+        MODULE_LIMIT,
+        MODULE_LIMIT,
+        |relation, budget| {
+            check_promoted_enum_v47(relation, budget)?;
+            assert_eq!(relation.enum_spill_count_v48(0, budget)?, 0);
+            completed.set(true);
+            Ok(())
+        },
+    )
+    .0
+    .unwrap();
+    assert!(completed.get());
 }
 
 #[test]
