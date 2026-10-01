@@ -4098,6 +4098,8 @@ impl RankedVerifiedProductionCompilation {
 }
 
 pub(crate) mod complete_body_vnext;
+#[cfg(test)]
+mod formal_memory_diagnostic_v1_tests;
 #[path = "production_pipeline_guarded_loop_source_v1.rs"]
 pub(crate) mod guarded_loop_source_v1;
 #[path = "production_pipeline_loop_capture_v1.rs"]

@@ -38,6 +38,8 @@ exec "$@"
 "#;
 
 pub(super) struct Captured {
+    pub original_args: Vec<String>,
+    pub explicit_sysroot: String,
     pub args: Vec<String>,
     pub environment: Vec<(OsString, OsString)>,
     pub cwd: PathBuf,
@@ -194,6 +196,15 @@ fn make_sysroot_explicit(
     environment: &[(OsString, OsString)],
     cwd: &Path,
 ) -> Result<(), SourceFailure> {
+    make_sysroot_explicit_in_case(args, environment, cwd, None)
+}
+
+fn make_sysroot_explicit_in_case(
+    args: &mut Vec<String>,
+    environment: &[(OsString, OsString)],
+    cwd: &Path,
+    bounded_case: Option<&Path>,
+) -> Result<(), SourceFailure> {
     match option_values(args, "--sysroot")?.len() {
         1 => return Ok(()),
         0 => {}
@@ -207,13 +218,19 @@ fn make_sysroot_explicit(
     let compiler = args
         .first()
         .ok_or_else(|| failed(SourceStage::Invocation, "missing captured compiler"))?;
-    let output = Command::new(compiler)
+    let mut command = Command::new(compiler);
+    command
         .env_clear()
         .envs(environment.iter().map(|(key, value)| (key, value)))
         .current_dir(cwd)
-        .args(["--print", "sysroot"])
-        .output()
-        .map_err(|e| failed(SourceStage::Invocation, e))?;
+        .args(["--print", "sysroot"]);
+    let output = capture_output(
+        &mut command,
+        bounded_case,
+        "sysroot",
+        60,
+        SourceStage::Invocation,
+    )?;
     if !output.status.success() {
         return Err(failed(SourceStage::Invocation, diagnostics(&output)));
     }
@@ -242,6 +259,67 @@ pub(super) fn capture(
     case: &Path,
     target: &Path,
 ) -> Result<Captured, SourceFailure> {
+    let rustflags = checked_output_rustflags(&fixture.target);
+    capture_with_flags(workspace, fixture, case, target, &rustflags, false)
+}
+
+fn checked_output_rustflags(target: &str) -> String {
+    format!(
+        "-Zalways-encode-mir -Ctarget-cpu={target} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32 -Coverflow-checks=on"
+    )
+}
+
+/// Diagnostic replay preserves the caller's entire flag string, including an
+/// absent overflow override. The checked-output corpus default above is intact.
+pub(super) fn capture_with_exact_rustflags(
+    workspace: &Path,
+    fixture: &Fixture,
+    case: &Path,
+    target: &Path,
+    rustflags: &str,
+) -> Result<Captured, SourceFailure> {
+    capture_with_flags(workspace, fixture, case, target, rustflags, true)
+}
+
+fn capture_output(
+    command: &mut Command,
+    bounded_case: Option<&Path>,
+    label: &str,
+    timeout: u64,
+    stage: SourceStage,
+) -> Result<std::process::Output, SourceFailure> {
+    match bounded_case {
+        Some(case) => {
+            super::formal_memory_diagnostic::bounded_output(command, case, label, timeout)
+                .map_err(|e| failed(stage, e))
+        }
+        None => command.output().map_err(|e| failed(stage, e)),
+    }
+}
+
+struct PrivateEnvironmentCapture(Option<PathBuf>);
+
+impl Drop for PrivateEnvironmentCapture {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => eprintln!("remove private captured environment: {error}"),
+            }
+        }
+    }
+}
+
+fn capture_with_flags(
+    workspace: &Path,
+    fixture: &Fixture,
+    case: &Path,
+    target: &Path,
+    rustflags: &str,
+    bounded: bool,
+) -> Result<Captured, SourceFailure> {
+    let bounded_case = bounded.then_some(case);
     let input = &fixture.compiler_input;
     let manifest = workspace
         .join(&input.package_manifest)
@@ -264,9 +342,13 @@ pub(super) fn capture(
         ])
         .arg(&manifest);
     feature_args(&mut metadata_command, fixture);
-    let output = metadata_command
-        .output()
-        .map_err(|e| failed(SourceStage::CargoMetadata, e))?;
+    let output = capture_output(
+        &mut metadata_command,
+        bounded_case,
+        "cargo-metadata",
+        120,
+        SourceStage::CargoMetadata,
+    )?;
     if !output.status.success() {
         return Err(failed(SourceStage::CargoMetadata, diagnostics(&output)));
     }
@@ -322,25 +404,60 @@ pub(super) fn capture(
         .map(PathBuf::from)
         .ok_or_else(|| failed(SourceStage::CargoMetadata, "missing workspace root"))?;
     let wrapper = case.join("capture-rustc.sh");
-    std::fs::write(&wrapper, WRAPPER).map_err(|e| failed(SourceStage::Invocation, e))?;
+    if bounded {
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&wrapper)
+            .and_then(|mut file| {
+                file.write_all(
+                    WRAPPER
+                        .replacen("set -eu", "set -eu\nset -C\numask 077", 1)
+                        .as_bytes(),
+                )
+            })
+            .map_err(|e| failed(SourceStage::Invocation, e))?;
+    } else {
+        std::fs::write(&wrapper, WRAPPER).map_err(|e| failed(SourceStage::Invocation, e))?;
+    }
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| failed(SourceStage::Invocation, e))?;
     let argv_file = case.join("cargo-root.argv");
     let env_file = case.join("cargo-root.env");
+    let _private_environment = PrivateEnvironmentCapture(bounded.then(|| env_file.clone()));
     let mut command = capture_command(Path::new(env!("CARGO")))?;
-    command.current_dir(&cargo_workspace).args([
-        "check", "--offline", "--locked", "--release", "-Zbuild-std=core", "--lib",
-        "--target", "amdgcn-amd-amdhsa", "--message-format=json-render-diagnostics", "--manifest-path",
-    ]).arg(&manifest).arg("--target-dir").arg(target)
+    command
+        .current_dir(&cargo_workspace)
+        .args([
+            "check",
+            "--offline",
+            "--locked",
+            "--release",
+            "-Zbuild-std=core",
+            "--lib",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--message-format=json-render-diagnostics",
+            "--manifest-path",
+        ])
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(target)
         .env("RUSTC_WRAPPER", &wrapper)
-        .env(CAPTURE_ARGS, &argv_file).env(CAPTURE_ENV, &env_file)
-        .env(CAPTURE_MANIFEST, package_dir).env(CAPTURE_CRATE, &input.cargo_target.name)
-        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", format!(
-            "-Zalways-encode-mir -Ctarget-cpu={} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32 -Coverflow-checks=on", fixture.target));
+        .env(CAPTURE_ARGS, &argv_file)
+        .env(CAPTURE_ENV, &env_file)
+        .env(CAPTURE_MANIFEST, package_dir)
+        .env(CAPTURE_CRATE, &input.cargo_target.name)
+        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", rustflags);
     feature_args(&mut command, fixture);
-    let output = command
-        .output()
-        .map_err(|e| failed(SourceStage::CargoDependencies, e))?;
+    let output = capture_output(
+        &mut command,
+        bounded_case,
+        "cargo-dependencies",
+        1200,
+        SourceStage::CargoDependencies,
+    )?;
     let cargo_diagnostics = diagnostics(&output);
     // A successful ordinary Cargo root compile is not P4 qualification. Capture
     // must be the intentional final failure, after its dependencies completed.
@@ -351,7 +468,15 @@ pub(super) fn capture(
     {
         return Err(failed(SourceStage::CargoDependencies, cargo_diagnostics));
     }
-    let raw = std::fs::read(&argv_file).map_err(|e| failed(SourceStage::Invocation, e))?;
+    let read_capture = |path: &Path| {
+        if bounded {
+            super::formal_memory_diagnostic::read_bounded(path)
+                .map_err(|error| failed(SourceStage::Invocation, error))
+        } else {
+            std::fs::read(path).map_err(|error| failed(SourceStage::Invocation, error))
+        }
+    };
+    let raw = read_capture(&argv_file)?;
     let rows = records(&raw)?;
     let (cwd, arguments) = rows
         .split_first()
@@ -419,7 +544,10 @@ pub(super) fn capture(
     let binding =
         derive_crate_binding_id_v1(compile.crate_name(), metadata.iter().map(String::as_str));
     let observation = derive_cargo_metadata_build_observation_v2(&metadata);
-    let env_bytes = std::fs::read(env_file).map_err(|e| failed(SourceStage::Invocation, e))?;
+    let env_bytes = read_capture(&env_file)?;
+    if bounded {
+        std::fs::remove_file(&env_file).map_err(|error| failed(SourceStage::Invocation, error))?;
+    }
     let mut environment = environment(&env_bytes)?;
     let observed_manifest = environment
         .iter()
@@ -443,11 +571,18 @@ pub(super) fn capture(
     }
     // The driver runs inside a libtest executable rather than the original
     // compiler binary. Preserve that compiler's implicit sysroot explicitly.
-    make_sysroot_explicit(&mut args, &environment, &cwd)?;
+    let original_args = args.clone();
+    make_sysroot_explicit_in_case(&mut args, &environment, &cwd, bounded_case)?;
+    let explicit_sysroot = option_values(&args, "--sysroot")?
+        .into_iter()
+        .next()
+        .ok_or_else(|| failed(SourceStage::Invocation, "missing explicit captured sysroot"))?;
     let output_directory = case.join("compiler-output");
     std::fs::create_dir(&output_directory).map_err(|e| failed(SourceStage::Invocation, e))?;
     redirect_output(&mut args, &output_directory)?;
     Ok(Captured {
+        original_args,
+        explicit_sysroot,
         args,
         environment,
         cwd,
@@ -481,6 +616,31 @@ fn cargo_capture_keeps_platform_environment_values_and_refuses_duplicates() {
     assert_eq!(rows[1], ("B".into(), "line\nvalue".into()));
     assert!(environment(b"A=x\0A=y\0").is_err());
     assert!(environment(b"A=x").is_err());
+}
+
+#[test]
+fn checked_output_capture_retains_its_existing_overflow_default() {
+    for target in ["gfx942", "gfx950"] {
+        assert_eq!(
+            checked_output_rustflags(target),
+            format!(
+                "-Zalways-encode-mir -Ctarget-cpu={target} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32 -Coverflow-checks=on"
+            ),
+        );
+    }
+}
+
+#[test]
+fn exact_capture_discards_private_environment_on_early_return() {
+    let scratch = crate::test_temp_dir::TestTempDir::create("formal-private-environment");
+    let path = scratch.path().join("cargo-root.env");
+    std::fs::write(&path, b"PRIVATE=value\0").unwrap();
+    let fail = || -> Result<(), ()> {
+        let _guard = PrivateEnvironmentCapture(Some(path.clone()));
+        Err(())
+    };
+    assert!(fail().is_err());
+    assert!(!path.exists());
 }
 
 #[test]
