@@ -166,3 +166,6 @@ impl RecordWriter<'_> {
         Ok(())
     }
 }
+
+#[path = "integer_execution_retained_storage_v1.rs"]
+mod retained_storage_v1;

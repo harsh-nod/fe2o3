@@ -2037,3 +2037,6 @@ fn proves_distinct_invocation_disjointness(
         _ => false,
     }
 }
+
+#[path = "formal_memory_retained_storage_v1.rs"]
+mod retained_storage_v1;

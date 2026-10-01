@@ -274,3 +274,6 @@ pub fn optimize_checked_canonical_kernel_ir_policy4_v1(
 #[cfg(test)]
 #[path = "checked_optimization_policy4_v1_tests.rs"]
 pub(crate) mod tests;
+
+#[path = "checked_optimization_policy4_retained_storage_v1.rs"]
+mod retained_storage_v1;
