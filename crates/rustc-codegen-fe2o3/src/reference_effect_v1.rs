@@ -3566,3 +3566,6 @@ fn kernel_scalar_symbols_cannot_enter_the_ranked_load_namespace() {
     );
     assert_eq!(kernel_scalar_symbol_v2(u32::MAX), None);
 }
+
+#[path = "reference_effect_retained_storage_v1.rs"]
+mod retained_storage_v1;

@@ -387,3 +387,6 @@ fn sort_unique<T: Ord>(values: &mut [T], field: &'static str) -> Result<(), Vali
     }
     Ok(())
 }
+
+#[path = "launch_retained_storage_v1.rs"]
+mod retained_storage_v1;

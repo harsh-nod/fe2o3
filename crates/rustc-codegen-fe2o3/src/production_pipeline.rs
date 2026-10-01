@@ -4891,3 +4891,12 @@ mod storage_component_profile_tests {
 
 #[path = "production_bindings_debug_retained_storage_v1.rs"]
 pub(crate) mod bindings_debug_retained_storage_v1;
+
+#[path = "production_bindings_context_retained_storage_v1.rs"]
+mod context_retained_storage_v1;
+
+#[path = "production_bindings_typed_descriptor_retained_storage_v1.rs"]
+mod bindings_typed_descriptor_retained_storage_v1;
+
+#[path = "production_bindings_reference_retained_storage_v1.rs"]
+mod reference_retained_storage_v1;

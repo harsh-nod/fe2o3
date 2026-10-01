@@ -356,3 +356,6 @@ fn kernel_relation_v1(
         }
     }
 }
+
+#[path = "signature_retained_storage_v1.rs"]
+mod retained_storage_v1;

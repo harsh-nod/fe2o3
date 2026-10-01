@@ -365,3 +365,6 @@ impl RetainedWorkgroupScopesV29 {
         &self.events
     }
 }
+
+#[path = "workgroup_scope_retained_storage_v29.rs"]
+mod retained_storage_v1;
