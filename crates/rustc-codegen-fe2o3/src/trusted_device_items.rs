@@ -2405,6 +2405,16 @@ mod core_checked_add_v1;
 #[path = "trusted_device_items/core_branch_hint_v1.rs"]
 mod core_branch_hint_v1;
 
+#[path = "trusted_device_items/core_slice_get_v1.rs"]
+mod core_slice_get_v1;
+
+pub(crate) fn authenticate_reviewed_safe_core_slice_get_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    core_slice_get_v1::authenticate_v1(tcx, instance)
+}
+
 pub(crate) fn authenticate_reviewed_safe_core_branch_hint_helper_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
