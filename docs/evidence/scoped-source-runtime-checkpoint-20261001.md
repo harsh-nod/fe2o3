@@ -9,10 +9,18 @@ examples as qualified through the new production path.
 
 ## Latest Compiler Checkpoint
 
-The latest completed six-package `cargo check --tests`, r313 at
-`683a2724f9b9a84dd4bf19982c5b2d39a7d4d46e`, ended at 12:13 UTC with one
-lowerer test borrow-checking error. No tests ran. Its narrow fix drops the
-borrowed descriptor view before its backing bytes; that fix is local.
+The latest completed six-package `cargo check --tests`, r319 at local candidate
+`c66e5f30a6f7624ee3aa3b507bd045b5bad339bd`, **passed** at 12:48 UTC. This
+checks the backend, lowerer, verifier, compiler-execution client/coordinator and
+protected-service spawn package with diagnostic source clauses enabled. It
+compiles selected test code but executes no tests. The preceding r315 receive
+assertion type error is corrected by checking both returned lengths; r313's
+borrow error was already cleared in r315.
+
+Two focused local suites also passed: r317 ran **29 process-tree cleanup tests**
+with zero failures/ignored and 342 filtered; r320 ran **nine source-receipt codec
+tests** with zero failures/ignored and 27 filtered. These are selected component
+tests, not complete crate suites or successful compiler/proof executions.
 
 The latest actual Rust source run, r312 at
 `414549a7f201f6d37e179da2307fef0dadf19e08`, built the backend test binary but
@@ -39,13 +47,22 @@ the proof-client/runtime changes also remain local, not end-to-end acceptance.
 Complete source-bound proof execution, paired publication/finalization and
 continuous protected compiler enforcement remain implementation work.
 
-The r314 static musl runtime-test build at the same r313 revision failed because
-`libc` does not expose `PTRACE_GET_SYSCALL_INFO` on musl. A local repair uses
-the unchanged Linux UAPI request value. The twelve new native process-tree
-controls have **not run**. Their launcher's seven local input/result tests
-passed, which does not qualify native execution. MI350 is reachable; read-only
-probes identified GCC 13 and the expected login account. No remote test scratch
-was created by these probes.
+The static musl runtime-test build now passes (r316 and r318), using the unchanged
+Linux UAPI request value where musl's `libc` does not export its name. At the
+r318 candidate, **all twelve native process-tree controls passed on MI350** in
+separate fresh processes: eight budget/accounting controls and four cancellation,
+retained-descendant, selected-error and unwind controls. Every run produced one
+passing selected test, consumed the original waits and removed its private
+filesystem and cgroup resources. A separate read-only check found all 24 recorded
+paths absent. None of these tests executed a GPU kernel or a protected proof.
+
+Two earlier setup attempts are not counted as tests. The first stopped at a
+missing C `pid_t` declaration, fixed by including `sys/types.h`. The second
+exceeded the upload deadline before compiler/test execution; its partial file
+was removed only after checking the recorded directory/file identities and
+expected binary-prefix hash. The reviewed successor records partial uploads for
+cleanup and uses SSH compression. Its ten local input/result/staging tests passed;
+these do not replace the twelve actual native controls above.
 
 The primary independently audited source inventories, tool identities, raw logs
 and runner before moving each validation worktree. Raw log SHA-256 values:
@@ -53,6 +70,11 @@ and runner before moving each validation worktree. Raw log SHA-256 values:
 - r312: `482e16514b9452bc22a9f45f964ebe6a98a72c6e474d859d1bb1a4e56603ea03`
 - r313: `01cc23abaaae6b60c8537da43bdf6c6ab115623b85b9d7463e1c318e3795649d`
 - r314: `e13e2c722b2af41947160143cff05885cb6320b5afe2e2723a5bebdb9f58e86a`
+- r315: `242306048164a64e17b0b6a94a1483b3c9be7210868bff45750244069bed1c0a`
+- r317: `dcac2b911e4042f5bdf0a6308a5cec91d7deba50e4bad883252e1980909b4e0a`
+- r318: `79e84d3de455f9b9ed254614543a1562d8b04922b730d7d611d3fb79450f5da7`
+- r319: `b3239ad751063505e3b31a26580ce7daebc4844d48113404f9b66e55ac9506b1`
+- r320: `e07aa564c4a935a557a54a6c8c318d771f2c29e0d274956d8f3623ff49e449b6`
 
 Both public mains were read at
 `f0145ab1a71a2dcaa888623e6035c47144f59c38` before this update. This publishes
