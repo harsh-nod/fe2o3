@@ -511,9 +511,18 @@ fn with_selected_niche_v42(
 
 #[test]
 fn selected_pointer_niche_binding_rejects_endpoint_and_role_substitution_stickily() {
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
     for wrong_role in [false, true] {
+        let reached = std::cell::Cell::new(false);
+        let positive_setup = std::cell::Cell::new(false);
+        let attack_completed = std::cell::Cell::new(false);
         let (result, _, _, _) = run(Fixture::SharedSome, LIMIT, LIMIT, |slots, _, _, out| {
+            reached.set(true);
             with_selected_niche_v42(slots, out, |recipe, ordinal, component, selected, out| {
+                selected.check_binding(recipe, ordinal, component, out.budget)?;
+                selected.pointer(out.budget)?;
+                selected.types_and_schema(out.budget)?;
+                positive_setup.set(true);
                 let foreign_ordinal = if wrong_role { ordinal } else { ordinal + 1 };
                 let foreign_component = if wrong_role {
                     match component {
@@ -523,29 +532,65 @@ fn selected_pointer_niche_binding_rejects_endpoint_and_role_substitution_stickil
                 } else {
                     component
                 };
-                assert!(
-                    selected
-                        .check_binding(recipe, foreign_ordinal, foreign_component, out.budget)
-                        .is_err()
-                );
-                assert!(
-                    selected
-                        .check_binding(recipe, ordinal, component, out.budget)
-                        .is_err()
-                );
-                assert!(selected.pointer(out.budget).is_err());
-                Ok(())
+                assert!(matches!(
+                    selected.check_binding(recipe, foreign_ordinal, foreign_component, out.budget),
+                    Err(SourceError::Binding(
+                        "selected pointer niche differs from its original endpoint"
+                    ))
+                ));
+                assert!(matches!(
+                    selected.check_binding(recipe, ordinal, component, out.budget),
+                    Err(SourceError::Binding(
+                        "selected pointer niche differs from its original endpoint"
+                    ))
+                ));
+                assert!(matches!(
+                    selected.pointer(out.budget),
+                    Err(SourceError::Binding(
+                        "selected pointer niche differs from its original endpoint"
+                    ))
+                ));
+                attack_completed.set(true);
+                Err(Error::Source(SourceError::Binding(
+                    "selected pointer niche differs from its original endpoint",
+                )))
             })
         });
-        assert!(result.is_err(), "binding failure must prevent publication");
+        assert!(reached.get(), "fixture failed before callback: {result:?}");
+        assert!(
+            positive_setup.get(),
+            "genuine selected binding was not established: {result:?}"
+        );
+        assert!(
+            attack_completed.get(),
+            "binding attack was not completed: {result:?}"
+        );
+        assert!(matches!(
+            result,
+            Err(Error::Source(SourceError::Binding(
+                "selected pointer niche differs from its original endpoint"
+            )))
+        ));
     }
 }
 
 #[test]
 fn selected_pointer_niche_guard_observes_transient_credit_undercut_before_restore() {
     use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    let reached = std::cell::Cell::new(false);
+    let positive_setup = std::cell::Cell::new(false);
+    let attack_completed = std::cell::Cell::new(false);
     let (result, _, _, _) = run(Fixture::SharedSome, LIMIT, LIMIT, |slots, _, _, out| {
+        reached.set(true);
         with_selected_niche_v42(slots, out, |_, _, _, selected, out| {
+            selected.pointer(out.budget)?;
+            selected.types_and_schema(out.budget)?;
+            positive_setup.set(true);
+            let before = (
+                out.budget.work(),
+                out.budget.storage(),
+                out.budget.peak_storage(),
+            );
             out.budget.release_storage(1)?;
             let first = selected.pointer(out.budget);
             out.budget.reserve_storage(1)?;
@@ -553,22 +598,51 @@ fn selected_pointer_niche_guard_observes_transient_credit_undercut_before_restor
                 first,
                 Err(SourceError::Resource(Resource::Accounting))
             ));
+            let after_first = (
+                out.budget.work(),
+                out.budget.storage(),
+                out.budget.peak_storage(),
+            );
+            assert_eq!((after_first.1, after_first.2), (before.1, before.2));
             assert!(matches!(
                 selected.pointer(out.budget),
                 Err(SourceError::Resource(Resource::Accounting))
             ));
-            Ok(())
+            assert_eq!(
+                (
+                    out.budget.work(),
+                    out.budget.storage(),
+                    out.budget.peak_storage()
+                ),
+                after_first
+            );
+            attack_completed.set(true);
+            Err(Error::Source(SourceError::Resource(Resource::Accounting)))
         })
     });
+    assert!(reached.get(), "fixture failed before callback: {result:?}");
     assert!(
-        result.is_err(),
-        "restoring credits must not restore owner authority"
+        positive_setup.get(),
+        "genuine selected binding was not established: {result:?}"
     );
+    assert!(
+        attack_completed.get(),
+        "undercut/restore attack was not completed: {result:?}"
+    );
+    assert!(matches!(
+        result,
+        Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+    ));
 }
 
 #[test]
 fn selected_pointer_niche_binding_rejects_the_same_nominal_contract_from_another_root() {
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    let reached = std::cell::Cell::new(false);
+    let positive_setup = std::cell::Cell::new(false);
+    let attack_completed = std::cell::Cell::new(false);
     let result = run(Fixture::SharedSome, LIMIT, LIMIT, |slots, _, _, out| {
+        reached.set(true);
         with_selected_niche_v42(slots, out, |recipe, ordinal, component, selected, out| {
             let source = slots.relation.source(out.budget)?;
             assert!(source.root_count(out.budget)? > 1);
@@ -599,6 +673,7 @@ fn selected_pointer_niche_binding_rejects_the_same_nominal_contract_from_another
                         continue;
                     }
                     let other_pointer = other_selection.pointer(out.budget)?;
+                    other_selection.check_binding(&other, ordinal, component, out.budget)?;
                     assert_eq!(
                         (
                             other_pointer.value_space,
@@ -613,23 +688,49 @@ fn selected_pointer_niche_binding_rejects_the_same_nominal_contract_from_another
                             expected_pointer.access
                         )
                     );
-                    assert!(
-                        selected
-                            .check_binding(&other, ordinal, component, out.budget)
-                            .is_err()
-                    );
-                    assert!(
-                        selected
-                            .check_binding(recipe, ordinal, component, out.budget)
-                            .is_err()
-                    );
-                    return Ok(());
+                    positive_setup.set(true);
+                    assert!(matches!(
+                        selected.check_binding(&other, ordinal, component, out.budget),
+                        Err(SourceError::Binding(
+                            "selected pointer niche differs from its original endpoint"
+                        ))
+                    ));
+                    assert!(matches!(
+                        selected.check_binding(recipe, ordinal, component, out.budget),
+                        Err(SourceError::Binding(
+                            "selected pointer niche differs from its original endpoint"
+                        ))
+                    ));
+                    attack_completed.set(true);
+                    return Err(Error::Source(SourceError::Binding(
+                        "selected pointer niche differs from its original endpoint",
+                    )));
                 }
             }
             panic!("second genuine root object not reached");
         })
     });
-    assert!(result.0.is_err());
+    assert!(
+        reached.get(),
+        "fixture failed before callback: {:?}",
+        result.0
+    );
+    assert!(
+        positive_setup.get(),
+        "two genuine root bindings were not established: {:?}",
+        result.0
+    );
+    assert!(
+        attack_completed.get(),
+        "cross-root attack was not completed: {:?}",
+        result.0
+    );
+    assert!(matches!(
+        result.0,
+        Err(Error::Source(SourceError::Binding(
+            "selected pointer niche differs from its original endpoint"
+        )))
+    ));
 }
 
 #[test]
@@ -639,8 +740,15 @@ fn selected_pointer_niche_rejects_funded_foreign_ledger_before_any_work() {
         CanonicalKernelIrWorkBudgetV1 as Work,
     };
     use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    let reached = std::cell::Cell::new(false);
+    let positive_setup = std::cell::Cell::new(false);
+    let attack_completed = std::cell::Cell::new(false);
     let result = run(Fixture::SharedSome, LIMIT, LIMIT, |slots, _, _, out| {
+        reached.set(true);
         with_selected_niche_v42(slots, out, |_, _, _, selected, out| {
+            selected.pointer(out.budget)?;
+            selected.types_and_schema(out.budget)?;
+            positive_setup.set(true);
             let mut work = Work::new(LIMIT);
             let mut foreign = Budget::new(&mut work, LIMIT);
             foreign.reserve_storage(out.budget.storage())?;
@@ -657,10 +765,29 @@ fn selected_pointer_niche_rejects_funded_foreign_ledger_before_any_work() {
                 selected.pointer(out.budget),
                 Err(SourceError::Resource(Resource::Accounting))
             ));
-            Ok(())
+            attack_completed.set(true);
+            Err(Error::Source(SourceError::Resource(Resource::Accounting)))
         })
     });
-    assert!(result.0.is_err());
+    assert!(
+        reached.get(),
+        "fixture failed before callback: {:?}",
+        result.0
+    );
+    assert!(
+        positive_setup.get(),
+        "genuine selected binding was not established: {:?}",
+        result.0
+    );
+    assert!(
+        attack_completed.get(),
+        "foreign-ledger attack was not completed: {:?}",
+        result.0
+    );
+    assert!(matches!(
+        result.0,
+        Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+    ));
 }
 
 #[test]
