@@ -124,7 +124,37 @@ fn run(
     super::super::super::super::invocations::tests::run_source_transform(
         work,
         storage,
-        |types, _| ids.set(Some(append_reference_option(types, mutable))),
+        |types, functions| {
+            let (reference, option) = append_reference_option(types, mutable);
+            ids.set(Some((reference, option)));
+            // Retain the enum and its reference payload in the exact root type
+            // closure without changing any argument, ABI, or executable block.
+            let root = &mut functions[0];
+            let mut locals = root.locals().to_vec();
+            let identity = SemanticLocalIdentityV1::from_sha256([254; 32]);
+            assert!(locals.last().unwrap().identity().as_bytes() < identity.as_bytes());
+            locals.push(SemanticLocalDeclV1::new(
+                identity,
+                option,
+                SemanticLocalRoleV1::Temporary,
+                root.source(),
+            ));
+            *root = SemanticFunctionDeclV1::new(
+                root.identity(),
+                root.role(),
+                root.item_definition_identity(),
+                root.monomorphization_identity(),
+                root.generic_type_arguments_identity(),
+                root.const_generic_arguments_identity(),
+                root.source(),
+                root.abi().clone(),
+                locals,
+                root.entry(),
+                root.blocks().to_vec(),
+            )
+            .unwrap()
+            .with_kernel_entry(root.kernel_entry().unwrap().clone());
+        },
         |plan, out| {
             super::super::super::source_function::tests::with_slots(plan, out, |slots, out| {
                 let (reference, option) = ids.get().unwrap();
@@ -144,6 +174,12 @@ fn source_tag_contracts_derive_shared_and_mutable_null_niches_from_original_owne
                 .relation
                 .source(out.budget)?
                 .source_semantic(out.budget)?;
+            let root = &original.functions()[original.roots()[0].index() as usize];
+            assert_eq!(root.locals().last().unwrap().ty(), option);
+            assert_eq!(
+                root.locals().last().unwrap().role(),
+                SemanticLocalRoleV1::Temporary
+            );
             assert!(std::ptr::eq(
                 recipe.declaration(out)?,
                 &original.types()[option.index() as usize]
