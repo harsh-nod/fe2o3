@@ -24,6 +24,24 @@ run_pre_split_generic_core_reference() {
   run_step tutorial-cpu-reference-tests \
     python3 -B scripts/tests/tutorial_cpu_reference.py
   run_step no-gpu-source-quickstart bash scripts/quickstart.sh no-gpu
+  run_step source-core-branch-hints \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_checked_add_tests::genuine_core_branch_hints_preserve_boolean_values
+  run_step source-core-checked-add \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_checked_add_tests::genuine_unsigned_checked_add_preserves_option_boundaries
+  run_step source-core-slice-get \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_slice_get_tests::genuine_core_shared_slice_get_preserves_boundaries
+  run_step source-core-branch-hint-refusals \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_checked_add_tests::branch_hint_lookalikes_do_not_bypass_source_safety
+  run_step source-core-checked-add-refusals \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_checked_add_tests::checked_add_lookalikes_do_not_bypass_source_safety
+  run_step source-core-slice-get-refusals \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_slice_get_tests::slice_get_lookalikes_and_other_owners_do_not_bypass_source_safety
   run_step kir-sim-capability-matrix \
     cargo test --locked -p fe2o3-kir-sim --test capability_matrix
   run_step kir-sim-scalar-differential \
@@ -134,7 +152,73 @@ MOCK
   rm -- "${root}/bin/tee"
 }
 
+assert_core_source_auth_steps() {
+  local -a steps=(
+    source-core-branch-hints
+    source-core-checked-add
+    source-core-slice-get
+    source-core-branch-hint-refusals
+    source-core-checked-add-refusals
+    source-core-slice-get-refusals
+  )
+  local -a parents=(
+    core_checked_add_tests::genuine_core_branch_hints_preserve_boolean_values
+    core_checked_add_tests::genuine_unsigned_checked_add_preserves_option_boundaries
+    core_slice_get_tests::genuine_core_shared_slice_get_preserves_boundaries
+    core_checked_add_tests::branch_hint_lookalikes_do_not_bypass_source_safety
+    core_checked_add_tests::checked_add_lookalikes_do_not_bypass_source_safety
+    core_slice_get_tests::slice_get_lookalikes_and_other_owners_do_not_bypass_source_safety
+  )
+  local -a actual=()
+  local step index expected
+  for step in "${STEP_NAMES[@]}"; do
+    if [[ "${step}" == source-core-* ]]; then
+      actual+=("${step}")
+    fi
+  done
+  assert_equals "$(printf '%s\n' "${steps[@]}")" \
+    "$(printf '%s\n' "${actual[@]}")" 'source authentication parent order or roster changed'
+  for index in "${!steps[@]}"; do
+    step="${steps[index]}"
+    assert_step_count "${step}" 1 'source authentication parent was omitted or duplicated'
+    expected="bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1"
+    expected+=" ${parents[index]}"
+    assert_equals "${expected}" "$(step_command "${step}")" \
+      'source authentication parent lost its exact ignored serial production selection'
+  done
+}
+
+assert_core_source_auth_fail_fast() {
+  local step status trace
+  for step in \
+    source-core-branch-hints source-core-checked-add source-core-slice-get \
+    source-core-branch-hint-refusals source-core-checked-add-refusals \
+    source-core-slice-get-refusals; do
+    trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
+    status=0
+    # Exercise the real phase body in its own shell, retaining errexit semantics.
+    timeout --signal=TERM --kill-after=2s 10s \
+      env CORE_SOURCE_FAIL_STEP="${step}" CORE_SOURCE_TRACE="${trace}" \
+      bash -c '
+        source "$1"
+        run_step() {
+          printf "%s\n" "$1" >>"${CORE_SOURCE_TRACE}"
+          [[ "$1" != "${CORE_SOURCE_FAIL_STEP}" ]] || return 37
+        }
+        run_generic_core_source_simulation
+        printf "%s\n" unexpected-success
+      ' -- "${TEST_SCRIPT_DIR}/../ci-local.sh" \
+      >"${trace}.stdout" 2>"${trace}.stderr" || status=$?
+    assert_equals 37 "${status}" 'a source authentication parent failure was suppressed'
+    assert_equals "${step}" "$(tail -n 1 "${trace}")" \
+      'source simulation continued after an authentication parent failed'
+    [[ ! -s "${trace}.stdout" ]]
+  done
+}
+
 assert_generic_core_phases() {
+  python3 -I -B "${TEST_SCRIPT_DIR}/cargo_test_json.py"
+  bash "${TEST_SCRIPT_DIR}/ci-cargo-test-json.sh"
   local -a expected_names expected_commands
   local phase step
   assert_equals $'policy\nbuild\nsource-simulation\ncpu\ncodegen-lib\nauxiliary' \
@@ -147,6 +231,7 @@ assert_generic_core_phases() {
 
   reset_generic_phase_capture
   run_generic_core
+  assert_core_source_auth_steps
   assert_equals "$(printf '%s\n' "${expected_names[@]}")" \
     "$(printf '%s\n' "${STEP_NAMES[@]}")" 'default core step order changed'
   assert_equals "$(printf '%s\n' "${expected_commands[@]}")" \
@@ -156,6 +241,7 @@ assert_generic_core_phases() {
   for phase in "${GENERIC_CORE_PHASES[@]}"; do
     run_generic_core_phase "${phase}"
   done
+  assert_core_source_auth_steps
   assert_equals "$(printf '%s\n' "${expected_names[@]}")" \
     "$(printf '%s\n' "${STEP_NAMES[@]}")" 'phase concatenation changed core step order'
   assert_equals "$(printf '%s\n' "${expected_commands[@]}")" \
@@ -169,6 +255,15 @@ assert_generic_core_phases() {
       return 1
     }
   done
+
+  reset_generic_phase_capture
+  run_generic_core_phase source-simulation
+  assert_core_source_auth_steps
+  assert_step_count backend-build 0 'fresh source phase ran the build phase'
+  assert_step_count cpu-tests 0 'fresh source phase ran the CPU phase'
+  assert_step_count rustc-codegen-lib-tests 0 'fresh source phase ran codegen library tests'
+  assert_equals 0 "${#STEP_TIMEOUT_OVERRIDES[@]}" 'source parents introduced timeout overrides'
+  assert_core_source_auth_fail_fast
 
   reset_generic_phase_capture
   run_generic_core_phase cpu
