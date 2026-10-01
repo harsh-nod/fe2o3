@@ -75,11 +75,11 @@ impl CompleteControl {
             // Invocation is not modeled by relabeling a helper as a root. The
             // whole request refuses until a call-step relation is available.
             let invocation_root = invocations.root(root, out)?;
-            let invocation = invocations.instance(root, 0, out)?;
+            let invocation_instance = invocations.instance(root, 0, out)?;
             if invocation_root.instances.len() != 1
-                || !invocation.active
-                || invocation.function != original
-                || invocation.incoming.is_some()
+                || !invocation_instance.active
+                || invocation_instance.function != original
+                || invocation_instance.incoming.is_some()
                 || invocation_root.function != original
                 || invocation_root.physical != physical
                 || !invocations.calls(root, 0, out)?.is_empty()
