@@ -4,9 +4,11 @@
 
 Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
-refreshed on 2026-10-01: the issue remained Open, with 32 comments and its latest
-update at 2026-09-30 19:46:57 UTC. Both runtime branch refs were confirmed through
-signed commit `3e016bd77` before the following composition evidence publication. GitHub and MI300X
+refreshed on 2026-10-01: the issue remained Open, with 33 comments and its latest
+update at 2026-10-01 02:01:40 UTC. Both runtime branch refs were confirmed through
+signed commit `4d5276cc9`, including the composition evidence publication.
+The [published checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5923229932)
+records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
@@ -45,6 +47,18 @@ Point-idle checks are not exclusive reservations, comparator engine identities
 are unknown, and no A7 or parity exit follows. The compact packet discloses
 its retained local source-payload prerequisites and both packaging rejections.
 
+The separate wait-cadence draft retains ordinary 1 ms behavior and adds an
+explicit 25 microsecond sleep-ceiling experiment, preserving the existing
+64-spin/16-yield prefix, deadline and custody checks. Its full three-input
+selector proof measures 2/0, including a derived Clone obligation; this does not
+prove cursor construction or scheduling. The first CPU attempt stopped before
+compilation because sparse workspace example manifests were missing. Exactly
+119 signed files in 26 example directories were restored, with all preexisting
+files unchanged. Both new locked/offline workspace metadata checks and the
+no-default non-test library check pass; the full CPU campaign is ongoing.
+No signed selector qualification, cadence GPU measurement or performance gain
+is accepted. Original preparation and CPU failures remain retained.
+
 The [distributed codec primitives](evidence/dev-distributed-codec-primitives-2026-10-01/README.md)
 are integrated at `a8a908878` and `8fd3b7ddb`. Signed candidate `e02b7229a`
 completes all 38 qualification stages: three full 54/0 positives, including
@@ -68,12 +82,17 @@ schema bytes through the standard array-view lemmas. The latest full nine-input
 proof reports 63 verified and zero errors with no trusted equality assumption;
 both release checks and all three owned groups close. Earlier 57/2, 59/2 and
 61/1 attempts remain rejected. Native bytes and all actual Rust dependencies
-are unchanged, so CPU evidence is explicitly reused, not rerun. The first
-mutation collection stopped at its ninth case because the parser rejected a
-compiler-generated auxiliary while-loop source span; all fifteen launched
-groups closed. A narrowly source-bound parser correction and rejection controls
-pass, and a fresh full 41-stage collection of all 34 cases is in progress.
-Neither raw diagnostic collection nor unsigned positive discovery is signed
+are unchanged, so CPU evidence is explicitly reused, not rerun. Two earlier
+collections stopped at auxiliary diagnostic spans; all fifteen and nineteen
+launched groups, respectively, closed. A separate capture-only campaign now
+completes all 41 stages and 34 raw mutation cases, with three full 63/0 positives
+and all 41 owned groups closed. Every mutation reports one logical error. The
+unchanged classifier returns 32 unqualified observations and rejects two
+auxiliary `vstd/seq.rs` recommendation notes. Those rejections are preserved as
+data, not relaxed into acceptance. Exact source-bound note handling and controls
+are being prepared before fresh signed qualification. Accepted negative
+classifications and qualified kills remain zero for this capture-only campaign.
+Neither raw diagnostic capture nor unsigned positive discovery is signed
 field-codec qualification or whole-wire proof.
 These draft results do not qualify the integrated primitive component anew.
 
@@ -93,6 +112,17 @@ archive, both signed side commits over their actual public ancestor, and
 matching independent readbacks. Root verifies every archived original and both
 signatures. External CPU/tool/history replay prerequisites and two retained
 packaging rejections are explicitly disclosed.
+
+The next, separate actual-journal wrapper draft passes an unfiltered 38-input
+proof at 165/0, covering the existing query closure and four new forwarding
+wrappers. Its earlier front-end rejection was corrected by removing an invalid
+`open` modifier from a private specification helper; no runtime body or theorem
+formula changed. All five discovery stages and owned groups close. This is
+unsigned positive discovery, not mutation or CPU qualification. Fresh runtime
+CPU validation and all nine proposed actual-body mutation captures are next.
+Direct validator/fold composition, live-allocation checks, fresh credit locks,
+interior-state refinement and A2 closure remain open; these draft sources and
+raw discovery records are not yet integrated or published.
 
 The [retained host-diagnostic CPU qualification](evidence/dev-xgmi-retained-host-diagnostic-cpu-2026-09-30/README.md)
 is integrated at `841c06b73`, with portable campaign helpers at `4ad64047b`.
