@@ -648,10 +648,36 @@ impl OriginalEntryIndexV20<'_, '_> {
                             rhs: Box::new(rhs),
                         })
                     }
-                    _ => self
-                        .source
-                        .source
-                        .missing("private source expression unsupported original derivation"),
+                    SemanticRvalueKindV1::Unary { .. } => self.source.source.missing(
+                        "private source expression unsupported original unary derivation",
+                    ),
+                    SemanticRvalueKindV1::Cast { .. } => self.source.source.missing(
+                        "private source expression unsupported original cast derivation",
+                    ),
+                    SemanticRvalueKindV1::CheckedBinary(_) => self.source.source.missing(
+                        "private source expression unsupported original checked-binary derivation",
+                    ),
+                    SemanticRvalueKindV1::UncheckedBinary(_) => self.source.source.missing(
+                        "private source expression unsupported original unchecked-binary derivation",
+                    ),
+                    SemanticRvalueKindV1::Borrow { .. } => self.source.source.missing(
+                        "private source expression unsupported original borrow derivation",
+                    ),
+                    SemanticRvalueKindV1::AddressOf { .. } => self.source.source.missing(
+                        "private source expression unsupported original address-of derivation",
+                    ),
+                    SemanticRvalueKindV1::Length(_) => self.source.source.missing(
+                        "private source expression unsupported original length derivation",
+                    ),
+                    SemanticRvalueKindV1::Discriminant(_) => self.source.source.missing(
+                        "private source expression unsupported original discriminant derivation",
+                    ),
+                    SemanticRvalueKindV1::Aggregate(_) => self.source.source.missing(
+                        "private source expression unsupported original aggregate derivation",
+                    ),
+                    SemanticRvalueKindV1::Load(_) => self.source.source.missing(
+                        "private source expression unsupported original volatile-load derivation",
+                    ),
                 }
             }
         }
