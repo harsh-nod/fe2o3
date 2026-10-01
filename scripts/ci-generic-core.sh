@@ -65,6 +65,9 @@ run_generic_core_source_simulation() {
   run_step source-core-slice-get-refusals \
     bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
       core_slice_get_tests::slice_get_lookalikes_and_other_owners_do_not_bypass_source_safety
+  run_step source-core-scalar-enum-payload \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_scalar_enum_payload_tests::genuine_scalar_enum_payload_elision_preserves_source_semantics
   run_step kir-sim-capability-matrix \
     cargo test --locked -p fe2o3-kir-sim --test capability_matrix
   run_step kir-sim-scalar-differential \

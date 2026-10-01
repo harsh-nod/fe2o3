@@ -68,10 +68,14 @@ phase separately as well as retaining the existing per-step deadlines; do not
 apply the per-step timeout as a deadline for an entire multi-step phase. The
 existing opt-in runtime/export subtarget lifecycle remains unchanged.
 
-The required `source-simulation` phase also selects six ignored production
+The required `source-simulation` phase also selects seven ignored production
 source-compiler controls explicitly: checked unsigned addition, core branch
 hints, and shared-slice `get`, with genuine-source and source-safety refusal
-parents for each family. These use the existing pinned nightly `rust-src`
+parents for each family, plus ordinary scalar enum payload transport. The enum
+parent checks a non-Option enum with an immutable entry scalar and an absent
+variant on both AMD targets at opt0/opt3, inspects the actual exported helper's
+purity, and compares CPU results with an independent flag/value oracle.
+These use the existing pinned nightly `rust-src`
 fixture and locked offline dependency graph, and run serially with
 `--ignored --exact --test-threads=1`. Cargo/libtest JSON must prove exactly one
 named test passed; an empty selection is a failure. Raw JSON receipts remain in
