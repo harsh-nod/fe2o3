@@ -16,7 +16,7 @@ macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
 
-const SOURCE_STATE: &str = r#"
+pub(super) const SOURCE_STATE: &str = r#"
 // MIR locals are distinct from canonical SSA definitions. Undefined/dead locals
 // are tracked explicitly; operations below are read from the original MIR.
 struct OriginalControlStateV31 {

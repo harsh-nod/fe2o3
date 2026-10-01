@@ -8,7 +8,7 @@ use crate::protected_rustc_invocation::{
 };
 use fe2o3_artifact_transaction::BuildAttempt;
 use fe2o3_verifier::MixedOptimizerRelocationCfgSubjectV28 as Subject;
-use fe2o3_verifier::PreparedOriginalSemanticMirRefinementV31 as OriginalMir;
+use fe2o3_verifier::PreparedOriginalSemanticMirRefinementV36 as OriginalMir;
 
 #[path = "production_pipeline_source_original_mir_v30.rs"]
 mod original_mir_v30;
@@ -110,6 +110,7 @@ impl<'a, 'v, 's> PreparedMixedPublicationV28<'a, 'v, 's> {
 
     pub(crate) fn replay(&self, budget: &mut Budget<'_>) -> Result<(), Error> {
         self.check(budget)?;
+        original_mir_v30::replay_runtime(&self.inputs, self.original_mir, budget)?;
         let original = self
             .original_mir
             .subject(budget)

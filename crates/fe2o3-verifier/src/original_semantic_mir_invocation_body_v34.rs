@@ -16,6 +16,36 @@ mod generate;
 #[path = "original_semantic_mir_invocation_actual_v35.rs"]
 mod actual;
 
+#[path = "original_semantic_mir_invocation_bytes_v36.rs"]
+mod bytes;
+
+#[path = "original_semantic_mir_invocation_slots_v36.rs"]
+mod slots;
+
+#[path = "original_semantic_mir_invocation_source_scalar_v36.rs"]
+mod source_scalar;
+
+#[path = "original_semantic_mir_invocation_source_bytes_v36.rs"]
+mod source_bytes;
+
+#[path = "original_semantic_mir_invocation_source_frames_v36.rs"]
+mod source_frames;
+
+#[path = "original_semantic_mir_invocation_source_enter_v36.rs"]
+mod source_enter;
+
+#[path = "original_semantic_mir_invocation_source_function_v36.rs"]
+mod source_function;
+
+#[path = "original_semantic_mir_invocation_byte_bindings_v36.rs"]
+mod byte_bindings;
+
+#[path = "original_semantic_mir_invocation_effects_v36.rs"]
+mod effects;
+
+#[path = "original_semantic_mir_invocation_paired_v36.rs"]
+mod paired;
+
 pub(super) struct Body {
     root: usize,
     instance: usize,
@@ -35,6 +65,185 @@ pub(super) struct InvocationBodies<'a, 'plan, 'view, 'source> {
 
 fn mismatch() -> Error {
     Error::Statement("original MIR body differs from its exact invocation transfer")
+}
+
+// An explicit policy ceiling on sparse partition boundaries, not object bytes
+// or a claim that an incomplete copy closure has been proved complete.
+const MAX_PRIVATE_BYTE_BOUNDARIES_V38: usize = 1 << 20;
+
+pub(crate) fn generate_refinement_v36(
+    relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
+    launches: &[fe2o3_kernel_ir::ExplicitLaunchExtent],
+    width: fe2o3_kernel_ir::FormalIndexWidth,
+    endianness: fe2o3_kernel_ir::EndiannessV2,
+    out: &mut Writer<'_, '_>,
+) -> Result<[usize; 6]> {
+    use std::fmt::Write as _;
+    out.budget.reserve_storage(generation_headers_v36())?;
+    let source = relation.source(out.budget)?;
+    let plan = super::invocations::InvocationPlan::derive(source, out)?;
+    let slots = slots::SourceSlots::derive(&plan, relation, out)?;
+    let mut byte_source = source_function::SourceByteProgram::derive(&plan, &slots, out)?;
+    let byte_bindings = byte_bindings::SourceByteBindings::derive(&slots, out)?;
+    let paired = paired::PairedInvocations::derive(&plan, &byte_source, width, out)?;
+    let inventory = relation.inventory(out.budget)?;
+    let (physical, physical_storage) =
+        fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+            inventory,
+            fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 {
+                max_boundaries: MAX_PRIVATE_BYTE_BOUNDARIES_V38,
+            },
+            out.budget,
+        )?;
+    out.budget
+        .reserve_storage(physical_storage.retained_storage())?;
+    let roots = source.root_count(out.budget)?;
+    if launches.len() != roots {
+        return Err(mismatch());
+    }
+    let mut byte_actual = vector(roots, out)?;
+    for root in 0..roots {
+        let (_, function) = source.root(root, out.budget)?;
+        out.budget.charge_work(1)?;
+        byte_actual.push(super::super::byte_function_v30::ByteFunctionV30::derive(
+            inventory,
+            &physical,
+            fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
+                u32::try_from(function).map_err(|_| Resource::Arithmetic)?,
+            ),
+            width,
+            &slots,
+            out,
+        )?);
+    }
+    let census = paired.census();
+    write!(
+        out,
+        "use vstd::prelude::*;\nuse vstd::seq_lib::*;\nverus! {{\n"
+    )
+    .map_err(|_| out.error())?;
+    super::relation::emit_prelude(out)?;
+    write!(
+        out,
+        "{}{}{}{}{}{}{}{}{}{}",
+        super::super::structured_state_v30::STATE,
+        super::control_generate::SOURCE_STATE,
+        super::super::cfg_trace::PRELUDE,
+        super::super::byte_memory_v30::BYTE_MEMORY_V30,
+        bytes::INVOCATION_BYTES_V36,
+        source_bytes::SOURCE_BYTES_V36,
+        source_bytes::SOURCE_POINTERS_V36,
+        source_frames::SOURCE_FRAMES_V36,
+        source_function::SOURCE_FUNCTION_V36,
+        effects::INVOCATION_EFFECTS_V36,
+    )
+    .map_err(|_| out.error())?;
+    slots.emit(out)?;
+    byte_source.emit(out)?;
+    byte_bindings.emit(out)?;
+    let index_bytes = match width {
+        fe2o3_kernel_ir::FormalIndexWidth::Bits32 => 4,
+        fe2o3_kernel_ir::FormalIndexWidth::Bits64 => 8,
+        fe2o3_kernel_ir::FormalIndexWidth::Unknown => return Err(mismatch()),
+    };
+    write!(out, "open spec fn invocation_runtime_index_bytes_v36() -> int {{ {index_bytes} }}\nopen spec fn invocation_runtime_little_endian_v36() -> bool {{ {} }}\n", matches!(endianness, fe2o3_kernel_ir::EndiannessV2::Little)).map_err(|_| out.error())?;
+    for (root, (function, launch)) in byte_actual.iter().zip(launches).enumerate() {
+        out.budget.charge_work(5)?;
+        let fe2o3_kernel_ir::ExplicitLaunchExtent::Exact { rank, extents } = launch else {
+            return Err(mismatch());
+        };
+        function.emit(root, out)?;
+        write!(out, "open spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ ({rank}, seq![{}, {}, {}]) }}\n", extents[0], extents[1], extents[2]).map_err(|_| out.error())?;
+        emit_execution_v37(relation, root, out)?;
+        write!(out, "open spec fn invocation_source_initial_runtime_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> InvocationSourceByteStateV36 {{ invocation_source_byte_initial_{root}_v36(arguments, external, execution, invocation_runtime_little_endian_v36()) }}\nopen spec fn invocation_source_block_runtime_{root}_v36(source: InvocationSourceByteStateV36) -> InvocationSourceBlockResultV36 {{ invocation_source_byte_block_{root}_v36(source, invocation_runtime_little_endian_v36()) }}\nopen spec fn invocation_actual_micro_runtime_{root}_v36(cursor: MemoryMicroStateV30) -> MemoryMicroResultV30 {{ byte_micro_step_{root}_v30(cursor, invocation_runtime_little_endian_v36()) }}\n").map_err(|_| out.error())?;
+    }
+    paired.emit(out)?;
+    write!(out, "}}\n").map_err(|_| out.error())?;
+    drop(byte_actual);
+    drop(physical);
+    out.budget
+        .release_storage(physical_storage.retained_storage())?;
+    Ok(census)
+}
+
+fn emit_execution_v37(
+    relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use std::fmt::Write as _;
+    let source = relation.source(out.budget)?;
+    let (function, _) = source.root(root, out.budget)?;
+    let semantic = source.source_semantic(out.budget)?;
+    out.budget.charge_work(6)?;
+    let launch = semantic
+        .functions()
+        .get(function.index() as usize)
+        .and_then(|function| function.kernel_entry())
+        .ok_or_else(mismatch)?
+        .source_contract()
+        .launch();
+    write!(out, "open spec fn invocation_runtime_execution_{root}_v37(execution: MemoryExecutionContextV37) -> bool {{\n byte_execution_well_formed_v37(execution) && execution.rank == invocation_runtime_launch_{root}_v36().0 && execution.extent == invocation_runtime_launch_{root}_v36().1\n && execution.workgroup[0] * execution.workgroup[1] * execution.workgroup[2] <= {}\n && (forall|axis: int| 0 <= axis < 3 ==> execution.extent[axis] <= memory_value_modulus_v30(invocation_runtime_index_bytes_v36()) && execution.workgroup[axis] < memory_value_modulus_v30(invocation_runtime_index_bytes_v36()))", fe2o3_mir_model::semantic_mir_v1::MAX_SEMANTIC_WORKGROUP_THREADS_V1).map_err(|_| out.error())?;
+    if let Some(required) = launch.and_then(|launch| launch.required()) {
+        out.budget.charge_work(3)?;
+        let [x, y, z] = required.as_array();
+        write!(
+            out,
+            "\n && execution.workgroup == seq![{x}int, {y}int, {z}int]"
+        )
+        .map_err(|_| out.error())?;
+    }
+    if let Some(maximum) = launch.and_then(|launch| launch.maximum()) {
+        out.budget.charge_work(3)?;
+        let [x, y, z] = maximum.as_array();
+        write!(out, "\n && execution.workgroup[0] <= {x} && execution.workgroup[1] <= {y} && execution.workgroup[2] <= {z}")
+            .map_err(|_| out.error())?;
+    }
+    write!(out, "\n}}\n").map_err(|_| out.error())?;
+    Ok(())
+}
+
+fn generation_headers_v36() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    h::<&fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>>()
+        + h::<&mut Writer<'_, '_>>()
+        + h::<super::invocations::InvocationPlan<'_, '_>>()
+        + h::<slots::SourceSlots<'_, '_>>()
+        + h::<source_function::SourceByteProgram<'_, '_, '_>>()
+        + h::<byte_bindings::SourceByteBindings<'_, '_, '_>>()
+        + h::<
+            Vec<
+                super::super::byte_function_v30::ByteFunctionV30<
+                    '_,
+                    '_,
+                    slots::SourceSlots<'_, '_>,
+                >,
+            >,
+        >()
+        + h::<&[fe2o3_kernel_ir::ExplicitLaunchExtent]>()
+        + h::<fe2o3_kernel_ir::FormalIndexWidth>()
+        + h::<fe2o3_kernel_ir::EndiannessV2>()
+        + h::<paired::PairedInvocations<'_, '_, '_>>()
+        + h::<fe2o3_kernel_analysis::CanonicalKirPrivateByteAnalysisV38<'_, '_>>()
+        + h::<fe2o3_kernel_analysis::CanonicalKirPrivateByteStorageV38>()
+        + h::<fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38>()
+        + size_of::<
+            std::result::Result<
+                (
+                    fe2o3_kernel_analysis::CanonicalKirPrivateByteAnalysisV38<'_, '_>,
+                    fe2o3_kernel_analysis::CanonicalKirPrivateByteStorageV38,
+                ),
+                fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1,
+            >,
+        >()
+        + h::<[usize; 6]>()
+        + h::<Option<fe2o3_mir_model::semantic_mir_v1::SemanticKernelLaunchBoundsV1>>()
+        + h::<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>()
+        + h::<[u32; 3]>()
+        + 6 * size_of::<&()>()
+        + 8 * size_of::<usize>()
 }
 
 impl<'a, 'plan, 'view, 'source> InvocationBodies<'a, 'plan, 'view, 'source> {

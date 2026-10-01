@@ -147,12 +147,27 @@ pub(super) fn check(
     model: &ActualInvocations<'_, '_, '_, '_, '_, '_>,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
+    replay(model, false, out)
+}
+
+pub(super) fn emit(
+    model: &ActualInvocations<'_, '_, '_, '_, '_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    replay(model, true, out)
+}
+
+fn replay(
+    model: &ActualInvocations<'_, '_, '_, '_, '_, '_>,
+    emit: bool,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
     out.budget.reserve_storage(headers())?;
     for (root, actual) in model.roots.iter().enumerate() {
         let mut covered = vector(actual.targets.len(), out)?;
         out.budget.charge_work(actual.targets.len())?;
         covered.resize(actual.targets.len(), false);
-        entry(model, root, &mut covered, out)?;
+        entry(model, root, &mut covered, emit, out)?;
         for index in model.original.roots[root].clone() {
             out.budget.charge_work(1)?;
             let Some(body) = model.original.bodies[index].as_ref() else {
@@ -170,7 +185,7 @@ pub(super) fn check(
                     _ => 1,
                 };
                 for edge in 0..edges {
-                    segment(model, index, block, edge, &mut covered, out)?;
+                    segment(model, index, block, edge, &mut covered, emit, out)?;
                 }
             }
         }
@@ -186,6 +201,7 @@ fn entry(
     model: &ActualInvocations<'_, '_, '_, '_, '_, '_>,
     root: usize,
     covered: &mut [bool],
+    emit: bool,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     let actual = &model.roots[root];
@@ -236,6 +252,9 @@ fn entry(
         {
             return Err(mismatch());
         }
+    }
+    if emit {
+        super::generate::entry(model, root, &trace, &path, out)?;
     }
     Ok(())
 }
@@ -399,6 +418,7 @@ fn segment(
     block: usize,
     ordinal: usize,
     covered: &mut [bool],
+    emit: bool,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     let body = model.original.bodies[index].as_ref().ok_or_else(mismatch)?;
@@ -567,7 +587,27 @@ fn segment(
                 &trace,
                 out,
             )?;
-            return equal(&nodes, &trace.nodes, &observations, out);
+            equal(&nodes, &trace.nodes, &observations, out)?;
+            if emit {
+                let returned = target
+                    .program
+                    .returned
+                    .map(|node| trace.appended_value(&appended, node, out))
+                    .transpose()?;
+                super::generate::segment(
+                    model,
+                    index,
+                    block,
+                    ordinal,
+                    &trace,
+                    &observations[..source.program.assignments.len()],
+                    returned,
+                    None,
+                    &[],
+                    out,
+                )?;
+            }
+            return Ok(());
         }
         _ => return Err(mismatch()),
     };
@@ -715,7 +755,27 @@ fn segment(
                 .transpose()?,
         ));
     }
-    equal(&nodes, &trace.nodes, &observations, out)
+    equal(&nodes, &trace.nodes, &observations, out)?;
+    if emit {
+        let returned = if source.program.returned.is_some() {
+            Some(trace.value(actual.returned.flatten().ok_or_else(mismatch)?, out)?)
+        } else {
+            None
+        };
+        super::generate::segment(
+            model,
+            index,
+            block,
+            ordinal,
+            &trace,
+            &observations[..source.program.assignments.len()],
+            returned,
+            Some((next_body, next_block)),
+            &path,
+            out,
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn segment_extras(

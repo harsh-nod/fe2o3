@@ -34,8 +34,10 @@ mod aggregate_v30;
 mod original_mir_v30;
 pub use original_mir_v30::{
     OriginalSemanticMirRefinementSubjectV30, OriginalSemanticMirRefinementSubjectV31,
-    PreparedOriginalSemanticMirRefinementV30, PreparedOriginalSemanticMirRefinementV31,
+    OriginalSemanticMirRefinementSubjectV36, PreparedOriginalSemanticMirRefinementV30,
+    PreparedOriginalSemanticMirRefinementV31, PreparedOriginalSemanticMirRefinementV36,
     prepare_original_semantic_mir_refinement_v30, prepare_original_semantic_mir_refinement_v31,
+    prepare_original_semantic_mir_refinement_v36,
 };
 #[path = "mixed_optimizer_cfg_refinement_v27.rs"]
 mod cfg_v27;
@@ -102,6 +104,8 @@ pub enum MixedOptimizerRefinementErrorV26 {
     Source(SourceError),
     Resource(Resource),
     Inventory(CanonicalKirInventoryErrorV1),
+    /// Exact-owner physical byte geometry or initialization analysis failed.
+    PrivateMemory(fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1),
     /// Bounded control-flow analysis failed while generating CFG obligations.
     Flow(fe2o3_kernel_ir::CanonicalKirControlFlowScopeErrorV1),
     Transition(CanonicalKirTransitionErrorV1),
@@ -126,6 +130,11 @@ impl From<Resource> for Error {
 impl From<CanonicalKirInventoryErrorV1> for Error {
     fn from(value: CanonicalKirInventoryErrorV1) -> Self {
         Self::Inventory(value)
+    }
+}
+impl From<fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1> for Error {
+    fn from(value: fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1) -> Self {
+        Self::PrivateMemory(value)
     }
 }
 impl From<fe2o3_kernel_ir::CanonicalKirControlFlowScopeErrorV1> for Error {
@@ -154,6 +163,7 @@ impl std::error::Error for Error {
             Self::Source(error) => Some(error),
             Self::Resource(error) => Some(error),
             Self::Inventory(error) => Some(error),
+            Self::PrivateMemory(error) => Some(error),
             Self::Flow(error) => Some(error),
             Self::Transition(error) => Some(error),
             Self::Generated(error) => Some(error),
@@ -328,6 +338,14 @@ pub fn prepare_mixed_optimizer_refinement_v26<'handoff, 'view, 'source>(
                     let resource = match &error {
                         Error::Resource(error)
                         | Error::Inventory(CanonicalKirInventoryErrorV1::Resource(error))
+                        | Error::PrivateMemory(
+                            fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1::Resource(
+                                error,
+                            )
+                            | fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1::Inventory(
+                                CanonicalKirInventoryErrorV1::Resource(error),
+                            ),
+                        )
                         | Error::Transition(CanonicalKirTransitionErrorV1::Resource(error)) => {
                             Some(*error)
                         }

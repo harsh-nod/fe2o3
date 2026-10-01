@@ -1,0 +1,365 @@
+use super::*;
+
+#[test]
+fn original_mir_stable_reference_currentness_requires_version_frame_and_exact_borrow_site() {
+    let text = SOURCE_BYTES_V36;
+    for required in [
+        "source.logical.versions[reference.origin] == reference.version",
+        "source.machine.frames.active[i] == reference.frame",
+        "source.machine.values[local] == source.machine.values[reference.origin]",
+        "source.logical.references[reference].origin_generation != generation",
+        "source.logical.references[reference].borrow_instance != instance",
+        "source.logical.references[reference].borrow_block != block",
+        "source.logical.references[reference].borrow_statement != statement",
+        "logical.versions.update(local, logical.versions[local] + 1)",
+        "witnesses: logical.witnesses.remove(local)",
+        "references: logical.references.remove(local)",
+        "logical: invocation_source_logical_write_v38(source.logical, local)",
+    ] {
+        assert!(
+            text.contains(required),
+            "missing source obligation: {required}"
+        );
+    }
+    let initial = text
+        .split("open spec fn invocation_source_logical_initial_v38")
+        .nth(1)
+        .unwrap()
+        .split("open spec fn invocation_source_logical_well_formed_v38")
+        .next()
+        .unwrap();
+    assert!(initial.contains("witnesses: Map::empty(), references: Map::empty()"));
+}
+
+#[test]
+fn original_mir_witness_issue_and_conversion_do_not_create_pointer_provenance() {
+    let text = include_str!("original_semantic_mir_source_logical_locals_v38.vrs");
+    assert!(text.contains("byte_execution_index_v37(execution, 0, 0)"));
+    assert!(text.contains("execution.rank != 1"));
+    assert!(text.contains("memory_value_modulus_v30(bits / 8)"));
+    assert!(text.contains("invocation_source_witness_current_v38(source, input, input_type)"));
+    assert!(!text.contains("MemoryValueV30::Pointer"));
+    assert!(!text.contains("MemoryAllocationV30::Private"));
+    assert!(!text.contains("assume("));
+}
+
+const LIMIT: usize = 100_000_000;
+
+fn run(
+    work: usize,
+    storage: usize,
+    control: bool,
+    instance: usize,
+    examine: impl FnOnce(&SourceByteBody<'_, '_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    super::super::super::invocations::tests::run_control_variant(
+        work,
+        storage,
+        false,
+        control,
+        |plan, out| {
+            let source = plan.source(out)?;
+            let owner = source.canonical(out.budget)?;
+            let (inventory, receipt) =
+                super::super::super::super::Inventory::derive_v18(owner, out.budget)?;
+            out.budget.reserve_storage(receipt.retained_storage())?;
+            let result = source.with_ranked_correspondence_v18(
+                &inventory,
+                out.budget,
+                |relation, budget| {
+                    let mut writer = Writer::new(budget)?;
+                    let slots = SourceSlots::derive(plan, relation, &mut writer)?;
+                    let body = SourceByteBody::derive(plan, &slots, 0, instance, &mut writer)?;
+                    examine(&body, &mut writer)
+                },
+            );
+            drop(inventory);
+            if result.is_ok() {
+                out.budget.release_storage(receipt.retained_storage())?;
+            }
+            result
+        },
+    )
+}
+
+#[test]
+fn original_mir_typed_call_operands_keep_exact_archived_order_and_local_identity() {
+    run(LIMIT, LIMIT, false, 0, |body, out| {
+        let first = body.call_argument(0, 0, out)?;
+        let second = body.call_argument(0, 1, out)?;
+        let scalar = ScalarV30::Integer {
+            signed: false,
+            width: 32,
+        };
+        assert_eq!(first.ty(), TypeId::from_index(0));
+        assert_eq!(first.scalar(), Some(scalar));
+        assert_eq!(
+            first.kind,
+            OperandKind::Scalar {
+                value: Value::Local {
+                    local: body.locals.start + 1,
+                    moved: false,
+                },
+                scalar,
+            }
+        );
+        assert_eq!(
+            second.kind,
+            OperandKind::Scalar {
+                value: Value::Local {
+                    local: body.locals.start + 2,
+                    moved: false,
+                },
+                scalar,
+            }
+        );
+        first.emit(out)?;
+        assert!(out.text.contains("InvocationSourceOperandV36::Scalar"));
+        assert!(out.text.contains("bits: 32int"));
+        assert!(!out.text.contains("assume("));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_typed_operands_refuse_wrong_terminators_and_missing_arguments() {
+    run(LIMIT, LIMIT, false, 0, |body, out| {
+        // Root block 2 is an actual Return, not a Call with an empty ABI.
+        assert!(body.call_argument(2, 0, out).is_err());
+        assert!(body.call_argument(0, 2, out).is_err());
+        assert!(body.call_argument(99, 0, out).is_err());
+        assert!(body.switch_operand(0, out).is_err());
+        assert!(body.switch_operand(99, out).is_err());
+        assert!(out.text.is_empty());
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_typed_switch_operand_uses_original_control_discriminant() {
+    run(LIMIT, LIMIT, true, 1, |body, out| {
+        let first = body.switch_operand(0, out)?;
+        let second = body.switch_operand(2, out)?;
+        assert!(matches!(
+            first.kind,
+            OperandKind::Scalar {
+                value: Value::Local { local, moved: false },
+                scalar: ScalarV30::Integer { signed: false, width: 32 },
+            } if local == body.locals.start + 1
+        ));
+        assert!(matches!(
+            second.kind,
+            OperandKind::Scalar {
+                value: Value::Local { local, moved: false },
+                scalar: ScalarV30::Integer { signed: false, width: 32 },
+            } if local == body.locals.start + 2
+        ));
+        assert!(body.switch_operand(1, out).is_err());
+        assert!(body.call_argument(0, 0, out).is_err());
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_typed_operand_emission_keeps_pointer_slice_and_unit_tags_distinct() {
+    // Isolated emitter inputs are not authenticated extraction/admission tests.
+    run(LIMIT, LIMIT, false, 0, |_, out| {
+        for kind in [
+            OperandKind::Pointer {
+                local: 7,
+                moved: true,
+            },
+            OperandKind::Slice {
+                local: 8,
+                moved: false,
+                metadata_bits: 64,
+            },
+            OperandKind::Scalar {
+                value: Value::Constant(0),
+                scalar: ScalarV30::Unit,
+            },
+        ] {
+            TypedOperand {
+                ty: TypeId::from_index(0),
+                kind,
+            }
+            .emit(out)?;
+        }
+        assert!(
+            out.text
+                .contains("InvocationSourceOperandV36::Pointer { local: 7int, moved: true }")
+        );
+        assert!(out.text.contains(
+            "InvocationSourceOperandV36::Slice { local: 8int, moved: false, metadata_bits: 64int }"
+        ));
+        assert!(out.text.contains("bits: 0int"));
+        let carrier = SOURCE_BYTES_V36
+            .split("open spec fn invocation_source_carrier_evaluate_v36(")
+            .nth(1)
+            .unwrap()
+            .split("open spec fn invocation_source_operand_evaluate_v36(")
+            .next()
+            .unwrap();
+        let capture = carrier
+            .find("let value = source.machine.values[local]")
+            .unwrap();
+        let clear = carrier
+            .find("invocation_source_byte_put_local_v36")
+            .unwrap();
+        assert!(capture < clear);
+        assert!(carrier.contains("MemoryValueV30::Pointer(_) => metadata_bits == 0"));
+        assert!(
+            carrier.contains("0 <= value.length < memory_value_modulus_v30(metadata_bits / 8)")
+        );
+        assert!(!carrier.contains("byte_load_v30"));
+        assert!(!carrier.contains("byte_store_v30"));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_slice_operand_metadata_uses_unsigned_archived_scalar_pair() {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    // Isolated layout parsing tests do not admit this synthetic declaration.
+    run(LIMIT, LIMIT, false, 0, |_, out| {
+        let first = BackendScalar::initialized(
+            BackendPrimitive::pointer(0, 8, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        );
+        let declaration = |second| {
+            Type::new(
+                SemanticTypeIdentityV1::from_sha256([245; 32]),
+                SemanticLayoutIdentityV1::from_sha256([246; 32]),
+                SemanticTypeLayoutV1::new_with_backend_repr(
+                    Some(16),
+                    8,
+                    BackendRepr::ScalarPair { first, second },
+                    false,
+                )
+                .unwrap(),
+                Shape::Opaque,
+            )
+        };
+        for bits in [8u16, 16, 32, 64] {
+            let ty = declaration(BackendScalar::initialized(
+                BackendPrimitive::integer(false, bits, u64::from(bits / 8)),
+                SemanticScalarValidityRangeV1::new(0, (1u128 << bits) - 1),
+            ));
+            let before = (out.budget.work(), out.budget.storage());
+            assert_eq!(slice_metadata_bits_v36(&ty, out)?, u32::from(bits));
+            assert_eq!(out.budget.work() - before.0, 2);
+            assert_eq!(out.budget.storage(), before.1);
+            if bits == 64 {
+                use fe2o3_kernel_ir::{
+                    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+                    CanonicalKernelIrWorkBudgetV1 as Work,
+                };
+                for limit in [2, 1] {
+                    let mut work = Work::new(limit);
+                    let storage = super::super::super::super::SOURCE_LIMIT + 17;
+                    let mut budget = Budget::new(&mut work, storage);
+                    budget.reserve_storage(storage).unwrap();
+                    let mut writer = Writer::new(&mut budget).unwrap();
+                    let result = slice_metadata_bits_v36(&ty, &mut writer);
+                    if limit == 2 {
+                        assert_eq!(result.unwrap(), 64);
+                        assert_eq!(writer.budget.work(), 2);
+                    } else {
+                        assert!(matches!(result, Err(Error::Resource(Resource::Work(_)))));
+                    }
+                    assert_eq!(writer.budget.storage(), storage);
+                    assert!(writer.text.is_empty());
+                }
+            }
+        }
+        for scalar in [
+            BackendScalar::initialized(
+                BackendPrimitive::integer(true, 64, 8),
+                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+            ),
+            BackendScalar::union(BackendPrimitive::integer(false, 64, 8)),
+            BackendScalar::initialized(
+                BackendPrimitive::integer(false, 64, 8),
+                SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+            ),
+        ] {
+            assert!(slice_metadata_bits_v36(&declaration(scalar), out).is_err());
+        }
+        assert!(out.text.is_empty());
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_byte_wrapper_retains_dynamic_slot_invariants_without_target_state() {
+    let predicate = SOURCE_BYTES_V36
+        .split("open spec fn invocation_source_byte_state_well_formed_v36(")
+        .nth(1)
+        .unwrap()
+        .split("enum InvocationSourceByteBaseV36")
+        .next()
+        .unwrap();
+    assert!(predicate.contains("source.slots.dom().finite()"));
+    assert!(predicate.contains("private_generation_counters_valid_v30"));
+    assert!(predicate.contains("source.machine.frames.active[i].invocation == invocation"));
+    assert!(
+        predicate.contains(
+            "source.machine.memory.live.contains_key(source.slots[descriptor].allocation)"
+        )
+    );
+    assert!(predicate.contains("source.slots[left].allocation != source.slots[right].allocation"));
+    assert!(!predicate.contains("target"));
+    let activate = SOURCE_BYTES_V36
+        .split("open spec fn invocation_source_byte_activate_v36(")
+        .nth(1)
+        .unwrap()
+        .split("open spec fn invocation_source_byte_end_v36(")
+        .next()
+        .unwrap();
+    assert!(activate.contains("source.slots.contains_key(descriptor)"));
+    assert!(
+        activate.contains("generations: source.machine.generations.insert(site, generation + 1)")
+    );
+    assert!(activate.contains("slots: source.slots.insert(descriptor"));
+    let end = SOURCE_BYTES_V36
+        .split("open spec fn invocation_source_byte_end_v36(")
+        .nth(1)
+        .unwrap()
+        .split("open spec fn invocation_source_byte_step_v36(")
+        .next()
+        .unwrap();
+    assert!(end.contains("slots: cleared.slots.remove(descriptor)"));
+    assert!(end.contains("generations: cleared.machine.generations"));
+    assert!(!end.contains("byte_pop_frame_v30"));
+}
+
+#[test]
+fn original_mir_typed_operand_extraction_has_exact_and_one_short_resources() {
+    let inspect = |body: &SourceByteBody<'_, '_, '_>, out: &mut Writer<'_, '_>| {
+        body.call_argument(0, 0, out)?.emit(out)?;
+        body.call_argument(0, 1, out)?.emit(out)
+    };
+    let measured = run(LIMIT, LIMIT, false, 0, inspect);
+    measured.0.unwrap();
+    run(measured.1, measured.3, false, 0, inspect).0.unwrap();
+    assert!(
+        run(measured.1 - 1, measured.3, false, 0, inspect)
+            .0
+            .is_err()
+    );
+    assert!(
+        run(measured.1, measured.3 - 1, false, 0, inspect)
+            .0
+            .is_err()
+    );
+}

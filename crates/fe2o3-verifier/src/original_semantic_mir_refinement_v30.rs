@@ -2,11 +2,20 @@
 //! This is generated proof input, never an executed or imported certificate.
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 as Ledger;
+use fe2o3_kernel_ir::{EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth};
 use std::mem::align_of;
 
 const DOMAIN: &[u8] = b"FE2O3/ORIGINAL-SEMANTIC-MIR/SCALAR-TRACE/V30\0";
 const CONTROL_DOMAIN: &[u8] = b"FE2O3/ORIGINAL-SEMANTIC-MIR/CONTROL-TRACE/V31\0";
-type PreparationCapture<'view, 'source> = (&'view Source<'source>, usize, Ledger, usize);
+const INVOCATION_DOMAIN: &[u8] = b"FE2O3/ORIGINAL-SEMANTIC-MIR/INVOCATION-TRACE/V36\0";
+type RuntimeV36<'a> = (&'a [ExplicitLaunchExtent], FormalIndexWidth, EndiannessV2);
+type PreparationCapture<'view, 'source, 'runtime> = (
+    &'view Source<'source>,
+    usize,
+    Ledger,
+    usize,
+    Option<RuntimeV36<'runtime>>,
+);
 
 /// Content identity of the complete original source and canonical proof scope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,6 +30,8 @@ pub struct OriginalSemanticMirRefinementSubject<const VERSION: u16> {
 pub type OriginalSemanticMirRefinementSubjectV30 = OriginalSemanticMirRefinementSubject<30>;
 /// Whole scalar CFG statement identity, distinct from the historical scalar domain.
 pub type OriginalSemanticMirRefinementSubjectV31 = OriginalSemanticMirRefinementSubject<31>;
+/// All-invocation scalar body/control identity, including concrete connector paths.
+pub type OriginalSemanticMirRefinementSubjectV36 = OriginalSemanticMirRefinementSubject<36>;
 
 impl<const VERSION: u16> OriginalSemanticMirRefinementSubject<VERSION> {
     /// Exact original Semantic MIR content identity.
@@ -57,6 +68,78 @@ pub struct PreparedOriginalSemanticMirRefinement<'view, 'source, const VERSION: 
     ledger: Ledger,
     slot: usize,
     required: usize,
+    runtime: Option<[u8; 32]>,
+}
+
+impl PreparedOriginalSemanticMirRefinement<'_, '_, 36> {
+    /// Replays descriptive runtime fields against the same owner's funded
+    /// request. The enclosing final consumer must authenticate these inputs.
+    pub fn check_runtime_v36(
+        &self,
+        launches: &[ExplicitLaunchExtent],
+        width: FormalIndexWidth,
+        endianness: EndiannessV2,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.check(budget)?;
+        let identity = runtime_identity_v36(
+            self.source.root_count(budget)?,
+            (launches, width, endianness),
+            budget,
+        )?;
+        if self.runtime != Some(identity) {
+            return Err(Error::Statement(
+                "original MIR runtime differs from retained final context",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn runtime_identity_v36(
+    roots: usize,
+    (launches, width, endianness): RuntimeV36<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<[u8; 32]> {
+    // Forty domain bytes, two tags, eight count bytes, eight fixed checks.
+    budget.charge_work(58)?;
+    let bits = match width {
+        FormalIndexWidth::Bits32 => 32u8,
+        FormalIndexWidth::Bits64 => 64u8,
+        FormalIndexWidth::Unknown => {
+            return Err(Error::Statement("original MIR INDEX width is unknown"));
+        }
+    };
+    if roots == 0 || launches.len() != roots {
+        return Err(Error::Statement("original MIR runtime root census differs"));
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"FE2O3/ORIGINAL-SEMANTIC-MIR/RUNTIME/V36\0");
+    hash.update([bits, endianness as u8]);
+    hash.update(
+        u64::try_from(roots)
+            .map_err(|_| Resource::Arithmetic)?
+            .to_le_bytes(),
+    );
+    for launch in launches {
+        budget.charge_work(32)?;
+        let ExplicitLaunchExtent::Exact { rank, extents } = launch else {
+            return Err(Error::Statement("original MIR launch extent is unknown"));
+        };
+        if !(1..=3).contains(rank)
+            || extents.contains(&0)
+            || (*rank < 2 && extents[1] != 1)
+            || (*rank < 3 && extents[2] != 1)
+            || (bits == 32 && extents.iter().any(|n| *n > u64::from(u32::MAX)))
+        {
+            return Err(Error::Statement("original MIR launch extent is invalid"));
+        }
+        hash.update([*rank]);
+        for extent in extents {
+            hash.update(extent.to_le_bytes());
+        }
+    }
+    Ok(hash.finalize().into())
 }
 /// Historical straight-line scalar request. It cannot be relabeled as a CFG request.
 pub type PreparedOriginalSemanticMirRefinementV30<'view, 'source> =
@@ -64,6 +147,9 @@ pub type PreparedOriginalSemanticMirRefinementV30<'view, 'source> =
 /// Whole scalar CFG request retaining the genuine original source owner.
 pub type PreparedOriginalSemanticMirRefinementV31<'view, 'source> =
     PreparedOriginalSemanticMirRefinement<'view, 'source, 31>;
+/// All-invocation request on the same retained original-source ownership path.
+pub type PreparedOriginalSemanticMirRefinementV36<'view, 'source> =
+    PreparedOriginalSemanticMirRefinement<'view, 'source, 36>;
 
 impl<const VERSION: u16> PreparedOriginalSemanticMirRefinement<'_, '_, VERSION> {
     fn check(&self, budget: &Budget<'_>) -> Result<()> {
@@ -119,9 +205,13 @@ impl<const VERSION: u16> PreparedOriginalSemanticMirRefinement<'_, '_, VERSION> 
 fn retain(error: Error, source: &Source<'_>) -> Error {
     match error {
         Error::Resource(resource)
-        | Error::Inventory(CanonicalKirInventoryErrorV1::Resource(resource)) => {
-            Error::Source(source.retain_query_resource_error_v18(resource))
-        }
+        | Error::Inventory(CanonicalKirInventoryErrorV1::Resource(resource))
+        | Error::PrivateMemory(
+            fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1::Resource(resource)
+            | fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1::Inventory(
+                CanonicalKirInventoryErrorV1::Resource(resource),
+            ),
+        ) => Error::Source(source.retain_query_resource_error_v18(resource)),
         other => other,
     }
 }
@@ -133,7 +223,7 @@ pub fn prepare_original_semantic_mir_refinement_v30<'view, 'source>(
     source: &'view Source<'source>,
     budget: &mut Budget<'_>,
 ) -> Result<PreparedOriginalSemanticMirRefinementV30<'view, 'source>> {
-    prepare::<30>(source, budget)
+    prepare::<30>(source, None, budget)
 }
 
 /// Generates an all-root scalar CFG obligation with original local-state,
@@ -143,11 +233,27 @@ pub fn prepare_original_semantic_mir_refinement_v31<'view, 'source>(
     source: &'view Source<'source>,
     budget: &mut Budget<'_>,
 ) -> Result<PreparedOriginalSemanticMirRefinementV31<'view, 'source>> {
-    prepare::<31>(source, budget)
+    prepare::<31>(source, None, budget)
+}
+
+/// Generates all original scalar bodies, call/return and loop steps with exact
+/// concrete canonical connector replay. Unsupported memory/effects refuse the
+/// whole request; runtime frame annotations do not authorize allocation death.
+/// Runtime fields are descriptive proof inputs. The existing final consumer
+/// separately joins them to retained native launch and actual target owners.
+pub fn prepare_original_semantic_mir_refinement_v36<'view, 'source>(
+    source: &'view Source<'source>,
+    launches: &[ExplicitLaunchExtent],
+    width: FormalIndexWidth,
+    endianness: EndiannessV2,
+    budget: &mut Budget<'_>,
+) -> Result<PreparedOriginalSemanticMirRefinementV36<'view, 'source>> {
+    prepare::<36>(source, Some((launches, width, endianness)), budget)
 }
 
 fn prepare<'view, 'source, const VERSION: u16>(
     source: &'view Source<'source>,
+    runtime: Option<RuntimeV36<'_>>,
     budget: &mut Budget<'_>,
 ) -> Result<PreparedOriginalSemanticMirRefinement<'view, 'source, VERSION>> {
     source.check_query_v18(budget)?;
@@ -155,21 +261,21 @@ fn prepare<'view, 'source, const VERSION: u16>(
     let ledger = budget.work_ledger_identity_v1();
     let slot = std::ptr::from_ref(&*budget) as usize;
     let headers = original_mir_headers::<VERSION>()?;
-    let capture: PreparationCapture<'_, '_> = (source, floor, ledger, slot);
+    let capture: PreparationCapture<'_, '_, '_> = (source, floor, ledger, slot, runtime);
     let produce = move |budget: &mut Budget<'_>| {
-        let (source, floor, ledger, slot) = std::convert::identity(capture);
-        produce::<VERSION>(source, floor, ledger, slot, budget)
+        let (source, floor, ledger, slot, runtime) = std::convert::identity(capture);
+        produce::<VERSION>(source, floor, ledger, slot, runtime, budget)
             .map_err(|error| retain(error, source))
     };
     #[cfg(test)]
     {
         assert_eq!(
             std::mem::size_of_val(&produce),
-            size_of::<PreparationCapture<'_, '_>>()
+            size_of::<PreparationCapture<'_, '_, '_>>()
         );
         assert_eq!(
             std::mem::align_of_val(&produce),
-            align_of::<PreparationCapture<'_, '_>>()
+            align_of::<PreparationCapture<'_, '_, '_>>()
         );
     }
     budget
@@ -179,12 +285,24 @@ fn prepare<'view, 'source, const VERSION: u16>(
 
 fn generate<const VERSION: u16>(
     relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
+    runtime: Option<RuntimeV36<'_>>,
     budget: &mut Budget<'_>,
 ) -> Result<(String, [usize; 6])> {
     let mut writer = Writer::new(budget)?;
     let census = match VERSION {
         30 => semantics::original_scalar_v30::generate(relation, &mut writer)?,
         31 => semantics::original_scalar_v30::generate_control_v31(relation, &mut writer)?,
+        36 => {
+            let (launches, width, endianness) =
+                runtime.ok_or(Error::Statement("original MIR runtime is missing"))?;
+            semantics::original_scalar_v30::generate_invocations_v36(
+                relation,
+                launches,
+                width,
+                endianness,
+                &mut writer,
+            )?
+        }
         _ => {
             return Err(Error::Statement(
                 "original MIR proof domain is not registered",
@@ -199,14 +317,26 @@ fn produce<'view, 'source, const VERSION: u16>(
     floor: usize,
     ledger: Ledger,
     slot: usize,
+    runtime: Option<RuntimeV36<'_>>,
     budget: &mut Budget<'_>,
 ) -> Result<PreparedOriginalSemanticMirRefinement<'view, 'source, VERSION>> {
     let owner = source.canonical(budget)?;
     let original = source.source_ssa(budget)?;
     let (inventory, receipt) = Inventory::derive_v18(owner, budget)?;
     budget.reserve_storage(receipt.retained_storage())?;
+    let runtime_identity = match (VERSION, runtime) {
+        (36, Some(runtime)) => Some(runtime_identity_v36(
+            source.root_count(budget)?,
+            runtime,
+            budget,
+        )?),
+        (30 | 31, None) => None,
+        _ => return Err(Error::Statement("original MIR runtime domain differs")),
+    };
     let (text, census) =
-        source.with_ranked_correspondence_v18(&inventory, budget, generate::<VERSION>)?;
+        source.with_ranked_correspondence_v18(&inventory, budget, |relation, budget| {
+            generate::<VERSION>(relation, runtime, budget)
+        })?;
     budget.charge_work(text.len().checked_mul(3).ok_or(Resource::Arithmetic)?)?;
     let generated = CanonicalGeneratedVerusProofInputV3::new(text.into_bytes())?;
     let semantic = *original.source_semantic_sha256();
@@ -216,6 +346,7 @@ fn produce<'view, 'source, const VERSION: u16>(
     digest.update(match VERSION {
         30 => DOMAIN,
         31 => CONTROL_DOMAIN,
+        36 => INVOCATION_DOMAIN,
         _ => {
             return Err(Error::Statement(
                 "original MIR proof domain is not registered",
@@ -226,6 +357,9 @@ fn produce<'view, 'source, const VERSION: u16>(
     digest.update(ssa);
     digest.update(canonical.canonical_length().to_le_bytes());
     digest.update(canonical.digest());
+    if let Some(identity) = runtime_identity {
+        digest.update(identity);
+    }
     for value in census {
         digest.update(
             u64::try_from(value)
@@ -256,6 +390,7 @@ fn produce<'view, 'source, const VERSION: u16>(
         ledger,
         slot,
         required,
+        runtime: runtime_identity,
     })
 }
 
@@ -271,6 +406,12 @@ fn query_headers<const VERSION: u16>() -> Result<usize> {
         size_of::<Result<&[u8]>>(),
         3 * size_of::<Result<()>>(),
         size_of::<std::result::Result<(), SourceError>>(),
+        size_of::<RuntimeV36<'_>>(),
+        size_of::<Sha256>(),
+        size_of::<Result<[u8; 32]>>(),
+        size_of::<std::slice::Iter<'_, ExplicitLaunchExtent>>(),
+        size_of::<std::slice::Iter<'_, u64>>(),
+        8 * size_of::<usize>(),
     ]
     .into_iter()
     .try_fold(0usize, |total, bytes| {
@@ -293,9 +434,11 @@ fn original_mir_headers<const VERSION: u16>() -> Result<usize> {
         size_of::<Request<'_, VERSION>>(),
         2 * size_of::<Result<Request<'_, VERSION>>>(),
         size_of::<std::thread::Result<Result<Request<'_, VERSION>>>>(),
-        size_of::<PreparationCapture<'_, '_>>(),
-        align_of::<PreparationCapture<'_, '_>>(),
-        size_of::<std::panic::AssertUnwindSafe<PreparationCapture<'_, '_>>>(),
+        size_of::<PreparationCapture<'_, '_, '_>>(),
+        align_of::<PreparationCapture<'_, '_, '_>>(),
+        size_of::<std::panic::AssertUnwindSafe<PreparationCapture<'_, '_, '_>>>(),
+        3 * size_of::<Option<RuntimeV36<'_>>>(),
+        size_of::<Option<[u8; 32]>>(),
         size_of::<(&Source<'_>, &mut Budget<'_>, Ledger, usize, usize)>(),
         size_of::<(
             &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,
@@ -348,3 +491,177 @@ mod tests;
 #[cfg(test)]
 #[path = "original_semantic_mir_refinement_v31_tests.rs"]
 mod control_tests;
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    fn identity(
+        launches: &[ExplicitLaunchExtent],
+        width: FormalIndexWidth,
+        endian: EndiannessV2,
+        limit: usize,
+    ) -> (Result<[u8; 32]>, usize) {
+        let mut work = Work::new(limit);
+        let mut budget = Budget::new(&mut work, 37);
+        budget.reserve_storage(37).unwrap();
+        let result = runtime_identity_v36(2, (launches, width, endian), &mut budget);
+        assert_eq!(budget.storage(), 37);
+        (result, budget.work())
+    }
+
+    #[test]
+    fn original_mir_runtime_identity_binds_width_byte_order_axis_and_root_order() {
+        let launches = [
+            ExplicitLaunchExtent::Exact {
+                rank: 2,
+                extents: [8, 4, 1],
+            },
+            ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [64, 1, 1],
+            },
+        ];
+        let baseline = identity(
+            &launches,
+            FormalIndexWidth::Bits64,
+            EndiannessV2::Little,
+            122,
+        )
+        .0
+        .unwrap();
+        assert_ne!(
+            baseline,
+            identity(
+                &launches,
+                FormalIndexWidth::Bits32,
+                EndiannessV2::Little,
+                122
+            )
+            .0
+            .unwrap()
+        );
+        assert_ne!(
+            baseline,
+            identity(&launches, FormalIndexWidth::Bits64, EndiannessV2::Big, 122)
+                .0
+                .unwrap()
+        );
+        let mut changed = launches;
+        changed.swap(0, 1);
+        assert_ne!(
+            baseline,
+            identity(
+                &changed,
+                FormalIndexWidth::Bits64,
+                EndiannessV2::Little,
+                122
+            )
+            .0
+            .unwrap()
+        );
+        changed = launches;
+        changed[0] = ExplicitLaunchExtent::Exact {
+            rank: 2,
+            extents: [4, 8, 1],
+        };
+        assert_ne!(
+            baseline,
+            identity(
+                &changed,
+                FormalIndexWidth::Bits64,
+                EndiannessV2::Little,
+                122
+            )
+            .0
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn original_mir_runtime_rejects_unknown_inactive_axes_and_width_overflow() {
+        let exact = ExplicitLaunchExtent::Exact {
+            rank: 1,
+            extents: [64, 1, 1],
+        };
+        for invalid in [
+            ExplicitLaunchExtent::Unknown,
+            ExplicitLaunchExtent::Exact {
+                rank: 0,
+                extents: [1, 1, 1],
+            },
+            ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [64, 2, 1],
+            },
+            ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [0, 1, 1],
+            },
+            ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [u64::from(u32::MAX) + 1, 1, 1],
+            },
+        ] {
+            assert!(
+                identity(
+                    &[exact, invalid],
+                    FormalIndexWidth::Bits32,
+                    EndiannessV2::Little,
+                    122
+                )
+                .0
+                .is_err()
+            );
+        }
+        assert!(
+            identity(
+                &[exact; 2],
+                FormalIndexWidth::Unknown,
+                EndiannessV2::Little,
+                122
+            )
+            .0
+            .is_err()
+        );
+        assert!(
+            identity(
+                &[exact],
+                FormalIndexWidth::Bits64,
+                EndiannessV2::Little,
+                122
+            )
+            .0
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn original_mir_runtime_identity_has_independent_exact_work_and_one_short() {
+        let launches = [ExplicitLaunchExtent::Exact {
+            rank: 1,
+            extents: [64, 1, 1],
+        }; 2];
+        // Forty domain bytes + two tags + eight count bytes + eight checks,
+        // then 32 units for each exact root launch.
+        let exact = identity(
+            &launches,
+            FormalIndexWidth::Bits64,
+            EndiannessV2::Little,
+            40 + 2 + 8 + 8 + 32 * 2,
+        );
+        exact.0.unwrap();
+        assert_eq!(exact.1, 122);
+        assert!(matches!(
+            identity(
+                &launches,
+                FormalIndexWidth::Bits64,
+                EndiannessV2::Little,
+                121
+            )
+            .0,
+            Err(Error::Resource(_))
+        ));
+    }
+}

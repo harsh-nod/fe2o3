@@ -4,6 +4,307 @@ use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
 
 const LIMIT: usize = 100_000_000;
 
+#[test]
+fn original_mir_actual_all_step_emission_consumes_each_checked_edge_and_dynamic_frame() {
+    run_control_case(LIMIT, LIMIT, false, true, |actual, out| {
+        actual.emit_refinement(out)?;
+        for (index, body) in actual.original.bodies.iter().enumerate() {
+            let Some(body) = body else { continue };
+            let bindings = actual.bodies[index].as_ref().unwrap();
+            for (block, source) in body.control.blocks.iter().enumerate() {
+                let Some(source) = source else { continue };
+                let key = body.blocks.start + block;
+                let edges = match &source.branch {
+                    super::super::super::control::Branch::Switch { cases, .. } => cases.len() + 1,
+                    _ => 1,
+                };
+                for ordinal in 0..edges {
+                    let name = format!("open spec fn actual_invocation_segment_{key}_{ordinal}_v36(");
+                    assert_eq!(out.text.matches(&name).count(), 1);
+                    let path = format!("open spec fn actual_invocation_path_{key}_{ordinal}_v36() -> Seq<int> {{ seq![{}int,", bindings.bindings[block].as_ref().unwrap().physical.block);
+                    assert!(out.text.contains(&path));
+                }
+            }
+        }
+        for root in 0..2 {
+            for stem in ["invocation_initial_relation", "invocation_step_relation", "invocation_all_steps", "invocation_finite_trace", "invocation_initial_concrete_trace"] {
+                assert!(out.text.contains(&format!("proof fn {stem}_{root}_v36(")));
+            }
+        }
+        assert!(out.text.contains("byte_enter_frame_v30(f, "));
+        assert!(out.text.contains("byte_pop_frame_v30(f)"));
+        assert!(out.text.contains("byte_root_frame_v30("));
+        assert!(out.text.contains("byte_frame_runtime_well_formed_v30(n.frames)"));
+        assert!(!out.text.contains("byte_end_frame_v30("));
+        assert!(!out.text.contains("assume("));
+        assert!(!out.text.contains("admit("));
+        Ok(())
+    }).0.unwrap();
+}
+
+#[test]
+fn original_mir_actual_all_step_emission_rejects_changed_body_before_any_text() {
+    run_control_case(LIMIT, LIMIT, false, true, |actual, out| {
+        let target = actual.roots[0]
+            .targets
+            .iter_mut()
+            .find(|target| {
+                target.program.nodes.iter().any(|node| {
+                    matches!(
+                        node.expression,
+                        super::super::super::ExpressionV30::Binary { .. }
+                    )
+                })
+            })
+            .unwrap();
+        let node = target
+            .program
+            .nodes
+            .iter_mut()
+            .find(|node| {
+                matches!(
+                    node.expression,
+                    super::super::super::ExpressionV30::Binary { .. }
+                )
+            })
+            .unwrap();
+        if let super::super::super::ExpressionV30::Binary { operation, .. } = &mut node.expression {
+            *operation = super::super::super::OperatorV30::And;
+        }
+        assert!(actual.emit_refinement(out).is_err());
+        assert!(out.text.is_empty());
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_actual_all_step_generator_has_exact_and_one_short_resources() {
+    let probe = |work, storage| {
+        run_control_case(work, storage, false, true, |actual, out| {
+            actual.emit_refinement(out)
+        })
+    };
+    let measured = probe(LIMIT, LIMIT);
+    measured.0.unwrap();
+    probe(measured.1, measured.3).0.unwrap();
+    assert!(probe(measured.1 - 1, measured.3).0.is_err());
+    assert!(probe(measured.1, measured.3 - 1).0.is_err());
+}
+
+#[test]
+fn original_mir_actual_all_step_generator_frame_has_independent_field_oracle() {
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    let expected = 5 * h::<&()>()
+        + h::<&super::super::super::target_trace::ConcreteTrace<'_, '_>>()
+        + h::<Vec<usize>>()
+        + h::<&[(usize, Option<usize>)]>()
+        + h::<&[usize]>()
+        + h::<Option<(usize, usize)>>()
+        + h::<Option<usize>>()
+        + 32 * size_of::<usize>()
+        + 16 * size_of::<&()>();
+    assert_eq!(generate::headers(), expected);
+    assert_eq!(
+        physical::headers(),
+        7 * h::<&()>() + 32 * size_of::<usize>() + 16 * size_of::<&()>()
+    );
+}
+
+#[test]
+fn original_mir_invocation_request_consumes_the_complete_retained_source() {
+    use crate::{
+        PreparedOriginalSemanticMirRefinementV31, PreparedOriginalSemanticMirRefinementV36,
+        prepare_original_semantic_mir_refinement_v36,
+    };
+    use std::any::TypeId;
+    assert_ne!(
+        TypeId::of::<PreparedOriginalSemanticMirRefinementV31<'static, 'static>>(),
+        TypeId::of::<PreparedOriginalSemanticMirRefinementV36<'static, 'static>>()
+    );
+    invocations::tests::run_control_variant(LIMIT, LIMIT, false, true, |plan, out| {
+        let source = plan.source(out)?;
+        let floor = out.budget.storage();
+        use fe2o3_kernel_ir::{EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth};
+        let launches = [ExplicitLaunchExtent::Exact {
+            rank: 1,
+            extents: [64, 1, 1],
+        }; 2];
+        let request = prepare_original_semantic_mir_refinement_v36(
+            source,
+            &launches,
+            FormalIndexWidth::Bits64,
+            EndiannessV2::Little,
+            out.budget,
+        )?;
+        assert_eq!(out.budget.storage(), floor);
+        let retained = request.retained_storage();
+        out.budget.reserve_storage(retained)?;
+        request.check_original_source(source, out.budget)?;
+        request.check_runtime_v36(
+            &launches,
+            FormalIndexWidth::Bits64,
+            EndiannessV2::Little,
+            out.budget,
+        )?;
+        assert!(
+            request
+                .check_runtime_v36(
+                    &launches,
+                    FormalIndexWidth::Bits32,
+                    EndiannessV2::Little,
+                    out.budget
+                )
+                .is_err()
+        );
+        assert!(
+            request
+                .check_runtime_v36(
+                    &launches,
+                    FormalIndexWidth::Bits64,
+                    EndiannessV2::Big,
+                    out.budget
+                )
+                .is_err()
+        );
+        let mut changed = launches;
+        changed[1] = ExplicitLaunchExtent::Exact {
+            rank: 1,
+            extents: [65, 1, 1],
+        };
+        assert!(
+            request
+                .check_runtime_v36(
+                    &changed,
+                    FormalIndexWidth::Bits64,
+                    EndiannessV2::Little,
+                    out.budget
+                )
+                .is_err()
+        );
+        assert_eq!(&request.subject(out.budget)?.census()[..4], &[2, 8, 28, 28]);
+        let text = std::str::from_utf8(request.generated_source(out.budget)?).unwrap();
+        assert!(text.starts_with("use vstd::prelude::*;"));
+        assert!(text.contains("struct MemoryFrameRuntimeV30"));
+        assert!(text.contains("struct InvocationByteMapV36"));
+        assert!(text.contains("open spec fn invocation_activation_witness_v36("));
+        assert!(text.contains("open spec fn invocation_source_read_enabled_v36("));
+        assert!(text.contains("open spec fn invocation_frame_end_witness_v36("));
+        assert!(text.contains("open spec fn invocation_source_slot_count_v36("));
+        assert!(text.contains("open spec fn invocation_source_byte_initial_0_v36("));
+        assert!(text.contains("open spec fn invocation_source_micro_step_0_0_v36("));
+        assert!(text.contains("open spec fn invocation_source_byte_storage_related_0_v36("));
+        assert!(text.contains("open spec fn invocation_runtime_index_bytes_v36() -> int { 8 }"));
+        assert!(
+            text.contains("open spec fn invocation_runtime_little_endian_v36() -> bool { true }")
+        );
+        assert!(text.contains("open spec fn invocation_actual_micro_runtime_0_v36("));
+        for root in 0..2 {
+            assert!(text.contains(&format!(
+                "proof fn invocation_paired_finite_trace_{root}_v36("
+            )));
+            assert!(text.contains(&format!(
+                "let head = byte_block_step_{root}_v30(target, invocation_runtime_little_endian_v36());"
+            )));
+            assert!(text.contains(&format!("proof fn invocation_paired_initial_{root}_v36(")));
+            assert!(text.contains(&format!(
+                "proof fn invocation_paired_initial_trace_{root}_v36("
+            )));
+            assert!(text.contains(&format!(
+                "&& invocation_source_byte_storage_related_{root}_v36(source, target)"
+            )));
+        }
+        assert!(text.contains("invocation_source_operands_effects_v36(result.operands"));
+        assert!(!text.contains("struct ActualInvocationRuntimeV36"));
+        assert!(!text.contains("assume("));
+        assert!(!text.contains("external_body"));
+        assert!(!request.authenticates_executed_proof());
+        assert!(!request.grants_artifact_or_launch_authority());
+        drop(request);
+        out.budget.release_storage(retained)?;
+        assert_eq!(out.budget.storage(), floor);
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_mir_actual_microstep_observations_and_fuel_are_concretely_emitted() {
+    run_control_case(LIMIT, LIMIT, false, true, |actual, out| {
+        actual.emit_refinement(out)?;
+        for (index, body) in actual.original.bodies.iter().enumerate() {
+            let Some(body) = body else { continue };
+            let binding = actual.bodies[index].as_ref().unwrap();
+            for (block, source) in body.control.blocks.iter().enumerate() {
+                let Some(source) = source else { continue };
+                let key = body.blocks.start + block;
+                let count = match &source.branch {
+                    super::super::super::control::Branch::Switch { cases, .. } => cases.len() + 1,
+                    _ => 1,
+                };
+                for ordinal in 0..count {
+                    assert_eq!(
+                        out.text
+                            .matches(&format!(
+                                "proof fn invocation_segment_concrete_{key}_{ordinal}_v36("
+                            ))
+                            .count(),
+                        1
+                    );
+                    assert!(out.text.contains(&format!(
+                        "actual_invocation_path_{key}_{ordinal}_v36().len()"
+                    )));
+                }
+                for definition in binding.bindings[block]
+                    .as_ref()
+                    .unwrap()
+                    .assignments
+                    .iter()
+                    .flatten()
+                {
+                    assert!(out.text.contains(&format!("body[{definition}],")));
+                }
+            }
+        }
+        assert!(out.text.contains("invocation_physical_trace_split_v36("));
+        assert!(
+            out.text
+                .contains("invocation_runtime_projection_0_v36(o, fuel);")
+        );
+        assert!(
+            out.text
+                .contains("invocation_concrete_finite_trace_0_v36(o.scalar, fuel);")
+        );
+        for root in 0..2 {
+            assert_eq!(
+                out.text
+                    .matches(&format!(
+                        "open spec fn invocation_actual_raw_initial_{root}_v36("
+                    ))
+                    .count(),
+                1
+            );
+            assert!(out.text.contains(&format!(
+                "actual_invocation_ready_{root}_v36(invocation_actual_raw_initial_{root}_v36(a, p))"
+            )));
+            assert!(out.text.contains(&format!(
+                "invocation_prefix_concrete_{root}_v36(raw);"
+            )));
+            assert!(out.text.contains(&format!(
+                "raw, actual_invocation_prefix_{root}_v36().len(), invocation_physical_fuel_{root}_v36(o.scalar, fuel)"
+            )));
+        }
+        assert!(!out.text.contains("op!"));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
 fn run(work: usize, storage: usize) -> (Result<()>, usize, usize, usize) {
     run_case(work, storage, false, |actual, out| {
         actual.check_segments(out)

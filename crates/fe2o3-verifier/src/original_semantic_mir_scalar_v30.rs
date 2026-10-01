@@ -51,6 +51,7 @@ mod control_generate;
 #[cfg(test)]
 pub(crate) use control::tests::fixture as control_fixture_v31;
 pub(crate) use control_generate::generate as generate_control_v31;
+pub(crate) use invocation_body::generate_refinement_v36 as generate_invocations_v36;
 
 #[path = "original_semantic_mir_source_v30.rs"]
 mod source;

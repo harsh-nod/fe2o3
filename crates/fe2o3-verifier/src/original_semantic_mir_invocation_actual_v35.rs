@@ -32,6 +32,12 @@ struct ActualRoot {
 #[path = "original_semantic_mir_invocation_segments_v35.rs"]
 mod segments;
 
+#[path = "original_semantic_mir_invocation_physical_v36.rs"]
+mod physical;
+
+#[path = "original_semantic_mir_invocation_actual_generate_v36.rs"]
+mod generate;
+
 pub(super) struct ActualInvocations<'m, 'a, 'plan, 'view, 'source, 'i> {
     original: &'m InvocationBodies<'a, 'plan, 'view, 'source>,
     inventory: &'i Inventory<'i>,
@@ -307,6 +313,13 @@ impl<'m, 'a, 'plan, 'view, 'source, 'i> ActualInvocations<'m, 'a, 'plan, 'view, 
     pub(super) fn check_segments(&self, out: &mut Writer<'_, '_>) -> Result<()> {
         self.check(out)?;
         segments::check(self, out)
+    }
+
+    /// Emits the same checked scalar segment replay and its all-step obligation.
+    /// Generated text is not a verification result or a memory admission.
+    pub(super) fn emit_refinement(&self, out: &mut Writer<'_, '_>) -> Result<()> {
+        self.check_segments(out)?;
+        generate::emit(self, out)
     }
 }
 

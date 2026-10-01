@@ -25,11 +25,23 @@ fn original_mir_request_prepaid_frames_have_an_independent_field_oracle() {
         Ledger,
         usize,
         usize,
+        Option<[u8; 32]>,
     );
     assert_eq!(size_of::<Request>(), size_of::<Fields>());
-    type Captured = (&'static Source<'static>, usize, Ledger, usize);
+    type RuntimeFields = (
+        &'static [ExplicitLaunchExtent],
+        FormalIndexWidth,
+        EndiannessV2,
+    );
+    type Captured = (
+        &'static Source<'static>,
+        usize,
+        Ledger,
+        usize,
+        Option<RuntimeFields>,
+    );
     assert_eq!(
-        size_of::<PreparationCapture<'_, '_>>(),
+        size_of::<PreparationCapture<'_, '_, '_>>(),
         size_of::<Captured>()
     );
     type InventoryPair = (
@@ -41,7 +53,13 @@ fn original_mir_request_prepaid_frames_have_an_independent_field_oracle() {
         + size_of::<Result<OriginalSemanticMirRefinementSubjectV30>>()
         + size_of::<Result<&[u8]>>()
         + 3 * size_of::<Result<()>>()
-        + size_of::<std::result::Result<(), SourceError>>();
+        + size_of::<std::result::Result<(), SourceError>>()
+        + size_of::<RuntimeFields>()
+        + size_of::<Sha256>()
+        + size_of::<Result<[u8; 32]>>()
+        + size_of::<std::slice::Iter<'_, ExplicitLaunchExtent>>()
+        + size_of::<std::slice::Iter<'_, u64>>()
+        + 8 * size_of::<usize>();
     assert_eq!(query_headers_v30().unwrap(), queries);
     let expected = 2 * SOURCE_LIMIT
         + queries
@@ -51,6 +69,8 @@ fn original_mir_request_prepaid_frames_have_an_independent_field_oracle() {
         + size_of::<Captured>()
         + align_of::<Captured>()
         + size_of::<std::panic::AssertUnwindSafe<Captured>>()
+        + 3 * size_of::<Option<RuntimeFields>>()
+        + size_of::<Option<[u8; 32]>>()
         + size_of::<(&Source<'_>, &mut Budget<'_>, Ledger, usize, usize)>()
         + size_of::<(
             &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV18,

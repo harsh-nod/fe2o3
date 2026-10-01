@@ -43,6 +43,56 @@ fn prepared_root_variant(
     control: bool,
     root_count: u8,
 ) -> Result<ProductionPreparedSourceV18> {
+    prepared_root_storage_variant(budget, unit_return, control, root_count, 0)
+}
+
+fn prepared_root_storage_variant(
+    budget: &mut Budget<'_>,
+    unit_return: bool,
+    control: bool,
+    root_count: u8,
+    retained_storage: u8,
+) -> Result<ProductionPreparedSourceV18> {
+    prepared_source_transform(
+        budget,
+        unit_return,
+        control,
+        root_count,
+        retained_storage,
+        |_, _| {},
+    )
+}
+
+fn prepared_source_transform(
+    budget: &mut Budget<'_>,
+    unit_return: bool,
+    control: bool,
+    root_count: u8,
+    retained_storage: u8,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+) -> Result<ProductionPreparedSourceV18> {
+    prepared_callable_transform(
+        budget,
+        unit_return,
+        control,
+        root_count,
+        retained_storage,
+        |types, functions, _| transform(types, functions),
+    )
+}
+
+fn prepared_callable_transform(
+    budget: &mut Budget<'_>,
+    unit_return: bool,
+    control: bool,
+    root_count: u8,
+    retained_storage: u8,
+    transform: impl FnOnce(
+        &mut Vec<SemanticTypeDeclV1>,
+        &mut Vec<SemanticFunctionDeclV1>,
+        &mut Vec<Callable>,
+    ),
+) -> Result<ProductionPreparedSourceV18> {
     assert!((2..=8).contains(&root_count));
     let root_names: Vec<_> = (0..root_count)
         .map(|root| match root {
@@ -141,6 +191,20 @@ fn prepared_root_variant(
         .unwrap(),
         SemanticTypeShapeV1::Unit,
     ));
+    let pair = SemanticTypeIdV1::from_index(types.len() as u32);
+    if retained_storage == 1 {
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([88; 32]),
+            SemanticLayoutIdentityV1::from_sha256([89; 32]),
+            SemanticTypeLayoutV1::aggregate(
+                Some(8),
+                4,
+                SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![word, word]).unwrap()),
+        ));
+    }
     let source = SemanticSourceProvenanceV1::unavailable();
     let unit_place =
         || SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], unit).unwrap();
@@ -235,6 +299,14 @@ fn prepared_root_variant(
             SemanticLocalRoleV1::Return,
             source,
         );
+        if retained_storage != 0 {
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([tag + 15; 32]),
+                if retained_storage == 1 { pair } else { word },
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ));
+        }
         let mut blocks = Vec::new();
         for block in 0..4u32 {
             let terminator = if block == 2 {
@@ -259,7 +331,7 @@ fn prepared_root_variant(
                     .unwrap(),
                 )
             };
-            let statements = if control && block < 2 {
+            let mut statements = if control && block < 2 {
                 vec![SemanticStatementV1::new(
                     source,
                     SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
@@ -277,6 +349,104 @@ fn prepared_root_variant(
             } else {
                 vec![]
             };
+            if retained_storage == 1 && block == 0 {
+                let pair_place =
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], pair).unwrap();
+                let field = |index| {
+                    SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(4),
+                        vec![
+                            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(index), word)
+                                .unwrap(),
+                        ],
+                        word,
+                    )
+                    .unwrap()
+                };
+                statements.extend([
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            pair_place,
+                            SemanticRvalueV1::new(
+                                pair,
+                                SemanticRvalueKindV1::Aggregate(
+                                    SemanticAggregateRvalueV1::new(
+                                        SemanticAggregateKindV1::Tuple,
+                                        vec![
+                                            SemanticOperandV1::Copy(place(1)),
+                                            SemanticOperandV1::Copy(place(2)),
+                                        ],
+                                    )
+                                    .unwrap(),
+                                ),
+                            ),
+                        )),
+                    ),
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                            field(1),
+                            SemanticOperandV1::Copy(place(2)),
+                            SemanticVolatilityV1::NonVolatile,
+                            None,
+                        )),
+                    ),
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            place(1),
+                            SemanticRvalueV1::new(
+                                word,
+                                SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                                    field(0),
+                                    SemanticVolatilityV1::NonVolatile,
+                                    None,
+                                )),
+                            ),
+                        )),
+                    ),
+                ]);
+            }
+            if matches!(retained_storage, 2 | 3) && block == 0 {
+                if retained_storage == 3 {
+                    statements.push(SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)),
+                    ));
+                }
+                statements.extend([
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                            place(4),
+                            SemanticOperandV1::Copy(place(1)),
+                            SemanticVolatilityV1::NonVolatile,
+                            None,
+                        )),
+                    ),
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            place(1),
+                            SemanticRvalueV1::new(
+                                word,
+                                SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                                    place(4),
+                                    SemanticVolatilityV1::NonVolatile,
+                                    None,
+                                )),
+                            ),
+                        )),
+                    ),
+                ]);
+                if retained_storage == 3 {
+                    statements.push(SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4)),
+                    ));
+                }
+            }
             blocks.push(
                 SemanticBasicBlockV1::new(
                     SemanticBlockIdentityV1::from_sha256([tag + 10 + block as u8; 32]),
@@ -332,6 +502,10 @@ fn prepared_root_variant(
             .windows(2)
             .all(|pair| { pair[0].identity().as_bytes() < pair[1].identity().as_bytes() })
     );
+    let mut callables = (0..=root_count as u32)
+        .map(|i| Callable::defined(FunctionId::from_index(i)))
+        .collect();
+    transform(&mut types, &mut functions, &mut callables);
     let semantic = InertSemanticMirRequestV1::new_with_callables(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
         types,
@@ -339,9 +513,7 @@ fn prepared_root_variant(
         vec![],
         vec![],
         functions,
-        (0..=root_count as u32)
-            .map(|i| Callable::defined(FunctionId::from_index(i)))
-            .collect(),
+        callables,
         (0..root_count as u32).map(FunctionId::from_index).collect(),
     )
     .unwrap()
@@ -358,11 +530,23 @@ fn prepared_root_variant(
             ProductionSourceLaunchRootInputV1::new(
                 &root_names[root],
                 *entry.kernel_binding_identity().as_bytes(),
-                ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [1, 1, 1]),
+                ProductionSourceLaunchInputV1::new(
+                    1,
+                    Some(
+                        entry
+                            .source_contract()
+                            .launch()
+                            .and_then(|launch| launch.required())
+                            .map(|required| required.as_array())
+                            .unwrap_or([64, 1, 1]),
+                    ),
+                    [1, 1, 1],
+                ),
             )
         })
         .collect();
     let launch = ProductionSourceLaunchRosterV1::try_new(&semantic, &launches).unwrap();
+    let callable_count = semantic.callables().len();
     let owner = ProductionSemanticSsaOwnerV1::try_new(
         ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
             .unwrap(),
@@ -377,10 +561,7 @@ fn prepared_root_variant(
             ProductionExecutionSourceInputV29 {
                 semantic_sha256: &semantic_sha256,
                 roots: &[],
-                classes: &vec![
-                    ProductionScopeCallableCandidateV29::Ordinary;
-                    root_count as usize + 1
-                ],
+                classes: &vec![ProductionScopeCallableCandidateV29::Ordinary; callable_count],
                 events: &[],
             },
             ProductionSemanticKirLimitsV1::default(),
@@ -433,19 +614,111 @@ pub(in super::super) fn run_root_variant(
     root_count: u8,
     examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
 ) -> (Result<()>, usize, usize, usize) {
+    run_root_storage_variant(work, storage, unit_return, control, root_count, 0, examine)
+}
+
+pub(in super::super) fn run_allocation_variant(
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_root_storage_variant(work, storage, false, false, 2, 1, examine)
+}
+
+pub(in super::super) fn run_scalar_allocation_variant(
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_root_storage_variant(work, storage, false, false, 2, 2, examine)
+}
+
+pub(in super::super) fn run_scalar_lifetime_variant(
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_root_storage_variant(work, storage, false, false, 2, 3, examine)
+}
+
+fn run_root_storage_variant(
+    work: usize,
+    storage: usize,
+    unit_return: bool,
+    control: bool,
+    root_count: u8,
+    retained_storage: u8,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_prepared(
+        work,
+        storage,
+        |budget| {
+            if retained_storage != 0 {
+                prepared_root_storage_variant(
+                    budget,
+                    unit_return,
+                    control,
+                    root_count,
+                    retained_storage,
+                )
+            } else if root_count != 2 {
+                prepared_root_variant(budget, unit_return, control, root_count)
+            } else if control {
+                prepared_control_variant(budget, unit_return, true)
+            } else if unit_return {
+                prepared_variant(budget, true)
+            } else {
+                prepared(budget)
+            }
+        },
+        examine,
+    )
+}
+
+pub(in super::super) fn run_source_transform(
+    work: usize,
+    storage: usize,
+    transform: impl FnOnce(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>),
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_prepared(
+        work,
+        storage,
+        |budget| prepared_source_transform(budget, false, false, 2, 0, transform),
+        examine,
+    )
+}
+
+pub(in super::super) fn run_callable_transform(
+    work: usize,
+    storage: usize,
+    transform: impl FnOnce(
+        &mut Vec<SemanticTypeDeclV1>,
+        &mut Vec<SemanticFunctionDeclV1>,
+        &mut Vec<Callable>,
+    ),
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_prepared(
+        work,
+        storage,
+        |budget| prepared_callable_transform(budget, false, false, 2, 0, transform),
+        examine,
+    )
+}
+
+fn run_prepared(
+    work: usize,
+    storage: usize,
+    prepare: impl FnOnce(&mut Budget<'_>) -> Result<ProductionPreparedSourceV18>,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
     let mut work = Work::new(work);
     let mut budget = Budget::new(&mut work, storage);
     budget.reserve_storage(FLOOR).unwrap();
     let result = (|| {
-        let prepared = if root_count != 2 {
-            prepared_root_variant(&mut budget, unit_return, control, root_count)?
-        } else if control {
-            prepared_control_variant(&mut budget, unit_return, true)?
-        } else if unit_return {
-            prepared_variant(&mut budget, true)?
-        } else {
-            prepared(&mut budget)?
-        };
+        let prepared = prepare(&mut budget)?;
         prepared.with_source_consumer_v18(&mut budget, |source, budget| {
             let floor = budget.storage();
             let result = budget

@@ -5,6 +5,13 @@ use super::*;
 const ORIGINAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::original_mir_v30_tests::original_mir_worker_child";
 const SCALAR: &str = "let temporary = a ^ b; let _result = temporary | a;";
 const CONTROL: &str = "let _result = if a == b { a ^ b } else { a | b };";
+const WITNESS: &str = r#"
+let index = fe2o3_device::thread::index_1d();
+let ordinary = index.get();
+let disjoint = index.into_disjoint();
+let owned = disjoint.get();
+let _result = ordinary ^ owned;
+"#;
 
 fn original_program(body: &str) -> String {
     let kernel = |name| {
@@ -28,6 +35,7 @@ struct OriginalObservation {
     statement: [u8; 32],
     work: usize,
     peak: usize,
+    witness_protocol: [bool; 4],
 }
 
 fn original_observe(
@@ -48,9 +56,33 @@ fn original_observe(
             .map_err(Error::OriginalMir)?,
     )
     .unwrap();
-    assert!(source.contains("original_mir_cfg_refines_canonical_0_v31"));
-    assert!(source.contains("original_mir_cfg_refines_canonical_1_v31"));
-    assert!(source.contains("original_control_step_relation_0_v31"));
+    // Inspect generated obligations; this is not an executed proof of readiness.
+    for root in 0..2 {
+        assert!(source.contains(&format!("invocation_paired_step_{root}_v36")));
+        assert!(source.contains(&format!("invocation_paired_initial_trace_{root}_v36")));
+        assert!(source.contains(&format!(
+            "open spec fn invocation_paired_native_inputs_{root}_v38"
+        )));
+        let readiness = source
+            .split(&format!(
+                "proof fn invocation_paired_source_ready_{root}_v38"
+            ))
+            .nth(1)
+            .unwrap()
+            .split("open spec fn")
+            .next()
+            .unwrap();
+        let required = readiness.split(" requires ").nth(1).unwrap();
+        let (premise, consequence) = required.split_once(" ensures ").unwrap();
+        assert_eq!(
+            premise.trim(),
+            format!("invocation_paired_native_inputs_{root}_v38(arguments, external, execution),")
+        );
+        assert!(consequence.contains(&format!(
+            "invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid"
+        )));
+    }
+    assert!(source.contains("invocation_source_logical_write_v38"));
     assert!(!source.contains("assume("));
     assert_eq!(&subject.census()[..2], &[2, 2]);
     assert!(subject.census()[3] >= 4);
@@ -77,6 +109,12 @@ fn original_observe(
         statement: subject.statement_identity(),
         work: budget.work(),
         peak: budget.peak_storage(),
+        witness_protocol: [
+            source.contains("invocation_source_issue_witness_v38(cursor.source"),
+            source.contains("Some(InvocationSourceByteEventV36::WitnessBorrow {"),
+            source.contains("invocation_source_read_witness_v38(cursor.source"),
+            source.contains("invocation_source_convert_witness_v38(cursor.source"),
+        ],
     })
 }
 
@@ -243,15 +281,20 @@ fn original_mir_worker_child() {
 #[ignore = "requires pinned nightly rust-src/rustc-dev and authentic AMD dependencies"]
 fn actual_original_mir_cfg_request_reaches_worker_with_scalar_and_control() {
     run_actual_sources::<OriginalObservation>(
-        &[("scalar", SCALAR), ("control", CONTROL)],
+        &[
+            ("scalar", SCALAR),
+            ("control", CONTROL),
+            ("witness_borrow_read", WITNESS),
+        ],
         &[(0, 0)],
         ORIGINAL_CHILD,
-        "ORIGINAL_MIR_WORKER_V31",
+        "ORIGINAL_MIR_WORKER_V36",
         original_program,
-        |_, _, _, report, _| {
+        |_, _, case, report, _| {
             assert!(report.work > 0 && report.peak > 0);
             assert_eq!(&report.census[..2], &[2, 2]);
             assert_ne!(report.statement, [0; 32]);
+            assert_eq!(report.witness_protocol, [case == "witness_borrow_read"; 4]);
         },
     );
 }
