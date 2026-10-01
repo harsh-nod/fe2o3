@@ -1133,6 +1133,13 @@ impl Context<'_, '_, '_> {
         {
             return Ok(Event::IntegerCast(cast));
         }
+        // Nominal witnesses may have an ordinary Rust aggregate shape. Their
+        // original authority must be handled before structural value schemas.
+        if let Statement::Assign(assignment) = statement
+            && let Some(transfer) = witness_transfers::Transfer::derive(self, assignment, out)?
+        {
+            return Ok(Event::WitnessTransfer(transfer));
+        }
         if let Statement::Assign(assignment) = statement
             && let Some(transfer) = aggregates::Transfer::derive(self, assignment, out)?
         {
@@ -1152,11 +1159,6 @@ impl Context<'_, '_, '_> {
             && let Some(read) = discriminants::Read::derive(self, assignment, out)?
         {
             return Ok(Event::Discriminant(read));
-        }
-        if let Statement::Assign(assignment) = statement
-            && let Some(transfer) = witness_transfers::Transfer::derive(self, assignment, out)?
-        {
-            return Ok(Event::WitnessTransfer(transfer));
         }
         if let Some(event) = pointer_events::derive(self, statement, out)? {
             return Ok(Event::Pointer(event));

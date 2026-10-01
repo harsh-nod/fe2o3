@@ -5,6 +5,8 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 
+include!("original_semantic_mir_nominal_aggregate_dispatch_v48_tests.rs");
+
 const LIMIT: usize = 256 << 20;
 
 fn fixture(
