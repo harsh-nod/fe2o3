@@ -1,0 +1,13 @@
+{
+  "command": "env CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/home/harsh/.codex-tmp/fe2o3-compute-xgmi-20261001/target timeout --signal=TERM --kill-after=30s 900s cargo +nightly-2026-04-03 test --locked -p fe2o3-kfd --lib --all-features",
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-compute-xgmi-20261001",
+  "classification": "incomplete-exploratory-full-suite",
+  "raw_output_scope": "final tool output chunk only; prior tool output was not durably captured and included truncated chunks",
+  "result": {
+    "chunk_id": "819144",
+    "wall_time_seconds": 0.000053366,
+    "exit_code": 124,
+    "original_token_count": 503,
+    "output": "ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_retake_error_or_panic_overrides_normal_lower_error ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_ledger ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_single_returned_initialization_mismatch_is_terminal ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_three_preflights_reject_before_changing_any_prefix ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_currentness_boundaries_retain_exact_history_and_phase_owners ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_recovery_failures_keep_exact_outputs_before_owner_assembly ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::preallocation_cases::detached_rebind_retry_cancels_through_cancelled_abort ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::preallocation_cases::scaled_attached_preallocation_survives_canceled_history_detach_and_rebind ... ok\ntest queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recycled_detach_cases::recycled_detach_after_cancelled_retries_returns_prior_generation_on_each_lane ... "
+  }
+}

@@ -66,13 +66,52 @@ copy measurements do not qualify this combined compute-and-transfer path.
 The implementation is not a machine-code-refined or fully formally verified
 multi-GPU runtime, and no HIP/HSA parity or performance claim follows.
 
+## Shared-VM Queue Attachment
+
+`ComputeAqlQueueSessionV1::create_native_xgmi_queue_with_peer_v1` now creates
+an owned `Gfx942ComputeXgmiQueueV1` using two existing compute VMs, with no
+second VM or public raw-session callback. The caller supplies a
+`Gfx942ComputeXgmiQueueCreationRootV1` to retain uncertain native creation.
+The paired operation attempts both foundation restorations even when one fails;
+uncertainty poisons both endpoints while retaining native ownership. The first
+panic is preserved through subsequent restoration or poison failures.
+
+Both compute owners retain the same private attachment certificate, bound to
+their stable session identities, directional route and native queue ID. Explicit
+`destroy_native_xgmi_queue_with_peer_v1` checks both certificates and clears them
+only after native retirement and both successful restorations. Teardown cannot
+release either compute VM while the attachment remains. Ordinary compute stays
+available; additional peer, auxiliary or ordinary SDMA queue creation is refused
+while attached. Create any required ordinary SDMA queues before attachment.
+
+This initial interface permits one peer attachment per compute owner and exposes
+attachment/retirement only. It does **not** yet route runtime peer copies through
+XGMI, expose peer-mapped compute buffers, or establish native success. Nineteen
+focused CPU regressions pass, including eleven new settlement/attachment tests;
+strict all-feature KFD Clippy passes. Native creation/retirement and real-engine
+failure injection still require hardware qualification. The separate full
+1,858-test KFD run exceeded its 900-second bound; it is not a full-suite pass.
+After integration, the all-feature runtime library suite passed 1,928 tests
+with 32 existing hardware ignores, no failures and no filtering. All 32 existing
+source-CI commands also passed. The [attachment CPU packet](evidence/dev-compute-xgmi-attachment-cpu-2026-10-01/STATUS.md)
+separates the completed checks from the KFD timeout. Source-guard metadata was
+rebound with all 22 associated proof-closure files unchanged; no new formal
+verification claim follows.
+
 ## Next Dependencies
 
-The next implementation slice shares each device's existing compute VM with
-native XGMI queue ownership. It must retain both foundations and any new native
-owner until both session restorations succeed, including partial failure and
-unwind. Subsequent work must integrate peer-mapped allocation ownership,
-compute-to-copy dependencies, copy-to-compute readiness and ordered cleanup.
+The next bounded data-path increment is a full-extent transfer of exact recycled
+PUBLIC device data: retain both data owners, transition local mappings into
+two-device peer mappings, copy with the existing native XGMI engine, restore
+owner-local mappings, then return data only after both foundation restorations.
+Partial mappings, timeout tickets and uncertain results must remain owned.
+Initialization may survive the transfer; stale content-digest authority must not.
+
+The existing vecadd authority requires HostVisible memory and exact initial
+digests. A native compute-to-XGMI-to-compute witness therefore needs a separate
+bounded qualification authority, not a relaxation of that fixture. Async
+submission custody, runtime routing and dependency readiness follow the typed
+data transition; host-staged transfers remain the fallback.
 
 Only after full-byte native compute/transfer pipelines pass should qualification
 expand to real workload partitioning, all admitted devices, partial failures,

@@ -52,6 +52,7 @@ impl ComputeAqlQueueSessionV1 {
     pub fn supports_retained_primary_release_v1(
         &self,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_xgmi_attachment_v1()?;
         if self.auxiliary_release.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "unfinished auxiliary release",

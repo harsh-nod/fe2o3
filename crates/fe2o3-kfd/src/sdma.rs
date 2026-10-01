@@ -4049,6 +4049,10 @@ pub struct Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
 }
 
 impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
+    pub(crate) fn into_error(self) -> Gfx942SdmaErrorV1 {
+        self.error
+    }
+
     pub const fn error(&self) -> &Gfx942SdmaErrorV1 {
         &self.error
     }

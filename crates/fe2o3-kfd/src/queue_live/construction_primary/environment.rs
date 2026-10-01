@@ -262,6 +262,7 @@ impl CompletedPrimaryV1<LinuxPrimaryEnvironmentV1> {
             }),
             sdma: None,
             striped_sdma: None,
+            xgmi_attachment: None,
             sdma_outstanding_buffers: 0,
             sdma_pool_free: Vec::new(),
             sdma_pool_trim: None,

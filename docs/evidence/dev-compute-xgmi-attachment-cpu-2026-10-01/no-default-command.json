@@ -1,0 +1,21 @@
+{
+  "kind": "developer-integration-check",
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "source_baseline": "5778c9d09711055271c7f9c8f01afd53d056ad82",
+  "source_overlay": "guards/proposal.json inside records.tar.gz",
+  "command": [
+    "env", "-i",
+    "PATH=/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "HOME=/home/harsh", "LANG=C.UTF-8", "LC_ALL=C.UTF-8",
+    "CARGO_BUILD_JOBS=1", "CARGO_PROFILE_DEV_DEBUG=0",
+    "CARGO_PROFILE_TEST_DEBUG=0",
+    "timeout", "--signal=TERM", "--kill-after=30s", "600s",
+    "cargo", "+nightly-2026-04-03", "check", "--locked", "--offline",
+    "-p", "fe2o3-runtime", "--lib", "--no-default-features"
+  ],
+  "exit_code": 0,
+  "stdout": "no-default.stdout",
+  "stderr": "no-default.stderr",
+  "native_execution": false,
+  "formal_verification": false
+}

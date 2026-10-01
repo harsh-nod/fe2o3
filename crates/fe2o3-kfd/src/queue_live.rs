@@ -266,6 +266,11 @@ mod initial_bind;
 #[path = "queue_live/model_loan.rs"]
 pub(in crate::queue) mod model_loan;
 use model_loan::execute_live_model_custody_v1;
+#[path = "queue_live/compute_xgmi.rs"]
+mod compute_xgmi;
+#[path = "queue_live/model_pair_loan.rs"]
+mod model_pair_loan;
+pub use compute_xgmi::{Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1};
 #[path = "queue_live/sdma_creation.rs"]
 mod sdma_creation;
 use sdma_creation::ReturnedSdmaCreationV1;
@@ -3753,6 +3758,7 @@ pub struct ComputeAqlQueueSessionV1 {
     exception: Option<QueueExceptionStateV1>,
     sdma: Option<Gfx942SdmaQueueSetV1>,
     striped_sdma: Option<Gfx942SdmaQueueSetV1>,
+    xgmi_attachment: Option<compute_xgmi::Attachment>,
     sdma_outstanding_buffers: usize,
     sdma_pool_free: Vec<Gfx942SdmaBufferV1>,
     sdma_pool_trim: Option<pool_trim::SdmaPoolTrimCustodyV1>,
@@ -6303,6 +6309,7 @@ impl ComputeAqlQueueSessionV1 {
             ComputeAqlQueueSessionErrorV1,
         >,
     ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_xgmi_attachment_v1()?;
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
@@ -11803,6 +11810,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         mode: QueueDestroyModeV1,
     ) -> Result<QueueAfterEventDestroyedV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_xgmi_attachment_v1()?;
         self.require_no_sdma_recycle_v1()?;
         self.require_no_sdma_owner_transition_v1()?;
         if self.sdma_allocation.is_some() {
@@ -12207,6 +12215,7 @@ impl ComputeAqlQueueSessionV1 {
     fn active_compute_queue_ids_for_sdma_creation_v1(
         &mut self,
     ) -> Result<Vec<u32>, ComputeAqlQueueSessionErrorV1> {
+        self.require_no_xgmi_attachment_v1()?;
         let active_auxiliary_count = self
             .auxiliary_compute_lanes
             .iter()
@@ -13321,7 +13330,8 @@ fn validate_barrier_probe_success_snapshot(
 
 impl Drop for ComputeAqlQueueSessionV1 {
     fn drop(&mut self) {
-        if self.auxiliary_release.is_some()
+        if self.xgmi_attachment.is_some()
+            || self.auxiliary_release.is_some()
             || self.sdma_pool_trim.is_some()
             || self.sdma_allocation.is_some()
             || self.sdma_promotion.is_some()
@@ -16203,6 +16213,7 @@ mod tests {
             exception: None,
             sdma: None,
             striped_sdma: None,
+            xgmi_attachment: None,
             sdma_outstanding_buffers: 0,
             sdma_pool_free: Vec::new(),
             sdma_pool_trim: None,

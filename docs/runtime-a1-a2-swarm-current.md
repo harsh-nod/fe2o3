@@ -64,6 +64,21 @@ found another process using devices despite idle engine percentages. The
 exact scope and next dependencies. On the shared host, point-idle observations are
 not exclusive reservations, and cleanup is limited to exact owned resources.
 
+The next native ownership slice now attaches and explicitly retires a directional
+XGMI queue within two existing compute VMs. Exact attachment certificates prevent
+early VM teardown; creation and retirement settle both foundations and retain
+native ownership across failure or unwind. Nineteen focused CPU regressions and
+strict KFD Clippy pass. This is not yet runtime native peer-copy routing: typed
+PUBLIC-buffer transitions, a separate device-local qualification fixture and
+hardware validation remain required. The broad KFD suite exceeded its 900-second
+bound and remains incomplete; the focused result is not a full-suite pass.
+The integrated all-feature runtime suite passed 1,928 tests, with 32 existing
+hardware ignores and no failures or filtering; all 32 source-CI commands passed.
+The [attachment CPU packet](evidence/dev-compute-xgmi-attachment-cpu-2026-10-01/STATUS.md)
+records these checks separately from incomplete native and full-KFD qualification.
+The prior MI300X CPU scratch directory was
+removed and its absence independently checked after complete durable recovery.
+
 ## Latest Qualification
 
 The [receipt-origin ingress](runtime-distributed-receipt-origin-ingress-v1.md)

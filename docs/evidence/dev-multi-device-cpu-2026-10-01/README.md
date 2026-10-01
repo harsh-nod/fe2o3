@@ -53,6 +53,9 @@ archive as `records`. Optional `--repository REPOSITORY` compares all 6,594
 source inventory entries and permits only the disclosed post-test status-document
 update. The recorded repository check matches 6,593 files; only
 `docs/runtime-a1-a2-swarm-current.md` changed after testing.
+Use source-bearing baseline `5778c9d09711055271c7f9c8f01afd53d056ad82` for that
+repository comparison. Later implementation commits need not match this older
+qualification snapshot.
 
 Frozen source record:
 `b1ab447c92cb6a7bd51f549f6489c828db304144b41ff79f1665e5c51730689a`.

@@ -32,6 +32,7 @@ pub use live::cpu_fixture::{
     CpuDispatchIdentityV1, CpuFixedDispatchFixtureV1, CpuFixedDispatchLaneV1, CpuLaneSnapshotV1,
 };
 pub(crate) use live::sdma_synchronous::SdmaSynchronousCustodyV1;
+pub use live::{Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1};
 pub use live::{
     Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1, Gfx942SdmaHostReadIntoErrorV1,
 };
