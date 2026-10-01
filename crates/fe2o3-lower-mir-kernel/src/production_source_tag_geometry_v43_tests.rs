@@ -300,8 +300,48 @@ fn tag_graph_has_exact_work_and_storage_boundaries_with_restored_scratch() {
 
 #[test]
 fn an_initialized_tag_does_not_waive_the_original_allocation_lifetime() {
-    let (function, slots, layouts, accesses) = tag_graph_v43(ScalarType::U8, 1, false);
-    for restart in [false, true] {
+    let (mut function, slots, layouts, mut accesses) = tag_graph_v43(ScalarType::U8, 1, false);
+    let alias_type = Type::pointer(
+        Type::StorageObject(fe2o3_kernel_ir::StorageLayoutIdV1(2)),
+        AddressSpace::Private,
+        AccessMode::ReadOnly,
+    );
+    let operations = &mut function.body.as_mut().unwrap().blocks[0].operations;
+    operations.insert(
+        1,
+        Operation::effect_free(
+            ValueDef::new(EXPOSED_A, alias_type.clone()),
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value: A,
+                to: alias_type,
+            },
+        ),
+    );
+    let OperationKind::Storage(ScopedObjectOperationV29::ReadDiscriminant { address, .. }) =
+        &mut operations[3].kind
+    else {
+        unreachable!();
+    };
+    *address = EXPOSED_A;
+    for access in &mut accesses {
+        access.operation += 1;
+    }
+    let (positive, _, _, completed) =
+        run_tag_graph_v43(&function, &slots, &layouts, &accesses, &[], LIMIT, LIMIT);
+    positive.unwrap();
+    assert!(completed);
+    for (restart, derived) in [(false, false), (false, true), (true, true)] {
+        let mut function = function.clone();
+        if !derived {
+            let OperationKind::Storage(ScopedObjectOperationV29::ReadDiscriminant {
+                address, ..
+            }) = &mut function.body.as_mut().unwrap().blocks[0].operations[3].kind
+            else {
+                unreachable!();
+            };
+            *address = A;
+        }
         let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
         let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
         budget.reserve_storage(FLOOR).unwrap();
@@ -322,14 +362,14 @@ fn an_initialized_tag_does_not_waive_the_original_allocation_lifetime() {
             let events = [
                 SourceAddressLifetimeV29 {
                     block: BlockId(77),
-                    gap: 2,
+                    gap: 3,
                     sequence: 0,
                     slot: 0,
                     live: false,
                 },
                 SourceAddressLifetimeV29 {
                     block: BlockId(77),
-                    gap: 2,
+                    gap: 3,
                     sequence: 1,
                     slot: 0,
                     live: true,
@@ -352,7 +392,70 @@ fn an_initialized_tag_does_not_waive_the_original_allocation_lifetime() {
             checked,
             "negative must reach currentness after initialized byte history"
         );
-        assert!(result.is_err());
+        assert!(result.is_err(), "stale alias survived restart={restart}");
+        unsupported(result);
+        assert_eq!(budget.storage(), FLOOR);
+    }
+}
+
+#[test]
+fn restarted_tag_backing_requires_fresh_initialization_not_a_stale_tag() {
+    for rewrite in [false, true] {
+        let (mut function, slots, layouts, mut accesses) = tag_graph_v43(ScalarType::U8, 1, false);
+        if rewrite {
+            let operations = &mut function.body.as_mut().unwrap().blocks[0].operations;
+            operations.insert(2, operations[1].clone());
+            accesses.push(SourceAddressAccessV29 {
+                operation: 3,
+                ..accesses[1]
+            });
+        }
+        let kills = [SourceAddressKillV29 {
+            block: BlockId(77),
+            gap: 2,
+            slot: 0,
+        }];
+        let lifetimes = [false, true].map(|live| SourceAddressLifetimeV29 {
+            block: BlockId(77),
+            gap: 2,
+            sequence: usize::from(live),
+            slot: 0,
+            live,
+        });
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, LIMIT);
+        budget.reserve_storage(FLOOR).unwrap();
+        let mut reached_history = false;
+        let mut completed = false;
+        let result = with_canonical_call_scratch_v1(&mut budget, |budget| {
+            let graph = SourceAddressMemoryV29::prepare_with_layouts(
+                &function, &slots, None, &accesses, &layouts, budget,
+            )?
+            .solve(&slots, &accesses, &kills, budget)?;
+            reached_history = true;
+            scoped_slot_uses_v29::check_expanded_scalar_addresses_v29(
+                &function, &graph, &slots, &accesses, &kills, budget,
+            )?;
+            check_source_address_currentness_v29(
+                &function,
+                &graph,
+                &slots,
+                &accesses,
+                &kills,
+                &[true],
+                &lifetimes,
+                &[],
+                budget,
+            )?;
+            completed = true;
+            Ok(())
+        });
+        assert!(reached_history, "rewrite={rewrite}: {result:?}");
+        assert_eq!(result.is_ok(), rewrite, "rewrite={rewrite}: {result:?}");
+        assert_eq!(completed, rewrite);
+        if !rewrite {
+            unsupported(result);
+        }
         assert_eq!(budget.storage(), FLOOR);
     }
 }
