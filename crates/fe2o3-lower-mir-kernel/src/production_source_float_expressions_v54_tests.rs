@@ -250,6 +250,7 @@ fn original_float_store_checker_rejects_opcode_width_order_bits_and_checked_subs
                                 reached.set(true);
                                 request.check_expression(&expression, budget)
                             })
+                            .map(|_| ())
                         },
                     )
                 })
