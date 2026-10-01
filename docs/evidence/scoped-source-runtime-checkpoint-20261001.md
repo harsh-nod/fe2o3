@@ -7,7 +7,39 @@ Strict production compiler -> required proof -> safe GPU launch coverage remains
 not advance that count. This does not reclassify independently runnable legacy
 examples as qualified through the new production path.
 
-## Latest Verified Checkpoint
+## Latest Compiler Checkpoint
+
+At 10:54 UTC, r305 completed the actual Rust fill/vecadd parent tests at
+`cb4a7f048677b89d61ea4e0189194e4055cbdbd7`: **zero passed, two failed**, none
+ignored and 4,101 filtered. The backend test binary built successfully, but both
+tests failed before the expected original-source consumer was reached. Their
+assertion hid the underlying compiler refusal, so its cause is not yet established.
+A subsequent diagnostic-only change preserves that error in the assertion;
+it has not been rerun and is not a fix for the refusal.
+
+No generated source-clause frames were reached. The strict extractor refused
+the log rather than substituting proof text. No Verus, protected proof or GPU
+execution is credited. Source/tool inventories stayed unchanged, and the
+primary independently checked both source inventories, raw log and runner:
+
+- r305 raw SHA-256: `775cc9ee2c8c188ad69e462f28ea15f82e04d84bace473abd378a0c481914ff9`
+
+The preceding r304 four-package test-binary build failed with ten diagnostics:
+nine from an ambiguous coordinator callback error type, and one from a scalar
+test expectation for a tuple-valued receive API. Corrections are committed
+locally but have not been rebuilt. r305 selected the backend alone and does
+not validate those corrections. Its predecessor's independently checked raw
+log SHA-256 is `967d534d369ced484db3fb3e763680259f079df0a5fb58a8bfc96decf90eed5f`.
+
+Newer reviewed proof-client cleanup, native source-admission compatibility,
+original typed-root borrowing and target/descriptor/Worker integration remain
+local and untested. Full source-proof request construction and continuous
+protected compiler enforcement are still implementation gaps, not merely GPU
+testing tasks. Both public mains were read back at
+`7cfa074cf97c51176f042fe33fd531f7ddefcb81` before this documentation update.
+**No milestone advances: M0 alone is complete; strict coverage remains 0/47.**
+
+## Focused Component Checkpoint
 
 At 10:19 UTC, r303 passed **75 selected descriptor, KFD and host tests** at
 `aa7780fc31e692e64bb1896824f9aa26dce1c418`: descriptor 29, KFD 26 and host 20,
