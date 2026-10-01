@@ -542,3 +542,16 @@ pub(in crate::production_ranked_projection_v1) use genuine::observe_initial_grap
 
 #[cfg(test)]
 pub(in crate::production_ranked_projection_v1) use genuine::observe_invocation_seeds as observe_invocation_seeds_for_test_v1;
+
+#[cfg(test)]
+impl PendingWholeRootBeforeArgumentWritersV1<'_> {
+    pub(in crate::production_ranked_projection_v1) fn observe_initial_nonempty_for_test_v1(
+        owner: &ProductionPreRankedKirOwnerV1,
+        source: &fe2o3_lower_mir_kernel::CheckedBf16CallInstanceV1<'_>,
+        actual: &ActualRetainedRankedInputsV1<'_>,
+        inventory: &CanonicalKirInventoryV1<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        genuine::observe_initial_nonempty(owner, source, actual, inventory, budget)
+    }
+}

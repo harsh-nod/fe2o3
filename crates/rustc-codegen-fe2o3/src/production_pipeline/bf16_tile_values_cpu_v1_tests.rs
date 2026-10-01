@@ -6,6 +6,14 @@ use fe2o3_lower_mir_kernel::{
 use std::cell::Cell;
 #[path = "bf16_nominal_call_query_v1_tests.rs"]
 mod nominal_call_query;
+#[path = "bf16_nonempty_read_query_v1_tests.rs"]
+mod nonempty_read_query;
+
+#[derive(Clone, Copy)]
+enum NominalQueryProfileV1 {
+    Historical,
+    SingleStridedRead,
+}
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub(crate) struct CpuPhase {
@@ -31,6 +39,32 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// synthetic graph can satisfy the consumer callback.
     pub(crate) fn observe_bf16_call_source_cpu_for_test_v1<R: Copy + 'static>(
         self,
+        inspect: impl for<'a, 'b, 'work> FnOnce(
+            &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
+            &Bf16CallInstanceEmissionViewV1<'b>,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    ) -> (Result<R, Box<ProductionPipelineError>>, Option<CpuPhase>) {
+        self.observe_bf16_call_source_profile_for_test_v1(
+            NominalQueryProfileV1::Historical,
+            inspect,
+        )
+    }
+
+    /// Separate explicitly selected source-only observer. It invokes neither the
+    /// old empty-only observers nor a numerical CPU callback; normal refusal stays.
+    pub(crate) fn observe_bf16_single_strided_read_for_test_v1(
+        self,
+    ) -> (Result<(), Box<ProductionPipelineError>>, Option<CpuPhase>) {
+        self.observe_bf16_call_source_profile_for_test_v1(
+            NominalQueryProfileV1::SingleStridedRead,
+            |_, _, _| Ok(()),
+        )
+    }
+
+    fn observe_bf16_call_source_profile_for_test_v1<R: Copy + 'static>(
+        self,
+        profile: NominalQueryProfileV1,
         inspect: impl for<'a, 'b, 'work> FnOnce(
             &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
             &Bf16CallInstanceEmissionViewV1<'b>,
@@ -101,9 +135,14 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                                     }
                                     with_actual_retained_ranked_inputs_for_test_v1(
                                         &owner, ranked_inputs, reference_bindings, budget, frame_owned,
-                                        |actual_inputs, budget| nominal_call_query::inspect(
-                                            &owner, relation, &actual_inputs, budget,
-                                        ),
+                                        |actual_inputs, budget| match profile {
+                                            NominalQueryProfileV1::Historical => nominal_call_query::inspect(
+                                                &owner, relation, &actual_inputs, budget,
+                                            ),
+                                            NominalQueryProfileV1::SingleStridedRead => nonempty_read_query::inspect(
+                                                &owner, relation, &actual_inputs, budget,
+                                            ),
+                                        },
                                     )?;
                                     source_seed.with_relation(relation, budget, |source, budget| {
                                         inspect(source, &emission, budget)

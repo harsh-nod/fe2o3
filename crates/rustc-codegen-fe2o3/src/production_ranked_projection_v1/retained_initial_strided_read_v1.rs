@@ -406,3 +406,12 @@ mod tests;
 #[cfg(test)]
 #[path = "retained_initial_empty_read_genuine_v1_tests.rs"]
 pub(super) mod genuine_empty;
+
+// Independent retained legacy-donor controls; no actual-source entry is wired here.
+#[cfg(test)]
+#[path = "retained_strided_read_original_v1_tests.rs"]
+pub(super) mod retained_original;
+
+#[cfg(test)]
+#[path = "retained_initial_nonempty_read_genuine_v1_tests.rs"]
+pub(super) mod genuine_nonempty;
