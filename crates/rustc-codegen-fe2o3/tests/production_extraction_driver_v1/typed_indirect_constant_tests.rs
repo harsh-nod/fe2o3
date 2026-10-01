@@ -19,6 +19,7 @@ enum Direct {
 enum Niche {
     Empty,
     Filled(bool, u64),
+    Other,
 }
 
 #[inline(never)]
@@ -48,10 +49,17 @@ fn direct_constant(flag: u64, small: u8, wide: u64) -> (u64, u8) {
 
 #[inline(never)]
 fn niche_constant(flag: u64, truth: bool, value: u64) -> (u64, u8) {
-    let selected = if flag == 0 { Niche::Empty } else { Niche::Filled(truth, value) };
+    let selected = if flag == 0 {
+        Niche::Empty
+    } else if flag == 1 {
+        Niche::Filled(truth, value)
+    } else {
+        Niche::Other
+    };
     match selected {
         Niche::Empty => (0_u64, 2_u8),
         Niche::Filled(truth, value) => (value, truth as u8),
+        Niche::Other => (0_u64, 4_u8),
     }
 }
 
@@ -230,8 +238,10 @@ pub fn typed_indirect_constants(flag: u64, value: u64,
         };
         let (niche, niche_tag) = if flag == 0 {
             (0, 2)
-        } else {
+        } else if flag == 1 {
             (value, value & 1)
+        } else {
+            (0, 4)
         };
         for (index, expected) in [nested, nested_small, direct, direct_tag, niche, niche_tag]
             .into_iter()

@@ -265,10 +265,44 @@ fn niche_selection_uses_finite_width_wrapping_and_refuses_invalid_rosters() {
         niche_variant(u128::MAX, Size::from_bytes(16), u128::MAX, 1, 1, 0),
         Some(1)
     );
-    for (size, first, last, untagged) in [(0, 1, 1, 0), (17, 1, 1, 0), (1, 2, 1, 0), (1, 1, 2, 2)] {
+    for (size, first, last, untagged) in [(0, 1, 1, 0), (17, 1, 1, 0), (1, 2, 1, 0)] {
         assert_eq!(
             niche_variant(0, Size::from_bytes(size), 0, first, last, untagged),
             None
         );
+    }
+}
+
+#[test]
+fn niche_range_may_span_the_untagged_variant_but_its_encoded_slot_is_dead() {
+    for (start, cases) in [
+        (
+            2,
+            [
+                (2, Some(0)),
+                (3, None),
+                (4, Some(2)),
+                (0, Some(1)),
+                (1, Some(1)),
+            ],
+        ),
+        (
+            255,
+            [
+                (255, Some(0)),
+                (0, None),
+                (1, Some(2)),
+                (2, Some(1)),
+                (254, Some(1)),
+            ],
+        ),
+    ] {
+        for (bits, expected) in cases {
+            assert_eq!(
+                niche_variant(bits, Size::from_bytes(1), start, 0, 2, 1),
+                expected,
+                "start {start}, tag {bits}",
+            );
+        }
     }
 }

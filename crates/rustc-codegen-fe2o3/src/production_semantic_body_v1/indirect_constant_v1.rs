@@ -381,12 +381,16 @@ fn niche_variant(
     last: u32,
     untagged: u32,
 ) -> Option<u32> {
-    if !(1..=16).contains(&size.bytes()) || first > last || (first..=last).contains(&untagged) {
+    if !(1..=16).contains(&size.bytes()) || first > last {
         return None;
     }
     let relative = size.truncate(bits.wrapping_sub(start));
     if relative <= u128::from(last - first) {
-        first.checked_add(u32::try_from(relative).ok()?)
+        // The reserved range may span the untagged variant. Its encoded slot
+        // is a dead tag, not an alternative encoding of the live payload.
+        first
+            .checked_add(u32::try_from(relative).ok()?)
+            .filter(|variant| *variant != untagged)
     } else {
         Some(untagged)
     }
