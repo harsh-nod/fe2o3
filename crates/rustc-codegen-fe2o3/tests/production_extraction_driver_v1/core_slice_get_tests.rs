@@ -59,7 +59,8 @@ mod core_slice_get_tests {
             !bundle.exists(),
             "each actual extraction needs a fresh output"
         );
-        clean_command(fixture)
+        let mut command = clean_command(fixture);
+        command
             .env(
                 "RUSTC_WORKSPACE_WRAPPER",
                 env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
@@ -89,9 +90,11 @@ mod core_slice_get_tests {
             // The explicit case also forces the final crate to run when only
             // an observation path changes; dependencies remain reusable.
             .args(["--", "--cfg"])
-            .arg(format!("slice_get_case=\"{case}\""))
-            .output()
-            .expect("run genuine pinned core source extraction")
+            .arg(format!("slice_get_case=\"{case}\""));
+        super::source_failure_mir_v1::run(
+            &mut command,
+            &["slice_get_result", "get", "len", "metadata"],
+        )
     }
 
     fn kernel_source(element: &str, expression: &str, value: &str, declarations: &str) -> String {

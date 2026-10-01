@@ -67,7 +67,8 @@ mod core_checked_add_tests {
             !bundle.exists(),
             "each actual extraction needs a fresh output"
         );
-        clean_command(fixture)
+        let mut command = clean_command(fixture);
+        command
             .env(
                 "RUSTC_WORKSPACE_WRAPPER",
                 env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
@@ -97,9 +98,8 @@ mod core_checked_add_tests {
             // The explicit case also forces the final crate to run when only
             // an observation path changes; dependencies remain reusable.
             .args(["--", "--cfg"])
-            .arg(format!("checked_add_case=\"{case}\""))
-            .output()
-            .expect("run genuine pinned core source extraction")
+            .arg(format!("checked_add_case=\"{case}\""));
+        super::source_failure_mir_v1::run(&mut command, &["checked_add", "unlikely"])
     }
 
     fn kernel_source(expression: &str, declarations: &str) -> String {
