@@ -1231,6 +1231,8 @@ struct SourceAddressAccessSourceV29 {
     safe_object: Option<SourceSafeObjectOriginV29>,
 }
 
+include!("production_source_tag_census_v43.rs");
+
 // A completed descriptor producer may be classified outside the private access
 // roster only after this exact source/actual join. The physical solver separately
 // requires its actual pointer to have no private-slot origin; this is not a seed.
@@ -1336,6 +1338,7 @@ fn source_address_accesses_v29(
 > {
     references.plan.check_owner(instances, budget)?;
     budget.reserve_storage(source_issued_census_query_headers_v29()?)?;
+    budget.reserve_storage(source_address_tag_query_headers_v43()?)?;
     source_reference_emission_prepay_v29::<SourceDirectObjectOriginV29>(budget)?;
     source_reference_emission_prepay_v29::<Option<SourceDirectObjectOriginV29>>(budget)?;
     source_reference_emission_prepay_v29::<SourceSafeObjectOriginV29>(budget)?;
@@ -1366,7 +1369,7 @@ fn source_address_accesses_v29(
                 SOURCE_ADDRESS_ACCESS_FIRST_CENSUS_V29.set(Some(budget.work()));
             }
             budget.charge_work(1)?;
-            // Only value-access anchors can enter this vector. The full fill
+            // Only value- or tag-access anchors can enter this vector. The full fill
             // below still authenticates every payload and may exclude issued
             // or descriptor accesses, so this remains a conservative bound.
             let candidate = match row.kind {
@@ -1380,6 +1383,8 @@ fn source_address_accesses_v29(
                         payload.operation,
                         ScopedObjectOperationV29::ReadValue { .. }
                             | ScopedObjectOperationV29::WriteValue { .. }
+                            | ScopedObjectOperationV29::ReadDiscriminant { .. }
+                            | ScopedObjectOperationV29::SetDiscriminant { .. }
                     )
                 }
                 _ => false,
@@ -1416,6 +1421,27 @@ fn source_address_accesses_v29(
             .enumerate()
         {
             budget.charge_work(4)?;
+            let recorded = sidecar
+                .scoped_memory_anchors
+                .as_ref()
+                .ok_or_else(source_raw_physical_error_v29)?;
+            if let Some(tag) = source_address_tag_source_v43(
+                instances,
+                references.plan,
+                source_index,
+                slots,
+                instance,
+                anchor,
+                recorded,
+                row,
+                budget,
+            )? {
+                if rows.len() == count {
+                    return Err(ArgumentResourceV1::Accounting.into());
+                }
+                rows.push(tag);
+                continue;
+            }
             let object = source_address_object_payload_v29(
                 sidecar
                     .scoped_memory_anchors
@@ -2423,6 +2449,21 @@ fn check_source_cell_dereference_payload_v29(
     result.inspect_err(|error| source_reference_record_failure_v29(references.plan, error))
 }
 
+#[cfg(test)]
+fn source_address_payload_row_scratch_v43(budget: &ArgumentBudgetV1<'_>, query_floor: usize) {
+    let reclaimed = budget
+        .storage()
+        .checked_sub(query_floor)
+        .expect("payload row undercut its query frame");
+    let (calls, bytes, largest) =
+        scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.get();
+    scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.set((
+        calls.checked_add(1).unwrap(),
+        bytes.checked_add(reclaimed).unwrap(),
+        largest.max(reclaimed),
+    ));
+}
+
 fn check_source_address_payloads_v29(
     instances: &ExecutionInstancesV29<'_>,
     references: &SourceReferenceEmissionV29<'_, '_>,
@@ -2435,6 +2476,7 @@ fn check_source_address_payloads_v29(
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     source_reference_emission_prepay_v29::<Option<ScopedMemoryFrameV29>>(budget)?;
     source_reference_emission_prepay_v29::<Option<&SemanticPlaceV1>>(budget)?;
+    budget.reserve_storage(source_address_tag_query_headers_v43()?)?;
     for source in rows {
         // Each row is a closed validation query. Its temporary paid envelopes
         // must die here, not accumulate until the complete access census ends.
@@ -2469,6 +2511,21 @@ fn check_source_address_payloads_v29(
                 let row = anchors
                     .get(source.anchor)
                     .ok_or_else(source_raw_physical_error_v29)?;
+                if check_source_address_tag_payload_v43(
+                    instances,
+                    references,
+                    slots,
+                    source_index,
+                    graph,
+                    source,
+                    recorded,
+                    row,
+                    budget,
+                )? {
+                    #[cfg(test)]
+                    source_address_payload_row_scratch_v43(budget, query_floor);
+                    return Ok(());
+                }
                 let object = source_address_object_payload_v29(recorded, row, budget)?;
                 let (pointer, payload) = match (row.kind, object) {
                     (
@@ -2722,19 +2779,7 @@ fn check_source_address_payloads_v29(
                     }
                 }
                 #[cfg(test)]
-                {
-                    let reclaimed = budget
-                        .storage()
-                        .checked_sub(query_floor)
-                        .expect("payload row undercut its query frame");
-                    let (calls, bytes, largest) =
-                        scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.get();
-                    scoped_raw_admission_v29::SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.set((
-                        calls.checked_add(1).unwrap(),
-                        bytes.checked_add(reclaimed).unwrap(),
-                        largest.max(reclaimed),
-                    ));
-                }
+                source_address_payload_row_scratch_v43(budget, query_floor);
                 Ok(())
             },
         )?;

@@ -1,5 +1,6 @@
 // Partition only at observed access boundaries, never once per byte or once per
 // declared array element. Existing all-path history equations check each segment.
+include!("production_source_tag_history_v43.rs");
 fn check_expanded_static_object_history_v29(
     function: &Function,
     graph: &SourceAddressMemoryV29<'_>,
@@ -11,13 +12,16 @@ fn check_expanded_static_object_history_v29(
 ) -> UseResult<()> {
     with_canonical_call_scratch_v1(budget, |budget| {
         budget.reserve_storage(std::mem::size_of::<(
-            Vec<(usize, u64, u64, bool)>,
+            Vec<SourceAddressHistoryFootprintV43>,
             Vec<Cell>,
             Vec<std::ops::Range<usize>>,
             Vec<Event>,
             Vec<HistoryBlock>,
             Vec<usize>,
         )>())?;
+        budget.reserve_storage(source_reference_emission_headers_v29::<
+            SourceAddressHistoryQueryFrameV43<'_>,
+        >()?)?;
         let mut footprints = emission_vec_v1(accesses.len(), budget)?;
         let mut cells = emission_vec_v1(
             argument_sum_v1(&[slots.len(), argument_product_v1(accesses.len(), 2)?])?,
@@ -37,38 +41,11 @@ fn check_expanded_static_object_history_v29(
         }
         for row in accesses {
             budget.charge_work(3)?;
-            let operation = graph.blocks[graph.block(row.block, budget)?]
-                .1
-                .operations
-                .get(row.operation)
-                .ok_or_else(scoped_slot_error_v29)?;
-            let access =
-                source_address_value_access_v29(operation)?.ok_or_else(scoped_slot_error_v29)?;
-            let slot = slots.get(row.slot).ok_or_else(scoped_slot_error_v29)?;
-            let (start, end) = match slot.representation {
-                ScopedSlotRepresentationV29::Object { .. } => {
-                    if graph.object_location(access.pointer, budget)?.slot != row.slot {
-                        return Err(scoped_slot_error_v29());
-                    }
-                    graph.object_value_range(
-                        access.pointer,
-                        slot,
-                        graph.ty(access.value, budget)?,
-                        access.access,
-                        budget,
-                    )?
-                }
-                ScopedSlotRepresentationV29::ScalarArray(scalar)
-                    if scalar.length == 1 && scalar.bytes == scalar.element.size =>
-                {
-                    (0, scalar.bytes)
-                }
-                _ => return Err(invalid("static object history needs exact access ranges")),
+            let footprint = source_address_history_footprint_v43(graph, row, slots, budget)?;
+            footprints.push(footprint);
+            let Some((start, end)) = footprint.1 else {
+                continue;
             };
-            if start >= end {
-                return Err(invalid("static value access has an empty range"));
-            }
-            footprints.push((row.slot, start, end, access.writing));
             cells.push(Cell {
                 slot: row.slot,
                 index: CellIndex::Literal(start),
@@ -110,7 +87,12 @@ fn check_expanded_static_object_history_v29(
             }
             event_count = argument_sum_v1(&[event_count, usize::from(row.move_after)])?;
         }
-        for &(slot, start, end, _) in &footprints {
+        for &(slot, range, _) in &footprints {
+            let Some((start, end)) = range else {
+                budget.charge_work(1)?;
+                ranges.push(0..0);
+                continue;
+            };
             budget.charge_work(argument_product_v1(
                 2,
                 call_splice_search_work_v1(cells.len()),
@@ -201,7 +183,7 @@ fn check_expanded_static_object_history_v29(
                         budget.charge_work(1)?;
                         events.push(Event {
                             cell,
-                            kind: if footprints[access].3 {
+                            kind: if footprints[access].2 {
                                 EventKind::Set(true)
                             } else {
                                 EventKind::Read

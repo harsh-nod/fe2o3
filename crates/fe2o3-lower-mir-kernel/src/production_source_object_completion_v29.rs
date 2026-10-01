@@ -562,9 +562,13 @@ fn check_source_object_effect_census_v29(
     };
     #[cfg(test)]
     let sources = candidate_sources.as_deref().unwrap_or(sources);
-    source_reference_owned_prepay_v29::<(Vec<bool>, Vec<bool>, Vec<bool>, Vec<(usize, u32)>)>(
-        plan, budget,
-    )?;
+    source_reference_owned_prepay_v29::<(
+        Vec<bool>,
+        Vec<bool>,
+        Vec<bool>,
+        Vec<bool>,
+        Vec<(usize, u32)>,
+    )>(plan, budget)?;
     source_reference_owned_prepay_v29::<Option<(usize, SourceReferenceSelectorV29)>>(plan, budget)?;
     source_reference_owned_prepay_v29::<Option<&SemanticPlaceV1>>(plan, budget)?;
     source_reference_owned_prepay_v29::<Option<&mut bool>>(plan, budget)?;
@@ -580,13 +584,17 @@ fn check_source_object_effect_census_v29(
     budget.charge_work(plan.selectors.len())?;
     selector_reads.resize(plan.selectors.len(), false);
     let mut terminal = emission_vec_v1(plan.accesses.len(), budget)?;
+    let mut tags = emission_vec_v1(plan.accesses.len(), budget)?;
+    budget.reserve_storage(source_address_tag_query_headers_v43()?)?;
     let mut holders = emission_vec_v1(plan.raw_accesses.len(), budget)?;
     let mut aggregate_fields = Vec::new();
     budget.charge_work(argument_sum_v1(&[
         plan.accesses.len(),
+        plan.accesses.len(),
         plan.raw_accesses.len(),
     ])?)?;
     terminal.resize(plan.accesses.len(), false);
+    tags.resize(plan.accesses.len(), false);
     holders.resize(plan.raw_accesses.len(), false);
     for source in sources {
         let sidecar = source_index.sidecar(source.instance, budget)?;
@@ -598,6 +606,31 @@ fn check_source_object_effect_census_v29(
             .rows
             .get(source.anchor)
             .ok_or_else(scoped_object_error_v29)?;
+        if let Some((index, demand)) = source_address_tag_effect_v43(
+            instances,
+            plan,
+            source_index,
+            slots,
+            source,
+            anchors,
+            row,
+            budget,
+        )? {
+            budget.charge_work(2)?;
+            let seen = tags.get_mut(index).ok_or_else(scoped_object_error_v29)?;
+            if std::mem::replace(seen, true) {
+                return Err(scoped_object_error_v29());
+            }
+            if demand == SourceTagDemandV43::Statement {
+                let seen = terminal
+                    .get_mut(index)
+                    .ok_or_else(scoped_object_error_v29)?;
+                if std::mem::replace(seen, true) {
+                    return Err(scoped_object_error_v29());
+                }
+            }
+            continue;
+        }
         let Some((endpoint, payload)) = source_address_object_payload_v29(anchors, row, budget)?
         else {
             continue;
@@ -970,7 +1003,9 @@ fn check_source_object_effect_census_v29(
         if !object
             || !matches!(
                 access.key.access,
-                SourceReferenceAccessV29::Read | SourceReferenceAccessV29::Write
+                SourceReferenceAccessV29::Read
+                    | SourceReferenceAccessV29::Write
+                    | SourceReferenceAccessV29::ReadDiscriminant
             )
         {
             continue;
@@ -979,6 +1014,13 @@ fn check_source_object_effect_census_v29(
             .instance(access.key.site.instance)
             .ok_or_else(scoped_object_error_v29)?
             .declaration();
+        if tags[index]
+            != source_address_original_tag_demand_v43(function, access.key, budget)?.is_some()
+        {
+            return Err(source_reference_error_v29(
+                "original typed tag effect is missing or unrelated to its source occurrence",
+            ));
+        }
         let original = access.key.site.statement.and_then(|ordinal| {
             function
                 .blocks()
@@ -1105,6 +1147,7 @@ fn check_source_object_effect_census_v29(
     }
     let bytes = argument_sum_v1(&[
         terminal.capacity(),
+        tags.capacity(),
         holders.capacity(),
         selector_reads.capacity(),
         argument_product_v1(
@@ -1112,7 +1155,7 @@ fn check_source_object_effect_census_v29(
             std::mem::size_of::<(usize, u32)>(),
         )?,
     ])?;
-    drop((terminal, holders, selector_reads, aggregate_fields));
+    drop((terminal, tags, holders, selector_reads, aggregate_fields));
     budget.release_storage(bytes)?;
     #[cfg(test)]
     if let Some(rows) = candidate_sources {
