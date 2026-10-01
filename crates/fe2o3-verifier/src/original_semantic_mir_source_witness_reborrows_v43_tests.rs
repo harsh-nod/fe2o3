@@ -211,7 +211,7 @@ fn fixture(
             .unwrap(),
         )
     };
-    let block = |ordinal, statements, term| {
+    let block = |ordinal: u8, statements, term| {
         SemanticBasicBlockV1::new(
             SemanticBlockIdentityV1::from_sha256([200 + ordinal; 32]),
             source,
