@@ -13,7 +13,7 @@ fn transported_enum_owner_v50() -> ProductionSemanticSsaOwnerV1 {
             SemanticBlockIdV1::from_index(target),
         ))
     };
-    // The original entry copy is dynamic; both enum locals must cross CFG edges.
+    // Only the first enum local merges definitions; its later copy has a linear edge.
     let select = SemanticTerminatorKindV1::SwitchInt {
         discriminant: SemanticOperandV1::Copy(place(3, U32)),
         targets: SemanticSwitchTargetsV1::new(
@@ -100,17 +100,17 @@ fn inspect_enum_spills_v48(
     let first = (semantic.functions()[0].locals().len() - 3) as u32;
     let count = relation.enum_spill_count_v48(0, budget)?;
     assert_eq!(
-        count, 4,
-        "two enum locals, two non-Unit payload leaves each"
+        count, 2,
+        "one enum merge local, two non-Unit payload leaves"
     );
-    let mut seen = [None; 4];
-    let mut operations = [None; 4];
+    let mut seen = [None; 2];
+    let mut operations = [None; 2];
     for ordinal in 0..count {
         let receipt = relation.enum_spill_v48(0, ordinal, budget)?;
         let origin = receipt.origin(budget)?;
         assert_eq!(origin.instance, 0);
         assert_eq!(origin.source_type, enumeration);
-        assert!(origin.local == first || origin.local == first + 1);
+        assert_eq!(origin.local, first);
         assert_eq!(origin.variant, 1);
         assert_eq!(origin.component, 0);
         let expected = match origin.field {
@@ -189,7 +189,7 @@ fn compiler_enum_spill_roster_detects_missing_duplicate_and_substituted_origins(
                 .rvalue_results
                 .as_ref()
                 .unwrap();
-            assert_eq!(original.enum_spills.len(), 4);
+            assert_eq!(original.enum_spills.len(), 2);
             for fault in 0..15 {
                 let mut altered = OwnedSourceRvaluesV30 {
                     source: original.source,
