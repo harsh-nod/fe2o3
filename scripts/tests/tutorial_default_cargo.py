@@ -80,6 +80,52 @@ class DefaultCargoHarnessTests(unittest.TestCase):
             self.assertIn("--offline", args)
             self.assertTrue(inputs["kernelSymbols"])
 
+    def test_generic_ci_dispatches_exact_harness_once_without_running_compiler_census(self):
+        dispatch = r'''
+set -Eeuo pipefail
+source "$1"
+run_step() {
+  printf '%s' "$1"
+  shift
+  printf '\t%s' "$@"
+  printf '\n'
+}
+run_workspace_dependency_policy() { :; }
+run_standalone_lockfiles() { :; }
+run_runtime_pure_rust_policy() { :; }
+run_shard_policy() { :; }
+run_parity_matrix_checks() { :; }
+run_format() { :; }
+run_check() { :; }
+run_backend_build() { :; }
+run_cpu_tests() { :; }
+run_rustc_codegen_lib_tests() { :; }
+run_auxiliary_tests() { :; }
+run_all_rustc_codegen_shards() { :; }
+"$2"
+'''
+        expected = ["tutorial-default-cargo-harness-tests", "python3", "-I", "-B",
+                    "scripts/tests/tutorial_default_cargo.py"]
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = {"PATH": os.defpath, "HOME": temporary,
+                           "CARGO_TARGET_DIR": str(Path(temporary) / "cache"),
+                           "CI_LOG_DIR": str(Path(temporary) / "logs")}
+            for function in ("run_generic_core", "run_generic"):
+                with self.subTest(function=function):
+                    result = subprocess.run(
+                        ["bash", "--noprofile", "--norc", "-c", dispatch, "bash",
+                         str(SCRIPT_ROOT / "ci-local.sh"), function],
+                        cwd=temporary, env=environment, text=True, capture_output=True,
+                        timeout=10, check=True,
+                    )
+                    steps = [line.split("\t") for line in result.stdout.splitlines()]
+                    self.assertEqual([step for step in steps
+                                      if step[0] == expected[0] or expected[-1] in step], [expected])
+                    self.assertFalse(any("scripts/qualify-tutorial-default-cargo.py" in step
+                                         for step in steps))
+            self.assertFalse((Path(temporary) / "cache").exists())
+            self.assertFalse((Path(temporary) / "logs").exists())
+
     def test_real_physical_snapshot_uses_existing_source_closure(self):
         validator, census, manifest, digest, registered = self.loaded
         for source_case in (False, True):
