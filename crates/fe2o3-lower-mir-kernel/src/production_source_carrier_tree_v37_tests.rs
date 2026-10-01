@@ -268,10 +268,11 @@ fn source_typed_carrier_tree_single_value_and_out_of_range_queries_are_sticky() 
 
 #[test]
 fn source_typed_descriptor_wrapper_retains_slice_locator_without_shape_inference() {
+    let completed = std::cell::Cell::new(false);
     run_descriptor_roles_v18(
         DescriptorRoleEntranceV18::IssuedDisjointSlice,
         DescriptorRoleSourceV18::Arithmetic,
-        MODULE_LIMIT,
+        OPTIMIZED_SOURCE_WORK_LIMIT_V18,
         MODULE_LIMIT,
         |relation, _, budget| {
             let semantic = relation.source.source_semantic(budget)?;
@@ -312,11 +313,13 @@ fn source_typed_descriptor_wrapper_retains_slice_locator_without_shape_inference
                 wrappers += 1;
             }
             assert!(wrappers > 0, "nominal wrapper must remain a Slice locator");
+            completed.set(true);
             Ok(())
         },
     )
     .0
     .unwrap();
+    assert!(completed.get(), "typed wrapper consumer must complete");
 }
 
 #[test]
