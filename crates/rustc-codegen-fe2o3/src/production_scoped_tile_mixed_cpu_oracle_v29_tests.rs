@@ -321,7 +321,19 @@ pub(super) fn run(
     limits: sim::SimulationLimitsV1,
     order: Order,
 ) -> (usize, usize, usize, usize) {
+    run_with_output_fingerprint(simulation, limits, order).0
+}
+
+pub(super) fn run_with_output_fingerprint(
+    simulation: &sim::AdmittedSimulationModuleV1,
+    limits: sim::SimulationLimitsV1,
+    order: Order,
+) -> ((usize, usize, usize, usize), [u8; 32]) {
+    use sha2::{Digest, Sha256};
+
     let mut totals = (0, 0, 0, 0);
+    let mut observed = Sha256::new();
+    observed.update(b"fe2o3.test.mixed-simt-actual-buffers.v1\0");
     let targets = ["gfx942:xnack-", "gfx950:xnack-"]
         .map(|name| sim::SimulationTargetV1::amdgpu_from_device_target(name).unwrap());
     // Explicit CPU replay contexts provide no GPU target custody or launch authority.
@@ -347,6 +359,25 @@ pub(super) fn run(
                 .simulate_observed_with_sink(&request, target, limits, &mut events)
                 .expect("actual mixed source scalar candidate CPU execution");
             check(&execution, &request, case, order);
+            // Include case/profile framing and actual bytes plus initialization,
+            // but no graph identity: independently compiled algorithms must agree.
+            for value in [
+                target_index as u64,
+                case.input as u64,
+                case.output as u64,
+                case.base,
+                case.groups,
+            ] {
+                observed.update(value.to_le_bytes());
+            }
+            for backing in [INPUT, OUTPUT] {
+                let buffer = execution.shared_buffer(backing).unwrap();
+                observed.update((buffer.bytes().len() as u64).to_le_bytes());
+                observed.update(buffer.bytes());
+                for &initialized in buffer.initialized() {
+                    observed.update([u8::from(initialized)]);
+                }
+            }
             drop(execution);
             events.check();
             totals.2 += events
@@ -421,5 +452,5 @@ pub(super) fn run(
             totals.0 += 1;
         }
     }
-    totals
+    (totals, observed.finalize().into())
 }

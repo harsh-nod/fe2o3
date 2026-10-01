@@ -10,6 +10,9 @@ use fe2o3_lower_mir_kernel::{
 #[path = "production_scoped_tile_mixed_cpu_oracle_v29_tests.rs"]
 mod oracle;
 
+#[path = "production_scoped_tile_simt_reference_v29_tests.rs"]
+mod simt_reference;
+
 const BLOCKED_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::mixed_tile_cpu_tests::scoped_tile_mixed_cpu_source_blocked_child";
 const STRIPED_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::mixed_tile_cpu_tests::scoped_tile_mixed_cpu_source_striped_child";
 
