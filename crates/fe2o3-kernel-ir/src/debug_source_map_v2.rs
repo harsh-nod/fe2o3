@@ -357,6 +357,51 @@ impl DebugSourceVariableV2 {
 }
 
 impl DebugSourceMapDocumentV2 {
+    /// Charges retained capacities and nested owners, excluding this document's
+    /// inline header. Does not serialize, normalize, clone, validate or mutate.
+    /// The caller's explicit item/byte limits also apply to unvalidated Serde
+    /// values. Logical storage is not physical allocation, peak memory or RSS.
+    pub fn charge_retained_heap_v2(
+        &self,
+        counter: &mut crate::LogicalStorageCounterV1,
+    ) -> Result<(), crate::LogicalStorageErrorV1> {
+        let Self {
+            schema: _,
+            binding: _,
+            files,
+            sites,
+            eliminated,
+            scopes,
+            variables,
+        } = self;
+        counter.charge(0, 1)?;
+        counter.vector(files)?;
+        for file in files {
+            file.charge_retained_heap_v1(counter)?;
+        }
+        counter.vector(sites)?;
+        for site in sites {
+            site.charge_retained_heap_v1(counter)?;
+        }
+        counter.vector(eliminated)?;
+        counter.vector(scopes)?;
+        counter.vector(variables)?;
+        for variable in variables {
+            let DebugSourceVariableV2 {
+                identity: _,
+                name,
+                function_ordinal: _,
+                scope_identity: _,
+                fallback: _,
+                function_binding: _,
+                locations,
+            } = variable;
+            counter.charge(0, 1)?;
+            counter.string(name)?;
+            counter.vector(locations)?;
+        }
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         binding: DebugSourceMapBindingV1,
@@ -749,5 +794,71 @@ mod tests {
         .unwrap()
         .with_function_binding(DebugSourceVariableFunctionBindingV2::new(1, 7).unwrap());
         assert_eq!(with_location, Err(DebugSourceMapErrorV2::InvalidVariable));
+    }
+    #[test]
+    fn retained_storage_includes_all_source_map_owners_and_spare_capacity() {
+        use crate::{
+            LogicalStorageCounterV1 as Counter, LogicalStorageErrorV1 as Error,
+            LogicalStorageLimitsV1 as Limits,
+        };
+        use std::mem::size_of;
+        let mut document = document();
+        let before = document.to_canonical_json_bytes().unwrap();
+        document.files.reserve(7);
+        document.sites.reserve(11);
+        document.eliminated.reserve(13);
+        document.scopes.reserve(17);
+        document.variables.reserve(19);
+        let old_file = &document.files[0];
+        let mut path = String::with_capacity(127);
+        path.push_str(old_file.display_path());
+        let path_capacity = path.capacity();
+        document.files[0] =
+            DebugSourceMapFileV1::new(old_file.identity(), old_file.byte_len(), path).unwrap();
+        let old_site = &document.sites[0];
+        let mut spans = Vec::with_capacity(23);
+        spans.extend_from_slice(old_site.spans());
+        let spans_capacity = spans.capacity();
+        document.sites[0] = DebugSourceMapSiteV1::new(old_site.site(), spans).unwrap();
+        document.variables[0].name.reserve(137);
+        document.variables[0].locations.reserve(29);
+        let expected = document.files.capacity() * size_of::<DebugSourceMapFileV1>()
+            + path_capacity
+            + document.sites.capacity() * size_of::<DebugSourceMapSiteV1>()
+            + spans_capacity * size_of::<DebugSourceMapSpanV1>()
+            + document.eliminated.capacity() * size_of::<DebugSourceMapSpanV1>()
+            + document.scopes.capacity() * size_of::<DebugSourceScopeV2>()
+            + document.variables.capacity() * size_of::<DebugSourceVariableV2>()
+            + document.variables[0].name.capacity()
+            + document.variables[0].locations.capacity()
+                * size_of::<DebugSourceVariableLocationV2>();
+        let mut c = Counter::new(Limits {
+            max_bytes: None,
+            max_items: 100,
+        });
+        document.charge_retained_heap_v2(&mut c).unwrap();
+        assert_eq!(c.bytes(), expected);
+        assert_eq!(document.to_canonical_json_bytes().unwrap(), before);
+        let mut exact = Counter::new(Limits {
+            max_bytes: Some(expected),
+            max_items: c.items(),
+        });
+        document.charge_retained_heap_v2(&mut exact).unwrap();
+        let mut byte_short = Counter::new(Limits {
+            max_bytes: Some(expected - 1),
+            max_items: c.items(),
+        });
+        assert_eq!(
+            document.charge_retained_heap_v2(&mut byte_short),
+            Err(Error::ByteLimit)
+        );
+        let mut work_short = Counter::new(Limits {
+            max_bytes: None,
+            max_items: c.items() - 1,
+        });
+        assert_eq!(
+            document.charge_retained_heap_v2(&mut work_short),
+            Err(Error::ItemLimit)
+        );
     }
 }
