@@ -9,6 +9,46 @@ examples as qualified through the new production path.
 
 ## Latest Compiler Checkpoint
 
+At 11:34 UTC, r310 completed the five-package `cargo check --tests` at
+`3dabc6f3791f6cf876f609f4be6d2ffa854d670b` with **five verifier compilation
+errors**: three unavailable formation-type imports/uses and two mutable-budget
+argument mismatches. No tests ran. The preceding r309 failed on three
+scalar-query helper visibility errors; its narrow visibility repair is included
+in r310. These are completed failed checks, not observation timeouts.
+
+The latest actual source execution, r308 at
+`87f35a3a9a0415d05333061d3425ca917daaedf5`, built the backend test binary and
+finished with **zero passed, one failed**, none ignored and 4,114 filtered.
+The fill parent exercised gfx942/gfx950 source configurations. gfx942 opt0/MIR0
+stopped at unsupported original private-expression derivation; gfx950 opt0/MIR0
+stopped at execution lifecycle during pending root emission. Both targets at
+opt3/MIR2 stopped at an execution-lifecycle check during a producer call.
+The parent failure does not establish that every planned negative control ran.
+No actual source-clause frame was emitted; the strict extractor refused the log
+and created no proof input. No Verus, protected proof or GPU execution occurred.
+
+Original integer-cast reconstruction and source-proven consuming-Copy handling
+are now integrated locally, but an actual source rerun has not yet confirmed
+these repairs. Multi-effect memory tracking, scalar/read symbol binding and
+typed original-source borrowing are also local work, not end-to-end acceptance.
+The complete source-bound proof request, authenticated receipt consumption,
+publication within the original owner lifetimes and continuous protected
+execution remain implementation work.
+
+Both source inventories, tool identities, raw logs and runner were independently
+checked before changing each validation worktree. Raw log SHA-256 values:
+
+- r308: `7a11d50b450bdb64ad2ec2eb64cbb7b23e1cd3127d03d929458580cda65c2fff`
+- r309: `1d5677e13c7b3070f1c4730c56403cc4ce477c4efeb77c3baa037506cdfe4d3b`
+- r310: `62fd050e64e583aca767a412b49fa5731a8dda8a8283736131e29109a495c174`
+
+Both public mains were independently read at
+`e9d283947e171346b55dc6112bc2dff568fbe135` before this documentation update.
+The unfinished compiler candidate remains local. **M0 alone is complete;
+M1-M7 remain incomplete; strict coverage remains 0/47.**
+
+## Earlier Actual Source Checkpoint
+
 At 10:54 UTC, r305 completed the actual Rust fill/vecadd parent tests at
 `cb4a7f048677b89d61ea4e0189194e4055cbdbd7`: **zero passed, two failed**, none
 ignored and 4,101 filtered. The backend test binary built successfully, but both
