@@ -255,3 +255,151 @@ fn gfx942_companion_uses_the_original_closed_target_context() {
     assert!(input.all_mandatory_reports_are_clean());
     assert!(!input.grants_artifact_or_launch_authority());
 }
+
+#[test]
+fn snapshot_allowance_exact_zero_and_existing_ceiling_boundaries() {
+    use ProductionRankedSnapshotAllowanceErrorV1 as E;
+    let hard = ProductionRankedSnapshotAllowanceV1::production_hard_ceiling();
+    assert_eq!(hard.max_bytes(), crate::HARD_MAX_OPERATION_IMPORT_BYTES);
+    assert_eq!(hard.max_work(), ceiling().max_work());
+    assert_eq!(
+        ProductionRankedSnapshotAllowanceV1::new(hard.max_bytes(), hard.max_work()),
+        Ok(hard)
+    );
+    let zero = ProductionRankedSnapshotAllowanceV1::new(0, 0).unwrap();
+    assert_eq!((zero.max_bytes(), zero.max_work()), (0, 0));
+    assert_eq!(
+        ProductionRankedSnapshotAllowanceV1::new(hard.max_bytes() + 1, 0),
+        Err(E::BytesAboveHardCeiling)
+    );
+    assert_eq!(
+        ProductionRankedSnapshotAllowanceV1::new(0, hard.max_work() + 1),
+        Err(E::WorkAboveHardCeiling)
+    );
+    assert_eq!(
+        ProductionRankedSnapshotAllowanceV1::new(usize::MAX, usize::MAX),
+        Err(E::BytesAboveHardCeiling)
+    );
+}
+
+#[test]
+fn named_analysis_ceiling_is_the_unchanged_default() {
+    assert_eq!(
+        ProductionRankedAnalysisAllowanceV1::production_hard_ceiling(),
+        ceiling()
+    );
+}
+
+fn compile_both(
+    index: u64,
+    analysis: ProductionRankedAnalysisAllowanceV1,
+    snapshot: ProductionRankedSnapshotAllowanceV1,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    compile_ranked_kernel_for_lowering_with_analysis_and_snapshot_allowances_v1(
+        construction(index),
+        ProductionSessionLimitsV1::default(),
+        analysis,
+        snapshot,
+    )
+}
+
+#[test]
+fn both_allowances_reach_the_same_real_engine_and_retained_session() {
+    let original = compile_ranked_kernel_for_lowering_v1(
+        construction(0),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap();
+    let bounded = compile_both(
+        0,
+        ceiling(),
+        ProductionRankedSnapshotAllowanceV1::production_hard_ceiling(),
+    )
+    .unwrap();
+    assert_eq!(original.kernel(), bounded.kernel());
+    assert_eq!(
+        original.exact_graph_identity(),
+        bounded.exact_graph_identity()
+    );
+    assert!(original._session.inner.snapshot_policy.is_none());
+    let (work, completed, failure) = bounded
+        ._session
+        .inner
+        .snapshot_policy
+        .as_ref()
+        .unwrap()
+        .observation();
+    assert!(work > 0 && completed > 0);
+    assert_eq!(failure, None);
+    assert_eq!(
+        bounded._session.analysis_resource_limits(),
+        ceiling().limits
+    );
+    assert!(bounded._session.atomic_target.is_none());
+    assert!(bounded.all_mandatory_reports_are_clean());
+    assert!(!bounded.grants_artifact_or_launch_authority());
+}
+
+#[test]
+fn combined_endpoint_refuses_zero_snapshot_bytes() {
+    let result = compile_both(
+        0,
+        ceiling(),
+        ProductionRankedSnapshotAllowanceV1::new(0, ceiling().max_work()).unwrap(),
+    );
+    assert!(matches!(
+        result,
+        Err(ProductionRankedCompileErrorV1::Session(
+            ProductionSessionErrorV1::Operation(
+                crate::OperationHandleError::OperationGraphSnapshotResourceLimit {
+                    resource: "presentation UTF8 bytes"
+                }
+            )
+        ))
+    ));
+}
+
+#[test]
+fn combined_endpoint_refuses_zero_snapshot_work() {
+    let result = compile_both(
+        0,
+        ceiling(),
+        ProductionRankedSnapshotAllowanceV1::new(crate::HARD_MAX_OPERATION_IMPORT_BYTES, 0)
+            .unwrap(),
+    );
+    assert!(matches!(
+        result,
+        Err(ProductionRankedCompileErrorV1::Session(
+            ProductionSessionErrorV1::Operation(
+                crate::OperationHandleError::OperationGraphSnapshotResourceLimit {
+                    resource: "presentation hash work"
+                }
+            )
+        ))
+    ));
+}
+
+#[test]
+fn combined_endpoint_keeps_analysis_work_and_storage_refusals() {
+    let snapshot = ProductionRankedSnapshotAllowanceV1::production_hard_ceiling();
+    for analysis in [
+        ProductionRankedAnalysisAllowanceV1::new(0, ceiling().max_peak_storage()).unwrap(),
+        ProductionRankedAnalysisAllowanceV1::new(ceiling().max_work(), 0).unwrap(),
+    ] {
+        resource_refusal(compile_both(0, analysis, snapshot));
+    }
+}
+
+#[test]
+fn combined_endpoint_keeps_real_bounds_refusal() {
+    assert!(matches!(
+        compile_both(
+            1,
+            ceiling(),
+            ProductionRankedSnapshotAllowanceV1::production_hard_ceiling()
+        ),
+        Err(ProductionRankedCompileErrorV1::Session(
+            ProductionSessionErrorV1::RankedBounds(_)
+        ))
+    ));
+}

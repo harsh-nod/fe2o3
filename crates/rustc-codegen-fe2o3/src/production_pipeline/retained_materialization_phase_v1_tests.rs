@@ -452,3 +452,6 @@ fn default_phase_limits_are_not_widened() {
     assert_eq!(owned.account.ledger.storage_limit(), storage);
     owned.finish_copy();
 }
+
+#[path = "retained_ranked_allowance_v1_tests.rs"]
+mod ranked_allowance_tests;
