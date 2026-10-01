@@ -41,17 +41,23 @@ fn helper_fixture(
     .unwrap();
     let reference_abi =
         SemanticAbiValueV1::new(reference, SemanticAbiPassModeV1::Direct(attributes));
+    // Reference returns retain validity/alignment, not argument-only alias,
+    // capture, read-only, or dereferenceable-byte attributes.
+    let return_attributes = SemanticAbiValueAttributesV1::new(
+        SemanticAbiRegularAttributesV1::new(false, None, true, false, false, true),
+        SemanticAbiExtensionV1::None,
+        0,
+        Some(8),
+    )
+    .unwrap();
     let abi = SemanticFunctionAbiV1::new(
         old.abi().identity(),
         old.abi().layout_identity(),
         SemanticCanonAbiV1::Rust,
         false,
         false,
-        vec![
-            reference_abi.clone(),
-            old.abi().arguments()[1].value().clone(),
-        ],
-        reference_abi,
+        vec![reference_abi, old.abi().arguments()[1].value().clone()],
+        SemanticAbiValueV1::new(reference, SemanticAbiPassModeV1::Direct(return_attributes)),
     )
     .unwrap()
     .with_source_argument_ownership(vec![
