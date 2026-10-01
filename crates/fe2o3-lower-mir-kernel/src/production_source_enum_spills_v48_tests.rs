@@ -1,3 +1,23 @@
+fn enum_spill_header_oracle_v48() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    h::<Vec<SourceEnumSpillRowV48>>()
+        + h::<SourceEnumSpillRowV48>()
+        + h::<ExecutionEnumSpillV48>()
+        + h::<ProductionSourceEnumSpillOriginV48>()
+        + h::<ProductionSourceEnumSpillV48<'_, '_>>()
+        + h::<&[SourceEnumSpillRowV48]>()
+        + h::<std::slice::Iter<'_, SourceEnumSpillRowV48>>()
+        + h::<(&ExecutionEnumSpillV48, &ExecutionEnumSpillV48)>()
+        + h::<(&Type, &Type)>()
+        + h::<&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>()
+        + h::<&fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1<'_>>()
+        + h::<[usize; 6]>()
+}
+
 fn inspect_enum_spills_v48(
     relation: &ProductionSourceCorrespondenceV18<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
