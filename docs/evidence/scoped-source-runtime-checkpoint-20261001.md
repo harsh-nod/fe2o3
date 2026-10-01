@@ -9,7 +9,56 @@ examples as qualified through the new production path.
 
 ## Latest Verified Checkpoint
 
-The latest completed full kernel-IR library run, r286, passed **1,497 tests**,
+The completed r294/r295 runs used the local candidate
+`0d4f37f1e2b8d963aeb28891dc6c872c52d980fd`. The primary independently checked
+the source/tool inventories and raw logs. Neither run executed a GPU kernel
+or earned protected-proof credit.
+
+| Run | Executed scope | Result |
+| --- | --- | --- |
+| r294 | Selected kernel-IR, lowerer, Pliron and verifier library tests | 884 passed, 47 failed, 10 ignored |
+| r295 | Complete kernel-IR library suite | 1,501 passed, none failed, ignored or filtered |
+| r296 | Four-crate `cargo check --tests` on the newer integrated candidate | Passed; no tests executed |
+
+r294 includes kernel-IR 37/0, lowerer 596/47, Pliron 73/0 and verifier 178/0
+(pass/fail). Its ten ignored tests include checks requiring actual installed
+protected-runtime prerequisites. These are **test counts, not kernel counts**;
+the selected roster is broader than r285, so totals are not a same-selection
+comparison. Remaining lowerer failures include access/formation correspondence,
+parent cleanup accounting and insufficient fixture work allowances. The latter
+require diagnosis against actual optimizer charges, not arbitrary cap increases.
+
+r296 checked `fe2o3-kernel-ir`, `fe2o3-lower-mir-kernel`, `fe2o3-pliron` and
+`fe2o3-verifier` at `bfb609bb5b9b5ead0b6ef048f8849c8c085b031c`. That candidate
+includes the completed-source clause-input adapter, read-binding/formula
+components and a fix distinguishing the original pointer formation from its
+forwarded memory-access operand. This passing compile check does not validate
+their behavior or Rust backend tests, which need their own build and execution. Required missing
+source/memory obligations still refuse before aggregate proof execution.
+
+Independently checked raw log SHA-256 values:
+
+- r294: `514b80f449a17d220a9083e30dd1ccde86bfc80252a77c6d244100a250a9faaf`
+- r295: `7c5a483f7e879e5586a587d9c992736757ac409a60afac92028a97b858802d99`
+- r296: `2e12b3aed5f03f17268b0043735349c97a87936d3ae483f87e2e0e58ac50de37`
+
+Further expression-pair, scoped native lookup and parent-cleanup fixes are
+integrated locally but have not passed an execution rerun. The genuine Rust
+fill/vecadd results remain the failed r272/r273 runs below. The protected client
+and helper transport are still unqualified, and the active driver lacks the
+complete confirmed-execution and continuous-enforcement connection required
+for protected proof execution. An endpoint, handshake or process-output record
+does not replace that connection or a verified proof.
+
+The unpublished integration also has unresolved full-range hygiene and inherited
+commit sign-off findings. Passing checks on individual patches do not establish
+a passing publication gate. Both public mains were independently read back at
+`ca8647fc1932dece0a5b34e1b75721d482225d7e` before this documentation update;
+the unfinished compiler integration is not part of that publication.
+
+## Earlier Checkpoints
+
+The completed full kernel-IR library run r286 passed **1,497 tests**,
 with zero failures, ignored tests or filtered tests. Its candidate was
 `dce057115143ba327739877aab424ff56eb96eea`. Source/tool inventories stayed
 unchanged, and the primary independently checked the raw log digest:
@@ -23,7 +72,7 @@ is a canonical-IR result, not a genuine Rust frontend or GPU result.
 The scoped-memory projection now distinguishes the actual access operand from
 its original pointer-formation result and checks their typed, unique SSA origin.
 
-The latest selected compiler integration run, r285, completed at
+The selected compiler integration run r285 completed at
 `820f953e1f4598ac967b3c55963ad2f2e730cedb`: **455 passed and 47 failed**,
 none ignored (lowerer 410/47, Pliron 20/0, verifier 25/0). These are test counts,
 not kernel runs, and the selected roster differs from earlier runs. Source/tool
