@@ -22,6 +22,10 @@ pub(super) use pointer_events::SOURCE_POINTERS_V36;
 mod aggregates;
 #[path = "original_semantic_mir_source_discriminants_v41.rs"]
 mod discriminants;
+#[path = "original_semantic_mir_source_enum_construction_v43.rs"]
+mod enum_construction;
+#[path = "original_semantic_mir_source_integer_casts_v43.rs"]
+mod integer_casts;
 #[path = "original_semantic_mir_source_slice_reads_v41.rs"]
 mod slice_reads;
 #[path = "original_semantic_mir_source_witness_borrows_v38.rs"]
@@ -190,6 +194,8 @@ pub(super) enum Event {
     WitnessTransfer(witness_transfers::Transfer),
     Pointer(pointer_events::Event),
     Discriminant(discriminants::Read),
+    EnumConstruct(enum_construction::Construct),
+    IntegerCast(integer_casts::Cast),
     Checked(aggregates::Checked),
     AggregateTransfer(aggregates::Transfer),
     AggregateDeinitialize(aggregates::AggregatePlace),
@@ -232,6 +238,7 @@ pub(super) struct SourceByteBody<'slots, 'view, 'source> {
     locals: Range<usize>,
     blocks: Vec<Range<usize>>,
     events: Vec<Event>,
+    enum_payloads: Vec<enum_construction::Payload>,
     required: usize,
 }
 
@@ -390,14 +397,30 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             return Err(mismatch());
         }
         let mut count = 0usize;
+        let mut payload_count = 0usize;
         for block in function.blocks() {
             out.budget.charge_work(1)?;
             count = count
                 .checked_add(block.statements().len())
                 .ok_or(Resource::Arithmetic)?;
+            for statement in block.statements() {
+                out.budget.charge_work(1)?;
+                if let Statement::Assign(assignment) = statement.kind()
+                    && let Rvalue::Aggregate(aggregate) = assignment.value().kind()
+                    && matches!(
+                        aggregate.kind(),
+                        fe2o3_mir_model::semantic_mir_v1::SemanticAggregateKindV1::EnumVariant(_)
+                    )
+                {
+                    payload_count = payload_count
+                        .checked_add(aggregate.operands().len())
+                        .ok_or(Resource::Arithmetic)?;
+                }
+            }
         }
         let mut blocks = vector(function.blocks().len(), out)?;
         let mut events = vector(count, out)?;
+        let mut enum_payloads = vector(payload_count, out)?;
         let context = Context {
             slots,
             types: semantic.types(),
@@ -466,9 +489,26 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     (Some(_), Some(_)) => return Err(mismatch()),
                     (None, Some(event)) => event,
                     (Some(borrow), None) => Event::WitnessBorrow(borrow),
-                    (None, None) => context.statement(statement.kind(), out).map_err(|error| {
-                        statement_error(error, site, statement.kind(), context.types)
-                    })?,
+                    (None, None) => {
+                        let constructed = match statement.kind() {
+                            Statement::Assign(assignment) => enum_construction::Construct::derive(
+                                &context,
+                                assignment,
+                                &mut enum_payloads,
+                                out,
+                            )
+                            .map_err(|error| {
+                                statement_error(error, site, statement.kind(), context.types)
+                            })?,
+                            _ => None,
+                        };
+                        match constructed {
+                            Some(constructed) => Event::EnumConstruct(constructed),
+                            None => context.statement(statement.kind(), out).map_err(|error| {
+                                statement_error(error, site, statement.kind(), context.types)
+                            })?,
+                        }
+                    }
                 };
                 if events.len() == events.capacity() {
                     return Err(Resource::Accounting.into());
@@ -491,6 +531,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             locals: row.locals.clone(),
             blocks,
             events,
+            enum_payloads,
             required: out.budget.storage(),
         })
     }
@@ -674,7 +715,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     " if block == {block} && statement == {statement} {{ Some("
                 )
                 .map_err(|_| out.error())?;
-                emit_event(*event, out)?;
+                emit_event(*event, &self.enum_payloads, out)?;
                 write!(out, ") }} else").map_err(|_| out.error())?;
             }
         }
@@ -1088,6 +1129,11 @@ impl Context<'_, '_, '_> {
     fn statement(&self, statement: &Statement, out: &mut Writer<'_, '_>) -> Result<Event> {
         out.budget.charge_work(2)?;
         if let Statement::Assign(assignment) = statement
+            && let Some(cast) = integer_casts::Cast::derive(self, assignment, out)?
+        {
+            return Ok(Event::IntegerCast(cast));
+        }
+        if let Statement::Assign(assignment) = statement
             && let Some(transfer) = aggregates::Transfer::derive(self, assignment, out)?
         {
             return Ok(Event::AggregateTransfer(transfer));
@@ -1194,8 +1240,8 @@ impl Context<'_, '_, '_> {
                         })?;
                         Ok(Event::Scalar)
                     }
-                    // Includes every cast, so pointers cannot be laundered into
-                    // scalar payloads and then written into untracked bytes.
+                    // Non-integer casts remain closed; the integer branch
+                    // above requires independently typed original scalars.
                     _ => Err(unsupported()),
                 }
             }
@@ -1343,7 +1389,31 @@ fn emit_access(access: Access, out: &mut Writer<'_, '_>) -> Result<()> {
     .map_err(|_| out.error())
 }
 
-fn emit_event(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
+fn emit_destination(destination: Destination, out: &mut Writer<'_, '_>) -> Result<()> {
+    match destination {
+        Destination::Component(place) => {
+            write!(out, "InvocationSourceByteDestinationV36::Component(")
+                .map_err(|_| out.error())?;
+            place.emit(out)?;
+            write!(out, ")").map_err(|_| out.error())
+        }
+        Destination::Local(local) => {
+            write!(out, "InvocationSourceByteDestinationV36::Local({local}int)")
+                .map_err(|_| out.error())
+        }
+        Destination::Memory(access) => {
+            write!(out, "InvocationSourceByteDestinationV36::Memory(").map_err(|_| out.error())?;
+            emit_access(access, out)?;
+            write!(out, ")").map_err(|_| out.error())
+        }
+    }
+}
+
+fn emit_event(
+    event: Event,
+    enum_payloads: &[enum_construction::Payload],
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
     out.budget.charge_work(1)?;
     match event {
         Event::Checked(checked) => checked.emit(out)?,
@@ -1381,6 +1451,8 @@ fn emit_event(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
             write!(out, ")").map_err(|_| out.error())?;
         }
         Event::Discriminant(read) => read.emit(out)?,
+        Event::EnumConstruct(constructed) => constructed.emit(enum_payloads, out)?,
+        Event::IntegerCast(cast) => cast.emit(out)?,
         Event::WitnessBorrow(borrow) => borrow.emit(out)?,
         Event::WitnessTransfer(transfer) => transfer.emit(out)?,
         Event::Scalar => {
@@ -1396,24 +1468,7 @@ fn emit_event(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
                 "InvocationSourceByteEventV36::Transfer {{ destination: "
             )
             .map_err(|_| out.error())?;
-            match destination {
-                Destination::Component(place) => {
-                    write!(out, "InvocationSourceByteDestinationV36::Component(")
-                        .map_err(|_| out.error())?;
-                    place.emit(out)?;
-                    write!(out, ")").map_err(|_| out.error())?;
-                }
-                Destination::Local(local) => {
-                    write!(out, "InvocationSourceByteDestinationV36::Local({local}int)")
-                        .map_err(|_| out.error())?
-                }
-                Destination::Memory(access) => {
-                    write!(out, "InvocationSourceByteDestinationV36::Memory(")
-                        .map_err(|_| out.error())?;
-                    emit_access(access, out)?;
-                    write!(out, ")").map_err(|_| out.error())?;
-                }
-            }
+            emit_destination(destination, out)?;
             write!(out, ", value: ").map_err(|_| out.error())?;
             emit_value(value, out)?;
             write!(out, ", bits: {}int }}", scalar.width()).map_err(|_| out.error())?;
@@ -1486,6 +1541,8 @@ fn headers() -> usize {
         + slice_reads::headers()
         + discriminants::headers()
         + aggregates::headers()
+        + enum_construction::headers()
+        + integer_casts::headers()
         + 24 * size_of::<usize>()
         + 20 * size_of::<&()>()
 }
@@ -1493,9 +1550,11 @@ fn headers() -> usize {
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_aggregate_values_v42.vrs"),
     include_str!("original_semantic_mir_source_aggregate_laws_v42.vrs"),
+    include_str!("original_semantic_mir_source_integer_casts_v43.vrs"),
     include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
     include_str!("original_semantic_mir_source_slice_reads_v41.vrs"),
     include_str!("original_semantic_mir_source_discriminants_v41.vrs"),
+    include_str!("original_semantic_mir_source_enum_construction_v43.vrs"),
     r#"
 struct InvocationSourceByteStateV36 {
     machine: MemoryStateV30,
@@ -1591,6 +1650,8 @@ enum InvocationSourceByteEventV36 {
     Checked { destination: int, source_type: int, operation: int, bits: int, signed: bool,
         left: InvocationSourceByteValueV36, right: InvocationSourceByteValueV36 },
     Discriminant(InvocationSourceDiscriminantReadV41),
+    EnumConstruct(InvocationSourceEnumConstructV43),
+    IntegerCast(InvocationSourceIntegerCastV43),
     Scalar,
     WitnessBorrow { destination: int, origin: int, source_type: int, generation: int,
         instance: int, block: int, statement: int },
@@ -1937,6 +1998,10 @@ open spec fn invocation_source_byte_step_v36(
             invocation_source_pointer_step_v36(source, event, root, instance, little_endian),
         InvocationSourceByteEventV36::Discriminant(read) =>
             invocation_source_discriminant_read_v41(source, read, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::EnumConstruct(constructed) =>
+            invocation_source_enum_construct_v43(source, constructed, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::IntegerCast(cast) =>
+            invocation_source_integer_cast_v43(source, cast, root, instance, little_endian).source,
         InvocationSourceByteEventV36::Checked { destination, source_type, operation, bits, signed, left, right } =>
             invocation_source_checked_v42(source, destination, source_type, operation, bits, signed, left, right, root, instance, little_endian),
         InvocationSourceByteEventV36::AggregateTransfer { destination, source: input, moved } =>

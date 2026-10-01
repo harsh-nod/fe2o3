@@ -77,6 +77,20 @@ open spec fn invocation_source_statement_observations_v39(
         invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
             observation.before, observation.after)
     } else { match observation.event {
+        Some(InvocationSourceByteEventV36::IntegerCast(cast)) => {
+            let result = invocation_source_integer_cast_v43(observation.before, cast,
+                observation.root, observation.instance, little_endian);
+            if result.source == observation.after { result.observations }
+            else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                observation.before, observation.after) }
+        },
+        Some(InvocationSourceByteEventV36::EnumConstruct(constructed)) => {
+            let result = invocation_source_enum_construct_v43(observation.before, constructed,
+                observation.root, observation.instance, little_endian);
+            if result.source == observation.after { result.observations }
+            else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                observation.before, observation.after) }
+        },
         Some(InvocationSourceByteEventV36::Discriminant(read)) => {
             let result = invocation_source_discriminant_read_v41(observation.before, read,
                 observation.root, observation.instance, little_endian);

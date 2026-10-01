@@ -1,0 +1,87 @@
+struct InvocationSourceIntegerCastV43 {
+    destination: InvocationSourceByteDestinationV36,
+    value: InvocationSourceByteValueV36,
+    input_bits: int,
+    input_signed: bool,
+    output_bits: int,
+}
+
+struct InvocationSourceIntegerCastResultV43 {
+    source: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+}
+
+open spec fn invocation_source_integer_cast_value_v43(
+    value: MemoryValueV30, input_bits: int, input_signed: bool, output_bits: int,
+) -> MemoryValueV30 {
+    if !(input_bits == 1 || input_bits == 8 || input_bits == 16
+            || input_bits == 32 || input_bits == 64)
+        || input_bits == 1 && input_signed
+        || !(output_bits == 8 || output_bits == 16 || output_bits == 32 || output_bits == 64)
+        || !invocation_source_byte_value_typed_v36(value, input_bits) {
+        MemoryValueV30::Undefined
+    } else { match value {
+        MemoryValueV30::Scalar(bits) => {
+            let mathematical = if input_signed {
+                source_signed_v30(bits, memory_value_modulus_v30(input_bits / 8))
+            } else { bits };
+            let modulus = memory_value_modulus_v30(output_bits / 8);
+            MemoryValueV30::Scalar(((mathematical % modulus) + modulus) % modulus)
+        },
+        _ => MemoryValueV30::Undefined,
+    } }
+}
+
+open spec fn invocation_source_integer_cast_v43(
+    source: InvocationSourceByteStateV36, cast: InvocationSourceIntegerCastV43,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceIntegerCastResultV43 {
+    let evaluated = invocation_source_byte_evaluate_v36(source, cast.value, cast.input_bits,
+        root, instance, little_endian);
+    let reads = invocation_source_observe_effects_v39(invocation_source_read_effect_v36(
+        source, cast.value, cast.input_bits, root, instance, little_endian), source, evaluated.source);
+    let value = invocation_source_integer_cast_value_v43(evaluated.value,
+        cast.input_bits, cast.input_signed, cast.output_bits);
+    if !evaluated.source.machine.valid
+        || !invocation_source_byte_value_typed_v36(value, cast.output_bits) {
+        let after = invocation_source_byte_refused_v36(evaluated.source);
+        InvocationSourceIntegerCastResultV43 { source: after, observations: reads
+            + invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                evaluated.source, after) }
+    } else { match cast.destination {
+        InvocationSourceByteDestinationV36::Local(local) =>
+            InvocationSourceIntegerCastResultV43 {
+                source: invocation_source_byte_put_local_v36(evaluated.source, local, value),
+                observations: reads },
+        InvocationSourceByteDestinationV36::Component(place) =>
+            InvocationSourceIntegerCastResultV43 {
+                source: invocation_source_aggregate_place_replace_v42(evaluated.source, place,
+                    InvocationSourceAggregateV42 { source_type: place.result_type,
+                        leaves: Map::empty().insert(seq![], value) }),
+                observations: reads },
+        InvocationSourceByteDestinationV36::Memory(access) => {
+            match invocation_source_byte_address_v36(evaluated.source, access, root, instance) {
+                None => {
+                    let after = invocation_source_byte_refused_v36(evaluated.source);
+                    InvocationSourceIntegerCastResultV43 { source: after, observations: reads
+                        + invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                            evaluated.source, after) }
+                },
+                Some(pointer) => {
+                    let after = if cast.output_bits == access.width * 8 {
+                        InvocationSourceByteStateV36 { machine: invocation_source_store_v36(
+                            evaluated.source.machine, pointer, access.width, access.alignment,
+                            value, little_endian), ..evaluated.source }
+                    } else { invocation_source_byte_refused_v36(evaluated.source) };
+                    let writes = if !after.machine.valid { seq![MemoryOperationEffectV30::Refused] }
+                        else if invocation_private_allocation_v36(pointer.allocation) { seq![] }
+                        else { seq![MemoryOperationEffectV30::Write {
+                            address: MemoryValueV30::Pointer(pointer), width: access.width,
+                            alignment: access.alignment, value }] };
+                    InvocationSourceIntegerCastResultV43 { source: after, observations: reads
+                        + invocation_source_observe_effects_v39(writes, evaluated.source, after) }
+                },
+            }
+        },
+    } }
+}

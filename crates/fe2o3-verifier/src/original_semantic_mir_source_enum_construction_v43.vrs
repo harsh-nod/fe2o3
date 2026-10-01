@@ -1,0 +1,175 @@
+struct InvocationSourceEnumPayloadV43 {
+    value: InvocationSourceByteValueV36,
+    bits: int,
+    offset: int,
+    width: int,
+    alignment: int,
+}
+
+struct InvocationSourceEnumConstructV43 {
+    access: InvocationSourceByteAccessV36,
+    source_type: int,
+    variant: int,
+    tag_alignment: int,
+    fields: Seq<InvocationSourceEnumPayloadV43>,
+}
+
+struct InvocationSourceEnumOperandsV43 {
+    source: InvocationSourceByteStateV36,
+    values: Seq<MemoryValueV30>,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+}
+
+struct InvocationSourceEnumResultV43 {
+    source: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+}
+
+open spec fn invocation_source_enum_operands_v43(
+    source: InvocationSourceByteStateV36, fields: Seq<InvocationSourceEnumPayloadV43>,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceEnumOperandsV43
+    decreases fields.len(),
+{
+    if fields.len() == 0 {
+        InvocationSourceEnumOperandsV43 { source, values: seq![], observations: seq![] }
+    } else {
+        let field = fields[0];
+        let evaluated = invocation_source_byte_evaluate_v36(source, field.value, field.bits,
+            root, instance, little_endian);
+        let observed = invocation_source_observe_effects_v39(
+            invocation_source_read_effect_v36(source, field.value, field.bits,
+                root, instance, little_endian), source, evaluated.source);
+        let rest = invocation_source_enum_operands_v43(evaluated.source,
+            fields.drop_first(), root, instance, little_endian);
+        InvocationSourceEnumOperandsV43 { source: rest.source,
+            values: seq![evaluated.value] + rest.values,
+            observations: observed + rest.observations }
+    }
+}
+
+open spec fn invocation_source_enum_payloads_v43(
+    source: InvocationSourceByteStateV36, base: MemoryPointerV30, extent: int,
+    fields: Seq<InvocationSourceEnumPayloadV43>, values: Seq<MemoryValueV30>,
+    little_endian: bool,
+) -> InvocationSourceByteStateV36
+    decreases fields.len(),
+{
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || fields.len() != values.len()
+        || !invocation_private_allocation_v36(base.allocation) {
+        invocation_source_byte_refused_v36(source)
+    } else if fields.len() == 0 { source }
+    else {
+        let field = fields[0];
+        let pointer = MemoryPointerV30 { byte_offset: base.byte_offset + field.offset, ..base };
+        if field.offset < 0 || field.width < 0 || field.offset + field.width > extent
+            || !invocation_source_byte_value_typed_v36(values[0], field.bits)
+            || !(field.bits == 0 && field.width == 0
+                || field.bits == 1 && field.width == 1
+                || field.bits > 1 && field.bits == field.width * 8)
+            || !byte_range_aligned_v30(source.machine.memory, pointer, field.width, field.alignment) {
+            invocation_source_byte_refused_v36(source)
+        } else {
+            // Zero-sized fields still require current bounds/alignment, but do
+            // not manufacture a write or initialization of neighboring bytes.
+            let after = if field.width == 0 { source } else {
+                InvocationSourceByteStateV36 { machine: invocation_source_store_v36(
+                    source.machine, pointer, field.width, field.alignment, values[0], little_endian),
+                    ..source }
+            };
+            invocation_source_enum_payloads_v43(after, base, extent,
+                fields.drop_first(), values.drop_first(), little_endian)
+        }
+    }
+}
+
+open spec fn invocation_source_enum_tag_bits_v43(contract: MemoryTagContractV38, variant: int)
+    -> Option<Option<int>>
+{
+    if !byte_tag_contract_shape_v38(contract)
+        || variant < 0 || variant >= contract.inhabited.len() || !contract.inhabited[variant] {
+        None
+    } else { match contract.encoding {
+        MemoryTagEncodingV38::Direct { tags } => Some(Some(tags[variant])),
+        MemoryTagEncodingV38::Niche { untagged, first, last, start } => {
+            if variant == untagged { Some(None) }
+            else if first <= variant <= last {
+                Some(Some((start + variant - first) % memory_value_modulus_v30(contract.tag_width)))
+            } else { None }
+        },
+        // A non-null reference payload needs its own original validity and
+        // lifetime interpreter. Observing a pointer tag cannot supply that.
+        MemoryTagEncodingV38::PointerNullNiche { null, .. } =>
+            if variant == null { Some(Some(0int)) } else { None },
+        MemoryTagEncodingV38::Unsupported => None,
+    } }
+}
+
+open spec fn invocation_source_enum_refused_v43(
+    source: InvocationSourceByteStateV36, observations: Seq<InvocationSourceEffectObservationV39>,
+) -> InvocationSourceEnumResultV43 {
+    let after = invocation_source_byte_refused_v36(source);
+    InvocationSourceEnumResultV43 { source: after,
+        observations: observations + invocation_source_observe_effects_v39(
+            seq![MemoryOperationEffectV30::Refused], source, after) }
+}
+
+open spec fn invocation_source_enum_construct_v43(
+    source: InvocationSourceByteStateV36, event: InvocationSourceEnumConstructV43,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceEnumResultV43 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !matches!(event.access.base, InvocationSourceByteBaseV36::ObjectLocal(_))
+        || source.machine.memory.view_contracts != invocation_source_view_contracts_0_v39(little_endian)
+        || !source.machine.memory.view_contracts.rows.contains_key(event.source_type) {
+        invocation_source_enum_refused_v43(source, seq![])
+    } else {
+        let contract = source.machine.memory.view_contracts.rows[event.source_type];
+        match invocation_source_enum_tag_bits_v43(contract, event.variant) {
+            None => invocation_source_enum_refused_v43(source, seq![]),
+            Some(tag_bits) => {
+                // All original RHS operands, including Moves and external
+                // reads, are evaluated before any destination payload write.
+                let operands = invocation_source_enum_operands_v43(source, event.fields,
+                    root, instance, little_endian);
+                if !operands.source.machine.valid || contract.object_bytes != event.access.width {
+                    invocation_source_enum_refused_v43(operands.source, operands.observations)
+                } else { match invocation_source_byte_address_v36(operands.source, event.access, root, instance) {
+                    None => invocation_source_enum_refused_v43(operands.source, operands.observations),
+                    Some(pointer) => {
+                        if !invocation_private_allocation_v36(pointer.allocation)
+                            || !byte_range_aligned_v30(operands.source.machine.memory, pointer,
+                                event.access.width, event.access.alignment) {
+                            invocation_source_enum_refused_v43(operands.source, operands.observations)
+                        } else {
+                            let payload = invocation_source_enum_payloads_v43(operands.source, pointer,
+                                event.access.width, event.fields, operands.values, little_endian);
+                            let tagged = match tag_bits {
+                                None => payload,
+                                Some(bits) => InvocationSourceByteStateV36 {
+                                    machine: invocation_source_store_v36(payload.machine,
+                                        byte_tag_address_v39(pointer, contract), contract.tag_width,
+                                        event.tag_alignment, MemoryValueV30::Scalar(bits), little_endian),
+                                    ..payload },
+                            };
+                            let selected = if tagged.machine.valid {
+                                match byte_read_tag_v39(tagged.machine.memory, pointer,
+                                    event.source_type, event.tag_alignment) {
+                                    Some(tag) => byte_tag_selected_variant_v39(contract, tag),
+                                    None => None,
+                                }
+                            } else { None };
+                            if !tagged.machine.valid || selected != Some(event.variant) {
+                                invocation_source_enum_refused_v43(tagged, operands.observations)
+                            } else {
+                                InvocationSourceEnumResultV43 { source: tagged,
+                                    observations: operands.observations }
+                            }
+                        }
+                    },
+                } }
+            },
+        }
+    }
+}
