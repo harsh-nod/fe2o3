@@ -102,7 +102,7 @@ fn descriptor_length_leaf_headers_v40() -> Result<usize, ArgumentResourceV1> {
         Option<ProductionSourceRootSliceAbiV36<'a, 'a>>,
         &'a ProductionSourceRootSliceAbisV36<'a, 'a>,
         std::slice::Iter<'a, SourceRvalueRowV30>,
-        std::slice::Iter<'a, SemanticLocalDeclV1>,
+        std::slice::Iter<'a, fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1>,
         std::iter::Enumerate<std::slice::Iter<'a, DescriptorLengthRowV40>>,
     );
     argument_sum_v1(&[

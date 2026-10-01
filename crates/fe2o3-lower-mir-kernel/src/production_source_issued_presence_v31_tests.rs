@@ -251,6 +251,7 @@ fn issued_discriminant_rejects_copied_source_place_wrong_type_and_output_row() {
                                 wrapping: leaves.wrapping,
                                 boundaries: leaves.boundaries,
                                 presences: &forged,
+                                lengths: leaves.lengths,
                                 slot: leaves.slot,
                                 ledger: leaves.ledger,
                                 floor: leaves.floor,

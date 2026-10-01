@@ -690,6 +690,7 @@ fn source_scalar_boundaries_reject_missing_optimized_parameter_and_control_trans
                                     wrapping: leaves.wrapping,
                                     boundaries: &boundaries,
                                     presences: leaves.presences,
+                                    lengths: leaves.lengths,
                                     slot: leaves.slot,
                                     ledger: leaves.ledger,
                                     floor: leaves.floor,
