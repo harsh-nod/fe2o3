@@ -40,7 +40,9 @@ fn guard(plan: &ByteOperationV30<'_, '_>, actual: &OperationKind) -> Result<Guar
                 _ => return Err(mismatch()),
             },
         },
-        ByteOperationV30::Scalar(_) | ByteOperationV30::Index(_) => Guard::None,
+        ByteOperationV30::Scalar(_)
+        | ByteOperationV30::Index(_)
+        | ByteOperationV30::IntegralCast(_) => Guard::None,
     };
     Ok(guard)
 }

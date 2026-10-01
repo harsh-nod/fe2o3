@@ -37,6 +37,10 @@ pub(crate) use interpretation::ByteInterpretationContextV39;
 mod views;
 use views::StorageViewByteOperationV39;
 
+#[path = "mixed_optimizer_integral_byte_casts_v40.rs"]
+mod integral;
+use integral::IntegralByteCastV40;
+
 /// The original canonical Alloca occurrence and its physical root's original
 /// MIR declaration. A declaring callee is deliberately not the physical owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +64,7 @@ enum ByteOperationV30<'inventory, 'owner> {
     Alloca(AllocaByteOperationV30),
     Storage(StorageByteOperationV37),
     View(StorageViewByteOperationV39),
+    IntegralCast(IntegralByteCastV40),
     Index(IndexByteOperationV37),
     Scalar(CanonicalByteScalarV30<'inventory, 'owner>),
 }
@@ -216,6 +221,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 PointerByteOperationV30::derive(inventory, operation, width, out)?
             {
                 ByteOperationV30::Pointer(pointer)
+            } else if matches!(actual.operation.kind, OperationKind::Cast { .. }) {
+                ByteOperationV30::IntegralCast(IntegralByteCastV40::derive(
+                    inventory, operation, width, out,
+                )?)
             } else if let Some(index) =
                 IndexByteOperationV37::derive(inventory, operation, width, out)?
             {
@@ -510,6 +519,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 index.emit_step(before, after, out)?;
                 PointerByteEffectV30::None
             }
+            ByteOperationV30::IntegralCast(cast) => {
+                cast.emit_step(before, after, out)?;
+                PointerByteEffectV30::None
+            }
             ByteOperationV30::Pointer(pointer) => {
                 pointer.emit_step(
                     before,
@@ -616,6 +629,7 @@ fn headers<R>() -> usize {
         + physical::headers()
         + interpretation::headers()
         + views::headers()
+        + integral::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()
         + size_of::<ByteOperationV30<'_, '_>>()
