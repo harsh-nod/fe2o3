@@ -340,6 +340,8 @@ fn run_with_invalid_site(
                     scope.with_inventory_v1(|inventory, budget| {
                         source.with_ranked_correspondence_v18(inventory, budget, |relation, budget| {
                             source_scalar_normalization_scratch_v18(source.cleanup, budget, 0, |budget| {
+                              with_checked_source_memory_v29(relation, 0, None, budget, |memory, budget| -> SourceOwnedResultV18<()> {
+                                memory.check(budget)?;
                                 let definitions = relation.checked_assignment_definitions_v44(
                                     0, 0, execution_site_v29(SemanticBlockIdV1::from_index(2), Some(0)), budget,
                                 )?;
@@ -380,6 +382,7 @@ fn run_with_invalid_site(
                                     return Err(error);
                                 }
                                 Ok(())
+                              })
                             })
                         })
                     })

@@ -124,6 +124,31 @@ fn retained_program_v44(
         |types, functions| retained_transform_v44(types, functions, operation),
         |plan, out| {
             super::super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let original = plan.source(out)?.source_semantic(out.budget)?;
+                let pair = original.functions().last().unwrap().locals()[4].ty();
+                assert_eq!(
+                    slots.aggregate_leaf_count(pair, out)?,
+                    None,
+                    "retained objects must not require promoted component state"
+                );
+                let contract = slots.checked_object_type_v47(pair, out)?.unwrap();
+                assert_eq!(
+                    (
+                        contract.scalar,
+                        contract.bytes,
+                        contract.alignment,
+                        contract.offsets
+                    ),
+                    (
+                        ScalarV30::Integer {
+                            width: 32,
+                            signed: false
+                        },
+                        8,
+                        4,
+                        [0, 4]
+                    )
+                );
                 for root in 0..2 {
                     for instance in 1..=2 {
                         assert!(slots.has_original_object(root, instance, 4, out)?);
@@ -132,6 +157,7 @@ fn retained_program_v44(
                 let mut program = super::super::super::source_function::SourceByteProgram::derive(
                     plan, slots, out,
                 )?;
+                slots.emit(out)?;
                 program.emit(out)?;
                 assert_eq!(out.text.matches(
                     "InvocationSourceByteEventV36::CheckedObject(InvocationSourceCheckedObjectV44"
@@ -143,11 +169,58 @@ fn retained_program_v44(
                     4
                 );
                 assert!(!out.text.contains("InvocationSourceByteEventV36::Checked {"));
+                assert!(out.text.contains(&format!(
+                    "ty == {}int && bits == 32int && signed == false && bytes == 8int && alignment == 4int && value_offset == 0int && overflow_offset == 4int",
+                    pair.index())));
                 assert!(!out.text.contains("assume("));
                 Ok(())
             })
         },
     )
+}
+
+#[test]
+fn original_checked_object_contract_rejects_wrong_fields_extents_and_overlaps() {
+    run(SemanticCheckedBinaryOpV1::Add, false, LIMIT, LIMIT, |_, plan, out| {
+        let source = plan.source(out)?.source_semantic(out.budget)?;
+        let pair = source.functions().last().unwrap().locals()[4].ty();
+        let original = &source.types()[pair.index() as usize];
+        let Shape::Tuple(fields) = original.shape() else { panic!("genuine checked pair") };
+        let check = |types: &[Type], limit| {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, LIMIT);
+            budget.reserve_storage(crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT
+                + super::super::checked_types::headers()).unwrap();
+            let mut writer = Writer::new(&mut budget).unwrap();
+            let before = (writer.budget.work(), writer.budget.storage(), writer.budget.peak_storage());
+            let result = super::super::checked_types::classify(types, pair, &mut writer);
+            let observed = (writer.budget.work() - before.0, writer.budget.storage(), writer.budget.peak_storage());
+            assert_eq!((observed.1, observed.2), (before.1, before.2));
+            (result, observed.0)
+        };
+        let exact = check(source.types(), 12);
+        assert!(exact.0.unwrap().is_some());
+        assert_eq!(exact.1, 12);
+        assert!(matches!(check(source.types(), 11).0,
+            Err(Error::Resource(Resource::Work(error))) if error.actual() == 12 && error.limit() == 11));
+        for (bytes, offsets, shape) in [
+            (8, vec![0, 0], original.shape().clone()),
+            (4, vec![0, 4], original.shape().clone()),
+            (8, vec![0, 4], Shape::Tuple(SemanticAggregateTypeV1::new(vec![fields.fields()[0]; 2]).unwrap())),
+            (8, vec![0, 4], Shape::Aggregate(fields.clone())),
+        ] {
+            let mut inert = source.types().to_vec();
+            inert[pair.index() as usize] = Type::new(original.identity(), original.layout_identity(),
+                SemanticTypeLayoutV1::aggregate(Some(bytes), 4,
+                    SemanticAggregateLayoutV1::new(offsets, vec![]).unwrap()).unwrap(), shape);
+            assert_eq!(check(&inert, 12).0?, None);
+        }
+        let runtime = include_str!("original_semantic_mir_source_checked_objects_v44.vrs");
+        assert!(runtime.contains("invocation_source_checked_object_type_v47(event.source_type,"));
+        assert!(runtime.contains("source.objects[local].slot.semantic_type == event.source_type"));
+        assert!(!runtime.contains("invocation_source_aggregate_leaf_"));
+        Ok(())
+    }).0.unwrap();
 }
 
 #[test]

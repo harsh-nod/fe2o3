@@ -35,6 +35,9 @@ pub(super) use source_objects::ObjectActivation;
 mod source_aggregates;
 pub(super) use source_aggregates::SourceAggregateLeafV42;
 
+#[path = "original_semantic_mir_source_checked_types_v47.rs"]
+mod checked_types;
+
 pub(super) struct SourceSlots<'a, 'source> {
     relation: &'a Correspondence<'source>,
     operations: Vec<Operation>,
@@ -594,7 +597,8 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         )
         .map_err(|_| out.error())?;
         self.objects.emit(out)?;
-        self.aggregates.emit(out)
+        self.aggregates.emit(out)?;
+        self.emit_checked_object_types_v47(out)
     }
 }
 
@@ -668,6 +672,7 @@ pub(super) fn headers() -> usize {
         + 32 * size_of::<usize>()
         + 24 * size_of::<&()>()
         + 4 * size_of::<std::result::Result<usize, SourceError>>()
+        + checked_types::headers()
 }
 
 #[cfg(test)]
@@ -1157,6 +1162,7 @@ mod tests {
                 + 32 * size_of::<usize>()
                 + 24 * size_of::<&()>()
                 + 4 * size_of::<std::result::Result<usize, SourceError>>()
+                + checked_types::headers()
         );
     }
 }

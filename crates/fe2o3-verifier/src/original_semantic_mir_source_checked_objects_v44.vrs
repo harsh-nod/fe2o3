@@ -59,11 +59,15 @@ open spec fn invocation_source_checked_object_v44(
         || event.access.offset != 0
         || !(event.bits == 8 || event.bits == 16 || event.bits == 32 || event.bits == 64)
         || !(0 <= event.operation < 3)
-        || invocation_source_aggregate_leaf_count_v42(event.source_type) != 2
-        || invocation_source_aggregate_leaf_path_v42(event.source_type, 0) != seq![0int]
-        || invocation_source_aggregate_leaf_path_v42(event.source_type, 1) != seq![1int]
-        || invocation_source_aggregate_leaf_bits_v42(event.source_type, 0) != event.bits
-        || invocation_source_aggregate_leaf_bits_v42(event.source_type, 1) != 1
+        || !invocation_source_checked_object_type_v47(event.source_type,
+            event.bits, event.signed, event.access.width, event.access.alignment,
+            event.value_offset, event.overflow_offset)
+        || !(match event.access.base {
+            InvocationSourceByteBaseV36::ObjectLocal(local) =>
+                source.objects.contains_key(local)
+                    && source.objects[local].slot.semantic_type == event.source_type,
+            _ => false,
+        })
         || event.value_offset < 0 || event.value_offset + event.bits / 8 > event.access.width
         || event.overflow_offset < 0 || event.overflow_offset + 1 > event.access.width
         || !(event.value_offset + event.bits / 8 <= event.overflow_offset

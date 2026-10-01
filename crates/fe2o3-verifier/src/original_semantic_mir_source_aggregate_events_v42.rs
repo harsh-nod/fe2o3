@@ -172,20 +172,6 @@ impl Checked {
         {
             return Err(mismatch());
         }
-        if context.slots.aggregate_leaf_count(ty, out)? != Some(2) {
-            return Err(unsupported());
-        }
-        for (ordinal, expected_ty, expected_scalar) in
-            [(0, *integer, scalar), (1, *boolean, ScalarV30::Bool)]
-        {
-            let leaf = context.slots.aggregate_leaf(ty, ordinal, out)?;
-            if leaf.path(out)? != [ordinal as u32]
-                || leaf.source_type(out)? != expected_ty
-                || leaf.scalar(out)? != expected_scalar
-            {
-                return Err(mismatch());
-            }
-        }
         let destination = if context.slots.has_original_object(
             context.root,
             context.instance,
@@ -196,28 +182,35 @@ impl Checked {
             if !matches!(access.address, Address::Object { offset: 0, .. }) {
                 return Err(unsupported());
             }
-            let offsets = context.types[ty.index() as usize]
-                .layout()
-                .fields()
-                .source_order_offsets_bytes()
+            let original = context
+                .slots
+                .checked_object_type_v47(ty, out)?
                 .ok_or_else(unsupported)?;
-            let [value, overflow] = offsets else {
-                return Err(mismatch());
-            };
-            let width = match scalar {
-                ScalarV30::Integer { width, .. } => u64::from(width / 8),
-                _ => return Err(mismatch()),
-            };
-            if value.checked_add(width).ok_or(Resource::Arithmetic)? > access.bytes
-                || overflow.checked_add(1).ok_or(Resource::Arithmetic)? > access.bytes
+            if original.scalar != scalar
+                || original.bytes != access.bytes
+                || original.alignment != access.alignment
             {
                 return Err(mismatch());
             }
             CheckedDestination::Object {
                 access,
-                offsets: [*value, *overflow],
+                offsets: original.offsets,
             }
         } else {
+            if context.slots.aggregate_leaf_count(ty, out)? != Some(2) {
+                return Err(unsupported());
+            }
+            for (ordinal, expected_ty, expected_scalar) in
+                [(0, *integer, scalar), (1, *boolean, ScalarV30::Bool)]
+            {
+                let leaf = context.slots.aggregate_leaf(ty, ordinal, out)?;
+                if leaf.path(out)? != [ordinal as u32]
+                    || leaf.source_type(out)? != expected_ty
+                    || leaf.scalar(out)? != expected_scalar
+                {
+                    return Err(mismatch());
+                }
+            }
             let Destination::Local(destination) =
                 context.destination(assignment.destination(), out)?
             else {
