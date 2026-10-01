@@ -1077,11 +1077,11 @@ mod gfx942_bf16_tile_values_qualification_v1_tests;
 mod gfx942_tiled_region_qualification_v1_tests;
 
 #[cfg(all(test, target_os = "linux"))]
+mod gfx942_bf16_generated_source_qualification_v1_tests;
+#[cfg(all(test, target_os = "linux"))]
 mod gfx942_bf16_publication_sidecar_v1_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod gfx942_bf16_publication_tap_v1_tests;
-#[cfg(all(test, target_os = "linux"))]
-mod gfx942_bf16_generated_source_qualification_v1_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "production_rustc_driver_v1/source_bindings_checkpoint_v1_tests.rs"]
