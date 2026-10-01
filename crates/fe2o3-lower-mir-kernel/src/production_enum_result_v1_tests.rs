@@ -188,7 +188,7 @@ mod scalar_enum_result_tests {
         )
         .unwrap();
         SemanticFunctionDeclV1::new(
-            SemanticFunctionIdentityV1::from_sha256([107; 32]),
+            SemanticFunctionIdentityV1::from_sha256([165; 32]),
             SemanticFunctionRoleV1::InternalHelper,
             SemanticItemDefinitionIdentityV1::from_sha256([108; 32]),
             SemanticMonomorphizationIdentityV1::from_sha256([109; 32]),
