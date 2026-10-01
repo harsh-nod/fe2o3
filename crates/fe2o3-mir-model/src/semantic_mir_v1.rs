@@ -22551,3 +22551,6 @@ mod private_tests {
         assert!(inhabited_enum_variant(variants, 1).is_none());
     }
 }
+
+#[path = "semantic_operand_retained_storage_v1.rs"]
+mod retained_operand_storage_v1;

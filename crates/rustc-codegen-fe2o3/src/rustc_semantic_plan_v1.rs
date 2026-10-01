@@ -4290,3 +4290,7 @@ mod tests {
         include!("rustc_semantic_plan_v1/source_closure_work_tests.rs");
     }
 }
+
+#[cfg(test)]
+#[path = "rustc_semantic_plan_debug_retained_storage_v1_tests.rs"]
+mod debug_retained_storage_v1_tests;

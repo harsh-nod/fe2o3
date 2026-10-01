@@ -7,6 +7,9 @@ use fe2o3_kernel_ir::{
 use std::fmt::Write as _;
 use std::ops::Range;
 
+#[path = "production_ordered_composition_publish_repeat_v1.rs"]
+mod repeat;
+
 pub(super) struct Coordinates {
     pub(super) insertion: usize,
     pub(super) selected: Range<usize>,
@@ -157,11 +160,11 @@ pub(super) fn render(name: &str, edit: OrderedCompositionTypedEditV1) -> Result<
 /// Refuse compile-time repeat/selection captures, comments and alternate token
 /// spellings in this first publisher. Compare the original typed program, not an
 /// optional requested edit. Whitespace alone may vary; HIR remains the authority.
-pub(super) fn require_flat_source(
+fn flat_source_matches(
     original: &str,
     coordinates: &Coordinates,
     original_program: OrderedCompositionTypedEditV1,
-) -> Result<()> {
+) -> Result<bool> {
     let mut names = [""; 3];
     for (index, range) in coordinates.arguments.iter().enumerate() {
         names[index] = original
@@ -172,16 +175,41 @@ pub(super) fn require_flat_source(
     let selected = original
         .get(coordinates.selected.clone())
         .ok_or_else(|| Error::refused("publisher original macro range differs"))?;
-    if !selected
+    Ok(selected
         .bytes()
         .filter(|b| !b.is_ascii_whitespace())
-        .eq(expected.bytes().filter(|b| !b.is_ascii_whitespace()))
-    {
-        return Err(Error::refused(
+        .eq(expected.bytes().filter(|b| !b.is_ascii_whitespace())))
+}
+
+#[cfg(test)]
+pub(super) fn require_flat_source(
+    original: &str,
+    coordinates: &Coordinates,
+    original_program: OrderedCompositionTypedEditV1,
+) -> Result<()> {
+    if flat_source_matches(original, coordinates, original_program)? {
+        Ok(())
+    } else {
+        Err(Error::refused(
             "publisher supports only the exact flat literal program spelling",
-        ));
+        ))
     }
-    Ok(())
+}
+
+/// Preserve the old flat path and its accounting. Only an actual spelling
+/// mismatch enters the separately prepaid closed literal-repeat recognizer.
+/// A successful repeat is emitted as the existing flat helper, not a recovered
+/// generator template. All live-owner/HIR/source/IO checks remain outside here.
+pub(super) fn require_supported_source(
+    original: &str,
+    coordinates: &Coordinates,
+    original_program: OrderedCompositionTypedEditV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<()> {
+    if flat_source_matches(original, coordinates, original_program)? {
+        return Ok(());
+    }
+    repeat::require(original, coordinates, original_program, budget)
 }
 
 fn identifier(value: &str) -> bool {

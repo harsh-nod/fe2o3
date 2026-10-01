@@ -150,7 +150,7 @@ pub(crate) fn publish_ordered_composition_source_v1(
         .map_err(Error::refused)?;
     let floor = budget.storage();
     let mut attempted = false;
-    let result = budget.with_prepaid_scope(floor, 128, PUBLISH_WORK, PUBLISH_SCRATCH, |_budget| {
+    let result = budget.with_prepaid_scope(floor, 128, PUBLISH_WORK, PUBLISH_SCRATCH, |budget| {
         text::helper_name(request.helper_name)?;
         for path in [request.original_path, request.candidate_path] {
             fe2o3_source_isa_observation::source_edit_v1::validate_source_edit_path_v1(path)
@@ -193,7 +193,7 @@ pub(crate) fn publish_ordered_composition_source_v1(
             program: *region.program().program(),
             registers: region.program().registers(),
         };
-        text::require_flat_source(original, &coordinates, original_program)?;
+        text::require_supported_source(original, &coordinates, original_program, budget)?;
         let chosen = request.edit.unwrap_or(original_program);
         let helper = text::render(request.helper_name, chosen)?;
         let candidate = text::splice(original, &coordinates, request.helper_name, &helper)?;

@@ -309,3 +309,74 @@ outer resource census. A previous receipt cannot qualify changed inputs.
 
 This finite source profile does not complete the general assembly-authoring
 milestone, establish native correctness or supply protected proof authority.
+
+## Source promotion of literal repeats
+
+The separate publisher extension in
+`a209ae259299069479570cff7726cec7ff0b448e` accepts a direct qualified
+root macro with three direct u32 formal inputs, one initialization block and
+one canonical decimal `repeat(N)`, where `1 <= N <= 15` and expansion
+contains at most sixteen instructions. It compares the complete ordered
+descriptor sequence and register roles with the live source owner before
+materializing a flat typed-Rust helper.
+
+This source-edit profile is narrower than the normal macro/export profile
+above. Comments inside the selected macro, aliases, captures, nested or
+conditional generation and const-expression counts refuse. Other source bytes
+are preserved. No repeat/generic generator is recovered from the expanded
+program. The original phase ledger prepays the repeat parser's bounded work
+and scratch; failures do not reset that ledger.
+
+The checked-in inputs are
+[repeat-1.rs](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/ordered_repeat_inputs_v1/repeat-1.rs),
+[repeat-2.rs](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/ordered_repeat_inputs_v1/repeat-2.rs)
+and
+[repeat-15.rs](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/ordered_repeat_inputs_v1/repeat-15.rs).
+They use scratch8/out9/input10,input11,input12, unlike the scratch32/out33
+normal-source fixtures above. The copy oracle is wrapping `a + N*b`;
+the intentional one-instruction edit returns `c`. Copy means an omitted edit,
+not a separately exercised explicit preserving-edit request.
+
+| Qualification | Observed result | Retained receipt SHA-256 |
+| --- | --- | --- |
+| Repeat publication and fresh admission | 52 stages; 13 genuine frontends; 6 publications; 6 fresh candidates; 384 CPU cases; 288 wrong-expectation refusals; 1 source-spelling refusal | `cb22b59adadf3d3bef9da9abc4016690e891c090c997485eafb9212803356fca` |
+| Original publisher compatibility | 26 stages; 9 genuine frontends; 3 publications; 2 fresh candidates; 128 CPU cases; 4 HIR refusals and a post-publication inspection refusal | `0985ced7c61928371aebb0c538d015980a226f4b39749fd0f0069cdb351032ef` |
+
+The Rust adapters checked complete backing buffers, initialization, tails and
+canaries. Retained child frames include aggregate result digests rather than
+all raw output buffers. Each candidate received an independent fresh source
+owner; no previous owner was resumed. The compatibility campaign also checked
+two wrong-hash and two duplicate create-new refusals. Its post-publication
+inspection failure leaves the candidate present and does not imply rollback.
+
+Both campaigns used source census
+`e5d1064c66c4b79f257c949235482a5782e6ff6c3a66f55fdea479b8e2296c3b`
+and the archived executable SHA-256
+`21a1a3c1c8cc91fa26429cbc0685b0a5a11f2b7dffd2908fc0e433759c541a77`.
+Their successful reports have SHA-256
+`e84c0ae226b0aa6c2c381a4a329161125ba5567489a8d8149c2f06a3db73b0f1`
+and `4fcda3e7fcdbae03868092014c831d5a2c02bf374c914ac6ebf28f463f4edd1c`.
+
+The first repeat attempt stopped during Cargo metadata parsing because its
+828,436-byte metadata exceeded the ordinary JSON token limit. No dependency
+build, frontend or publication ran in that failed attempt. The retained failed
+receipt is `8b4daaa39a477842119a356cf92c19551fcf5358600c274d16c34a04329d7d53`;
+it has no successful postflight source/input census. Only Cargo metadata now
+uses an explicit 1,048,576-token parser budget. Ordinary records keep 65,536
+tokens, and byte/depth/duplicate-key/number checks remain in force. All 23
+parent controls passed before the new campaigns ran in separate fresh roots.
+
+After disjoint upstream integration, a separate debug regression passed 7,444
+Rust executions and 17 dependency-policy tests. The final integration gate on
+source census `75204e74566685f4059bec730a76f4157f104cbd112a0d3257a3f78ed5bc5e53`
+passed all 50 new optimized Rust controls, 23 parent controls and 12
+dependency-closure tests. Those checks do not retroactively move the genuine
+campaigns to the final source snapshot.
+
+These publisher results are private actual-frontend callback evidence. They
+do not rerun the normal CLI qualification above, qualify repeated candidates
+through the public library/CLI or normal LLVM/native path, establish a physical
+helper ABI, or authorize GPU launch. The tutorial site's
+[composition and promotion lab](https://github.com/harsh-nod/fe2o3-kernels/blob/main/docs/ordered-composition-promotion-v1.md)
+explains the source workflow and keeps those boundaries separate. M2/M5/M6/U4
+and the broader milestone exits remain open.
