@@ -464,6 +464,7 @@ fn rvalue_archive_sequential_captures_share_one_exact_retained_frame() {
                         id: ValueId(index as u32),
                         ty: Type::Scalar(ScalarType::U32),
                     },
+                    None,
                     &mut budget,
                 );
                 if short == 1 && index + 1 == count {

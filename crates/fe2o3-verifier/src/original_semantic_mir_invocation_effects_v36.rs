@@ -68,6 +68,13 @@ open spec fn invocation_source_statement_effects_v36(
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
                 } else { seq![MemoryOperationEffectV30::Refused] }
             }
+            Some(InvocationSourceByteEventV36::CheckedObject(event)) => {
+                let result = invocation_source_checked_object_v44(observation.before, event,
+                    observation.root, observation.instance, little_endian);
+                if result.source == observation.after {
+                    Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
+                } else { seq![MemoryOperationEffectV30::Refused] }
+            }
             Some(InvocationSourceByteEventV36::EnumConstruct(constructed)) => {
                 let result = invocation_source_enum_construct_v43(observation.before, constructed,
                     observation.root, observation.instance, little_endian);

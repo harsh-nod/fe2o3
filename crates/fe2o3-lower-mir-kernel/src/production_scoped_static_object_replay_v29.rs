@@ -126,6 +126,24 @@ fn check_immutable_static_object_value_v29(
     else {
         return Ok(());
     };
+    if let ScopedObjectSourceV29::RvalueComponent {
+        site,
+        result,
+        destination: local,
+    } = destination.source
+    {
+        return check_immutable_checked_object_value_v44(
+            correspondence,
+            root,
+            object,
+            site,
+            result,
+            local,
+            destination,
+            origin,
+            budget,
+        );
+    }
     let ScopedObjectSourceV29::AggregateComponent {
         site,
         operand,
@@ -252,4 +270,81 @@ fn check_immutable_static_object_value_v29(
             .source
             .missing("aggregate field changed source value representation"),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_immutable_checked_object_value_v44(
+    correspondence: &ProductionSourceCorrespondenceV18<'_>,
+    root: usize,
+    object: &SourcePhysicalObjectV18<'_>,
+    site: ExecutionSiteV29,
+    result: u32,
+    local: SemanticLocalIdV1,
+    destination: ScopedObjectEndpointV29,
+    origin: ScopedObjectValueOriginV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<()> {
+    budget.charge_work(12)?;
+    let ScopedObjectValueOriginV29::Original(ScopedMemoryStoreSourceV29::AssignmentComponent {
+        site: actual_site,
+        component,
+        ty,
+    }) = origin
+    else {
+        return correspondence
+            .source
+            .missing("checked field lost computed result origin");
+    };
+    let ScopedObjectOperationV29::WriteValue { value, .. } = object.actual.operation else {
+        return correspondence
+            .source
+            .missing("checked field changed write operation");
+    };
+    let semantic = correspondence.source.source_semantic(budget)?;
+    let (function, _) = correspondence
+        .source
+        .instance(root, object.instance, budget)?;
+    let function = semantic.functions().get(function.index() as usize).ok_or(
+        ProductionSourceOwnedViewErrorV18::Binding("checked field original function"),
+    )?;
+    let Some(SemanticStatementKindV1::Assign(assignment)) =
+        scoped_source_statement_v29(function, site)
+    else {
+        return correspondence
+            .source
+            .missing("checked field original assignment absent");
+    };
+    let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
+        return correspondence
+            .source
+            .missing("checked field original producer differs");
+    };
+    let fields = source_object_checked_types_v44(
+        semantic.types(),
+        assignment.value().result_type(),
+        checked,
+        budget,
+    )
+    .map_err(source_emission_error_v18)?;
+    if result > 1
+        || component != result
+        || actual_site != site
+        || fields.get(result as usize).copied() != Some(ty)
+        || destination.projected_type != ty
+        || destination.root_type != assignment.value().result_type()
+        || assignment.destination().local() != local
+        || !assignment.destination().projections().is_empty()
+    {
+        return correspondence
+            .source
+            .missing("checked field original result identity differs");
+    }
+    let pair =
+        correspondence.checked_assignment_definitions_v44(root, object.instance, site, budget)?;
+    if correspondence.inventory.definitions()[pair[result as usize]].value != Some(value) {
+        return correspondence
+            .source
+            .missing("checked field changed its exact archived result");
+    }
+    Ok(())
 }

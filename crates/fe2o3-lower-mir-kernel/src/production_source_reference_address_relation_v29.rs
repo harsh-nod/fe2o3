@@ -2807,6 +2807,7 @@ fn check_source_address_payloads_v29(
                     ScopedMemoryPayloadV29::Store {
                         source:
                             ScopedMemoryStoreSourceV29::Assignment { .. }
+                            | ScopedMemoryStoreSourceV29::AssignmentComponent { .. }
                             | ScopedMemoryStoreSourceV29::CallResult { .. }
                             | ScopedMemoryStoreSourceV29::EntryArgument { .. },
                         ..

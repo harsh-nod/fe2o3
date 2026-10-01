@@ -1,9 +1,11 @@
 // Generated field views are not original Rust projections. They retain the
 // aggregate assignment and its actual operand coordinates as inert recipes.
 include!("production_source_object_enum_construction_v43.rs");
+include!("production_source_object_checked_construction_v44.rs");
 #[derive(Clone, Copy)]
 struct SourceObjectAggregateFieldV29 {
     operand: u32,
+    computed: bool,
     projection: ScopedObjectViewProjectionV29,
     ty: SemanticTypeIdV1,
     schema: fe2o3_kernel_ir::StorageLayoutIdV1,
@@ -77,9 +79,6 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             let Some(SemanticStatementKindV1::Assign(assignment)) = scoped_source_statement_v29(this.function, site) else {
                 return Err(scoped_object_allocation_error_v29());
             };
-            let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
-                return Err(scoped_object_allocation_error_v29());
-            };
             if !std::ptr::eq(assignment.destination(), place) || !place.projections().is_empty()
                 || assignment.value().result_type() != place.ty()
                 || destination.root_type != place.ty() || destination.projected_type != place.ty()
@@ -92,6 +91,13 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     if instance == cursor.instance && local == place.local())
                 || volatility != SemanticVolatilityV1::NonVolatile
             { return Err(scoped_object_allocation_error_v29()); }
+            if matches!(assignment.value().kind(), SemanticRvalueKindV1::CheckedBinary(_)) {
+                return this.prepare_source_object_checked_fields_v44(
+                    site, assignment, destination, fields, budget);
+            }
+            let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+                return Err(scoped_object_allocation_error_v29());
+            };
             budget.source_reference_charge_v29(plan, 6)?;
             let array_element = match (this.types.get(place.ty().index() as usize).map(SemanticTypeDeclV1::shape), aggregate.kind()) {
                 (Some(SemanticTypeShapeV1::Array { element, length }), SemanticAggregateKindV1::Array)
@@ -177,7 +183,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     }
                 };
                 prepared.push(SourceObjectAggregateFieldV29 {
-                    operand: ordinal, projection: selected_projection,
+                    operand: ordinal, computed: false, projection: selected_projection,
                     ty, schema, value: *value,
                     source: ScopedMemoryStoreSourceV29::Operand { site, role, ty, source },
                 });
@@ -209,11 +215,19 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                     )?;
                 Ok((
                     ScopedObjectEndpointV29 {
-                        source: ScopedObjectSourceV29::AggregateComponent {
-                            site: execution_site_v29(block, statement),
-                            operand: field.operand,
-                            destination: place.local(),
-                            variant: None,
+                        source: if field.computed {
+                            ScopedObjectSourceV29::RvalueComponent {
+                                site: execution_site_v29(block, statement),
+                                result: field.operand,
+                                destination: place.local(),
+                            }
+                        } else {
+                            ScopedObjectSourceV29::AggregateComponent {
+                                site: execution_site_v29(block, statement),
+                                operand: field.operand,
+                                destination: place.local(),
+                                variant: None,
+                            }
                         },
                         projected_type: field.ty,
                         projected_schema: field.schema,

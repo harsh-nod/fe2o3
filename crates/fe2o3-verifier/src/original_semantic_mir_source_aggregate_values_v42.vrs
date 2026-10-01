@@ -214,18 +214,15 @@ open spec fn invocation_source_checked_v42(
                 if !lhs.source.machine.valid || !rhs.source.machine.valid {
                     invocation_source_byte_refused_v36(rhs.source)
                 } else {
-                    let modulus = memory_value_modulus_v30(bits / 8);
-                    let a = if signed { source_signed_v30(left, modulus) } else { left };
-                    let b = if signed { source_signed_v30(right, modulus) } else { right };
-                    let mathematical = if operation == 0 { a + b }
-                        else if operation == 1 { a - b } else { a * b };
-                    let overflow = if signed { mathematical < -(modulus / 2) || mathematical >= modulus / 2 }
-                        else { mathematical < 0 || mathematical >= modulus };
-                    let value = InvocationSourceAggregateV42 { source_type,
-                        leaves: Map::empty()
-                            .insert(seq![0int], MemoryValueV30::Scalar(((mathematical % modulus) + modulus) % modulus))
-                            .insert(seq![1int], MemoryValueV30::Scalar(if overflow { 1int } else { 0int })) };
-                    invocation_source_aggregate_install_v42(rhs.source, destination, value)
+                    match invocation_source_checked_pair_v44(MemoryValueV30::Scalar(left),
+                        MemoryValueV30::Scalar(right), operation, bits, signed) {
+                        Some((value, overflow)) => {
+                            let value = InvocationSourceAggregateV42 { source_type,
+                                leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow) };
+                            invocation_source_aggregate_install_v42(rhs.source, destination, value)
+                        },
+                        None => invocation_source_byte_refused_v36(rhs.source),
+                    }
                 }
             },
             _ => invocation_source_byte_refused_v36(rhs.source),

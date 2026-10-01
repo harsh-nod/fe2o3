@@ -14628,7 +14628,9 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                     );
                     let result = match result {
                         Ok(value) => {
-                            this.archive_rvalue_result_v30(block, statement, assignment, &value)?;
+                            this.archive_rvalue_result_v30(
+                                block, statement, assignment, &value, operations,
+                            )?;
                             this.with_scoped_store_payload_v29(payload, value, |this, value| {
                                 this.assign_place(
                                     block,

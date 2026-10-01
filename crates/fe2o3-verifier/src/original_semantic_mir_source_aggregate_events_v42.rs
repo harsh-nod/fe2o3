@@ -128,12 +128,18 @@ impl Transfer {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Checked {
-    destination: usize,
+    destination: CheckedDestination,
     source_type: TypeId,
     left: Value,
     right: Value,
     scalar: ScalarV30,
     operation: SemanticCheckedBinaryOpV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CheckedDestination {
+    Local(usize),
+    Object { access: Access, offsets: [u64; 2] },
 }
 
 impl Checked {
@@ -180,13 +186,50 @@ impl Checked {
                 return Err(mismatch());
             }
         }
-        let Destination::Local(destination) = context.destination(assignment.destination(), out)?
-        else {
-            return Err(unsupported());
+        let destination = if context.slots.has_original_object(
+            context.root,
+            context.instance,
+            assignment.destination().local().index(),
+            out,
+        )? {
+            let access = context.access(assignment.destination(), out)?;
+            if !matches!(access.address, Address::Object { offset: 0, .. }) {
+                return Err(unsupported());
+            }
+            let offsets = context.types[ty.index() as usize]
+                .layout()
+                .fields()
+                .source_order_offsets_bytes()
+                .ok_or_else(unsupported)?;
+            let [value, overflow] = offsets else {
+                return Err(mismatch());
+            };
+            let width = match scalar {
+                ScalarV30::Integer { width, .. } => u64::from(width / 8),
+                _ => return Err(mismatch()),
+            };
+            if value.checked_add(width).ok_or(Resource::Arithmetic)? > access.bytes
+                || overflow.checked_add(1).ok_or(Resource::Arithmetic)? > access.bytes
+            {
+                return Err(mismatch());
+            }
+            CheckedDestination::Object {
+                access,
+                offsets: [*value, *overflow],
+            }
+        } else {
+            let Destination::Local(destination) =
+                context.destination(assignment.destination(), out)?
+            else {
+                return Err(unsupported());
+            };
+            CheckedDestination::Local(destination)
         };
         let left = context.value(checked.left(), out)?;
         let right = context.value(checked.right(), out)?;
-        if matches!(left, Value::Read { .. }) || matches!(right, Value::Read { .. }) {
+        if matches!(destination, CheckedDestination::Local(_))
+            && (matches!(left, Value::Read { .. }) || matches!(right, Value::Read { .. }))
+        {
             return Err(Error::Statement(
                 "checked aggregate memory operands need ordered source read effects",
             ));
@@ -211,11 +254,30 @@ impl Checked {
             SemanticCheckedBinaryOpV1::Subtract => 1,
             SemanticCheckedBinaryOpV1::Multiply => 2,
         };
-        write!(out, "InvocationSourceByteEventV36::Checked {{ destination: {}int, source_type: {}int, operation: {operation}int, bits: {width}int, signed: {signed}, left: ", self.destination, self.source_type.index()).map_err(|_| out.error())?;
+        match self.destination {
+            CheckedDestination::Local(destination) => write!(out,
+                "InvocationSourceByteEventV36::Checked {{ destination: {destination}int, source_type: {}int, operation: {operation}int, bits: {width}int, signed: {signed}, left: ",
+                self.source_type.index()).map_err(|_| out.error())?,
+            CheckedDestination::Object { access, offsets } => {
+                write!(out, "InvocationSourceByteEventV36::CheckedObject(InvocationSourceCheckedObjectV44 {{ access: ").map_err(|_| out.error())?;
+                emit_access(access, out)?;
+                write!(out, ", source_type: {}int, value_offset: {}int, overflow_offset: {}int, operation: {operation}int, bits: {width}int, signed: {signed}, left: ",
+                    self.source_type.index(), offsets[0], offsets[1]).map_err(|_| out.error())?;
+            }
+        }
         emit_value(self.left, out)?;
         write!(out, ", right: ").map_err(|_| out.error())?;
         emit_value(self.right, out)?;
-        write!(out, " }}").map_err(|_| out.error())
+        write!(
+            out,
+            " }}{}",
+            if matches!(self.destination, CheckedDestination::Object { .. }) {
+                ")"
+            } else {
+                ""
+            }
+        )
+        .map_err(|_| out.error())
     }
 }
 
@@ -227,8 +289,15 @@ pub(super) fn headers() -> usize {
         + size_of::<Transfer>()
         + 2 * size_of::<Result<Option<Transfer>>>()
         + 2 * size_of::<Value>()
+        + size_of::<CheckedDestination>()
+        + size_of::<[u64; 2]>()
+        + size_of::<&[u64]>()
         + 4 * size_of::<TypeId>()
         + 2 * size_of::<super::super::slots::SourceAggregateLeafV42<'_, '_, '_>>()
         + 8 * size_of::<usize>()
         + 6 * size_of::<&()>()
 }
+
+#[cfg(test)]
+#[path = "original_semantic_mir_source_checked_object_emission_v44_tests.rs"]
+mod checked_object_emission_tests;

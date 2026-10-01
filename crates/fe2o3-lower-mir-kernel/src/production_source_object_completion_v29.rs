@@ -288,6 +288,14 @@ fn source_address_object_payload_v29(
         ) && endpoint.source_path.count == 0
             && endpoint.path.count == if variant.is_some() { 2 } else { 1 } => {}
         (
+            ScopedObjectIdentityV29::Local { .. },
+            ScopedObjectSourceV29::RvalueComponent { site, result, .. },
+        ) if matches!(role, ScopedMemoryPayloadV29::Store {
+            source: ScopedMemoryStoreSourceV29::AssignmentComponent { site: actual, component, .. }, ..
+        } if actual == site && component == result && result < 2)
+            && endpoint.source_path.count == 0
+            && endpoint.path.count == 1 => {}
+        (
             ScopedObjectIdentityV29::Reference {
                 dereference_prefix, ..
             },
@@ -774,6 +782,11 @@ fn check_source_object_effect_census_v29(
             operand,
             destination,
             variant: _,
+        }
+        | ScopedObjectSourceV29::RvalueComponent {
+            site,
+            result: operand,
+            destination,
         } = endpoint.source
         {
             let original = instances
@@ -1119,6 +1132,33 @@ fn check_source_object_effect_census_v29(
                 {
                     return Err(source_reference_error_v29(
                         "original typed aggregate field effect is missing or duplicated",
+                    ));
+                }
+                next_aggregate_field += 1;
+            }
+            terminal[index] = true;
+        }
+        if let Some(SemanticStatementKindV1::Assign(assignment)) =
+            original.map(|statement| statement.kind())
+            && assignment.destination() as *const SemanticPlaceV1 as usize == access.key.source
+            && assignment.destination().projections().is_empty()
+            && access.key.access == SourceReferenceAccessV29::Write
+            && let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind()
+        {
+            let fields = source_object_checked_types_v44(
+                instances.owner().source_semantic().types(),
+                assignment.value().result_type(),
+                checked,
+                budget,
+            )?;
+            if terminal[index] || fields.len() != 2 {
+                return Err(scoped_object_error_v29());
+            }
+            for result in 0..2 {
+                budget.charge_work(2)?;
+                if aggregate_fields.get(next_aggregate_field) != Some(&(index, result)) {
+                    return Err(source_reference_error_v29(
+                        "original checked result write is missing or duplicated",
                     ));
                 }
                 next_aggregate_field += 1;

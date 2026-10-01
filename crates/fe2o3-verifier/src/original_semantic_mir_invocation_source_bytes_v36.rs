@@ -1549,6 +1549,7 @@ fn headers() -> usize {
 
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_aggregate_values_v42.vrs"),
+    include_str!("original_semantic_mir_source_checked_objects_v44.vrs"),
     include_str!("original_semantic_mir_source_aggregate_laws_v42.vrs"),
     include_str!("original_semantic_mir_source_integer_casts_v43.vrs"),
     include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
@@ -1649,6 +1650,7 @@ enum InvocationSourceByteEventV36 {
         source: InvocationSourceAggregatePlaceV42, moved: bool },
     Checked { destination: int, source_type: int, operation: int, bits: int, signed: bool,
         left: InvocationSourceByteValueV36, right: InvocationSourceByteValueV36 },
+    CheckedObject(InvocationSourceCheckedObjectV44),
     Discriminant(InvocationSourceDiscriminantReadV41),
     EnumConstruct(InvocationSourceEnumConstructV43),
     IntegerCast(InvocationSourceIntegerCastV43),
@@ -2004,6 +2006,8 @@ open spec fn invocation_source_byte_step_v36(
             invocation_source_integer_cast_v43(source, cast, root, instance, little_endian).source,
         InvocationSourceByteEventV36::Checked { destination, source_type, operation, bits, signed, left, right } =>
             invocation_source_checked_v42(source, destination, source_type, operation, bits, signed, left, right, root, instance, little_endian),
+        InvocationSourceByteEventV36::CheckedObject(event) =>
+            invocation_source_checked_object_v44(source, event, root, instance, little_endian).source,
         InvocationSourceByteEventV36::AggregateTransfer { destination, source: input, moved } =>
             invocation_source_aggregate_transfer_v42(source, destination, input, moved),
         InvocationSourceByteEventV36::AggregateDeinitialize(place) =>

@@ -391,6 +391,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 source
                 };
                 prepared.push(SourceObjectAggregateFieldV29 {
+                    computed: false,
                     operand: ordinal, projection: ScopedObjectViewProjectionV29::Field(
                         u32::try_from(physical).map_err(|_| ArgumentResourceV1::Arithmetic)?),
                     ty, schema, value,

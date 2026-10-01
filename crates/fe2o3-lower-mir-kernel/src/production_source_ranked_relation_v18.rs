@@ -793,6 +793,7 @@ impl ProductionSourceScalarStoreV18<'_> {
             let ty = match self.source {
                 ScopedMemoryStoreSourceV29::Operand { ty, .. }
                 | ScopedMemoryStoreSourceV29::Assignment { ty, .. }
+                | ScopedMemoryStoreSourceV29::AssignmentComponent { ty, .. }
                 | ScopedMemoryStoreSourceV29::CallResult { ty, .. }
                 | ScopedMemoryStoreSourceV29::EntryArgument { ty, .. } => ty,
             };
@@ -986,6 +987,7 @@ fn source_scalar_input_v18<'a>(
         let ty = match source {
             ScopedMemoryStoreSourceV29::Operand { ty, .. }
             | ScopedMemoryStoreSourceV29::Assignment { ty, .. }
+            | ScopedMemoryStoreSourceV29::AssignmentComponent { ty, .. }
             | ScopedMemoryStoreSourceV29::CallResult { ty, .. }
             | ScopedMemoryStoreSourceV29::EntryArgument { ty, .. } => ty,
         };
@@ -1032,6 +1034,9 @@ fn source_scalar_input_v18<'a>(
                 ProductionSourceScalarInputV18::Assignment {
                     block: SemanticBlockIdV1::from_index(block.get()), statement, assignment: original,
                 }
+            }
+            ScopedMemoryStoreSourceV29::AssignmentComponent { .. } => {
+                return relation.source.missing("computed result requires its typed object write relation");
             }
             ScopedMemoryStoreSourceV29::CallResult { site, .. } => {
                 let ExecutionSiteV29::Terminator { block } = site else {

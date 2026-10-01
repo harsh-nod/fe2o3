@@ -116,6 +116,9 @@ fn source_static_object_expected_location_inner_v29(
             variant: None,
             ..
         } => (site, ExecutionOperandV29::Destination, 0, Some(operand)),
+        ScopedObjectSourceV29::RvalueComponent { site, result, .. } => {
+            (site, ExecutionOperandV29::Destination, 0, Some(result))
+        }
         _ => return Err(scoped_object_pending_v29()),
     };
     source_index.sidecar(instance, budget)?;
@@ -131,75 +134,104 @@ fn source_static_object_expected_location_inner_v29(
         else {
             return Err(scoped_object_error_v29());
         };
-        let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
-            return Err(scoped_object_error_v29());
-        };
-        let types = instances.owner().source_semantic().types();
-        budget.charge_work(10)?;
-        let declaration = types
-            .get(place.ty().index() as usize)
-            .ok_or_else(scoped_object_error_v29)?;
-        require_ordinary_execution_representation_v29(declaration)?;
-        let (ty, components, projection) = match (declaration.shape(), aggregate.kind()) {
-            (SemanticTypeShapeV1::Tuple(fields), SemanticAggregateKindV1::Tuple)
-            | (SemanticTypeShapeV1::Aggregate(fields), SemanticAggregateKindV1::Aggregate) => {
-                let fields = fields.fields();
-                (
-                    *fields
-                        .get(operand as usize)
-                        .ok_or_else(scoped_object_error_v29)?,
-                    fields.len(),
-                    SemanticProjectionKindV1::Field(operand),
-                )
+        if let ScopedObjectSourceV29::RvalueComponent { result, .. } = endpoint.source {
+            let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
+                return Err(scoped_object_error_v29());
+            };
+            let fields = source_object_checked_types_v44(
+                instances.owner().source_semantic().types(),
+                assignment.value().result_type(),
+                checked,
+                budget,
+            )?;
+            let ty = *fields
+                .get(result as usize)
+                .ok_or_else(scoped_object_error_v29)?;
+            if !place.projections().is_empty()
+                || endpoint.path.count != 1
+                || endpoint.source_path.count != 0
+                || endpoint.projected_type != ty
+            {
+                return Err(scoped_object_error_v29());
             }
-            (SemanticTypeShapeV1::Array { element, length }, SemanticAggregateKindV1::Array) => {
-                budget.charge_work(4)?;
-                if *length == 0
-                    || *length > MAX_SSA_VALUE_COMPONENTS_V1 as u64
-                    || u64::from(operand) >= *length
-                {
-                    return Err(scoped_object_error_v29());
+            Some(
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(result), ty)
+                    .map_err(|_| ArgumentResourceV1::Accounting)?,
+            )
+        } else {
+            let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+                return Err(scoped_object_error_v29());
+            };
+            let types = instances.owner().source_semantic().types();
+            budget.charge_work(10)?;
+            let declaration = types
+                .get(place.ty().index() as usize)
+                .ok_or_else(scoped_object_error_v29)?;
+            require_ordinary_execution_representation_v29(declaration)?;
+            let (ty, components, projection) = match (declaration.shape(), aggregate.kind()) {
+                (SemanticTypeShapeV1::Tuple(fields), SemanticAggregateKindV1::Tuple)
+                | (SemanticTypeShapeV1::Aggregate(fields), SemanticAggregateKindV1::Aggregate) => {
+                    let fields = fields.fields();
+                    (
+                        *fields
+                            .get(operand as usize)
+                            .ok_or_else(scoped_object_error_v29)?,
+                        fields.len(),
+                        SemanticProjectionKindV1::Field(operand),
+                    )
                 }
                 (
-                    *element,
-                    usize::try_from(*length).map_err(|_| ArgumentResourceV1::Arithmetic)?,
-                    SemanticProjectionKindV1::ConstantIndex {
-                        offset: u64::from(operand),
-                        minimum_length: *length,
-                        from_end: false,
-                    },
+                    SemanticTypeShapeV1::Array { element, length },
+                    SemanticAggregateKindV1::Array,
+                ) => {
+                    budget.charge_work(4)?;
+                    if *length == 0
+                        || *length > MAX_SSA_VALUE_COMPONENTS_V1 as u64
+                        || u64::from(operand) >= *length
+                    {
+                        return Err(scoped_object_error_v29());
+                    }
+                    (
+                        *element,
+                        usize::try_from(*length).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                        SemanticProjectionKindV1::ConstantIndex {
+                            offset: u64::from(operand),
+                            minimum_length: *length,
+                            from_end: false,
+                        },
+                    )
+                }
+                _ => return Err(scoped_object_pending_v29()),
+            };
+            if !place.projections().is_empty()
+                || components != aggregate.operands().len()
+                || components > MAX_SSA_VALUE_COMPONENTS_V1
+                || endpoint.path.count != 1
+                || aggregate
+                    .operands()
+                    .get(operand as usize)
+                    .map(|operand| operand.ty())
+                    != Some(ty)
+                || endpoint.projected_type != ty
+                || endpoint.source_path.count != 0
+                || !matches!(
+                    types
+                        .get(ty.index() as usize)
+                        .map(SemanticTypeDeclV1::shape),
+                    Some(
+                        SemanticTypeShapeV1::Scalar(_)
+                            | SemanticTypeShapeV1::ValidityScalar(_)
+                            | SemanticTypeShapeV1::Pointer(_)
+                    )
                 )
+            {
+                return Err(scoped_object_error_v29());
             }
-            _ => return Err(scoped_object_pending_v29()),
-        };
-        if !place.projections().is_empty()
-            || components != aggregate.operands().len()
-            || components > MAX_SSA_VALUE_COMPONENTS_V1
-            || endpoint.path.count != 1
-            || aggregate
-                .operands()
-                .get(operand as usize)
-                .map(|operand| operand.ty())
-                != Some(ty)
-            || endpoint.projected_type != ty
-            || endpoint.source_path.count != 0
-            || !matches!(
-                types
-                    .get(ty.index() as usize)
-                    .map(SemanticTypeDeclV1::shape),
-                Some(
-                    SemanticTypeShapeV1::Scalar(_)
-                        | SemanticTypeShapeV1::ValidityScalar(_)
-                        | SemanticTypeShapeV1::Pointer(_)
-                )
+            Some(
+                SemanticProjectionV1::new(projection, ty)
+                    .map_err(|_| ArgumentResourceV1::Accounting)?,
             )
-        {
-            return Err(scoped_object_error_v29());
         }
-        Some(
-            SemanticProjectionV1::new(projection, ty)
-                .map_err(|_| ArgumentResourceV1::Accounting)?,
-        )
     } else {
         None
     };
@@ -409,6 +441,9 @@ fn check_source_static_object_projects_v29(
                     }
                     ScopedObjectSourceV29::AggregateComponent { site, operand, .. } => {
                         (site, ExecutionOperandV29::Destination, true, operand)
+                    }
+                    ScopedObjectSourceV29::RvalueComponent { site, result, .. } => {
+                        (site, ExecutionOperandV29::Destination, true, result)
                     }
                     ScopedObjectSourceV29::Place {
                         site, role, prefix, ..

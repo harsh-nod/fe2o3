@@ -379,6 +379,7 @@ impl ProductionSourceObjectEndpointV39<'_, '_> {
             ScopedObjectSourceV29::EntryArgument { .. }
             | ScopedObjectSourceV29::ProjectionIndex(_)
             | ScopedObjectSourceV29::AggregateComponent { .. }
+            | ScopedObjectSourceV29::RvalueComponent { .. }
             | ScopedObjectSourceV29::EntryComponent { .. }
             | ScopedObjectSourceV29::OperandSnapshot { .. }
             | ScopedObjectSourceV29::CallResultSnapshot { .. }

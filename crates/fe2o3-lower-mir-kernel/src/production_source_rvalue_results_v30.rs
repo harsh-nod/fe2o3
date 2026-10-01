@@ -3,6 +3,7 @@
 include!("production_source_descriptor_operand_v30.rs");
 include!("production_source_index_computation_v35.rs");
 include!("production_source_typed_endpoints_v36.rs");
+include!("production_source_checked_results_v44.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceRvalueEndpointV30 {
@@ -19,6 +20,7 @@ struct SourceRvalueRowV30 {
     ty: SemanticTypeIdV1,
     endpoint: SourceRvalueEndpointV30,
     descriptor: Option<SourceDescriptorOperandV30>,
+    checked: Option<SourceCheckedResultV44>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +68,7 @@ fn source_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
         h::<Vec<SourceRvalueRowV30>>()?,
         h::<SourceRvalueRowV30>()?,
         h::<SourceRvalueEndpointV30>()?,
+        source_checked_result_headers_v44()?,
         h::<Vec<SourceSsaRowV30>>()?,
         h::<SourceSsaRowV30>()?,
         h::<&SourceSsaRowV30>()?,
@@ -202,8 +205,9 @@ fn retain_source_rvalues_v30(
                 let site =
                     execution_site_v29(SemanticBlockIdV1::from_index(block), Some(statement));
                 let ty = assignment.value().result_type();
-                let binding =
-                    archive.lookup_rvalue_original_v30(instances, instance, site, ty, budget)?;
+                let record = archive
+                    .lookup_rvalue_record_original_v44(instances, instance, site, ty, budget)?;
+                let binding = &record.binding;
                 let descriptor = retain_source_descriptor_operand_v30(
                     instances, instance, archive, site, assignment, budget,
                 )?;
@@ -217,6 +221,13 @@ fn retain_source_rvalues_v30(
                     ty,
                     endpoint: source_rvalue_endpoint_v30(binding),
                     descriptor,
+                    checked: retain_source_checked_result_v44(
+                        instances.owner().source_semantic().types(),
+                        assignment,
+                        binding,
+                        record.checked_operands,
+                        budget,
+                    )?,
                 });
             }
         }

@@ -58,6 +58,11 @@ enum ScopedMemoryStoreSourceV29 {
         site: ExecutionSiteV29,
         ty: SemanticTypeIdV1,
     },
+    AssignmentComponent {
+        site: ExecutionSiteV29,
+        component: u32,
+        ty: SemanticTypeIdV1,
+    },
     CallResult {
         site: ExecutionSiteV29,
         ty: SemanticTypeIdV1,
@@ -296,6 +301,7 @@ fn scoped_payload_source_type_v29(source: ScopedMemoryStoreSourceV29) -> Semanti
     match source {
         ScopedMemoryStoreSourceV29::Operand { ty, .. }
         | ScopedMemoryStoreSourceV29::Assignment { ty, .. }
+        | ScopedMemoryStoreSourceV29::AssignmentComponent { ty, .. }
         | ScopedMemoryStoreSourceV29::CallResult { ty, .. }
         | ScopedMemoryStoreSourceV29::EntryArgument { ty, .. } => ty,
     }
@@ -1537,6 +1543,11 @@ fn check_scoped_payload_v29(
                         return Err(scoped_memory_error_v29());
                     }
                     Ok(())
+                }
+                ScopedMemoryStoreSourceV29::AssignmentComponent { .. } => {
+                    // Computed components require the typed object endpoint and
+                    // exact rvalue archive; a raw Store receipt is insufficient.
+                    Err(scoped_memory_error_v29())
                 }
                 ScopedMemoryStoreSourceV29::CallResult { site, ty } => {
                     if row.source

@@ -89,6 +89,11 @@ enum ScopedObjectSourceV29 {
         destination: SemanticLocalIdV1,
         variant: Option<u32>,
     },
+    RvalueComponent {
+        site: ExecutionSiteV29,
+        result: u32,
+        destination: SemanticLocalIdV1,
+    },
     EntryComponent {
         local: SemanticLocalIdV1,
         argument: u32,
@@ -752,6 +757,23 @@ impl ScopedMemoryAnchorsV29 {
                     }
                     Some((site, ExecutionOperandV29::Destination, assignment.destination().projections()))
                 }
+                ScopedObjectSourceV29::RvalueComponent { site, result, destination } => {
+                    let Some(SemanticStatementKindV1::Assign(assignment)) = scoped_source_statement_v29(function, site) else {
+                        return Err(scoped_object_error_v29());
+                    };
+                    if result > 1 || assignment.destination().local() != destination
+                        || !assignment.destination().projections().is_empty()
+                        || assignment.value().result_type() != endpoint.root_type
+                        || !matches!(assignment.value().kind(), SemanticRvalueKindV1::CheckedBinary(_))
+                        || anchor.source != Some(ScopedMemoryFrameV29::operand(site, Some(ExecutionOperandV29::Destination)))
+                        || !matches!(view_path, [ScopedObjectComponentV29::View {
+                            projection: ScopedObjectViewProjectionV29::Field(_), ty,
+                        }] if *ty == endpoint.projected_type)
+                    {
+                        return Err(scoped_object_error_v29());
+                    }
+                    Some((site, ExecutionOperandV29::Destination, assignment.destination().projections()))
+                }
                 ScopedObjectSourceV29::EntryComponent { local, argument, .. } => {
                     let declaration = function.locals().get(local.index() as usize).ok_or_else(scoped_object_error_v29)?;
                     if anchor.source.is_some() || !matches!(declaration.role(),
@@ -829,7 +851,8 @@ impl ScopedMemoryAnchorsV29 {
                     | ScopedObjectSourceV29::Place { local, .. }
                     | ScopedObjectSourceV29::EntryComponent { local, .. }
                     | ScopedObjectSourceV29::ReturnComponent { local, .. } => local,
-                    ScopedObjectSourceV29::AggregateComponent { destination, .. } => destination,
+                    ScopedObjectSourceV29::AggregateComponent { destination, .. }
+                    | ScopedObjectSourceV29::RvalueComponent { destination, .. } => destination,
                     ScopedObjectSourceV29::OperandSnapshot { .. }
                     | ScopedObjectSourceV29::CallResultSnapshot { .. } => {
                         return Err(scoped_object_error_v29());
@@ -1087,6 +1110,21 @@ impl ScopedMemoryAnchorsV29 {
                             return Err(scoped_object_error_v29());
                         }
                     }
+                    if let ScopedObjectSourceV29::RvalueComponent { site, result, .. } =
+                        destination.source
+                    {
+                        if !matches!(value, ScopedObjectValueOriginV29::Original(
+                            ScopedMemoryStoreSourceV29::AssignmentComponent { site: actual, component, ty }
+                        ) if actual == site && component == result && ty == destination.projected_type)
+                        {
+                            return Err(scoped_object_error_v29());
+                        }
+                    } else if matches!(
+                        original,
+                        ScopedMemoryStoreSourceV29::AssignmentComponent { .. }
+                    ) {
+                        return Err(scoped_object_error_v29());
+                    }
                     let mut ty = scoped_payload_source_type_v29(original);
                     if let ScopedObjectValueOriginV29::Component { path, .. } = value {
                         let path = self.object_path(path, budget)?;
@@ -1161,6 +1199,18 @@ impl ScopedMemoryAnchorsV29 {
                         ScopedMemoryStoreSourceV29::Assignment { site, ty } => {
                             if anchor.source.map(|frame| frame.site) != Some(site)
                                 || !matches!(scoped_source_statement_v29(function, site), Some(SemanticStatementKindV1::Assign(row)) if row.value().result_type() == ty)
+                            {
+                                return Err(scoped_object_error_v29());
+                            }
+                        }
+                        ScopedMemoryStoreSourceV29::AssignmentComponent {
+                            site, component, ..
+                        } => {
+                            if component > 1
+                                || anchor.source.map(|frame| frame.site) != Some(site)
+                                || !matches!(scoped_source_statement_v29(function, site),
+                                    Some(SemanticStatementKindV1::Assign(row))
+                                    if matches!(row.value().kind(), SemanticRvalueKindV1::CheckedBinary(_)))
                             {
                                 return Err(scoped_object_error_v29());
                             }

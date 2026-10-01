@@ -4,6 +4,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticPaddingV1,
 };
 
+#[path = "production_source_retained_checked_objects_v44_tests.rs"]
+mod retained_checked_objects_v44_tests;
+
 fn checked_loop(operation: SemanticCheckedBinaryOpV1) -> ProductionSemanticSsaOwnerV1 {
     let base = comparison_loop();
     let source = base.source_semantic();
@@ -384,7 +387,7 @@ fn promoted_failure_components_do_not_bypass_real_retained_aggregate_history() {
         (
             retained_projected_failure_loop as fn() -> ProductionSemanticSsaOwnerV1,
             false,
-            "typed allocation identity or representation requires its exact source contract",
+            "failure history requires an exact whole scalar diagnostic",
         ),
         (
             retained_constructed_failure_loop as fn() -> ProductionSemanticSsaOwnerV1,

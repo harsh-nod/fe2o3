@@ -5,6 +5,7 @@ type ExecutionRvalueBindingsV30 = BTreeMap<(u32, u32), Box<ExecutionRvalueBindin
 struct ExecutionRvalueBindingV30 {
     ty: SemanticTypeIdV1,
     binding: SemanticValueBindingV1,
+    checked_operands: Option<[ValueId; 2]>,
 }
 
 fn execution_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
@@ -39,6 +40,7 @@ fn execution_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
         h::<&Type>()?,
         h::<&Operation>()?,
         h::<ValueId>()?,
+        h::<Option<[ValueId; 2]>>()?,
         argument_product_v1(4, h::<usize>()?)?,
         h::<()>()?,
     ])
@@ -73,6 +75,7 @@ fn archive_owned_rvalue_v30(
     site: ExecutionSiteV29,
     ty: SemanticTypeIdV1,
     binding: &SemanticValueBindingV1,
+    checked_operands: Option<[ValueId; 2]>,
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let mut owned = match *credit {
@@ -101,7 +104,14 @@ fn archive_owned_rvalue_v30(
         .ok_or(ArgumentResourceV1::Accounting)?;
     owned.bytes = argument_sum_v1(&[owned.bytes, payload])?;
     *credit = Some(owned);
-    rvalues.insert(key, Box::new(ExecutionRvalueBindingV30 { ty, binding }));
+    rvalues.insert(
+        key,
+        Box::new(ExecutionRvalueBindingV30 {
+            ty,
+            binding,
+            checked_operands,
+        }),
+    );
     Ok(())
 }
 
@@ -112,6 +122,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         statement: Option<u32>,
         assignment: &fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1,
         binding: &SemanticValueBindingV1,
+        operations: &[Operation],
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         if self.execution.is_none() {
             return Ok(());
@@ -132,12 +143,32 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             {
                 return Err(execution_archive_error_v29());
             }
+            let checked_operands = if let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() {
+                budget.charge_work(12)?;
+                let SemanticValueBindingV1::Aggregate(fields) = binding else {
+                    return Err(execution_archive_error_v29());
+                };
+                let [SemanticValueBindingV1::Value { id: value, ty },
+                    SemanticValueBindingV1::Value { id: overflow, ty: overflow_ty }] = fields.as_slice() else {
+                    return Err(execution_archive_error_v29());
+                };
+                let Some(operation) = operations.last() else { return Err(execution_archive_error_v29()); };
+                let OperationKind::Binary { op: BinaryOp::Checked(operator), lhs, rhs } = operation.kind else {
+                    return Err(execution_archive_error_v29());
+                };
+                if operator != lower_checked_binary(checked.operation()) || overflow_ty != &Type::BOOL
+                    || !matches!(operation.results.as_slice(), [a, b]
+                        if a.id == *value && &a.ty == ty && b.id == *overflow && &b.ty == overflow_ty)
+                { return Err(execution_archive_error_v29()); }
+                Some([lhs, rhs])
+            } else { None };
             archive_owned_rvalue_v30(
                 &mut this.semantic_rvalue_bindings,
                 &mut this.semantic_ssa_archive_credit,
                 site,
                 assignment.value().result_type(),
                 binding,
+                checked_operands,
                 budget,
             )
         })
@@ -153,6 +184,18 @@ impl ExecutionArchiveV29 {
         ty: SemanticTypeIdV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<&'archive SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.lookup_rvalue_record_original_v44(instances, instance, site, ty, budget)
+            .map(|record| &record.binding)
+    }
+
+    fn lookup_rvalue_record_original_v44<'archive>(
+        &'archive self,
+        instances: &ExecutionInstancesV29<'_>,
+        instance: ProductionCallInstanceIdV1,
+        site: ExecutionSiteV29,
+        ty: SemanticTypeIdV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<&'archive ExecutionRvalueBindingV30, ProductionSemanticKirErrorV1> {
         self.check_original_v29(instances, instance, budget)?;
         let header = execution_rvalue_headers_v30()?;
         budget.reserve_storage(header)?;
@@ -169,7 +212,7 @@ impl ExecutionArchiveV29 {
         site: ExecutionSiteV29,
         ty: SemanticTypeIdV1,
         budget: &mut ArgumentBudgetV1<'_>,
-    ) -> Result<&'archive SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+    ) -> Result<&'archive ExecutionRvalueBindingV30, ProductionSemanticKirErrorV1> {
         budget.charge_work(5)?;
         let function = instances
             .instance(instance)
@@ -191,7 +234,7 @@ impl ExecutionArchiveV29 {
         if record.ty != ty {
             return Err(execution_archive_error_v29());
         }
-        Ok(&record.binding)
+        Ok(record)
     }
 }
 

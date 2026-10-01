@@ -4,6 +4,202 @@ use std::collections::BTreeMap;
 
 const LIMIT: usize = 256 * 1024 * 1024;
 
+fn retained_transform_v44(
+    types: &mut Vec<SemanticTypeDeclV1>,
+    functions: &mut Vec<SemanticFunctionDeclV1>,
+    operation: SemanticCheckedBinaryOpV1,
+) {
+    super::super::super::paired::aggregate_tests::checked_transform(
+        types, functions, operation, false, false,
+    );
+    let old = functions.last_mut().unwrap();
+    let pair = old.locals()[4].ty();
+    let raw = TypeId::from_index(types.len() as u32);
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256([250; 32]),
+        SemanticLayoutIdentityV1::from_sha256([250; 32]),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+            )),
+            false,
+        )
+        .unwrap(),
+        Shape::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                pair,
+                SemanticPointerKindV1::Raw,
+                SemanticMutabilityV1::Mutable,
+                0,
+                64,
+                SemanticPointerMetadataV1::None,
+            )
+            .unwrap(),
+        ),
+    ));
+    let mut locals = old.locals().to_vec();
+    assert_eq!(locals.len(), 5);
+    locals.push(SemanticLocalDeclV1::new(
+        SemanticLocalIdentityV1::from_sha256([250; 32]),
+        raw,
+        SemanticLocalRoleV1::Temporary,
+        old.source(),
+    ));
+    let mut blocks = old.blocks().to_vec();
+    let mut statements = blocks[0].statements().to_vec();
+    statements.push(SemanticStatementV1::new(
+        old.source(),
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(5), vec![], raw).unwrap(),
+            SemanticRvalueV1::new(
+                raw,
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: SemanticMutabilityV1::Mutable,
+                    place: SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], pair)
+                        .unwrap(),
+                },
+            ),
+        )),
+    ));
+    blocks[0] = SemanticBasicBlockV1::new(
+        blocks[0].identity(),
+        blocks[0].source(),
+        statements,
+        blocks[0].terminator().clone(),
+    )
+    .unwrap();
+    let SemanticTerminatorKindV1::Assert {
+        condition: SemanticOperandV1::Move(condition),
+        expected,
+        message,
+        target,
+        unwind,
+    } = blocks[1].terminator().kind()
+    else {
+        panic!("original checked overflow condition");
+    };
+    blocks[1] = SemanticBasicBlockV1::new(
+        blocks[1].identity(),
+        blocks[1].source(),
+        blocks[1].statements().to_vec(),
+        SemanticTerminatorV1::new(
+            blocks[1].terminator().source(),
+            SemanticTerminatorKindV1::Assert {
+                condition: SemanticOperandV1::Copy(condition.clone()),
+                expected: *expected,
+                message: message.clone(),
+                target: *target,
+                unwind: *unwind,
+            },
+        ),
+    )
+    .unwrap();
+    *old = SemanticFunctionDeclV1::new(
+        old.identity(),
+        old.role(),
+        old.item_definition_identity(),
+        old.monomorphization_identity(),
+        old.generic_type_arguments_identity(),
+        old.const_generic_arguments_identity(),
+        old.source(),
+        old.abi().clone(),
+        locals,
+        old.entry(),
+        blocks,
+    )
+    .unwrap();
+}
+
+fn retained_program_v44(
+    operation: SemanticCheckedBinaryOpV1,
+    work: usize,
+    storage: usize,
+) -> (Result<()>, usize, usize, usize) {
+    super::super::super::super::invocations::tests::run_source_transform(
+        work,
+        storage,
+        |types, functions| retained_transform_v44(types, functions, operation),
+        |plan, out| {
+            super::super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                for root in 0..2 {
+                    for instance in 1..=2 {
+                        assert!(slots.has_original_object(root, instance, 4, out)?);
+                    }
+                }
+                let mut program = super::super::super::source_function::SourceByteProgram::derive(
+                    plan, slots, out,
+                )?;
+                program.emit(out)?;
+                assert_eq!(out.text.matches(
+                    "InvocationSourceByteEventV36::CheckedObject(InvocationSourceCheckedObjectV44"
+                ).count(), 4);
+                assert_eq!(
+                    out.text
+                        .matches("value_offset: 0int, overflow_offset: 4int")
+                        .count(),
+                    4
+                );
+                assert!(!out.text.contains("InvocationSourceByteEventV36::Checked {"));
+                assert!(!out.text.contains("assume("));
+                Ok(())
+            })
+        },
+    )
+}
+
+#[test]
+fn retained_checked_objects_emit_independent_source_events_in_every_call_instance() {
+    for operation in [
+        SemanticCheckedBinaryOpV1::Add,
+        SemanticCheckedBinaryOpV1::Subtract,
+        SemanticCheckedBinaryOpV1::Multiply,
+    ] {
+        retained_program_v44(operation, LIMIT, LIMIT).0.unwrap();
+    }
+}
+
+#[test]
+fn retained_checked_object_program_has_exact_and_one_short_complete_resources() {
+    let operation = SemanticCheckedBinaryOpV1::Multiply;
+    let measured = retained_program_v44(operation, LIMIT, LIMIT);
+    measured.0.unwrap();
+    let exact = retained_program_v44(operation, measured.1, measured.3);
+    exact.0.unwrap();
+    assert_eq!(
+        (exact.1, exact.2, exact.3),
+        (measured.1, measured.2, measured.3)
+    );
+    for (work, storage, is_work) in [
+        (measured.1 - 1, measured.3, true),
+        (measured.1, measured.3 - 1, false),
+    ] {
+        let refused = retained_program_v44(operation, work, storage).0;
+        let mut error: &(dyn std::error::Error + 'static) = refused.as_ref().unwrap_err();
+        loop {
+            if let Some(resource) = error.downcast_ref::<Resource>() {
+                match resource {
+                    Resource::Work(limit) if is_work => {
+                        assert_eq!(limit.limit(), work);
+                        assert_eq!(limit.actual(), measured.1);
+                    }
+                    Resource::Storage(limit) if !is_work => {
+                        assert_eq!(limit.limit(), storage);
+                        assert_eq!(limit.actual(), measured.3);
+                    }
+                    other => panic!("wrong resource: {other:?}"),
+                }
+                break;
+            }
+            error = error
+                .source()
+                .unwrap_or_else(|| panic!("missing resource: {refused:?}"));
+        }
+    }
+}
+
 fn transform(
     types: &mut Vec<SemanticTypeDeclV1>,
     functions: &mut Vec<SemanticFunctionDeclV1>,

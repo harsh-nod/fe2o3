@@ -98,6 +98,7 @@ pub(super) fn rvalue_archive_frame_storage_v30() -> usize {
         + h::<(u32, u32)>()
         + h::<SemanticTypeIdV1>()
         + h::<SemanticValueBindingV1>()
+        + h::<Option<[ValueId; 2]>>()
         + h::<Box<ExecutionRvalueBindingV30>>()
         + h::<&ExecutionRvalueBindingV30>()
         + h::<&SemanticValueBindingV1>()
