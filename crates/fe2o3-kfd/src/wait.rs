@@ -2,8 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-const SPIN_ATTEMPTS_V1: u32 = 64;
-const YIELD_ATTEMPTS_V1: u32 = 16;
+include!("wait_arithmetic.rs");
 const INITIAL_SLEEP_V1: Duration = Duration::from_micros(25);
 const MAX_SLEEP_V1: Duration = Duration::from_millis(1);
 
@@ -107,24 +106,23 @@ impl MonotonicWaitV1 {
     }
 
     fn next_action_at(&mut self, now: Instant) -> WaitActionV1 {
-        self.attempts = self.attempts.saturating_add(1);
+        self.attempts = increment_wait_attempts_v1(self.attempts);
         if self
             .active_spin_until
             .is_some_and(|active_spin_until| now < active_spin_until)
         {
             return WaitActionV1::Spin;
         }
-        if self.attempts <= SPIN_ATTEMPTS_V1 {
-            return WaitActionV1::Spin;
+        match wait_prefix_v1(self.attempts) {
+            WaitPrefixV1::Spin => return WaitActionV1::Spin,
+            WaitPrefixV1::Yield => return WaitActionV1::Yield,
+            WaitPrefixV1::Sleep => {}
         }
-        if self.attempts <= SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1 {
-            return WaitActionV1::Yield;
-        }
-        let sleep = self
+        let remaining = self
             .deadline
-            .map(|deadline| deadline.saturating_duration_since(now))
-            .map_or(self.next_sleep, |remaining| remaining.min(self.next_sleep));
-        self.next_sleep = self.next_sleep.saturating_mul(2).min(self.max_sleep);
+            .map(|deadline| deadline.saturating_duration_since(now));
+        let sleep = wait_sleep_duration_v1(self.next_sleep, remaining);
+        self.next_sleep = wait_backoff_duration_v1(self.next_sleep, self.max_sleep);
         WaitActionV1::Sleep(sleep)
     }
 
@@ -165,6 +163,14 @@ impl MonotonicWaitV1 {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "wait_cursor_differential_tests.rs"]
+mod cursor_differential_tests;
+
+#[cfg(test)]
+#[path = "wait_arithmetic_tests.rs"]
+mod arithmetic_tests;
 
 #[cfg(test)]
 mod tests {
