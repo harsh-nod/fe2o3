@@ -6893,6 +6893,24 @@ fn compile_ranked_kernel_for_lowering_with_target_and_analysis_limits_v1(
     atomic_target: Option<PlironAtomicTargetContextV1>,
     analysis_resource_limits: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    compile_ranked_kernel_for_lowering_with_resource_policy_v1(
+        construction,
+        limits,
+        atomic_target,
+        analysis_resource_limits,
+        None,
+    )
+}
+
+// Same engine. The private opt-in policy controls presentation bytes/hash work,
+// not constructor, upstream Display, or Context allocation.
+fn compile_ranked_kernel_for_lowering_with_resource_policy_v1(
+    construction: ProductionConstructionV1,
+    limits: ProductionSessionLimitsV1,
+    atomic_target: Option<PlironAtomicTargetContextV1>,
+    analysis_resource_limits: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
+    snapshot_policy: Option<crate::graph_analysis_v1::snapshot_policy_v1::SnapshotPolicyV1>,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
     if let ProductionConstructionKindV1::RankedKernel { kernel, .. } = &construction.kind {
         ranked_preverification_transform_v1::require_ranked_preverification_normal_form_v1(kernel)
             .map_err(|error| {
@@ -6901,9 +6919,10 @@ fn compile_ranked_kernel_for_lowering_with_target_and_analysis_limits_v1(
                 ))
             })?;
     }
-    let mut session = ProductionPlironSessionV1::new_ranked_with_analysis_resource_limits_v1(
+    let mut session = ProductionPlironSessionV1::new_ranked_with_resource_policy_v1(
         limits,
         analysis_resource_limits,
+        snapshot_policy,
     )?;
     if let Some(target) = atomic_target {
         session.bind_atomic_target(target);
@@ -6939,16 +6958,25 @@ impl ProductionPlironSessionV1 {
         limits: ProductionSessionLimitsV1,
         analysis_resource_limits: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
     ) -> Result<Self, ProductionRankedCompileErrorV1> {
+        Self::new_ranked_with_resource_policy_v1(limits, analysis_resource_limits, None)
+    }
+
+    fn new_ranked_with_resource_policy_v1(
+        limits: ProductionSessionLimitsV1,
+        analysis_resource_limits: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
+        snapshot_policy: Option<crate::graph_analysis_v1::snapshot_policy_v1::SnapshotPolicyV1>,
+    ) -> Result<Self, ProductionRankedCompileErrorV1> {
         let kernel = dialect_kernel::dialect_registration()
             .map_err(ProductionRankedCompileErrorV1::Registration)?;
         let gpu = dialect_gpu::dialect_registration()
             .map_err(ProductionRankedCompileErrorV1::Registration)?;
         let proof = dialect_proof::dialect_registration()
             .map_err(ProductionRankedCompileErrorV1::Registration)?;
-        Self::new_with_analysis_resource_limits_v1(
+        Self::new_with_analysis_and_snapshot_policy_v1(
             limits,
             [kernel, gpu, proof],
             analysis_resource_limits,
+            snapshot_policy,
         )
         .map_err(ProductionRankedCompileErrorV1::Context)
     }
@@ -7012,3 +7040,7 @@ pub fn compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
 #[cfg(feature = "internal-proof-staging")]
 #[path = "refinement_staging_policy_retained_storage_v1.rs"]
 mod retained_storage_v1;
+
+#[cfg(test)]
+#[path = "ranked/ranked_snapshot_policy_v1_tests.rs"]
+mod ranked_snapshot_policy_v1_tests;
