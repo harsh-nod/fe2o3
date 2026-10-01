@@ -4,7 +4,7 @@
 
 use std::mem::size_of;
 
-const PROC_MAGIC: libc::c_long = 0x9fa0;
+const PROC_MAGIC: u64 = 0x9fa0;
 const PATH_BYTES: usize = 32;
 const RECORD_BYTES: usize = 10;
 const READ_IMPLIES_EXEC: u32 = 0x0040_0000;
@@ -192,7 +192,7 @@ unsafe fn inspect(fd: libc::c_int, directory: bool) -> Option<libc::stat> {
         let mut fs: libc::statfs = std::mem::zeroed();
         let mut stat: libc::stat = std::mem::zeroed();
         if libc::syscall(libc::SYS_fstatfs, fd, &raw mut fs) != 0
-            || fs.f_type != PROC_MAGIC
+            || !is_procfs_type(fs.f_type)
             || libc::syscall(libc::SYS_fstat, fd, &raw mut stat) != 0
             || stat.st_mode & libc::S_IFMT
                 != if directory {
@@ -210,6 +210,11 @@ unsafe fn inspect(fd: libc::c_int, directory: bool) -> Option<libc::stat> {
             Some(stat)
         }
     }
+}
+
+fn is_procfs_type(value: impl TryInto<u64>) -> bool {
+    // Normalize libc's signed/unsigned statfs ABI without truncating or wrapping.
+    matches!(value.try_into(), Ok(PROC_MAGIC))
 }
 
 unsafe fn close(fd: &mut libc::c_int) -> bool {
