@@ -103,40 +103,57 @@ fn byte_index_dispatch_requires_explicit_context_for_all_axes_and_hierarchies() 
 #[test]
 fn byte_index_derivation_resources_scale_linearly_without_hidden_kernel_coordinates() {
     for copies in [1, 4, 16] {
-        let module = index_module_v37(copies);
-        with_inventory(&module, |inventory, physical, floor| {
-            let allocations = NoAllocations(inventory.owner());
-            let derive = |out: &mut Writer<'_, '_>| {
-                ByteFunctionV30::derive(
-                    inventory,
-                    physical,
-                    Function(0),
-                    ByteContext::native(FormalIndexWidth::Bits64),
-                    &allocations,
-                    out,
-                )
-                .map(|_| ())
-            };
-            // Owner1 + entry/analysis4 + definitionsN + N*(dispatch4, Alloca6,
-            // Storage6, pointer2+24, INDEX2+8, physical19) + empty-return5+1.
+        for returned in [false, true] {
+            let mut module = index_module_v37(copies);
             let count = 18 * copies;
-            let work = 1 + 4 + count * (1 + 4 + 6 + 6 + 2 + 24 + 2 + 8 + 19) + 5 + 1;
-            let storage = floor
-                + super::super::super::SOURCE_LIMIT
-                + headers::<NoAllocations<'_>>()
-                + count * size_of::<ByteOperationV30<'_, '_>>();
-            let exact = run(floor, work, storage, derive);
-            assert!(exact.0.unwrap().is_empty());
-            assert_eq!((exact.1, exact.2), (work, storage));
-            assert!(matches!(
-                run(floor, work - 1, storage, derive).0,
-                Err(Error::Resource(_))
-            ));
-            assert!(matches!(
-                run(floor, work, storage - 1, derive).0,
-                Err(Error::Resource(_))
-            ));
-        });
+            if returned {
+                module.functions[0].signature.results = vec![Type::INDEX];
+                module.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+                    Some(Terminator::Return {
+                        values: vec![ValueId((count - 1) as u32)],
+                    });
+            }
+            with_inventory(&module, |inventory, physical, floor| {
+                let allocations = NoAllocations(inventory.owner());
+                let derive = |out: &mut Writer<'_, '_>| {
+                    ByteFunctionV30::derive(
+                        inventory,
+                        physical,
+                        Function(0),
+                        ByteContext::native(FormalIndexWidth::Bits64),
+                        &allocations,
+                        out,
+                    )
+                    .map(|_| ())
+                };
+                // Owner1 + entry/analysis4 + definitionsN + N*(dispatch4,
+                // Alloca6, Storage6, pointer2+24, INDEX2+8, physical19).
+                // Control entry5 is fixed; only a returned value adds operand
+                // visitation3 and result-type check1. Empty Return has neither.
+                let work = 1
+                    + 4
+                    + count * (1 + 4 + 6 + 6 + 2 + 24 + 2 + 8 + 19)
+                    + 5
+                    + usize::from(returned) * (3 + 1);
+                let storage = floor
+                    + super::super::super::SOURCE_LIMIT
+                    + headers::<NoAllocations<'_>>()
+                    + count * size_of::<ByteOperationV30<'_, '_>>();
+                let exact = run(floor, work, storage, derive);
+                assert!(exact.0.unwrap().is_empty());
+                assert_eq!((exact.1, exact.2), (work, storage));
+                assert!(matches!(
+                    run(floor, work - 1, storage, derive).0,
+                    Err(Error::Resource(Resource::Work(error)))
+                        if error.limit() == work - 1 && error.actual() == work
+                ));
+                assert!(matches!(
+                    run(floor, work, storage - 1, derive).0,
+                    Err(Error::Resource(Resource::Storage(error)))
+                        if error.limit() == storage - 1 && error.actual() == storage
+                ));
+            });
+        }
     }
 }
 
