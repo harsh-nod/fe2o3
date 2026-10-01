@@ -6,7 +6,7 @@ Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
 refreshed on 2026-10-01: the issue remained Open, with 32 comments and its latest
 update at 2026-09-30 19:46:57 UTC. Both runtime branch refs were confirmed through
-signed commit `7d7a688c7` before the following native evidence publication. GitHub and MI300X
+signed commit `92f18e433` before the following composition integration. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
@@ -62,18 +62,28 @@ local CI commands pass. Whole-wire and distributed authority remain open.
 The equality-successor field-codec draft passes fresh CPU qualification:
 1,125 debug tests, 19 existing ignores, all sixteen selected release codec
 tests and strict Clippy, with both complete 1,144-test rosters and thirteen
-closed groups independently checked. Its unfiltered proof reports 59 verified
-and two errors: the shared byte-equality helper verifies, but the header success
-postcondition and writer suffix composition remain open. The earlier 57/2
-attempt remains rejected. A proof-only successor is under review; no trusted
-equality assumption or field-proof qualification is added.
+closed groups independently checked. Proof-only successors repair the header
+success and suffix composition obligations, then explicitly establish the
+schema bytes through the standard array-view lemmas. The latest full nine-input
+proof reports 63 verified and zero errors with no trusted equality assumption;
+both release checks and all three owned groups close. Earlier 57/2, 59/2 and
+61/1 attempts remain rejected. Native bytes and all actual Rust dependencies
+are unchanged, so CPU evidence is explicitly reused, not rerun. A separate
+41-stage collection of 34 mutation diagnostics is in progress; this unsigned
+positive discovery is not signed field-codec qualification or whole-wire proof.
 These draft results do not qualify the integrated primitive component anew.
 
-The A2 producer-input composition candidate `6b9e5d87c` has entered its fresh
-102-stage qualification: the original 38 validator and 22 fold mutations plus
-21 unfiltered composition mutations, with full/relocated/closing positives.
-The campaign is incomplete until every stage and final continuity/closure audit
-passes. Earlier calibration captures remain observations, never accepted kills.
+The [A2 producer-input composition](runtime-producer-input-composition.md)
+is integrated at signed `6c0718c1d`. Candidate `6b9e5d87c` passes all 102
+qualification stages: 38 validator and 22 fold mutations plus 21 unfiltered
+composition mutations, nine full/relocated/closing positives at 42/13/64
+obligations, six release checks and five source controls plus its signature.
+All 102 groups close, and independent agent/root readbacks agree. Integration
+preserves the actual proof closures and refreshes only four source-inventory
+guards/tests; all 21 local CI commands pass. Earlier calibration captures remain
+observations, never accepted kills. Concrete journal forwarding is next;
+live-allocation checks, fresh credit locks and complete Context refinement remain
+open. The original campaign's public packaging is being prepared separately.
 
 The [retained host-diagnostic CPU qualification](evidence/dev-xgmi-retained-host-diagnostic-cpu-2026-09-30/README.md)
 is integrated at `841c06b73`, with portable campaign helpers at `4ad64047b`.
@@ -114,8 +124,9 @@ Relocated runs, strict diagnostic-family joins and all 74 fresh process-group
 closures pass. The earlier 112 affected CPU tests and warning-free static gates
 are bound to unchanged signed production/test bytes, not rerun by this campaign.
 Integration preserves both proof closures, refreshes four reviewed source guards,
-and adds the validator's source controls to CI. The receipt-fold/validator
-composition and six actual journal/live/credit observer refinements remain open;
+and adds the validator's source controls to CI. The subsequent conditional
+receipt-fold/validator composition is qualified above; the six actual
+journal/live/credit observer refinements remain open;
 no native freshness, composed Context theorem or milestone exit follows. The
 signed campaign's broader evidence packet remains local.
 
@@ -165,11 +176,11 @@ restricted-environment runs below remain separate histories. This run does not
 qualify the KFD suite; its separate retained-executable result is above.
 
 The read-only [component source-guard CI job](../.github/workflows/runtime-component-source-guards.yml)
-runs eighteen explicit commands covering the newer model, runtime, accounting,
+runs 21 explicit commands covering the newer model, runtime, accounting,
 KFD and native harness source/classifier controls, including 64 ordinary native
-series and 40 separate diagnostic harness tests. All eighteen commands pass
-locally after the primitive integration and reviewed guard refresh at
-`8fd3b7ddb`; workflow YAML and
+series and 40 separate diagnostic harness tests. All 21 commands pass
+locally after composition integration at `6c0718c1d`, including three new
+composition source/qualification/diagnostic suites; workflow YAML and
 command inventory checks also pass. The resource-domain command selects its six
 source-only controls, not its three subprocess lifecycle tests. This adds drift
 detection, not solver execution, Rust test execution, authenticated proof

@@ -1,0 +1,1 @@
+PASS: codec primitive source calibration (13 groups; 11 actual diagnostic fixtures replayed; 31 mutants constructed; no verifier execution)

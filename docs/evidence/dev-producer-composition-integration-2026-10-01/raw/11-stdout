@@ -1,0 +1,1 @@
+PASS: producer-input fold source/controller calibration (4 groups; 22 logical mutants constructed, not executed)

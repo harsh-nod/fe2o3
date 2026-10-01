@@ -76,6 +76,9 @@ jobs:
         run: |
           python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-input-fold.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-input-validate.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-input-composition.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-input-composition-qualification.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-input-diagnostics.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-routing.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-owned-storage.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-post-catch.py
