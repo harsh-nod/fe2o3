@@ -318,31 +318,41 @@ fn source_allocation_frames_unwind_drops_callback_before_refunding_headers() {
     let caught = std::cell::Cell::new(false);
     let result =
         with_production_optimizer_result_v18(prepared, &mut budget, |original, _, budget| {
-            assert!(!original.source.root_row(0)?.source_slots.slots.is_empty());
-            let query_credit = allocation_query_credit_v39(original, 1, budget)?;
-            let floor = budget.storage();
-            let captured = AllocationVisitorDropV32(drops.clone());
-            let reached = &reached;
-            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                original.visit_allocation_frames_v32(0, budget, move |_, _| {
-                    let _ = &captured;
-                    reached.set(true);
-                    panic!("allocation visitor unwind")
-                })
-            }))
-            .unwrap_err();
-            assert_eq!(
-                panic.downcast_ref::<&str>(),
-                Some(&"allocation visitor unwind")
-            );
-            assert_eq!(drops.get(), 1);
-            assert_eq!(budget.storage(), floor + query_credit);
-            caught.set(true);
-            Err(ProductionSourceOwnedViewErrorV18::Binding(
-                "observed allocation visitor unwind",
-            ))
+            // Query credit belongs to this scratch phase, not the visitor or
+            // the outer optimizer's fixed retained-storage receipt.
+            source_scalar_normalization_scratch_v18(original.source.cleanup, budget, 0, |budget| {
+                assert!(!original.source.root_row(0)?.source_slots.slots.is_empty());
+                let query_credit = allocation_query_credit_v39(original, 1, budget)?;
+                let floor = budget.storage();
+                let captured = AllocationVisitorDropV32(drops.clone());
+                let reached = &reached;
+                let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    original.visit_allocation_frames_v32(0, budget, move |_, _| {
+                        let _ = &captured;
+                        reached.set(true);
+                        panic!("allocation visitor unwind")
+                    })
+                }))
+                .unwrap_err();
+                assert_eq!(
+                    panic.downcast_ref::<&str>(),
+                    Some(&"allocation visitor unwind")
+                );
+                assert_eq!(drops.get(), 1);
+                assert_eq!(budget.storage(), floor + query_credit);
+                assert!(!original.source.cleanup.is_denied());
+                caught.set(true);
+                Err(ProductionSourceOwnedViewErrorV18::Binding(
+                    "observed allocation visitor unwind",
+                ))
+            })
         });
-    assert!(result.is_err());
+    assert!(matches!(
+        result,
+        Err(ProductionSourceOptimizationErrorV18::Source(
+            ProductionSourceOwnedViewErrorV18::Binding("observed allocation visitor unwind")
+        ))
+    ));
     assert!(caught.get());
     assert!(reached.get());
     assert_eq!(drops.get(), 1);
