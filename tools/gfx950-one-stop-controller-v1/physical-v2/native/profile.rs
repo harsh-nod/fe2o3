@@ -71,6 +71,8 @@ pub(super) fn arguments(data: &str) -> Result<Vec<String>, Refusal> {
                 "set debuginfod enabled off",
                 "-iex",
                 "set startup-with-shell off",
+                "-iex",
+                "set displaced-stepping off",
             ]
             .into_iter()
             .map(String::from),
@@ -114,11 +116,43 @@ mod tests {
                 "-iex",
                 "set debuginfod enabled off",
                 "-iex",
-                "set startup-with-shell off"
+                "set startup-with-shell off",
+                "-iex",
+                "set displaced-stepping off"
             ]
         );
         for p in ["/tmp/a b", "relative", "/tmp/a\n", "/tmp/$(cmd)", ""] {
             assert!(arguments(p).is_err());
         }
+    }
+
+    #[test]
+    fn inline_policy_is_one_fixed_initial_command_within_existing_argv_cap() {
+        let data = format!("/{}", "d".repeat(511));
+        let args = arguments(&data).unwrap();
+        assert_eq!(args.len(), 13);
+        assert_eq!(
+            &args[args.len() - 2..],
+            ["-iex", "set displaced-stepping off"]
+        );
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.as_str() == "set displaced-stepping off")
+                .count(),
+            1
+        );
+        assert_eq!(args.iter().filter(|arg| arg.as_str() == "-iex").count(), 4);
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "set displaced-stepping on"
+                    || arg == "set displaced-stepping auto")
+        );
+        // Inert argv fixture: this does not select or enable a runtime profile.
+        let debugger_path = "/inert/pinned/gdb";
+        let cmdline_bytes =
+            debugger_path.len() + 1 + args.iter().map(|arg| arg.len() + 1).sum::<usize>();
+        assert!(cmdline_bytes <= 2048);
+        assert!(arguments(&(data + "d")).is_err());
     }
 }

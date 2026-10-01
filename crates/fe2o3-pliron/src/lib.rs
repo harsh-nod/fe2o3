@@ -2016,3 +2016,9 @@ pub use neutral_optimization_v1::{
     optimize_native_neutral_kernel_ir_integer_continuation_v1,
     optimize_native_neutral_kernel_ir_policy3_v1, optimize_native_neutral_kernel_ir_v1,
 };
+
+pub use production::{
+    ProductionRankedAnalysisAllowanceErrorV1, ProductionRankedAnalysisAllowanceV1,
+    compile_ranked_kernel_for_gfx942_lowering_with_analysis_allowance_v1,
+    compile_ranked_kernel_for_lowering_with_analysis_allowance_v1,
+};

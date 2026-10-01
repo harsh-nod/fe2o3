@@ -27,6 +27,10 @@ use fe2o3_lower_mir_kernel::{CheckedBf16NominalCallV1, ProductionPreRankedKirOwn
 #[path = "bf16_nominal_root_argument_initialization_v1.rs"]
 mod argument_initialization;
 
+#[allow(dead_code)]
+#[path = "bf16_nominal_block_stream_v1.rs"]
+mod block_stream;
+
 /// Must exist physically outside rich/facts/context/graph callbacks. It owns
 /// actual entry operations/SSA counter; future access/CFG preparation extends
 /// this SAME assembly. No conversion from unjoined component data is provided.
@@ -37,6 +41,7 @@ pub(in crate::production_ranked_projection_v1) struct PendingActualRootPrefixInd
     guarded: RootGuardedAccessStorageV1,
     origins: ActualRootReferenceOriginsStorageV1,
     arguments: argument_initialization::PendingArgumentProducersV1,
+    stream: block_stream::BlockStream,
     retired_fixed_proof: Option<RetiredLazyProofPayloadsV1>,
     ledger: Option<(usize, CanonicalKernelIrWorkLedgerIdentityV1)>,
     started: bool,
@@ -52,6 +57,7 @@ impl PendingActualRootPrefixIndicesV1 {
             guarded: RootGuardedAccessStorageV1::empty(),
             origins: ActualRootReferenceOriginsStorageV1::empty(),
             arguments: argument_initialization::PendingArgumentProducersV1::new(),
+            stream: block_stream::BlockStream::empty(),
             retired_fixed_proof: None,
             ledger: None,
             started: false,
@@ -103,6 +109,7 @@ struct ActualRootAssemblyPartsV1<'a> {
     indices: &'a mut RootInvocationIndexStorageV1,
     guarded: &'a mut RootGuardedAccessStorageV1,
     origins: &'a mut ActualRootReferenceOriginsStorageV1,
+    stream: &'a mut block_stream::BlockStream,
 }
 impl ActualRootAssemblyPartsV1<'_> {
     fn prefix_view(&self) -> ActualRootPrefixIndicesV1<'_> {
@@ -819,6 +826,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
             indices,
             guarded,
             origins,
+            stream,
             completed,
             ..
         } = pending;
@@ -882,6 +890,7 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                     indices,
                     guarded,
                     origins,
+                    stream,
                 },
                 context,
             )
@@ -1053,3 +1062,6 @@ fn capability_prefix_selection_frame() -> Result<usize> {
             .ok_or_else(|| resource(Resource::Arithmetic))
     })
 }
+
+#[cfg(test)]
+pub(crate) use block_stream::genuine::observe_actual_root_block_stream_for_test_v1;

@@ -7,7 +7,121 @@ Strict production compiler -> required proof -> safe GPU launch coverage remains
 not advance that count. This does not reclassify independently runnable legacy
 examples as qualified through the new production path.
 
-## Latest Verified Checkpoint
+## Latest Compiler Checkpoint
+
+At 11:34 UTC, r310 completed the five-package `cargo check --tests` at
+`3dabc6f3791f6cf876f609f4be6d2ffa854d670b` with **five verifier compilation
+errors**: three unavailable formation-type imports/uses and two mutable-budget
+argument mismatches. No tests ran. The preceding r309 failed on three
+scalar-query helper visibility errors; its narrow visibility repair is included
+in r310. These are completed failed checks, not observation timeouts.
+
+The latest actual source execution, r308 at
+`87f35a3a9a0415d05333061d3425ca917daaedf5`, built the backend test binary and
+finished with **zero passed, one failed**, none ignored and 4,114 filtered.
+The fill parent exercised gfx942/gfx950 source configurations. gfx942 opt0/MIR0
+stopped at unsupported original private-expression derivation; gfx950 opt0/MIR0
+stopped at execution lifecycle during pending root emission. Both targets at
+opt3/MIR2 stopped at an execution-lifecycle check during a producer call.
+The parent failure does not establish that every planned negative control ran.
+No actual source-clause frame was emitted; the strict extractor refused the log
+and created no proof input. No Verus, protected proof or GPU execution occurred.
+
+Original integer-cast reconstruction and source-proven consuming-Copy handling
+are now integrated locally, but an actual source rerun has not yet confirmed
+these repairs. Multi-effect memory tracking, scalar/read symbol binding and
+typed original-source borrowing are also local work, not end-to-end acceptance.
+The complete source-bound proof request, authenticated receipt consumption,
+publication within the original owner lifetimes and continuous protected
+execution remain implementation work.
+
+Both source inventories, tool identities, raw logs and runner were independently
+checked before changing each validation worktree. Raw log SHA-256 values:
+
+- r308: `7a11d50b450bdb64ad2ec2eb64cbb7b23e1cd3127d03d929458580cda65c2fff`
+- r309: `1d5677e13c7b3070f1c4730c56403cc4ce477c4efeb77c3baa037506cdfe4d3b`
+- r310: `62fd050e64e583aca767a412b49fa5731a8dda8a8283736131e29109a495c174`
+
+Both public mains were independently read at
+`e9d283947e171346b55dc6112bc2dff568fbe135` before this documentation update.
+The unfinished compiler candidate remains local. **M0 alone is complete;
+M1-M7 remain incomplete; strict coverage remains 0/47.**
+
+## Earlier Actual Source Checkpoint
+
+At 10:54 UTC, r305 completed the actual Rust fill/vecadd parent tests at
+`cb4a7f048677b89d61ea4e0189194e4055cbdbd7`: **zero passed, two failed**, none
+ignored and 4,101 filtered. The backend test binary built successfully, but both
+tests failed before the expected original-source consumer was reached. Their
+assertion hid the underlying compiler refusal, so its cause is not yet established.
+A subsequent diagnostic-only change preserves that error in the assertion;
+it has not been rerun and is not a fix for the refusal.
+
+No generated source-clause frames were reached. The strict extractor refused
+the log rather than substituting proof text. No Verus, protected proof or GPU
+execution is credited. Source/tool inventories stayed unchanged, and the
+primary independently checked both source inventories, raw log and runner:
+
+- r305 raw SHA-256: `775cc9ee2c8c188ad69e462f28ea15f82e04d84bace473abd378a0c481914ff9`
+
+The preceding r304 four-package test-binary build failed with ten diagnostics:
+nine from an ambiguous coordinator callback error type, and one from a scalar
+test expectation for a tuple-valued receive API. Corrections are committed
+locally but have not been rebuilt. r305 selected the backend alone and does
+not validate those corrections. Its predecessor's independently checked raw
+log SHA-256 is `967d534d369ced484db3fb3e763680259f079df0a5fb58a8bfc96decf90eed5f`.
+
+Newer reviewed proof-client cleanup, native source-admission compatibility,
+original typed-root borrowing and target/descriptor/Worker integration remain
+local and untested. Full source-proof request construction and continuous
+protected compiler enforcement are still implementation gaps, not merely GPU
+testing tasks. Both public mains were read back at
+`7cfa074cf97c51176f042fe33fd531f7ddefcb81` before this documentation update.
+**No milestone advances: M0 alone is complete; strict coverage remains 0/47.**
+
+## Focused Component Checkpoint
+
+At 10:19 UTC, r303 passed **75 selected descriptor, KFD and host tests** at
+`aa7780fc31e692e64bb1896824f9aa26dce1c418`: descriptor 29, KFD 26 and host 20,
+with zero failures or ignored tests and 625 filtered tests. These are component
+tests, not GPU runs, complete crate suites or protected-proof execution.
+
+Ordinary pointer formation and its eventual memory access now retain separate
+source coordinates and address envelopes in the V28 contract. Shared formation,
+type and link requirements remain checked. Both envelopes are checked against
+the live mapping, including zero-access formations and independent overflow
+cases. The codec itself does not authenticate source correspondence or grant
+compiler, artifact or launch authority.
+
+The preceding r302 selection had 74 passes and one failure: a newly authored
+test incorrectly expected an unchanged formation identity when another contract
+row changed. The existing hash intentionally binds each row to the whole
+contract. Only that assertion was corrected; production hashing was unchanged,
+and the test still requires the decoded formation row to remain identical.
+
+The primary independently checked both runs' source/tool inventories and raw
+log hashes:
+
+- r302: `95ffeef3b43586390dbf52c031a8775392fedaf7628f97d7e875da5465ebf2b7`
+- r303: `adf15b3b6b30c79c9b58f5063b00d8f67b8cb2e5a657cf41925b071cf2610918`
+
+The broader compiler integration is not yet validated. The r300 lowerer-test
+build exhausted its unchanged 16 GiB virtual-memory allowance; no tests ran.
+The r301 native-backend build then stopped with three invalid block-ID method
+calls in source-control verification; no tests ran. Those calls were corrected
+to use the original source block ordinals. New original-formation, borrowed
+proof-client and target-consumer integration requires its own build and actual
+Rust fill/vecadd execution; the component pass above does not validate it.
+
+Protected execution still needs the complete original compiler/proof connection
+and continuous enforcement. Provisioning, endpoint association, process parking
+and ordinary proof-text diagnostics are not protected proof results. No required
+missing source obligation is waived. Both public mains were read back at
+`978379990f45c126c6191ed9517288ee695ba4a6` before this documentation update;
+the unfinished compiler integration remains local. Full-range publication gates
+also remain unresolved. **M0 alone is complete; strict coverage remains 0/47.**
+
+## Earlier Compiler Checkpoint
 
 The completed r294/r295 runs used the local candidate
 `0d4f37f1e2b8d963aeb28891dc6c872c52d980fd`. The primary independently checked

@@ -1060,3 +1060,14 @@ pub(super) use bf16_nominal_recipe_resources_v1::{
     ActualSelectedInputsV1, select_actual_capability_prefix_inputs_v1,
     with_nominal_source_preparation_v1,
 };
+
+#[allow(dead_code)]
+#[path = "bf16_nominal_prepared_control_flow_v1.rs"]
+mod prepared_control_flow_v1;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use prepared_control_flow_v1::{
+    NominalPreparedControlFlowV1, with_nominal_prepared_control_flow_v1,
+};
+
+#[cfg(test)]
+pub(crate) use bf16_nominal_recipe_resources_v1::observe_actual_root_block_stream_for_test_v1;

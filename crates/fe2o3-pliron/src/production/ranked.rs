@@ -184,6 +184,9 @@ mod ranked_recipe_wire_v1;
 
 pub use ranked_recipe_wire_v1::*;
 
+mod ranked_analysis_allowance_v1;
+pub use ranked_analysis_allowance_v1::*;
+
 pub use ranked_index_constant_fold_v1::ProductionRankedTranslationErrorV1;
 
 pub const HARD_MAX_PRODUCTION_RANKED_ARGUMENTS: usize = 64;
@@ -6854,21 +6857,41 @@ pub fn compile_ranked_kernel_for_gfx942_lowering_v1(
     limits: ProductionSessionLimitsV1,
     system_coherent_allocations: impl IntoIterator<Item = u64>,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
-    let target = PlironAtomicTargetContextV1::new([PlironAtomicTargetCapabilityV1::new(
+    let target = ranked_gfx942_atomic_target_v1(system_coherent_allocations)?;
+    compile_ranked_kernel_for_lowering_with_target_v1(construction, limits, Some(target))
+}
+
+fn ranked_gfx942_atomic_target_v1(
+    system_coherent_allocations: impl IntoIterator<Item = u64>,
+) -> Result<PlironAtomicTargetContextV1, ProductionRankedCompileErrorV1> {
+    PlironAtomicTargetContextV1::new([PlironAtomicTargetCapabilityV1::new(
         32,
         MemorySpaceAttr::Global,
         AtomicScopeAttr::System,
     )
     .map_err(ProductionRankedCompileErrorV1::AtomicTarget)?])
     .and_then(|target| target.with_system_coherent_allocations(system_coherent_allocations))
-    .map_err(ProductionRankedCompileErrorV1::AtomicTarget)?;
-    compile_ranked_kernel_for_lowering_with_target_v1(construction, limits, Some(target))
+    .map_err(ProductionRankedCompileErrorV1::AtomicTarget)
 }
 
 fn compile_ranked_kernel_for_lowering_with_target_v1(
     construction: ProductionConstructionV1,
     limits: ProductionSessionLimitsV1,
     atomic_target: Option<PlironAtomicTargetContextV1>,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    compile_ranked_kernel_for_lowering_with_target_and_analysis_limits_v1(
+        construction,
+        limits,
+        atomic_target,
+        crate::production_analysis::ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+    )
+}
+
+fn compile_ranked_kernel_for_lowering_with_target_and_analysis_limits_v1(
+    construction: ProductionConstructionV1,
+    limits: ProductionSessionLimitsV1,
+    atomic_target: Option<PlironAtomicTargetContextV1>,
+    analysis_resource_limits: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
     if let ProductionConstructionKindV1::RankedKernel { kernel, .. } = &construction.kind {
         ranked_preverification_transform_v1::require_ranked_preverification_normal_form_v1(kernel)
@@ -6878,7 +6901,10 @@ fn compile_ranked_kernel_for_lowering_with_target_v1(
                 ))
             })?;
     }
-    let mut session = ProductionPlironSessionV1::new_ranked_v1(limits)?;
+    let mut session = ProductionPlironSessionV1::new_ranked_with_analysis_resource_limits_v1(
+        limits,
+        analysis_resource_limits,
+    )?;
     if let Some(target) = atomic_target {
         session.bind_atomic_target(target);
     }
@@ -6902,13 +6928,29 @@ impl ProductionPlironSessionV1 {
     pub fn new_ranked_v1(
         limits: ProductionSessionLimitsV1,
     ) -> Result<Self, ProductionRankedCompileErrorV1> {
+        Self::new_ranked_with_analysis_resource_limits_v1(
+            limits,
+            crate::production_analysis::ProductionAnalysisResourceLimitsV1::production_hard_ceiling(
+            ),
+        )
+    }
+
+    fn new_ranked_with_analysis_resource_limits_v1(
+        limits: ProductionSessionLimitsV1,
+        analysis_resource_limits: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
+    ) -> Result<Self, ProductionRankedCompileErrorV1> {
         let kernel = dialect_kernel::dialect_registration()
             .map_err(ProductionRankedCompileErrorV1::Registration)?;
         let gpu = dialect_gpu::dialect_registration()
             .map_err(ProductionRankedCompileErrorV1::Registration)?;
         let proof = dialect_proof::dialect_registration()
             .map_err(ProductionRankedCompileErrorV1::Registration)?;
-        Self::new(limits, [kernel, gpu, proof]).map_err(ProductionRankedCompileErrorV1::Context)
+        Self::new_with_analysis_resource_limits_v1(
+            limits,
+            [kernel, gpu, proof],
+            analysis_resource_limits,
+        )
+        .map_err(ProductionRankedCompileErrorV1::Context)
     }
 }
 
