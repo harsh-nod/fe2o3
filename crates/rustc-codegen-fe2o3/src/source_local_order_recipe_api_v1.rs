@@ -7,6 +7,10 @@ use crate::source_local_order_recipe_v1 as codec;
 use fe2o3_source_isa_observation::source_edit_v1::validate_source_edit_path_v1;
 use std::mem::size_of;
 
+#[path = "source_local_order_recipe_measurement_v1.rs"]
+mod measurement;
+pub use measurement::SourceLocalOrderRecipeRetainedStorageV1;
+
 pub(crate) const LLVM_BYTE_CAP: usize = 48 * 1024;
 const DIAGNOSTIC_BYTE_CAP: usize = 4096;
 pub(crate) const DESCRIPTOR_PRODUCER: &str = "source-local-order-policy6-v1/gfx942";
@@ -479,6 +483,7 @@ pub struct SourceLocalOrderRecipeAttemptV1 {
     result: Result<SourceLocalOrderRecipeOutputV1, SourceLocalOrderRecipeFailureV1>,
     callback_count: usize,
     compiler_callback_count: usize,
+    callback_stage_elapsed: Option<std::time::Duration>,
 }
 impl SourceLocalOrderRecipeAttemptV1 {
     pub const fn request(&self) -> &SourceLocalOrderRecipeRequestV1 {
@@ -516,6 +521,7 @@ impl SourceLocalOrderRecipeAttemptV1 {
             result,
             callback_count,
             compiler_callback_count,
+            callback_stage_elapsed: None,
         }
     }
 }

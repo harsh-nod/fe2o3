@@ -25,7 +25,9 @@ pub use source_bitselect_promotion_driver_v1::run_bitselect_source_promotion_dri
 #[path = "production_rustc_driver_v1/source_local_order_recipe_driver_v1.rs"]
 pub(crate) mod source_local_order_recipe_driver_v1;
 #[cfg(target_os = "linux")]
-pub use source_local_order_recipe_driver_v1::run_source_local_order_recipe_driver_v1;
+pub use source_local_order_recipe_driver_v1::{
+    run_source_local_order_recipe_driver_measured_v1, run_source_local_order_recipe_driver_v1,
+};
 
 #[cfg(test)]
 #[path = "production_rustc_driver_checked_output_source_v1_tests.rs"]
@@ -68,6 +70,10 @@ pub use physical_lds_exchange_diagnostic_export_v22::run_diagnostic_physical_lds
 #[path = "production_rustc_driver_v1/ordered_program_diagnostic_export_v17.rs"]
 mod ordered_program_diagnostic_export_v17;
 pub use ordered_program_diagnostic_export_v17::run_diagnostic_ordered_program_kir_extraction_driver_v17;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "production_rustc_driver_v1/ordered_program_stage_measurement_v1_tests.rs"]
+mod ordered_program_stage_measurement_v1_tests;
 #[path = "production_rustc_driver_v1/ordered_program_origin_export_v1.rs"]
 mod ordered_program_origin_export_v1;
 pub use ordered_program_origin_export_v1::run_diagnostic_ordered_program_origin_driver_v1;
