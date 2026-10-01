@@ -204,7 +204,7 @@ fn mixed_v53_encoder_exact_work_and_panic_leave_output_untouched() {
         let mut output = vec![0xa5; length];
         let result = encode_mixed_descriptor_v53(&nominal, &rows, &mut output, &mut |n| {
             left = left.checked_sub(n).ok_or(())?;
-            Ok(())
+            Ok::<(), ()>(())
         });
         if remaining == work {
             result.unwrap();
