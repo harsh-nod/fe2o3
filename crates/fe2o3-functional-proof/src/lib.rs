@@ -948,3 +948,5 @@ impl<'a> WireReaderV2<'a> {
         DigestV1::from_untrusted_bytes(self.bytes::<32>())
     }
 }
+
+mod imported_functional_retained_storage_v1;

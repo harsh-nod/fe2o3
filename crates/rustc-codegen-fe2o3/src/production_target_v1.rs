@@ -450,3 +450,6 @@ mod tests {
             .unwrap();
     }
 }
+
+#[path = "production_target_retained_storage_v1.rs"]
+mod retained_storage_v1;
