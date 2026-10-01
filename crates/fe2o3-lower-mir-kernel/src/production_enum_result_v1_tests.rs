@@ -345,7 +345,7 @@ mod scalar_enum_result_tests {
                     source,
                     SemanticTerminatorKindV1::Call(
                         SemanticDirectCallV1::new_callable(
-                            SemanticCallableIdV1::from_index(0),
+                            SemanticCallableIdV1::from_index(1),
                             vec![],
                             Some(SemanticCallDestinationV1::new(
                                 whole(1),
@@ -405,9 +405,14 @@ mod scalar_enum_result_tests {
             vec![],
             vec![],
             vec![root, fixture(0)],
-            vec![SemanticCallableDeclV1::Defined {
-                function: SemanticFunctionIdV1::from_index(1),
-            }],
+            vec![
+                SemanticCallableDeclV1::Defined {
+                    function: SemanticFunctionIdV1::from_index(0),
+                },
+                SemanticCallableDeclV1::Defined {
+                    function: SemanticFunctionIdV1::from_index(1),
+                },
+            ],
             vec![SemanticFunctionIdV1::from_index(0)],
         )
         .unwrap()
