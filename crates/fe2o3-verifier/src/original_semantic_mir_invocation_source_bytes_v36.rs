@@ -18,6 +18,8 @@ use std::{fmt::Write as _, mem::size_of, ops::Range};
 #[path = "original_semantic_mir_invocation_source_pointers_v36.rs"]
 mod pointer_events;
 pub(super) use pointer_events::SOURCE_POINTERS_V36;
+#[path = "original_semantic_mir_source_slice_reads_v41.rs"]
+mod slice_reads;
 #[path = "original_semantic_mir_source_witness_borrows_v38.rs"]
 pub(super) mod witness_events;
 #[path = "original_semantic_mir_source_witness_transfers_v40.rs"]
@@ -25,9 +27,22 @@ mod witness_transfers;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Address {
-    Slot { descriptor: usize, offset: u64 },
-    Object { local: usize, offset: u64 },
-    Pointer { local: usize, offset: u64 },
+    Slot {
+        descriptor: usize,
+        offset: u64,
+    },
+    Object {
+        local: usize,
+        offset: u64,
+    },
+    Pointer {
+        local: usize,
+        offset: u64,
+    },
+    Slice {
+        source: slice_reads::Slice,
+        offset: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -678,6 +693,30 @@ impl Context<'_, '_, '_> {
                 offset: 0,
             }
         };
+        self.project_access(base, ty, projections, place.ty(), out)
+    }
+
+    fn read_access(&self, place: &Place, out: &mut Writer<'_, '_>) -> Result<Access> {
+        match slice_reads::derive(self, place, out)? {
+            Some((source, element)) => self.project_access(
+                Address::Slice { source, offset: 0 },
+                element,
+                &place.projections()[2..],
+                place.ty(),
+                out,
+            ),
+            None => self.access(place, out),
+        }
+    }
+
+    fn project_access(
+        &self,
+        base: Address,
+        mut ty: TypeId,
+        projections: &[fe2o3_mir_model::semantic_mir_v1::SemanticProjectionV1],
+        result_type: TypeId,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Access> {
         let mut offset = 0u64;
         for projection in projections {
             out.budget.charge_work(6)?;
@@ -738,7 +777,7 @@ impl Context<'_, '_, '_> {
             offset = offset.checked_add(delta).ok_or(Resource::Arithmetic)?;
             ty = next;
         }
-        if ty != place.ty() {
+        if ty != result_type {
             return Err(mismatch());
         }
         let layout = self
@@ -750,6 +789,7 @@ impl Context<'_, '_, '_> {
             Address::Slot { descriptor, .. } => Address::Slot { descriptor, offset },
             Address::Object { local, .. } => Address::Object { local, offset },
             Address::Pointer { local, .. } => Address::Pointer { local, offset },
+            Address::Slice { source, .. } => Address::Slice { source, offset },
         };
         Ok(Access {
             address,
@@ -815,6 +855,12 @@ impl Context<'_, '_, '_> {
             }
             Operand::Copy(place) | Operand::Move(place) => {
                 let moved = matches!(operand, Operand::Move(_));
+                if !moved && !place.projections().is_empty() && scalar != ScalarV30::Unit {
+                    return Ok(Value::Read {
+                        access: self.read_access(place, out)?,
+                        moved: false,
+                    });
+                }
                 match self.destination(place, out)? {
                     Destination::Local(local) => Ok(Value::Local { local, moved }),
                     Destination::Memory(access) if scalar != ScalarV30::Unit => {
@@ -938,7 +984,7 @@ impl Context<'_, '_, '_> {
                         Ok(Event::Transfer {
                             destination,
                             value: Value::Read {
-                                access: self.access(load.source(), out)?,
+                                access: self.read_access(load.source(), out)?,
                                 moved: false,
                             },
                             scalar,
@@ -1094,6 +1140,10 @@ fn emit_access(access: Access, out: &mut Writer<'_, '_>) -> Result<()> {
                 .map_err(|_| out.error())?;
             offset
         }
+        Address::Slice { source, offset } => {
+            slice_reads::emit(source, out)?;
+            offset
+        }
     };
     write!(
         out,
@@ -1221,12 +1271,14 @@ fn headers() -> usize {
         + h::<Option<(u32, &'static str)>>()
         + pointer_events::headers()
         + witness_transfers::headers()
+        + slice_reads::headers()
         + 24 * size_of::<usize>()
         + 20 * size_of::<&()>()
 }
 
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
+    include_str!("original_semantic_mir_source_slice_reads_v41.vrs"),
     r#"
 struct InvocationSourceByteStateV36 {
     machine: MemoryStateV30,
@@ -1278,6 +1330,7 @@ open spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSour
 }
 
 enum InvocationSourceByteBaseV36 {
+    SliceElement(InvocationSourceSliceReadV41),
     Slot { descriptor: int, slot: InvocationSourceSlotV36 },
     ObjectLocal(int),
     PointerLocal(int),
@@ -1388,6 +1441,9 @@ open spec fn invocation_source_byte_address_v36(
     root: int, instance: int,
 ) -> Option<MemoryPointerV30> {
     let base = match access.base {
+        InvocationSourceByteBaseV36::SliceElement(slice) =>
+            invocation_source_slice_read_base_v41(source, slice, access.offset,
+                access.width, access.alignment),
         InvocationSourceByteBaseV36::ObjectLocal(local) =>
             if source.objects.contains_key(local) {
                 let object = source.objects[local];

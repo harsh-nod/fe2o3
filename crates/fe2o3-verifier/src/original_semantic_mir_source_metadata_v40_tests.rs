@@ -2,6 +2,9 @@ use super::*;
 use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
 use fe2o3_mir_model::semantic_mir_v1::*;
 
+#[path = "original_semantic_mir_source_slice_reads_v41_tests.rs"]
+mod slice_reads_tests;
+
 const LIMIT: usize = 100_000_000;
 
 fn transform(types: &mut Vec<Type>, functions: &mut Vec<Function>, mutable: bool) {

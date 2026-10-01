@@ -1,0 +1,47 @@
+struct InvocationSourceSliceReadV41 {
+    local: int,
+    index: int,
+    index_bits: int,
+    metadata_bits: int,
+    stride: int,
+    alignment: int,
+}
+
+open spec fn invocation_source_slice_read_base_v41(
+    source: InvocationSourceByteStateV36, recipe: InvocationSourceSliceReadV41,
+    offset: int, width: int, alignment: int,
+) -> Option<MemoryPointerV30> {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !(0 <= recipe.local < source.machine.values.len())
+        || !(0 <= recipe.index < source.machine.values.len())
+        || recipe.stride < 0 || !(0 <= offset && 0 <= width && offset + width <= recipe.stride)
+        || !invocation_source_pointer_carrier_v36(source.machine.values[recipe.local], recipe.metadata_bits)
+        || !invocation_source_byte_value_typed_v36(source.machine.values[recipe.index], recipe.index_bits) {
+        None
+    } else {
+        match source.machine.values[recipe.local] {
+            MemoryValueV30::Slice(slice) => {
+                match source.machine.values[recipe.index] {
+                    MemoryValueV30::Scalar(index) => {
+                        let base = MemoryPointerV30 {
+                            byte_offset: slice.pointer.byte_offset + index * recipe.stride,
+                            ..slice.pointer };
+                        let projected = MemoryPointerV30 {
+                            byte_offset: base.byte_offset + offset, ..base };
+                        if 0 <= index < slice.length
+                            && byte_range_aligned_v30(source.machine.memory, slice.pointer,
+                                slice.length * recipe.stride, recipe.alignment)
+                            && slice.pointer.byte_offset + slice.length * recipe.stride < memory_value_modulus_v30(8)
+                            && byte_range_aligned_v30(source.machine.memory, base,
+                                recipe.stride, recipe.alignment)
+                            && byte_range_aligned_v30(source.machine.memory, projected, width, alignment) {
+                            Some(base)
+                        } else { None }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+}
