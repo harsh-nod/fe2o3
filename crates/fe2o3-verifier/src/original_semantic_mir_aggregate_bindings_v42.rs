@@ -298,7 +298,9 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             || endpoint.source_local(out.budget)?.index() as usize != local
             || endpoint.source_type(out.budget)? != source_type
         {
-            return Err(mismatch());
+            return Err(Error::Statement(
+                "original aggregate endpoint differs from its nominal source root",
+            ));
         }
         let root_components = match semantic
             .types()
@@ -315,7 +317,11 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         match endpoint.carrier_shape(out.budget)? {
             Carrier::Aggregate { components } if components == root_components => (),
             Carrier::Unit if root_components == 0 => (),
-            _ => return Err(mismatch()),
+            _ => {
+                return Err(Error::Statement(
+                    "original aggregate root carrier differs from its exact source arity",
+                ));
+            }
         }
         if slots
             .legacy_descriptor_by_source(
@@ -390,7 +396,9 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                         components: expected,
                     })
                 {
-                    return Err(mismatch());
+                    return Err(Error::Statement(
+                        "original aggregate child carrier differs from its exact source path",
+                    ));
                 }
                 selected = Some(parent.component(field as usize, out.budget)?);
             }
@@ -400,7 +408,9 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 || selected.source_local(out.budget)?.index() as usize != local
                 || selected.source_type(out.budget)? != ty
             {
-                return Err(mismatch());
+                return Err(Error::Statement(
+                    "original aggregate leaf differs from its nominal source path",
+                ));
             }
             let scalar = original.scalar(out)?;
             let carrier = selected.carrier_shape(out.budget)?;

@@ -440,13 +440,19 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                         }
                         continue;
                     };
-                    let location = location.ok_or_else(mismatch)?;
+                    let location = location.ok_or(Error::Statement(
+                        "original reachable source block has no paired canonical entry",
+                    ))?;
                     if location.function != physical.coordinate {
-                        return Err(mismatch());
+                        return Err(Error::Statement(
+                            "original source block entry names a foreign canonical function",
+                        ));
                     }
                     let cut = cuts.get_mut(location.block as usize).ok_or_else(mismatch)?;
                     if cut.is_some() {
-                        return Err(mismatch());
+                        return Err(Error::Statement(
+                            "distinct original source blocks share one paired canonical entry",
+                        ));
                     }
                     let mut bindings = vector(live.len(), out)?;
                     for &variable in live {
@@ -624,7 +630,9 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             || endpoint.source_local(out.budget)?.index() as usize != local
             || endpoint.source_type(out.budget)? != declaration.ty()
         {
-            return Err(mismatch());
+            return Err(Error::Statement(
+                "original SSA endpoint differs from its paired source local or type",
+            ));
         }
         if self.is_aggregate_binding(declaration.ty(), &endpoint, out)? {
             return self.aggregate_binding(

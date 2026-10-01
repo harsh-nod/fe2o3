@@ -195,9 +195,6 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 || call.unwind() != Unwind::Unreachable
                 || destination.edge().role() != EdgeRole::CallReturn
                 || destination.place().ty() != ty
-                || slots
-                    .legacy_descriptor_by_source(root, parent, local, out)?
-                    .is_some()
             {
                 return Err(mismatch());
             }
@@ -219,23 +216,37 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                     return Err(mismatch());
                 }
                 destination_memory = Some((access, parent));
-            } else if destination.place().projections().is_empty() {
-                if root_type != ty {
-                    return Err(mismatch());
-                }
             } else {
-                let (range, result_type) = slots
-                    .aggregate_component_range(root_type, destination.place().projections(), out)?
-                    .ok_or_else(mismatch)?;
-                if result_type != ty || range.is_empty() {
+                // Original objects have exact statement generations and were
+                // authenticated above; only legacy storage uses a local key.
+                if slots
+                    .legacy_descriptor_by_source(root, parent, local, out)?
+                    .is_some()
+                {
                     return Err(mismatch());
                 }
-                destination_component = Some(DestinationComponent {
-                    root_type,
-                    result_type,
-                    first_leaf: range.start,
-                    depth: destination.place().projections().len(),
-                });
+                if destination.place().projections().is_empty() {
+                    if root_type != ty {
+                        return Err(mismatch());
+                    }
+                } else {
+                    let (range, result_type) = slots
+                        .aggregate_component_range(
+                            root_type,
+                            destination.place().projections(),
+                            out,
+                        )?
+                        .ok_or_else(mismatch)?;
+                    if result_type != ty || range.is_empty() {
+                        return Err(mismatch());
+                    }
+                    destination_component = Some(DestinationComponent {
+                        root_type,
+                        result_type,
+                        first_leaf: range.start,
+                        depth: destination.place().projections().len(),
+                    });
+                }
             }
             let target = parent_row
                 .blocks

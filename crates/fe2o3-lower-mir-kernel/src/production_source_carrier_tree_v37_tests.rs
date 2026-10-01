@@ -267,6 +267,87 @@ fn source_typed_carrier_tree_single_value_and_out_of_range_queries_are_sticky() 
 }
 
 #[test]
+fn source_typed_carrier_tree_missing_child_refuses_without_hiding_independent_siblings() {
+    let reached = std::cell::Cell::new(false);
+    let result = probe(
+        nested_owner,
+        MODULE_LIMIT,
+        MODULE_LIMIT,
+        |relation, budget| {
+            let semantic = relation.source.source_semantic(budget)?;
+            let outer = SemanticTypeIdV1::from_index((semantic.types().len() - 1) as u32);
+            let archive = relation
+                .source
+                .root_row(0)?
+                .rvalue_results
+                .as_ref()
+                .unwrap();
+            let row = archive
+                .values
+                .iter()
+                .find(|row| row.typed.ty == outer)
+                .unwrap();
+            let endpoint =
+                relation.ssa_typed_endpoint_v36(0, row.instance, row.original, budget)?;
+            let SourceSsaPhysicalV36::Aggregate { start, .. } = *endpoint.physical else {
+                panic!("genuine outer aggregate");
+            };
+            let SourceSsaPhysicalV36::Aggregate { start: inner, .. } =
+                archive.carriers[start].physical
+            else {
+                panic!("genuine nested aggregate");
+            };
+            let mut carriers = archive.carriers.clone();
+            // Test-only corruption of one retained child, not a claim that Deinit
+            // removes physical carriers or a public endpoint construction path.
+            carriers[inner].physical = SourceSsaPhysicalV36::Unmodeled;
+            let changed = ProductionSourceSsaEndpointV36 {
+                carriers: &carriers,
+                ..endpoint
+            };
+            let sibling = changed.component(1, budget)?;
+            assert_eq!(sibling.source_type(budget)?, U32);
+            assert_eq!(
+                sibling.carrier_shape(budget)?,
+                ProductionSourceSsaCarrierShapeV37::Value
+            );
+            assert!(sibling.original_definition(budget)?.is_some());
+            let nested = changed.component(0, budget)?;
+            assert_eq!(
+                nested.carrier_shape(budget)?,
+                ProductionSourceSsaCarrierShapeV37::Aggregate { components: 2 }
+            );
+            assert_eq!(
+                nested.component(1, budget)?.carrier_shape(budget)?,
+                ProductionSourceSsaCarrierShapeV37::Unit
+            );
+            assert!(matches!(
+                nested.component(0, budget),
+                Err(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original SSA binding has no typed carrier"
+                ))
+            ));
+            assert!(matches!(
+                changed.carrier_shape(budget),
+                Err(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original SSA binding has no typed carrier"
+                ))
+            ));
+            reached.set(true);
+            Ok(())
+        },
+    )
+    .0;
+    assert!(reached.get());
+    assert!(matches!(
+        result,
+        Err(ProductionSourceOwnedViewErrorV18::Binding(
+            "original SSA binding has no typed carrier"
+        ))
+    ));
+}
+
+#[test]
 fn source_typed_descriptor_wrapper_retains_slice_locator_without_shape_inference() {
     let completed = std::cell::Cell::new(false);
     run_descriptor_roles_v18(

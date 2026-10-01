@@ -435,7 +435,13 @@ pub(in super::super) fn call_transform(
     };
     let pair_mode = SemanticAbiPassModeV1::Pair {
         first: *attributes,
-        second: *attributes,
+        second: SemanticAbiValueAttributesV1::new(
+            attributes.regular(),
+            SemanticAbiExtensionV1::ZeroExtend,
+            0,
+            None,
+        )
+        .unwrap(),
     };
     let result_type = if aggregate_return { pair } else { word };
     let result_mode = if aggregate_return {
@@ -889,7 +895,11 @@ fn original_mir_aggregate_partial_initialization_keeps_the_mixed_memory_cut_rela
                     paired.emit(out)?;
                     assert!(out.text.contains("InvocationSourceByteDestinationV36::Memory("));
                     assert!(out.text.contains("InvocationSourceByteBaseV36::ObjectLocal("));
-                    assert!(out.text.contains("invocation_byte_heaps_related_v36("));
+                    for root in 0..paired.roots.len() {
+                        assert!(out.text.contains(&format!(
+                            "&& invocation_source_byte_storage_related_{root}_v36(source, target)"
+                        )));
+                    }
                     assert!(!out.text.contains("InvocationSourceByteEventV36::Checked"));
                     Ok(())
                 })
@@ -969,7 +979,7 @@ fn original_mir_aggregate_cuts_preserve_partial_move_payload_across_join_and_bac
 #[test]
 fn original_mir_aggregate_cuts_skip_missing_dead_carriers_but_require_live_and_complete_snapshots()
 {
-    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    use fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37 as Carrier;
     for backedge in [false, true] {
         super::super::super::invocations::tests::run_source_transform(
             LIMIT,
@@ -990,12 +1000,12 @@ fn original_mir_aggregate_cuts_skip_missing_dead_carriers_but_require_live_and_c
                             let value = source_boundary_value(plan, root, instance, 2, 4, out)?;
                             let endpoint = relation
                                 .ssa_typed_endpoint_v36(root, instance, value, out.budget)?;
-                            assert!(matches!(
-                                endpoint.component(1, out.budget),
-                                Err(SourceError::Binding(
-                                    "original SSA binding has no typed carrier"
-                                ))
-                            ));
+                            // Deinit clears source definedness, not physical
+                            // storage. Its old canonical flag carrier survives.
+                            let flag = endpoint.component(1, out.budget)?;
+                            assert_eq!(flag.carrier_shape(out.budget)?, Carrier::Value);
+                            let flag_definition = flag.original_definition(out.budget)?;
+                            assert!(flag_definition.is_some());
                             let physical =
                                 inventory.functions()[scope.physical].definitions.clone();
                             let binding = paired.binding(
@@ -1014,17 +1024,21 @@ fn original_mir_aggregate_cuts_skip_missing_dead_carriers_but_require_live_and_c
                             };
                             assert_eq!(paired.aggregates[index].components.len(), 1);
                             assert_eq!(paired.aggregates[index].components[0].leaf, 0);
-                            // Block 1 reads the flag before deinitializing it. Reusing
-                            // the later partial endpoint there must not satisfy it.
+                            // Locating old bits does not restore source
+                            // definedness. Required leaves still receive an
+                            // independent source-presence guard at runtime.
                             for demanded in [Some(ComponentCut::at(1)), None] {
-                                assert!(matches!(
-                                    paired.binding(
-                                        plan, root, instance, 4, value, 1, &physical, demanded, out
-                                    ),
-                                    Err(Error::Source(SourceError::Binding(
-                                        "original SSA binding has no typed carrier"
-                                    )))
-                                ));
+                                let complete = paired.binding(
+                                    plan, root, instance, 4, value, 1, &physical, demanded, out,
+                                )?;
+                                let SourceValue::Aggregate(index) = complete.source else {
+                                    panic!("complete aggregate carrier locator");
+                                };
+                                let components = &paired.aggregates[index].components;
+                                assert_eq!(components.len(), 2);
+                                assert_eq!(components[0].leaf, 0);
+                                assert_eq!(components[1].leaf, 1);
+                                assert_eq!(components[1].definition, flag_definition);
                             }
                             for (function, local, ty) in [
                                 (
@@ -1072,6 +1086,16 @@ fn original_mir_aggregate_cuts_skip_missing_dead_carriers_but_require_live_and_c
                             ));
                         }
                     }
+                    paired.emit(out)?;
+                    assert!(
+                        out.text
+                            .contains("match invocation_source_aggregate_leaf_v42(")
+                    );
+                    assert!(out.text.contains("None => false"));
+                    assert!(
+                        super::super::source_bytes::SOURCE_BYTES_V36
+                            .contains("invocation_source_aggregate_complete_v42(snapshot)")
+                    );
                     Ok(())
                 })
             },
