@@ -24,17 +24,17 @@ proof preparation nor executed proof. No protected proof or GPU launch ran.
 The independent source/tool/runner audit passed; raw r332 log SHA-256 is
 `64e2068050e4ea8693a4dd26fc22de9a4e7289e4e36a84b98b0c3bf5fb3c849d`.
 
-Reviewed local integration now includes original Option-predicate transport
-through helpers and SSA joins, scalar-control correspondence, explicit pending
-proof-relay state, source-record inputs, artifact custody, shared V3 finalization
-traversal and a static-musl `close_range` linking repair. Actual helper-call
-activation and control/memory proof composition are still being implemented.
-Strict parent recovery also needs the checked optimization witnesses, not only
-record hashes or signatures. No partial record grants production authority.
+Reviewed local integration includes scalar-control correspondence, original
+helper-call topology, instance-qualified control/memory proof composition,
+pending proof-response dispatch barriers and shared V3 capsule packing. The
+call topology still does not prove complete callee semantics; `MissingCall`
+and `MissingSourcePublication` remain explicit refusals. Strict parent recovery
+needs the actual checked optimization witnesses and original context/ABI
+inputs, not only record hashes or signatures. No partial record grants authority.
 
 The nine-package checks r333-r336 stopped on internal schema visibility, a loan
 lifetime bound and two test-integration issues. Those narrow repairs are local.
-The latest combined check **r337 failed** at
+The earlier combined check **r337 failed** at
 `1e5299e8fe9585375bb25591a3acc2dc1ab0f891`: four compile errors in the new
 scalar-control fixture prevented test execution. Its source/tool/runner audit
 passed; raw log SHA-256 is
@@ -43,11 +43,34 @@ Focused lowerer r338 then failed on one incorrect test-probe module import,
 before test execution. Its independent audit passed; raw log SHA-256 is
 `2a3619cee2261404143e5aa3d1db8fe68b5d587ccfe44c087ccaa23147ac67cb`.
 The test-only scope repair is integrated without exposing private production
-methods. Focused lowerer execution **r339 is running** at frozen candidate
-`0811ebca0699ab17ff76fd38cd0c41069cea82ed`; no result is credited yet.
-That candidate also merges public retained-translation accounting while
-preserving authenticated launch-envelope checks and both semantic replays,
-and prevents compiler dispatch while an original proof response remains pending.
+methods. Focused lowerer execution **r339 finished with 61 passed and seven
+failed**, none ignored and 4,712 filtered, at
+`0811ebca0699ab17ff76fd38cd0c41069cea82ed`. The full harness built in 11m58s;
+selected tests ran in 23.96s. Failures concern two original Option-storage
+transports, three invalid scalar fixtures and two control-flow visit checks.
+Both new authenticated-launch-envelope/paid-replay tests passed. The independent
+audit passed; raw log SHA-256 is
+`4e90a26697922f49b7555ba099c7f333a7a19e2d33d7b88d79d20da00cf271b2`.
+The callable-prefix fixture repair is integrated but not yet executed.
+
+Ten-package checks r340 and r341 then exposed a call-query error-type mismatch
+and a verifier tuple-constructor alias. Both have narrow local fixes; neither
+check executed tests. The combined ten-package check **r342 passed**, including
+test compilation, at `d39c35e2ae35e571c39654af02a24fb8b42d79a8`. Its independent
+source/tool/runner/raw-log audit passed; raw log SHA-256 is
+`9875f9f8bf9940a8b9a175f040807ad54f565dcddfe7e590fd31df865508700f`.
+This did not execute tests, protected proof or hardware. Component execution
+**r343 is running** on that same frozen candidate.
+
+Subsequent reviewed local integration at
+`1e0a09788a6ce886a5d4370b860a801283b407c5` preserves original typed storage at
+both helper-return joins, checks retained descriptor bounds branches against
+the original source and optimized graph, and replays the actual carried Policy11
+and LICM witnesses through the existing checked engines. These changes and their
+new regressions have not yet executed. Normal-edge diagnostics now expose the
+original failure before the unchanged visit-count assertion; that is not a
+claimed control-flow repair. Checked optimizer replay still lacks the original
+context/ABI/source-semantic conjunction required for source publication.
 
 A fresh isolated deployment retry on MI350 passed **166 tests**, with zero
 failures and eight ignored: 154 library, nine runtime CLI and three qualification
@@ -57,21 +80,24 @@ still **failed** because the static qualification usage oracle omitted two
 existing V3 commands. The helper stage was not reached and no runtime was
 approved. The exact usage-check repair preserves exit-status and text-equality
 requirements. A fresh retry of candidate
-`676484cc2a97560c588a8e8b26ecd407ef5b41a0` has passed the deployment stage:
-166 tests passed, eight ignored, and all five static binaries passed their ELF
-and CLI checks. Its proof-helper stage is still running. This separate runtime
-candidate is not the newer integrated compiler, and neither has approval.
-The primary independently verified the failed run's archive and test summaries;
-archive SHA-256 is
-`3ae88b70323480bb4d27dfed87db24c8f25388c58952a9d8e02a89f5610c0fec`.
-Both private build/probe containers and their disposable cache were removed.
+`676484cc2a97560c588a8e8b26ecd407ef5b41a0` has now passed **both complete
+build stages**: 166 tests passed, eight ignored; all five deployment binaries
+passed their ELF/CLI gates, and the proof-helper passed its static ELF and
+secure-entry gate. The primary independently verified the archive and all
+twelve artifact payload hashes, comprising six binaries and six ELF reports.
+Successful archive SHA-256:
+`042e1caaff6187d7fb4e8adb59987bd40fbe1f63fe904442007caa1b1ff64c80`.
+The owned container and 3,957,444,608-byte disposable cache were removed after
+verification. No runtime assembly, approval, service activation or proof request
+is credited. This exact runtime candidate is not the newer integrated compiler.
 Earlier successful V3 provisioning below remains prerequisite evidence for its
 own older bundle, not current compiler or proof execution.
 
 Both public mains were independently read at
-`b6fd9d1e678f81766ec0543a81b355ef8eedb17f`. Their concurrent retained helper
-translation work is preserved here; its reported tests are not credited as
-validation of this local integration candidate.
+`d125dd02b91f60756c052f5d9f734d24731765cc`. Their concurrent BF16 source
+authoring workflow and retained helper accounting are preserved. The workflow's
+27 local Node controls passed in this integration; they test diagnostic
+transport and do not establish compiler, simulator or GPU qualification.
 The unfinished implementation remains local. Its full pending-range audit at
 `2eb0d14782270b892bdd47facf60810bc79a303d` found 154 missing author sign-offs
 and 96 hygiene findings: 65 file-size/growth findings and 31 test-gated panic
