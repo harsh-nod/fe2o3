@@ -13,6 +13,14 @@ enum Case {
     Backedge,
     Single,
     Reordered,
+    AliasCopy,
+    AliasMoveChain,
+    AliasSameProducer,
+    AliasConflict,
+    AliasRedefined,
+    AliasReordered,
+    AliasCrossBlock,
+    AliasRepeatedLocal,
 }
 
 struct Fixture {
@@ -26,6 +34,22 @@ fn place(local: u32, ty: SemanticTypeIdV1) -> SemanticPlaceV1 {
 
 fn operand(local: u32) -> SemanticOperandV1 {
     SemanticOperandV1::Copy(place(local, SCALAR))
+}
+
+fn moved(local: u32) -> SemanticOperandV1 {
+    SemanticOperandV1::Move(place(local, SCALAR))
+}
+
+fn lifetime(local: u32, live: bool) -> SemanticStatementV1 {
+    let local = SemanticLocalIdV1::from_index(local);
+    SemanticStatementV1::new(
+        SemanticSourceProvenanceV1::unavailable(),
+        if live {
+            SemanticStatementKindV1::StorageLive(local)
+        } else {
+            SemanticStatementKindV1::StorageDead(local)
+        },
+    )
 }
 
 fn constant(value: u64) -> SemanticOperandV1 {
@@ -131,12 +155,77 @@ impl Fixture {
         if matches!(case, Case::RedefinedParameter) {
             first.push(assign(2, SCALAR, SemanticRvalueKindV1::Use(constant(99))));
         }
-        first.push(construct(0, vec![operand(2)]));
+        let aliases = matches!(
+            case,
+            Case::AliasCopy
+                | Case::AliasMoveChain
+                | Case::AliasSameProducer
+                | Case::AliasConflict
+                | Case::AliasRedefined
+                | Case::AliasReordered
+                | Case::AliasCrossBlock
+                | Case::AliasRepeatedLocal
+        );
+        if matches!(case, Case::AliasCrossBlock) {
+            first.extend([
+                lifetime(7, true),
+                assign(7, SCALAR, SemanticRvalueKindV1::Use(operand(6))),
+                construct(0, vec![moved(7)]),
+                lifetime(7, false),
+            ]);
+        } else if aliases {
+            first.extend([
+                lifetime(6, true),
+                assign(6, SCALAR, SemanticRvalueKindV1::Use(operand(2))),
+            ]);
+            if matches!(case, Case::AliasRedefined) {
+                first.push(assign(6, SCALAR, SemanticRvalueKindV1::Use(operand(3))));
+            }
+            if matches!(case, Case::AliasMoveChain) {
+                first.extend([
+                    lifetime(7, true),
+                    assign(7, SCALAR, SemanticRvalueKindV1::Use(moved(6))),
+                    lifetime(8, true),
+                    assign(8, SCALAR, SemanticRvalueKindV1::Use(operand(7))),
+                    construct(0, vec![moved(8)]),
+                    lifetime(8, false),
+                    lifetime(7, false),
+                ]);
+            } else {
+                first.push(construct(0, vec![moved(6)]));
+            }
+            first.push(lifetime(6, false));
+        } else {
+            first.push(construct(0, vec![operand(2)]));
+        }
         let second = match case {
-            Case::Single => SemanticStatementV1::new(source, SemanticStatementKindV1::Nop),
-            Case::SameProducer => construct(0, vec![operand(2)]),
-            Case::Conflict => construct(0, vec![operand(3)]),
-            _ => construct(1, vec![]),
+            Case::Single => vec![SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Nop,
+            )],
+            Case::SameProducer => vec![construct(0, vec![operand(2)])],
+            Case::Conflict => vec![construct(0, vec![operand(3)])],
+            Case::AliasSameProducer | Case::AliasConflict => vec![
+                lifetime(7, true),
+                assign(
+                    7,
+                    SCALAR,
+                    SemanticRvalueKindV1::Use(operand(if matches!(case, Case::AliasConflict) {
+                        3
+                    } else {
+                        2
+                    })),
+                ),
+                construct(0, vec![moved(7)]),
+                lifetime(7, false),
+            ],
+            Case::AliasRepeatedLocal => vec![
+                lifetime(6, true),
+                assign(6, SCALAR, SemanticRvalueKindV1::Use(operand(2))),
+                construct(0, vec![moved(6)]),
+                lifetime(6, false),
+            ],
+            _ => vec![construct(1, vec![])],
         };
         let field = SemanticPlaceV1::new(
             SemanticLocalIdV1::from_index(4),
@@ -150,7 +239,14 @@ impl Fixture {
         let mut blocks = vec![
             block(
                 0,
-                vec![],
+                if matches!(case, Case::AliasCrossBlock) {
+                    vec![
+                        lifetime(6, true),
+                        assign(6, SCALAR, SemanticRvalueKindV1::Use(operand(2))),
+                    ]
+                } else {
+                    vec![]
+                },
                 SemanticTerminatorKindV1::SwitchInt {
                     discriminant: operand(1),
                     targets: SemanticSwitchTargetsV1::new(
@@ -164,7 +260,7 @@ impl Fixture {
                 },
             ),
             block(1, first, goto(3)),
-            block(2, vec![second], goto(3)),
+            block(2, second, goto(3)),
             block(
                 3,
                 vec![assign(
@@ -213,10 +309,10 @@ impl Fixture {
         if matches!(case, Case::Single) {
             blocks[0] = block(0, vec![], goto(1));
         }
-        if matches!(case, Case::Reordered) {
+        if matches!(case, Case::Reordered | Case::AliasReordered) {
             blocks.swap(1, 2);
         }
-        let locals = [
+        let mut locals: Vec<_> = [
             (SCALAR, SemanticLocalRoleV1::Return),
             (SCALAR, SemanticLocalRoleV1::Argument(0)),
             (SCALAR, SemanticLocalRoleV1::Argument(1)),
@@ -235,6 +331,16 @@ impl Fixture {
             )
         })
         .collect();
+        if aliases {
+            locals.extend((6..9).map(|index| {
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([100 + index; 32]),
+                    SCALAR,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                )
+            }));
+        }
         let function = SemanticFunctionDeclV1::new(
             SemanticFunctionIdentityV1::from_sha256([110; 32]),
             SemanticFunctionRoleV1::InternalHelper,
@@ -431,7 +537,14 @@ fn immutable_entry_payload_uses_exact_ssa_across_enum_phi() {
 
 #[test]
 fn conflicting_redefined_and_looping_payloads_retain_storage() {
-    for case in [Case::Conflict, Case::RedefinedParameter, Case::Backedge] {
+    for case in [
+        Case::Conflict,
+        Case::RedefinedParameter,
+        Case::Backedge,
+        Case::AliasConflict,
+        Case::AliasRedefined,
+        Case::AliasRepeatedLocal,
+    ] {
         let fixture = Fixture::new(case);
         assert!(
             plan_with_limits(&fixture, 1_000_000, 1_000_000)
@@ -443,28 +556,136 @@ fn conflicting_redefined_and_looping_payloads_retain_storage() {
 }
 
 #[test]
-fn scalar_plan_does_not_reconstruct_pointers_or_compiler_issued_values() {
-    let fixture = Fixture::new(Case::Ordinary);
-    let (source, mut ssa) = fixture.plans();
-    let (dominance, variants) = restoration_facts(&fixture, &ssa);
-    for binding in [
-        SemanticValueBindingV1::Value {
-            id: ValueId(12),
-            ty: Type::pointer(
-                Type::Scalar(ScalarType::U64),
-                AddressSpace::Private,
-                AccessMode::ReadWrite,
-            ),
-        },
-        SemanticValueBindingV1::Value {
-            id: ValueId(12),
-            ty: Type::Scalar(ScalarType::U32),
-        },
-        SemanticValueBindingV1::MathContext,
-        SemanticValueBindingV1::Unmaterialized,
+fn scalar_copy_aliases_retain_the_exact_immutable_entry_identity() {
+    for case in [
+        Case::AliasCopy,
+        Case::AliasMoveChain,
+        Case::AliasSameProducer,
+        Case::AliasReordered,
+        Case::AliasCrossBlock,
     ] {
-        let mut bindings = fixture.bindings();
-        bindings[2] = Some(binding);
+        let fixture = Fixture::new(case);
+        let (rows, work, storage) = plan_with_limits(&fixture, 1_000_000, 1_000_000).unwrap();
+        assert_eq!(rows.len(), 1);
+        let ScalarEnumCandidateV1::Fixed(producer) = rows[0].source else {
+            panic!("actual immutable entry producer required");
+        };
+        let (_, ssa) = fixture.plans();
+        assert_eq!(producer.ssa, ssa.entry_definitions[&2]);
+        assert_eq!(producer.value, ValueId(12));
+        assert_eq!(producer.semantic_type, SCALAR);
+        assert!(plan_with_limits(&fixture, work, storage).is_ok());
+        assert!(plan_with_limits(&fixture, work - 1, storage).is_err());
+        assert!(plan_with_limits(&fixture, work, storage - 1).is_err());
+    }
+}
+
+#[test]
+fn alias_assignment_requires_the_exact_canonical_use_kill_define_sequence() {
+    let variable = fe2o3_mir_model::SsaVariableIdV1::new;
+    let value = |id| SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(id));
+    let read = SsaResolvedEventV1::Use {
+        variable: variable(2),
+        value: value(0),
+    };
+    let define = SsaResolvedEventV1::Define {
+        variable: variable(6),
+        value: value(1),
+    };
+    let kill = SsaResolvedEventV1::Kill {
+        variable: variable(2),
+        previous: Some(value(0)),
+    };
+    assert_eq!(
+        scalar_enum_alias_input_v1(&[(3, read), (4, define)], 1, 2, false),
+        Some(value(0))
+    );
+    assert_eq!(
+        scalar_enum_alias_input_v1(&[(3, read), (4, kill), (5, define)], 2, 2, true),
+        Some(value(0))
+    );
+    for events in [
+        vec![(3, read), (5, define)],
+        vec![
+            (
+                3,
+                SsaResolvedEventV1::Use {
+                    variable: variable(3),
+                    value: value(0),
+                },
+            ),
+            (4, define),
+        ],
+        vec![(3, kill), (4, define)],
+    ] {
+        assert_eq!(scalar_enum_alias_input_v1(&events, 1, 2, false), None);
+    }
+    assert_eq!(
+        scalar_enum_alias_input_v1(
+            &[
+                (3, read),
+                (
+                    4,
+                    SsaResolvedEventV1::Kill {
+                        variable: variable(2),
+                        previous: Some(value(9)),
+                    }
+                ),
+                (5, define)
+            ],
+            2,
+            2,
+            true
+        ),
+        None
+    );
+}
+
+#[test]
+fn scalar_plan_does_not_reconstruct_pointers_or_compiler_issued_values() {
+    for case in [Case::Ordinary, Case::AliasMoveChain] {
+        let fixture = Fixture::new(case);
+        let (source, mut ssa) = fixture.plans();
+        let (dominance, variants) = restoration_facts(&fixture, &ssa);
+        for binding in [
+            SemanticValueBindingV1::Value {
+                id: ValueId(12),
+                ty: Type::pointer(
+                    Type::Scalar(ScalarType::U64),
+                    AddressSpace::Private,
+                    AccessMode::ReadWrite,
+                ),
+            },
+            SemanticValueBindingV1::Value {
+                id: ValueId(12),
+                ty: Type::Scalar(ScalarType::U32),
+            },
+            SemanticValueBindingV1::MathContext,
+            SemanticValueBindingV1::Unmaterialized,
+        ] {
+            let mut bindings = fixture.bindings();
+            bindings[2] = Some(binding);
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+            assert!(
+                plan_scalar_enum_payloads_v1(
+                    &fixture.types,
+                    &fixture.function,
+                    &source,
+                    &ssa,
+                    &bindings,
+                    ScalarEnumRestorationFactsV1 {
+                        dominance: &dominance,
+                        variants: &variants
+                    },
+                    &mut budget
+                )
+                .unwrap()
+                .is_empty()
+            );
+        }
+        ssa.compiler_issued_bindings
+            .insert(SCALAR, SemanticPromotedBindingV1::MathContext);
         let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
         let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
         assert!(
@@ -473,7 +694,7 @@ fn scalar_plan_does_not_reconstruct_pointers_or_compiler_issued_values() {
                 &fixture.function,
                 &source,
                 &ssa,
-                &bindings,
+                &fixture.bindings(),
                 ScalarEnumRestorationFactsV1 {
                     dominance: &dominance,
                     variants: &variants
@@ -484,26 +705,6 @@ fn scalar_plan_does_not_reconstruct_pointers_or_compiler_issued_values() {
             .is_empty()
         );
     }
-    ssa.compiler_issued_bindings
-        .insert(SCALAR, SemanticPromotedBindingV1::MathContext);
-    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
-    let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
-    assert!(
-        plan_scalar_enum_payloads_v1(
-            &fixture.types,
-            &fixture.function,
-            &source,
-            &ssa,
-            &fixture.bindings(),
-            ScalarEnumRestorationFactsV1 {
-                dominance: &dominance,
-                variants: &variants
-            },
-            &mut budget
-        )
-        .unwrap()
-        .is_empty()
-    );
 }
 
 #[test]
@@ -517,61 +718,122 @@ fn scalar_payload_analysis_uses_original_exact_work_and_storage_limits() {
 }
 
 #[test]
+fn scalar_alias_census_refuses_escape_and_nonunique_definitions() {
+    let fixture = Fixture::new(Case::AliasCopy);
+    let (source, ssa) = fixture.plans();
+    let (dominance, _) = restoration_facts(&fixture, &ssa);
+    let producer = ScalarEnumProducerV1 {
+        semantic_type: SCALAR,
+        ssa: ssa.entry_definitions[&2],
+        value: ValueId(12),
+        scalar: ScalarType::U64,
+    };
+    for facts in [
+        ScalarEnumLocalCensusV1 {
+            definitions: 1,
+            ssa_definitions: 1,
+            escaped: true,
+            constructors: 0,
+        },
+        ScalarEnumLocalCensusV1 {
+            definitions: 2,
+            ssa_definitions: 1,
+            ..Default::default()
+        },
+        ScalarEnumLocalCensusV1 {
+            definitions: 1,
+            ssa_definitions: 2,
+            ..Default::default()
+        },
+    ] {
+        let mut parameters = vec![None; fixture.function.locals().len()];
+        parameters[2] = Some(producer);
+        let mut census = vec![ScalarEnumLocalCensusV1::default(); parameters.len()];
+        census[6] = facts;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+        extend_scalar_enum_aliases_v1(
+            &mut parameters,
+            &fixture.types,
+            &fixture.function,
+            &source,
+            &ssa,
+            &census,
+            &dominance,
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(parameters[2], Some(producer));
+        assert_eq!(parameters[6], None);
+    }
+}
+
+#[test]
 fn only_proved_payload_memory_operations_are_omitted() {
-    let fixture = Fixture::new(Case::Ordinary);
-    for enabled in [false, true] {
-        fixture.with_lowering(enabled, |lowering, plan| {
-            assert_eq!(lowering.enum_payload_storage.is_empty(), enabled);
-            let mut operations = Vec::new();
-            for source_block in plan.plan().reverse_postorder() {
-                let block = SemanticBlockIdV1::from_index(source_block.get());
-                let mut target = BasicBlock::new(BlockId(source_block.get()));
-                let prologue = lowering.begin_block(block, &mut target).unwrap();
-                if enabled {
-                    assert_eq!(prologue.enum_payload_storage, 0);
-                }
-                for (ordinal, statement) in fixture.function.blocks()[source_block.get() as usize]
-                    .statements()
-                    .iter()
-                    .enumerate()
-                {
+    for case in [
+        Case::Ordinary,
+        Case::AliasCopy,
+        Case::AliasMoveChain,
+        Case::AliasSameProducer,
+        Case::AliasReordered,
+        Case::AliasCrossBlock,
+    ] {
+        let fixture = Fixture::new(case);
+        for enabled in [false, true] {
+            fixture.with_lowering(enabled, |lowering, plan| {
+                assert_eq!(lowering.enum_payload_storage.is_empty(), enabled);
+                let mut operations = Vec::new();
+                for source_block in plan.plan().reverse_postorder() {
+                    let block = SemanticBlockIdV1::from_index(source_block.get());
+                    let mut target = BasicBlock::new(BlockId(source_block.get()));
+                    let prologue = lowering.begin_block(block, &mut target).unwrap();
+                    if enabled {
+                        assert_eq!(prologue.enum_payload_storage, 0);
+                    }
+                    for (ordinal, statement) in fixture.function.blocks()
+                        [source_block.get() as usize]
+                        .statements()
+                        .iter()
+                        .enumerate()
+                    {
+                        lowering
+                            .lower_statement(
+                                block,
+                                Some(ordinal as u32),
+                                statement.kind(),
+                                &mut target.operations,
+                            )
+                            .unwrap();
+                    }
                     lowering
-                        .lower_statement(
+                        .lower_terminator(
                             block,
-                            Some(ordinal as u32),
-                            statement.kind(),
+                            fixture.function.blocks()[source_block.get() as usize]
+                                .terminator()
+                                .kind(),
                             &mut target.operations,
                         )
                         .unwrap();
+                    operations.extend(target.operations);
                 }
-                lowering
-                    .lower_terminator(
-                        block,
-                        fixture.function.blocks()[source_block.get() as usize]
-                            .terminator()
-                            .kind(),
-                        &mut target.operations,
-                    )
-                    .unwrap();
-                operations.extend(target.operations);
-            }
-            for is_kind in [
-                (|kind: &OperationKind| matches!(kind, OperationKind::Alloca { .. }))
-                    as fn(&OperationKind) -> bool,
-                |kind| matches!(kind, OperationKind::Store { .. }),
-                |kind| matches!(kind, OperationKind::Load { .. }),
-            ] {
-                assert_eq!(
-                    operations.iter().any(|operation| is_kind(&operation.kind)),
-                    !enabled
-                );
-            }
-            require_semantic_ssa_definitions_consumed_v1(
-                0,
-                &lowering.pending_semantic_ssa_definitions,
-            )
-            .unwrap();
-        });
+                for is_kind in [
+                    (|kind: &OperationKind| matches!(kind, OperationKind::Alloca { .. }))
+                        as fn(&OperationKind) -> bool,
+                    |kind| matches!(kind, OperationKind::Store { .. }),
+                    |kind| matches!(kind, OperationKind::Load { .. }),
+                ] {
+                    assert_eq!(
+                        operations.iter().any(|operation| is_kind(&operation.kind)),
+                        !enabled
+                    );
+                }
+                require_semantic_ssa_definitions_consumed_v1(
+                    0,
+                    &lowering.pending_semantic_ssa_definitions,
+                )
+                .unwrap();
+            });
+        }
     }
 }
 

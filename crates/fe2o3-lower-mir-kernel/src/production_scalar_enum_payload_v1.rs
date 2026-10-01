@@ -30,6 +30,196 @@ struct ScalarEnumLocalCensusV1 {
     escaped: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+struct ScalarEnumAliasV1 {
+    source: Option<(u32, bool, u32)>,
+    definition: Option<(u32, u32, SsaValueV1)>,
+    input: Option<SsaValueV1>,
+    valid: bool,
+}
+
+fn scalar_enum_alias_input_v1(
+    events: &[(u32, SsaResolvedEventV1)],
+    definition: usize,
+    source: u32,
+    moved: bool,
+) -> Option<SsaValueV1> {
+    // The canonical adapter emits whole-local Use, optional MoveKill, Define.
+    // A unique source assignment binds this exact sequence to its destination.
+    let (ordinal, _) = events.get(definition)?;
+    let distance = if moved { 2 } else { 1 };
+    let (input_ordinal, input) = events.get(definition.checked_sub(distance)?)?;
+    let SsaResolvedEventV1::Use { variable, value } = input else {
+        return None;
+    };
+    if variable.get() != source || input_ordinal.checked_add(distance as u32)? != *ordinal {
+        return None;
+    }
+    if moved
+        && !matches!(events.get(definition - 1),
+            Some((kill_ordinal, SsaResolvedEventV1::Kill { variable, previous: Some(previous) }))
+            if kill_ordinal.checked_add(1) == Some(*ordinal)
+                && variable.get() == source && previous == value)
+    {
+        return None;
+    }
+    Some(*value)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extend_scalar_enum_aliases_v1(
+    parameters: &mut [Option<ScalarEnumProducerV1>],
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
+    ssa: &SemanticControlFlowSsaPlanV1,
+    census: &[ScalarEnumLocalCensusV1],
+    dominance: &SemanticEnumPayloadDominanceV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mut aliases = emission_vec_v1(parameters.len(), budget)?;
+    budget.charge_work(parameters.len())?;
+    aliases.extend(parameters.iter().map(|parameter| ScalarEnumAliasV1 {
+        valid: parameter.is_some(),
+        ..ScalarEnumAliasV1::default()
+    }));
+    for (block, body) in function.blocks().iter().enumerate() {
+        budget.charge_work(1)?;
+        for statement in body.statements() {
+            budget.charge_work(1)?;
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            let SemanticRvalueKindV1::Use(operand) = assignment.value().kind() else {
+                continue;
+            };
+            let (source, moved) = match operand {
+                SemanticOperandV1::Copy(place) => (place, false),
+                SemanticOperandV1::Move(place) => (place, true),
+                _ => continue,
+            };
+            let destination = assignment.destination();
+            let local = destination.local().index() as usize;
+            let facts = &census[local];
+            let ty = function.locals()[local].ty();
+            if !destination.projections().is_empty()
+                || !source.projections().is_empty()
+                || source.ty() != ty
+                || destination.ty() != ty
+                || function.locals()[source.local().index() as usize].ty() != ty
+                || function.locals()[local].role().is_entry_argument()
+                || facts.escaped
+                || facts.definitions != 1
+                || facts.ssa_definitions != 1
+                || !matches!(
+                    types[ty.index() as usize].shape(),
+                    SemanticTypeShapeV1::Scalar(_)
+                )
+            {
+                continue;
+            }
+            charge_execution_cfg_lookup_v29(ssa.ssa_value_locals.len(), budget)?;
+            charge_execution_cfg_lookup_v29(ssa.compiler_issued_bindings.len(), budget)?;
+            if !ssa.ssa_value_locals.contains(&(local as u32))
+                || ssa.compiler_issued_bindings.contains_key(&ty)
+            {
+                continue;
+            }
+            aliases[local].source = Some((source.local().index(), moved, block as u32));
+            aliases[local].valid = true;
+        }
+    }
+    let plan = semantic_ssa.plan();
+    for &block in plan.reverse_postorder() {
+        budget.charge_work(1)?;
+        let events = plan
+            .resolved_events(block)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        for (index, &(ordinal, event)) in events.iter().enumerate() {
+            budget.charge_work(1)?;
+            let SsaResolvedEventV1::Define { variable, value } = event else {
+                continue;
+            };
+            let row = &mut aliases[variable.get() as usize];
+            let Some((source, moved, expected_block)) = row.source else {
+                continue;
+            };
+            if row.definition.is_some()
+                || expected_block != block.get()
+                || !matches!(value, SsaValueV1::Definition(_))
+            {
+                row.valid = false;
+                continue;
+            }
+            budget.charge_work(3)?;
+            row.definition = Some((block.get(), ordinal, value));
+            row.input = scalar_enum_alias_input_v1(events, index, source, moved);
+            row.valid &= row.input.is_some();
+        }
+    }
+    // Verify every actual use before propagating aliases. Local indices are
+    // lookup keys only; unknown/merged SSA values never stand in for a producer.
+    for &block in plan.reverse_postorder() {
+        budget.charge_work(1)?;
+        let events = plan
+            .resolved_events(block)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        for &(ordinal, event) in events {
+            budget.charge_work(1)?;
+            let SsaResolvedEventV1::Use { variable, value } = event else {
+                continue;
+            };
+            let local = variable.get() as usize;
+            let row = &mut aliases[local];
+            let expected = parameters[local]
+                .map(|parameter| parameter.ssa)
+                .or_else(|| row.definition.map(|(_, _, value)| value));
+            row.valid &= expected == Some(value) && matches!(value, SsaValueV1::Definition(_));
+            if let Some((producer_block, producer_ordinal, _)) = row.definition {
+                budget.charge_work(1)?;
+                row.valid &= if producer_block == block.get() {
+                    producer_ordinal < ordinal
+                } else {
+                    dominance.block_dominates(
+                        SemanticBlockIdV1::from_index(producer_block),
+                        SemanticBlockIdV1::from_index(block.get()),
+                    )
+                };
+            }
+        }
+    }
+    // The caller already excludes cyclic CFGs. Exact dominating definitions
+    // precede their uses in this canonical order, so no recursive alias walk or
+    // guessed local version is needed; each event is visited once per pass.
+    for &block in plan.reverse_postorder() {
+        budget.charge_work(1)?;
+        let events = plan
+            .resolved_events(block)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        for &(_, event) in events {
+            budget.charge_work(1)?;
+            let SsaResolvedEventV1::Define { variable, .. } = event else {
+                continue;
+            };
+            let local = variable.get() as usize;
+            let row = aliases[local];
+            let Some((source, _, _)) = row.source else {
+                continue;
+            };
+            let source = source as usize;
+            let expected = aliases[source]
+                .definition
+                .map(|(_, _, value)| value)
+                .or_else(|| parameters[source].map(|parameter| parameter.ssa));
+            if row.valid && aliases[source].valid && row.input == expected {
+                parameters[local] = parameters[source]
+                    .filter(|parameter| parameter.semantic_type == function.locals()[local].ty());
+            }
+        }
+    }
+    Ok(())
+}
+
 struct ScalarEnumCensusWorkV1<'a>(&'a mut dyn SemanticEmissionBudgetV1);
 impl PrivateArrayChargeV1 for ScalarEnumCensusWorkV1<'_> {
     type Error = ProductionSemanticKirErrorV1;
@@ -247,6 +437,16 @@ fn plan_scalar_enum_payloads_v1(
             scalar: *scalar,
         });
     }
+    extend_scalar_enum_aliases_v1(
+        &mut parameters,
+        types,
+        function,
+        semantic_ssa,
+        ssa,
+        &census,
+        restoration.dominance,
+        budget,
+    )?;
     let mut rows = Vec::new();
     for (&local, promoted) in &ssa.promoted {
         budget.charge_work(1)?;
