@@ -377,7 +377,7 @@ fn mixed_v53_finalizer_requires_exact_scratch_and_work() {
     let mut left = work;
     finalize_protected_worker_nominal_hsaco_v53(evidence, MIXED_SCRATCH, &mut |n| {
         left = left.checked_sub(n).ok_or("work")?;
-        Ok(())
+        Ok::<(), &'static str>(())
     })
     .unwrap();
     assert_eq!(left, 0);
@@ -386,7 +386,7 @@ fn mixed_v53_finalizer_requires_exact_scratch_and_work() {
     assert!(
         finalize_protected_worker_nominal_hsaco_v53(evidence, MIXED_SCRATCH, &mut |n| {
             left = left.checked_sub(n).ok_or("work")?;
-            Ok(())
+            Ok::<(), &'static str>(())
         })
         .is_err()
     );
