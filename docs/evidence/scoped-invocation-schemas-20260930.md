@@ -705,5 +705,17 @@ no protected runtime was provisioned or activated. The build and cleanup reports
 were recovered locally. A checked-conversion repair and its separate validation
 must precede another bundle attempt.
 
+That repair is now implemented in candidate
+`768b62d8a64ebc3d7d2d16248a81e42195e19a1f`: a checked conversion normalizes
+libc's signed/unsigned filesystem type without accepting negative, overflowing,
+or truncated aliases of the procfs magic. A private `#[path]` harness compiled
+the actual source module and its adjacent tests, unchanged, against the pinned
+libc dependency. All **five module tests passed on GNU and musl**, including the
+two new exact-match/alias controls. This is module-level portability coverage,
+not full-package or deployment qualification. The reviewed rerun log SHA-256 is
+`1f4b372cba11a0334b3b25f3b683e6c5f1e5b81aa7e78b517822a1ccf94ca5af`.
+The subsequent MI350 build began at 2026-10-01 00:28:09 UTC under its own
+2700-second deadline plus 30-second kill grace; no outcome is credited here.
+
 M0 is complete; M1-M7 remain incomplete and strict end-to-end coverage is
 **0/47**. None of these observations supplies protected proof or GPU execution.
