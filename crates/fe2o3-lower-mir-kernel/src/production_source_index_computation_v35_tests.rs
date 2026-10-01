@@ -1,4 +1,6 @@
 use super::*;
+#[path = "production_source_reference_endpoints_v38_tests.rs"]
+mod reference_endpoint_tests;
 
 fn index_production_owner_v35() -> ProductionSemanticSsaOwnerV1 {
     let component = index_reader_owner();

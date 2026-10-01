@@ -225,6 +225,7 @@ fn typed_endpoint_header_oracle_v36() -> usize {
     h::<SourceSsaElementV36>()
         + h::<SourceSsaCarrierTypeV36>()
         + h::<SourceSsaLoanV36>()
+        + reference_endpoint_header_oracle_v38()
         + h::<SourceSsaPhysicalV36>()
         + h::<SourceSsaEndpointRowV36>()
         + carrier_tree_header_oracle_v37()
@@ -257,6 +258,22 @@ fn typed_endpoint_header_oracle_v36() -> usize {
         + h::<SemanticLocalIdV1>()
         + h::<SemanticTypeIdV1>()
         + 12 * h::<usize>()
+}
+
+fn reference_endpoint_header_oracle_v38() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    h::<ProductionSourceReferenceCarrierV38>()
+        + h::<ProductionSourceReferenceEndpointV38<'_, '_>>()
+        + h::<Option<ProductionSourceReferenceEndpointV38<'_, '_>>>()
+        + h::<(usize, SemanticBlockIdV1, Option<usize>)>()
+        + h::<SourceReferenceRepresentationV29>()
+        + h::<SemanticBorrowKindV1>()
+        + h::<u32>()
+        + h::<&SourceSsaLoanV36>()
 }
 
 fn carrier_tree_header_oracle_v37() -> usize {

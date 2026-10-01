@@ -1,6 +1,7 @@
 // Exact source SSA carriers retained before the original emission archive dies.
 // These locators do not establish pointer validity, aliasing, or heap equality.
 include!("production_source_carrier_tree_v37.rs");
+include!("production_source_reference_endpoints_v38.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceSsaElementV36 {
     Scalar(ScalarType),
@@ -99,6 +100,9 @@ struct SourceSsaLoanV36 {
     origin_instance: ProductionCallInstanceIdV1,
     origin_local: SemanticLocalIdV1,
     origin_generation: u32,
+    origin_function: SemanticFunctionIdV1,
+    origin_type: SemanticTypeIdV1,
+    carrier: ProductionSourceReferenceCarrierV38,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -283,8 +287,8 @@ fn retain_source_carrier_leaf_v37(
         ) if pointer.kind() == SemanticPointerKindV1::Reference
             && pointer.metadata() == SemanticPointerMetadataV1::None =>
         {
-            // Scalar stable-referent payloads and correlated alternatives are not
-            // pointer carriers even when their physical payload count is one.
+            // A scalar stable-referent payload is a distinct locator class,
+            // never a pointer value just because there is one carrier.
             let carrier = match reference.values.as_slice() {
                 [value] => SourceSsaCarrierTypeV36::from_type(&value.ty),
                 _ => None,
@@ -292,7 +296,10 @@ fn retain_source_carrier_leaf_v37(
             match (reference.origin, carrier) {
                 (
                     SourceReferenceBindingOriginV29::SingleLoan(loan),
-                    Some(carrier_type @ SourceSsaCarrierTypeV36::Pointer { .. }),
+                    Some(
+                        carrier_type @ (SourceSsaCarrierTypeV36::Pointer { .. }
+                        | SourceSsaCarrierTypeV36::Scalar(_)),
+                    ),
                 ) => {
                     references.check(budget)?;
                     if !std::ptr::eq(references.plan.instances, instances)
@@ -312,6 +319,27 @@ fn retain_source_carrier_leaf_v37(
                         .origins
                         .get(record.origin)
                         .ok_or_else(source_typed_endpoint_error_v36)?;
+                    let carrier = match carrier_type {
+                        SourceSsaCarrierTypeV36::Pointer { .. } => {
+                            ProductionSourceReferenceCarrierV38::MemoryPointer
+                        }
+                        SourceSsaCarrierTypeV36::Scalar(_)
+                            if record.representation
+                                == SourceReferenceRepresentationV29::StableReferent
+                                && record.kind == SemanticBorrowKindV1::Shared
+                                && pointer.mutability() == SemanticMutabilityV1::Immutable
+                                && origin.projections.is_empty()
+                                && origin.ty == pointer.pointee() =>
+                        {
+                            ProductionSourceReferenceCarrierV38::StableScalar
+                        }
+                        _ => return Ok(SourceSsaPhysicalV36::Unmodeled),
+                    };
+                    budget.charge_work(3)?;
+                    let origin_function = instances
+                        .instance(origin.instance)
+                        .ok_or_else(source_typed_endpoint_error_v36)?
+                        .function();
                     SourceSsaPhysicalV36::Value {
                         value: reference.values[0].id,
                         ty: carrier_type,
@@ -322,6 +350,9 @@ fn retain_source_carrier_leaf_v37(
                             origin_instance: origin.instance,
                             origin_local: origin.local,
                             origin_generation: origin.generation,
+                            origin_function,
+                            origin_type: origin.ty,
+                            carrier,
                         }),
                     }
                 }
@@ -522,6 +553,7 @@ fn source_typed_endpoint_headers_v36() -> Result<usize, ArgumentResourceV1> {
         h::<SourceSsaElementV36>()?,
         h::<SourceSsaCarrierTypeV36>()?,
         h::<SourceSsaLoanV36>()?,
+        source_reference_endpoint_headers_v38()?,
         h::<SourceSsaPhysicalV36>()?,
         h::<SourceSsaEndpointRowV36>()?,
         source_carrier_tree_headers_v37()?,
