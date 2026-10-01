@@ -24,7 +24,10 @@ mod rows;
 
 #[path = "checked_u32_local_order_owned_v1.rs"]
 mod owned;
-pub use owned::{OwnedU32LocalOrderContinuationV1, prepare_owned_u32_local_order_continuation_v1};
+pub use owned::{
+    OwnedU32LocalOrderContinuationV1, OwnedU32LocalOrderRetainedStorageV1,
+    prepare_owned_u32_local_order_continuation_v1,
+};
 
 /// Two reviewed local preferences, never caller-selected passes or callbacks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

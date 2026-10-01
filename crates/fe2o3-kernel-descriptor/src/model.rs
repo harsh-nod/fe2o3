@@ -1597,3 +1597,6 @@ pub(crate) fn validate_text(value: &str, field: &'static str) -> Result<(), Vali
     }
     Ok(())
 }
+
+#[path = "model_storage_v1.rs"]
+mod logical_storage;

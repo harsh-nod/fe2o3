@@ -180,3 +180,7 @@ fn check_input(
 #[cfg(test)]
 #[path = "checked_u32_local_order_owned_v1_tests.rs"]
 mod tests;
+
+#[path = "checked_u32_local_order_retained_storage_v1.rs"]
+mod retained_storage_v1;
+pub use retained_storage_v1::OwnedU32LocalOrderRetainedStorageV1;

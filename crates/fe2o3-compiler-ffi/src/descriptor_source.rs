@@ -156,3 +156,6 @@ impl Error for CompilerDescriptorSourceErrorV1 {
         }
     }
 }
+
+#[path = "descriptor_source_storage_v1.rs"]
+mod logical_storage;

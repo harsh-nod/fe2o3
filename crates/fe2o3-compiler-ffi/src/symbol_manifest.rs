@@ -698,3 +698,6 @@ mod tests {
         }
     }
 }
+
+#[path = "symbol_manifest_storage_v1.rs"]
+mod logical_storage;

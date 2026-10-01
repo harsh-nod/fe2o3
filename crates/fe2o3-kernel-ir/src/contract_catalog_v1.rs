@@ -772,3 +772,7 @@ mod tests {
         budget.release_storage(receipt.retained_storage()).unwrap();
     }
 }
+
+#[path = "contract_catalog_retained_storage_v1.rs"]
+mod retained_storage_v1;
+pub use retained_storage_v1::KernelIrContractCatalogRetainedStorageV1;

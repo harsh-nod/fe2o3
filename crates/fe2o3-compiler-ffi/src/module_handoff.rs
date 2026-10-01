@@ -1310,3 +1310,6 @@ mod tests {
         }
     }
 }
+
+#[path = "module_payload_storage_v1.rs"]
+mod logical_storage;
