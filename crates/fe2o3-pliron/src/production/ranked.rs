@@ -6966,3 +6966,7 @@ pub fn compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
     compile_ranked_kernel_for_lowering_v1(construction, limits)
         .map_err(ProductionRankedCompileErrorV2::Pipeline)
 }
+
+#[cfg(feature = "internal-proof-staging")]
+#[path = "refinement_staging_policy_retained_storage_v1.rs"]
+mod retained_storage_v1;

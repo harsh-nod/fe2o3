@@ -4888,3 +4888,6 @@ mod storage_component_profile_tests {
         );
     }
 }
+
+#[path = "production_bindings_debug_retained_storage_v1.rs"]
+pub(crate) mod bindings_debug_retained_storage_v1;

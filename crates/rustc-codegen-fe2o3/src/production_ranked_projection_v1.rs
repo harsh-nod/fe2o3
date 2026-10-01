@@ -40507,3 +40507,6 @@ pub(crate) use bf16_nominal_source_preparation_v1::observe_actual_capability_pre
 
 #[cfg(test)]
 pub(crate) use bf16_nominal_source_preparation_v1::observe_initial_nonempty_reads_for_test_v1;
+
+#[path = "ranked_roster_retained_storage_v1.rs"]
+mod retained_storage_v1;

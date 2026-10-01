@@ -646,3 +646,6 @@ mod tests {
         );
     }
 }
+
+#[path = "debug_source_file_retained_storage_v1.rs"]
+mod file_retained_storage_v1;
