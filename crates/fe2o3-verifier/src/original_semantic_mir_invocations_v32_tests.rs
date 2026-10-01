@@ -16,7 +16,7 @@ use fe2o3_pliron::{
 };
 
 const LIMIT: usize = 100_000_000;
-const FLOOR: usize = 37;
+pub(in super::super) const FLOOR: usize = 37;
 
 fn prepared(budget: &mut Budget<'_>) -> Result<ProductionPreparedSourceV18> {
     prepared_variant(budget, false)
