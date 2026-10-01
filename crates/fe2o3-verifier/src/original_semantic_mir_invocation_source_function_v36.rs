@@ -175,7 +175,7 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
         for (root, (range, owner, entry)) in self.roots.iter().enumerate() {
             out.budget.charge_work(1)?;
             let locals = self.locals;
-            write!(out, "open spec fn invocation_source_byte_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let source = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {entry}, values: Seq::new({locals}nat, |i: int| MemoryValueV30::Undefined), memory: external, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({owner}, execution), valid: invocation_runtime_execution_{root}_v37(execution) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && (forall|allocation: MemoryAllocationV30| external.live.contains_key(allocation) ==> !invocation_private_allocation_v36(allocation)) && (forall|argument: int| 0 <= argument < arguments.len() ==> invocation_source_external_argument_v36(arguments[argument])) }}, slots: Map::empty(), logical: invocation_source_logical_initial_v38({locals}nat) }};\n invocation_source_enter_{root}_0_v36(source, arguments, little_endian)\n}}\nopen spec fn invocation_source_byte_block_{root}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{\n").map_err(|_| out.error())?;
+            write!(out, "open spec fn invocation_source_byte_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let source = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {entry}, values: Seq::new({locals}nat, |i: int| MemoryValueV30::Undefined), memory: external, generations: Map::empty(), frames: byte_root_frame_with_execution_v37({owner}, execution), valid: invocation_runtime_execution_{root}_v37(execution) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments) && (forall|argument: int| 0 <= argument < arguments.len() ==> invocation_source_external_argument_v36(arguments[argument])) }}, slots: Map::empty(), logical: invocation_source_logical_initial_v38({locals}nat) }};\n invocation_source_enter_{root}_0_v36(source, arguments, little_endian)\n}}\nopen spec fn invocation_source_byte_block_{root}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{\n").map_err(|_| out.error())?;
             for (instance, function) in self.functions[range.clone()].iter().enumerate() {
                 out.budget.charge_work(1)?;
                 if let Some(function) = function {
@@ -680,6 +680,46 @@ pub(super) mod tests {
             })
         }).0.unwrap();
         }
+    }
+
+    #[test]
+    fn original_mir_standalone_byte_initial_reuses_native_provenance_without_readiness_assumptions()
+    {
+        super::super::super::invocations::tests::run_variant(LIMIT, LIMIT, true, |plan, out| {
+            with_slots(plan, out, |slots, out| {
+                let mut program = SourceByteProgram::derive(plan, slots, out)?;
+                program.emit(out)?;
+                assert_eq!(program.roots.len(), 2);
+                for root in 0..program.roots.len() {
+                    let initial = out
+                        .text
+                        .split_once(&format!(
+                            "open spec fn invocation_source_byte_initial_{root}_v36"
+                        ))
+                        .unwrap()
+                        .1
+                        .split("open spec fn ")
+                        .next()
+                        .unwrap();
+                    assert!(
+                        initial.contains("invocation_native_provenance_v39(external, arguments)")
+                    );
+                    assert!(initial.contains("byte_memory_well_formed_v30(external)"));
+                    assert!(initial.contains("byte_native_view_inputs_v38(external, arguments)"));
+                    assert!(
+                        initial.contains(
+                            "invocation_source_external_argument_v36(arguments[argument])"
+                        )
+                    );
+                    assert!(!initial.contains("source_ready"));
+                    assert!(!initial.contains("valid: true"));
+                    assert!(!initial.contains("target"));
+                }
+                Ok(())
+            })
+        })
+        .0
+        .unwrap();
     }
 
     #[test]

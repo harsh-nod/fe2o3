@@ -364,3 +364,45 @@ fn original_mir_typed_operand_extraction_has_exact_and_one_short_resources() {
             .is_err()
     );
 }
+
+#[test]
+fn original_mir_storage_dead_checks_all_initialized_pointer_fragments_before_deallocation() {
+    let end = SOURCE_BYTES_V36
+        .split_once("open spec fn invocation_source_byte_end_v36(")
+        .unwrap()
+        .1
+        .split("open spec fn ")
+        .next()
+        .unwrap();
+    let census = end
+        .find("!invocation_memory_names_allocation_v37(cleared.machine.memory, pointer.allocation)")
+        .unwrap();
+    let remove = end
+        .find("byte_end_lifetime_v30(cleared.machine.memory, pointer.allocation)")
+        .unwrap();
+    assert!(census < remove);
+    assert!(end.contains("forall|i: int| 0 <= i < cleared.machine.values.len()"));
+    assert!(end.contains(
+        "!invocation_value_names_allocation_v36(cleared.machine.values[i], pointer.allocation)"
+    ));
+    assert!(end.contains("else { invocation_source_byte_refused_v36(cleared) }"));
+    let shared = include_str!("original_semantic_mir_invocation_bytes_v36.rs");
+    let census = shared
+        .split_once("open spec fn invocation_memory_names_allocation_v37(")
+        .unwrap()
+        .1
+        .split("struct InvocationByteLifetimeV36")
+        .next()
+        .unwrap();
+    for required in [
+        "object != allocation",
+        "memory.live.contains_key(object)",
+        "memory.live[object].relocations[at].pointer.allocation == allocation",
+        "memory.live[object].initialized[at]",
+        "MemoryByteV37::PointerFragment { pointer, .. } => pointer.allocation == allocation",
+    ] {
+        assert!(census.contains(required), "{required}");
+    }
+    assert!(!census.contains("generation =="));
+    assert!(!census.contains("write_epochs"));
+}

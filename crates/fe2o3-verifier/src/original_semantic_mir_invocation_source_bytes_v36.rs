@@ -1275,10 +1275,12 @@ open spec fn invocation_source_byte_end_v36(
     match invocation_source_byte_slot_v36(source, descriptor, slot, root, instance) {
         Some(pointer) => {
             let cleared = invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined);
-            // Complete retained local-value census, not a caller-chosen subset.
-            // Pointer/Slice stores and laundering are refused by extraction.
-            if cleared.machine.valid && forall|i: int| 0 <= i < cleared.machine.values.len() ==>
-                !invocation_value_names_allocation_v36(cleared.machine.values[i], pointer.allocation) {
+            // Both live values and initialized fragments in other allocations
+            // may retain provenance, even without a complete relocation cell.
+            if cleared.machine.valid
+                && !invocation_memory_names_allocation_v37(cleared.machine.memory, pointer.allocation)
+                && (forall|i: int| 0 <= i < cleared.machine.values.len() ==>
+                    !invocation_value_names_allocation_v36(cleared.machine.values[i], pointer.allocation)) {
                 InvocationSourceByteStateV36 { machine: MemoryStateV30 {
                     pc: cleared.machine.pc, values: cleared.machine.values,
                     memory: byte_end_lifetime_v30(cleared.machine.memory, pointer.allocation),
