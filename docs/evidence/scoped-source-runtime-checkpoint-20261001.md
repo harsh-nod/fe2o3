@@ -9,22 +9,27 @@ examples as qualified through the new production path.
 
 ## Latest Compiler Checkpoint
 
-The actual-source rerun **r348 failed** at local candidate
-`4ad611b1105268e6e1e119f743d8a2d5281f1377`. Its backend built, then all 24
+The actual-source rerun **r356 failed** at local candidate
+`b44357ecf14370d73fc29bd95cc1eecf9c6a8b35`. Its backend built, then all 24
 ordinary fill, guarded-fill and vecadd configurations failed on gfx942/gfx950:
 
 - Sixteen fill/guarded-fill attempts emitted partial proof text but lacked the
   required store-activation clause connecting original control to memory effects.
-- Four vecadd opt0/MIR0 attempts stopped at the root-only function census.
+- Four vecadd opt0/MIR0 attempts passed the earlier root-only census failure
+  but stopped at `pending global read changed exact local domain`.
 - Four vecadd opt3/MIR2 attempts stopped with source resource-accounting errors.
 
-The parent result was zero passed, one failed, none ignored and 4,344 filtered.
+The parent result was zero passed, one failed, none ignored and 4,383 filtered.
 No required protected proof or safe GPU launch completed. The independent
 source/tool/runner audit passed; raw log SHA-256 is
-`4acebd5bc6ce64098be78f030d12a08a924d7ac2b7ba3421c1a12a842e194437`.
-These results supersede r332, not the missing production acceptance criteria.
+`594e6faf2e5c4ed40897a650f90d60a874b87b617f5c5b90f4b002d9b57517e7`.
+These results supersede r348, not the missing production acceptance criteria.
+The preceding r355 reached only a partial matrix before its unchanged deadline;
+it receives no complete-matrix credit. Its original process terminated before
+r356 reused the completed build cache at the same source revision and limits.
 
-The same candidate's focused lowerer run on isolated MI350 completed with
+The earlier `4ad611b1105268e6e1e119f743d8a2d5281f1377` candidate's focused
+lowerer run on isolated MI350 completed with
 **75 passed, 17 failed, none ignored and 4,713 filtered**. Ten tests stopped on
 noncanonical source block order; six exhausted the unchanged work allowance;
 one stopped before its intended foreign-owner observation. Early failures are
@@ -99,8 +104,39 @@ The independent exact-source, tool-manifest, archive, result and cleanup audit
 passed; raw log SHA-256 is
 `9030714446a48c1b30c0e47ad658f3bff15d36d8f83bb535cdbd67ce51c6b490`.
 The container and its 3,437,182,976-byte private scratch directory were removed.
-This was CPU verifier testing, not protected proof or GPU execution. The updated
-actual-source matrix and repaired verifier tests remain to be executed.
+This was CPU verifier testing, not protected proof or GPU execution.
+
+The subsequent `480b36136b36f5eb560a66ce3706f602c695a27c` isolated run completed
+with **66 passed and one failed** in the same focused verifier selection, and
+**339 passed, one failed and 51 ignored** in the ordinary spawn library.
+The remaining verifier failure was an incorrect test assumption about a smaller
+raw work charge after a denied larger charge. Its correction retains the first
+denial and requires actual admission to reject it; production limits are unchanged.
+The spawn failure was `clone3` returning `ENOSYS` in the container. Its cause was
+not established, and no container security restriction was weakened. All three
+new namespace unit controls passed; seven namespace native tests were ignored.
+The exact-source, tool, result and cleanup audit passed; combined raw log SHA-256:
+`a1f3f1fc4d03f63654132f743aebcc4a4f8cd287fd653cd657b859a96406e78f`.
+The container and its 3,628,052,480-byte private scratch directory were removed.
+
+Local full spawn rerun **r358 passed all 353 ordinary tests**, with none failed
+and 51 ignored, at `f905ea0502ed0756200374f382878c7874eef82c`. This includes
+the atomic-clone test, the three namespace unit controls and thirteen new
+mapped-input lifetime/accounting controls. It follows r357's 352-pass/one-fail
+result: the remaining fixture now explicitly creates its required `0700`
+scratch directory instead of depending on the process umask. The production
+directory check is unchanged. Independent exact-source, six-tool, runner and
+raw-log checks passed; log SHA-256:
+`027ba8725b43d11f5a362314eb95a5796a998e56242dcde6c949041588c3d1cd`.
+The 51 ignored native tests remain unexecuted; these ordinary controls do not
+establish protected compiler input delivery, source authority, proof or GPU launch.
+
+Reviewed local integration now retains the original source-hashing file handles
+and mapped input backing across descriptor close until exact unmap or cleanup.
+It also joins context-issuance value clauses to the genuine original root and
+existing lifecycle insertion checker. Complete source delivery, return-value
+proofs and final aggregate obligations remain unfinished. No completed milestone
+or kernel qualification is claimed for these component changes.
 
 Local source-capture runs r349 and r350 receive **no test credit**: disk
 exhaustion interrupted r349's report, and an execution-environment interruption
