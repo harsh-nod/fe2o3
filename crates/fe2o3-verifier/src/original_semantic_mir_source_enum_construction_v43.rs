@@ -29,6 +29,49 @@ pub(super) struct Payload {
     alignment: u64,
 }
 
+impl Payload {
+    pub(super) fn logical(value: PayloadValue, bytes: u64) -> Self {
+        Self {
+            value,
+            offset: 0,
+            bytes,
+            alignment: 1,
+        }
+    }
+
+    pub(super) fn emit(self, out: &mut Writer<'_, '_>) -> Result<()> {
+        out.budget.charge_work(1)?;
+        write!(out, "InvocationSourceEnumPayloadV43 {{ value: ").map_err(|_| out.error())?;
+        match self.value {
+            PayloadValue::Scalar { value, bits } => {
+                write!(out, "InvocationSourceEnumValueV44::Scalar {{ value: ")
+                    .map_err(|_| out.error())?;
+                emit_value(value, out)?;
+                write!(out, ", bits: {bits}int }}").map_err(|_| out.error())?;
+            }
+            PayloadValue::Reference {
+                operand,
+                referent_bits,
+                referent_bytes,
+                referent_alignment,
+                mutable,
+            } => {
+                write!(out, "InvocationSourceEnumValueV44::Reference {{ operand: ")
+                    .map_err(|_| out.error())?;
+                operand.emit(out)?;
+                write!(out, ", referent_bits: {referent_bits}int, referent_width: {referent_bytes}int, referent_alignment: {referent_alignment}int, mutable: {mutable} }}")
+                    .map_err(|_| out.error())?;
+            }
+        }
+        write!(
+            out,
+            ", offset: {}int, width: {}int, alignment: {}int }},",
+            self.offset, self.bytes, self.alignment
+        )
+        .map_err(|_| out.error())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Construct {
     access: Access,
@@ -216,35 +259,7 @@ impl Construct {
         )
         .map_err(|_| out.error())?;
         for field in fields {
-            out.budget.charge_work(1)?;
-            write!(out, "InvocationSourceEnumPayloadV43 {{ value: ").map_err(|_| out.error())?;
-            match field.value {
-                PayloadValue::Scalar { value, bits } => {
-                    write!(out, "InvocationSourceEnumValueV44::Scalar {{ value: ")
-                        .map_err(|_| out.error())?;
-                    emit_value(value, out)?;
-                    write!(out, ", bits: {bits}int }}").map_err(|_| out.error())?;
-                }
-                PayloadValue::Reference {
-                    operand,
-                    referent_bits,
-                    referent_bytes,
-                    referent_alignment,
-                    mutable,
-                } => {
-                    write!(out, "InvocationSourceEnumValueV44::Reference {{ operand: ")
-                        .map_err(|_| out.error())?;
-                    operand.emit(out)?;
-                    write!(out, ", referent_bits: {referent_bits}int, referent_width: {referent_bytes}int, referent_alignment: {referent_alignment}int, mutable: {mutable} }}")
-                        .map_err(|_| out.error())?;
-                }
-            }
-            write!(
-                out,
-                ", offset: {}int, width: {}int, alignment: {}int }},",
-                field.offset, field.bytes, field.alignment
-            )
-            .map_err(|_| out.error())?;
+            field.emit(out)?;
         }
         write!(out, "] }})").map_err(|_| out.error())
     }

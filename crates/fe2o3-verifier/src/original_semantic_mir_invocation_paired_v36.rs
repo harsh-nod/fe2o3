@@ -33,6 +33,9 @@ mod component_demands;
 mod aggregate_bindings;
 use aggregate_bindings::AggregateBindingV42;
 use component_demands::ComponentDemandsV42;
+#[path = "original_semantic_mir_enum_bindings_v49.rs"]
+mod enum_bindings;
+use enum_bindings::EnumBinding;
 #[path = "original_semantic_mir_object_returns_v42.rs"]
 mod object_returns;
 use object_returns::ObjectReturnsV42;
@@ -42,6 +45,7 @@ enum SourceValue {
     Local(usize),
     Slot { descriptor: usize, bits: u32 },
     Aggregate(usize),
+    Enum(usize),
     ReturnSnapshot,
 }
 
@@ -113,6 +117,7 @@ pub(super) struct PairedInvocations<'slots, 'view, 'source> {
     width: FormalIndexWidth,
     census: [usize; 6],
     aggregates: Vec<AggregateBindingV42>,
+    enums: Vec<EnumBinding>,
     component_demands: Vec<Option<ComponentDemandsV42<'slots, 'view, 'source>>>,
     object_returns: ObjectReturnsV42<'slots, 'view, 'source>,
     required: usize,
@@ -198,6 +203,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 inventory.definitions().len(),
             ],
             aggregates: vector(0, out)?,
+            enums: vector(0, out)?,
             component_demands,
             object_returns: ObjectReturnsV42::derive(slots, width, out)?,
             required: 0,
@@ -576,7 +582,10 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             parameter_seen.resize(physical.function.signature.parameters.len(), false);
             for (argument, binding) in entry.arguments.iter().enumerate() {
                 out.budget.charge_work(3)?;
-                if matches!(binding.source, SourceValue::Aggregate(_)) {
+                if matches!(
+                    binding.source,
+                    SourceValue::Aggregate(_) | SourceValue::Enum(_)
+                ) {
                     return Err(Error::Statement(
                         "native aggregate argument requires original ABI component reconstruction",
                     ));
@@ -663,6 +672,27 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             return Err(Error::Statement(
                 "original SSA endpoint differs from its paired source local or type",
             ));
+        }
+        if matches!(
+            semantic
+                .types()
+                .get(declaration.ty().index() as usize)
+                .ok_or_else(mismatch)?
+                .shape(),
+            super::super::Shape::Enum { .. }
+        ) {
+            return self.enum_binding(
+                root,
+                instance,
+                local,
+                row.function,
+                declaration.ty(),
+                &endpoint,
+                row.locals.start,
+                frame,
+                physical,
+                out,
+            );
         }
         if self.is_aggregate_binding(declaration.ty(), &endpoint, out)? {
             return self.aggregate_binding(
@@ -955,6 +985,8 @@ fn headers() -> usize {
         + h::<ComponentCut>()
         + h::<AggregateBindingV42>()
         + h::<Vec<AggregateBindingV42>>()
+        + h::<Vec<EnumBinding>>()
+        + enum_bindings::headers()
         + h::<Vec<Option<ComponentDemandsV42<'_, '_, '_>>>>()
         + aggregate_bindings::headers()
         + object_returns::headers()

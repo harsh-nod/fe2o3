@@ -2,6 +2,7 @@
 //! supplied by a caller or guessed from a latest-generation counter.
 
 use super::super::super::byte_function_v30::ByteAllocationResolverV30;
+use super::slots::AllocationOrigin;
 use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_kernel_ir::{FunctionRole, OperationKind};
 use std::{fmt::Write as _, mem::size_of, ops::Range};
@@ -82,6 +83,7 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
         }
         let mut rows = vector(count, out)?;
         let mut ranges = vector(roots, out)?;
+        let mut accounted = 0usize;
         let mut seen = vector(inventory.functions().len(), out)?;
         out.budget.charge_work(inventory.functions().len())?;
         seen.resize(inventory.functions().len(), false);
@@ -111,7 +113,24 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
                 if operation.results.len() != 1 {
                     return Err(mismatch());
                 }
-                let frame = slots.frame_by_allocation(operation.coordinate, out)?;
+                accounted = accounted.checked_add(1).ok_or(Resource::Arithmetic)?;
+                let frame = match slots.allocation_origin(operation.coordinate, out)? {
+                    AllocationOrigin::OriginalFrame(frame) => frame,
+                    AllocationOrigin::CompilerSpill(spill) => {
+                        let site = slots.site(operation.coordinate, out)?;
+                        out.budget.charge_work(4)?;
+                        if spill.root != root
+                            || spill.definition != operation.results.start
+                            || site.original != spill.operation
+                            || site.physical_root_owner != spill.physical_owner
+                        {
+                            return Err(mismatch());
+                        }
+                        // Compiler storage participates in the actual Alloca
+                        // census, never in the original source allocation map.
+                        continue;
+                    }
+                };
                 let (descriptor, same) = slots.descriptor_by_source(
                     frame.root(),
                     frame.instance(),
@@ -138,7 +157,7 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
             }
             ranges.push(begin..rows.len());
         }
-        if rows.len() != count {
+        if accounted != count {
             return Err(mismatch());
         }
         check_root_census(inventory.functions(), &seen, out)?;
@@ -201,6 +220,7 @@ fn headers() -> usize {
     h::<SourceByteBindings<'_, '_, '_>>()
         + h::<Vec<Binding>>()
         + h::<Binding>()
+        + h::<AllocationOrigin<'_>>()
         + h::<Vec<Range<usize>>>()
         + h::<Vec<bool>>()
         + h::<Range<usize>>()

@@ -89,6 +89,13 @@ open spec fn invocation_source_statement_effects_v36(
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
                 } else { seq![MemoryOperationEffectV30::Refused] }
             }
+            Some(InvocationSourceByteEventV36::LogicalEnum(event)) => {
+                let result = invocation_source_logical_enum_step_v47(observation.before, event,
+                    observation.root, observation.instance, little_endian);
+                if result.source == observation.after {
+                    Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
+                } else { seq![MemoryOperationEffectV30::Refused] }
+            }
             Some(InvocationSourceByteEventV36::Discriminant(read)) => {
                 let result = invocation_source_discriminant_read_v41(observation.before, read,
                     observation.root, observation.instance, little_endian);

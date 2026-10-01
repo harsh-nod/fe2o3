@@ -229,6 +229,81 @@ fn original_promoted_enum_carriers_preserve_logical_tags_empty_and_nested_payloa
 }
 
 #[test]
+fn original_enum_optional_field_carriers_preserve_exact_existing_owner_and_leaf_queries() {
+    let completed = std::cell::Cell::new(false);
+    probe(
+        promoted_enum_owner_v47,
+        MODULE_LIMIT,
+        MODULE_LIMIT,
+        |relation, budget| {
+            check_promoted_enum_v47(relation, budget)?;
+            let semantic = relation.source.source_semantic(budget)?;
+            let enumeration = SemanticTypeIdV1::from_index((semantic.types().len() - 1) as u32);
+            let rows = &relation
+                .source
+                .root_row(0)?
+                .rvalue_results
+                .as_ref()
+                .unwrap()
+                .values;
+            let mut checked = 0usize;
+            for row in rows.iter().filter(|row| row.typed.ty == enumeration) {
+                let endpoint =
+                    relation.ssa_typed_endpoint_v36(0, row.instance, row.original, budget)?;
+                if !matches!(
+                    endpoint.carrier_shape(budget)?,
+                    ProductionSourceSsaCarrierShapeV37::Enum {
+                        known_variant: Some(1),
+                        ..
+                    }
+                ) {
+                    continue;
+                }
+                for field in 0..3 {
+                    let original = endpoint.enum_field_v47(1, field, budget)?;
+                    let optional = endpoint
+                        .enum_field_carrier_v49(1, field, budget)?
+                        .expect("genuine initialized scalar, Unit and aggregate retain a carrier");
+                    assert_eq!(
+                        optional.source_function(budget)?,
+                        original.source_function(budget)?
+                    );
+                    assert_eq!(
+                        optional.source_local(budget)?,
+                        original.source_local(budget)?
+                    );
+                    assert_eq!(optional.source_type(budget)?, original.source_type(budget)?);
+                    assert_eq!(
+                        optional.carrier_shape(budget)?,
+                        original.carrier_shape(budget)?
+                    );
+                    if field < 2 {
+                        assert_eq!(
+                            optional.original_definition(budget)?,
+                            original.original_definition(budget)?
+                        );
+                        assert_eq!(
+                            optional.physical_type(budget)?,
+                            original.physical_type(budget)?
+                        );
+                    }
+                    checked += 1;
+                }
+            }
+            assert!(
+                checked >= 6,
+                "both constructor and whole enum Copy are observed"
+            );
+            completed.set(true);
+            Ok(())
+        },
+    )
+    .0
+    .unwrap();
+    assert!(completed.get());
+}
+
+#[test]
 fn original_promoted_enum_carriers_have_exact_and_one_short_complete_resources() {
     let (result, work, storage) = probe(
         promoted_enum_owner_v47,

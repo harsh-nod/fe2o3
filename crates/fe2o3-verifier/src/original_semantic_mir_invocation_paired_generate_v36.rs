@@ -12,6 +12,11 @@ macro_rules! emit {
 pub(super) fn emit(model: &PairedInvocations<'_, '_, '_>, out: &mut Writer<'_, '_>) -> Result<()> {
     out.budget.reserve_storage(headers())?;
     emit!(out, "{PAIRED_V36}");
+    emit!(
+        out,
+        "{}",
+        include_str!("original_semantic_mir_enum_bindings_v49.vrs")
+    );
     for (root, row) in model.roots.iter().enumerate() {
         out.budget.charge_work(1)?;
         control(model, root, row, out)?;
@@ -100,6 +105,9 @@ fn binding(
     if let SourceValue::Aggregate(index) = row.source {
         return aggregate_binding(model, index, out);
     }
+    if let SourceValue::Enum(index) = row.source {
+        return enum_binding(model, index, out);
+    }
     emit!(out, " && ({{ ");
     match row.source {
         SourceValue::Local(local) => emit!(out, "let original = source.machine.values[{local}]; "),
@@ -111,7 +119,9 @@ fn binding(
                 "source.slots.contains_key({descriptor}) && {frame} < source.machine.frames.active.len() && ({{ let slot = invocation_source_slot_{descriptor}_v36(); let pointer = source.slots[{descriptor}];\n match pointer.allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, .. }} => owner == source.machine.frames.active[{frame}].owner && invocation == source.machine.frames.active[{frame}].invocation && owner == slot.owner && site == slot.site, _ => false }}\n && invocation_source_read_enabled_v36(source.machine, pointer, {width}, slot.alignment) && ({{ let original = MemoryValueV30::Scalar(byte_load_v30(source.machine.memory, pointer, {width}, invocation_runtime_little_endian_v36())); invocation_source_byte_value_typed_v36(original, {bits}) && ({{ "
             );
         }
-        SourceValue::Aggregate(_) | SourceValue::ReturnSnapshot => return Err(mismatch()),
+        SourceValue::Aggregate(_) | SourceValue::Enum(_) | SourceValue::ReturnSnapshot => {
+            return Err(mismatch());
+        }
     }
     actual_value(model, row, out)?;
     if matches!(row.source, SourceValue::Slot { .. }) {
@@ -141,11 +151,103 @@ fn binding(
                 " && invocation_source_reference_current_v38(source, {local}, {source_type}) && ({{ let reference = source.logical.references[{local}]; reference.origin == {origin} && reference.origin_generation == {generation} && reference.borrow_instance == {instance} && reference.borrow_block == {block} && reference.borrow_statement == {statement} }})"
             );
         }
-        (SourceValue::Slot { .. } | SourceValue::Aggregate(_) | SourceValue::ReturnSnapshot, _) => {
+        (
+            SourceValue::Slot { .. }
+            | SourceValue::Aggregate(_)
+            | SourceValue::Enum(_)
+            | SourceValue::ReturnSnapshot,
+            _,
+        ) => {
             return Err(mismatch());
         }
     }
     emit!(out, " }})");
+    Ok(())
+}
+
+fn enum_binding(
+    model: &PairedInvocations<'_, '_, '_>,
+    index: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use super::enum_bindings::FieldCarrier;
+    let row = model.enums.get(index).ok_or_else(mismatch)?;
+    emit!(
+        out,
+        " && (match invocation_source_enum_local_v47(source, {}, {}) {{ Some(value) => {{ ",
+        row.local,
+        row.source_type.index()
+    );
+    if let Some(variant) = row.known_variant {
+        emit!(out, "value.variant == {variant} && ");
+    }
+    emit!(out, "(");
+    for variant in &row.variants {
+        out.budget.charge_work(1)?;
+        emit!(
+            out,
+            "if value.variant == {} {{ target.values[{}] == MemoryValueV30::Scalar({})",
+            variant.ordinal,
+            row.tag,
+            variant.discriminant
+        );
+        for (field, carrier) in variant.fields.iter().enumerate() {
+            out.budget.charge_work(1)?;
+            emit!(
+                out,
+                " && (!value.fields.contains_key({field}) || ({{ let original = value.fields[{field}]; "
+            );
+            match carrier {
+                FieldCarrier::Missing => emit!(out, "false"),
+                FieldCarrier::Unit => emit!(out, "original == MemoryValueV30::Unit"),
+                FieldCarrier::Value(definition) => actual_value(
+                    model,
+                    &Binding {
+                        source: SourceValue::Local(row.local),
+                        logical: LogicalBinding::Plain,
+                        definition: Some(*definition),
+                        frame: 0,
+                    },
+                    out,
+                )?,
+                FieldCarrier::Spill {
+                    row: spill,
+                    width,
+                    alignment,
+                } => {
+                    let inventory = model.slots.correspondence(out)?.inventory(out.budget)?;
+                    let fe2o3_kernel_ir::Type::Pointer(pointer) = inventory
+                        .definitions()
+                        .get(spill.definition)
+                        .ok_or_else(mismatch)?
+                        .ty
+                    else {
+                        return Err(mismatch());
+                    };
+                    let pointer_payload =
+                        matches!(pointer.pointee.as_ref(), fe2o3_kernel_ir::Type::Pointer(_));
+                    let operation = spill.operation;
+                    emit!(
+                        out,
+                        "match invocation_enum_spill_read_v49(target, {}, {}, MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, {width}, {alignment}, {pointer_payload}, invocation_runtime_little_endian_v36()) {{ Some(actual) => {{ ",
+                        spill.definition,
+                        spill.physical_owner,
+                        operation.block.function.0,
+                        operation.block.block,
+                        operation.operation
+                    );
+                    emit_value_type(&pointer.pointee, model.width, "actual", out)?;
+                    emit!(
+                        out,
+                        " && invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory) }}, None => false }}"
+                    );
+                }
+            }
+            emit!(out, " }}))");
+        }
+        emit!(out, " }} else ");
+    }
+    emit!(out, "{{ false }}) }}, None => false }})");
     Ok(())
 }
 
@@ -192,6 +294,11 @@ fn snapshot_binding(
     row: &Binding,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
+    if matches!(row.source, SourceValue::Enum(_)) {
+        return Err(Error::Statement(
+            "original enum call/return requires a complete nominal payload snapshot",
+        ));
+    }
     if let SourceValue::Aggregate(index) = row.source {
         let aggregate = model.aggregates.get(index).ok_or_else(mismatch)?;
         emit!(

@@ -38,11 +38,25 @@ pub(super) use source_aggregates::SourceAggregateLeafV42;
 #[path = "original_semantic_mir_source_checked_types_v47.rs"]
 mod checked_types;
 
+#[path = "original_semantic_mir_source_enum_types_v47.rs"]
+mod enum_types;
+pub(super) use enum_types::EnumFieldV47;
+
+#[path = "original_semantic_mir_source_enum_spills_v48.rs"]
+mod compiler_spills;
+pub(super) use compiler_spills::Spill;
+
+pub(super) enum AllocationOrigin<'a> {
+    OriginalFrame(&'a Frame),
+    CompilerSpill(&'a Spill),
+}
+
 pub(super) struct SourceSlots<'a, 'source> {
     relation: &'a Correspondence<'source>,
     operations: Vec<Operation>,
     frames: Vec<Option<Frame>>,
     source_order: Vec<(SourceKey, usize)>,
+    spills: compiler_spills::CompilerSpills,
     abi: source_abi::SourceAbi,
     tags: source_tags::SourceTagIndexV39,
     objects: source_objects::SourceObjects,
@@ -69,6 +83,16 @@ fn locate<T: Ord>(
     key: &T,
     budget: &mut Budget<'_>,
 ) -> std::result::Result<usize, SourceError> {
+    locate_optional(keys, key, budget)?.ok_or(SourceError::Binding(
+        "original allocation descriptor key absent",
+    ))
+}
+
+fn locate_optional<T: Ord>(
+    keys: &[T],
+    key: &T,
+    budget: &mut Budget<'_>,
+) -> std::result::Result<Option<usize>, SourceError> {
     let (mut lo, mut hi) = (0, keys.len());
     while lo < hi {
         budget.charge_work(1)?;
@@ -81,11 +105,9 @@ fn locate<T: Ord>(
     }
     budget.charge_work(1)?;
     if keys.get(lo) == Some(key) {
-        Ok(lo)
+        Ok(Some(lo))
     } else {
-        Err(SourceError::Binding(
-            "original allocation descriptor key absent",
-        ))
+        Ok(None)
     }
 }
 
@@ -209,7 +231,15 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
                 Ok(())
             })?;
         }
-        if source_order.len() != count || frames.len() != count || operations.len() != count {
+        let spills = compiler_spills::CompilerSpills::derive(
+            plan,
+            relation,
+            &mut operations,
+            &mut frames,
+            &mut source_order,
+            out,
+        )?;
+        if source_order.len() != frames.len() || operations.len() != frames.len() {
             return Err(mismatch());
         }
         for row in &frames {
@@ -291,6 +321,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             operations,
             frames,
             source_order,
+            spills,
             abi,
             tags,
             objects,
@@ -437,6 +468,42 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             .get(at)
             .and_then(Option::as_ref)
             .ok_or_else(mismatch)
+    }
+
+    pub(super) fn allocation_origin(
+        &self,
+        operation: Operation,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<AllocationOrigin<'_>> {
+        self.with_source_query_v42(out, |out| {
+            let frame =
+                locate_optional(&self.operations, &operation, out.budget).map_err(|error| {
+                    match error {
+                        SourceError::Resource(resource) => Error::Resource(resource),
+                        other => other.into(),
+                    }
+                })?;
+            if let Some(at) = frame {
+                return self
+                    .frames
+                    .get(at)
+                    .and_then(Option::as_ref)
+                    .map(AllocationOrigin::OriginalFrame)
+                    .ok_or_else(mismatch);
+            }
+            self.spills
+                .allocation(operation, out)?
+                .map(AllocationOrigin::CompilerSpill)
+                .ok_or_else(mismatch)
+        })
+    }
+
+    pub(super) fn compiler_spill_field(
+        &self,
+        key: [usize; 6],
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<&Spill>> {
+        self.with_source_query_v42(out, |out| self.spills.field(key, out))
     }
 
     pub(super) fn frame_by_source(
@@ -598,7 +665,8 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         .map_err(|_| out.error())?;
         self.objects.emit(out)?;
         self.aggregates.emit(out)?;
-        self.emit_checked_object_types_v47(out)
+        self.emit_checked_object_types_v47(out)?;
+        self.emit_logical_enum_types_v47(out)
     }
 }
 
@@ -621,7 +689,15 @@ impl ByteAllocationResolverV30 for SourceSlots<'_, '_> {
         operation: Operation,
         out: &mut Writer<'_, '_>,
     ) -> Result<ByteAllocationSiteV30> {
-        let frame = self.frame_by_allocation(operation, out)?;
+        let frame = match self.allocation_origin(operation, out)? {
+            AllocationOrigin::OriginalFrame(frame) => frame,
+            AllocationOrigin::CompilerSpill(spill) => {
+                return Ok(ByteAllocationSiteV30 {
+                    original: spill.operation,
+                    physical_root_owner: spill.physical_owner,
+                });
+            }
+        };
         let source = self.relation.source(out.budget)?;
         let (owner, physical) = source.root(frame.root(), out.budget)?;
         out.budget.charge_work(3)?;
@@ -673,6 +749,9 @@ pub(super) fn headers() -> usize {
         + 24 * size_of::<&()>()
         + 4 * size_of::<std::result::Result<usize, SourceError>>()
         + checked_types::headers()
+        + enum_types::headers()
+        + compiler_spills::headers()
+        + h::<AllocationOrigin<'_>>()
 }
 
 #[cfg(test)]
@@ -1126,6 +1205,7 @@ mod tests {
             Vec<Operation>,
             Vec<Option<Frame>>,
             Vec<(SourceKey, usize)>,
+            compiler_spills::CompilerSpills,
             source_abi::SourceAbi,
             source_tags::SourceTagIndexV39,
             source_objects::SourceObjects,
@@ -1163,6 +1243,9 @@ mod tests {
                 + 24 * size_of::<&()>()
                 + 4 * size_of::<std::result::Result<usize, SourceError>>()
                 + checked_types::headers()
+                + enum_types::headers()
+                + compiler_spills::headers()
+                + h::<AllocationOrigin<'_>>()
         );
     }
 }

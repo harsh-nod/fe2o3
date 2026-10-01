@@ -597,6 +597,9 @@ open spec fn invocation_source_return_v36(
             || (exists|local: int, path: Seq<int>| logical.aggregates.contains_key(local)
                 && logical.aggregates[local].leaves.contains_key(path)
                 && invocation_source_value_escapes_frame_v36(logical.aggregates[local].leaves[path], frame))
+            || (exists|local: int, field: int| logical.enums.contains_key(local)
+                && logical.enums[local].fields.contains_key(field)
+                && invocation_source_value_escapes_frame_v36(logical.enums[local].fields[field], frame))
             || invocation_source_memory_escapes_frame_v37(source.machine.memory, frame)
             || (exists|i: int| logical.references.contains_key(i)
                 && logical.references[i].frame == frame);

@@ -336,6 +336,47 @@ impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
             self.enum_carrier_endpoint_v47(at, budget)
         })())
     }
+
+    /// Borrows a retained field carrier when the immutable emitted binding has
+    /// one. `None` means an unmodeled physical carrier, never source undefinedness
+    /// or permission to omit an independently defined source payload.
+    pub fn enum_field_carrier_v49(
+        &self,
+        variant: u32,
+        field: usize,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<ProductionSourceSsaEndpointV36<'a, 'source>>> {
+        self.owner.retain_query((|| {
+            self.owner.query(budget)?;
+            let Some((start, length)) = self.enum_variant_row_v47(variant, budget)? else {
+                return self
+                    .owner
+                    .source
+                    .missing("original enum payload is not retained");
+            };
+            if field >= length {
+                return self
+                    .owner
+                    .source
+                    .missing("original enum field is out of range");
+            }
+            let at = start
+                .checked_add(field)
+                .ok_or(ArgumentResourceV1::Arithmetic)?;
+            budget.charge_work(1)?;
+            let row = self
+                .carriers
+                .get(at)
+                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original enum carrier component is absent",
+                ))?;
+            if matches!(row.physical, SourceSsaPhysicalV36::Unmodeled) {
+                Ok(None)
+            } else {
+                self.enum_carrier_endpoint_v47(at, budget).map(Some)
+            }
+        })())
+    }
 }
 
 fn source_enum_carrier_headers_v47() -> Result<usize, ArgumentResourceV1> {
@@ -349,6 +390,7 @@ fn source_enum_carrier_headers_v47() -> Result<usize, ArgumentResourceV1> {
     argument_sum_v1(&[
         h::<Option<SourceSsaPhysicalV36>>()?,
         h::<Option<(usize, usize)>>()?,
+        h::<Option<ProductionSourceSsaEndpointV36<'_, '_>>>()?,
         h::<(SemanticTypeIdV1, usize)>()?,
         h::<std::cmp::Ordering>()?,
         h::<std::collections::btree_map::Iter<'_, u32, Vec<SemanticValueBindingV1>>>()?,

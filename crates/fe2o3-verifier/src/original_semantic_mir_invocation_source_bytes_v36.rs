@@ -26,6 +26,8 @@ mod discriminants;
 mod enum_construction;
 #[path = "original_semantic_mir_source_integer_casts_v43.rs"]
 mod integer_casts;
+#[path = "original_semantic_mir_source_enum_events_v47.rs"]
+mod logical_enums;
 #[path = "original_semantic_mir_source_scalar_operands_v48.rs"]
 mod scalar_operands;
 #[path = "original_semantic_mir_source_slice_reads_v41.rs"]
@@ -201,6 +203,7 @@ pub(super) enum Event {
     Pointer(pointer_events::Event),
     Discriminant(discriminants::Read),
     EnumConstruct(enum_construction::Construct),
+    LogicalEnum(logical_enums::LogicalEvent),
     IntegerCast(integer_casts::Cast),
     ScalarOperands(scalar_operands::Operation),
     Checked(aggregates::Checked),
@@ -497,23 +500,39 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     (None, Some(event)) => event,
                     (Some(borrow), None) => Event::WitnessBorrow(borrow),
                     (None, None) => {
-                        let constructed = match statement.kind() {
-                            Statement::Assign(assignment) => enum_construction::Construct::derive(
-                                &context,
-                                assignment,
-                                &mut enum_payloads,
-                                out,
-                            )
-                            .map_err(|error| {
-                                statement_error(error, site, statement.kind(), context.types)
-                            })?,
+                        let logical = logical_enums::derive(
+                            &context,
+                            statement.kind(),
+                            &mut enum_payloads,
+                            out,
+                        )
+                        .map_err(|error| {
+                            statement_error(error, site, statement.kind(), context.types)
+                        })?;
+                        let constructed = match (logical, statement.kind()) {
+                            (Some(_), _) => None,
+                            (None, Statement::Assign(assignment)) => {
+                                enum_construction::Construct::derive(
+                                    &context,
+                                    assignment,
+                                    &mut enum_payloads,
+                                    out,
+                                )
+                                .map_err(|error| {
+                                    statement_error(error, site, statement.kind(), context.types)
+                                })?
+                            }
                             _ => None,
                         };
-                        match constructed {
-                            Some(constructed) => Event::EnumConstruct(constructed),
-                            None => context.statement(statement.kind(), out).map_err(|error| {
-                                statement_error(error, site, statement.kind(), context.types)
-                            })?,
+                        match (logical, constructed) {
+                            (Some(event), None) => Event::LogicalEnum(event),
+                            (None, Some(constructed)) => Event::EnumConstruct(constructed),
+                            (Some(_), Some(_)) => return Err(mismatch()),
+                            (None, None) => {
+                                context.statement(statement.kind(), out).map_err(|error| {
+                                    statement_error(error, site, statement.kind(), context.types)
+                                })?
+                            }
                         }
                     }
                 };
@@ -1454,6 +1473,7 @@ fn emit_event(
         }
         Event::Discriminant(read) => read.emit(out)?,
         Event::EnumConstruct(constructed) => constructed.emit(enum_payloads, out)?,
+        Event::LogicalEnum(event) => event.emit(enum_payloads, out)?,
         Event::IntegerCast(cast) => cast.emit(out)?,
         Event::ScalarOperands(operation) => operation.emit(out)?,
         Event::WitnessBorrow(borrow) => borrow.emit(out)?,
@@ -1545,6 +1565,7 @@ fn headers() -> usize {
         + discriminants::headers()
         + aggregates::headers()
         + enum_construction::headers()
+        + logical_enums::headers()
         + integer_casts::headers()
         + scalar_operands::headers()
         + 24 * size_of::<usize>()
@@ -1561,6 +1582,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_slice_reads_v41.vrs"),
     include_str!("original_semantic_mir_source_discriminants_v41.vrs"),
     include_str!("original_semantic_mir_source_enum_construction_v43.vrs"),
+    include_str!("original_semantic_mir_source_enum_values_v47.vrs"),
     r#"
 struct InvocationSourceByteStateV36 {
     machine: MemoryStateV30,
@@ -1583,6 +1605,9 @@ open spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSour
     byte_memory_well_formed_v30(source.machine.memory)
         && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len())
         && (forall|local: int| source.logical.aggregates.contains_key(local) ==>
+            source.machine.values[local] == MemoryValueV30::Undefined
+                && !source.objects.contains_key(local))
+        && (forall|local: int| source.logical.enums.contains_key(local) ==>
             source.machine.values[local] == MemoryValueV30::Undefined
                 && !source.objects.contains_key(local))
         && byte_frame_runtime_well_formed_v30(source.machine.frames)
@@ -1658,6 +1683,7 @@ enum InvocationSourceByteEventV36 {
     CheckedObject(InvocationSourceCheckedObjectV44),
     Discriminant(InvocationSourceDiscriminantReadV41),
     EnumConstruct(InvocationSourceEnumConstructV43),
+    LogicalEnum(InvocationSourceLogicalEnumEventV47),
     IntegerCast(InvocationSourceIntegerCastV43),
     ScalarOperands(InvocationSourceScalarOperandsV48),
     Scalar,
@@ -1934,10 +1960,11 @@ open spec fn invocation_source_byte_end_v36(
     match invocation_source_byte_slot_v36(source, descriptor, slot, root, instance) {
         Some(pointer) => {
             let cleared = invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined);
-            // Both live values and initialized fragments in other allocations
-            // may retain provenance, even without a complete relocation cell.
+            // Logical payloads, live values and initialized fragments in other
+            // allocations all retain provenance until explicitly cleared.
             if cleared.machine.valid
                 && !invocation_memory_names_allocation_v37(cleared.machine.memory, pointer.allocation)
+                && !invocation_source_enums_name_allocation_v49(cleared.logical, pointer.allocation)
                 && (forall|i: int| 0 <= i < cleared.machine.values.len() ==>
                     !invocation_value_names_allocation_v36(cleared.machine.values[i], pointer.allocation)) {
                 InvocationSourceByteStateV36 { machine: MemoryStateV30 {
@@ -2008,6 +2035,8 @@ open spec fn invocation_source_byte_step_v36(
             invocation_source_discriminant_read_v41(source, read, root, instance, little_endian).source,
         InvocationSourceByteEventV36::EnumConstruct(constructed) =>
             invocation_source_enum_construct_v43(source, constructed, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::LogicalEnum(event) =>
+            invocation_source_logical_enum_step_v47(source, event, root, instance, little_endian).source,
         InvocationSourceByteEventV36::IntegerCast(cast) =>
             invocation_source_integer_cast_v43(source, cast, root, instance, little_endian).source,
         InvocationSourceByteEventV36::ScalarOperands(operation) =>
