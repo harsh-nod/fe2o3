@@ -208,7 +208,19 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   they may invoke other macros or reference helpers. The complete source/Cargo
   closure remains identity-bearing, but neither resolved expansion dependencies
   nor a compiler-expanded entry roster is inferred. Kernel attributes on macro
-  definitions reject. Unknown cfg, item macro calls, `include!`, transforming attributes,
+  definitions reject. Exact unqualified literal `include!("path.rs");` calls
+  may select files containing only inert macro definitions and further literal
+  includes from the authenticated package source closure. Ordinary unescaped
+  and raw string literals are accepted; paths are canonical and relative to the
+  physical containing file, without changing its Rust module context. Included
+  functions, modules, imports and inner attributes reject. Missing, repeated,
+  cyclic, generated or noncanonical include paths reject. Across the selected
+  closure, a definition named `include`, duplicate active macro names, and
+  imports containing `include`, aliases or globs conservatively reject include
+  selection, including parent-scope shadowing. This is not Rust name resolution.
+  Includes share the existing record/source-byte budgets and allow at most
+  32 nested include edges. No included macro token becomes a selected function.
+  Unknown cfg, other item macro calls, transforming attributes,
   build-script cfg, dependency features, nested/inline/path-selected modules,
   duplicate modules or selected symbols reject a claimed binding. Such sources
   retain `pending` until an exact selection can be established. This bounded

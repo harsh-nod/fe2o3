@@ -561,6 +561,195 @@ class AttentionCfgSelectionTests(unittest.TestCase):
                         self.declarations(source)
 
 
+class LiteralIncludeSelectionTests(unittest.TestCase):
+    """Authenticate inert includes without expanding their tokens into declarations."""
+
+    library = "pkg/src/lib.rs"
+    definition = "macro_rules! body { () => { #[kernel] fn fake() {} }; }\n"
+    kernel = "#[kernel] fn visible() { body!(); }\n"
+
+    @classmethod
+    def setUpClass(cls):
+        for name, filename in (("parent", "validate-tutorial-kernel-manifest.py"),
+                               ("identities", "tutorial_kernel_identities.py")):
+            spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            setattr(cls, name, module)
+        cls.original = cls.parent.load_manifest(ROOT / "config/tutorial-kernel-manifest-v1.json")
+
+    def select(self, sources, *, budget=None):
+        def syntax(source):
+            code = self.parent._rust_code_without_comments_and_literals(source)
+            return code, self.parent._rust_delimiters(code)
+        return self.identities._fixture_selection(
+            {"compilerInput": {"kernelSymbols": ["visible"]}},
+            lambda _: (self.library, sources, []), self.parent.ordinary_rust_function_items,
+            syntax, budget if budget is not None else self.identities._Budget(4096))
+
+    def sources(self, prefix='include!("body.rs");\n', body=None):
+        return {self.library: prefix + self.kernel,
+                "pkg/src/body.rs": self.definition if body is None else body}
+
+    def document(self):
+        document = copy.deepcopy(self.original)
+        fixture = next(row for row in document["compilerFixtures"]
+                       if row["fixtureId"] == "gfx942-typed-vecadd-source")
+        kernel = next(row for row in document["kernelInventory"]["kernels"]
+                      if row["kernelId"] == "fixture:gfx942-typed-vecadd-source:vecadd")
+        binding = {
+            "implementationKernelId": kernel["kernelId"], "selection": kernel["selections"][0],
+            "selectionSha256": self.identities._selection_identity(
+                fixture["compilerInput"], "vecadd", self.identities._Budget(4096)),
+            "sourcePath": "examples/vecadd/src/lib.rs",
+            "sourceSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
+            "functionUtf8Offset": 203,
+        }
+        kernel["variants"][0].update(status="source-bound", source=binding)
+        return document, fixture, binding
+
+    def test_real_vecadd_binds_only_the_physical_kernel_through_authenticated_parent(self):
+        document, _, binding = self.document()
+        before = copy.deepcopy(document)
+        result = self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
+        self.assertEqual(document, before)
+        expected = sum(variant["source"] is not None
+                       for row in document["kernelInventory"]["kernels"] for variant in row["variants"])
+        self.assertEqual(result["sourceBoundVariantCount"], expected)
+        self.assertEqual(result["sourceBoundPairCount"], 0)
+        self.assertFalse(result["inventoryComplete"])
+        self.assertIsNone(result["requiredPairCount"])
+        self.assertEqual((ROOT / binding["sourcePath"]).read_bytes()[203:209], b"vecadd")
+
+    def test_real_vecadd_included_bytes_remain_part_of_authenticated_closure(self):
+        document, fixture, _ = self.document()
+        cache = {}
+        self.parent.validate_compiler_input(ROOT, fixture, "include closure test", cache)
+        package = cache[fixture["compilerInput"]["packageManifest"]]
+        sources = package["packageSources"]
+        index = next(i for i, (path, _) in enumerate(sources) if path.name == "vecadd_body.rs")
+        path, source = sources[index]
+        self.assertIn("$add!($a[i], $b[i])", source)
+        package["packageSources"] = [
+            *sources[:index], (path, source.replace("$add!($a[i], $b[i])", "$a[i]")), *sources[index + 1:]]
+        with self.assertRaisesRegex(SystemExit, "physical source differs from its validated closure"):
+            self.parent.validate_kernel_inventory(document, None, repo_root=ROOT, package_cache=cache)
+
+    def test_exact_quoted_and_raw_literals_preserve_physical_offsets(self):
+        for literal in ('"body.rs"', 'r"body.rs"', 'r###"body.rs"###'):
+            sources = self.sources(f"// UTF-8: \u03bb\ninclude /* gap */ !({literal});\n")
+            with self.subTest(literal=literal):
+                selected = self.select(sources)
+                self.assertEqual(set(selected), {"visible"})
+                path, offset, source = selected["visible"]
+                self.assertEqual(path, self.library)
+                self.assertEqual(source.encode()[offset:offset + 7], b"visible")
+                self.assertEqual(source, sources[self.library])
+
+    def test_nested_includes_are_relative_to_containing_file_not_module_context(self):
+        child = 'include!("shared/body.rs");\n' + self.kernel
+        sources = {self.library: "mod child;", "pkg/src/child.rs": child,
+                   "pkg/src/shared/body.rs": 'include!("leaf.rs");',
+                   "pkg/src/shared/leaf.rs": self.definition,
+                   "pkg/src/leaf.rs": "fn wrong_physical_parent() {}"}
+        self.assertEqual(self.select(sources)["visible"][0], "pkg/src/child.rs")
+        del sources["pkg/src/shared/leaf.rs"]
+        with self.assertRaisesRegex(self.identities.KernelInventoryError, "missing fixture module"):
+            self.select(sources)
+
+    def test_cycles_repeats_missing_and_ambiguous_module_paths_reject(self):
+        cases = [
+            self.sources('include!("lib.rs");\n'),
+            self.sources('include!("missing.rs");\n'),
+            self.sources('include!("body.rs"); include!("body.rs");\n'),
+            self.sources(body='include!("body.rs");'),
+            {**self.sources(body='include!("other.rs");'), "pkg/src/other.rs": 'include!("body.rs");'},
+            {self.library: "mod child;", "pkg/src/child.rs": self.kernel,
+             "pkg/src/child/mod.rs": self.kernel},
+        ]
+        for sources in cases:
+            with self.subTest(sources=sources), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "ambiguous or missing"):
+                self.select(sources)
+
+    def test_nonliteral_noncanonical_qualified_and_generated_paths_reject(self):
+        for argument in ('concat!("body", ".rs")', 'env!("OUT_DIR")', '"/body.rs"', '"../body.rs"',
+                         '"./body.rs"', '"sub//body.rs"', '""', '"body\\x2ers"', '"body.rs",'):
+            with self.subTest(argument=argument), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "fixture include"):
+                self.select(self.sources(f"include!({argument});\n"))
+        for directive in ('std::include!("body.rs");', 'include!{"body.rs"}', 'include!["body.rs"];'):
+            with self.subTest(directive=directive), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "fixture"):
+                self.select(self.sources(directive))
+        # The authenticated package closure never supplies generated target/ members.
+        with self.assertRaisesRegex(self.identities.KernelInventoryError, "missing fixture module"):
+            self.select(self.sources('include!("target/generated.rs");\n'))
+
+    def test_included_items_never_become_functions_modules_or_imports(self):
+        for body in ("fn helper() {}", "#[kernel] fn injected() {}", "mod child;",
+                     "mod child {}", "use crate::helper;", "const VALUE: u32 = 0;",
+                     "body!();", '"masked" macro_rules! body {}', "#![no_std]\n" + self.definition,
+                     '#[allow(dead_code)] "masked" macro_rules! body {}',
+                     "#[cfg(test)] fn disabled() {}"):
+            with self.subTest(body=body), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "included fixture source"):
+                self.select(self.sources(body=body))
+
+    def test_parent_macro_shadowing_cannot_fake_builtin_include_in_a_child(self):
+        definition = "macro_rules! include { ($path:expr) => {}; }\n"
+        for root in (definition + "mod child;", "mod child;\n" + definition):
+            sources = {self.library: root, "pkg/src/child.rs": 'include!("body.rs");\n' + self.kernel,
+                       "pkg/src/body.rs": self.definition}
+            with self.subTest(root=root), self.assertRaisesRegex(
+                    self.identities.KernelInventoryError, "ambiguous macro or import scope"):
+                self.select(sources)
+
+    def test_duplicate_macros_and_import_aliases_or_globs_reject_in_include_closure(self):
+        for hazard in ("macro_rules! include { () => {}; }", self.definition,
+                       "use other::include;", "use other::thing as include;", "use other::thing as alias;",
+                       "use other::*;", "use other::{thing, nested::*};"):
+            for prefix in (hazard + '\ninclude!("body.rs");\n', 'include!("body.rs");\n' + hazard):
+                with self.subTest(prefix=prefix), self.assertRaisesRegex(
+                        self.identities.KernelInventoryError, "ambiguous macro or import scope"):
+                    self.select(self.sources(prefix))
+        with self.assertRaisesRegex(self.identities.KernelInventoryError, "ambiguous macro or import scope"):
+            self.select(self.sources(body="macro_rules! include { () => {}; }"))
+
+    def test_inactive_include_is_not_traversed_but_unknown_cfg_rejects(self):
+        sources = {self.library: '#[cfg(test)] include!("missing.rs");\n' + self.kernel}
+        self.assertEqual(set(self.select(sources)), {"visible"})
+        sources[self.library] = '#[cfg(unknown)] include!("missing.rs");\n' + self.kernel
+        with self.assertRaisesRegex(self.identities.KernelInventoryError, "cfg predicate"):
+            self.select(sources)
+
+    def test_include_records_source_bytes_and_depth_have_exact_boundaries(self):
+        sources = self.sources()
+        budget = self.identities._Budget(4)  # One scanned function and three physical items.
+        self.select(sources, budget=budget)
+        self.assertEqual(budget.used, 4)
+        with self.assertRaisesRegex(self.identities.KernelInventoryError, "record bound"):
+            self.select(sources, budget=self.identities._Budget(3))
+        total = sum(len(source.encode()) for source in sources.values())
+        for limit, succeeds in ((total, True), (total - 1, False)):
+            with patch.object(self.identities, "MAX_RUNTIME_BYTES", limit):
+                if succeeds:
+                    self.select(sources)
+                else:
+                    with self.assertRaisesRegex(self.identities.KernelInventoryError, "aggregate byte bound"):
+                        self.select(sources)
+        for depth in (32, 33):
+            chain = {self.library: 'include!("0.rs");\n' + self.kernel}
+            chain.update({f"pkg/src/{index}.rs": f'include!("{index + 1}.rs");'
+                          for index in range(depth - 1)})
+            chain[f"pkg/src/{depth - 1}.rs"] = self.definition
+            if depth == 32:
+                self.select(chain)
+            else:
+                with self.assertRaisesRegex(self.identities.KernelInventoryError, "nesting bound"):
+                    self.select(chain)
+
+
 class RowSourceBindingTests(unittest.TestCase):
     lesson_id = "cpu-semantic-simulation"
     kernel_id = "source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1"

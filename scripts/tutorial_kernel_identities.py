@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import PurePosixPath
 import re
 from typing import Any, Callable
 
@@ -22,6 +23,7 @@ MAX_TEXT_BYTES = 4 * 1024 * 1024
 MAX_RUNTIME_BYTES = 16 * 1024 * 1024
 MAX_IDENTITY_BYTES = 16 * 1024 * 1024
 MAX_CFG_TOKENS = 512
+MAX_INCLUDE_DEPTH = 32
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 KERNEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
 ISSUE_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*")
@@ -425,21 +427,65 @@ def _fixture_attribute(source: str, code: str, pairs: dict[int, int], start: int
     return True, int(name == "kernel")
 
 
-def _fixture_macro_definition(source: str, start: int, end: int) -> bool:
+def _fixture_macro_definition(source: str, start: int, end: int) -> str | None:
     """Recognize an inert definition header without accepting masked literals."""
     if not source.startswith("macro_rules", start):
-        return False
+        return None
     cursor = _fixture_trivia_end(source, start + len("macro_rules"), end)
     if cursor == end or source[cursor] != "!":
-        return False
+        return None
     cursor = _fixture_trivia_end(source, cursor + 1, end)
     name = IDENTIFIER.match(source, cursor, end)
-    return name is not None and _fixture_trivia_end(source, name.end(), end) == end
+    return name[0] if name is not None and _fixture_trivia_end(source, name.end(), end) == end else None
+
+
+class _FixtureIncludeScope:
+    """Conservatively exclude textual/import shadowing across the selected closure."""
+
+    def __init__(self):
+        self.names: set[str] = set()
+        self.ambiguous = False
+        self.used = False
+
+    def define(self, name: str) -> None:
+        self.ambiguous |= name == "include" or name in self.names
+        self.names.add(name)
+
+    def imported(self, item: str) -> None:
+        self.ambiguous |= re.search(r"\b(?:include|as)\b|\*", item) is not None
+
+    def validate(self) -> None:
+        if self.used and self.ambiguous:
+            _fail("literal fixture include has ambiguous macro or import scope")
+
+
+def _fixture_include_path(source: str, start: int, end: int, pairs: dict[int, int]) -> str:
+    cursor = _fixture_trivia_end(source, start + len("include"), end)
+    if cursor == end or source[cursor] != "!":
+        _fail("unsupported literal fixture include")
+    cursor = _fixture_trivia_end(source, cursor + 1, end)
+    closing = pairs.get(cursor)
+    if (cursor == end or source[cursor] != "(" or closing is None or closing > end
+            or _fixture_trivia_end(source, closing, end) != end):
+        _fail("unsupported literal fixture include")
+    literal = re.fullmatch(
+        r'\s*(?:"(?P<quoted>[^"\\\r\n]*)"|r(?P<hashes>#{0,255})"(?P<raw>.*?)"(?P=hashes))\s*',
+        source[cursor + 1:closing - 1], re.DOTALL)
+    if literal is None:
+        _fail("fixture include requires one unescaped literal path")
+    value = literal["quoted"] if literal["quoted"] is not None else literal["raw"]
+    relative = PurePosixPath(value)
+    if (not value or not relative.parts or len(value) > 256 or relative.is_absolute() or str(relative) != value
+            or ".." in relative.parts or "\\" in value or any(ord(char) < 32 for char in value)):
+        _fail("fixture include requires a canonical relative path")
+    return value
 
 
 def _fixture_declarations(
     source: str, features: set[str], scan_functions: Callable,
     rust_syntax: Callable, budget: _Budget,
+    *, include_paths: list[str] | None = None, include_scope: _FixtureIncludeScope | None = None,
+    macros_only: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Select physical functions/modules; macro definitions are never expanded."""
     _utf8(source, "fixture source")
@@ -451,13 +497,18 @@ def _fixture_declarations(
     modules = []
     attribute = re.compile(r"#\s*(!?)\s*\[")
     while cursor < len(code):
-        if code[cursor].isspace() or code[cursor] == ";":
+        cursor = _fixture_trivia_end(source, cursor, len(code))
+        if cursor == len(code):
+            break
+        if code[cursor] == ";":
             cursor += 1
             continue
         budget.rows([None], "fixture source items")
         enabled = True
         kernels = 0
         while match := attribute.match(code, cursor):
+            if macros_only and match[1]:
+                _fail("included fixture source cannot contain inner attributes")
             opening = match.end() - 1
             end = pairs[opening]
             attr_enabled, attr_kernels = _fixture_attribute(
@@ -467,8 +518,7 @@ def _fixture_declarations(
             if match[1] and not enabled:
                 _fail("conditional fixture crate/module is unsupported")
             cursor = end
-            while cursor < len(code) and code[cursor].isspace():
-                cursor += 1
+            cursor = _fixture_trivia_end(source, cursor, len(code))
         if cursor == len(code):
             break
         start = cursor
@@ -489,6 +539,11 @@ def _fixture_declarations(
         inert_macro = code[boundary] == "{" and _fixture_macro_definition(source, start, boundary)
         if inert_macro and kernels:
             _fail("kernel attribute on an inert fixture macro definition")
+        include_item = include_paths is not None and re.match(r"include\b", head) is not None
+        if macros_only and not inert_macro and not include_item:
+            _fail("included fixture source must contain only inert macro definitions or literal includes")
+        if inert_macro and enabled and include_scope is not None:
+            include_scope.define(inert_macro)
         item_functions = []
         while function_index < len(functions) and functions[function_index]["functionUtf8Offset"] < end_byte:
             function = functions[function_index]
@@ -503,6 +558,14 @@ def _fixture_declarations(
             continue
         if kernels > 1:
             _fail("duplicate active fixture kernel attributes")
+        if include_item:
+            if kernels or code[boundary] != ";" or include_scope is None:
+                _fail("unsupported literal fixture include")
+            include_paths.append(_fixture_include_path(source, start, boundary, pairs))
+            include_scope.used = True
+            continue
+        if include_scope is not None and re.match(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\b", head):
+            include_scope.imported(code[start:cursor])
         module = re.fullmatch(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*", head)
         if module is not None:
             if code[boundary] != ";":
@@ -523,19 +586,26 @@ def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_fun
     # The loader authenticates the current physical package closure and Cargo
     # inputs. Traversal establishes only this bounded source selection, not rustc
     # acceptance or any executable outcome.
-    pending = [library]
+    # Physical include paths and Rust module context are different coordinates.
+    pending = [(library, (), False, 0)]
     visited = set()
     selected = {}
+    include_scope = _FixtureIncludeScope()
     while pending:
-        path = pending.pop()
+        path, module_context, included, include_depth = pending.pop()
+        if include_depth > MAX_INCLUDE_DEPTH:
+            _fail("fixture include exceeds its nesting bound")
         if path in visited or path not in sources:
-            _fail("ambiguous or missing fixture module selection")
+            _fail("ambiguous or missing fixture module selection or repeated include")
         visited.add(path)
         source = sources[path]
         budget.source_bytes += len(_utf8(source, "fixture source"))
         if budget.source_bytes > MAX_RUNTIME_BYTES:
             _fail("selected fixture source exceeds its aggregate byte bound")
-        functions, modules = _fixture_declarations(source, set(enabled), scan_functions, rust_syntax, budget)
+        includes = []
+        functions, modules = _fixture_declarations(
+            source, set(enabled), scan_functions, rust_syntax, budget,
+            include_paths=includes, include_scope=include_scope, macros_only=included)
         for function in functions:
             symbol = function["kernelSymbol"]
             if symbol in selected:
@@ -544,7 +614,7 @@ def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_fun
         # Deliberately bounded to ordinary sibling modules of a library root.
         # Nested, inline, #[path] and macro-selected modules need a separate
         # reviewed extension, not a guess about Rust's module resolution.
-        if modules and path != library:
+        if modules and (path != library or module_context):
             _fail("nested fixture modules are unsupported")
         for module in modules:
             parent = path.rsplit("/", 1)[0]
@@ -552,7 +622,12 @@ def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_fun
                           if candidate in sources]
             if len(candidates) != 1:
                 _fail("ambiguous or missing fixture module selection")
-            pending.append(candidates[0])
+            pending.append((candidates[0], (module,), False, 0))
+        for relative in includes:
+            # Membership uses only the loader-authenticated packageSources closure.
+            target = (PurePosixPath(path).parent / relative).as_posix()
+            pending.append((target, module_context, True, include_depth + 1))
+    include_scope.validate()
     if set(selected) != set(fixture["compilerInput"]["kernelSymbols"]):
         _fail("feature-selected fixture kernel roster differs")
     return selected
