@@ -39,10 +39,66 @@ type Measurements = (
     Option<usize>,
     Option<usize>,
     transition_work_oracle::ReplaySchedule,
+    usize,
 );
+
+fn checked_recurrence_delta(prefix: &DirectPreheaders, mutation: bool) -> usize {
+    use fe2o3_kernel_ir::{BinaryOp, CheckedBinaryOperator, Type};
+    let module = prefix.output().module();
+    let mut count = 0;
+    for (function, declaration) in module.functions.iter().enumerate() {
+        let Some(body) = &declaration.body else {
+            continue;
+        };
+        for block in &body.blocks {
+            for operation in &block.operations {
+                let OperationKind::Binary {
+                    op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+                    lhs,
+                    rhs,
+                } = operation.kind
+                else {
+                    continue;
+                };
+                count += 1;
+                assert_eq!(operation.results.len(), 2);
+                assert_eq!(
+                    operation.results[0].ty,
+                    Type::Scalar(fe2o3_kernel_ir::ScalarType::U32)
+                );
+                assert_eq!(operation.results[1].ty, Type::BOOL);
+                let [origin] = prefix.origins() else {
+                    panic!("one genuine recurrence loop")
+                };
+                assert_eq!(origin.header.function.0 as usize, function);
+                let header = &body.blocks[origin.header.block as usize];
+                assert!(header.parameters.iter().any(
+                    |parameter| parameter.id == lhs && parameter.ty == operation.results[0].ty
+                ));
+                assert!(
+                    body.blocks
+                        .iter()
+                        .flat_map(|block| &block.operations)
+                        .any(|constant| {
+                            constant.results.len() == 1
+                                && constant.results[0].id == rhs
+                                && constant.kind
+                                    == OperationKind::Constant(fe2o3_kernel_ir::Constant::U32(1))
+                        })
+                );
+            }
+        }
+    }
+    assert_eq!(count, usize::from(mutation));
+    // The producer checks the pair shape, both scalar operand types, then the
+    // first availability query stops at the loop-header parameter. No checked
+    // recurrence is moved, so the independent motion replay adds no such cost.
+    count * (4 + 2 * 2 + 4)
+}
 
 fn measured(profile: Profile, mutation: bool, limit: usize, storage: usize) -> Measurements {
     let (prefix, inherited) = direct::prefix(profile, mutation);
+    let checked_delta = checked_recurrence_delta(&prefix, mutation);
     let schedule = transition_work_oracle::assert_policy6_endpoints(
         prefix.prefix().prefix().prefix().prefix(),
         transition_work_oracle::Family::Licm,
@@ -61,6 +117,27 @@ fn measured(profile: Profile, mutation: bool, limit: usize, storage: usize) -> M
                 owner.additional_retained_storage_v1(),
                 added.retained_storage()
             );
+            for row in owner.operation_origins() {
+                let operation = &owner.prefix().output().module().functions
+                    [row.input.block.function.0 as usize]
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .blocks[row.input.block.block as usize]
+                    .operations[row.input.operation as usize];
+                if matches!(
+                    operation.kind,
+                    OperationKind::Binary {
+                        op: fe2o3_kernel_ir::BinaryOp::Checked(_),
+                        ..
+                    }
+                ) {
+                    assert!(
+                        row.hoist.is_none(),
+                        "the original recurrence stays in its loop"
+                    );
+                }
+            }
             if mutation {
                 actual_mutation(
                     owner.prefix().output(),
@@ -93,6 +170,7 @@ fn measured(profile: Profile, mutation: bool, limit: usize, storage: usize) -> M
         failed_storage,
         work.failed_work(),
         schedule,
+        checked_delta,
     )
 }
 
@@ -100,18 +178,18 @@ fn measured(profile: Profile, mutation: bool, limit: usize, storage: usize) -> M
 fn source_licm_exact_work_and_one_short_keep_first_denial_and_live_sibling() {
     for profile in [Profile::Gfx942, Profile::Gfx950] {
         for mutation in [false, true] {
-            let (result, work, peak, storage_denial, work_denial, _) =
+            let (result, work, peak, storage_denial, work_denial, _, _) =
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
-            let (result, accepted, actual_peak, storage_denial, work_denial, _) =
+            let (result, accepted, actual_peak, storage_denial, work_denial, _, _) =
                 measured(profile, mutation, work, peak);
             result.unwrap();
             assert_eq!(
                 (accepted, actual_peak, storage_denial, work_denial),
                 (work, peak, None, None)
             );
-            let (result, accepted, actual_peak, storage_denial, work_denial, _) =
+            let (result, accepted, actual_peak, storage_denial, work_denial, _, _) =
                 measured(profile, mutation, work - 1, peak);
             match result {
                 Err(LicmError::Resource(AssertOriginResourceV1::Work(error))) => {
@@ -132,7 +210,7 @@ fn source_licm_exact_work_and_one_short_keep_first_denial_and_live_sibling() {
 fn source_licm_one_short_storage_preserves_exact_nested_phase() {
     for profile in [Profile::Gfx942, Profile::Gfx950] {
         for mutation in [false, true] {
-            let (result, work, peak, storage_denial, work_denial, schedule) =
+            let (result, work, peak, storage_denial, work_denial, schedule, checked_delta) =
                 measured(profile, mutation, WORK, STORAGE);
             result.unwrap();
             assert_eq!((storage_denial, work_denial), (None, None));
@@ -145,9 +223,9 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
             let nominal_header = std::mem::size_of::<Option<Box<SealedBf16CallRelationV1>>>();
             let expected = if mutation {
                 (
-                    2_733_569 + 3 * complete,
+                    2_733_569 + 3 * complete + checked_delta,
                     3_335_432 + nominal_header,
-                    2_686_896 + 2 * complete + partial,
+                    2_686_896 + 2 * complete + partial + checked_delta,
                     3_309_581 + nominal_header,
                 )
             } else {
@@ -159,9 +237,17 @@ fn source_licm_one_short_storage_preserves_exact_nested_phase() {
                 )
             };
             assert_eq!((work, peak), (expected.0, expected.1));
-            let (result, accepted, actual_peak, storage_denial, work_denial, short_schedule) =
-                measured(profile, mutation, work, peak - 1);
+            let (
+                result,
+                accepted,
+                actual_peak,
+                storage_denial,
+                work_denial,
+                short_schedule,
+                short_delta,
+            ) = measured(profile, mutation, work, peak - 1);
             assert_eq!(short_schedule, schedule);
+            assert_eq!(short_delta, checked_delta);
             let error =
                 result.expect_err("one-short storage cannot complete the same allocation history");
             assert_eq!((storage_denial, work_denial), (Some(peak), None));
