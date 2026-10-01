@@ -3344,6 +3344,29 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
         let callee_path = self.tcx.def_path_str(*def_id);
+        if crate::production_core_panic_v50::is_candidate(self.tcx, func) {
+            let checked = crate::production_core_panic_v50::observe(
+                self.tcx,
+                *caller,
+                body,
+                block,
+                &mut |amount| self.closure_work.charge(amount),
+            );
+            return match checked {
+                Ok(Some(_)) => Ok(()),
+                Ok(None) => Err(self.reachable_error(
+                    caller,
+                    "core panic candidate lost its exact original call",
+                    Some(callee_path),
+                )),
+                Err(crate::production_core_panic_v50::CorePanicErrorV50::Work(error)) => {
+                    Err(self.reachable_error(caller, &error.to_string(), Some(callee_path)))
+                }
+                Err(crate::production_core_panic_v50::CorePanicErrorV50::Refused(reason)) => {
+                    Err(self.reachable_error(caller, reason, Some(callee_path)))
+                }
+            };
+        }
         if callee_path.contains("::panicking::")
             || callee_path.contains("::panic_fmt")
             || callee_path.contains("::begin_panic")

@@ -2,7 +2,8 @@
 //!
 //! These are ordinary Item instances, not rustc intrinsics. Their semantics are
 //! a pinned-core trust boundary, not a formal proof of the core implementation.
-//! No unchecked method, panic path, or caller-supplied summary is admitted here.
+//! No unchecked method or caller-supplied summary is admitted here. The separate
+//! core-panic recipe below requires its own exact nonreturning call contract.
 
 use rustc_abi::{CanonAbi, ExternAbi};
 use rustc_hir::{Safety, def::DefKind};
@@ -191,6 +192,7 @@ pub(crate) enum NormalizedCallV1<'tcx> {
     Rustc(ProductionRustcIntrinsicOperationV1),
     SafeCoreShift(SafeCoreShiftV1<'tcx>),
     CheckedPrimitiveFrom(crate::production_primitive_from_v1::CheckedPrimitiveFromV1<'tcx>),
+    CorePanic(crate::production_core_panic_v50::CorePanicV50<'tcx>),
 }
 
 impl NormalizedCallV1<'_> {
@@ -199,6 +201,7 @@ impl NormalizedCallV1<'_> {
             Self::Rustc(_) => 1,
             Self::SafeCoreShift(_) => 3,
             Self::CheckedPrimitiveFrom(_) => 1,
+            Self::CorePanic(_) => 0,
         }
     }
 
@@ -210,6 +213,7 @@ impl NormalizedCallV1<'_> {
                 DirectionV1::Right => 5,
             },
             Self::CheckedPrimitiveFrom(_) => 7,
+            Self::CorePanic(_) => 8,
         }
     }
 }

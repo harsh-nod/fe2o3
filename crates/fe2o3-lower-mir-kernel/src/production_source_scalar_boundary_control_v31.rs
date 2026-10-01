@@ -10,6 +10,7 @@ struct SourceBoundaryCheckV31<'a> {
 }
 
 include!("production_source_scalar_boundary_asserts_v40.rs");
+include!("production_source_scalar_boundary_aborts_v50.rs");
 
 fn source_boundary_function_seen_v31(
     inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>,
@@ -99,6 +100,7 @@ fn source_boundary_control_headers_v31() -> Result<usize, ArgumentResourceV1> {
         std::mem::align_of::<Frame<'_, '_>>(),
         original_private_expression_headers_v22()?,
         source_boundary_assert_headers_v40()?,
+        source_boundary_abort_headers_v50()?,
     ])
 }
 
@@ -835,6 +837,9 @@ impl SourceScalarLeavesV18<'_, '_> {
                                         .missing("source SSA boundary control entry differs");
                                 }
                                 match (original, actual.terminator) {
+                                    (SemanticTerminatorKindV1::Abort, _) => {
+                                        check.abort_v50(original_actual, actual, budget)?;
+                                    }
                                     (SemanticTerminatorKindV1::Assert { .. }, _) => {
                                         check.assertion_v40(
                                             &assertions,

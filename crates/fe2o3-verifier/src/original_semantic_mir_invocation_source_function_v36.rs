@@ -26,6 +26,7 @@ mod assertions;
 
 enum End {
     Unreachable,
+    Abort,
     Goto(usize),
     Switch {
         operand: TypedOperand,
@@ -170,6 +171,28 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
                 .retain_query_resource_error_v18(Resource::Accounting)
                 .into());
         }
+        write!(
+            out,
+            "open spec fn invocation_source_abort_site_v50(pc: int) -> bool {{ false"
+        )
+        .map_err(|_| out.error())?;
+        for function in &self.functions {
+            out.budget.charge_work(1)?;
+            if let Some(function) = function {
+                for (block, row) in function.control.iter().enumerate() {
+                    out.budget.charge_work(1)?;
+                    if matches!(row.end, End::Abort) {
+                        let pc = function
+                            .blocks
+                            .start
+                            .checked_add(block)
+                            .ok_or(Resource::Arithmetic)?;
+                        write!(out, " || pc == {pc}int").map_err(|_| out.error())?;
+                    }
+                }
+            }
+        }
+        write!(out, " }}\n").map_err(|_| out.error())?;
         for function in &mut self.functions {
             out.budget.charge_work(1)?;
             if let Some(function) = function {
@@ -203,7 +226,20 @@ fn program_headers() -> usize {
         + h::<Range<usize>>()
         + 14 * size_of::<usize>()
         + 12 * size_of::<&()>()
+        + abort_headers()
 }
+
+fn abort_headers() -> usize {
+    size_of::<std::slice::Iter<'_, Option<SourceByteFunction<'_, '_, '_>>>>()
+        + size_of::<std::iter::Enumerate<std::slice::Iter<'_, BodyBlock>>>()
+        + size_of::<Option<usize>>()
+        + size_of::<usize>()
+        + 2 * size_of::<&()>()
+}
+
+#[cfg(test)]
+#[path = "original_semantic_mir_source_abort_control_v50_tests.rs"]
+mod abort_tests;
 
 fn mismatch() -> Error {
     Error::Statement("original MIR byte control differs from its exact invocation")
@@ -375,6 +411,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                         End::Call { child, arguments }
                     }
                     Terminator::Return => End::Return,
+                    Terminator::Abort => End::Abort,
                     _ => return Err(unsupported()),
                 }
             };
@@ -473,6 +510,9 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             match &row.end {
                 End::Index(call) => call.emit(out)?,
                 End::Assert(assertion) => assertion.emit(r, i, block, out)?,
+                End::Abort => {
+                    write!(out, " let source = invocation_source_byte_trap_v40(cursor.source);\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }}\n").map_err(|_| out.error())?;
+                }
                 End::Goto(target) => {
                     write!(out, " let source = invocation_source_byte_pc_v36(cursor.source, {target});\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }}\n").map_err(|_| out.error())?;
                 }

@@ -219,8 +219,10 @@ open spec fn invocation_source_trap_observations_v40(result: InvocationSourceBlo
             result.operands.last().after
         } else { result.before_control };
         let authentic = result.before_control.machine.pc >= 0
-            && result.operands.len() > 0
-            && result.operands[0].role == InvocationSourceOperandRoleV36::AssertCondition
+            && ((result.operands.len() > 0
+                    && result.operands[0].role == InvocationSourceOperandRoleV36::AssertCondition)
+                || (result.operands.len() == 0
+                    && invocation_source_abort_site_v50(result.before_control.machine.pc)))
             && result.source == invocation_source_byte_trap_v40(before)
             && result.source.machine.valid && result.returned.is_none();
         invocation_source_observe_effects_v39(

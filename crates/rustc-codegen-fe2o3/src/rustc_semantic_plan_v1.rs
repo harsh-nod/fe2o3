@@ -860,6 +860,44 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
             };
             match resolve_direct_call_v1(tcx, function.instance, body, func) {
                 Ok(resolved) => {
+                    if crate::production_core_panic_v50::is_candidate(tcx, func) {
+                        match crate::production_core_panic_v50::observe(
+                            tcx,
+                            function.instance,
+                            body,
+                            block,
+                            &mut |amount| {
+                                counts.charge(SemanticMirResourceV1::ValidationWork, amount, limits)
+                            },
+                        ) {
+                            Ok(Some(checked)) if checked.instance() == resolved => {
+                                normalized_intrinsics.push(NormalizedRustcIntrinsicRecipeV1 {
+                                    caller: function_id,
+                                    block: block.index() as u32,
+                                    operation: NormalizedCallV1::CorePanic(checked),
+                                    element_type: tcx.types.never,
+                                    instance: resolved,
+                                    identities: canonical_function_identities_v1(tcx, resolved),
+                                });
+                            }
+                            Ok(_) => remember_rejection(
+                                &mut first_rejection,
+                                "core panic normalized callee differs",
+                                site,
+                            ),
+                            Err(crate::production_core_panic_v50::CorePanicErrorV50::Work(
+                                error,
+                            )) => {
+                                return Err(error);
+                            }
+                            Err(crate::production_core_panic_v50::CorePanicErrorV50::Refused(
+                                reason,
+                            )) => {
+                                remember_rejection(&mut first_rejection, reason, site);
+                            }
+                        }
+                        continue;
+                    }
                     match SafeCoreShiftV1::classify(tcx, resolved) {
                         Ok(Some(shift)) => {
                             has_safe_core_shift = true;
@@ -1609,11 +1647,38 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 self.charge(SemanticMirResourceV1::SwitchTargets, targets.iter().count())
             }
             TerminatorKind::Call {
+                func,
                 args,
                 destination,
                 unwind,
                 ..
             } => {
+                if crate::production_core_panic_v50::is_candidate(self.tcx, func) {
+                    let block = site
+                        .block
+                        .ok_or_else(|| reject("core panic source block", site))?;
+                    let checked = crate::production_core_panic_v50::observe(
+                        self.tcx,
+                        self.instance,
+                        self.body,
+                        rustc_middle::mir::BasicBlock::from_usize(block as usize),
+                        &mut |amount| self.charge(SemanticMirResourceV1::ValidationWork, amount),
+                    )
+                    .map_err(|error| match error {
+                        crate::production_core_panic_v50::CorePanicErrorV50::Work(error) => error,
+                        crate::production_core_panic_v50::CorePanicErrorV50::Refused(reason) => {
+                            reject(reason, site)
+                        }
+                    })?;
+                    let checked =
+                        checked.ok_or_else(|| reject("core panic source call differs", site))?;
+                    self.charge(SemanticMirResourceV1::Operands, 2)?;
+                    self.charge(SemanticMirResourceV1::ConstantBytes, checked.bytes().len())?;
+                    // The checked literal has no read or move effect and is not
+                    // installed as a source value. Its original local/statement
+                    // declarations are still inspected by the ordinary walk.
+                    return self.inspect_place(*destination, site);
+                }
                 if !matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) {
                     return Err(reject("call with executable unwind edge", site));
                 }
@@ -3814,6 +3879,15 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
                 section.field(&rustc_fn_signature_sha256_v1(tcx, signature))?;
                 section.field(&rustc_fn_abi_sha256_v1(tcx, checked.abi()))?;
             }
+            NormalizedCallV1::CorePanic(checked) => {
+                section.field(b"fe2o3/core-panic-literal/recipe/v50")?;
+                section.field(rustc_type_identity_v1(tcx, checked.message_type()).as_bytes())?;
+                section.field(checked.bytes())?;
+                let signature = source_signature_v1(tcx, recipe.instance)
+                    .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+                section.field(&rustc_fn_signature_sha256_v1(tcx, signature))?;
+                section.field(&rustc_fn_abi_sha256_v1(tcx, checked.abi()))?;
+            }
         }
         section.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes())?;
         section.field(recipe.identities.function().as_bytes())?;
@@ -3862,6 +3936,9 @@ fn normalized_intrinsic_definition_sha256_v1<'tcx>(
             borrowed_rustc_mir_body_sha256_v1(tcx, recipe.instance, shift.body())
         }
         NormalizedCallV1::CheckedPrimitiveFrom(checked) => {
+            borrowed_rustc_mir_body_sha256_v1(tcx, recipe.instance, checked.body())
+        }
+        NormalizedCallV1::CorePanic(checked) => {
             borrowed_rustc_mir_body_sha256_v1(tcx, recipe.instance, checked.body())
         }
     }

@@ -17,6 +17,23 @@ pub(crate) fn preflight_and_construct<'tcx>(
     instance: Instance<'tcx>,
     work: SourceClosureWorkV1,
 ) {
+    construct(tcx, instance, work, false);
+}
+
+pub(crate) fn preflight_and_construct_literal_panic<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    work: SourceClosureWorkV1,
+) {
+    construct(tcx, instance, work, true);
+}
+
+fn construct<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    work: SourceClosureWorkV1,
+    panic: bool,
+) {
     let prior = work.validation_work_for_test();
     assert!(prior > 17);
     let identities = canonical_function_identities_v1(tcx, instance);
@@ -43,10 +60,17 @@ pub(crate) fn preflight_and_construct<'tcx>(
     assert_eq!(plan.normalized_intrinsic_producers().len(), 1);
     assert!(plan.direct_call_producers().is_empty());
     assert!(plan.terminal_producers().is_empty());
-    assert!(matches!(
-        plan.normalized_intrinsic_producers()[0].operation,
-        NormalizedCallV1::CheckedPrimitiveFrom(_)
-    ));
+    if panic {
+        assert!(matches!(
+            plan.normalized_intrinsic_producers()[0].operation,
+            NormalizedCallV1::CorePanic(_)
+        ));
+    } else {
+        assert!(matches!(
+            plan.normalized_intrinsic_producers()[0].operation,
+            NormalizedCallV1::CheckedPrimitiveFrom(_)
+        ));
+    }
     let types = construct_production_semantic_types_v1(tcx, plan.type_producers())
         .unwrap()
         .into_records();
@@ -155,6 +179,25 @@ pub(crate) fn preflight_and_construct<'tcx>(
         &raw.basic_blocks[rustc_middle::mir::BasicBlock::from_usize(call.rustc_block as usize)];
     let after =
         &result.blocks()[body.raw_to_semantic_blocks[call.rustc_block as usize].index() as usize];
+    if panic {
+        assert_eq!(after.statements().len(), original.statements.len());
+        assert!(matches!(
+            after.terminator().kind(),
+            SemanticTerminatorKindV1::Abort
+        ));
+        assert_eq!(
+            result
+                .blocks()
+                .iter()
+                .filter(|block| matches!(
+                    block.terminator().kind(),
+                    SemanticTerminatorKindV1::Abort
+                ))
+                .count(),
+            1
+        );
+        return;
+    }
     assert_eq!(after.statements().len(), original.statements.len() + 1);
     let SemanticStatementKindV1::Assign(assignment) = after.statements().last().unwrap().kind()
     else {

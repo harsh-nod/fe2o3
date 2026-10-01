@@ -1105,12 +1105,22 @@ fn source_scalar_boundaries_derivation_and_control_frames_match_field_envelopes(
         [SourceOwnedResultV18<()>; 4],
         Result<Option<(BlockId, u32)>, ScopedTileFailureKindV29>,
     );
+    type Abort<'a> = (
+        [&'a fe2o3_kernel_analysis::CanonicalKirBlockRefV1<'a>; 3],
+        [&'a fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'a>; 2],
+        &'a fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'a>,
+        [SourceOwnedResultV18<()>; 3],
+        [SourceOwnedResultV18<fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1>; 2],
+        [usize; 4],
+    );
     assert_eq!(
         source_boundary_control_headers_v31().unwrap(),
         size_of::<Control<'_, '_>>()
             + std::mem::align_of::<Control<'_, '_>>()
             + original_private_expression_headers_v22().unwrap()
             + assertions::independent_assert_headers()
+            + size_of::<Abort<'_>>()
+            + std::mem::align_of::<Abort<'_>>()
     );
 }
 
