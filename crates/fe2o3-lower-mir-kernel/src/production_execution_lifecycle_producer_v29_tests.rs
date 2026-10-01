@@ -1,4 +1,7 @@
 use super::*;
+#[path = "production_scoped_tile_schedule_v29_tests.rs"]
+mod tile_schedule_tests;
+
 mod owner_parameter_tests {
     include!("production_execution_owner_parameter_v29_tests.rs");
 }
