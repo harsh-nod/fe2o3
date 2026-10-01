@@ -6,7 +6,7 @@ Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
 refreshed on 2026-10-01: the issue remained Open, with 32 comments and its latest
 update at 2026-09-30 19:46:57 UTC. Both runtime branch refs were confirmed through
-signed commit `92f18e433` before the following composition integration. GitHub and MI300X
+signed commit `3e016bd77` before the following composition evidence publication. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
@@ -68,9 +68,13 @@ schema bytes through the standard array-view lemmas. The latest full nine-input
 proof reports 63 verified and zero errors with no trusted equality assumption;
 both release checks and all three owned groups close. Earlier 57/2, 59/2 and
 61/1 attempts remain rejected. Native bytes and all actual Rust dependencies
-are unchanged, so CPU evidence is explicitly reused, not rerun. A separate
-41-stage collection of 34 mutation diagnostics is in progress; this unsigned
-positive discovery is not signed field-codec qualification or whole-wire proof.
+are unchanged, so CPU evidence is explicitly reused, not rerun. The first
+mutation collection stopped at its ninth case because the parser rejected a
+compiler-generated auxiliary while-loop source span; all fifteen launched
+groups closed. A narrowly source-bound parser correction and rejection controls
+pass, and a fresh full 41-stage collection of all 34 cases is in progress.
+Neither raw diagnostic collection nor unsigned positive discovery is signed
+field-codec qualification or whole-wire proof.
 These draft results do not qualify the integrated primitive component anew.
 
 The [A2 producer-input composition](runtime-producer-input-composition.md)
@@ -83,7 +87,12 @@ preserves the actual proof closures and refreshes only four source-inventory
 guards/tests; all 21 local CI commands pass. Earlier calibration captures remain
 observations, never accepted kills. Concrete journal forwarding is next;
 live-allocation checks, fresh credit locks and complete Context refinement remain
-open. The original campaign's public packaging is being prepared separately.
+open. The [public campaign packet](evidence/dev-producer-input-composition-2026-10-01/README.md)
+now includes the complete 1,218-file campaign in a 1,240-member deduplicated
+archive, both signed side commits over their actual public ancestor, and
+matching independent readbacks. Root verifies every archived original and both
+signatures. External CPU/tool/history replay prerequisites and two retained
+packaging rejections are explicitly disclosed.
 
 The [retained host-diagnostic CPU qualification](evidence/dev-xgmi-retained-host-diagnostic-cpu-2026-09-30/README.md)
 is integrated at `841c06b73`, with portable campaign helpers at `4ad64047b`.
@@ -130,19 +139,18 @@ journal/live/credit observer refinements remain open;
 no native freshness, composed Context theorem or milestone exit follows. The
 signed campaign's broader evidence packet remains local.
 
-The [compiler-owner update at 00:33:26 UTC on October 1](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5922288509)
-reports all 411 MIR-model tests passing in r237, including six new Option
-producer/dominance controls. The actual-source optimizer run r233 failed its
-fill parent and timed out during vector-add dependency compilation; it supplies
-no actual-source positive or intended-negative credit. The integrated r238
-lowerer/verifier run remains in progress. Completed-source, target/Worker,
-composed evidence, finalizer and generated-host handoffs remain incomplete.
-These component results overlap earlier suites and are not coverage to sum.
-The narrow MI350 portability repair passes five actual-module tests on each
-of GNU and musl; its new bounded full bundle build remains in progress.
-The strict production/proof/safe-GPU chain remains 0/47, compiler M0 is complete
-and M1-M7 remain incomplete. Public commit `16b76d786`, containing that narrow
-portability repair and evidence, grants no new protected runtime launch authority.
+The [compiler-owner update at 01:21:02 UTC on October 1](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5922794589)
+reports r241 with 374 selected lowerer tests passing, 28 failing, and five
+verifier tests passing. Helper ABI and storage-origin controls pass; 27 failures
+stop at implicit helper-return availability and one negative at earlier source
+initialization. A return-authentication repair is under test, not credited.
+The MI350 runtime build reached its original timeout without a complete bundle,
+provisioning, proof or GPU run; owned processes and caches were cleaned up.
+These component counts overlap earlier suites and are not coverage to sum.
+The strict production/proof/safe-GPU chain remains 0/47: compiler M0 is complete,
+M1-M7 remain incomplete, and production handoffs remain open. Evidence commit
+`b7f96650e` is public on both mains; it grants no new protected runtime launch
+authority. The broader compiler implementation remains a separate candidate.
 
 The [retained KFD CPU regression](evidence/dev-kfd-retained-regression-2026-09-30/README.md)
 now passes all 1,824 tests with two test threads, zero failures, ignores or

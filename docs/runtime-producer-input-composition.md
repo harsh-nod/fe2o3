@@ -50,6 +50,11 @@ The result hash is
 `735a86e580e37d66390953ed372f61fbf1bc18b6b45622cf1b5bbe5691e14fa0`;
 the independent readback hash is
 `0aa2bda66cccacc40c57627a8f0bc09a35904c6b97e7e76cba2bee9e81302d70`.
+The [public evidence packet](evidence/dev-producer-input-composition-2026-10-01/README.md)
+preserves the complete accepted campaign and both signed side commits. Its
+1,240-member archive and original buffers pass independent root readback.
+Pinned tools, original CPU artifacts and some historical replay inputs remain
+external prerequisites; no self-contained replay is claimed.
 The following calibration history remains separate from those fresh results.
 
 The first 33-stage diagnostic campaign was interrupted by SIGTERM after twenty

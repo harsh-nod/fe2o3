@@ -1,0 +1,118 @@
+{
+  "commits": [
+    "10013c06a14e876fde141c769b5baf8bc42b3203",
+    "6b9e5d87c4386692f7c213a95dd786ccdf42cb45"
+  ],
+  "header": {
+    "format": "# v2 git bundle",
+    "heads": [
+      [
+        "6b9e5d87c4386692f7c213a95dd786ccdf42cb45",
+        "HEAD"
+      ]
+    ],
+    "prerequisite": "ee849c0fc5bf6d7f7bc21e4044b2a152dbfab1f3"
+  },
+  "stages": [
+    {
+      "command": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "--no-pager",
+        "-c",
+        "gc.auto=0",
+        "bundle",
+        "create",
+        "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle",
+        "HEAD",
+        "^ee849c0fc5bf6d7f7bc21e4044b2a152dbfab1f3"
+      ],
+      "name": "create",
+      "record": {
+        "command": [
+          "/usr/bin/git",
+          "--no-replace-objects",
+          "--no-pager",
+          "-c",
+          "gc.auto=0",
+          "bundle",
+          "create",
+          "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle",
+          "HEAD",
+          "^ee849c0fc5bf6d7f7bc21e4044b2a152dbfab1f3"
+        ],
+        "finished_ns": 1790819209789797332,
+        "group_absent": true,
+        "process_group": 942418,
+        "started_ns": 1790819209741931400,
+        "status": 0
+      },
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "command": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "--no-pager",
+        "-c",
+        "gc.auto=0",
+        "bundle",
+        "verify",
+        "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle"
+      ],
+      "name": "verify",
+      "record": {
+        "command": [
+          "/usr/bin/git",
+          "--no-replace-objects",
+          "--no-pager",
+          "-c",
+          "gc.auto=0",
+          "bundle",
+          "verify",
+          "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle"
+        ],
+        "finished_ns": 1790819209817918174,
+        "group_absent": true,
+        "process_group": 942428,
+        "started_ns": 1790819209792036917,
+        "status": 0
+      },
+      "stderr": "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle is okay\n",
+      "stdout": "The bundle contains this ref:\n6b9e5d87c4386692f7c213a95dd786ccdf42cb45 HEAD\nThe bundle requires this ref:\nee849c0fc5bf6d7f7bc21e4044b2a152dbfab1f3 \nThe bundle uses this hash algorithm: sha1\n"
+    },
+    {
+      "command": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "--no-pager",
+        "-c",
+        "gc.auto=0",
+        "bundle",
+        "list-heads",
+        "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle"
+      ],
+      "name": "heads",
+      "record": {
+        "command": [
+          "/usr/bin/git",
+          "--no-replace-objects",
+          "--no-pager",
+          "-c",
+          "gc.auto=0",
+          "bundle",
+          "list-heads",
+          "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle"
+        ],
+        "finished_ns": 1790819209828577834,
+        "group_absent": true,
+        "process_group": 942437,
+        "started_ns": 1790819209820256156,
+        "status": 0
+      },
+      "stderr": "",
+      "stdout": "6b9e5d87c4386692f7c213a95dd786ccdf42cb45 HEAD\n"
+    }
+  ]
+}

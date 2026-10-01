@@ -1,0 +1,68 @@
+{
+  "accepted": true,
+  "archive_members": 1240,
+  "campaign_tree_sha256": "c76eec6b642205a2d70517c96bbea14d8fc0c813fd56c8fbbec02d233260bfdd",
+  "fresh_git_checks": [
+    {
+      "argv": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-preflight-repeat-20260929-nnNtgZnS/preflight-final/allowed-signers",
+        "verify-commit",
+        "10013c06a14e876fde141c769b5baf8bc42b3203"
+      ],
+      "status": 0,
+      "stderr": "Good \"git\" signature for harmenon@amd.com with ED25519 key SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-preflight-repeat-20260929-nnNtgZnS/preflight-final/allowed-signers",
+        "verify-commit",
+        "6b9e5d87c4386692f7c213a95dd786ccdf42cb45"
+      ],
+      "status": 0,
+      "stderr": "Good \"git\" signature for harmenon@amd.com with ED25519 key SHA256:q8oGVYZ11904aFzlMkSiEwyeSP+6hbuiZGbNVGRZVCg\n",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "/usr/bin/git",
+        "--no-replace-objects",
+        "-c",
+        "gc.auto=0",
+        "bundle",
+        "verify",
+        "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle"
+      ],
+      "status": 0,
+      "stderr": "/home/harsh/.codex-tmp/fe2o3-a2-producer-composition-records-20260930-audit/compact-publication-attempt-2/public/signed-candidate.bundle is okay\n",
+      "stdout": "The bundle contains this ref:\n6b9e5d87c4386692f7c213a95dd786ccdf42cb45 HEAD\nThe bundle requires this ref:\nee849c0fc5bf6d7f7bc21e4044b2a152dbfab1f3 \nThe bundle uses this hash algorithm: sha1\n"
+    }
+  ],
+  "historical_pid_probes": false,
+  "new_solver_cpu_gpu_execution": false,
+  "original_bundle_groups_closed": [
+    942418,
+    942428,
+    942437
+  ],
+  "original_campaign_files": 1218,
+  "originals_unchanged": true,
+  "publication_pins": {
+    "campaign.tar.xz": "5dcbe2ad5cc49e4b60cf33acad5a38f97f27904dd9302a38a06c3fadf9bb8455",
+    "publish.py": "6e6c2f70e6e0b9bb227eb92471c36dceb64f247f94880d11d9d8f99b56c59af8",
+    "signed-candidate.bundle": "092cceb5fd39504f124a5bb9175a1048bd46b28da625a6ecc38e1224832ea5b2",
+    "summary.json": "9d4dec0c674c85aa21f36c2baf8421e49fbc53174bd8efc8ee27b0ec2848c61b",
+    "test-publish.py": "4667d87733bdd90f2c7ec631df7f8c2d1d270b655667e2ae9deeb8dd9d269118"
+  },
+  "self_contained_full_replay": false
+}
