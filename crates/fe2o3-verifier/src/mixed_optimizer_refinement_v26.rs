@@ -122,6 +122,15 @@ pub enum MixedOptimizerRefinementErrorV26 {
     Execution(crate::FunctionalRefinementVerusExecutionErrorV2),
     Receipt(&'static str),
     Statement(&'static str),
+    /// The unchanged bounded source writer refused an emission section.
+    GeneratedSourceLimit {
+        /// Innermost named emission section that reached the limit.
+        section: &'static str,
+        /// Bytes already accepted by the bounded writer.
+        emitted_bytes: usize,
+        /// Unchanged global generated proof source limit.
+        limit_bytes: usize,
+    },
     /// A refused original MIR statement, with exact static source coordinates.
     SourceStatement {
         /// Source root ordinal.
@@ -202,7 +211,10 @@ impl std::error::Error for Error {
             Self::Generated(error) => Some(error),
             Self::Runtime(error) => Some(error),
             Self::Execution(error) => Some(error),
-            Self::Statement(_) | Self::Receipt(_) | Self::SourceStatement { .. } => None,
+            Self::Statement(_)
+            | Self::Receipt(_)
+            | Self::SourceStatement { .. }
+            | Self::GeneratedSourceLimit { .. } => None,
         }
     }
 }
@@ -421,6 +433,16 @@ impl<'a, 'work> Writer<'a, 'work> {
             .take()
             .map(Error::Resource)
             .unwrap_or(Error::Statement("generated source limit"))
+    }
+    fn source_section_error(&self, error: Error, section: &'static str) -> Error {
+        match error {
+            Error::Statement("generated source limit") => Error::GeneratedSourceLimit {
+                section,
+                emitted_bytes: self.text.len(),
+                limit_bytes: SOURCE_LIMIT,
+            },
+            error => error,
+        }
     }
     fn finish(self) -> Result<String> {
         match self.failure {

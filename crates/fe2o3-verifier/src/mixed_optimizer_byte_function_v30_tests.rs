@@ -25,6 +25,7 @@ include!("mixed_optimizer_checked_byte_operations_v48_tests.rs");
 include!("mixed_optimizer_float_byte_operations_v52_tests.rs");
 include!("mixed_optimizer_tagged_select_v55_tests.rs");
 include!("mixed_optimizer_byte_trap_v40_tests.rs");
+include!("mixed_optimizer_byte_source_sharing_v55_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
@@ -296,7 +297,12 @@ fn byte_function_consumes_all_operations_and_preserves_exact_global_observations
         })
         .0
         .unwrap();
-        assert!(text.contains("s.values.len() != 10 || s.pc != 1"));
+        assert!(text.contains("s.values.len() == 10 && byte_state_memory_well_formed_v30(s)"));
+        assert_eq!(
+            text.matches("s.pc != 1 || !byte_inputs_19_v55(s, little_endian)")
+                .count(),
+            3
+        );
         assert!(text.contains("function: 1, block: 0, operation: 1"));
         assert!(text.contains("MemoryOperationEffectV30::Read { address: s.values[8], width: 4, alignment: 4, value: values[9] }"));
         assert!(text.contains("MemoryOperationEffectV30::Write { address: s.values[5], width: 4, alignment: 4, value: s.values[7] }"));
@@ -305,7 +311,13 @@ fn byte_function_consumes_all_operations_and_preserves_exact_global_observations
         assert!(text.contains("p.byte_offset + i * 4 < memory_value_modulus_v30(8)"));
         assert!(text.contains("m.next_operation == 4 && m.observations.len() == 1"));
         assert!(text.contains("m.observations.len() == 3 { byte_control_19_1_v30"));
-        assert!(text.contains("observations: m.observations.push(result.observation)"));
+        assert!(text.contains(
+            "byte_micro_result_v55(m, byte_operation_19_4_v30(m.state, little_endian), 5)"
+        ));
+        assert!(
+            include_str!("mixed_optimizer_byte_results_v55.vrs")
+                .contains("observations: before.observations.push(result.observation)")
+        );
         assert!(!text.contains("byte_end_frame_v30"));
         assert!(!text.contains("spec_fn"));
     });

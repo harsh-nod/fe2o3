@@ -585,5 +585,6 @@ open spec fn byte_state_memory_well_formed_v30(state: MemoryStateV30) -> bool {
 "#,
     include_str!("mixed_optimizer_byte_relocations_v37.vrs"),
     include_str!("mixed_optimizer_byte_views_v38.vrs"),
-    include_str!("mixed_optimizer_float_values_v52.vrs")
+    include_str!("mixed_optimizer_float_values_v52.vrs"),
+    include_str!("mixed_optimizer_byte_results_v55.vrs")
 );

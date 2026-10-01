@@ -642,15 +642,21 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                     super::super::super::byte_function_v30::ByteInterpretationContextV39::classified(width, output_contracts, registry_namespace),
                     &prefix_allocations, out,
                 )?;
-                before.emit(original_function, out)?;
-                after.emit(
-                    input
-                        .functions()
-                        .len()
-                        .checked_add(function)
-                        .ok_or(Resource::Arithmetic)?,
-                    out,
-                )?;
+                before.emit(original_function, out).map_err(|error| {
+                    out.source_section_error(error, "typed prefix original byte functions")
+                })?;
+                after
+                    .emit(
+                        input
+                            .functions()
+                            .len()
+                            .checked_add(function)
+                            .ok_or(Resource::Arithmetic)?,
+                        out,
+                    )
+                    .map_err(|error| {
+                        out.source_section_error(error, "typed prefix output byte functions")
+                    })?;
                 drop((before, after));
                 if let Some((physical, contracts)) = relocated {
                     let model = super::super::super::byte_function_v30::ByteFunctionV30::derive(
@@ -658,15 +664,19 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                         super::super::super::byte_function_v30::ByteInterpretationContextV39::classified(width, contracts, registry_namespace),
                         &relocated_allocations, out,
                     )?;
-                    model.emit(
-                        input
-                            .functions()
-                            .len()
-                            .checked_add(output.functions().len())
-                            .and_then(|n| n.checked_add(function))
-                            .ok_or(Resource::Arithmetic)?,
-                        out,
-                    )?;
+                    model
+                        .emit(
+                            input
+                                .functions()
+                                .len()
+                                .checked_add(output.functions().len())
+                                .and_then(|n| n.checked_add(function))
+                                .ok_or(Resource::Arithmetic)?,
+                            out,
+                        )
+                        .map_err(|error| {
+                            out.source_section_error(error, "typed LICM output byte functions")
+                        })?;
                     drop(model);
                 }
                 out.budget.release_storage(
@@ -686,18 +696,32 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                 if row.function.body.is_none() {
                     continue;
                 }
-                segments.emit_relation(function, width, out)?;
-                segments.emit_entry(function, width, out)?;
-                segments.emit_laws(function, out)?;
+                segments
+                    .emit_relation(function, width, out)
+                    .map_err(|error| out.source_section_error(error, "typed prefix relations"))?;
+                segments.emit_entry(function, width, out).map_err(|error| {
+                    out.source_section_error(error, "typed prefix entry obligations")
+                })?;
+                segments.emit_laws(function, out).map_err(|error| {
+                    out.source_section_error(error, "typed prefix simulation obligations")
+                })?;
             }
             if relocated.is_some() {
-                segments.emit_licm_composition(width, out)?;
+                segments
+                    .emit_licm_composition(width, out)
+                    .map_err(|error| {
+                        out.source_section_error(error, "typed LICM composition obligations")
+                    })?;
             }
             if let Some(relation) = source {
                 if relocated.is_none() {
                     return Err(mismatch());
                 }
-                segments.emit_source_composition(relation, out)?;
+                segments
+                    .emit_source_composition(relation, out)
+                    .map_err(|error| {
+                        out.source_section_error(error, "typed source composition obligations")
+                    })?;
             }
             if let Some((final_inventory, forwarding, final_physical, final_contracts)) = forwarded
             {
@@ -717,7 +741,8 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
                     &segments,
                     relation,
                     out,
-                )?;
+                )
+                .map_err(|error| out.source_section_error(error, "typed forwarding composition"))?;
             }
             emit!(out, "}}\n");
             drop((
