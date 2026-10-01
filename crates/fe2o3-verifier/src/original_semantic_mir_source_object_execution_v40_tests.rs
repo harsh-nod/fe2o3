@@ -26,13 +26,9 @@ fn run_original_objects_v40(
         }
         result
     };
-    if explicit {
-        super::super::super::invocations::tests::run_scalar_lifetime_variant(work, storage, execute)
-    } else {
-        super::super::super::invocations::tests::run_scalar_allocation_variant(
-            work, storage, execute,
-        )
-    }
+    super::super::super::invocations::tests::run_original_object_variant_v41(
+        explicit, work, storage, execute,
+    )
 }
 
 #[test]
@@ -43,19 +39,26 @@ fn original_object_byte_events_follow_exact_storage_live_read_write_and_dead() {
             let instance = plan.instance(root, 0, out)?;
             let function = &original.functions()[instance.function.index() as usize];
             let statements = function.blocks()[0].statements();
-            assert_eq!(statements.len(), 4);
+            assert_eq!(statements.len(), 6);
             assert!(matches!(statements[0].kind(), Statement::StorageLive(local) if local.index() == 4));
             assert!(matches!(statements[1].kind(), Statement::Store(_)));
             assert!(matches!(statements[2].kind(), Statement::Assign(assignment)
+                if matches!(assignment.value().kind(), Rvalue::AddressOf { .. })));
+            assert!(matches!(statements[3].kind(), Statement::Assign(assignment)
                 if matches!(assignment.value().kind(), Rvalue::Load(_))));
-            assert!(matches!(statements[3].kind(), Statement::StorageDead(local) if local.index() == 4));
+            assert!(matches!(statements[4].kind(), Statement::StorageDead(local) if local.index() == 5));
+            assert!(matches!(statements[5].kind(), Statement::StorageDead(local) if local.index() == 4));
             let body = SourceByteBody::derive(plan, slots, root, 0, out)?;
             let local = instance.locals.start + 4;
             let scalar = ScalarV30::Integer { signed: false, width: 32 };
             assert!(matches!(body.event_at(0, 0, out)?, Event::ObjectLive {
                 local: found, activation: 1, ..
             } if found == local));
-            assert_eq!(body.event_at(0, 3, out)?, Event::ObjectDead { local });
+            assert_eq!(body.event_at(0, 5, out)?, Event::ObjectDead { local });
+            assert!(matches!(body.event_at(0, 2, out)?, Event::Address {
+                destination, access: Access { address: Address::Object { local: found, offset: 0 }, bytes: 4, alignment: 4, .. },
+            } if destination == instance.locals.start + 5 && found == local));
+            assert_eq!(body.event_at(0, 4, out)?, Event::Scalar);
             assert!(matches!(body.event_at(0, 1, out)?, Event::Transfer {
                 destination: Destination::Memory(Access {
                     address: Address::Object { local: found, offset: 0 },
@@ -63,7 +66,7 @@ fn original_object_byte_events_follow_exact_storage_live_read_write_and_dead() {
                 }),
                 value: Value::Local { local: input, moved: false }, scalar: found_scalar,
             } if found == local && input == instance.locals.start + 1 && found_scalar == scalar));
-            assert!(matches!(body.event_at(0, 2, out)?, Event::Transfer {
+            assert!(matches!(body.event_at(0, 3, out)?, Event::Transfer {
                 destination: Destination::Local(destination),
                 value: Value::Read { access: Access {
                     address: Address::Object { local: found, offset: 0 },
@@ -74,7 +77,7 @@ fn original_object_byte_events_follow_exact_storage_live_read_write_and_dead() {
         }
         assert_eq!(out.text.matches("InvocationSourceByteEventV36::ObjectLive {").count(), 2);
         assert_eq!(out.text.matches("InvocationSourceByteEventV36::ObjectDead {").count(), 2);
-        assert_eq!(out.text.matches("InvocationSourceByteBaseV36::ObjectLocal(").count(), 4);
+        assert_eq!(out.text.matches("InvocationSourceByteBaseV36::ObjectLocal(").count(), 6);
         Ok(())
     })
     .0
@@ -101,7 +104,7 @@ fn emit_original_objects_v40(
         out.text
             .matches("InvocationSourceByteBaseV36::ObjectLocal(")
             .count(),
-        4
+        6
     );
     assert_eq!(
         out.text

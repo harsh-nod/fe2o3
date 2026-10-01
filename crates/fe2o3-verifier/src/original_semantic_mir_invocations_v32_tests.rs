@@ -702,6 +702,148 @@ pub(in super::super) fn run_source_transform(
     )
 }
 
+pub(in super::super) fn run_original_object_variant_v41(
+    explicit: bool,
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_source_transform(
+        work,
+        storage,
+        |types, functions| {
+            let word = SemanticTypeIdV1::from_index(0);
+            let raw = SemanticTypeIdV1::from_index(types.len() as u32);
+            types.push(SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([230; 32]),
+                SemanticLayoutIdentityV1::from_sha256([231; 32]),
+                SemanticTypeLayoutV1::new_with_backend_repr(
+                    Some(8),
+                    8,
+                    SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                        SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                    )),
+                    false,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Pointer(
+                    SemanticPointerTypeV1::new_with_kind(
+                        word,
+                        SemanticPointerKindV1::Raw,
+                        SemanticMutabilityV1::Mutable,
+                        0,
+                        64,
+                        SemanticPointerMetadataV1::None,
+                    )
+                    .unwrap(),
+                ),
+            ));
+            for root in 0..2 {
+                let prior = &functions[root];
+                let source = prior.source();
+                let mut locals = prior.locals().to_vec();
+                assert_eq!(locals.len(), 4);
+                for (ordinal, ty) in [word, raw].into_iter().enumerate() {
+                    locals.push(SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256(
+                            [232 + root as u8 * 2 + ordinal as u8; 32],
+                        ),
+                        ty,
+                        SemanticLocalRoleV1::Temporary,
+                        source,
+                    ));
+                }
+                let place = |local, ty| {
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+                };
+                let mut statements = vec![];
+                if explicit {
+                    statements.push(SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)),
+                    ));
+                }
+                statements.extend([
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                            place(4, word),
+                            SemanticOperandV1::Copy(place(1, word)),
+                            SemanticVolatilityV1::NonVolatile,
+                            None,
+                        )),
+                    ),
+                    // Taking a raw address requires original typed backing, unlike
+                    // the legacy retained scalar fixture. It stores no pointer bytes.
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            place(5, raw),
+                            SemanticRvalueV1::new(
+                                raw,
+                                SemanticRvalueKindV1::AddressOf {
+                                    place: place(4, word),
+                                    mutability: SemanticMutabilityV1::Mutable,
+                                },
+                            ),
+                        )),
+                    ),
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            place(1, word),
+                            SemanticRvalueV1::new(
+                                word,
+                                SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                                    place(4, word),
+                                    SemanticVolatilityV1::NonVolatile,
+                                    None,
+                                )),
+                            ),
+                        )),
+                    ),
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(5)),
+                    ),
+                ]);
+                if explicit {
+                    statements.push(SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4)),
+                    ));
+                }
+                let mut blocks = prior.blocks().to_vec();
+                assert!(blocks[0].statements().is_empty());
+                blocks[0] = SemanticBasicBlockV1::new(
+                    blocks[0].identity(),
+                    source,
+                    statements,
+                    blocks[0].terminator().clone(),
+                )
+                .unwrap();
+                functions[root] = SemanticFunctionDeclV1::new(
+                    prior.identity(),
+                    prior.role(),
+                    prior.item_definition_identity(),
+                    prior.monomorphization_identity(),
+                    prior.generic_type_arguments_identity(),
+                    prior.const_generic_arguments_identity(),
+                    source,
+                    prior.abi().clone(),
+                    locals,
+                    prior.entry(),
+                    blocks,
+                )
+                .unwrap()
+                .with_kernel_entry(prior.kernel_entry().unwrap().clone());
+            }
+        },
+        examine,
+    )
+}
+
 pub(in super::super) fn run_callable_transform(
     work: usize,
     storage: usize,

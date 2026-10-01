@@ -4,11 +4,28 @@ use super::*;
 
 fn slice_transform(types: &mut Vec<Type>, functions: &mut Vec<Function>, mutable: bool) {
     super::transform(types, functions, mutable);
+    let boolean = TypeId::from_index(types.len() as u32);
+    types.push(Type::new(
+        SemanticTypeIdentityV1::from_sha256([220; 32]),
+        SemanticLayoutIdentityV1::from_sha256([221; 32]),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(1),
+            1,
+            BackendRepr::scalar(BackendScalar::initialized(
+                BackendPrimitive::integer(false, 8, 1),
+                SemanticScalarValidityRangeV1::new(0, 1),
+            )),
+            false,
+        )
+        .unwrap(),
+        Shape::Scalar(SemanticScalarTypeV1::Bool),
+    ));
     for root in 0..2 {
         let prior = &functions[root];
         let source = prior.source();
         let word = prior.locals()[1].ty();
         let reference = prior.locals()[4].ty();
+        let length = prior.locals()[5].ty();
         let Shape::Pointer(pointer) = types[reference.index() as usize].shape() else {
             unreachable!()
         };
@@ -17,7 +34,7 @@ fn slice_transform(types: &mut Vec<Type>, functions: &mut Vec<Function>, mutable
             vec![
                 SemanticProjectionV1::new(Projection::Dereference, pointer.pointee()).unwrap(),
                 SemanticProjectionV1::new(
-                    Projection::Index(SemanticLocalIdV1::from_index(1)),
+                    Projection::Index(SemanticLocalIdV1::from_index(6)),
                     word,
                 )
                 .unwrap(),
@@ -46,15 +63,113 @@ fn slice_transform(types: &mut Vec<Type>, functions: &mut Vec<Function>, mutable
         })
         .collect::<Vec<_>>();
         let mut blocks = prior.blocks().to_vec();
-        // The metadata fixture's three prefix statements consume the slice.
-        // This read fixture replaces that prefix and preserves its original CFG.
+        // The original guard's success edge must dominate both source reads.
+        // Preserve all existing call targets and append only the guarded block.
         statements.extend_from_slice(&blocks[0].statements()[3..]);
+        let read_block = blocks.len() as u32;
+        assert_eq!(read_block, 4);
+        blocks.push(
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([226 + root as u8; 32]),
+                source,
+                statements,
+                blocks[0].terminator().clone(),
+            )
+            .unwrap(),
+        );
+        let place =
+            |local, ty| Place::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap();
+        let guard = vec![
+            blocks[0].statements()[0].clone(),
+            SemanticStatementV1::new(
+                source,
+                Statement::Assign(SemanticAssignmentV1::new(
+                    place(7, boolean),
+                    SemanticRvalueV1::new(
+                        boolean,
+                        Rvalue::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: Operand::Copy(place(6, length)),
+                            right: Operand::Copy(place(5, length)),
+                        },
+                    ),
+                )),
+            ),
+        ];
         blocks[0] = SemanticBasicBlockV1::new(
             blocks[0].identity(),
             blocks[0].source(),
-            statements,
-            blocks[0].terminator().clone(),
+            guard,
+            SemanticTerminatorV1::new(
+                source,
+                SemanticTerminatorKindV1::Assert {
+                    condition: Operand::Move(place(7, boolean)),
+                    expected: true,
+                    message: SemanticAssertMessageV1::BoundsCheck {
+                        length: Operand::Copy(place(5, length)),
+                        index: Operand::Copy(place(6, length)),
+                    },
+                    target: SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::AssertSuccess,
+                        SemanticBlockIdV1::from_index(read_block),
+                    ),
+                    unwind: SemanticUnwindActionV1::Unreachable,
+                },
+            ),
         )
+        .unwrap();
+        let mut locals = prior.locals().to_vec();
+        assert_eq!(locals.len(), 6);
+        locals.push(SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256([222 + root as u8 * 2; 32]),
+            length,
+            SemanticLocalRoleV1::Argument(3),
+            source,
+        ));
+        locals.push(SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256([223 + root as u8 * 2; 32]),
+            boolean,
+            SemanticLocalRoleV1::Temporary,
+            source,
+        ));
+        let mut arguments: Vec<_> = prior
+            .abi()
+            .arguments()
+            .iter()
+            .map(|row| row.value().clone())
+            .collect();
+        arguments.push(SemanticAbiValueV1::new(
+            length,
+            SemanticAbiPassModeV1::Direct(
+                SemanticAbiValueAttributesV1::new(
+                    SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                    SemanticAbiExtensionV1::None,
+                    0,
+                    None,
+                )
+                .unwrap(),
+            ),
+        ));
+        let abi = SemanticFunctionAbiV1::new(
+            prior.abi().identity(),
+            prior.abi().layout_identity(),
+            SemanticCanonAbiV1::GpuKernel,
+            false,
+            false,
+            arguments,
+            prior.abi().return_value().clone(),
+        )
+        .unwrap()
+        .with_source_argument_ownership(vec![
+            SemanticSourceArgumentOwnershipV1::ByValue,
+            SemanticSourceArgumentOwnershipV1::ByValue,
+            if mutable {
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow
+            } else {
+                SemanticSourceArgumentOwnershipV1::SharedBorrow
+            },
+            SemanticSourceArgumentOwnershipV1::ByValue,
+        ])
         .unwrap();
         functions[root] = Function::new(
             prior.identity(),
@@ -64,8 +179,8 @@ fn slice_transform(types: &mut Vec<Type>, functions: &mut Vec<Function>, mutable
             prior.generic_type_arguments_identity(),
             prior.const_generic_arguments_identity(),
             source,
-            prior.abi().clone(),
-            prior.locals().to_vec(),
+            abi,
+            locals,
             prior.entry(),
             blocks,
         )
@@ -119,7 +234,7 @@ fn original_mir_slice_reads_admit_genuine_copy_and_load_on_both_roots() {
             let first = body.locals.start;
             for statement in 0..2 {
                 assert_eq!(
-                    body.event_at(0, statement, out)?,
+                    body.event_at(4, statement, out)?,
                     ByteEvent::Transfer {
                         destination: Destination::Local(first + 3),
                         value: Value::Read {
@@ -127,8 +242,8 @@ fn original_mir_slice_reads_admit_genuine_copy_and_load_on_both_roots() {
                                 address: Address::Slice {
                                     source: Slice {
                                         local: first + 4,
-                                        index: first + 1,
-                                        index_bits: 32,
+                                        index: first + 6,
+                                        index_bits: 64,
                                         metadata_bits: 64,
                                         stride: 4,
                                         alignment: 4,
@@ -164,7 +279,7 @@ fn original_mir_slice_reads_admit_genuine_copy_and_load_on_both_roots() {
 fn original_mir_slice_reads_preserve_write_move_and_projection_refusals() {
     run_slices(false, LIMIT, LIMIT, |body, out| {
         let context = body.context(out)?;
-        let Statement::Assign(assignment) = context.function.blocks()[0].statements()[0].kind()
+        let Statement::Assign(assignment) = context.function.blocks()[4].statements()[0].kind()
         else {
             unreachable!()
         };

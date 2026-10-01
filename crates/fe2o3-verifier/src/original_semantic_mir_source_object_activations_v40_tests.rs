@@ -32,15 +32,9 @@ fn run(
         }
         result
     };
-    if explicit {
-        super::super::super::super::invocations::tests::run_scalar_lifetime_variant(
-            work, storage, execute,
-        )
-    } else {
-        super::super::super::super::invocations::tests::run_allocation_variant(
-            work, storage, execute,
-        )
-    }
+    super::super::super::super::invocations::tests::run_original_object_variant_v41(
+        explicit, work, storage, execute,
+    )
 }
 
 fn check(
