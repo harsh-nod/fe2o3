@@ -36,7 +36,15 @@ impl fmt::Display for Error {
         write!(f, "canonical CFG scope: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::ControlFlow(error) => Some(error),
+            Self::InvalidFunction(_) | Self::InvalidBlock(_) | Self::Panicked => None,
+        }
+    }
+}
 
 struct Accounting {
     slot: usize,

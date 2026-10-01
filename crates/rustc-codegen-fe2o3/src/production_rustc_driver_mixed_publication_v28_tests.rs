@@ -72,6 +72,51 @@ fn work_refusal(error: &Error) -> fe2o3_kernel_ir::CanonicalKernelIrWorkLimitV1 
     panic!("typed composed execution work refusal required: {error:?}");
 }
 
+#[test]
+fn mixed_publication_nested_cfg_resources_keep_exact_work_and_storage_diagnostics() {
+    use fe2o3_kernel_ir::CanonicalKirControlFlowScopeErrorV1 as Flow;
+    use fe2o3_verifier::MixedOptimizerRelocationErrorV28 as Relocation;
+
+    let work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(17)
+        .charge_work(18)
+        .unwrap_err();
+    let error =
+        Error::MixedRelocationExpressions(Relocation::Flow(Flow::Resource(Resource::Work(work))));
+    let reported = work_refusal(&error);
+    assert_eq!(reported.limit(), 17);
+    assert_eq!(reported.actual(), 18);
+
+    let error = Error::MixedRelocationExpressions(Relocation::Flow(Flow::Resource(
+        Resource::Storage(StorageLimit::new(42, 41)),
+    )));
+    let reported = storage_refusal(&error);
+    assert_eq!(reported.limit(), 41);
+    assert_eq!(reported.actual(), 42);
+}
+
+#[test]
+fn mixed_publication_cfg_nonresource_refusals_are_not_exhaustion_diagnostics() {
+    use fe2o3_kernel_ir::{CanonicalKirControlFlowScopeErrorV1 as Flow, ControlFlowError};
+    use fe2o3_verifier::MixedOptimizerRelocationErrorV28 as Relocation;
+
+    for flow in [
+        Flow::ControlFlow(ControlFlowError::EmptyFunction),
+        Flow::Panicked,
+        Flow::Resource(Resource::Accounting),
+        Flow::Resource(Resource::Arithmetic),
+    ] {
+        let error = Error::MixedRelocationExpressions(Relocation::Flow(flow));
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work_refusal(&error)))
+                .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| storage_refusal(&error)))
+                .is_err()
+        );
+    }
+}
+
 fn observe(
     candidate: PreparedMixedPublicationV28<'_, '_, '_>,
     budget: &mut Budget<'_>,
