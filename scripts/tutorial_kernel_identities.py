@@ -496,10 +496,16 @@ def _fixture_declarations(
     rust_syntax: Callable, budget: _Budget,
     *, include_paths: list[str] | None = None, include_scope: _FixtureIncludeScope | None = None,
     macros_only: bool = False,
+    function_cache: dict[str, list[dict[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Select physical functions/modules; macro definitions are never expanded."""
     _utf8(source, "fixture source")
-    functions = budget.rows(scan_functions(source), "fixture function items")
+    # Coordinates depend only on source bytes, not the selected Cargo features.
+    functions = None if function_cache is None else function_cache.get(source)
+    if functions is None:
+        functions = budget.rows(scan_functions(source), "fixture function items")
+        if function_cache is not None:
+            function_cache[source] = functions
     code, pairs = rust_syntax(source)
     cursor = 0
     function_index = previous_character = previous_byte = 0
@@ -591,7 +597,9 @@ def _fixture_declarations(
 
 
 def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_functions: Callable,
-                       rust_syntax: Callable, budget: _Budget) -> dict[str, tuple[str, int, str]]:
+                       rust_syntax: Callable, budget: _Budget, *,
+                       function_cache: dict[str, list[dict[str, Any]]] | None = None,
+                       ) -> dict[str, tuple[str, int, str]]:
     library, sources, enabled = load_sources(fixture)
     # The loader authenticates the current physical package closure and Cargo
     # inputs. Traversal establishes only this bounded source selection, not rustc
@@ -615,7 +623,8 @@ def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_fun
         includes = []
         functions, modules = _fixture_declarations(
             source, set(enabled), scan_functions, rust_syntax, budget,
-            include_paths=includes, include_scope=include_scope, macros_only=included)
+            include_paths=includes, include_scope=include_scope, macros_only=included,
+            function_cache=function_cache)
         for function in functions:
             symbol = function["kernelSymbol"]
             if symbol in selected:
@@ -778,6 +787,7 @@ def validate_kernel_inventory(
 
     selected_sources = {}
     source_digests = {}
+    function_cache: dict[str, list[dict[str, Any]]] = {}
 
     def selected_source(key: tuple[Any, ...]) -> tuple[str, int, str, str]:
         selection = selections[key]
@@ -797,7 +807,7 @@ def validate_kernel_inventory(
                            "features": case["features"], "kernelSymbols": [case["kernelSymbol"]]}}
                 loader = lambda _: load_source_case_sources(key[1], tab, case)
             selected_sources[cache_key] = _fixture_selection(
-                fixture, loader, scan_functions, rust_syntax, budget)
+                fixture, loader, scan_functions, rust_syntax, budget, function_cache=function_cache)
         path, offset, source = selected_sources[cache_key][selection["symbol"]]
         digest_key = (cache_key, path)
         if digest_key not in source_digests:
