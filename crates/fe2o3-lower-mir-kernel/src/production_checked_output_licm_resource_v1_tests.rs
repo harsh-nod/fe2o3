@@ -70,8 +70,8 @@ fn checked_recurrence_delta(prefix: &DirectPreheaders, mutation: bool) -> usize 
                 let [origin] = prefix.origins() else {
                     panic!("one genuine recurrence loop")
                 };
-                assert_eq!(origin.header.function.0 as usize, function);
-                let header = &body.blocks[origin.header.block as usize];
+                assert_eq!(origin.input_header().function.0 as usize, function);
+                let header = &body.blocks[origin.input_header().block as usize];
                 assert!(header.parameters.iter().any(
                     |parameter| parameter.id == lhs && parameter.ty == operation.results[0].ty
                 ));

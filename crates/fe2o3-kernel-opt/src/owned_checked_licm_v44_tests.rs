@@ -588,8 +588,8 @@ fn checked_licm_preserves_conditional_overflow_trap_and_pretrap_effects() {
                         assert_eq!(x.site, y.site);
                         let site = x.site.as_ref().expect("exact failing Trap operation");
                         assert_eq!(
-                            (site.function_ordinal, site.block, site.operation),
-                            (0, BlockId(80), Some(0))
+                            (site.function.as_str(), site.block, site.operation),
+                            ("checked_licm_impl", BlockId(80), Some(0))
                         );
                         assert_eq!(x.invocation, y.invocation);
                         assert!(x.observation_failure.is_none());
