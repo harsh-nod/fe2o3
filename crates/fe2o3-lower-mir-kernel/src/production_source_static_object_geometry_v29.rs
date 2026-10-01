@@ -274,7 +274,8 @@ fn source_static_object_transfer_with_index_v29(
         && !(matches!(child_row.kind, Kind::Pointer(_))
             && matches!(
                 step,
-                ScopedObjectProjectionV29::ArrayIndex(_)
+                ScopedObjectProjectionV29::Field(_)
+                    | ScopedObjectProjectionV29::ArrayIndex(_)
                     | ScopedObjectProjectionV29::VariantForWrite { .. }
             ))
         && !(matches!(child_row.kind, Kind::Record(_))

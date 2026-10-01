@@ -368,8 +368,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         if source_object_reference_field_v44(declaration) => {
                         let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand
                         else { return Err(source_object_reference_payload_error_v44()) };
-                        let occurrence = scoped_payload_occurrence_v29(cursor, site, role, place, budget)?
-                            .ok_or_else(source_object_reference_payload_error_v44)?;
+                        let occurrence = scoped_claimed_operand_occurrence_v47(cursor, site, role, place, budget)?;
                         let original = this.source_object_current_reference_v44(
                             plan, site, role, place, occurrence, budget,
                         )?;

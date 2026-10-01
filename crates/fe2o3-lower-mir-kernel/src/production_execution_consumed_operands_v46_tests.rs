@@ -1,4 +1,7 @@
-use super::super::super::super::{ExecutionEventV29, unit_local_source_key_v1};
+use super::super::super::super::{
+    ExecutionEventV29, ScopedMemoryOccurrenceV29, scoped_claimed_operand_occurrence_v47,
+    unit_local_source_key_v1,
+};
 use super::*;
 
 fn assert_availability_refusal(result: Result<(), ProductionSemanticKirErrorV1>) {
@@ -48,11 +51,22 @@ fn claimed_original_move_requires_exact_base_kill_and_consumed_state() {
             assert_availability_refusal(
                 cursor.check_claimed_original_operand_v46(site, role, original, definition, budget),
             );
+            assert_availability_refusal(
+                scoped_claimed_operand_occurrence_v47(&cursor, site, role, original, budget)
+                    .map(|_| ()),
+            );
             assert_eq!(
                 cursor.use_place(site, role, original, true, budget)?,
                 definition
             );
             cursor.check_claimed_original_operand_v46(site, role, original, definition, budget)?;
+            assert_eq!(
+                scoped_claimed_operand_occurrence_v47(&cursor, site, role, original, budget)?,
+                ScopedMemoryOccurrenceV29::Promoted {
+                    event: base,
+                    definition
+                }
+            );
             assert_eq!(cursor.current[original.local().index() as usize], None);
             for event in [base, kill] {
                 cursor.claimed[event] = false;
@@ -61,12 +75,20 @@ fn claimed_original_move_requires_exact_base_kill_and_consumed_state() {
                         site, role, original, definition, budget,
                     ),
                 );
+                assert_availability_refusal(
+                    scoped_claimed_operand_occurrence_v47(&cursor, site, role, original, budget)
+                        .map(|_| ()),
+                );
                 cursor.claimed[event] = true;
             }
             let local = original.local().index() as usize;
             cursor.current[local] = Some(definition);
             assert_availability_refusal(
                 cursor.check_claimed_original_operand_v46(site, role, original, definition, budget),
+            );
+            assert_availability_refusal(
+                scoped_claimed_operand_occurrence_v47(&cursor, site, role, original, budget)
+                    .map(|_| ()),
             );
             cursor.current[local] = None;
             let other = source_definition(&cursor, 0, 0);
@@ -81,12 +103,35 @@ fn claimed_original_move_requires_exact_base_kill_and_consumed_state() {
                 definition,
                 budget,
             ));
+            assert_availability_refusal(
+                scoped_claimed_operand_occurrence_v47(
+                    &cursor,
+                    site,
+                    role,
+                    &original.clone(),
+                    budget,
+                )
+                .map(|_| ()),
+            );
             assert_availability_refusal(cursor.check_claimed_original_operand_v46(
                 site,
                 ExecutionOperandV29::Destination,
                 original,
                 definition,
                 budget,
+            ));
+            assert!(matches!(
+                scoped_claimed_operand_occurrence_v47(
+                    &cursor,
+                    site,
+                    ExecutionOperandV29::Destination,
+                    original,
+                    budget,
+                ),
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "scoped memory anchors differ from their source instance",
+                    ..
+                })
             ));
             let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
             let mut foreign = Budget::new(&mut foreign_work, 1_000_000);
@@ -97,6 +142,11 @@ fn claimed_original_move_requires_exact_base_kill_and_consumed_state() {
                 definition,
                 &mut foreign,
             ));
+            assert_eq!(foreign.work(), 0);
+            assert_availability_refusal(
+                scoped_claimed_operand_occurrence_v47(&cursor, site, role, original, &mut foreign)
+                    .map(|_| ()),
+            );
             assert_eq!(foreign.work(), 0);
             cursor.check_claimed_original_operand_v46(site, role, original, definition, budget)?;
             completed.set(true);
@@ -136,11 +186,16 @@ fn claimed_original_copy_retains_its_current_definition_without_move_authority()
             let role = ExecutionOperandV29::CallArgument(1);
             let definition = cursor.use_place(site, role, original, false, budget)?;
             cursor.check_claimed_original_operand_v46(site, role, original, definition, budget)?;
+            assert!(matches!(scoped_claimed_operand_occurrence_v47(&cursor, site, role, original, budget)?,
+                ScopedMemoryOccurrenceV29::Promoted { definition: value, .. } if value == definition));
             let local = original.local().index() as usize;
             assert_eq!(cursor.current[local], Some(definition));
             cursor.current[local] = None;
             assert_availability_refusal(
                 cursor.check_claimed_original_operand_v46(site, role, original, definition, budget),
+            );
+            assert_availability_refusal(
+                scoped_claimed_operand_occurrence_v47(&cursor, site, role, original, budget).map(|_| ()),
             );
             cursor.current[local] = Some(definition);
             cursor.check_claimed_original_operand_v46(site, role, original, definition, budget)?;
@@ -181,12 +236,16 @@ fn consumed_operand_query_has_independent_work_and_exact_transaction_limits() {
                     let role = ExecutionOperandV29::RvalueOperand(0);
                     let definition = cursor.use_place(site, role, original, true, budget)?;
                     let mut comparisons = 0;
+                    let mut base_comparisons = 0;
                     for kind in [ExecutionEventV29::BaseUse, ExecutionEventV29::MoveKill] {
                         let key = unit_local_source_key_v1(site, role, Some(kind));
                         let found = cursor.index.iter().position(|row| row.key == key).unwrap();
                         let (mut lo, mut hi) = (0, cursor.index.len());
                         loop {
                             comparisons += 1;
+                            if kind == ExecutionEventV29::BaseUse {
+                                base_comparisons += 1;
+                            }
                             let mid = lo + (hi - lo) / 2;
                             if mid == found {
                                 break;
@@ -203,6 +262,21 @@ fn consumed_operand_query_has_independent_work_and_exact_transaction_limits() {
                         site, role, original, definition, budget,
                     )?;
                     assert_eq!(budget.work() - before.0, 5 + 7 + 8 * comparisons);
+                    assert_eq!(
+                        (budget.storage(), budget.peak_storage()),
+                        (before.1, before.2)
+                    );
+                    let before = (budget.work(), budget.storage(), budget.peak_storage());
+                    let occurrence = scoped_claimed_operand_occurrence_v47(
+                        &cursor, site, role, original, budget,
+                    )?;
+                    assert!(
+                        matches!(occurrence, ScopedMemoryOccurrenceV29::Promoted { definition: value, .. } if value == definition)
+                    );
+                    assert_eq!(
+                        budget.work() - before.0,
+                        3 + 8 * base_comparisons + 5 + 7 + 8 * comparisons
+                    );
                     assert_eq!(
                         (budget.storage(), budget.peak_storage()),
                         (before.1, before.2)

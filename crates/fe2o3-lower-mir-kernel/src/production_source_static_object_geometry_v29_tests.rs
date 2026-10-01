@@ -650,6 +650,7 @@ fn static_field_geometry_refuses_unknown_schema_nested_pointer_and_array_steps()
         unreachable!()
     };
     fields[0].layout = Id(2);
+    fields[0].offset = 4;
     unsupported(
         source_static_object_transfer_v29(
             &layouts,
@@ -691,4 +692,124 @@ fn static_field_geometry_refuses_unknown_schema_nested_pointer_and_array_steps()
         ));
     }
     assert_eq!(budget.peak_storage(), 0);
+}
+
+#[test]
+fn static_pointer_field_geometry_preserves_exact_child_and_parent_bounds() {
+    use fe2o3_kernel_ir::{
+        StorageFieldV1, StorageLayoutIdV1 as Id, StorageLayoutKindV1 as Kind, StorageLayoutV1,
+        StoragePointerV1,
+    };
+    for bits in [32u16, 64] {
+        for access in [AccessMode::ReadOnly, AccessMode::ReadWrite] {
+            let width = u64::from(bits / 8);
+            let mut layouts = vec![
+                StorageLayoutV1 {
+                    size: 4,
+                    alignment: 4,
+                    kind: Kind::Scalar(ScalarType::U32),
+                },
+                StorageLayoutV1 {
+                    size: width,
+                    alignment: width,
+                    kind: Kind::Pointer(StoragePointerV1 {
+                        pointee: Id(0),
+                        value_space: AddressSpace::Private,
+                        encoded_space: AddressSpace::Generic,
+                        access,
+                        stored_bits: bits,
+                    }),
+                },
+                StorageLayoutV1 {
+                    size: 2 * width,
+                    alignment: width,
+                    kind: Kind::Record(
+                        vec![StorageFieldV1 {
+                            offset: width,
+                            layout: Id(1),
+                        }]
+                        .into(),
+                    ),
+                },
+            ];
+            for limit in [7, 6] {
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+                let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+                let result = source_static_object_transfer_v29(
+                    &layouts,
+                    Id(2),
+                    ScopedObjectProjectionV29::Field(0),
+                    &mut budget,
+                );
+                if limit == 7 {
+                    assert_eq!(
+                        result.unwrap(),
+                        SourceStaticObjectTransferV29::Project {
+                            parent: Id(2),
+                            child: Id(1),
+                            offset: width,
+                            parent_bytes: 2 * width,
+                            child_bytes: width,
+                        }
+                    );
+                    assert_eq!(budget.work(), 7);
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(
+                            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                                ArgumentResourceV1::Work(_)
+                            )
+                        )
+                    ));
+                }
+                assert_eq!((budget.storage(), budget.peak_storage()), (0, 0));
+            }
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+            let Kind::Record(fields) = &mut layouts[2].kind else {
+                unreachable!()
+            };
+            fields[0].offset += 1;
+            unsupported(
+                source_static_object_transfer_v29(
+                    &layouts,
+                    Id(2),
+                    ScopedObjectProjectionV29::Field(0),
+                    &mut budget,
+                )
+                .map(|_| ()),
+            );
+            unsupported(
+                source_static_object_transfer_v29(
+                    &layouts,
+                    Id(2),
+                    ScopedObjectProjectionV29::Field(1),
+                    &mut budget,
+                )
+                .map(|_| ()),
+            );
+            unsupported(
+                source_static_object_transfer_v29(
+                    &layouts,
+                    Id(1),
+                    ScopedObjectProjectionV29::Field(0),
+                    &mut budget,
+                )
+                .map(|_| ()),
+            );
+            unsupported(
+                source_static_object_transfer_v29(
+                    &layouts,
+                    Id(2),
+                    ScopedObjectProjectionV29::Variant {
+                        index: 0,
+                        access: MemoryAccess::new(AddressSpace::Private, 1),
+                    },
+                    &mut budget,
+                )
+                .map(|_| ()),
+            );
+        }
+    }
 }

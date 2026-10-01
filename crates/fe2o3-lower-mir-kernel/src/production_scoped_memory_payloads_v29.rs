@@ -217,6 +217,46 @@ fn scoped_payload_place_v29(
     }
 }
 
+// Post-evaluation queries reopen a claimed original operand. In particular,
+// a whole Move has consumed its current SSA value and must retain its kill.
+fn scoped_claimed_operand_occurrence_v47(
+    cursor: &ExecutionAvailabilityV29<'_>,
+    site: ExecutionSiteV29,
+    role: ExecutionOperandV29,
+    original: &SemanticPlaceV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<ScopedMemoryOccurrenceV29, ProductionSemanticKirErrorV1> {
+    cursor.check_ledger(budget)?;
+    budget.charge_work(3)?;
+    let key = unit_local_source_key_v1(site, role, Some(ExecutionEventV29::BaseUse));
+    let (mut left, mut right) = (0, cursor.index.len());
+    while left < right {
+        budget.charge_work(8)?;
+        let middle = left + (right - left) / 2;
+        match cursor.index[middle].key.cmp(&key) {
+            std::cmp::Ordering::Less => left = middle + 1,
+            std::cmp::Ordering::Greater => right = middle,
+            std::cmp::Ordering::Equal => {
+                let event = cursor.index[middle].index;
+                let Some(SsaResolvedEventV1::Use {
+                    value: definition, ..
+                }) = cursor
+                    .occurrences
+                    .events()
+                    .get(event)
+                    .and_then(|row| row.resolved())
+                else {
+                    return Err(scoped_memory_error_v29());
+                };
+                cursor
+                    .check_claimed_original_operand_v46(site, role, original, definition, budget)?;
+                return Ok(ScopedMemoryOccurrenceV29::Promoted { event, definition });
+            }
+        }
+    }
+    Err(scoped_memory_error_v29())
+}
+
 fn scoped_payload_occurrence_v29(
     cursor: &ExecutionAvailabilityV29<'_>,
     site: ExecutionSiteV29,
