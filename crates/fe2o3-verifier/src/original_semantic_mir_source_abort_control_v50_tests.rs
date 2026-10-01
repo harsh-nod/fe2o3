@@ -134,7 +134,7 @@ fn original_abort_joins_exact_source_sites_with_the_mandatory_paired_trap_route(
 fn original_abort_complete_program_has_exact_and_one_short_resource_boundaries() {
     let measured = run(LIMIT, LIMIT);
     measured.0.unwrap();
-    assert_eq!(measured.2, 23);
+    assert_eq!(measured.2, super::super::super::invocations::tests::FLOOR);
     let exact = run(measured.1, measured.3);
     exact.0.unwrap();
     assert_eq!(

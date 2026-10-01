@@ -236,7 +236,8 @@ fn original_object_dead_only_marker_does_not_activate_catalogued_entry_storage()
                     assert!(!enter.contains("invocation_source_object_activate_v40("));
                     assert!(!enter.contains("invocation_source_byte_activate_v36("));
                 }
-                let object_address = SOURCE_BYTES_V36.split_once("InvocationSourceByteBaseV36::ObjectLocal(local) =>")
+                let object_address = SOURCE_BYTES_V36.split_once("open spec fn invocation_source_byte_address_v36(")
+                    .unwrap().1.split_once("InvocationSourceByteBaseV36::ObjectLocal(local) =>")
                     .unwrap().1.split_once("InvocationSourceByteBaseV36::Slot").unwrap().0;
                 assert!(object_address.contains("if source.objects.contains_key(local)"));
                 assert!(object_address.contains("} else { None }"));
