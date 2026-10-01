@@ -6,8 +6,8 @@ Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
 refreshed on 2026-10-01: the issue remained Open, with 33 comments and its latest
 update at 2026-10-01 02:01:40 UTC. Both runtime branch refs were confirmed through
-signed commit `69c98bd50`, including the qualified field-codec integration,
-public raw evidence and opt-in wait-cadence experiment.
+signed commit `1cfb7580f`, including the qualified field-codec and journal-wrapper
+integrations, public raw evidence and the matched wait-cadence campaign helpers.
 The [published checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5923229932)
 records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
@@ -31,6 +31,31 @@ device-language and atomic/collective authority, target expansion, deployment
 and debugger handoffs remain separate open work under [Later Milestones](#later-milestones).
 
 ## Latest Qualification
+
+The [combined runtime CPU regression](evidence/dev-integrated-runtime-cpu-2026-10-01/README.md)
+passes at signed source `1cfb7580f`: all fifteen stages and owned groups close,
+with 1,901 passing tests, 32 existing hardware ignores, no failures or filtering,
+and strict all-target/all-feature Clippy. Independent readback joins all 6,558
+source inputs, the fresh executable, raw receipts and complete rosters. The
+compact public packet includes all command records and support sources;
+toolchain/OS and retained local executable prerequisites remain explicit.
+This closes the combined CPU regression gap below, not a milestone exit.
+
+The next A2 concrete composition connects the actual journal observers to the
+validator and receipt fold. A full unsigned discovery passes at 42/0 for the
+changed leaf closure, 64/0 for the changed conditional closure and 213/0 for the
+concrete root; all seven stages and groups close. An earlier visibility-related
+frontend rejection is preserved, and the corrected three-root frontend check
+passes. These are positive discovery results only. The 89-case full-root
+negative roster passes sixteen source-only controls, but signed qualification,
+live-allocation checks and fresh credit-lock refinement remain open. Native
+runtime and model bytes are unchanged in this proof-only candidate.
+
+The 36-trial wait-cadence campaign has a reviewed signed payload with all 6,529
+selected source objects and thirteen helper identities independently checked.
+Its six ordinary comparison cells and twelve diagnostic cells are covered by
+synthetic controls. Preparation is not hardware execution; no new native
+cadence result or performance gain is accepted at this checkpoint.
 
 The [24-trial retained XGMI diagnostic campaign](evidence/dev-xgmi-retained-host-diagnostic-native-2026-10-01/README.md)
 is complete at signed source `a26dbebb5`: eighteen ordinary and six profiled
@@ -151,8 +176,9 @@ parser rejected previously unrecognized abort-child output; a narrow corrected
 readback accepts the exact parent-associated output, and a separate four-stage
 continuation now passes the missing strict Clippy check and process closure.
 The original rejection is preserved. This is linked readback plus continuation,
-not one uninterrupted campaign. A later combined runtime regression is still
-needed after integrating the separately changed model codec dependency.
+not one uninterrupted campaign. Integrating the separately changed model codec
+dependency required a combined runtime regression; the fresh campaign recorded
+above now satisfies that CPU regression gate.
 The separate nine-case raw
 capture completes all fifteen stages and owned group closures with full 165/0
 proof brackets. Eight mutations fail actual result-equality contracts; the
@@ -169,7 +195,8 @@ queued-query helper hash and two runtime source inventories are refreshed.
 All 26 local source-workflow commands pass on the integrated worktree.
 Direct validator/fold composition, live-allocation checks, fresh credit locks,
 interior-state refinement and A2 closure remain open. Combined-runtime CPU
-regression and public raw campaign packaging remain pending.
+regression is now accepted above; public raw wrapper-campaign packaging remains
+pending.
 
 The [retained host-diagnostic CPU qualification](evidence/dev-xgmi-retained-host-diagnostic-cpu-2026-09-30/README.md)
 is integrated at `841c06b73`, with portable campaign helpers at `4ad64047b`.

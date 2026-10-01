@@ -1,0 +1,444 @@
+{
+  "all_archived_originals_rechecked": true,
+  "archive": {
+    "bytes": 1358351,
+    "mode": 420,
+    "path": "records.tar.gz",
+    "sha256": "89b32c4d8ea797f27900e8126e33ad969aefece9ae879adaf376f8ea5ac965eb"
+  },
+  "complete_command_groups": 15,
+  "counts": {
+    "failed": 0,
+    "filtered_out": 0,
+    "ignored": 32,
+    "passed": 1901
+  },
+  "elf_identity": {
+    "bytes": 43605904,
+    "mode": 33216,
+    "path": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/target/debug/deps/fe2o3_runtime-2ae2195abdb0e9c1",
+    "sha256": "408f21efc4bbfd91c7a45b1921b514e1af1c6886cac259266a1d4435618aaf01"
+  },
+  "elf_in_archive": false,
+  "external_prerequisites": [
+    "Signed source at the recorded commit",
+    "Recorded Rust toolchain, registry, system libraries and OS",
+    "Fresh executable retained at elf_identity.path; not distributed in this compact packet",
+    "Controller absolute paths must be mapped explicitly before relocation; no turnkey portable replay claim"
+  ],
+  "head": "1cfb7580f36090c41cd9f96141c5d6b2952750ab",
+  "members": {
+    "records/closing-continuity.json": {
+      "bytes": 87,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/closing-continuity.json",
+      "sha256": "52c4acad9931930b219b8aef023a06e5edc7fb56360f5d9306a70353ab10b1a7"
+    },
+    "records/commands/build/receipt.json": {
+      "bytes": 2249,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/build/receipt.json",
+      "sha256": "9289b0c1401c9a32a2d50ecad3172adacdd1225520a1f076fc6c1f78c8cf7dc2"
+    },
+    "records/commands/build/stderr": {
+      "bytes": 2609,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/build/stderr",
+      "sha256": "d5d680b3e5c1c813f328ee70f641b8900f889a8fa2aef2171395351e76007ca4"
+    },
+    "records/commands/build/stdout": {
+      "bytes": 55732,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/build/stdout",
+      "sha256": "a6ba0db09ad4c516bdc840edd31600ca4445e00402cf5c90cc31f72c41944267"
+    },
+    "records/commands/cargo-version/receipt.json": {
+      "bytes": 1975,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/cargo-version/receipt.json",
+      "sha256": "f6c3eac458c5dc962f52ba9e9669f8170f89082e514c9cab3cc6494c762b033d"
+    },
+    "records/commands/cargo-version/stderr": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/cargo-version/stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/cargo-version/stdout": {
+      "bytes": 44,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/cargo-version/stdout",
+      "sha256": "ec757dbb82aca77f9d653bc3a3f1e69665ac3ea072fcfba984595bf479b17fcc"
+    },
+    "records/commands/clippy-driver-version/receipt.json": {
+      "bytes": 1990,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/clippy-driver-version/receipt.json",
+      "sha256": "5400f66eba9d2b9b1b920bc9689c8b93e31938d68797901cec6cb67192b42aea"
+    },
+    "records/commands/clippy-driver-version/stderr": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/clippy-driver-version/stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/clippy-driver-version/stdout": {
+      "bytes": 38,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/clippy-driver-version/stdout",
+      "sha256": "277d6656c55b61089493cc45b9530b59eb7bd1081416cbf352fefdafca9ad21d"
+    },
+    "records/commands/clippy/receipt.json": {
+      "bytes": 2279,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/clippy/receipt.json",
+      "sha256": "2c9f250c0fcc2e2aaacc7de0948a941d79d4b43e6e2420833fa52c834eb510dc"
+    },
+    "records/commands/clippy/stderr": {
+      "bytes": 1960,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/clippy/stderr",
+      "sha256": "f3a5a254f3aa885897897c5f0267dd09e875c19e414b77120b18815dad2e5ea7"
+    },
+    "records/commands/clippy/stdout": {
+      "bytes": 75424,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/clippy/stdout",
+      "sha256": "71de26aa4779451cdcd77e63d5a090cd8064f1d9278cc8fef11074eb60f2af76"
+    },
+    "records/commands/closing-signature/receipt.json": {
+      "bytes": 2102,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/closing-signature/receipt.json",
+      "sha256": "a4b22142b41e7d42c2652d252f7d608f0006c84b0b7e1be4ef027f7f5789eb19"
+    },
+    "records/commands/closing-signature/stderr": {
+      "bytes": 110,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/closing-signature/stderr",
+      "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+    },
+    "records/commands/closing-signature/stdout": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/closing-signature/stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/ignored/receipt.json": {
+      "bytes": 2051,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/ignored/receipt.json",
+      "sha256": "f7cb77542be7c7f6035f050a8bc050a2760dca0230a1bd59bbfe40164d22ada7"
+    },
+    "records/commands/ignored/stderr": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/ignored/stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/ignored/stdout": {
+      "bytes": 3834,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/ignored/stdout",
+      "sha256": "8777a74ffb5acc964c85cabd1ce32c758cdb74837c112e539f8aceaade9e0808"
+    },
+    "records/commands/list/receipt.json": {
+      "bytes": 2034,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/list/receipt.json",
+      "sha256": "110e5645ca8dc89c2a46c2ea9f7f57eda0056f4fa812dbf50ea81951e6b6705d"
+    },
+    "records/commands/list/stderr": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/list/stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/list/stdout": {
+      "bytes": 224775,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/list/stdout",
+      "sha256": "97d2f0a42bbc0a0f0526b518f0f78d8fa494cb5351352b2ed5a3d9c2cf66e3f4"
+    },
+    "records/commands/metadata/receipt.json": {
+      "bytes": 2064,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/metadata/receipt.json",
+      "sha256": "957badfe4a82cbe02540d967bbd22cd76fcb08af56bc00277cdc063b5148e847"
+    },
+    "records/commands/metadata/stderr": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/metadata/stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/metadata/stdout": {
+      "bytes": 461827,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/metadata/stdout",
+      "sha256": "a9e4776009ba9f5e371c5da833a3b3cb3bebf63714aec98a2e962cefe79c6141"
+    },
+    "records/commands/no-default-check/receipt.json": {
+      "bytes": 2240,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/no-default-check/receipt.json",
+      "sha256": "18cc9e68715afc32c03e8e616c3082e834db3c4ac168b7c79e58c6617eb5671a"
+    },
+    "records/commands/no-default-check/stderr": {
+      "bytes": 2307,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/no-default-check/stderr",
+      "sha256": "fee78b52fe5744cb10db215376633d44c5fc0bc321fae77e93091b0f186b62e4"
+    },
+    "records/commands/no-default-check/stdout": {
+      "bytes": 39540,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/no-default-check/stdout",
+      "sha256": "4583a1bcde883e00f9e4304bfc242f276451a744c889de738f2ffbb4eb81299f"
+    },
+    "records/commands/rustc-version/receipt.json": {
+      "bytes": 1976,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/rustc-version/receipt.json",
+      "sha256": "8ce93a376b0a26610c5e8df629ad457c7958bb5eb71d8a330ef38588a4c20965"
+    },
+    "records/commands/rustc-version/stderr": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/rustc-version/stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/rustc-version/stdout": {
+      "bytes": 212,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/rustc-version/stdout",
+      "sha256": "580dbecb7627e4e8ad67fd0b1d539727ba8d2651d04035c907b406d83200b4e2"
+    },
+    "records/commands/serial-controls/receipt.json": {
+      "bytes": 2350,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/serial-controls/receipt.json",
+      "sha256": "11d90838e214a49f2f43f65b73f98e9bb72afaa96265af1dc6fe31004ff1b939"
+    },
+    "records/commands/serial-controls/stderr": {
+      "bytes": 700,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/serial-controls/stderr",
+      "sha256": "0a277f6e23d8438b72fa498ce5d9e986a5f9d1aafdcd968854f11070fd155e20"
+    },
+    "records/commands/serial-controls/stdout": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/serial-controls/stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/signature/receipt.json": {
+      "bytes": 2102,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/signature/receipt.json",
+      "sha256": "873f42a02c91fc3c6df901f161df38885b7825130ae0666446b55d3b68621fd5"
+    },
+    "records/commands/signature/stderr": {
+      "bytes": 110,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/signature/stderr",
+      "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+    },
+    "records/commands/signature/stdout": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/signature/stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/suite/receipt.json": {
+      "bytes": 2079,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/suite/receipt.json",
+      "sha256": "55c580528b1482b2d718c23b67a220d5a3569c38dda2074bcbf01ffd929d04cf"
+    },
+    "records/commands/suite/stderr": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/suite/stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/suite/stdout": {
+      "bytes": 614067,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/suite/stdout",
+      "sha256": "ed81bdb1b9404d4db908159698a3fad68bb4e8877f7826e3edf96bf117d372cd"
+    },
+    "records/commands/test_cpu_results_v1.py/receipt.json": {
+      "bytes": 2027,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/test_cpu_results_v1.py/receipt.json",
+      "sha256": "4ccaeafa24d303767091282ae4015d318d8030b0a8b3dcfcfdf41670187d4feb"
+    },
+    "records/commands/test_cpu_results_v1.py/stderr": {
+      "bytes": 2372,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/test_cpu_results_v1.py/stderr",
+      "sha256": "d0ccc1ec00aa12a7f3631bb9d4ff63beceeac4881dee3646ef3e35c333efa29e"
+    },
+    "records/commands/test_cpu_results_v1.py/stdout": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/test_cpu_results_v1.py/stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/commands/test_cpu_workspace_v1.py/receipt.json": {
+      "bytes": 2029,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/test_cpu_workspace_v1.py/receipt.json",
+      "sha256": "9f630292e65bce7ad92e9fbaa5c4c8fc38681a538be4b718c3662ac3c1256c6b"
+    },
+    "records/commands/test_cpu_workspace_v1.py/stderr": {
+      "bytes": 1002,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/test_cpu_workspace_v1.py/stderr",
+      "sha256": "9141a17ca9d11423e928aa94c2e3c8387343342958e2e552953b055f25639505"
+    },
+    "records/commands/test_cpu_workspace_v1.py/stdout": {
+      "bytes": 0,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/commands/test_cpu_workspace_v1.py/stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "records/fresh-census.json": {
+      "bytes": 7117,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/fresh-census.json",
+      "sha256": "505d191dcf777d92fd8a37b8c25a09a6202b8550ed5a2dc6e5ecd60aea89925d"
+    },
+    "records/fresh-elf.json": {
+      "bytes": 1497,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/fresh-elf.json",
+      "sha256": "51884f5dda7d1c44953b0407abf10c765ef1d4e29284e5fd17e5a6364e4f94ec"
+    },
+    "records/ignored-roster.json": {
+      "bytes": 3781,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/ignored-roster.json",
+      "sha256": "f010f6cb57fdd832524ea9ace483baedaf9d38b2232ee6a3255b018eae0954ef"
+    },
+    "records/independent-readback.json": {
+      "bytes": 5518,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/independent-readback.json",
+      "sha256": "ae3278ba0988b68bf0df3289218c5263b7ca1c300e40b8a8eb5079c8b5eefd52"
+    },
+    "records/inputs.json": {
+      "bytes": 1960886,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/inputs.json",
+      "sha256": "6d8f1becfb313eecb5839a7b9e30d39f60a8d51d2ba766265a72ec055ac76a67"
+    },
+    "records/list-roster.json": {
+      "bytes": 222819,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/list-roster.json",
+      "sha256": "0bd796926b15c102f5cfae6d2823168b2c673a04b0dc14c7e1fa857df5a3ad3f"
+    },
+    "records/result.json": {
+      "bytes": 6741,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/result.json",
+      "sha256": "5b07b9ecdffb0b723cb66833a8229759af706ef3564cf33226619fb8ce28ff03"
+    },
+    "records/suite-classification.json": {
+      "bytes": 240940,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-records-20261001/suite-classification.json",
+      "sha256": "7d29bea1cc85859f8980b5576c3d4fa2dddba13b30e94ddfa0d05b2780432901"
+    },
+    "support/00-cpu_results_v1.py": {
+      "bytes": 10358,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-a2-native-journal-observers-records-20261001-audit/cpu_results_v1.py",
+      "sha256": "62471de76b92ed900df159e30031c0aae124d1479b8d4ab55be9eb87328b8099"
+    },
+    "support/01-cpu_results_v2.py": {
+      "bytes": 1860,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-a2-native-journal-observers-records-20261001-audit/cpu_results_v2.py",
+      "sha256": "85e5238c580d2177ca55d553e5c1bf4413273da79cef7c8a4a5f57d32c807f1d"
+    },
+    "support/02-cpu_workspace_v1.py": {
+      "bytes": 5443,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-a2-native-journal-observers-records-20261001-audit/cpu_workspace_v1.py",
+      "sha256": "37acbc9670a70141d17602e251cf08bcf81c4ba9318de6c9e416bea421410b47"
+    },
+    "support/03-test_cpu_results_v1.py": {
+      "bytes": 9485,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-a2-native-journal-observers-records-20261001-audit/test_cpu_results_v1.py",
+      "sha256": "cc122251f6d0547b27bb26efcbeebaced785cf66a63bd0b336ccf7d8bad74fd4"
+    },
+    "support/04-test_cpu_results_v2.py": {
+      "bytes": 3988,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-a2-native-journal-observers-records-20261001-audit/test_cpu_results_v2.py",
+      "sha256": "b58306846b31ac5372168b9dca40a0b0536f92e5326e62620c6d339b94a9fe33"
+    },
+    "support/05-test_cpu_workspace_v1.py": {
+      "bytes": 4618,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-a2-native-journal-observers-records-20261001-audit/test_cpu_workspace_v1.py",
+      "sha256": "c132f6eb4860999fdcc3154cc9f5234684a0e76c848de461a84c81f6caf32f54"
+    },
+    "support/06-fe2o3-integrated-runtime-cpu-20261001.py": {
+      "bytes": 13199,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-20261001.py",
+      "sha256": "4a26a4ee8a257ee9bad0c6f93475d9d3117f01341072649b45ed0cab051d1168"
+    },
+    "support/07-allowed-signers": {
+      "bytes": 98,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-preflight-repeat-20260929-nnNtgZnS/preflight-final/allowed-signers",
+      "sha256": "ea67b34912b272ccbb46a4a83d8e00eb1a83e87832f089c1c134eed1786b560b"
+    },
+    "support/08-xgmi_peer_series_native.py": {
+      "bytes": 22586,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-r61-execution/benchmarks/runtime_gfx942/xgmi_peer_series_native.py",
+      "sha256": "fef3e00f9310ee1895dff2dac133826c66a8432a600d5be6065b4249f3ebc3f4"
+    },
+    "support/09-native.py": {
+      "bytes": 17557,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/native.py",
+      "sha256": "820ad87e74a1f9915c2eb7d2d7c7c6c1c451da4cecf29fcc381229324d98473b"
+    },
+    "support/10-native.py": {
+      "bytes": 20463,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-r61-execution/docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py",
+      "sha256": "df740a80c83c94af02f7e7dfb1203dcf7c1eafbde0010e41219e4aac40b34bb7"
+    },
+    "support/fe2o3-integrated-runtime-cpu-audit-20261001.py": {
+      "bytes": 6010,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-audit-20261001.py",
+      "sha256": "329a809b9928cb89418b88f1afbf517ed14faa903b181b0ccb8b729083566fd2"
+    },
+    "support/fe2o3-integrated-runtime-cpu-package-20261001.py": {
+      "bytes": 4484,
+      "mode": 420,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-package-20261001.py",
+      "sha256": "bb9d28c8233a5428b5884fe4aaeb0e9526c1609caad0e5e13290546a731dae16"
+    },
+    "support/fe2o3-integrated-runtime-cpu-prepared-20261001.json": {
+      "bytes": 1960886,
+      "mode": 384,
+      "original": "/home/harsh/.codex-tmp/fe2o3-integrated-runtime-cpu-prepared-20261001.json",
+      "sha256": "6d8f1becfb313eecb5839a7b9e30d39f60a8d51d2ba766265a72ec055ac76a67"
+    }
+  },
+  "schema": "fe2o3.integrated-runtime-cpu-records.v1",
+  "scope": "Fresh combined runtime CPU regression only. No GPU, solver, hardware-ignore removal or parity claim. Signed source and explicit tool/helper inputs bound; registry, system libraries and OS are not hermetically attested. Disk/elapsed bounds checked at stage boundaries, not continuously. No automatic retry.",
+  "source_files": 6558,
+  "tests_reexecuted_by_packaging": false
+}

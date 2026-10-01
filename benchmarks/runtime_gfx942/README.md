@@ -538,6 +538,13 @@ point-idle admission does not prove exclusivity. The shared selector proof
 covers ceiling selection, not cursor construction, scheduling, hardware timing,
 or performance parity.
 
+`xgmi_retained_wait_cadence_comparison.compare` composes the strict campaign
+replay to produce six ordinary comparison cells and twelve separate diagnostic
+cells. It retains each invocation's raw-output and execution-receipt identities,
+reports the five matched latency ratios per ordinary cell, and counts unavailable
+diagnostic values rather than substituting zero. Its output is descriptive; it
+does not accept a performance threshold or assert aggregate parity or speedup.
+
 Source-only controls, including bounded Python helper relocation without any
 SSH, build, or GPU command:
 
