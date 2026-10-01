@@ -46,11 +46,36 @@ fn float_owner_v54(bits: u16) -> ProductionSemanticSsaOwnerV1 {
                 )),
             },
         );
+        let SemanticStatementKindV1::Assign(arithmetic) = statements[2].kind() else {
+            unreachable!();
+        };
+        let stored_value = arithmetic.value().kind().clone();
+        // Private WriteValue and explicit Store have distinct correspondence
+        // queries. Retain a real original Store instead of assuming one exists.
+        statements.insert(3, assign(place(4, U32), stored_value));
+        statements.insert(
+            4,
+            SemanticStatementV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                    place(1, U32),
+                    SemanticOperandV1::Copy(place(4, U32)),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )),
+            ),
+        );
+        let mut locals = old.locals().to_vec();
+        locals.push(local(
+            if index == 1 { 104 } else { 164 },
+            U32,
+            SemanticLocalRoleV1::Temporary,
+        ));
         let mut replacement = function(
             identity,
             old.role(),
             old.abi().clone(),
-            old.locals().to_vec(),
+            locals,
             vec![block(
                 block_identity,
                 statements,
@@ -161,7 +186,11 @@ fn original_float_writes_check_exact_private_and_store_transcripts_on_both_roots
             })
         })
         .unwrap();
-        assert!(counts.get().into_iter().flatten().all(|count| count > 0));
+        assert!(
+            counts.get().into_iter().flatten().all(|count| count > 0),
+            "each root must check both private writes and retained Stores: {:?}",
+            counts.get()
+        );
     }
 }
 
@@ -196,17 +225,20 @@ fn original_float_store_checker_rejects_opcode_width_order_bits_and_checked_subs
         for fault in 0..5 {
             let reached = std::cell::Cell::new(false);
             let result = with_entry_fixture_v18(factory, |original, optimized, budget| {
-                let floor = budget.storage();
-                scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
-                    budget.reserve_storage(private_source_completion_headers_v20()?)?;
-                    let index = OriginalEntryIndexV20::build(original, budget)?;
-                    original.with_optimized_scalar_leaf_namespace_v18(
-                        optimized,
-                        0,
-                        &SourceScalarNamespaceV18::PrivateSourceWritesV22,
-                        budget,
-                        |leaves, budget| {
-                            leaves.visit_store_inputs(budget, |disposition, budget| {
+                source_scalar_normalization_scratch_v18(
+                    original.source.cleanup,
+                    budget,
+                    0,
+                    |budget| {
+                        budget.reserve_storage(private_source_completion_headers_v20()?)?;
+                        let index = OriginalEntryIndexV20::build(original, budget)?;
+                        original.with_optimized_scalar_leaf_namespace_v18(
+                            optimized,
+                            0,
+                            &SourceScalarNamespaceV18::PrivateSourceWritesV22,
+                            budget,
+                            |leaves, budget| {
+                                leaves.visit_store_inputs(budget, |disposition, budget| {
                                 let ProductionOptimizedSourceScalarStoreDispositionV18::Retained(
                                     request,
                                 ) = disposition
@@ -251,9 +283,10 @@ fn original_float_store_checker_rejects_opcode_width_order_bits_and_checked_subs
                                 request.check_expression(&expression, budget)
                             })
                             .map(|_| ())
-                        },
-                    )
-                })
+                            },
+                        )
+                    },
+                )
             });
             assert!(
                 reached.get(),

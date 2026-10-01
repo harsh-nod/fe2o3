@@ -116,6 +116,42 @@ fn mixed_v53_generated_preparation_reaches_real_packer_and_preserves_v26_family(
 }
 
 #[test]
+fn mixed_v53_generated_preparation_preserves_nested_resource_sources() {
+    use crate::generated_kfd_arguments::conditional::GeneratedConditionalPremiseErrorV1 as Inner;
+    use std::error::Error as _;
+    let resource = Resource::Accounting;
+    for inner in [
+        Inner::Resource(resource),
+        Inner::from(fe2o3_kernel_descriptor::DescriptorWireErrorV3::Work(
+            resource,
+        )),
+        Inner::from(fe2o3_artifacts::ConditionalInvocationWireErrorV1::Work(
+            resource,
+        )),
+        Inner::from(fe2o3_kernel_descriptor::DescriptorWireErrorV4::Contract(
+            fe2o3_artifacts::ConditionalInvocationWireErrorV1::Work(resource),
+        )),
+        Inner::from(
+            fe2o3_kernel_descriptor::mixed_conditional_v26::MixedContractErrorV26::Resource(
+                resource,
+            ),
+        ),
+    ] {
+        let outer = MixedWorkerV53PreparationError::arguments(inner);
+        let mut source: &(dyn std::error::Error + 'static) = &outer;
+        let mut depth = 0;
+        while source.downcast_ref::<Resource>().is_none() {
+            source = source.source().expect("original typed resource source");
+            depth += 1;
+            assert!(depth <= 5, "resource error chain must terminate");
+        }
+        assert_eq!(source.downcast_ref::<Resource>(), Some(&resource));
+        assert!(depth >= 2);
+    }
+    assert!(Inner::Binding("binding").source().is_none());
+}
+
+#[test]
 fn mixed_v53_generated_preparation_refuses_candidate_layout_and_contract_substitution() {
     run::<false>(usize::MAX, usize::MAX, false).0.unwrap();
     assert!(matches!(

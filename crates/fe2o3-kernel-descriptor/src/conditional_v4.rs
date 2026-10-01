@@ -47,7 +47,15 @@ impl<E: fmt::Display> fmt::Display for DescriptorWireErrorV4<E> {
         }
     }
 }
-impl<E: Error + 'static> Error for DescriptorWireErrorV4<E> {}
+impl<E: Error + 'static> Error for DescriptorWireErrorV4<E> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Nominal(error) => Some(error),
+            Self::Contract(error) => Some(error),
+            Self::Invalid(_) | Self::OutputLength { .. } => None,
+        }
+    }
+}
 pub(crate) type ResultV4<T, E> = Result<T, DescriptorWireErrorV4<E>>;
 
 /// No public V3 table accessor or conversion: the mandatory contract cannot be
