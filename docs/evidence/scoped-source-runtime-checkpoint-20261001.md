@@ -9,17 +9,102 @@ examples as qualified through the new production path.
 
 ## Latest Verified Checkpoint
 
-The latest completed full kernel-IR library run, r283, passed **1,480 tests**,
+The completed r294/r295 runs used the local candidate
+`0d4f37f1e2b8d963aeb28891dc6c872c52d980fd`. The primary independently checked
+the source/tool inventories and raw logs. Neither run executed a GPU kernel
+or earned protected-proof credit.
+
+| Run | Executed scope | Result |
+| --- | --- | --- |
+| r294 | Selected kernel-IR, lowerer, Pliron and verifier library tests | 884 passed, 47 failed, 10 ignored |
+| r295 | Complete kernel-IR library suite | 1,501 passed, none failed, ignored or filtered |
+| r296 | Four-crate `cargo check --tests` on the newer integrated candidate | Passed; no tests executed |
+
+r294 includes kernel-IR 37/0, lowerer 596/47, Pliron 73/0 and verifier 178/0
+(pass/fail). Its ten ignored tests include checks requiring actual installed
+protected-runtime prerequisites. These are **test counts, not kernel counts**;
+the selected roster is broader than r285, so totals are not a same-selection
+comparison. Remaining lowerer failures include access/formation correspondence,
+parent cleanup accounting and insufficient fixture work allowances. The latter
+require diagnosis against actual optimizer charges, not arbitrary cap increases.
+
+r296 checked `fe2o3-kernel-ir`, `fe2o3-lower-mir-kernel`, `fe2o3-pliron` and
+`fe2o3-verifier` at `bfb609bb5b9b5ead0b6ef048f8849c8c085b031c`. That candidate
+includes the completed-source clause-input adapter, read-binding/formula
+components and a fix distinguishing the original pointer formation from its
+forwarded memory-access operand. This passing compile check does not validate
+their behavior or Rust backend tests, which need their own build and execution. Required missing
+source/memory obligations still refuse before aggregate proof execution.
+
+Independently checked raw log SHA-256 values:
+
+- r294: `514b80f449a17d220a9083e30dd1ccde86bfc80252a77c6d244100a250a9faaf`
+- r295: `7c5a483f7e879e5586a587d9c992736757ac409a60afac92028a97b858802d99`
+- r296: `2e12b3aed5f03f17268b0043735349c97a87936d3ae483f87e2e0e58ac50de37`
+
+Further expression-pair, scoped native lookup and parent-cleanup fixes are
+integrated locally but have not passed an execution rerun. The genuine Rust
+fill/vecadd results remain the failed r272/r273 runs below. The protected client
+and helper transport are still unqualified, and the active driver lacks the
+complete confirmed-execution and continuous-enforcement connection required
+for protected proof execution. An endpoint, handshake or process-output record
+does not replace that connection or a verified proof.
+
+The unpublished integration also has unresolved full-range hygiene and inherited
+commit sign-off findings. Passing checks on individual patches do not establish
+a passing publication gate. Both public mains were independently read back at
+`ca8647fc1932dece0a5b34e1b75721d482225d7e` before this documentation update;
+the unfinished compiler integration is not part of that publication.
+
+## Earlier Checkpoints
+
+The completed full kernel-IR library run r286 passed **1,497 tests**,
 with zero failures, ignored tests or filtered tests. Its candidate was
-`d7b40521fc828f7eba1f5e95a02e5725de9a3c67`. Source/tool inventories stayed
+`dce057115143ba327739877aab424ff56eb96eea`. Source/tool inventories stayed
 unchanged, and the primary independently checked the raw log digest:
-`db444eee35f7f11014c6862aa0b7d45cf107124026570ac6b4c0cba498eb1cee`.
+`f7dcd87666278c67be120740e340a72d8939239ff5490b3926200e5c0ce3a51b`.
 
 This implements scoped pointer forwarding through exact SSA block arguments,
 retaining the original producer and scope lifetime. Presence guards
 propagate in the direction of actual CFG edges. Mixed origins, unconstrained
 entry parameters, closed scopes and unsupported escapes remain rejected. This
 is a canonical-IR result, not a genuine Rust frontend or GPU result.
+The scoped-memory projection now distinguishes the actual access operand from
+its original pointer-formation result and checks their typed, unique SSA origin.
+
+The selected compiler integration run r285 completed at
+`820f953e1f4598ac967b3c55963ad2f2e730cedb`: **455 passed and 47 failed**,
+none ignored (lowerer 410/47, Pliron 20/0, verifier 25/0). These are test counts,
+not kernel runs, and the selected roster differs from earlier runs. Source/tool
+inventories and the independently checked log digest remained stable:
+`bc3ae6748de815c7be6e23a9cfe6765e215a1306ee7d04f8ab574de125033c74`.
+Failures include source/native pointer correspondence and fixture assumptions
+about generated abort edges, deferred cleanup flags and query-counter scopes.
+
+The successor combined `cargo check --tests`, r287 at the r286 candidate,
+failed with **88 lowerer compilation errors**; no tests executed. The errors
+include generic lifetime coupling, source-block identifier types and a helper
+still restricted to the older source profile. These are being repaired, not
+waived. Source/tool inventories stayed unchanged; raw log digest:
+`5987c1c01e7c71bf8573490e379d758005c3a66ef388688761ef2329cd5ac47c`.
+The full kernel-IR pass does not validate this unfinished compiler integration.
+
+The reviewed lifetime/interface repairs were integrated at
+`79d670124cc2b61151bbfecac29d1ac0a6369740`. The next combined check, r288,
+stopped with **three compilation errors**: two scoped-wrapper lifetime arities
+and one shared native-view outlives bound. No tests ran. Further errors may
+be exposed after these type errors are fixed; this is not a passing build or
+evidence that every earlier error is resolved. Source/tool inventories remained
+unchanged, and the independently checked raw log SHA-256 is
+`7b8c7f6e85836575bbe686092c7145f864df470501f5f8627ec931258118ec76`.
+
+The successor r289 at `db6f0c379c10a477d00c4678216eea4593f87cb2`
+includes the scoped lifetime repairs and exact original-read symbol interface.
+It stopped with **two lowerer lifetime errors** in the final LICM native
+handoff; no tests ran. Its seven new source-read tests remain unrun, and the
+complete memory theorem consumer is still being implemented. Source/tool
+inventories remained unchanged; independently checked raw log SHA-256:
+`fce0b69e3bda660e2e486e6b324deb575d70ed76be43a54830b7b4d22ecd114f`.
 
 The preceding combined compiler run, r279, finished at
 `af11b1f931ee622dfb2029e551660fbf05ae79b6` with **402 passed and 93 failed**:
@@ -49,8 +134,25 @@ files since the accepted tree: generic typed-entry validation and its tests in
 The complete 59-file tree was independently hashed and its local pin updated;
 the former pin and intermediate source-only pin are explicit negative controls.
 External-source and device-source pins and all closure checks remain unchanged.
-This repair still needs the actual CI tests; it is not a passing release gate or
-publication of the local compiler candidate.
+The pin repair was published as `65d0910b36c222e09598ae4d5817ee6004fdf190`.
+Its five codegen shards and parity gate passed, but generic-core was cancelled;
+that run does not establish a passing release gate. Both public mains were
+subsequently read back at `a209ae259299069479570cff7726cec7ff0b448e`, preserving
+concurrent literal-repeat and retained-storage work. That candidate's
+[CI](https://github.com/harsh-nod/fe2o3/actions/runs/36831694594) has five passing
+codegen shards and a passing parity gate; generic-core was subsequently
+cancelled. Neither cancelled run establishes a passing release gate. The
+unfinished local compiler candidate has not been published.
+
+Subsequent independent readbacks found both public mains at
+`6ea0940fb67352bbc6a49c2ffab62e1f8ce803e9`, retaining concurrent context,
+descriptor and reference-storage work. Its
+[CI](https://github.com/harsh-nod/fe2o3/actions/runs/36833714801) was cancelled.
+The next readback matched `cefb2f6426346a63a55b25dfac2e350d0a76c406` on both
+mains; its [CI](https://github.com/harsh-nod/fe2o3/actions/runs/36834002610)
+is in progress at this checkpoint. No complete release gate is claimed. Those
+published changes do not include the unfinished scoped-source integration
+candidate.
 
 ## Compiler Evidence
 
@@ -153,6 +255,31 @@ The committed image-admission gates at the same source revision also passed
 for the admitted base and derived image, and rejected the old base-as-executable
 substitution. This supersedes the earlier image-integration-pending note for
 that local candidate only; it does not establish service or compiler activation.
+
+### Deployment Tests on MI350
+
+Exact deployment source `db78a9c36abc8d8a11dfe8b2a0f79205fd9bb7a0` passed a
+nonroot MI350 run in private scratch with pinned nightly-2026-04-03, locked
+offline dependencies, one build job and serial tests:
+
+- Deployment library: **143 passed, zero failed, two ignored**.
+- Qualification executable: built successfully; **four unit tests passed**.
+- Compile-fail doctests: **19 passed**.
+
+The two ignored tests require native root-owned filesystem authority and remain
+unvalidated. All source inventories before and after the run matched. The
+primary independently checked the exact source archive, selected raw report
+contents and matching local/remote report-archive SHA-256:
+`d0a305b99ae6acb98932706954bd6701daa36f2a5e001d742017ee86ffa41c2e`.
+All owned sessions terminated. Owned build/dependency caches and temporary
+source were removed; evidence and reports remain. No other user's work was
+removed.
+
+This run does **not** validate the newer integrated compiler/helper candidate,
+native service activation, the fourteen-role descriptor/main-PID join, actual
+proof requests, or GPU execution. The cancellation tests exercised the existing
+flag logic, not injected cancellation during admission/recovery. Those acceptance
+cases remain required; these component passes do not complete M1.
 
 ## Milestone Status
 

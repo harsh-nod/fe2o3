@@ -156,10 +156,35 @@ fn publish_inner(
     bytes: &[u8],
     #[cfg(test)] directory_sync: Option<DirectorySyncHook<'_>>,
 ) -> Result<Published, String> {
+    publish_profile_inner(
+        source,
+        candidate,
+        bytes,
+        None,
+        #[cfg(test)]
+        directory_sync,
+    )
+}
+
+fn publish_profile_inner(
+    source: &mut RetainedSource,
+    candidate: &str,
+    bytes: &[u8],
+    source_limit: Option<usize>,
+    #[cfg(test)] directory_sync: Option<DirectorySyncHook<'_>>,
+) -> Result<Published, String> {
+    if let Some(limit) = source_limit {
+        source.bounded_retained_storage_v1(limit)?;
+    }
     if bytes.is_empty() || bytes.len() > MAX_SOURCE_EDIT_OUTPUT_BYTES_V1 {
         return Err("candidate exceeds the bounded source-output profile".into());
     }
     let (directory, name) = parent(candidate)?;
+    if source_limit.is_some()
+        && name.capacity() > crate::source_edit_v1::MAX_SOURCE_EDIT_PATH_BYTES_V1
+    {
+        return Err("bounded candidate basename capacity exceeds path bound".into());
+    }
     let temporary = openat(
         &directory,
         ".",
@@ -182,12 +207,20 @@ fn publish_inner(
     if !metadata.is_file() || metadata.nlink() != 0 || metadata.len() != bytes.len() as u64 {
         return Err("anonymous candidate file identity changed".into());
     }
-    verify_staged_bytes(&mut temporary, &metadata, bytes)?;
-    source.recheck()?;
+    if let Some(limit) = source_limit {
+        bounded::verify_staged(&mut temporary, &metadata, bytes)?;
+        source.recheck_bounded_streaming_v1(limit)?;
+    } else {
+        verify_staged_bytes(&mut temporary, &metadata, bytes)?;
+        source.recheck()?;
+    }
     // linkat follows ONLY our retained anonymous fd's procfs link. The explicit
     // destination is descriptor-relative and linkat never replaces an entry.
     // Existing files, directories, hard links, and symlinks all reject atomically.
     let descriptor_path = format!("/proc/self/fd/{}", temporary.as_raw_fd());
+    if source_limit.is_some() && descriptor_path.capacity() > 64 {
+        return Err("bounded staging descriptor path capacity exceeds bound".into());
+    }
     linkat(
         CWD,
         &descriptor_path,
@@ -305,3 +338,7 @@ fn same_snapshot(left: &Metadata, right: &Metadata) -> bool {
 #[cfg(test)]
 #[path = "source_candidate_io_v1_tests.rs"]
 mod tests;
+
+#[path = "source_candidate_io_bounded_v1.rs"]
+mod bounded;
+pub use bounded::{BOUNDED_SOURCE_IO_CHUNK_BYTES_V1, publish_bounded_streaming_v1};

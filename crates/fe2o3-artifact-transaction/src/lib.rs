@@ -7063,3 +7063,6 @@ fn build_attempt_error(error: impl fmt::Display) -> EmitError {
         reason: error.to_string(),
     }
 }
+
+#[path = "producer_retained_storage_v1.rs"]
+mod producer_retained_storage_v1;

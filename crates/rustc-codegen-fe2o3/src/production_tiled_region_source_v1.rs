@@ -618,3 +618,9 @@ impl AuthenticatedBf16MfmaSourceSeedV1<'_> {
             + std::mem::size_of::<Captured<'_>>() * self.captured.payload.len()
     }
 }
+
+pub(crate) use hir::{
+    Bf16SourcePublicationEffectV1, Bf16SourcePublicationProgressV1, Bf16SourcePublishReasonV1,
+    Bf16TileReturnOrderV1, Bf16TileSourcePublishErrorV1, Bf16TileSourcePublishRequestV1,
+    PublishedBf16TileSourceV1, publish_bf16_tile_helper_source_v1,
+};
