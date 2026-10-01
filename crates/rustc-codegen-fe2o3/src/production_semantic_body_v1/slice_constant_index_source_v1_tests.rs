@@ -52,7 +52,8 @@ impl Callbacks for ConstructionCallbacks {
             tcx.sess.opts.cg.target_cpu.as_deref(),
             Some(self.profile.cpu())
         );
-        assert_eq!(tcx.sess.target.arch.as_str(), "amdgcn");
+        assert_eq!(tcx.sess.target.arch.as_str(), "amdgpu");
+        assert_eq!(tcx.sess.target.llvm_target, "amdgcn-amd-amdhsa");
         let roots = ROOTS
             .iter()
             .map(|(name, _)| {
