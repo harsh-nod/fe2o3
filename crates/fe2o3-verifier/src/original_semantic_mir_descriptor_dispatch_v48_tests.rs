@@ -346,6 +346,15 @@ fn capture(
     launch: ProductionSourceLaunchRosterV1,
     budget: &mut Budget<'_>,
 ) -> Result<ProductionPreparedSourceV18> {
+    capture_element(owner, launch, budget, DescriptorScalar::U32)
+}
+
+fn capture_element(
+    owner: ProductionSemanticSsaOwnerV1,
+    launch: ProductionSourceLaunchRosterV1,
+    budget: &mut Budget<'_>,
+    element: DescriptorScalar,
+) -> Result<ProductionPreparedSourceV18> {
     let original = owner.source_semantic();
     let mut bindings = Vec::new();
     let mut exports = Vec::new();
@@ -364,14 +373,12 @@ fn capture(
         for (ordinal, ty) in function.abi().source_input_types().iter().enumerate() {
             let name = ValidName::new(format!("arg{ordinal}")).unwrap();
             let (source, argument) = if ordinal == 2 {
-                let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(
-                    DescriptorScalar::U32,
-                ));
-                let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(
-                    DescriptorScalar::U32,
-                ));
+                let source =
+                    SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(element));
+                let layout =
+                    DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(element));
                 (
-                    SourceTypeDescriptorV3::DisjointSlice(DescriptorScalar::U32),
+                    SourceTypeDescriptorV3::DisjointSlice(element),
                     LogicalArgumentV1::disjoint_slice(
                         ordinal as u16,
                         name,

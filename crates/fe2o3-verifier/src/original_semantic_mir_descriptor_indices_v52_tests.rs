@@ -46,7 +46,7 @@ fn indexed_fixture(
     functions: &mut Vec<Function>,
     callables: &mut Vec<SemanticCallableDeclV1>,
 ) {
-    indexed_fixture_kind(types, functions, callables, false);
+    indexed_fixture_kind(types, functions, callables, false, None);
 }
 
 fn disjoint_indexed_fixture(
@@ -54,7 +54,7 @@ fn disjoint_indexed_fixture(
     functions: &mut Vec<Function>,
     callables: &mut Vec<SemanticCallableDeclV1>,
 ) {
-    indexed_fixture_kind(types, functions, callables, true);
+    indexed_fixture_kind(types, functions, callables, true, None);
 }
 
 fn indexed_fixture_kind(
@@ -62,12 +62,19 @@ fn indexed_fixture_kind(
     functions: &mut Vec<Function>,
     callables: &mut Vec<SemanticCallableDeclV1>,
     disjoint: bool,
+    float_bits: Option<u16>,
 ) {
     fixture(types, functions, callables);
     let word = TypeId::from_index(0);
     let unit = TypeId::from_index(1);
     let descriptor = functions[0].locals()[4].ty();
     let raw = functions[0].locals()[8].ty();
+    let element = if float_bits.is_some() {
+        TypeId::from_index(types.len() as u32 + 4 + u32::from(disjoint))
+    } else {
+        word
+    };
+    let element_bytes = u64::from(float_bits.unwrap_or(32) / 8);
     let mutable = TypeId::from_index(types.len() as u32);
     types.push(pointer_type(206, descriptor, 16, 8));
     let witness = TypeId::from_index(types.len() as u32);
@@ -85,7 +92,7 @@ fn indexed_fixture_kind(
         Shape::Aggregate(SemanticAggregateTypeV1::new(vec![raw, unit]).unwrap()),
     ));
     let reference = TypeId::from_index(types.len() as u32);
-    types.push(pointer_type(208, word, 4, 4));
+    types.push(pointer_type(208, element, element_bytes, element_bytes));
     let option = TypeId::from_index(types.len() as u32);
     let pointer = BackendPrimitive::pointer(0, 8, 8);
     let nonnull = SemanticScalarValidityRangeV1::new(1, u64::MAX.into());
@@ -169,8 +176,8 @@ fn indexed_fixture_kind(
                 Some(
                     SemanticAbiPointeeInfoV1::new(
                         SemanticAbiPointeeKindV1::MutableReference { unpin: true },
-                        4,
-                        4,
+                        element_bytes,
+                        element_bytes,
                     )
                     .unwrap(),
                 ),
@@ -190,6 +197,63 @@ fn indexed_fixture_kind(
     } else {
         witness
     };
+    if let Some(bits) = float_bits {
+        assert!(matches!(bits, 32 | 64));
+        assert_eq!(element.index() as usize, types.len());
+        types.push(Type::new(
+            SemanticTypeIdentityV1::from_sha256([211; 32]),
+            SemanticLayoutIdentityV1::from_sha256([211; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(element_bytes),
+                element_bytes,
+                BackendRepr::scalar(BackendScalar::initialized(
+                    BackendPrimitive::float(bits, element_bytes),
+                    SemanticScalarValidityRangeV1::new(0, (1u128 << bits) - 1),
+                )),
+                false,
+            )
+            .unwrap(),
+            Shape::Scalar(SemanticScalarTypeV1::Float { bits }),
+        ));
+        let Shape::Aggregate(fields) = types[descriptor.index() as usize].shape() else {
+            panic!();
+        };
+        let raw_pointer = fields.fields()[0];
+        let old = &types[raw_pointer.index() as usize];
+        types[raw_pointer.index() as usize] = Type::new(
+            old.identity(),
+            old.layout_identity(),
+            old.layout().clone(),
+            Shape::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    element,
+                    PointerKind::Raw,
+                    SemanticMutabilityV1::Mutable,
+                    0,
+                    64,
+                    PointerMetadata::None,
+                )
+                .unwrap(),
+            ),
+        )
+        .with_rustc_abi_properties(old.abi_properties());
+        let mut lengths = 0;
+        for callable in callables.iter_mut() {
+            if let SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+                        element: original, ..
+                    },
+                ..
+            } = callable
+            {
+                assert_eq!(*original, word);
+                *original = element;
+                lengths += 1;
+            }
+        }
+        assert_eq!(lengths, 1);
+    }
     let plain = SemanticAbiValueAttributesV1::new(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
         SemanticAbiExtensionV1::None,
@@ -208,7 +272,7 @@ fn indexed_fixture_kind(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
         SemanticAbiExtensionV1::None,
         0,
-        Some(4),
+        Some(element_bytes),
     )
     .unwrap();
     let issue = SemanticCallableIdV1::from_index(callables.len() as u32);
@@ -258,7 +322,7 @@ fn indexed_fixture_kind(
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
                 disjoint_slice: descriptor,
                 index_witness: owned_witness,
-                element: word,
+                element,
                 raw_index: raw,
                 index_space: SemanticDisjointIndexSpaceV1::Index1d,
             }
@@ -266,7 +330,7 @@ fn indexed_fixture_kind(
             SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
                 disjoint_slice: descriptor,
                 index_witness: witness,
-                element: word,
+                element,
                 raw_index: raw,
             }
         },
@@ -305,7 +369,7 @@ fn indexed_fixture_kind(
         let source = old.source();
         let mut locals = old.locals().to_vec();
         assert_eq!(locals.len(), 9);
-        for (ordinal, ty) in [mutable, witness, option, word, reference, word]
+        for (ordinal, ty) in [mutable, witness, option, word, reference, element]
             .into_iter()
             .enumerate()
         {
@@ -459,8 +523,10 @@ fn indexed_fixture_kind(
         .unwrap();
         let deref = Place::new(
             SemanticLocalIdV1::from_index(13),
-            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, word).unwrap()],
-            word,
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, element).unwrap(),
+            ],
+            element,
         )
         .unwrap();
         blocks.push(block(
@@ -471,8 +537,8 @@ fn indexed_fixture_kind(
                     SemanticRvalueV1::new(reference, Rvalue::Use(Operand::Move(payload))),
                 ),
                 assign(
-                    place(14, word),
-                    SemanticRvalueV1::new(word, Rvalue::Use(Operand::Copy(deref))),
+                    place(14, element),
+                    SemanticRvalueV1::new(element, Rvalue::Use(Operand::Copy(deref))),
                 ),
                 SemanticStatementV1::new(
                     source,
@@ -512,17 +578,39 @@ fn run_indexed(
     fault: Option<u8>,
     disjoint: bool,
 ) -> (Result<()>, usize, usize, usize) {
+    run_indexed_kind(work, storage, fault, disjoint, None)
+}
+
+fn run_indexed_kind(
+    work: usize,
+    storage: usize,
+    fault: Option<u8>,
+    disjoint: bool,
+    float_bits: Option<u16>,
+) -> (Result<()>, usize, usize, usize) {
     let reached = std::cell::Cell::new(0);
     let attacked = std::cell::Cell::new(false);
     let result = super::super::super::super::invocations::tests::run_captured_callable_transform(
         work,
         storage,
-        if disjoint {
-            disjoint_indexed_fixture
-        } else {
-            indexed_fixture
+        |types, functions, callables| {
+            if float_bits.is_some() {
+                indexed_fixture_kind(types, functions, callables, disjoint, float_bits);
+            } else if disjoint {
+                disjoint_indexed_fixture(types, functions, callables);
+            } else {
+                indexed_fixture(types, functions, callables);
+            }
         },
-        capture,
+        |owner, launch, budget| {
+            let element = match float_bits {
+                None => DescriptorScalar::U32,
+                Some(32) => DescriptorScalar::F32,
+                Some(64) => DescriptorScalar::F64,
+                _ => unreachable!(),
+            };
+            capture_element(owner, launch, budget, element)
+        },
         |plan, out| {
             super::super::super::source_function::tests::with_slots(plan, out, |slots, out| {
                 let mut program = super::super::super::source_function::SourceByteProgram::derive(
@@ -580,6 +668,28 @@ fn run_indexed(
                     assert_eq!(endpoint.enum_variant_fields_v47(1, out.budget)?, Some(1));
                     let payload = endpoint.enum_field_v47(1, 0, out.budget)?;
                     assert_eq!(payload.source_type(out.budget)?, function.locals()[13].ty());
+                    if let Some(bits) = float_bits {
+                        use fe2o3_kernel_ir::{
+                            AccessMode, AddressSpace, ScalarType, Type as Physical,
+                        };
+                        let pointee = function.locals()[14].ty();
+                        assert!(matches!(semantic.types()[pointee.index() as usize].shape(),
+                            Shape::Scalar(SemanticScalarTypeV1::Float { bits: actual }) if *actual == bits));
+                        let Some(Physical::Pointer(pointer)) = payload.physical_type(out.budget)?
+                        else {
+                            panic!("exact Float result pointer");
+                        };
+                        assert_eq!(pointer.address_space, AddressSpace::Global);
+                        assert_eq!(pointer.access, AccessMode::ReadWrite);
+                        assert_eq!(
+                            *pointer.pointee,
+                            Physical::Scalar(if bits == 32 {
+                                ScalarType::F32
+                            } else {
+                                ScalarType::F64
+                            })
+                        );
+                    }
                     assert!(
                         payload.reference(out.budget)?.is_none(),
                         "locator does not issue an ordinary loan"
@@ -674,6 +784,71 @@ fn run_indexed(
 fn descriptor_indexed_option_uses_real_intrinsic_some_edge_and_complete_source_pair() {
     for disjoint in [false, true] {
         run_indexed(LIMIT, LIMIT, None, disjoint).0.unwrap();
+    }
+}
+
+#[test]
+fn descriptor_float_indices_preserve_original_native_element_and_some_pointer_types() {
+    for bits in [32, 64] {
+        for disjoint in [false, true] {
+            run_indexed_kind(LIMIT, LIMIT, None, disjoint, Some(bits))
+                .0
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn descriptor_float_indices_keep_exact_presence_and_foreign_owner_refusals() {
+    for bits in [32, 64] {
+        for disjoint in [false, true] {
+            run_indexed_kind(LIMIT, LIMIT, None, disjoint, Some(bits))
+                .0
+                .unwrap();
+            for fault in 0..3 {
+                assert!(
+                    run_indexed_kind(LIMIT, LIMIT, Some(fault), disjoint, Some(bits))
+                        .0
+                        .is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn descriptor_float_index_complete_route_has_exact_and_one_short_resources() {
+    for bits in [32, 64] {
+        for disjoint in [false, true] {
+            let generous = run_indexed_kind(LIMIT, LIMIT, None, disjoint, Some(bits));
+            generous.0.unwrap();
+            let exact = run_indexed_kind(generous.1, generous.3, None, disjoint, Some(bits));
+            exact.0.unwrap();
+            assert_eq!(
+                (exact.1, exact.2, exact.3),
+                (generous.1, generous.2, generous.3)
+            );
+            for work in [true, false] {
+                let denied = run_indexed_kind(
+                    if work { generous.1 - 1 } else { generous.1 },
+                    if work { generous.3 } else { generous.3 - 1 },
+                    None,
+                    disjoint,
+                    Some(bits),
+                );
+                if work {
+                    assert!(
+                        matches!(denied.0, Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+                        if error.actual() == generous.1 && error.limit() == generous.1 - 1)
+                    );
+                } else {
+                    assert!(
+                        matches!(denied.0, Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+                        if error.actual() == generous.3 && error.limit() == generous.3 - 1)
+                    );
+                }
+            }
+        }
     }
 }
 
