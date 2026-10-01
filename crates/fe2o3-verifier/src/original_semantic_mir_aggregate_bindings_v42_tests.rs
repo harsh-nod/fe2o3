@@ -660,6 +660,78 @@ fn original_mir_aggregate_calls_and_returns_keep_complete_exclusive_snapshots() 
     .unwrap();
 }
 
+#[test]
+fn original_mir_root_census_keeps_helpers_distinct_and_requires_every_kernel_entry() {
+    super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |types, functions| call_transform(types, functions, true),
+        |plan, out| {
+            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let relation = slots.correspondence(out)?;
+                let inventory = relation.inventory(out.budget)?;
+                let functions = inventory.functions();
+                assert_eq!(functions.len(), 3);
+                let roots = relation.source(out.budget)?.root_count(out.budget)?;
+                assert_eq!(roots, 2);
+                let mut seen = vector(functions.len(), out)?;
+                out.budget.charge_work(functions.len())?;
+                seen.resize(functions.len(), false);
+                for root in 0..roots {
+                    let physical = plan.root(root, out)?.physical;
+                    assert!(!seen[physical]);
+                    assert_eq!(functions[physical].function.role, FunctionRole::KernelEntry);
+                    seen[physical] = true;
+                }
+                let work = out.budget.work();
+                let storage = out.budget.storage();
+                check_root_census(functions, &seen, out)?;
+                assert_eq!(out.budget.work() - work, functions.len() + 1);
+                assert_eq!(out.budget.storage(), storage);
+                let kernel = seen.iter().position(|&selected| selected).unwrap();
+                let helper = seen.iter().position(|&selected| !selected).unwrap();
+                assert_eq!(functions[helper].function.role, FunctionRole::InternalHelper);
+                for (index, selected) in [(kernel, false), (helper, true)] {
+                    let old = seen[index];
+                    seen[index] = selected;
+                    assert!(matches!(check_root_census(functions, &seen, out),
+                        Err(Error::Statement("paired original roots differ from the complete canonical kernel-entry census"))));
+                    seen[index] = old;
+                }
+                assert!(matches!(check_root_census(functions, &seen[..roots], out),
+                    Err(Error::Statement("original MIR paired byte relation differs from its exact source cuts"))));
+                check_root_census(functions, &seen, out)?;
+                use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
+                use fe2o3_kernel_ir::{
+                    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+                    CanonicalKernelIrWorkBudgetV1 as Work,
+                };
+                let exact_work = functions.len() + 1;
+                for limit in [exact_work, exact_work - 1] {
+                    let mut work = Work::new(limit);
+                    let mut budget = Budget::new(&mut work, SOURCE_LIMIT);
+                    budget.reserve_storage(SOURCE_LIMIT)?;
+                    let result = {
+                        let mut writer = Writer::new(&mut budget)?;
+                        check_root_census(functions, &seen, &mut writer)
+                    };
+                    if limit == exact_work {
+                        result?;
+                        assert_eq!(budget.work(), exact_work);
+                    } else {
+                        assert!(matches!(result, Err(Error::Resource(Resource::Work(error)))
+                            if error.limit() == limit && error.actual() == exact_work));
+                    }
+                    assert_eq!(budget.storage(), SOURCE_LIMIT);
+                }
+                Ok(())
+            })
+        },
+    )
+    .0
+    .unwrap();
+}
+
 pub(in super::super) fn retained_call_transform(
     types: &mut Vec<SemanticTypeDeclV1>,
     functions: &mut Vec<SemanticFunctionDeclV1>,

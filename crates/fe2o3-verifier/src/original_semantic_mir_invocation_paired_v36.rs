@@ -10,7 +10,9 @@ use super::super::{
 use super::{
     Error, Resource, Result, Writer, slots::SourceSlots, source_function::SourceByteProgram, vector,
 };
-use fe2o3_kernel_ir::{CanonicalKirDefinitionCoordinateV1 as Definition, FormalIndexWidth};
+use fe2o3_kernel_ir::{
+    CanonicalKirDefinitionCoordinateV1 as Definition, FormalIndexWidth, FunctionRole,
+};
 use fe2o3_mir_model::{
     SsaBlockIdV1 as Block, SsaEdgeIdV1 as Edge, SsaResolvedEventV1 as Event, SsaValueV1 as Value,
     SsaVariableIdV1 as Variable, semantic_mir_v1::SemanticBlockIdV1 as SourceBlock,
@@ -131,6 +133,26 @@ fn block(index: usize) -> Result<Block> {
     ))
 }
 
+fn check_root_census(
+    functions: &[fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>],
+    seen: &[bool],
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    out.budget.charge_work(1)?;
+    if functions.len() != seen.len() {
+        return Err(mismatch());
+    }
+    out.budget.charge_work(functions.len())?;
+    if functions.iter().zip(seen).any(|(function, selected)| {
+        *selected != (function.function.role == FunctionRole::KernelEntry)
+    }) {
+        return Err(Error::Statement(
+            "paired original roots differ from the complete canonical kernel-entry census",
+        ));
+    }
+    Ok(())
+}
+
 impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
     pub(super) fn derive(
         plan: &InvocationPlan<'_, '_>,
@@ -149,7 +171,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         let archive = source.source_ssa(out.budget)?;
         let inventory = relation.inventory(out.budget)?;
         let count = source.root_count(out.budget)?;
-        if count != inventory.functions().len() {
+        if count > inventory.functions().len() {
             return Err(mismatch());
         }
         let mut total = 0usize;
@@ -180,9 +202,11 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             object_returns: ObjectReturnsV42::derive(slots, width, out)?,
             required: 0,
         };
-        let mut seen = vector(count, out)?;
-        out.budget.charge_work(count)?;
-        seen.resize(count, false);
+        // Root coordinates are complete-module ordinals. The inventory can
+        // retain verified non-entry helpers that are not invocation roots.
+        let mut seen = vector(inventory.functions().len(), out)?;
+        out.budget.charge_work(inventory.functions().len())?;
+        seen.resize(inventory.functions().len(), false);
         for root in 0..count {
             let scope = plan.root(root, out)?;
             out.budget.charge_work(3)?;
@@ -196,6 +220,12 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 .functions()
                 .get(scope.physical)
                 .ok_or_else(mismatch)?;
+            out.budget.charge_work(1)?;
+            if physical.function.role != FunctionRole::KernelEntry {
+                return Err(Error::Statement(
+                    "paired original root names a non-entry canonical function",
+                ));
+            }
             let mut cuts = vector(physical.blocks.len(), out)?;
             out.budget.charge_work(physical.blocks.len())?;
             cuts.resize_with(physical.blocks.len(), || None);
@@ -594,10 +624,10 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 parameters,
             });
         }
-        out.budget.charge_work(seen.len())?;
-        if result.instances.len() != total || seen.iter().any(|seen| !seen) {
+        if result.instances.len() != total {
             return Err(mismatch());
         }
+        check_root_census(inventory.functions(), &seen, out)?;
         result.required = out.budget.storage();
         Ok(result)
     }
@@ -944,6 +974,9 @@ fn headers() -> usize {
         + h::<Vec<Block>>()
         + h::<Boundaries<'_>>()
         + h::<ControlInput<'_>>()
+        + h::<&[fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>]>()
+        + h::<&[bool]>()
+        + h::<FunctionRole>()
         + h::<Range<usize>>()
         + h::<Option<usize>>()
         + h::<Value>()
