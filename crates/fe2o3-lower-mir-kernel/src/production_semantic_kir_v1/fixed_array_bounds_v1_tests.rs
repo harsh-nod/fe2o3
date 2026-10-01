@@ -343,10 +343,14 @@ fn helper_effect_diagnostic_labels_declaration_provenance_without_inventing_a_ca
         let error = ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
             function: 7,
             declaration_source: Box::new(source),
+            effect_diagnostic: ProductionHelperEffectDiagnosticV1::from_decision(None),
         };
         let rendered = error.to_string();
         assert!(rendered.contains("rejected function 7"));
         assert!(rendered.contains("not interprocedurally complete and pure"));
+        assert!(rendered.starts_with("semantic-to-Kernel-IR lowering rejected function 7: reachable deterministic scalar helper is not interprocedurally complete and pure\n  = helper declaration at "));
+        assert!(rendered.contains("effect decision=missing; physical=unavailable"));
+        assert!(rendered.contains("contributing operation=unavailable"));
         assert!(rendered.contains(&format!("helper declaration at {location}")));
         assert!(rendered.contains("lowering stopped before target IR or artifact emission"));
         assert!(!rendered.contains("caller"));
