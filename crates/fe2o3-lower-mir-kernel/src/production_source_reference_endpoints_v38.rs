@@ -123,9 +123,9 @@ impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
                     owner: self.owner,
                     loan,
                 })),
-                SourceSsaPhysicalV36::Value { loan: None, .. } | SourceSsaPhysicalV36::Unit => {
-                    Ok(None)
-                }
+                SourceSsaPhysicalV36::Value { loan: None, .. }
+                | SourceSsaPhysicalV36::Witness(_)
+                | SourceSsaPhysicalV36::Unit => Ok(None),
                 SourceSsaPhysicalV36::Aggregate { .. }
                 | SourceSsaPhysicalV36::Enum { .. }
                 | SourceSsaPhysicalV36::EnumVariant { .. }

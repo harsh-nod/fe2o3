@@ -170,11 +170,13 @@ fn source_carrier_definition_v37(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> SourceOwnedResultV18<Option<usize>> {
     budget.charge_work(4)?;
-    match *physical {
-        SourceSsaPhysicalV36::Unmodeled => owner
-            .source
-            .missing("original SSA binding has no typed carrier"),
-        SourceSsaPhysicalV36::Unit => Ok(None),
+    let (value, ty) = match *physical {
+        SourceSsaPhysicalV36::Unmodeled => {
+            return owner
+                .source
+                .missing("original SSA binding has no typed carrier");
+        }
+        SourceSsaPhysicalV36::Unit => return Ok(None),
         SourceSsaPhysicalV36::Enum {
             discriminant,
             start,
@@ -189,11 +191,13 @@ fn source_carrier_definition_v37(
                     .source
                     .missing("original enum SSA carrier range differs");
             }
-            Ok(None)
+            return Ok(None);
         }
-        SourceSsaPhysicalV36::EnumVariant { .. } => owner
-            .source
-            .missing("enum variant field roster is not a source SSA value"),
+        SourceSsaPhysicalV36::EnumVariant { .. } => {
+            return owner
+                .source
+                .missing("enum variant field roster is not a source SSA value");
+        }
         SourceSsaPhysicalV36::Aggregate { start, length } => {
             let end = start
                 .checked_add(length)
@@ -203,28 +207,31 @@ fn source_carrier_definition_v37(
                     .source
                     .missing("original aggregate SSA carrier range differs");
             }
-            Ok(None)
+            return Ok(None);
         }
-        SourceSsaPhysicalV36::Value { value, ty, .. } => {
-            let index = owner
-                .inventory
-                .definition_index_for_value(function, value, budget)
-                .map_err(|error| {
-                    ProductionSourceOwnedViewErrorV18::from(
-                        fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
-                    )
-                })?
-                .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                    "original typed SSA canonical value is absent",
-                ))?;
-            if !ty.matches(owner.inventory.definitions()[index].ty) {
-                return owner
-                    .source
-                    .missing("original typed SSA canonical type differs");
-            }
-            Ok(Some(index))
-        }
+        SourceSsaPhysicalV36::Value { value, ty, .. } => (value, ty),
+        SourceSsaPhysicalV36::Witness(witness) => (
+            witness.value,
+            SourceSsaCarrierTypeV36::Scalar(ScalarType::Index),
+        ),
+    };
+    let index = owner
+        .inventory
+        .definition_index_for_value(function, value, budget)
+        .map_err(|error| {
+            ProductionSourceOwnedViewErrorV18::from(
+                fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
+            )
+        })?
+        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+            "original typed SSA canonical value is absent",
+        ))?;
+    if !ty.matches(owner.inventory.definitions()[index].ty) {
+        return owner
+            .source
+            .missing("original typed SSA canonical type differs");
     }
+    Ok(Some(index))
 }
 
 /// Physical shape of one retained source binding, without a semantic interpretation.
@@ -259,7 +266,9 @@ impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
             budget.charge_work(1)?;
             match *self.physical {
                 SourceSsaPhysicalV36::Unit => Ok(ProductionSourceSsaCarrierShapeV37::Unit),
-                SourceSsaPhysicalV36::Value { .. } => Ok(ProductionSourceSsaCarrierShapeV37::Value),
+                SourceSsaPhysicalV36::Value { .. } | SourceSsaPhysicalV36::Witness(_) => {
+                    Ok(ProductionSourceSsaCarrierShapeV37::Value)
+                }
                 SourceSsaPhysicalV36::Aggregate { length, .. } => {
                     Ok(ProductionSourceSsaCarrierShapeV37::Aggregate { components: length })
                 }

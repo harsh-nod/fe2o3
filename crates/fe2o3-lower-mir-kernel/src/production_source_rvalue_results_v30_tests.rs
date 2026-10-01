@@ -256,6 +256,8 @@ fn typed_endpoint_header_oracle_v36() -> usize {
         + h::<SourceSsaCarrierTypeV36>()
         + h::<SourceSsaLoanV36>()
         + reference_endpoint_header_oracle_v38()
+        + h::<SourceSsaWitnessV50>()
+        + h::<(ValueId, SourceSsaCarrierTypeV36)>()
         + h::<SourceSsaPhysicalV36>()
         + h::<SourceSsaEndpointRowV36>()
         + carrier_tree_header_oracle_v37()

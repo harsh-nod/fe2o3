@@ -152,6 +152,14 @@ fn checked_rows(
                     }
                     counts[3] += usize::from(loan.is_some());
                 }
+                SourceSsaPhysicalV36::Witness(witness) => {
+                    let index = endpoint.original_definition(budget)?.unwrap();
+                    let actual = &relation.inventory.definitions()[index];
+                    assert_eq!(actual.value, Some(witness.value));
+                    assert_eq!(actual.ty, &Type::INDEX);
+                    assert_eq!(endpoint.physical_type(budget)?, Some(actual.ty));
+                    assert!(endpoint.reference(budget)?.is_none());
+                }
                 SourceSsaPhysicalV36::EnumVariant { .. } | SourceSsaPhysicalV36::Unmodeled => {
                     unreachable!()
                 }

@@ -106,6 +106,14 @@ struct SourceSsaLoanV36 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceSsaWitnessV50 {
+    value: ValueId,
+    index_space: SemanticDisjointIndexSpaceV1,
+    disjoint: bool,
+    availability: Option<SemanticCapabilityAvailabilityV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceSsaPhysicalV36 {
     Unit,
     Aggregate {
@@ -128,6 +136,7 @@ enum SourceSsaPhysicalV36 {
         ty: SourceSsaCarrierTypeV36,
         loan: Option<SourceSsaLoanV36>,
     },
+    Witness(SourceSsaWitnessV50),
     Unmodeled,
 }
 
@@ -279,6 +288,25 @@ fn retain_source_carrier_leaf_v37(
         .shape();
     let physical = match (binding, shape) {
         (SemanticValueBindingV1::Unit, SemanticTypeShapeV1::Unit) => SourceSsaPhysicalV36::Unit,
+        (
+            SemanticValueBindingV1::IndexWitness {
+                id,
+                index_space,
+                disjoint,
+                availability,
+            },
+            _,
+        ) => {
+            // Only the archived emitter binding supplies this class. INDEX or
+            // a scalar-like source layout does not issue witness authority.
+            budget.charge_work(4)?;
+            SourceSsaPhysicalV36::Witness(SourceSsaWitnessV50 {
+                value: *id,
+                index_space: *index_space,
+                disjoint: *disjoint,
+                availability: *availability,
+            })
+        }
         (SemanticValueBindingV1::Value { id, ty: actual }, _) => {
             // This records the original emitted carrier, not an interpretation
             // of its source type. Descriptor wrappers require a separate
@@ -575,6 +603,8 @@ fn source_typed_endpoint_headers_v36() -> Result<usize, ArgumentResourceV1> {
         h::<SourceSsaCarrierTypeV36>()?,
         h::<SourceSsaLoanV36>()?,
         source_reference_endpoint_headers_v38()?,
+        h::<SourceSsaWitnessV50>()?,
+        h::<(ValueId, SourceSsaCarrierTypeV36)>()?,
         h::<SourceSsaPhysicalV36>()?,
         h::<SourceSsaEndpointRowV36>()?,
         source_carrier_tree_headers_v37()?,
