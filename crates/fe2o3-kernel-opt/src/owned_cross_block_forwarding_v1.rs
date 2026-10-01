@@ -20,8 +20,8 @@ use fe2o3_kernel_ir::{
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirControlFlowScopeErrorV1 as FlowError,
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirOperationCoordinateV1 as Site,
     KirLocalMemoryEffectRefV1 as Effect, MemoryAccess, Module, OperationKind as Kind, ScalarType,
-    Type, UnaryOp, ValueId, VerifiedCanonicalKernelIrIdentityV12 as Identity,
-    VerifiedCanonicalKernelIrModuleV12 as Owner,
+    StorageLayoutKindV1, StorageOperationV1 as Storage, Type, UnaryOp, ValueId,
+    VerifiedCanonicalKernelIrIdentityV12 as Identity, VerifiedCanonicalKernelIrModuleV12 as Owner,
 };
 use std::{fmt, mem::size_of};
 
@@ -251,8 +251,9 @@ fn materialize<O>(
             continue;
         };
         let at = operation_index(inventory, store)?;
-        let Kind::Store { value, .. } = inventory.operations()[at].operation.kind else {
-            return Err(Error::Recipe("selected initializing Store"));
+        let value = match inventory.operations()[at].operation.kind {
+            Kind::Store { value, .. } | Kind::Storage(Storage::WriteValue { value, .. }) => value,
+            _ => return Err(Error::Recipe("selected initializing Store")),
         };
         let body = candidate
             .functions
@@ -559,7 +560,8 @@ fn plan<O: Profile>(
                 != a.operations()[at].coordinate.block.function
             || load.pointer != store.pointer
             || load.definition != store.definition
-            || load.access != store.access
+            || load.access.address_space != store.access.address_space
+            || load.access.volatile != store.access.volatile
             || a.definitions()[definition].ty != &a.operations()[at].operation.results[0].ty
         {
             continue;
@@ -698,12 +700,12 @@ fn integer(ty: &Type) -> bool {
 fn scalar(ty: &Type) -> bool {
     *ty == Type::BOOL || integer(ty)
 }
-fn slots<O>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
+fn slots<O: Profile>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
     let mut alignments = filled(a.definitions().len(), 0u32, meter)?;
     for row in a.operations() {
         meter.work(7)?;
         let Kind::Alloca {
-            element: Type::Scalar(element),
+            element,
             count: None,
             address_space: AddressSpace::Private,
             alignment,
@@ -711,11 +713,14 @@ fn slots<O>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>>
         else {
             continue;
         };
-        if !integer(&Type::Scalar(*element))
+        let Some(scalar) = cell_scalar(a.owner(), element, meter)? else {
+            continue;
+        };
+        if !integer(&Type::Scalar(scalar))
             || !alignment.is_power_of_two()
             || *alignment
                 < u32::from(
-                    element
+                    scalar
                         .bit_width()
                         .ok_or(Error::Recipe("integer cell width"))?
                         / 8,
@@ -735,7 +740,7 @@ fn slots<O>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>>
         };
         if pointer.address_space == AddressSpace::Private
             && pointer.access == AccessMode::ReadWrite
-            && *pointer.pointee == Type::Scalar(*element)
+            && pointer.pointee.as_ref() == element
         {
             alignments[row.results.start] = *alignment;
         }
@@ -748,7 +753,11 @@ fn slots<O>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>>
                 continue;
             }
             let permitted = match row.operation.kind {
-                Kind::Load { pointer, access } => {
+                Kind::Load { pointer, access }
+                | Kind::Storage(Storage::ReadValue {
+                    address: pointer,
+                    access,
+                }) => {
                     pointer == operand.value
                         && !access.volatile
                         && access.address_space == AddressSpace::Private
@@ -757,7 +766,12 @@ fn slots<O>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>>
                     pointer,
                     value,
                     access,
-                } => {
+                }
+                | Kind::Storage(Storage::WriteValue {
+                    address: pointer,
+                    value,
+                    access,
+                }) => {
                     pointer == operand.value
                         && value != operand.value
                         && !access.volatile
@@ -779,7 +793,34 @@ fn slots<O>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>>
     }
     Ok(alignments)
 }
-fn access<O>(
+fn cell_scalar<O: Profile>(
+    owner: &O,
+    ty: &Type,
+    meter: &mut Meter<'_, '_>,
+) -> Result<Option<ScalarType>> {
+    match ty {
+        Type::Scalar(scalar) => Ok(integer(ty).then_some(*scalar)),
+        Type::StorageObject(id) => {
+            meter.work(12)?;
+            let Some(layout) = owner.layout(*id) else {
+                return Ok(None);
+            };
+            let StorageLayoutKindV1::Scalar(scalar) = layout.kind else {
+                return Ok(None);
+            };
+            let Some(bits) = scalar.bit_width() else {
+                return Ok(None);
+            };
+            Ok((integer(&Type::Scalar(scalar))
+                && layout.size == u64::from(bits / 8)
+                && layout.alignment.is_power_of_two()
+                && layout.alignment <= u32::from(bits / 8))
+            .then_some(scalar))
+        }
+        _ => Ok(None),
+    }
+}
+fn access<O: Profile>(
     a: &Inventory<'_, O>,
     at: usize,
     slots: &[u32],
@@ -792,9 +833,12 @@ fn access<O>(
         .ok_or(Error::Recipe("memory operation"))?;
     let (pointer, access, value) = match row.operation.kind {
         Kind::Load { pointer, access }
-            if row.operands.len() == 1
-                && row.results.len() == 1
-                && integer(&row.operation.results[0].ty) =>
+        | Kind::Storage(Storage::ReadValue {
+            address: pointer,
+            access,
+        }) if row.operands.len() == 1
+            && row.results.len() == 1
+            && integer(&row.operation.results[0].ty) =>
         {
             (pointer, access, None)
         }
@@ -802,7 +846,12 @@ fn access<O>(
             pointer,
             value,
             access,
-        } if row.operands.len() == 2 && row.results.is_empty() => (pointer, access, Some(value)),
+        }
+        | Kind::Storage(Storage::WriteValue {
+            address: pointer,
+            value,
+            access,
+        }) if row.operands.len() == 2 && row.results.is_empty() => (pointer, access, Some(value)),
         _ => return Ok(None),
     };
     if access.address_space != AddressSpace::Private
@@ -820,6 +869,25 @@ fn access<O>(
     let definition = uses[0].definition;
     if slots[definition] == 0 || access.alignment > slots[definition] {
         return Ok(None);
+    }
+    if matches!(row.operation.kind, Kind::Storage(_)) {
+        let Type::Pointer(pointer_type) = a.definitions()[definition].ty else {
+            return Ok(None);
+        };
+        if !matches!(pointer_type.pointee.as_ref(), Type::StorageObject(_)) {
+            return Ok(None);
+        }
+        let Some(scalar) = cell_scalar(a.owner(), &pointer_type.pointee, meter)? else {
+            return Ok(None);
+        };
+        let value_type = if value.is_some() {
+            a.definitions()[uses[1].definition].ty
+        } else {
+            &row.operation.results[0].ty
+        };
+        if value_type != &Type::Scalar(scalar) {
+            return Ok(None);
+        }
     }
     let stored = if let Some(value) = value {
         if uses[1].value != value {
