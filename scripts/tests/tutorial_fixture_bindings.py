@@ -579,6 +579,113 @@ class AttentionCfgSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "fixture display differs from the exact current source occurrence"):
             self.check_ablation(document, runtime)
 
+
+    def kda_baseline_document(self):
+        """One isolated whole-file component, not a claim about the full live census."""
+        document = copy.deepcopy(self.original)
+        lesson = next(row for row in document["curriculum"]["lessons"]
+                      if row["lessonId"] == "gfx950-kda-gdn-linear-attention")
+        self.assertEqual(len(lesson["codeTabs"]), 7)
+        tab = lesson["codeTabs"][6]
+        self.assertEqual(tab["sourceCommit"], "6399ee2cf8456c6237a89d5507f50c1872602269")
+        self.assertEqual(tab["sourcePath"], "examples/gfx950_advanced_attention/src/kda_baseline.rs")
+        self.assertEqual(tab["sourceDigestScope"], "file")
+        self.assertEqual(tab["sourceItemStatus"], "pending")
+        self.assertIsNone(tab["sourceItem"])
+        self.assertIsNone(tab["evidenceId"])
+        physical = (ROOT / tab["sourcePath"]).read_bytes()
+        self.assertEqual(len(physical), 10258)
+        self.assertEqual(hashlib.sha256(physical).hexdigest(),
+                         "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455")
+        ids = {"gfx950-kda-decode-baseline", "gfx950-kda-prefill-baseline"}
+        document["compilerFixtures"] = [row for row in document["compilerFixtures"]
+                                        if row["fixtureId"] in ids]
+        inventory = document["kernelInventory"]
+        inventory["kernels"] = [row for row in inventory["kernels"]
+                                 if row["selections"][0].get("fixtureId") in ids]
+        inventory["negativeCases"] = []
+        inventory["displayItems"] = [row for row in inventory["displayItems"]
+                                      if row["lessonId"] == lesson["lessonId"] and row["tabOrdinal"] == 6]
+        self.assertEqual([(row["kernelSymbol"], row["functionUtf8Offset"])
+                          for row in inventory["displayItems"]],
+                         [("gfx950_kda_decode", 1610), ("gfx950_kda_chunkwise_prefill", 4908)])
+        for row in inventory["displayItems"]:
+            self.assertEqual(row["bindingStatus"], "fixture-source-contract")
+            self.assertEqual(len(row["kernelIds"]), 1)
+            row["tabOrdinal"] = 0
+        lesson["codeTabs"], tab["ordinal"] = [tab], 0
+        document["curriculum"]["lessons"] = [lesson]
+        runtime = {"schema": self.parent.SITE_INVENTORY_SCHEMA, "site": document["curriculum"]["site"],
+                   "lessons": [{"id": lesson["lessonId"], "codeTabs": [
+                       {**tab, "displayedCode": physical.decode("utf-8"), "sourceFragments": None}]}]}
+        return document, runtime
+
+    def test_whole_kda_baseline_display_binds_two_feature_selected_sources_only(self):
+        document, runtime = self.kda_baseline_document()
+        before = copy.deepcopy((document, runtime))
+        report = self.check_ablation(document, runtime)
+        self.assertEqual((document, runtime), before)
+        self.assertEqual(report["unresolvedBindings"], [])
+        self.assertEqual(report["displayItemCount"], 2)
+        self.assertEqual(report["sourceBoundVariantCount"], 2)
+        self.assertEqual(report["pendingVariantCount"], 2)
+        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertEqual({tuple(row["compilerInput"]["features"]) for row in document["compilerFixtures"]},
+                         {("kernel-kda-decode-baseline-v1",), ("kernel-kda-prefill-baseline-v1",)})
+        self.assertTrue(all(not row["compilerInput"]["defaultFeatures"] for row in document["compilerFixtures"]))
+
+    def test_kda_baseline_display_requires_complete_unique_occurrence_census(self):
+        for mutation in ("missing", "duplicate", "offset", "swapped"):
+            document, runtime = self.kda_baseline_document()
+            rows = document["kernelInventory"]["displayItems"]
+            if mutation == "missing":
+                rows.pop()
+            elif mutation == "duplicate":
+                rows.append(copy.deepcopy(rows[0]))
+            elif mutation == "offset":
+                rows[0]["functionUtf8Offset"] += 1
+            else:
+                rows[0]["kernelIds"], rows[1]["kernelIds"] = rows[1]["kernelIds"], rows[0]["kernelIds"]
+            with self.subTest(mutation=mutation), self.assertRaises(SystemExit):
+                self.check_ablation(document, runtime)
+
+    def test_kda_baseline_rejects_same_named_nonbaseline_selection_or_ambiguity(self):
+        for combine in (False, True):
+            document, runtime = self.kda_baseline_document()
+            fixture_id = "gfx950-kda-decode"
+            kernel_id = "fixture:" + fixture_id + ":gfx950_kda_decode"
+            document["compilerFixtures"].append(copy.deepcopy(next(row for row in self.original["compilerFixtures"]
+                                                                 if row["fixtureId"] == fixture_id)))
+            document["kernelInventory"]["kernels"].append(copy.deepcopy(next(
+                row for row in self.original["kernelInventory"]["kernels"] if row["kernelId"] == kernel_id)))
+            row = document["kernelInventory"]["displayItems"][0]
+            row["kernelIds"] = [*row["kernelIds"], kernel_id] if combine else [kernel_id]
+            with self.subTest(combine=combine), self.assertRaisesRegex(SystemExit, "exact selected source"):
+                self.check_ablation(document, runtime)
+
+    def test_kda_baseline_rejects_stale_source_bytes_paths_and_features(self):
+        for mutation in ("hash", "path", "features", "both-features", "rehashed-display"):
+            document, runtime = self.kda_baseline_document()
+            if mutation in ("hash", "path"):
+                binding = document["kernelInventory"]["kernels"][0]["variants"][0]["source"]
+                binding["sourceSha256" if mutation == "hash" else "sourcePath"] = (
+                    "0" * 64 if mutation == "hash" else "examples/gfx950_advanced_attention/src/kernel.rs")
+            elif mutation in ("features", "both-features"):
+                fixture = next(row for row in document["compilerFixtures"]
+                               if row["fixtureId"] == "gfx950-kda-decode-baseline")
+                fixture["compilerInput"]["features"] = (["kernel-kda-prefill-baseline-v1"] if mutation == "features"
+                    else ["kernel-kda-decode-baseline-v1", "kernel-kda-prefill-baseline-v1"])
+            else:
+                tab = document["curriculum"]["lessons"][0]["codeTabs"][0]
+                live = runtime["lessons"][0]["codeTabs"][0]
+                live["displayedCode"] += "\n// changed display\n"
+                payload = live["displayedCode"].encode("utf-8")
+                for entry in (tab, live):
+                    entry.update(displayedUtf8Bytes=len(payload), displayedSha256=hashlib.sha256(payload).hexdigest(),
+                                 sourceSha256=hashlib.sha256(payload).hexdigest())
+            with self.subTest(mutation=mutation), self.assertRaises(SystemExit):
+                self.check_ablation(document, runtime)
+
     def test_same_named_host_fallback_cannot_replace_the_selected_source(self):
         document, _, binding = self.source_document("gfx950-attnres-aggregate")
         binding["functionUtf8Offset"] = 68105

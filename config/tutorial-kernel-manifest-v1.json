@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "fec72ed40255fb490bfc0a74e5ff5d24cc2218ea",
-      "tree": "94799b73e7481d7de4ad96a09c17ca4441040d0b"
+      "commit": "74e154b27b3ef4e2382ea683214d4580f55a80b6",
+      "tree": "b6d41dc5ed793d1019384f1311a43c656dda70b1"
     },
     "status": "pending",
     "lessons": [
@@ -3471,6 +3471,23 @@
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "not-applicable"
+          },
+          {
+            "ordinal": 6,
+            "kind": "kernel",
+            "label": "Baseline source [SOURCE-ONLY]",
+            "language": "rust",
+            "displayedUtf8Bytes": 10258,
+            "displayedSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
+            "sourcePath": "examples/gfx950_advanced_attention/src/kda_baseline.rs",
+            "sourceCommit": "6399ee2cf8456c6237a89d5507f50c1872602269",
+            "sourceSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
+            "sourceDigestScope": "file",
+            "explanatory": false,
+            "evidenceId": null,
+            "sourceFragmentsSha256": null,
+            "sourceItem": null,
+            "sourceItemStatus": "pending"
           }
         ]
       },
@@ -14939,6 +14956,32 @@
         "negativeCases": [],
         "bindingStatus": "fixture-source-contract",
         "reason": "The exact retained display maps to the listed current fixture selections and their physical declaration; historical evidence, SIMT/tile variants, and required stage qualification remain unchanged."
+      },
+      {
+        "lessonId": "gfx950-kda-gdn-linear-attention",
+        "tabOrdinal": 6,
+        "functionUtf8Offset": 1610,
+        "kernelSymbol": "gfx950_kda_decode",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx950-kda-decode-baseline:gfx950_kda_decode"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact whole-file baseline display selects this feature-specific declaration; source association only, with historical evidence and all execution qualification unchanged."
+      },
+      {
+        "lessonId": "gfx950-kda-gdn-linear-attention",
+        "tabOrdinal": 6,
+        "functionUtf8Offset": 4908,
+        "kernelSymbol": "gfx950_kda_chunkwise_prefill",
+        "classification": "kernel",
+        "kernelIds": [
+          "fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact whole-file baseline display selects this feature-specific declaration; source association only, with historical evidence and all execution qualification unchanged."
       },
       {
         "lessonId": "gfx950-kda-prefill-performance-lab",
