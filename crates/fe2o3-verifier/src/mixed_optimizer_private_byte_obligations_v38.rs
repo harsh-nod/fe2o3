@@ -15,11 +15,13 @@ pub(super) enum Guard {
     Read,
     Write,
     Copy,
+    View(views::ViewGuard),
 }
 
 fn guard(plan: &ByteOperationV30<'_, '_>, actual: &OperationKind) -> Result<Guard> {
     let guard = match plan {
         ByteOperationV30::Alloca(_) => Guard::Allocate,
+        ByteOperationV30::View(view) => Guard::View(view.guard()),
         ByteOperationV30::Storage(storage) => match storage.effect() {
             PointerByteEffectV30::Read { .. } => Guard::Read,
             PointerByteEffectV30::Write { .. } => Guard::Write,
@@ -62,6 +64,14 @@ pub(super) fn check(
         Guard::Read => Kind::Read,
         Guard::Write => Kind::Write,
         Guard::Copy => Kind::Copy,
+        Guard::View(
+            views::ViewGuard::Form | views::ViewGuard::Construction | views::ViewGuard::Variant,
+        ) => Kind::Project,
+        Guard::View(
+            views::ViewGuard::Discriminant
+            | views::ViewGuard::TagWrite
+            | views::ViewGuard::UntaggedNoop,
+        ) => Kind::Unmodeled,
     };
     if fact.kind() != expected {
         return Err(Error::Statement(
@@ -73,7 +83,17 @@ pub(super) fn check(
             Obligation::Address | Obligation::Currentness | Obligation::ExternalMemory => {
                 matches!(
                     guard,
-                    Guard::Form | Guard::Read | Guard::Write | Guard::Copy
+                    Guard::Form
+                        | Guard::Read
+                        | Guard::Write
+                        | Guard::Copy
+                        | Guard::View(
+                            views::ViewGuard::Form
+                                | views::ViewGuard::Construction
+                                | views::ViewGuard::Variant
+                                | views::ViewGuard::Discriminant
+                                | views::ViewGuard::TagWrite
+                        )
                 )
             }
             Obligation::Bounds | Obligation::Alignment => {
@@ -81,8 +101,15 @@ pub(super) fn check(
                     guard,
                     Guard::Allocate | Guard::Read | Guard::Write | Guard::Copy
                 ) || guard == Guard::Form
+                    || matches!(guard, Guard::View(view) if view != views::ViewGuard::UntaggedNoop)
             }
-            Obligation::Initialization => guard == Guard::Read,
+            Obligation::Initialization => {
+                guard == Guard::Read
+                    || matches!(
+                        guard,
+                        Guard::View(views::ViewGuard::Variant | views::ViewGuard::Discriminant)
+                    )
+            }
             // Unknown static reachability prevents a fixed-point claim. The
             // generated step still checks its actual PC and complete dynamic
             // memory preconditions; a paired run must establish the real path.
@@ -93,12 +120,29 @@ pub(super) fn check(
             Obligation::Operation => {
                 matches!(
                     guard,
-                    Guard::Allocate | Guard::Form | Guard::Read | Guard::Write | Guard::Copy
+                    Guard::Allocate
+                        | Guard::Form
+                        | Guard::Read
+                        | Guard::Write
+                        | Guard::Copy
+                        | Guard::View(_)
                 )
             }
-            Obligation::CopyBoundaryClosure | Obligation::ActiveView | Obligation::TagContract => {
-                false
-            }
+            // Exact tag plans borrow checked row contracts. Read/formation
+            // steps preserve/check enclosing guards; real writes use byte_store.
+            // The untagged niche plan is proven physically inert by derivation,
+            // so it neither dereferences an address nor certifies an active tag.
+            Obligation::ActiveView | Obligation::TagContract => matches!(
+                guard,
+                Guard::View(
+                    views::ViewGuard::Construction
+                        | views::ViewGuard::Variant
+                        | views::ViewGuard::Discriminant
+                        | views::ViewGuard::TagWrite
+                        | views::ViewGuard::UntaggedNoop
+                )
+            ),
+            Obligation::CopyBoundaryClosure => false,
         };
         if covered {
             Ok(())

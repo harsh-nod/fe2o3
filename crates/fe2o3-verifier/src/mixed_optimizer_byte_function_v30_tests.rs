@@ -19,6 +19,7 @@ include!("mixed_optimizer_index_byte_operations_v37_tests.rs");
 include!("mixed_optimizer_byte_views_v38_tests.rs");
 include!("mixed_optimizer_private_byte_obligations_v38_tests.rs");
 include!("mixed_optimizer_target_view_contracts_v38_tests.rs");
+include!("mixed_optimizer_storage_view_byte_operations_v39_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
@@ -760,9 +761,11 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
     assert_eq!(super::super::index_byte_operations_v37::headers(), index);
     assert_eq!(physical::headers(), physical);
     assert_eq!(interpretation::headers(), interpretation);
+    let views = storage_view_header_oracle_v39();
+    assert_eq!(views::headers(), views);
     assert_eq!(
         headers::<R<'_>>(),
-        pointer + private + storage + index + control + physical + interpretation + model
+        pointer + private + storage + index + control + physical + interpretation + views + model
     );
 }
 

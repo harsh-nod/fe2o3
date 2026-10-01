@@ -33,6 +33,10 @@ mod physical;
 mod interpretation;
 pub(crate) use interpretation::ByteInterpretationContextV39;
 
+#[path = "mixed_optimizer_storage_view_byte_operations_v39.rs"]
+mod views;
+use views::StorageViewByteOperationV39;
+
 /// The original canonical Alloca occurrence and its physical root's original
 /// MIR declaration. A declaring callee is deliberately not the physical owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +59,7 @@ enum ByteOperationV30<'inventory, 'owner> {
     Pointer(PointerByteOperationV30),
     Alloca(AllocaByteOperationV30),
     Storage(StorageByteOperationV37),
+    View(StorageViewByteOperationV39),
     Index(IndexByteOperationV37),
     Scalar(CanonicalByteScalarV30<'inventory, 'owner>),
 }
@@ -200,6 +205,13 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 StorageByteOperationV37::derive(inventory, operation, width, out)?
             {
                 ByteOperationV30::Storage(storage)
+            } else if matches!(actual.operation.kind, OperationKind::Storage(_)) {
+                ByteOperationV30::View(StorageViewByteOperationV39::derive(
+                    inventory,
+                    operation,
+                    interpretation,
+                    out,
+                )?)
             } else if let Some(pointer) =
                 PointerByteOperationV30::derive(inventory, operation, width, out)?
             {
@@ -528,6 +540,19 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 )?;
                 storage.effect()
             }
+            ByteOperationV30::View(view) => {
+                view.emit_step(
+                    before,
+                    after,
+                    ByteMemoryContextNamesV30 {
+                        owner: "0",
+                        invocation: "0",
+                        little_endian: "little_endian",
+                    },
+                    out,
+                )?;
+                PointerByteEffectV30::None
+            }
         };
         emit!(out, " let effect = ");
         if let ByteOperationV30::Alloca(alloca) = plan {
@@ -538,6 +563,8 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 alloca.extent,
                 alloca.alignment
             );
+        } else if let ByteOperationV30::View(view) = plan {
+            view.emit_effect("s.values", out)?;
         } else {
             match effect {
                 PointerByteEffectV30::None => emit!(out, "MemoryOperationEffectV30::Pure"),
@@ -588,6 +615,7 @@ fn headers<R>() -> usize {
         + control::headers()
         + physical::headers()
         + interpretation::headers()
+        + views::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()
         + size_of::<ByteOperationV30<'_, '_>>()

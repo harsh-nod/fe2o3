@@ -53,6 +53,21 @@ impl<'a, 'owner> ByteInterpretationContextV39<'a, 'owner> {
         }
     }
 
+    pub(super) fn tag_class(
+        &self,
+        owner: &Owner,
+        row: fe2o3_kernel_ir::StorageLayoutIdV1,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<super::super::target_view_contracts_v38::TargetByteTagClassV38> {
+        self.check_owner(owner, out)?;
+        match self.views {
+            Views::Native => Err(super::Error::Statement(
+                "actual tag operation requires checked view contracts",
+            )),
+            Views::Classified { contracts, .. } => contracts.row_class(row, out),
+        }
+    }
+
     pub(super) fn emit_state_predicate(
         &self,
         memory: &str,
