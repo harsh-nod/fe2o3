@@ -20,7 +20,8 @@ fn unavailable(why: &'static str) -> ProductionPipelineError {
 }
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
-    // Intentionally no public command/selector and no post-ranked repeatable view.
+    // Private live P0 entry: public source-only adapters use production-owned
+    // primitive-report/publication wrappers, never a post-ranked repeatable view.
     // The dedicated importer result, never bytes or a bool, owns the live seed.
     pub(super) fn materialize_with_bf16_mfma_inspection_v1<R>(
         self,

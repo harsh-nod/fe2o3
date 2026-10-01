@@ -48,3 +48,42 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         }
     }
 }
+
+/// Inert point-in-time selection facts, not a source owner or production token.
+#[derive(Clone, Copy)]
+pub(crate) struct Bf16TileSourceSelectionV1 {
+    pub(crate) semantic_sha256: [u8; 32],
+    pub(crate) canonical_sha256: [u8; 32],
+    pub(crate) mir_sha256: [u8; 32],
+    pub(crate) original_sha256: [u8; 32],
+    pub(crate) original_bytes: usize,
+}
+impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    /// Read-only inspection of the original direct source profile. Publishing
+    /// redoes the live source admission and additional eligibility checks.
+    pub(crate) fn inspect_bf16_tile_source_selection_v1(
+        self,
+    ) -> Result<Bf16TileSourceSelectionV1, Box<ProductionPipelineError>> {
+        let (ordinary, selection) =
+            self.materialize_with_bf16_mfma_inspection_v1(|source, budget| {
+                // Retain only fixed primitive facts through original postflight.
+                // No whole-action storage or timing measurement is introduced.
+                budget.reserve_storage(std::mem::size_of::<Bf16TileSourceSelectionV1>())?;
+                budget.charge_work(256)?;
+                let owner = source.emission().original();
+                Ok(Bf16TileSourceSelectionV1 {
+                    semantic_sha256: *owner
+                        .semantic_ssa()
+                        .source_semantic()
+                        .semantic_sha256()
+                        .as_bytes(),
+                    canonical_sha256: *owner.executable().canonical().identity().digest(),
+                    mir_sha256: *source.mir_sha256(),
+                    original_sha256: *source.source().sha256(),
+                    original_bytes: source.source().bytes().len(),
+                })
+            })?;
+        drop(ordinary);
+        Ok(selection)
+    }
+}

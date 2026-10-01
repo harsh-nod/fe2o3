@@ -9,14 +9,14 @@ const SOURCE_CAP: usize = 1024 * 1024;
 
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct FilePin {
+pub(in crate::production_rustc_driver_v1) struct FilePin {
     path: String,
     bytes: u64,
     sha256: String,
 }
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct TreePin {
+pub(in crate::production_rustc_driver_v1) struct TreePin {
     pub(super) files: usize,
     pub(super) bytes: u64,
     pub(super) manifest_sha256: String,
@@ -100,7 +100,9 @@ fn walk(
         stamp(&fs::symlink_metadata(directory).unwrap())
     );
 }
-pub(super) fn dependency_snapshot(directory: &Path) -> (TreePin, Vec<FilePin>) {
+pub(in crate::production_rustc_driver_v1) fn dependency_snapshot(
+    directory: &Path,
+) -> (TreePin, Vec<FilePin>) {
     let root = directory.join("dependencies");
     let mut rows = Vec::new();
     let mut bytes = 0;

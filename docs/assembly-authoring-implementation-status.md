@@ -5,6 +5,17 @@ refreshes the current supported/pending matrix and identifies the missing owner
 and measured-budget decisions. It is proposed, not accepted; broad exits remain
 **M1/V1/V2/U1/U2/U3 (6/18)**.
 
+## Generated BF16 source and imported bindings — 2026-10-01
+
+The [generated-source and bindings qualification](generated-bf16-source-and-bindings-qualification-20261001.md)
+passed four genuine generated-source sessions, two helper publications, two fresh
+candidates, 72 positive CPU requests and 64 expected refusals. All nine legacy
+source sessions passed. A separate four-session import checkpoint preserved all
+1,502 exposed ordinary-result bytes while observing 5,804 logical retained bytes
+for its named bindings owner. Normal BF16 ranked lowering still typed-refuses;
+public tooling, whole-action memory, native/debugger and GPU acceptance remain
+separate. Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
+
 ## Disabled loaded-maintenance debugger source — 2026-09-27
 
 The [loaded-maintenance debugger checkpoint](debugger-loaded-maintenance-source-qualification-20260927.md)
