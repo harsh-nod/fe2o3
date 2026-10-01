@@ -132,7 +132,7 @@ Do not add these collections to obtain a kernel count. They can overlap, repeat
 symbols under different features, and omit still-unbound kernel identities.
 For the current incomplete inventory, `requiredPairCount` is null,
 `qualifiedPairCount` is zero, and `inventoryComplete` and `qualified` are false.
-Two SIMT variants have exact source associations; the remaining 121 variants
+Seventeen SIMT variants have exact source associations; the remaining 106 variants
 are pending and no pair is source-bound. Stages are not evaluated unless a
 diagnostic source report is bound; binding that report does not qualify a pair.
 Existing historical successes do not
@@ -151,8 +151,8 @@ The CPU simulation lesson's whole-file tab 6 binds
 source-driver contract, with `row-affine-u32-kernel` and default features disabled.
 The associated production test exports Bundle V5 and compares 86 independent
 oracle cases on the gfx942 and gfx950 CPU profiles, including execution and
-exact persisted replay. This is the second source-bound SIMT variant, not a
-new native fixture or a completed pair. Tile and mixed implementations,
+exact persisted replay. This was the second registered source-bound SIMT variant,
+not a new native fixture or a completed pair. Tile and mixed implementations,
 native artifact/generated-host admission, and direct-KFD GPU validation remain
 pending for gfx942/mi300x and gfx950/mi350. The inventory does not ingest these
 CPU test results as per-variant target qualification receipts.
@@ -257,6 +257,17 @@ focused reference tests. Its tile variant and execution evidence remain pending.
 This association does not complete a pair or the curriculum census, or rebind
 the historical first-fill display to the changed file.
 
+Fifteen advanced-attention SIMT variants now bind their registered feature
+selection, physical file digest and exact function-name byte offset. Same-named
+production, baseline and ablation declarations retain distinct selection
+identities. These are source associations, not rustc expansion acceptance or
+compilation, simulation, native artifact, generated-host admission, or
+direct-KFD qualification. Every corresponding tile variant remains pending.
+The ablation tab's unchanged whole-file source binds all three displayed
+functions to the explicit-reuse aggregation, explicit four-branch residual,
+and scalar Sinkhorn fixtures. Its complete three-function test projection
+does not establish the full curriculum census or a qualified pair.
+
 Eight GPT-OSS occurrences in tabs 1-6 retain these expected fixture/source
 contracts: serial-router, held-fragments, interleaved-stores, and the three
 materialized components, plus pipelined-attention and scalar-attention. Their
@@ -266,15 +277,17 @@ also bind to their exact selected physical source. Eight FP4/FP8 GEMM and
 attention displays, including their performance-lab excerpts, also bind to the
 registered feature-selected source. The declared runners use non-test
 `cargo check --lib`; test-only declarations are excluded from this selection.
-Together with fourteen systems occurrences and the four whole-file
-displays described below, these thirty-six associations leave 28 pending
-display bindings and the historical
+Together with fourteen systems occurrences, the four whole-file displays
+described below and the three ablation occurrences, these thirty-nine
+associations leave 25 pending display bindings and the historical
 GEMM lesson's source gap unresolved. The two attention variants are required
 positive compile obligations with separate pending-design simulation requests;
 neither inherits another variant's retained KIR or execution evidence. These
 registrations, together with the explicit SIMT row source above, bring known
 kernel identities to 61, not completed pairs or a proven final curriculum
 denominator.
+Twenty-four positive display occurrences still lack registered kernel identities;
+the required pair count remains unknown.
 The systems occurrences cover routing, expert computation, expert combination,
 gradient staging, Muon update, n-gram gather and speculative verification,
 including repeated performance excerpts. They bind eleven existing
