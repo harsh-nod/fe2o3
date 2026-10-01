@@ -1729,3 +1729,8 @@ mod tests {
         );
     }
 }
+
+mod logical_retained_storage_v1;
+pub use logical_retained_storage_v1::{
+    CompilerFfiLogicalStorageErrorV1, CompilerFfiLogicalStorageLimitsV1, CompilerFfiLogicalStorageV1,
+};
