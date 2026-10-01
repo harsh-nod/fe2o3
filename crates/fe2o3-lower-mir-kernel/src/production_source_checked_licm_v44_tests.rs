@@ -1,6 +1,20 @@
 fn mixed_checked_licm_source_v44(
     operation: SemanticCheckedBinaryOpV1,
 ) -> ProductionSemanticSsaOwnerV1 {
+    mixed_checked_licm_operand_source_v46(
+        operation,
+        if operation == SemanticCheckedBinaryOpV1::Multiply {
+            3
+        } else {
+            1
+        },
+    )
+}
+
+fn mixed_checked_licm_operand_source_v46(
+    operation: SemanticCheckedBinaryOpV1,
+    constant: u128,
+) -> ProductionSemanticSsaOwnerV1 {
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticCheckedBinaryRvalueV1,
         SemanticPaddingV1, SemanticProjectionKindV1, SemanticProjectionV1,
@@ -58,7 +72,9 @@ fn mixed_checked_licm_source_v44(
                 SemanticOperandV1::Copy(place(8, scalar)),
                 SemanticOperandV1::Constant(SemanticConstantV1::new(
                     scalar,
-                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 4).unwrap()),
+                    SemanticConstantValueV1::Scalar(
+                        SemanticScalarValueV1::new(constant, 4).unwrap(),
+                    ),
                 )),
             )),
         ),
@@ -129,6 +145,36 @@ fn mixed_checked_licm_source_v44(
         ProductionSemanticSsaLimitsV1::default(),
     )
     .unwrap()
+}
+
+#[test]
+fn fixed_source_policy11_preserves_checked_neutral_source_value_binding() {
+    for (operation, neutral) in [
+        (SemanticCheckedBinaryOpV1::Add, 0),
+        (SemanticCheckedBinaryOpV1::Subtract, 0),
+        (SemanticCheckedBinaryOpV1::Multiply, 1),
+    ] {
+        let owner = mixed_checked_licm_operand_source_v46(operation, neutral);
+        let completed = std::cell::Cell::new(false);
+        with_mixed_fixedpoint_prefix_owner_v28(owner, false, |prefix, source, budget| {
+            // Entering this callback requires the original source expressions
+            // to match the independently optimized Policy11 prefix.
+            let floor = budget.storage();
+            let relocated = prefix.prepare_mixed_fixedpoint_licm_v29(budget).unwrap();
+            relocated.check_original_source(source, budget).unwrap();
+            relocated.replay(budget).unwrap();
+            let native = relocated.complete_native_v28(budget).unwrap();
+            assert!(native.source_roles_are_complete());
+            assert!(native.final_native_completion_is_complete());
+            assert!(!native.grants_artifact_or_launch_authority());
+            native.discard(budget).unwrap();
+            relocated.discard(budget).unwrap();
+            assert_eq!(budget.storage(), floor);
+            completed.set(true);
+        })
+        .unwrap();
+        assert!(completed.get());
+    }
 }
 
 #[test]

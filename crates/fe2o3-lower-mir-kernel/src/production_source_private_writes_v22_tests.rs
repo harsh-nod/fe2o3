@@ -403,10 +403,14 @@ fn private_source_integer_identities_have_exact_work_and_no_checked_or_float_equ
                         &mut IdentityWorkV22 { remaining: 24 },
                     )
                     .unwrap();
-                    assert!(matches!(
-                        checked,
-                        NormalizedScalarExpressionV1::Binary { .. }
-                    ));
+                    assert_eq!(
+                        matches!(
+                            checked,
+                            NormalizedScalarExpressionV1::Symbol { symbol: 7, .. }
+                        ),
+                        matches!(operation, Op::Add | Op::Subtract | Op::Multiply)
+                            && !(left && operation == Op::Subtract)
+                    );
                 }
             }
         }
@@ -440,6 +444,8 @@ fn private_source_integer_identities_have_exact_work_and_no_checked_or_float_equ
     assert_eq!(private_binary_v22(SemanticBinaryOpV1::ShiftLeft), None);
     assert_eq!(private_binary_v22(SemanticBinaryOpV1::Offset), None);
 }
+
+include!("production_source_checked_neutral_v46_tests.rs");
 
 #[test]
 fn private_typed_read_profile_rejects_volatile_nonprivate_and_zero_alignment() {

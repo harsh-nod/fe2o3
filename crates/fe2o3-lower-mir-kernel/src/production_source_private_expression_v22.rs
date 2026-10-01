@@ -765,8 +765,9 @@ include!("production_source_private_shared_capture_v26.rs");
 include!("production_source_checked_components_v41.rs");
 
 // Only the private write profile uses these total fixed-width bit-vector
-// identities. In particular, checked arithmetic and floating values retain
-// their operators. This runs after the existing evaluator's constant folding.
+// identities. Checked arithmetic permits only neutral operations that cannot
+// overflow at any input. This normalizes the value expression, not the separate
+// overflow result or its control effects. Floating operators remain unchanged.
 fn source_private_integer_identity_v22(
     expression: &mut NormalizedScalarExpressionV1,
     depth: usize,
@@ -815,8 +816,18 @@ fn source_private_integer_identity_v22(
     else {
         return Some(());
     };
-    if *overflow != ProductionOverflowContractV2::Wrapping {
-        return Some(());
+    match *overflow {
+        ProductionOverflowContractV2::Wrapping => (),
+        ProductionOverflowContractV2::Checked => {
+            if !matches!(
+                *operation,
+                ProductionSemanticBinaryOpV2::Add
+                    | ProductionSemanticBinaryOpV2::Subtract
+                    | ProductionSemanticBinaryOpV2::Multiply
+            ) {
+                return Some(());
+            }
+        }
     }
     let neutral = match *operation {
         ProductionSemanticBinaryOpV2::Add
