@@ -837,9 +837,10 @@ unchanged snapshots. No tests executed. Log SHA-256:
 r244 then ran the enabled actual-Rust fill optimizer parent on that candidate.
 It completed at 2026-10-01 01:51:05 UTC with exit 101: **zero passed, one failed**.
 Both gfx942 and gfx950, optimization/MIR settings `(0, 0)` and `(3, 2)`, and
-duplicate fresh source sessions were attempted. Unoptimized input stopped at
-raw-address formation/history checking; optimized input stopped at the scoped
-invocation slice index type/move check. No session reached the expected checked
+duplicate fresh source sessions were attempted. Unoptimized gfx942 input stopped
+at raw-address formation/history checking; unoptimized gfx950 input stopped at
+retained lifecycle replay. Optimized input stopped at the scoped invocation
+slice index type/move check. No session reached the expected checked
 optimizer consumer. The parent used its genuine source/import path, not a
 reconstructed graph; it produced no kernel artifact, protected proof or GPU run.
 Snapshots were unchanged. Log SHA-256:
@@ -875,3 +876,109 @@ validated before another attempt. Public evidence archive SHA-256:
 M0 remains complete; M1-M7 and strict production-to-required-proof-to-safe-GPU
 coverage remain **0/47**. Candidate compiler and launch-contract changes are
 separate from the published evidence checkpoint.
+
+### Combined Scoped Integration
+
+r245-r247 tested successive frozen integration candidates. All three stopped
+during compilation, with no test execution and unchanged source/tool snapshots:
+
+- r245 (`2a6d119b814b636f9db783fde696e9863cf3324b`) exposed a missing
+  owner lifetime bound in the shared Pliron mixed-memory adapter.
+- r246 (`97dbc7f5a3576c39ff8336387e967ac40867953b`) exposed profile visibility
+  narrower than the existing crate consumers.
+- r247 (`a58fc1220549a3ecbf003c050a2428fc13b60503`) reached lowerer compilation
+  and exposed the redundant analysis-scope GAT's lifetime requirement, stale
+  source-owner fields, incorrect transition-range fields, and a remaining
+  legacy-only selected-source adapter.
+
+The candidate repairs preserve the existing graph-typed analysis scope and
+generalize the existing selected-source traversal; they do not create another
+graph or grant final source/proof authority. Their complete integration still
+requires a successful new run. Log SHA-256, respectively:
+
+- r245: `fa4d81c7eac9d213672fb79644e88e20e557708a4ff926b0cc72ddb304be8d89`
+- r246: `e6476b8e752d0a8dd2c50bf802ccbc7daae01ce78a0e2465897928a6e1203e19`
+- r247: `6560c79e20d91cf8f826bd9a1b5f300aeeeb40cd1df83ac4843bd98e95dadb2a`
+
+r248 tested four component crates on frozen candidate
+`039f1a7c287ec758266a796e0a27370fd317b746`. Descriptor tests passed **22/22**,
+KFD tests **19/19**, runtime tests **11/11**, and Pliron tests **65/71**:
+**117 passed, six failed, zero ignored**. Scoped-analysis positive tests reject
+`gpu.execution_role_v23` at the structural-preservation encoding boundary.
+Several intended resource and mutation controls stop before their tested
+boundary and receive no intended-negative credit. The descriptor and runtime
+tests exercise contracts and scripted preparation, not GPU execution or complete
+safe launch. The run ended at 2026-10-01 02:04:22 UTC with exit 101 and unchanged
+snapshots. Log SHA-256:
+`76cbfb6b96c234eba0145386551dcd17fae366e1f22b9b29cfe88fb8666db273`.
+
+The provisioning-runner candidate `498ceae3084f927a01dae13cc356fb85735759c0`
+removes Docker's unsupported private-PID flag and requires the actual created
+container's inspected PID mode to be the default private mode before start.
+Cleanup remains available for a refused, terminal owned container. All **11**
+runner tests passed; these are local script/contract tests, not successful
+container provisioning, protected proof execution, or installation evidence.
+
+M0 remains complete, M1-M7 remain incomplete, and strict end-to-end coverage is
+still **0/47**. The service bundle, runner, compiler integration and published
+evidence checkpoint have distinct revisions; no cross-revision success is implied.
+
+### Source, Target and Formation Integration
+
+The next integration candidates combine original-source invocation recipes,
+exact-owner formal report extraction, typed target-coordinate/LLVM replay, and
+formation-aware host/runtime transport. The formal report factory keeps
+unsupported scoped semantics explicitly incomplete. Deterministic LLVM replay
+does not establish machine refinement. Numeric host checks cannot create source
+or proof authority, and the normal launch gate still refuses incomplete evidence.
+
+The formation-aware contract records surviving pointer formations separately
+from memory accesses. Each access references an actual formation; a formation
+with no remaining load/store still reaches live address-overflow/alignment checks.
+V26/V27 contract encodings remain unchanged. V28 has its own reserved framing
+and domains, recorded in #271 issuecomment-5923565594. These candidate changes
+and their new tests are not yet qualified by successful integrated execution.
+
+| Run | Frozen Candidate | Result |
+| --- | --- | --- |
+| r249 | `f6dfab8d9964eab6533278fb5de5856ef2d8bd43` | Five lowerer test-compilation errors; no tests ran |
+| r250 | `d486dce435aa2f2a0567c9c0760943a35cf7258a` | Proof-binding digest comparison type error; no tests ran |
+| r251 | `976394c8688ef756ceaa510fb9af657e8b0358a4` | Five temporary-identity borrow errors; no tests ran |
+| r252 | `8c2c00387cd219cb5a813768861cf9e3454ee44d` | One lowerer test match omitted `CopyIndex`; no tests ran |
+| r253 | `2abc332a16194fe6fbfd7d4c831e91ce251686f9` | Compiler/test-target check stopped on eight expansions of a missing codec-error import |
+
+All five runs retained unchanged source/tool inventories. The candidate repairs
+use the actual current owner APIs, own receipt digest bytes, retain exhaustive
+test mutation classification, and import the existing shared codec error. No
+acceptance rule, proof requirement, or resource assertion was removed.
+Log SHA-256, respectively:
+
+- r249: `48af05fdc800315301543ccc8d7209b5aba9c689b60ce367d46830b4a5fe8d1a`
+- r250: `6f80ca61274709316a8ce63a0a7842e91969f201e294e3955fa93a30edd2ce49`
+- r251: `18c3efb693c2dc51701e0a5d624359ce66edb26afb02f47e53cfd64c408b1de1`
+- r252: `b4d9f94861d0f97344be704dcad6a50f45b2adeef180f48797365e73120ff114`
+- r253: `e8e16ec352f58a078a7236cd3b79c011fd62ee123fe1a3217ffa3ccc986f4b16`
+
+### Isolated Install Reached, Provisioning Incomplete
+
+The corrected runner `498ceae3084f927a01dae13cc356fb85735759c0` executed
+against the same accepted service bundle and pinned image. The isolated install
+container exited zero. The provision container exited 127: independent image
+layer inspection found neither `systemd-sysusers` nor `systemd-tmpfiles`, which
+the provision script checks before account or identity creation. Failed-stage
+output was not retained by the existing runner; this diagnosis does not invent
+an observed shell error message.
+
+The runner terminated at 2026-10-01 02:11:14 UTC. Independent checks at
+02:12:39 UTC confirmed both process IDs absent, the original process group empty,
+and both container IDs and all planned names absent. The owned public upload
+directory was removed; protected inputs, the installed service files, and reports
+were retained. No keys, records or client profile were created. Readback and
+revalidation did not complete; no host service, compiler, proof or GPU executed.
+Public evidence archive SHA-256:
+`2e7071dc34f1fb53cb5f582ccc1f40a72983cda78bda7730b915013c930a8c02`.
+
+Required next steps remain genuine scoped-source completion, full final-graph
+semantics, signed source/optimizer evidence composition, protected runtime
+provisioning, and target-matched end-to-end runs. M0 remains complete; M1-M7
+remain incomplete and strict coverage remains **0/47**.

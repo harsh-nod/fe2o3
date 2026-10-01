@@ -4,6 +4,13 @@
 //! and generated Rust drafts are inert projections: neither admits an edited
 //! intermediate, authenticates source, nor establishes a source insertion site.
 
+#[path = "multilevel_authoring_retained_storage_v1.rs"]
+mod retained_storage_v1;
+pub use retained_storage_v1::AuthoringSnapshotRetainedStorageV1;
+
+#[path = "multilevel_authoring_result_storage_v1.rs"]
+mod result_storage_v1;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 use std::io;
