@@ -837,9 +837,10 @@ unchanged snapshots. No tests executed. Log SHA-256:
 r244 then ran the enabled actual-Rust fill optimizer parent on that candidate.
 It completed at 2026-10-01 01:51:05 UTC with exit 101: **zero passed, one failed**.
 Both gfx942 and gfx950, optimization/MIR settings `(0, 0)` and `(3, 2)`, and
-duplicate fresh source sessions were attempted. Unoptimized input stopped at
-raw-address formation/history checking; optimized input stopped at the scoped
-invocation slice index type/move check. No session reached the expected checked
+duplicate fresh source sessions were attempted. Unoptimized gfx942 input stopped
+at raw-address formation/history checking; unoptimized gfx950 input stopped at
+retained lifecycle replay. Optimized input stopped at the scoped invocation
+slice index type/move check. No session reached the expected checked
 optimizer consumer. The parent used its genuine source/import path, not a
 reconstructed graph; it produced no kernel artifact, protected proof or GPU run.
 Snapshots were unchanged. Log SHA-256:
@@ -875,3 +876,49 @@ validated before another attempt. Public evidence archive SHA-256:
 M0 remains complete; M1-M7 and strict production-to-required-proof-to-safe-GPU
 coverage remain **0/47**. Candidate compiler and launch-contract changes are
 separate from the published evidence checkpoint.
+
+### Combined Scoped Integration
+
+r245-r247 tested successive frozen integration candidates. All three stopped
+during compilation, with no test execution and unchanged source/tool snapshots:
+
+- r245 (`2a6d119b814b636f9db783fde696e9863cf3324b`) exposed a missing
+  owner lifetime bound in the shared Pliron mixed-memory adapter.
+- r246 (`97dbc7f5a3576c39ff8336387e967ac40867953b`) exposed profile visibility
+  narrower than the existing crate consumers.
+- r247 (`a58fc1220549a3ecbf003c050a2428fc13b60503`) reached lowerer compilation
+  and exposed the redundant analysis-scope GAT's lifetime requirement, stale
+  source-owner fields, incorrect transition-range fields, and a remaining
+  legacy-only selected-source adapter.
+
+The candidate repairs preserve the existing graph-typed analysis scope and
+generalize the existing selected-source traversal; they do not create another
+graph or grant final source/proof authority. Their complete integration still
+requires a successful new run. Log SHA-256, respectively:
+
+- r245: `fa4d81c7eac9d213672fb79644e88e20e557708a4ff926b0cc72ddb304be8d89`
+- r246: `e6476b8e752d0a8dd2c50bf802ccbc7daae01ce78a0e2465897928a6e1203e19`
+- r247: `6560c79e20d91cf8f826bd9a1b5f300aeeeb40cd1df83ac4843bd98e95dadb2a`
+
+r248 tested four component crates on frozen candidate
+`039f1a7c287ec758266a796e0a27370fd317b746`. Descriptor tests passed **22/22**,
+KFD tests **19/19**, runtime tests **11/11**, and Pliron tests **65/71**:
+**117 passed, six failed, zero ignored**. Scoped-analysis positive tests reject
+`gpu.execution_role_v23` at the structural-preservation encoding boundary.
+Several intended resource and mutation controls stop before their tested
+boundary and receive no intended-negative credit. The descriptor and runtime
+tests exercise contracts and scripted preparation, not GPU execution or complete
+safe launch. The run ended at 2026-10-01 02:04:22 UTC with exit 101 and unchanged
+snapshots. Log SHA-256:
+`76cbfb6b96c234eba0145386551dcd17fae366e1f22b9b29cfe88fb8666db273`.
+
+The provisioning-runner candidate `498ceae3084f927a01dae13cc356fb85735759c0`
+removes Docker's unsupported private-PID flag and requires the actual created
+container's inspected PID mode to be the default private mode before start.
+Cleanup remains available for a refused, terminal owned container. All **11**
+runner tests passed; these are local script/contract tests, not successful
+container provisioning, protected proof execution, or installation evidence.
+
+M0 remains complete, M1-M7 remain incomplete, and strict end-to-end coverage is
+still **0/47**. The service bundle, runner, compiler integration and published
+evidence checkpoint have distinct revisions; no cross-revision success is implied.
