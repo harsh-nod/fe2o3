@@ -879,6 +879,10 @@ fn allocation_receiver_full_pending_access_v29(
             // holds its shared loan. Source lifetime checking must refuse
             // before a backing choice or physical entry initialization.
             "source reference referent storage dies with a live loan"
+        } else if observation == 6 {
+            // The field-observed owner remains retained; whole-owner Moves
+            // currently refuse in original availability before initialization.
+            "execution availability differs from its source SSA instance"
         } else {
             "typed entry allocation requires source-bound object materialization"
         };
@@ -955,50 +959,126 @@ fn allocation_receiver_whole_owner_moves_preserve_the_native_slice_without_wrapp
 #[test]
 fn allocation_receiver_whole_owner_write_rechecks_exact_original_destination_and_role() {
     let reached = std::cell::Cell::new(false);
-    super::source_reference_plan_v29_tests::run_owner_with_storage(
-        owner_with_carrier_access(false, 5),
-        |plan, budget| {
-            let original = plan
-                .accesses
-                .iter()
-                .find(|access| {
-                    access.key.access == SourceReferenceAccessV29::Write
-                        && access.local.index() == 1
-                })
-                .expect("original owner replacement");
-            let before = budget.work();
-            assert!(source_existing_receiver_write_v53(plan, original, budget)?);
-            assert_eq!(budget.work() - before, 20);
-            for fault in 0..5 {
-                let mut changed = SourceReferenceAccessRecordV29 {
-                    key: original.key,
-                    source_local: original.source_local,
-                    ty: original.ty,
-                    instance: original.instance,
-                    local: original.local,
-                    generation: original.generation,
-                    projections: original.projections.clone(),
-                    loan: original.loan,
-                    traversed: original.traversed.clone(),
-                    shared_path: original.shared_path,
-                };
-                match fault {
-                    0 => changed.key.source = 0,
-                    1 => changed.key.access = SourceReferenceAccessV29::Read,
-                    2 => changed.key.site.statement = None,
-                    3 => changed.source_local = SemanticLocalIdV1::from_index(4),
-                    4 => changed.ty = LENGTH,
-                    _ => unreachable!(),
-                }
-                assert!(
-                    !source_existing_receiver_write_v53(plan, &changed, budget)?,
-                    "fault {fault}"
-                );
+    with_receiver_original_accesses_v53(owner_with_carrier_access(false, 5), |plan, budget| {
+        let original = plan
+            .accesses
+            .iter()
+            .find(|access| {
+                access.key.access == SourceReferenceAccessV29::Write && access.local.index() == 1
+            })
+            .expect("original owner replacement");
+        let before = budget.work();
+        assert!(source_existing_receiver_write_v53(plan, original, budget)?);
+        assert_eq!(budget.work() - before, 20);
+        for fault in 0..5 {
+            let mut changed = SourceReferenceAccessRecordV29 {
+                key: original.key,
+                source_local: original.source_local,
+                ty: original.ty,
+                instance: original.instance,
+                local: original.local,
+                generation: original.generation,
+                projections: original.projections.clone(),
+                loan: original.loan,
+                traversed: original.traversed.clone(),
+                shared_path: original.shared_path,
+            };
+            match fault {
+                0 => changed.key.source = 0,
+                1 => changed.key.access = SourceReferenceAccessV29::Read,
+                2 => changed.key.site.statement = None,
+                3 => changed.source_local = SemanticLocalIdV1::from_index(4),
+                4 => changed.ty = LENGTH,
+                _ => unreachable!(),
             }
-            reached.set(true);
-            Ok(())
+            assert!(
+                !source_existing_receiver_write_v53(plan, &changed, budget)?,
+                "fault {fault}"
+            );
+        }
+        reached.set(true);
+        Ok(())
+    })
+    .unwrap();
+    assert!(reached.get());
+}
+
+fn with_receiver_original_accesses_v53(
+    owner: ProductionSemanticSsaOwnerV1,
+    consume: impl FnOnce(
+        &SourceReferencePlanV29<'_, '_>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+    let demands =
+        source_storage_demands_v29::SourceStorageDemandsV29::collect(&owner, &mut budget)?;
+    let mut layouts = source_storage_v29::SourceStorageLayoutsV29::new_with_limits(
+        &owner,
+        demands.types(&owner, &mut budget)?,
+        ProductionSemanticKirLimitsV1::default().storage_layout_limits(),
+        &mut budget,
+    )?;
+    let floor = budget.storage();
+    let persistent = layouts.persistent_storage_for_test();
+    let result = production_call_instances_v1::with_production_call_instances_v1(
+        &owner,
+        ROOT,
+        &mut budget,
+        |instances, budget| {
+            let lens = demands.root_lens(&owner, 0, budget).unwrap();
+            let result = with_source_reference_descriptor_demands_scope_v29(
+                instances,
+                SourceReferenceStorageV29::ScalarCells,
+                Some(&mut layouts),
+                None,
+                Some(lens),
+                budget,
+                |plan, _, budget| consume(plan, budget).map_err(Into::into),
+            );
+            Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(result)
         },
     )
+    .unwrap();
+    let growth = layouts.persistent_storage_for_test() - persistent;
+    let scratch = budget.storage() - floor - growth;
+    assert!(layouts.permits_root_emission_refund(&owner, scratch, &budget));
+    budget.release_storage(scratch)?;
+    let cleanup = layouts.release(&mut budget);
+    let demand_cleanup = demands.discard(&mut budget);
+    assert_eq!(budget.storage(), 0);
+    result.and(cleanup).and(demand_cleanup)
+}
+
+#[test]
+fn allocation_receiver_moved_wrapper_field_keeps_real_backing_demand() {
+    let reached = std::cell::Cell::new(false);
+    with_receiver_original_accesses_v53(owner_with_carrier_access(false, 6), |plan, budget| {
+        assert_eq!(plan.storage, SourceReferenceStorageV29::ScalarCells);
+        let reads = plan
+            .accesses
+            .iter()
+            .filter(|access| {
+                access.local.index() == 1
+                    && access.key.access == SourceReferenceAccessV29::Read
+                    && !access.projections.is_empty()
+            })
+            .count();
+        assert_eq!(reads, 1, "exact original wrapper field read");
+        let rows = source_existing_receiver_rows_v29(plan, budget)?;
+        assert!(!source_existing_receiver_v29(
+            &rows,
+            plan.root,
+            SemanticLocalIdV1::from_index(1),
+            budget
+        )?);
+        assert!(plan.cells.rows.iter().any(|cell| cell.instance == plan.root
+            && cell.local.index() == 1
+            && matches!(cell.kind, SourceBackingKindV29::Object(_))));
+        reached.set(true);
+        Ok(())
+    })
     .unwrap();
     assert!(reached.get());
 }
