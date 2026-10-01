@@ -20,6 +20,12 @@ pub(in super::super) enum Event {
         access: Access,
         bits: u32,
     },
+    TypedBorrow {
+        destination: usize,
+        access: Access,
+        source_type: TypeId,
+        root_type: TypeId,
+    },
     SliceBorrow {
         destination: usize,
         local: usize,
@@ -286,6 +292,54 @@ pub(super) fn derive(
             if target.metadata() != PointerMetadata::None {
                 return Err(unsupported());
             }
+            if matches!(
+                context
+                    .types
+                    .get(place.ty().index() as usize)
+                    .map(Type::shape),
+                Some(
+                    Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. } | Shape::Pointer(_)
+                )
+            ) {
+                if place
+                    .projections()
+                    .first()
+                    .is_some_and(|p| p.kind() == Projection::Dereference)
+                {
+                    let base_type = context
+                        .function
+                        .locals()
+                        .get(place.local().index() as usize)
+                        .ok_or_else(mismatch)?
+                        .ty();
+                    if mutable
+                        && pointer(context, base_type, out)?.mutability() != Mutability::Mutable
+                    {
+                        return Err(unsupported());
+                    }
+                }
+                let Some((bytes, alignment, _)) =
+                    context.slots.original_memory_layout_v51(place.ty(), out)?
+                else {
+                    return Err(unsupported());
+                };
+                let access = context.access(place, out)?;
+                if access.ty != place.ty() || access.bytes != bytes || access.alignment != alignment
+                {
+                    return Err(mismatch());
+                }
+                return Ok(Some(Event::TypedBorrow {
+                    destination,
+                    access,
+                    source_type: place.ty(),
+                    root_type: context
+                        .function
+                        .locals()
+                        .get(place.local().index() as usize)
+                        .ok_or_else(mismatch)?
+                        .ty(),
+                }));
+            }
             let (bytes, alignment, bits) = scalar_layout(context, place.ty(), out)?;
             if let [first, second] = place.projections()
                 && first.kind() == Projection::Dereference
@@ -361,6 +415,11 @@ pub(super) fn emit(event: Event, out: &mut Writer<'_, '_>) -> Result<()> {
             emit_access(access, out)?;
             write!(out, ", bits: {bits}int }}").map_err(|_| out.error())
         }
+        Event::TypedBorrow { destination, access, source_type, root_type } => {
+            write!(out, "InvocationSourcePointerEventV36::TypedBorrow {{ destination: {destination}int, access: ").map_err(|_| out.error())?;
+            emit_access(access, out)?;
+            write!(out, ", source_type: {}int, root_type: {}int }}", source_type.index(), root_type.index()).map_err(|_| out.error())
+        }
         Event::SliceBorrow { destination, local, metadata_bits, bytes, alignment, bits } => write!(out,
             "InvocationSourcePointerEventV36::SliceBorrow {{ destination: {destination}int, local: {local}int, metadata_bits: {metadata_bits}int, width: {bytes}int, alignment: {alignment}int, bits: {bits}int }}").map_err(|_| out.error()),
         Event::IndexBorrow { destination, local, index, index_bits, metadata_bits, bytes, alignment, bits } => write!(out,
@@ -380,6 +439,7 @@ pub(super) fn headers() -> usize {
         + h::<(usize, TypeId, u32)>()
         + h::<(u64, u64, u32)>()
         + h::<TypedOperand>()
+        + h::<Option<(u64, u64, bool)>>()
         + 18 * size_of::<usize>()
         + 10 * size_of::<&()>()
 }
@@ -388,6 +448,7 @@ pub(in super::super) const SOURCE_POINTERS_V36: &str = r#"
 enum InvocationSourcePointerEventV36 {
     Copy { destination: int, operand: InvocationSourceOperandV36, metadata_bits: int },
     Borrow { destination: int, access: InvocationSourceByteAccessV36, bits: int },
+    TypedBorrow { destination: int, access: InvocationSourceByteAccessV36, source_type: int, root_type: int },
     SliceBorrow { destination: int, local: int, metadata_bits: int, width: int, alignment: int, bits: int },
     IndexBorrow { destination: int, local: int, index: int, index_bits: int, metadata_bits: int, width: int, alignment: int, bits: int },
     Length { destination: int, local: int, metadata_bits: int, moved: bool },
@@ -437,6 +498,9 @@ open spec fn invocation_source_pointer_step_v36(
                 None => invocation_source_byte_refused_v36(source),
             }
         }
+        InvocationSourcePointerEventV36::TypedBorrow { destination, access, source_type, root_type } =>
+            invocation_source_typed_borrow_v51(source, destination, access, source_type, root_type,
+                root, instance, little_endian),
         InvocationSourcePointerEventV36::Length { destination, local, metadata_bits, moved } => {
             // Metadata comes from the current original carrier. The scalar
             // normalizer's descriptor name is never a runtime input or premise.

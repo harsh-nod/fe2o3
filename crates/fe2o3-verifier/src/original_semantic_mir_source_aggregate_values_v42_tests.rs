@@ -7,6 +7,9 @@ const LIMIT: usize = 256 * 1024 * 1024;
 #[path = "original_semantic_mir_source_scalar_ranges_v45_tests.rs"]
 mod scalar_range_tests;
 
+#[path = "original_semantic_mir_source_typed_borrows_v51_tests.rs"]
+mod typed_borrow_tests;
+
 fn retained_transform_v44(
     types: &mut Vec<SemanticTypeDeclV1>,
     functions: &mut Vec<SemanticFunctionDeclV1>,

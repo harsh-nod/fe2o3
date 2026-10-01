@@ -1,0 +1,45 @@
+// Generated proof obligations; their presence is not executed qualification.
+proof fn invocation_source_memory_missing_shape_refuses_v51(
+    source: InvocationSourceByteStateV36, pointer: MemoryPointerV30, ty: int,
+    fuel: nat, little_endian: bool,
+)
+    requires invocation_source_memory_layout_v51(ty).is_none(),
+    ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),
+{}
+
+proof fn invocation_source_typed_borrow_requires_live_current_referent_v51(
+    source: InvocationSourceByteStateV36, destination: int,
+    access: InvocationSourceByteAccessV36, ty: int, root_type: int,
+    root: int, instance: int, little_endian: bool, pointer: MemoryPointerV30,
+    layout: InvocationSourceMemoryLayoutV51,
+)
+    requires invocation_source_byte_address_v36(source, access, root, instance) == Some(pointer),
+        invocation_source_memory_layout_v51(ty) == Some(layout),
+        !byte_range_live_v30(source.machine.memory, pointer, layout.width),
+    ensures !invocation_source_typed_borrow_v51(source, destination, access, ty, root_type,
+        root, instance, little_endian).machine.valid,
+{}
+
+proof fn invocation_source_typed_borrow_keeps_memory_v51(
+    source: InvocationSourceByteStateV36, destination: int,
+    access: InvocationSourceByteAccessV36, ty: int, root_type: int,
+    root: int, instance: int, little_endian: bool,
+)
+    ensures invocation_source_typed_borrow_v51(source, destination, access, ty, root_type,
+        root, instance, little_endian).machine.memory == source.machine.memory,
+{}
+
+proof fn invocation_source_typed_memory_missing_field_refuses_v51(
+    source: InvocationSourceByteStateV36, pointer: MemoryPointerV30,
+    ty: int, layout: InvocationSourceMemoryLayoutV51,
+    fields: Seq<InvocationSourceMemoryFieldV51>, field: int,
+    fuel: nat, little_endian: bool,
+)
+    requires invocation_source_memory_layout_v51(ty) == Some(layout),
+        layout.kind == InvocationSourceMemoryKindV51::Fields(fields),
+        0 <= field < fields.len(), fuel > 0,
+        !invocation_source_memory_value_valid_v51(source,
+            MemoryPointerV30 { byte_offset: pointer.byte_offset + fields[field].offset, ..pointer },
+            fields[field].source_type, (fuel - 1) as nat, little_endian),
+    ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),
+{}

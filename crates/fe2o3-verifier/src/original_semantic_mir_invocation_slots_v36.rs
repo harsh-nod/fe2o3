@@ -35,6 +35,9 @@ pub(super) use source_objects::ObjectActivation;
 mod source_aggregates;
 pub(super) use source_aggregates::SourceAggregateLeafV42;
 
+#[path = "original_semantic_mir_source_memory_types_v51.rs"]
+mod memory_types;
+
 #[path = "original_semantic_mir_source_checked_types_v47.rs"]
 mod checked_types;
 
@@ -61,6 +64,7 @@ pub(super) struct SourceSlots<'a, 'source> {
     tags: source_tags::SourceTagIndexV39,
     objects: source_objects::SourceObjects,
     aggregates: source_aggregates::SourceAggregateTypesV42,
+    memory_types: memory_types::SourceMemoryTypesV51,
     required: usize,
 }
 
@@ -316,6 +320,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             .ok_or(Resource::Arithmetic)?;
         drop(requested);
         out.budget.release_storage(requested_credit)?;
+        let memory_types = memory_types::SourceMemoryTypesV51::derive(semantic.types(), &abi, out)?;
         Ok(Self {
             relation,
             operations,
@@ -326,6 +331,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             tags,
             objects,
             aggregates,
+            memory_types,
             required: out.budget.storage(),
         })
     }
@@ -406,6 +412,14 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             .objects
             .local_range(root, instance, local, out)?
             .is_empty())
+    }
+
+    pub(super) fn original_memory_layout_v51(
+        &self,
+        ty: fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<(u64, u64, bool)>> {
+        self.with_source_query_v42(out, |out| self.memory_types.layout(ty, out))
     }
 
     pub(super) fn object_activation(
@@ -665,6 +679,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         .map_err(|_| out.error())?;
         self.objects.emit(out)?;
         self.aggregates.emit(out)?;
+        self.memory_types.emit(out)?;
         self.emit_checked_object_types_v47(out)?;
         self.emit_logical_enum_types_v47(out)
     }
@@ -1210,6 +1225,7 @@ mod tests {
             source_tags::SourceTagIndexV39,
             source_objects::SourceObjects,
             source_aggregates::SourceAggregateTypesV42,
+            memory_types::SourceMemoryTypesV51,
             usize,
         );
         fn h<T>() -> usize {

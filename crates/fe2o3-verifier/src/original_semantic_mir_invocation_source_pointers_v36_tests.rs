@@ -317,6 +317,8 @@ fn original_mir_pointer_probe_and_header_oracles_are_independent() {
                 + 2 * size_of::<Result<(usize, TypeId, u32)>>()
                 + size_of::<(u64, u64, u32)>()
                 + 2 * size_of::<Result<(u64, u64, u32)>>()
+                + size_of::<Option<(u64, u64, bool)>>()
+                + 2 * size_of::<Result<Option<(u64, u64, bool)>>>()
                 + 18 * size_of::<usize>()
                 + 10 * size_of::<&()>()
         );
