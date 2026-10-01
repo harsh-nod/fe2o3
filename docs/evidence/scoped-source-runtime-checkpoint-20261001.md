@@ -41,9 +41,16 @@ Both public main branches were independently read back at
 That publication fixes target-scoped dependency policy, the missing codegen test
 shard assignment, and workspace formatting. All five codegen shards passed in
 the [CI run](https://github.com/harsh-nod/fe2o3/actions/runs/36826853167);
-generic-core subsequently failed, so the overall run failed. Diagnosis of that
-remaining job is pending. This is not a passing release gate or publication of
-the local compiler candidate.
+generic-core subsequently failed, so the overall run failed. Its `cargo-fe2o3`
+suite had 470 passes, two failures and five ignored tests: both failures rejected
+the stale reviewed workspace macro-tree pin. Review found exactly four changed
+files since the accepted tree: generic typed-entry validation and its tests in
+`54585b104`, and a nested fixture lockfile synchronization in `ce7bed431`.
+The complete 59-file tree was independently hashed and its local pin updated;
+the former pin and intermediate source-only pin are explicit negative controls.
+External-source and device-source pins and all closure checks remain unchanged.
+This repair still needs the actual CI tests; it is not a passing release gate or
+publication of the local compiler candidate.
 
 ## Compiler Evidence
 
