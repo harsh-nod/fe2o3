@@ -21,6 +21,8 @@ use reserved_fe2o3_symbols::{
 
 #[path = "fe2o3-rustc-extract/ordered_origin_v1.rs"]
 mod ordered_origin_v1;
+#[path = "fe2o3-rustc-extract/scoped_tile_v18.rs"]
+mod scoped_tile_v18;
 include!("fe2o3-rustc-extract/ordered_composition_v1.rs");
 include!("fe2o3-rustc-extract/composition_promotion_v1.rs");
 include!("fe2o3-rustc-extract/normal_composition_v1.rs");
@@ -64,6 +66,41 @@ fn main() {
     let physical_global_copy_v21 = env::var_os(EXTRACT_PHYSICAL_GLOBAL_COPY_DIRECTORY_ENV_V21);
     let physical_lds_exchange_v22 = env::var_os(EXTRACT_PHYSICAL_LDS_EXCHANGE_DIRECTORY_ENV_V22);
     let ordered_composition_v1 = env::var_os(EXTRACT_ORDERED_COMPOSITION_DIRECTORY_ENV_V1);
+    let diagnostic_kir_v18 = env::var_os(scoped_tile_v18::OUTPUT_ENV);
+    let diagnostic_tile_order_v18 = match scoped_tile_v18::validate_options(
+        diagnostic_kir_v18.as_deref(),
+        env::var_os(scoped_tile_v18::ORDER_ENV).as_deref(),
+        [
+            simulation_v1.is_some(),
+            simulation_v2.is_some(),
+            simulation_v3.is_some(),
+            simulation_v4.is_some(),
+            simulation_v5.is_some(),
+            simulation_v6.is_some(),
+            diagnostic_kir_v16.is_some(),
+            diagnostic_kir_v17.is_some(),
+            diagnostic_kir_v19.is_some(),
+            physical_entry_v20.is_some(),
+            physical_global_copy_v21.is_some(),
+            physical_lds_exchange_v22.is_some(),
+            ordered_composition_v1.is_some(),
+            env::var_os(EXTRACT_RANKED_MEMORY_ENV_V1).is_some(),
+            env::var_os(EXTRACT_AMDGPU_LLVM_PATH_ENV_V1).is_some(),
+            env::var_os(EXTRACT_GFX942_LLVM_PATH_ENV_V1).is_some(),
+            env::var_os(EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1).is_some(),
+            env::var_os(EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_ENV_V1).is_some(),
+            env::var_os(EXTRACT_CRATE_BINDING_PATH_ENV_V1).is_some(),
+            env::var_os(ordered_origin_v1::OUTPUT_ENV).is_some(),
+            env::var_os(EXTRACT_COMPOSITION_PROMOTION_REQUEST_ENV_V1).is_some(),
+            env::var_os(EXTRACT_COMPOSITION_NORMAL_ENV_V1).is_some(),
+        ],
+    ) {
+        Ok(order) => order,
+        Err(error) => {
+            eprintln!("fe2o3 rustc extraction: {error}");
+            std::process::exit(1);
+        }
+    };
     if let Err(error) = require_disjoint_ordered_composition_diagnostic_v1(
         ordered_composition_v1.is_some(),
         [
@@ -171,6 +208,9 @@ fn main() {
     })
     .and_then(|prepared| {
         select_ordered_composition_diagnostic_v1_mode(prepared, ordered_composition_v1)
+    })
+    .and_then(|prepared| {
+        scoped_tile_v18::select_mode(prepared, diagnostic_kir_v18, diagnostic_tile_order_v18)
     });
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
@@ -229,6 +269,10 @@ enum ExtractionModeV1 {
     SimulationBundleV6(OsString),
     DiagnosticKirV16(OsString),
     DiagnosticKirV17(OsString),
+    DiagnosticKirV18(
+        OsString,
+        fe2o3_lower_mir_kernel::ProductionScopedTileObservationOrderV29,
+    ),
     DiagnosticKirV19(OsString),
     PhysicalEntryDiagnosticV20(OsString),
     PhysicalGlobalCopyDiagnosticV21(OsString),
@@ -814,6 +858,9 @@ fn passthrough_command(executable: OsString, forwarded_args: Vec<OsString>) -> C
         .env_remove(EXTRACT_COMPOSITION_PROMOTION_REQUEST_ENV_V1)
         .env_remove(EXTRACT_COMPOSITION_NORMAL_ENV_V1);
     command
+        .env_remove(scoped_tile_v18::OUTPUT_ENV)
+        .env_remove(scoped_tile_v18::ORDER_ENV);
+    command
 }
 
 fn execute_passthrough(executable: OsString, forwarded_args: Vec<OsString>) -> Result<i32, String> {
@@ -950,6 +997,13 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 std::path::Path::new(&output),
             )?;
         }
+        ExtractionModeV1::DiagnosticKirV18(output, order) => {
+            rustc_codegen_fe2o3::run_diagnostic_scoped_tile_kir_extraction_driver_v18(
+                &selected.args,
+                std::path::Path::new(&output),
+                order,
+            )?;
+        }
         ExtractionModeV1::DiagnosticKirV16(output) => {
             rustc_codegen_fe2o3::run_diagnostic_ordered_region_kir_extraction_driver_v16(
                 &selected.args,
@@ -1040,6 +1094,7 @@ fn exit_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("fe2o3-rustc-extract/scoped_tile_v18_tests.rs");
     include!("fe2o3-rustc-extract/ordered_program_v17_tests.rs");
     include!("fe2o3-rustc-extract/complete_body_v19_tests.rs");
     include!("fe2o3-rustc-extract/physical_entry_v20_tests.rs");

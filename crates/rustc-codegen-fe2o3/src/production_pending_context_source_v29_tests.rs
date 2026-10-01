@@ -1,5 +1,7 @@
 //! Actual Rust through the shared prepared-source path; this is not execution admission.
 use super::*;
+#[path = "production_scoped_tile_export_source_v18_tests.rs"]
+mod tile_export_tests;
 use crate::production_pipeline::ProductionPipelineError as PipelineError;
 use fe2o3_kernel_ir::{AddressSpace, Constant, ExecutionOperationV15 as Execution, OperationKind};
 use fe2o3_lower_mir_kernel::ProductionPendingScopedSourceOwnerV29 as Pending;

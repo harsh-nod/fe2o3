@@ -67,7 +67,10 @@ pub use physical_lds_exchange_diagnostic_export_v22::run_diagnostic_physical_lds
 
 #[path = "production_rustc_driver_v1/ordered_program_diagnostic_export_v17.rs"]
 mod ordered_program_diagnostic_export_v17;
+#[path = "production_rustc_driver_v1/scoped_tile_diagnostic_export_v18.rs"]
+mod scoped_tile_diagnostic_export_v18;
 pub use ordered_program_diagnostic_export_v17::run_diagnostic_ordered_program_kir_extraction_driver_v17;
+pub use scoped_tile_diagnostic_export_v18::run_diagnostic_scoped_tile_kir_extraction_driver_v18;
 #[path = "production_rustc_driver_v1/ordered_program_origin_export_v1.rs"]
 mod ordered_program_origin_export_v1;
 pub use ordered_program_origin_export_v1::run_diagnostic_ordered_program_origin_driver_v1;
