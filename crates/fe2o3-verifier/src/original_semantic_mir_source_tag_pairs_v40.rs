@@ -13,13 +13,14 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::{
     ProductionSourceObjectEndpointRoleV39 as EndpointRole,
-    ProductionSourceObjectRecipeV39 as ObjectRecipe,
+    ProductionSourceObjectRecipeV39 as ObjectRecipe, ProductionSourceObjectSchemaV42 as SchemaRole,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Pair {
     source: TypeId,
     physical: Id,
+    selected_space: Option<AddressSpace>,
 }
 
 struct TagOperation {
@@ -61,7 +62,11 @@ fn integer_primitive(scalar: PhysicalScalar) -> Option<(bool, u16)> {
     })
 }
 
-fn primitive_matches(primitive: Primitive, physical: &Layout) -> bool {
+fn primitive_matches(
+    primitive: Primitive,
+    physical: &Layout,
+    selected_space: Option<AddressSpace>,
+) -> bool {
     if primitive.size_bytes() != Some(physical.size)
         || primitive.alignment_bytes() != u64::from(physical.alignment)
     {
@@ -89,7 +94,8 @@ fn primitive_matches(primitive: Primitive, physical: &Layout) -> bool {
             };
             size_bytes.checked_mul(8) == Some(u64::from(pointer.stored_bits))
                 && pointer.encoded_space == space
-                && pointer.value_space == space
+                && pointer.value_space == selected_space.unwrap_or(space)
+                && (space == AddressSpace::Generic || pointer.value_space == space)
         }
         _ => false,
     }
@@ -104,6 +110,7 @@ fn check_records(
     physical_rows: &[Layout],
     physical: &Layout,
     target_class: TargetClass,
+    selected_space: Option<AddressSpace>,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     out.budget.charge_work(10)?;
@@ -141,7 +148,10 @@ fn check_records(
     let tag = physical_rows
         .get(encoding.tag().layout.0 as usize)
         .ok_or_else(mismatch)?;
-    if offset != encoding.tag().offset || !primitive_matches(primitive, tag) {
+    if selected_space.is_some() != matches!(class, SourceTagClassV39::PointerNullReference { .. }) {
+        return Err(mismatch());
+    }
+    if offset != encoding.tag().offset || !primitive_matches(primitive, tag, selected_space) {
         return Err(mismatch());
     }
     if let SourceTagClassV39::PointerNullReference { terminal } = class {
@@ -254,19 +264,21 @@ fn is_tag_operation(operation: Storage) -> bool {
     )
 }
 
-fn pair_present(rows: &[Pair], key: Pair, out: &mut Writer<'_, '_>) -> Result<bool> {
+fn pair_present(rows: &[Pair], key: (TypeId, Id), out: &mut Writer<'_, '_>) -> Result<bool> {
     let (mut lo, mut hi) = (0, rows.len());
     while lo < hi {
         out.budget.charge_work(1)?;
         let middle = lo + (hi - lo) / 2;
-        if rows[middle] < key {
+        if (rows[middle].source, rows[middle].physical) < key {
             lo = middle + 1;
         } else {
             hi = middle;
         }
     }
     out.budget.charge_work(1)?;
-    Ok(rows.get(lo) == Some(&key))
+    Ok(rows
+        .get(lo)
+        .is_some_and(|row| (row.source, row.physical) == key))
 }
 
 fn tag_position(
@@ -435,7 +447,14 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
         // Compact in place, retaining the already paid allocation capacity.
         let mut unique = 0usize;
         for read in 0..pairs.len() {
-            out.budget.charge_work(2)?;
+            out.budget.charge_work(4)?;
+            if unique != 0
+                && (pairs[unique - 1].source, pairs[unique - 1].physical)
+                    == (pairs[read].source, pairs[read].physical)
+                && pairs[unique - 1].selected_space != pairs[read].selected_space
+            {
+                return Err(mismatch());
+            }
             if unique == 0 || pairs[unique - 1] != pairs[read] {
                 pairs[unique] = pairs[read];
                 unique += 1;
@@ -454,6 +473,7 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
                 rows,
                 rows.get(pair.physical.0 as usize).ok_or_else(mismatch)?,
                 contracts.row_class(pair.physical, out)?,
+                pair.selected_space,
                 out,
             )?;
         }
@@ -488,7 +508,10 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
             let endpoint = recipe.endpoint(ordinal, out.budget)?;
             let source = endpoint.source_types(out.budget)?;
             let physical = endpoint.storage_layouts(out.budget)?;
-            for (source, physical) in [(source.0, physical.0), (source.1, physical.1)] {
+            for (component, source, physical) in [
+                (SchemaRole::Root, source.0, physical.0),
+                (SchemaRole::Projected, source.1, physical.1),
+            ] {
                 out.budget.charge_work(2)?;
                 let class = slots.tag_contract(source, out)?.class(out)?;
                 let tagged = matches!(
@@ -504,10 +527,41 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
                         return Err(unsupported());
                     }
                     _ => {
+                        let selected_space = if let SourceTagClassV39::PointerNullReference {
+                            terminal,
+                        } = class
+                        {
+                            let selected = recipe
+                                .selected_pointer_niche_v42(ordinal, component, out.budget)?
+                                .ok_or_else(mismatch)?;
+                            selected.check_binding(recipe, ordinal, component, out.budget)?;
+                            if selected.types_and_schema(out.budget)?
+                                != (source, terminal, physical)
+                            {
+                                return Err(mismatch());
+                            }
+                            let pointer = selected.pointer(out.budget)?;
+                            let Kind::Variants { encoding, .. } =
+                                &rows.get(physical.0 as usize).ok_or_else(mismatch)?.kind
+                            else {
+                                return Err(mismatch());
+                            };
+                            if !matches!(rows.get(encoding.tag().layout.0 as usize).ok_or_else(mismatch)?.kind, Kind::Pointer(actual) if actual == pointer)
+                            {
+                                return Err(mismatch());
+                            }
+                            Some(pointer.value_space)
+                        } else {
+                            None
+                        };
                         if pairs.len() == pairs.capacity() {
                             return Err(Resource::Accounting.into());
                         }
-                        pairs.push(Pair { source, physical });
+                        pairs.push(Pair {
+                            source,
+                            physical,
+                            selected_space,
+                        });
                     }
                 }
             }
@@ -552,14 +606,7 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
             let source = operation.source.ok_or(Error::Statement(
                 "actual tag operation lacks an authenticated original object recipe",
             ))?;
-            if !pair_present(
-                pairs,
-                Pair {
-                    source,
-                    physical: operation.physical,
-                },
-                out,
-            )? {
+            if !pair_present(pairs, (source, operation.physical), out)? {
                 return Err(mismatch());
             }
         }
@@ -592,7 +639,7 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
     ) -> Result<()> {
         let result = (|| {
             self.check(out)?;
-            if !pair_present(&self.pairs, Pair { source, physical }, out)? {
+            if !pair_present(&self.pairs, (source, physical), out)? {
                 return Err(mismatch());
             }
             Ok(())
@@ -649,6 +696,12 @@ pub(super) fn headers() -> usize {
         + h::<ObjectRecipe<'_, '_>>()
         + h::<Option<ObjectRecipe<'_, '_>>>()
         + h::<fe2o3_lower_mir_kernel::ProductionSourceObjectEndpointV39<'_, '_>>()
+        + h::<fe2o3_lower_mir_kernel::ProductionSourceSelectedPointerNicheV42<'_, '_>>()
+        + h::<Option<fe2o3_lower_mir_kernel::ProductionSourceSelectedPointerNicheV42<'_, '_>>>()
+        + h::<SchemaRole>()
+        + h::<Option<AddressSpace>>()
+        + h::<fe2o3_kernel_ir::StoragePointerV1>()
+        + h::<(TypeId, TypeId, Id)>()
         + h::<Vec<Pair>>()
         + h::<Vec<TagOperation>>()
         + h::<Pair>()
@@ -686,7 +739,7 @@ pub(super) fn headers() -> usize {
                 >,
                 std::slice::Iter<'static, fe2o3_kernel_ir::StorageVariantV1>,
             >,
-            std::array::IntoIter<(TypeId, Id), 2>,
+            std::array::IntoIter<(SchemaRole, TypeId, Id), 2>,
             [usize; 24],
             [u64; 4],
             Option<Scalar>,

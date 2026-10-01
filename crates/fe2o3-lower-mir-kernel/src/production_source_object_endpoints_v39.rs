@@ -1,4 +1,5 @@
 include!("production_source_object_lifetimes_v40.rs");
+include!("production_source_selected_pointer_niche_v42.rs");
 
 /// Original object category. A category is not allocation or lifetime authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

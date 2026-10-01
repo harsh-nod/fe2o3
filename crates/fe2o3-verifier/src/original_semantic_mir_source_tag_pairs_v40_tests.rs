@@ -10,6 +10,8 @@ pub(in super::super::super::super) enum Fixture {
     SignedDirect,
     SharedNull,
     MutableNull,
+    SharedSome,
+    MutableSome,
 }
 
 fn direct(types: &mut Vec<Declaration>, signed: bool) -> (TypeId, TypeId) {
@@ -102,10 +104,10 @@ pub(in super::super::super::super) fn transform(
         Fixture::Direct | Fixture::SignedDirect => {
             direct(types, matches!(fixture, Fixture::SignedDirect))
         }
-        Fixture::SharedNull | Fixture::MutableNull => {
+        Fixture::SharedNull | Fixture::MutableNull | Fixture::SharedSome | Fixture::MutableSome => {
             let (_, enumeration) = super::super::tests::append_reference_option(
                 types,
-                matches!(fixture, Fixture::MutableNull),
+                matches!(fixture, Fixture::MutableNull | Fixture::MutableSome),
             );
             (enumeration, word)
         }
@@ -191,17 +193,113 @@ pub(in super::super::super::super) fn transform(
         vec![]
     };
     let mut statements = helper.blocks()[0].statements().to_vec();
+    let selected = matches!(fixture, Fixture::SharedSome | Fixture::MutableSome);
+    let operands = if selected {
+        let Shape::Enum { variants, .. } = types[enumeration.index() as usize].shape() else {
+            panic!("reference option expected")
+        };
+        let reference = variants[1].fields().fields()[0];
+        let raw_word = TypeId::from_index(types.len() as u32);
+        types.push(Declaration::new(
+            SemanticTypeIdentityV1::from_sha256([252; 32]),
+            SemanticLayoutIdentityV1::from_sha256([252; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                Backend::scalar(SemanticBackendScalarV1::initialized(
+                    Primitive::pointer(0, 8, 8),
+                    Validity::new(0, u64::MAX.into()),
+                )),
+                false,
+            )
+            .unwrap(),
+            Shape::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    word,
+                    SemanticPointerKindV1::Raw,
+                    SemanticMutabilityV1::Mutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        ));
+        for (ordinal, ty) in [word, reference, raw_word].into_iter().enumerate() {
+            let mut identity = [255; 32];
+            identity[31] = ordinal as u8;
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(identity),
+                ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ));
+            statements.push(SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(
+                    8 + ordinal as u32,
+                )),
+            ));
+        }
+        statements.extend([
+            assignment(
+                8,
+                word,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1, word))),
+            ),
+            assignment(
+                10,
+                raw_word,
+                SemanticRvalueKindV1::AddressOf {
+                    place: place(8, word),
+                    mutability: SemanticMutabilityV1::Mutable,
+                },
+            ),
+            assignment(
+                9,
+                reference,
+                SemanticRvalueKindV1::Borrow {
+                    kind: if matches!(fixture, Fixture::MutableSome) {
+                        SemanticBorrowKindV1::Mutable
+                    } else {
+                        SemanticBorrowKindV1::Shared
+                    },
+                    place: place(8, word),
+                },
+            ),
+        ]);
+        vec![if matches!(fixture, Fixture::MutableSome) {
+            SemanticOperandV1::Move(place(9, reference))
+        } else {
+            SemanticOperandV1::Copy(place(9, reference))
+        }]
+    } else {
+        operands
+    };
+    statements.push(SemanticStatementV1::new(
+        source,
+        SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)),
+    ));
+    if selected {
+        statements.push(assignment(
+            4,
+            enumeration,
+            SemanticRvalueKindV1::Aggregate(
+                SemanticAggregateRvalueV1::new(SemanticAggregateKindV1::EnumVariant(0), vec![])
+                    .unwrap(),
+            ),
+        ));
+    }
     statements.extend([
-        SemanticStatementV1::new(
-            source,
-            SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)),
-        ),
         assignment(
             4,
             enumeration,
             SemanticRvalueKindV1::Aggregate(
-                SemanticAggregateRvalueV1::new(SemanticAggregateKindV1::EnumVariant(0), operands)
-                    .unwrap(),
+                SemanticAggregateRvalueV1::new(
+                    SemanticAggregateKindV1::EnumVariant(if selected { 1 } else { 0 }),
+                    operands,
+                )
+                .unwrap(),
             ),
         ),
         // Taking the original address requires genuine typed object storage;
@@ -236,6 +334,25 @@ pub(in super::super::super::super) fn transform(
             SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4)),
         ),
     ]);
+    if selected {
+        let dead_enum = statements.pop().unwrap();
+        let dead_raw = statements.pop().unwrap();
+        statements.push(assignment(
+            4,
+            enumeration,
+            SemanticRvalueKindV1::Aggregate(
+                SemanticAggregateRvalueV1::new(SemanticAggregateKindV1::EnumVariant(0), vec![])
+                    .unwrap(),
+            ),
+        ));
+        statements.extend([dead_raw, dead_enum]);
+        for local in [9, 10, 8] {
+            statements.push(SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(local)),
+            ));
+        }
+    }
     let blocks = vec![
         SemanticBasicBlockV1::new(
             helper.blocks()[0].identity(),
@@ -308,6 +425,272 @@ fn run(
             )
         },
     )
+}
+
+#[test]
+fn source_tag_pairs_bind_generic_encoded_some_references_to_the_selected_private_space() {
+    for fixture in [Fixture::SharedSome, Fixture::MutableSome] {
+        run(fixture, LIMIT, LIMIT, |slots, enumeration, _, out| {
+            let inventory = slots.relation.inventory(out.budget)?;
+            let contracts = TargetContracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+            let pairs = SourceTagPairsV40::derive(slots, &contracts, out)?;
+            let mut found = 0;
+            for pair in &pairs.pairs {
+                if pair.source != enumeration {
+                    continue;
+                }
+                let row = &inventory.owner().module().storage_layouts[pair.physical.0 as usize];
+                let Kind::Variants { encoding, .. } = &row.kind else {
+                    panic!("enum row expected");
+                };
+                let Kind::Pointer(pointer) = inventory.owner().module().storage_layouts
+                    [encoding.tag().layout.0 as usize]
+                    .kind
+                else {
+                    panic!("pointer tag expected");
+                };
+                assert_eq!(pointer.encoded_space, AddressSpace::Generic);
+                assert_eq!(pointer.value_space, AddressSpace::Private);
+                assert_eq!(pointer.stored_bits, 64);
+                assert_eq!(
+                    pointer.access,
+                    if matches!(fixture, Fixture::MutableSome) {
+                        fe2o3_kernel_ir::AccessMode::ReadWrite
+                    } else {
+                        fe2o3_kernel_ir::AccessMode::ReadOnly
+                    }
+                );
+                assert_eq!(pair.selected_space, Some(AddressSpace::Private));
+                pairs.require_pair(enumeration, pair.physical, out)?;
+                found += 1;
+            }
+            assert!(found > 0);
+            Ok(())
+        })
+        .0
+        .unwrap();
+    }
+}
+
+fn with_selected_niche_v42(
+    slots: &SourceSlots<'_, '_>,
+    out: &mut Writer<'_, '_>,
+    examine: impl FnOnce(
+        &ObjectRecipe<'_, '_>,
+        usize,
+        SchemaRole,
+        &fe2o3_lower_mir_kernel::ProductionSourceSelectedPointerNicheV42<'_, '_>,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>,
+) -> Result<()> {
+    let source = slots.relation.source(out.budget)?;
+    for root in 0..source.root_count(out.budget)? {
+        for instance in 0..source.instance_count(root, out.budget)? {
+            for anchor in 0..source.memory_anchor_count(root, instance, out.budget)? {
+                let Some(recipe) = slots
+                    .relation
+                    .memory_object_recipe_v39(root, instance, anchor, out.budget)?
+                else {
+                    continue;
+                };
+                for ordinal in 0..recipe.endpoint_count(out.budget)? {
+                    for component in [SchemaRole::Root, SchemaRole::Projected] {
+                        if let Some(selected) =
+                            recipe.selected_pointer_niche_v42(ordinal, component, out.budget)?
+                        {
+                            selected.check_binding(&recipe, ordinal, component, out.budget)?;
+                            return examine(&recipe, ordinal, component, &selected, out);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    panic!("genuine selected pointer niche endpoint not reached");
+}
+
+#[test]
+fn selected_pointer_niche_binding_rejects_endpoint_and_role_substitution_stickily() {
+    for wrong_role in [false, true] {
+        let (result, _, _, _) = run(Fixture::SharedSome, LIMIT, LIMIT, |slots, _, _, out| {
+            with_selected_niche_v42(slots, out, |recipe, ordinal, component, selected, out| {
+                let foreign_ordinal = if wrong_role { ordinal } else { ordinal + 1 };
+                let foreign_component = if wrong_role {
+                    match component {
+                        SchemaRole::Root => SchemaRole::Projected,
+                        SchemaRole::Projected => SchemaRole::Root,
+                    }
+                } else {
+                    component
+                };
+                assert!(
+                    selected
+                        .check_binding(recipe, foreign_ordinal, foreign_component, out.budget)
+                        .is_err()
+                );
+                assert!(
+                    selected
+                        .check_binding(recipe, ordinal, component, out.budget)
+                        .is_err()
+                );
+                assert!(selected.pointer(out.budget).is_err());
+                Ok(())
+            })
+        });
+        assert!(result.is_err(), "binding failure must prevent publication");
+    }
+}
+
+#[test]
+fn selected_pointer_niche_guard_observes_transient_credit_undercut_before_restore() {
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    let (result, _, _, _) = run(Fixture::SharedSome, LIMIT, LIMIT, |slots, _, _, out| {
+        with_selected_niche_v42(slots, out, |_, _, _, selected, out| {
+            out.budget.release_storage(1)?;
+            let first = selected.pointer(out.budget);
+            out.budget.reserve_storage(1)?;
+            assert!(matches!(
+                first,
+                Err(SourceError::Resource(Resource::Accounting))
+            ));
+            assert!(matches!(
+                selected.pointer(out.budget),
+                Err(SourceError::Resource(Resource::Accounting))
+            ));
+            Ok(())
+        })
+    });
+    assert!(
+        result.is_err(),
+        "restoring credits must not restore owner authority"
+    );
+}
+
+#[test]
+fn selected_pointer_niche_binding_rejects_the_same_nominal_contract_from_another_root() {
+    let result = run(Fixture::SharedSome, LIMIT, LIMIT, |slots, _, _, out| {
+        with_selected_niche_v42(slots, out, |recipe, ordinal, component, selected, out| {
+            let source = slots.relation.source(out.budget)?;
+            assert!(source.root_count(out.budget)? > 1);
+            let original = recipe.original_operation(out.budget)?;
+            let expected = selected.types_and_schema(out.budget)?;
+            let expected_pointer = selected.pointer(out.budget)?;
+            for instance in 0..source.instance_count(1, out.budget)? {
+                for anchor in 0..source.memory_anchor_count(1, instance, out.budget)? {
+                    let Some(other) = slots
+                        .relation
+                        .memory_object_recipe_v39(1, instance, anchor, out.budget)?
+                    else {
+                        continue;
+                    };
+                    if other.original_operation(out.budget)? == original {
+                        continue;
+                    }
+                    if ordinal >= other.endpoint_count(out.budget)? {
+                        continue;
+                    }
+                    let Some(other_selection) =
+                        other.selected_pointer_niche_v42(ordinal, component, out.budget)?
+                    else {
+                        continue;
+                    };
+                    let other_types = other_selection.types_and_schema(out.budget)?;
+                    if (other_types.0, other_types.1) != (expected.0, expected.1) {
+                        continue;
+                    }
+                    let other_pointer = other_selection.pointer(out.budget)?;
+                    assert_eq!(
+                        (
+                            other_pointer.value_space,
+                            other_pointer.encoded_space,
+                            other_pointer.stored_bits,
+                            other_pointer.access
+                        ),
+                        (
+                            expected_pointer.value_space,
+                            expected_pointer.encoded_space,
+                            expected_pointer.stored_bits,
+                            expected_pointer.access
+                        )
+                    );
+                    assert!(
+                        selected
+                            .check_binding(&other, ordinal, component, out.budget)
+                            .is_err()
+                    );
+                    assert!(
+                        selected
+                            .check_binding(recipe, ordinal, component, out.budget)
+                            .is_err()
+                    );
+                    return Ok(());
+                }
+            }
+            panic!("second genuine root object not reached");
+        })
+    });
+    assert!(result.0.is_err());
+}
+
+#[test]
+fn selected_pointer_niche_rejects_funded_foreign_ledger_before_any_work() {
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    let result = run(Fixture::SharedSome, LIMIT, LIMIT, |slots, _, _, out| {
+        with_selected_niche_v42(slots, out, |_, _, _, selected, out| {
+            let mut work = Work::new(LIMIT);
+            let mut foreign = Budget::new(&mut work, LIMIT);
+            foreign.reserve_storage(out.budget.storage())?;
+            let before = (foreign.work(), foreign.storage(), foreign.peak_storage());
+            assert!(matches!(
+                selected.pointer(&mut foreign),
+                Err(SourceError::Resource(Resource::Accounting))
+            ));
+            assert_eq!(
+                (foreign.work(), foreign.storage(), foreign.peak_storage()),
+                before
+            );
+            assert!(matches!(
+                selected.pointer(out.budget),
+                Err(SourceError::Resource(Resource::Accounting))
+            ));
+            Ok(())
+        })
+    });
+    assert!(result.0.is_err());
+}
+
+#[test]
+fn selected_pointer_tag_pairs_have_exact_and_one_short_cumulative_resources() {
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    let execute = |work, storage| {
+        run(Fixture::MutableSome, work, storage, |slots, _, _, out| {
+            let contracts = TargetContracts::derive(
+                slots.relation.inventory(out.budget)?,
+                FormalIndexWidth::Bits64,
+                out,
+            )?;
+            SourceTagPairsV40::derive(slots, &contracts, out)?.emit(0, 1, out)
+        })
+    };
+    let (result, work, _, storage) = execute(LIMIT, LIMIT);
+    result.unwrap();
+    let exact = execute(work, storage);
+    exact.0.unwrap();
+    assert_eq!((exact.1, exact.3), (work, storage));
+    for (w, s, is_work) in [(work - 1, storage, true), (work, storage - 1, false)] {
+        let refused = execute(w, s);
+        assert!(
+            matches!((is_work, &refused.0), (true, Err(Error::Source(SourceError::Resource(Resource::Work(error))))) if error.limit() == w && error.actual() == work)
+                || matches!((is_work, &refused.0), (false, Err(Error::Source(SourceError::Resource(Resource::Storage(error))))) if error.limit() == s && error.actual() == storage),
+            "{:?}",
+            refused.0
+        );
+        assert!(refused.1 <= w && refused.3 <= s);
+    }
 }
 
 #[test]
@@ -538,23 +921,21 @@ fn source_tag_pair_lookup_uses_a_bounded_sorted_index_without_source_rescans() {
                 .map(|value| Pair {
                     source: TypeId::from_index(value as u32),
                     physical: Id(value as u32),
+                    selected_space: None,
                 })
                 .collect();
             let floor = out.budget.storage();
             let before = out.budget.work();
             let key = rows[size - 1];
             for _ in 0..64 {
-                assert!(pair_present(&rows, key, out)?);
+                assert!(pair_present(&rows, (key.source, key.physical), out)?);
             }
             assert_eq!(out.budget.storage(), floor);
             let height = size.ilog2() as usize + 1;
             assert!(out.budget.work() - before <= 64 * (height + 1));
             assert!(!pair_present(
                 &rows,
-                Pair {
-                    source: TypeId::from_index(size as u32),
-                    physical: Id(0)
-                },
+                (TypeId::from_index(size as u32), Id(0)),
                 out
             )?);
         }
@@ -569,7 +950,7 @@ fn source_tag_pair_headers_match_independent_retained_fields_and_frames() {
     fn h<T>() -> usize {
         size_of::<T>() + 2 * size_of::<Result<T>>()
     }
-    type PairFields = (TypeId, Id);
+    type PairFields = (TypeId, Id, Option<AddressSpace>);
     type OperationFields = (Operation, usize, Id, Option<TypeId>);
     type Fields<'a, 'view, 'source, 'inventory, 'owner> = (
         &'a SourceSlots<'view, 'source>,
@@ -603,7 +984,7 @@ fn source_tag_pair_headers_match_independent_retained_fields_and_frames() {
             >,
             std::slice::Iter<'a, fe2o3_kernel_ir::StorageVariantV1>,
         >,
-        std::array::IntoIter<(TypeId, Id), 2>,
+        std::array::IntoIter<(SchemaRole, TypeId, Id), 2>,
         [usize; 24],
         [u64; 4],
         Option<Scalar>,
@@ -614,6 +995,12 @@ fn source_tag_pair_headers_match_independent_retained_fields_and_frames() {
         + h::<ObjectRecipe<'_, '_>>()
         + h::<Option<ObjectRecipe<'_, '_>>>()
         + h::<fe2o3_lower_mir_kernel::ProductionSourceObjectEndpointV39<'_, '_>>()
+        + h::<fe2o3_lower_mir_kernel::ProductionSourceSelectedPointerNicheV42<'_, '_>>()
+        + h::<Option<fe2o3_lower_mir_kernel::ProductionSourceSelectedPointerNicheV42<'_, '_>>>()
+        + h::<SchemaRole>()
+        + h::<Option<AddressSpace>>()
+        + h::<fe2o3_kernel_ir::StoragePointerV1>()
+        + h::<(TypeId, TypeId, Id)>()
         + h::<Vec<Pair>>()
         + h::<Vec<TagOperation>>()
         + h::<PairFields>()
