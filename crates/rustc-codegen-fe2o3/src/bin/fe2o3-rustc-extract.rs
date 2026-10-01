@@ -28,6 +28,7 @@ include!("fe2o3-rustc-extract/composition_promotion_v1.rs");
 include!("fe2o3-rustc-extract/normal_composition_v1.rs");
 
 const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
+const EXTRACT_ENGINEERING_CAPTURE_ENV_V1: &str = "FE2O3_EXTRACT_ENGINEERING_CAPTURE_V1";
 const EXTRACT_RANKED_MEMORY_ENV_V1: &str = "FE2O3_EXTRACT_RANKED_MEMORY_V1";
 const EXTRACT_AMDGPU_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1";
 const EXTRACT_GFX942_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1";
@@ -199,7 +200,17 @@ fn main() {
         select_ordered_composition_diagnostic_v1_mode(prepared, ordered_composition_v1)
     })
     .and_then(|prepared| select_bf16_tile_source_v1_mode(prepared, bf16_tile_source_v1))
-    .and_then(|prepared| select_bf16_generated_source_v1_mode(prepared, bf16_generated_source_v1));
+    .and_then(|prepared| select_bf16_generated_source_v1_mode(prepared, bf16_generated_source_v1))
+    .and_then(|mut prepared| {
+        let capture = capture_enabled(env::var_os(EXTRACT_ENGINEERING_CAPTURE_ENV_V1).as_deref())?;
+        if capture && let PreparedExtractionV1::Selected(selected) = &mut prepared {
+            selected.mode = capture_mode(std::mem::replace(
+                &mut selected.mode,
+                ExtractionModeV1::KernelIr,
+            ))?;
+        }
+        Ok(prepared)
+    });
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -249,6 +260,7 @@ enum ExtractionModeV1 {
     Gfx942Llvm(OsString),
     Gfx942CompilerHandoff(OsString),
     AmdgpuCompilerHandoff(OsString),
+    AmdgpuCompilerHandoffCapture(OsString),
     SimulationBundle(OsString),
     SimulationBundleV2(OsString),
     SimulationBundleV3(OsString),
@@ -264,6 +276,93 @@ enum ExtractionModeV1 {
     OrderedCompositionDiagnosticV1(OsString),
     Bf16TileSourceV1(OsString),
     Bf16GeneratedSourceV1(OsString),
+}
+
+fn capture_enabled(value: Option<&std::ffi::OsStr>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        Some(_) => Err(format!(
+            "{EXTRACT_ENGINEERING_CAPTURE_ENV_V1} must be exactly 1 or absent"
+        )),
+    }
+}
+
+fn capture_mode(mode: ExtractionModeV1) -> Result<ExtractionModeV1, String> {
+    match mode {
+        ExtractionModeV1::AmdgpuCompilerHandoff(output) => {
+            Ok(ExtractionModeV1::AmdgpuCompilerHandoffCapture(output))
+        }
+        _ => {
+            Err("engineering capture requires the generic AMDGPU compiler-handoff mode".to_owned())
+        }
+    }
+}
+
+#[cfg(test)]
+mod engineering_capture_tests {
+    use super::*;
+
+    #[test]
+    fn engineering_capture_accepts_only_exact_child_boolean() {
+        assert!(!capture_enabled(None).unwrap());
+        assert!(capture_enabled(Some(std::ffi::OsStr::new("1"))).unwrap());
+        for invalid in ["", "0", "true", "01", "1 "] {
+            assert!(capture_enabled(Some(std::ffi::OsStr::new(invalid))).is_err());
+        }
+    }
+
+    #[test]
+    fn engineering_capture_rejects_normal_composition_selection() {
+        let capture =
+            capture_mode(ExtractionModeV1::AmdgpuCompilerHandoff("handoff".into())).unwrap();
+        assert!(require_normal_composition_mode_v1(&capture, false, None).is_ok());
+        assert!(
+            require_normal_composition_mode_v1(&capture, false, Some(std::ffi::OsStr::new("1")),)
+                .is_err()
+        );
+        assert!(
+            require_normal_composition_mode_v1(
+                &ExtractionModeV1::AmdgpuCompilerHandoff("handoff".into()),
+                false,
+                Some(std::ffi::OsStr::new("1")),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn engineering_capture_is_generic_handoff_only() {
+        assert!(matches!(
+            capture_mode(ExtractionModeV1::AmdgpuCompilerHandoff("handoff".into())).unwrap(),
+            ExtractionModeV1::AmdgpuCompilerHandoffCapture(_)
+        ));
+        for mode in [
+            ExtractionModeV1::KernelIr,
+            ExtractionModeV1::RankedMemory,
+            ExtractionModeV1::AmdgpuLlvm("llvm".into()),
+            ExtractionModeV1::Gfx942CompilerHandoff("handoff".into()),
+            ExtractionModeV1::DiagnosticKirV17("kir".into()),
+            ExtractionModeV1::Gfx942Llvm("llvm".into()),
+            ExtractionModeV1::SimulationBundle("bundle".into()),
+            ExtractionModeV1::SimulationBundleV2("bundle".into()),
+            ExtractionModeV1::SimulationBundleV3("bundle".into()),
+            ExtractionModeV1::SimulationBundleV4("bundle".into()),
+            ExtractionModeV1::SimulationBundleV5("bundle".into()),
+            ExtractionModeV1::SimulationBundleV6("bundle".into()),
+            ExtractionModeV1::DiagnosticKirV16("kir".into()),
+            ExtractionModeV1::DiagnosticKirV19("kir".into()),
+            ExtractionModeV1::PhysicalEntryDiagnosticV20("directory".into()),
+            ExtractionModeV1::PhysicalGlobalCopyDiagnosticV21("directory".into()),
+            ExtractionModeV1::PhysicalLdsExchangeDiagnosticV22("directory".into()),
+            ExtractionModeV1::OrderedCompositionDiagnosticV1("directory".into()),
+            ExtractionModeV1::Bf16TileSourceV1("directory".into()),
+            ExtractionModeV1::Bf16GeneratedSourceV1("directory".into()),
+            ExtractionModeV1::AmdgpuCompilerHandoffCapture("handoff".into()),
+        ] {
+            assert!(capture_mode(mode).is_err());
+        }
+    }
 }
 
 fn require_disjoint_physical_entry_diagnostic_v20(
@@ -906,6 +1005,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
         }
         ExtractionModeV1::AmdgpuCompilerHandoff(output) => {
             rustc_codegen_fe2o3::run_production_amdgpu_compiler_handoff_extraction_driver_v1(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
+        ExtractionModeV1::AmdgpuCompilerHandoffCapture(output) => {
+            rustc_codegen_fe2o3::run_production_amdgpu_compiler_handoff_capture_driver_v1(
                 &selected.args,
                 std::path::Path::new(&output),
             )?;

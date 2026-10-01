@@ -292,6 +292,11 @@ pub(super) fn run_extraction(
             extraction_rustflags(options.profile),
         );
     crate::configure_pinned_rustc_child(command.as_command_mut(), rustc)?;
+    if options.diagnostic_capture_root.is_some() {
+        command
+            .as_command_mut()
+            .env("FE2O3_EXTRACT_ENGINEERING_CAPTURE_V1", "1");
+    }
     crate::remove_dynamic_loader_environment(command.as_command_mut());
     command.as_command_mut().env("LD_LIBRARY_PATH", loader_path);
     let status = command
