@@ -77,9 +77,15 @@ the independent readback is
 `982cda3fe8952f8b86d38a5d4cac98bd2efc9e387f3571fe0828c17efbe0453d`.
 Raw records are retained locally under
 `/home/harsh/.codex-tmp/fe2o3-a2-native-journal-observers-records-20261001-audit/`.
-Public raw packaging remains pending. Integration preserves every native body,
+The [public raw packet](evidence/dev-producer-journal-observers-2026-10-01/README.md)
+now preserves the complete campaign, support records and signed source bundle.
+Every archive member was rechecked against its original; external
+CPU/tool/history prerequisites remain explicit. Integration preserves every native body,
 proof input, diagnostic classifier, mutation and fixture from the signed
 candidate. It refreshes the queued-query helper binding and the two affected
 runtime source inventories, without promoting the source guard itself to proof
 authority. All 26 local source-workflow commands pass on the integrated
-worktree. Combined-runtime CPU regression remains pending.
+worktree. The separate
+[combined-runtime CPU regression](evidence/dev-integrated-runtime-cpu-2026-10-01/README.md)
+now passes all fifteen stages at signed source `1cfb7580f`, including the full
+1,901-pass/32-ignore suite and strict Clippy. No A2 milestone closure follows.

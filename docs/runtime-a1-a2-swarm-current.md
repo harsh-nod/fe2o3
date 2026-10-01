@@ -51,6 +51,16 @@ negative roster passes sixteen source-only controls, but signed qualification,
 live-allocation checks and fresh credit-lock refinement remain open. Native
 runtime and model bytes are unchanged in this proof-only candidate.
 
+The operation-level distributed codec now passes full unsigned discovery at
+99/0 over eleven proof inputs, including executable encode/decode roundtrip
+and successful-decode canonicality. Both tool-release brackets and all three
+groups close; independent root readback agrees. Explicit header-byte and
+schema-bitvector lemmas repair the earlier rejected attempts without changing
+native bytes or weakening contracts. The 1,130-pass/19-ignore CPU result and
+sixteen retained executables are reused through unchanged actual compiler
+inputs. Signed qualification and actual-body negative controls remain pending;
+this does not qualify two-host transport or distributed authority.
+
 The 36-trial wait-cadence campaign has a reviewed signed payload with all 6,529
 selected source objects and thirteen helper identities independently checked.
 Its six ordinary comparison cells and twelve diagnostic cells are covered by
@@ -195,8 +205,11 @@ queued-query helper hash and two runtime source inventories are refreshed.
 All 26 local source-workflow commands pass on the integrated worktree.
 Direct validator/fold composition, live-allocation checks, fresh credit locks,
 interior-state refinement and A2 closure remain open. Combined-runtime CPU
-regression is now accepted above; public raw wrapper-campaign packaging remains
-pending.
+regression is now accepted above. The
+[public raw wrapper packet](evidence/dev-producer-journal-observers-2026-10-01/README.md)
+preserves the complete 705-file campaign, original signed source bundle and
+independent readbacks. Every archived original was rechecked; external
+CPU/tool/history prerequisites remain explicit.
 
 The [retained host-diagnostic CPU qualification](evidence/dev-xgmi-retained-host-diagnostic-cpu-2026-09-30/README.md)
 is integrated at `841c06b73`, with portable campaign helpers at `4ad64047b`.
