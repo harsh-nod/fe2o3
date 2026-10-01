@@ -15,6 +15,10 @@ use std::{fmt::Write as _, mem::size_of};
 #[path = "original_semantic_mir_canonical_v30.rs"]
 mod canonical;
 
+#[path = "original_semantic_mir_canonical_byte_v36.rs"]
+mod canonical_byte;
+pub(crate) use canonical_byte::CanonicalByteScalarV30;
+
 #[path = "original_semantic_mir_relation_v30.rs"]
 mod relation;
 

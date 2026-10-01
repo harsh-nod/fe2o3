@@ -232,7 +232,7 @@ impl CanonicalProgramV30 {
     }
 }
 
-fn operation_headers_v31() -> usize {
+pub(super) fn operation_headers_v31() -> usize {
     size_of::<(
         &Kind,
         &[usize],
@@ -243,7 +243,7 @@ fn operation_headers_v31() -> usize {
     )>()
 }
 
-fn operation_expression(
+pub(super) fn operation_expression(
     kind: &Kind,
     input: &[usize],
     ty: ScalarV30,

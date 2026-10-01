@@ -24,6 +24,19 @@ mod structured_state_v30;
 #[path = "original_semantic_mir_scalar_v30.rs"]
 pub(super) mod original_scalar_v30;
 
+#[path = "mixed_optimizer_byte_function_v30.rs"]
+mod byte_function_v30;
+#[path = "mixed_optimizer_byte_memory_v30.rs"]
+mod byte_memory_v30;
+#[path = "mixed_optimizer_index_byte_operations_v37.rs"]
+mod index_byte_operations_v37;
+#[path = "mixed_optimizer_external_byte_operations_v30.rs"]
+mod pointer_byte_operations_v30;
+#[path = "mixed_optimizer_private_byte_operations_v30.rs"]
+mod private_byte_operations_v30;
+#[path = "mixed_optimizer_storage_byte_operations_v37.rs"]
+mod storage_byte_operations_v37;
+
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => {
         write!($out, $($arg)*).map_err(|_| $out.error())?
