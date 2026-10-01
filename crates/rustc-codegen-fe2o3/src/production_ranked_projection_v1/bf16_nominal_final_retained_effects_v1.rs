@@ -378,3 +378,10 @@ mod tests;
 #[cfg(test)]
 #[path = "bf16_nominal_final_retained_effects_genuine_v1_tests.rs"]
 pub(in crate::production_ranked_projection_v1) mod genuine;
+
+#[path = "bf16_nominal_prepared_tensor_effects_v1.rs"]
+mod composed;
+#[allow(unused_imports)]
+pub(in crate::production_ranked_projection_v1) use composed::{
+    NominalPreparedTensorEffectsV1, with_nominal_prepared_tensor_effects_v1,
+};

@@ -648,3 +648,8 @@ pub(super) use retained_effects::{
 #[cfg(test)]
 #[path = "bf16_nominal_final_candidate_v1_tests.rs"]
 mod tests;
+
+#[allow(unused_imports)]
+pub(super) use retained_effects::{
+    NominalPreparedTensorEffectsV1, with_nominal_prepared_tensor_effects_v1,
+};
