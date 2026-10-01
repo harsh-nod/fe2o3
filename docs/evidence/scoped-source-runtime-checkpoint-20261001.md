@@ -9,20 +9,54 @@ examples as qualified through the new production path.
 
 ## Latest Compiler Checkpoint
 
-The actual-source rerun **r332 failed** at local candidate
-`c13567f2f876bc4ed9b0c5edc1e4d1017a94f904`. Its backend built, then all 24
-ordinary fill, guarded-fill and vecadd configurations failed on gfx942/gfx950.
-The parent result was zero passed, one failed, none ignored and 4,284 filtered.
-Failures now include original scalar correspondence, global-effect coverage,
-and observer assumptions about helper count and retained transaction storage.
-These are under investigation; no assertion or admission check is waived.
+The actual-source rerun **r348 failed** at local candidate
+`4ad611b1105268e6e1e119f743d8a2d5281f1377`. Its backend built, then all 24
+ordinary fill, guarded-fill and vecadd configurations failed on gfx942/gfx950:
 
-Some optimized fill cases emitted exact diagnostic proof text. The strict
-extractor rejected it: all three distinct payloads lack the required original
-path and control-memory join components. Emission is therefore neither complete
-proof preparation nor executed proof. No protected proof or GPU launch ran.
-The independent source/tool/runner audit passed; raw r332 log SHA-256 is
-`64e2068050e4ea8693a4dd26fc22de9a4e7289e4e36a84b98b0c3bf5fb3c849d`.
+- Sixteen fill/guarded-fill attempts emitted partial proof text but lacked the
+  required store-activation clause connecting original control to memory effects.
+- Four vecadd opt0/MIR0 attempts stopped at the root-only function census.
+- Four vecadd opt3/MIR2 attempts stopped with source resource-accounting errors.
+
+The parent result was zero passed, one failed, none ignored and 4,344 filtered.
+No required protected proof or safe GPU launch completed. The independent
+source/tool/runner audit passed; raw log SHA-256 is
+`4acebd5bc6ce64098be78f030d12a08a924d7ac2b7ba3421c1a12a842e194437`.
+These results supersede r332, not the missing production acceptance criteria.
+
+The same candidate's focused lowerer run on isolated MI350 completed with
+**75 passed, 17 failed, none ignored and 4,713 filtered**. Ten tests stopped on
+noncanonical source block order; six exhausted the unchanged work allowance;
+one stopped before its intended foreign-owner observation. Early failures are
+not credited as successful negative tests. Independent source, tool, archive,
+result and cleanup checks passed. Raw log SHA-256 is
+`1ddd806ed9fa5fc4e844b75e256a71f3f8f46b64649467e340caeb16efb33a8b`.
+The isolated container and 3,710,394,368-byte owned cache were removed. This was
+CPU compiler testing on a GPU host, not GPU execution.
+
+Reviewed local changes subsequently connect original intrinsic clauses to the
+source census, replay a handoff against its retained original source owner,
+and capture immutable original source bytes under a shared storage allowance.
+These are incomplete integration steps: aggregate call/return obligations,
+actual compiler consumption of captured inputs, generated dependency provenance,
+and the complete source/context/ABI/launch conjunction remain outstanding.
+`MissingCall` and `MissingSourcePublication` remain explicit refusals.
+
+The complete kernel-descriptor library run **r351 passed all 67 tests**, with
+none failed or ignored, at local candidate
+`2ea1914290fe15b3c6edeaeaf0336c73acbde01a`. This includes the new allocation-free
+physical-component accessor and its exact access/alias/unchanged-wire control.
+The independent source/tool/runner audit passed; raw log SHA-256 is
+`db38606b5571598655d7bb8b4ec23484f7524bd267330ae833ae71aaef6840d7`.
+This verifies descriptor behavior, not source proof or launch authority.
+
+Local source-capture runs r349 and r350 receive **no test credit**: disk
+exhaustion interrupted r349's report, and an execution-environment interruption
+left r350 without a final report. The incomplete logs are preserved. Storage
+was recovered without deleting source or reports; a fresh private RAM cache
+was created after the previous cache disappeared. No missing result is inferred.
+
+## Component History
 
 Reviewed local integration includes scalar-control correspondence, original
 helper-call topology, instance-qualified control/memory proof composition,
@@ -109,6 +143,12 @@ and coordinator currentness controls. Ignored native tests remain unexecuted.
 The independent source/tool/runner/raw audit passed; raw log SHA-256 is
 `c30bb53881f2091b0a26ac420a7730e435111e5fe4616c358a9cece41b8a605d`.
 No protected proof or GPU execution occurred.
+
+A separate isolated MI350 check compiled the Cargo frontend, execution protocol
+and coordinator with their test targets at that same `d111e0d45` candidate.
+The independent source/tool/archive/cleanup audit passed; it executed no tests.
+The owned container and 2,827,980,800-byte cache were removed. Raw log SHA-256 is
+`d9e91af0c7d48d52ff6529a892b6656dc48bb4d6ebb0f7d6177683e869b1d017`.
 
 The runtime staging adapter passed **28 local controls**, including ELF W+X
 rejection, nonblocking FIFO rejection, detached-descendant cleanup, and reached
