@@ -1,4 +1,6 @@
 use super::*;
+#[path = "production_source_index_reborrows_v43_tests.rs"]
+mod reborrow_tests;
 #[path = "production_source_reference_endpoints_v38_tests.rs"]
 mod reference_endpoint_tests;
 

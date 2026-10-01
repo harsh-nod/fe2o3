@@ -1161,6 +1161,25 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             )? {
                 return Ok(SemanticValueBindingV1::Value { id, ty });
             }
+            if let Some(value) = references.reborrow_index_referent_v43(
+                &binding,
+                source_type,
+                SourceReferenceSiteV29 {
+                    instance: this
+                        .execution
+                        .as_ref()
+                        .ok_or_else(execution_cfg_error_v29)?
+                        .instance,
+                    block,
+                    statement: statement.map(|value| value as usize),
+                },
+                source,
+                projection_index,
+                access,
+                budget,
+            )? {
+                return Ok(value);
+            }
             let loan = &references.plan.loans[binding.origin.single_loan()?];
             let origin = &references.plan.origins[loan.origin];
             let mut values = binding.values.iter();

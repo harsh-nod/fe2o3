@@ -20,6 +20,7 @@ pub(super) struct Borrow {
     instance: usize,
     block: usize,
     statement: usize,
+    parent: Option<(usize, usize, usize, usize)>,
 }
 
 fn key(site: Site) -> [u32; 2] {
@@ -125,7 +126,9 @@ impl Borrow {
             return Ok(None);
         };
         let destination = assignment.destination();
-        if !place.projections().is_empty()
+        let reborrow = matches!(place.projections(), [projection]
+            if projection.kind() == Projection::Dereference && projection.result_type() == place.ty());
+        if (!place.projections().is_empty() && !reborrow)
             || !destination.projections().is_empty()
             || destination.ty() != assignment.value().result_type()
             || context
@@ -169,7 +172,7 @@ impl Borrow {
             || reference.carrier(out.budget)? != Carrier::StableScalar
             || reference.origin_instance(out.budget)? != context.instance
             || reference.origin_function(out.budget)? != function
-            || reference.origin_local(out.budget)? != place.local()
+            || (!reborrow && reference.origin_local(out.budget)? != place.local())
             || reference.origin_type(out.budget)? != place.ty()
             || reference.borrow_site(out.budget)?
                 != (
@@ -182,22 +185,84 @@ impl Borrow {
         {
             return Err(mismatch());
         }
+        let origin = reference.origin_local(out.budget)?;
+        let generation = reference.origin_generation(out.budget)?;
+        let parent = if reborrow {
+            let parent_type = context
+                .function
+                .locals()
+                .get(place.local().index() as usize)
+                .ok_or_else(mismatch)?
+                .ty();
+            if !matches!(context.types.get(parent_type.index() as usize).map(Type::shape),
+                Some(Shape::Pointer(pointer)) if pointer.kind() == PointerKind::Reference
+                    && pointer.mutability() == fe2o3_mir_model::semantic_mir_v1::SemanticMutabilityV1::Immutable
+                    && pointer.metadata() == PointerMetadata::None && pointer.pointee() == place.ty())
+            {
+                return Err(mismatch());
+            }
+            let value = original_value(
+                context.slots,
+                function,
+                block,
+                Some(statement),
+                OperandRole::RvaluePlace,
+                place.local().index(),
+                false,
+                out,
+            )?;
+            let endpoint = relation.ssa_typed_endpoint_v36(
+                context.root,
+                context.instance,
+                value,
+                out.budget,
+            )?;
+            let parent = endpoint.reference(out.budget)?.ok_or_else(mismatch)?;
+            if endpoint.source_type(out.budget)? != parent_type
+                || endpoint.source_local(out.budget)? != place.local()
+                || endpoint.source_function(out.budget)? != function
+                || parent.carrier(out.budget)? != Carrier::StableScalar
+                || parent.origin_instance(out.budget)? != context.instance
+                || parent.origin_function(out.budget)? != function
+                || parent.origin_local(out.budget)? != origin
+                || parent.origin_type(out.budget)? != place.ty()
+                || parent.origin_generation(out.budget)? != generation
+            {
+                return Err(mismatch());
+            }
+            let (instance, block, statement) = parent.borrow_site(out.budget)?;
+            Some((
+                context.local(place.local().index())?,
+                instance,
+                block.index() as usize,
+                statement.ok_or_else(mismatch)?,
+            ))
+        } else {
+            None
+        };
         Ok(Some(Self {
             destination: context.local(destination.local().index())?,
-            origin: context.local(place.local().index())?,
+            origin: context.local(origin.index())?,
             source_type: place.ty().index(),
-            generation: reference.origin_generation(out.budget)?,
+            generation,
             instance: context.instance,
             block,
             statement,
+            parent,
         }))
     }
 
     pub(super) fn emit(&self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.charge_work(1)?;
-        write!(out, "InvocationSourceByteEventV36::WitnessBorrow {{ destination: {}, origin: {}, source_type: {}, generation: {}, instance: {}, block: {}, statement: {} }}",
+        write!(out, "InvocationSourceByteEventV36::WitnessBorrow {{ destination: {}, origin: {}, source_type: {}, generation: {}, instance: {}, block: {}, statement: {}, parent: ",
             self.destination, self.origin, self.source_type, self.generation, self.instance,
-            self.block, self.statement).map_err(|_| out.error())
+            self.block, self.statement).map_err(|_| out.error())?;
+        match self.parent {
+            None => write!(out, "None"),
+            Some((local, instance, block, statement)) => write!(out,
+                "Some(InvocationSourceWitnessParentV43 {{ local: {local}, instance: {instance}, block: {block}, statement: {statement} }})"),
+        }.map_err(|_| out.error())?;
+        write!(out, " }}").map_err(|_| out.error())
     }
 }
 
@@ -220,4 +285,12 @@ pub(super) fn headers() -> usize {
         + size_of::<
             Result<Option<fe2o3_lower_mir_kernel::ProductionSourceReferenceEndpointV38<'_, '_>>>,
         >()
+        + size_of::<Option<(usize, usize, usize, usize)>>()
+        + size_of::<fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>>()
+        + size_of::<fe2o3_lower_mir_kernel::ProductionSourceReferenceEndpointV38<'_, '_>>()
+        + 12 * size_of::<usize>()
 }
+
+#[cfg(test)]
+#[path = "original_semantic_mir_source_witness_reborrows_v43_tests.rs"]
+mod tests;

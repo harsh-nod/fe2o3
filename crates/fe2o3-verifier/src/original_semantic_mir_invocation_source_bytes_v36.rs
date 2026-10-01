@@ -1654,7 +1654,7 @@ enum InvocationSourceByteEventV36 {
     IntegerCast(InvocationSourceIntegerCastV43),
     Scalar,
     WitnessBorrow { destination: int, origin: int, source_type: int, generation: int,
-        instance: int, block: int, statement: int },
+        instance: int, block: int, statement: int, parent: Option<InvocationSourceWitnessParentV43> },
     WitnessTransfer { destination: int, input: int, source_type: int, reference: bool, moved: bool },
     Pointer(InvocationSourcePointerEventV36),
     Transfer { destination: InvocationSourceByteDestinationV36,
@@ -1986,8 +1986,8 @@ open spec fn invocation_source_byte_step_v36(
         InvocationSourceByteEventV36::ObjectDead { local } =>
             invocation_source_object_end_v40(source, local, root, instance),
         InvocationSourceByteEventV36::WitnessBorrow { destination, origin, source_type,
-            generation, instance, block, statement } => invocation_source_borrow_witness_v38(
-                source, destination, origin, source_type, generation, instance, block, statement),
+            generation, instance, block, statement, parent } => invocation_source_reborrow_witness_v43(
+                source, destination, origin, source_type, generation, instance, block, statement, parent),
         InvocationSourceByteEventV36::WitnessTransfer { destination, input, source_type,
             reference, moved } => invocation_source_transfer_witness_v40(
                 source, destination, input, source_type, reference, moved),

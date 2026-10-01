@@ -142,6 +142,45 @@ open spec fn invocation_source_borrow_witness_v38(
     }
 }
 
+struct InvocationSourceWitnessParentV43 {
+    local: int,
+    instance: int,
+    block: int,
+    statement: int,
+}
+
+open spec fn invocation_source_reborrow_witness_v43(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, origin_generation: int, instance: int, block: int, statement: int,
+    parent: Option<InvocationSourceWitnessParentV43>,
+) -> InvocationSourceByteStateV36 {
+    match parent {
+        None => invocation_source_borrow_witness_v38(source, destination, origin,
+            source_type, origin_generation, instance, block, statement),
+        Some(parent) => {
+            if destination == origin || !invocation_source_reference_current_v38(source, parent.local, source_type)
+                || source.logical.references[parent.local].origin != origin
+                || source.logical.references[parent.local].origin_generation != origin_generation
+                || source.logical.references[parent.local].borrow_instance != parent.instance
+                || source.logical.references[parent.local].borrow_block != parent.block
+                || source.logical.references[parent.local].borrow_statement != parent.statement
+                || instance < 0 || block < 0 || statement < 0 {
+                invocation_source_byte_refused_v36(source)
+            } else {
+                // Preserve the original dynamic origin frame and version, not
+                // the scalar bits or the current frame as a new authority.
+                let reference = InvocationSourceReferenceV38 {
+                    borrow_instance: instance, borrow_block: block, borrow_statement: statement,
+                    ..source.logical.references[parent.local] };
+                let changed = invocation_source_byte_put_local_v36(source, destination, source.machine.values[parent.local]);
+                InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+                    references: changed.logical.references.insert(destination, reference),
+                    ..changed.logical }, ..changed }
+            }
+        },
+    }
+}
+
 open spec fn invocation_source_read_witness_v38(
     source: InvocationSourceByteStateV36, destination: int, reference: int, source_type: int,
     origin: int, generation: int, instance: int, block: int, statement: int, moved: bool,
@@ -161,6 +200,46 @@ open spec fn invocation_source_read_witness_v38(
         invocation_source_byte_put_local_v36(consumed, destination, value)
     }
 }
+
+proof fn source_witness_reborrow_requires_current_parent_v43(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, generation: int, instance: int, block: int, statement: int,
+    parent: InvocationSourceWitnessParentV43,
+)
+    requires !invocation_source_reference_current_v38(source, parent.local, source_type),
+    ensures !invocation_source_reborrow_witness_v43(source, destination, origin,
+        source_type, generation, instance, block, statement, Some(parent)).machine.valid,
+{}
+
+proof fn source_witness_reborrow_preserves_original_dynamic_loan_v43(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, generation: int, instance: int, block: int, statement: int,
+    parent: InvocationSourceWitnessParentV43,
+)
+    requires invocation_source_reborrow_witness_v43(source, destination, origin,
+        source_type, generation, instance, block, statement, Some(parent)).machine.valid,
+    ensures ({ let changed = invocation_source_reborrow_witness_v43(source, destination, origin,
+        source_type, generation, instance, block, statement, Some(parent));
+        changed.logical.references[destination].frame == source.logical.references[parent.local].frame
+            && changed.logical.references[destination].version == source.logical.references[parent.local].version
+            && changed.logical.references[destination].origin == source.logical.references[parent.local].origin
+            && changed.logical.references[destination].borrow_instance == instance
+            && changed.logical.references[destination].borrow_block == block
+            && changed.logical.references[destination].borrow_statement == statement }),
+{}
+
+proof fn source_witness_reborrow_rejects_wrong_original_parent_site_v43(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, generation: int, instance: int, block: int, statement: int,
+    parent: InvocationSourceWitnessParentV43,
+)
+    requires source.logical.references.contains_key(parent.local),
+        source.logical.references[parent.local].borrow_instance != parent.instance
+            || source.logical.references[parent.local].borrow_block != parent.block
+            || source.logical.references[parent.local].borrow_statement != parent.statement,
+    ensures !invocation_source_reborrow_witness_v43(source, destination, origin,
+        source_type, generation, instance, block, statement, Some(parent)).machine.valid,
+{}
 
 open spec fn invocation_source_convert_witness_v38(
     source: InvocationSourceByteStateV36, destination: int, input: int,

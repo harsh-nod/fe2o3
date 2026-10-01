@@ -25,7 +25,10 @@ struct SourceIndexWitnessBorrowV29 {
     origin: usize,
     index_space: SemanticDisjointIndexSpaceV1,
     disjoint: bool,
+    availability: Option<SemanticCapabilityAvailabilityV1>,
 }
+
+include!("production_source_index_reborrows_v43.rs");
 
 fn source_index_witness_error_v29() -> ProductionSemanticKirErrorV1 {
     source_reference_error_v29("source index reader differs from its original witness loan")
@@ -156,13 +159,18 @@ fn source_reference_index_witness_values_v29(
         references.plan,
         budget,
     )?;
+    if let Some(proof) =
+        source_reference_index_reborrow_values_v43(cursor, place, loan, referent, values, budget)?
+    {
+        return Ok(Some(proof));
+    }
     let Some(carrier) = carriers.lookup(place.local().index(), budget)? else {
         return Ok(None);
     };
     let SemanticPromotedBindingV1::IndexWitness {
         index_space,
         disjoint,
-        ..
+        availability,
     } = carrier.binding
     else {
         return Ok(None);
@@ -205,6 +213,7 @@ fn source_reference_index_witness_values_v29(
         origin: record.origin,
         index_space,
         disjoint,
+        availability,
     }))
 }
 

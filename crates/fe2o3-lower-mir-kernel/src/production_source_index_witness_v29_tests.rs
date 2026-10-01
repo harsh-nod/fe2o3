@@ -151,6 +151,15 @@ fn index_reader_owner_with_fanout_v41(
     copy_references: bool,
     fanout: bool,
 ) -> ProductionSemanticSsaOwnerV1 {
+    index_reader_owner_with_reborrows_v43(move_witnesses, copy_references, fanout, 0)
+}
+
+fn index_reader_owner_with_reborrows_v43(
+    move_witnesses: bool,
+    copy_references: bool,
+    fanout: bool,
+    depth: usize,
+) -> ProductionSemanticSsaOwnerV1 {
     assert!(!fanout || copy_references);
     let base = owner(Case::Shared);
     let mut types = base.source_semantic().types()[..2].to_vec();
@@ -390,6 +399,54 @@ fn index_reader_owner_with_fanout_v41(
     ];
     if move_witnesses || copy_references {
         local_types.extend([THREAD_REF, THREAD, DISJOINT, DISJOINT_REF]);
+    }
+    for (block_index, witness, reference, first, callable, output, next) in [
+        (
+            1usize,
+            THREAD,
+            THREAD_REF,
+            if copy_references { 7 } else { 2 },
+            2,
+            3,
+            if fanout { 5 } else { 2 },
+        ),
+        (
+            3usize,
+            DISJOINT,
+            DISJOINT_REF,
+            if copy_references { 10 } else { 5 },
+            4,
+            6,
+            if fanout { 6 } else { 4 },
+        ),
+    ] {
+        let mut parent = first;
+        let mut statements = blocks[block_index].statements().to_vec();
+        for _ in 0..depth {
+            let child = local_types.len() as u32;
+            local_types.push(reference);
+            statements.push(assign(
+                place(child, reference),
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Shared,
+                    place: projected(parent, &[(SemanticProjectionKindV1::Dereference, witness)]),
+                },
+            ));
+            parent = child;
+        }
+        if depth != 0 {
+            blocks[block_index] = block(
+                10 + block_index as u8,
+                statements,
+                index_call(
+                    callable,
+                    vec![SemanticOperandV1::Copy(place(parent, reference))],
+                    output,
+                    INDEX,
+                    next,
+                ),
+            );
+        }
     }
     let function = SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256([10; 32]),
