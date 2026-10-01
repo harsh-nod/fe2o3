@@ -203,7 +203,9 @@ fn source_static_object_expected_location_inner_v29(
         .ok_or_else(scoped_object_error_v29)?;
     if !matches!(
         access,
-        SourceReferenceAccessV29::Read | SourceReferenceAccessV29::Write
+        SourceReferenceAccessV29::Read
+            | SourceReferenceAccessV29::Write
+            | SourceReferenceAccessV29::Address
     ) {
         return Err(scoped_object_pending_v29());
     }
@@ -218,7 +220,7 @@ fn source_static_object_expected_location_inner_v29(
             .get(..prefix as usize)
             .ok_or_else(scoped_object_error_v29)?
     };
-    if path.len() > 1 || endpoint.path.count != path.len() {
+    if endpoint.path.count != path.len() {
         return Err(scoped_object_pending_v29());
     }
     budget.charge_work(path.len())?;
@@ -297,6 +299,11 @@ fn source_static_object_expected_location_inner_v29(
             Some(SemanticTypeShapeV1::Pointer(_)) => {
                 let _ = source_object_original_leaf_type_v29(plan, ty, schema, budget)?;
             }
+            Some(
+                SemanticTypeShapeV1::Tuple(_)
+                | SemanticTypeShapeV1::Aggregate(_)
+                | SemanticTypeShapeV1::Array { .. },
+            ) if generated.is_none() && (prefix as usize) < place.projections().len() => {}
             _ => return Err(scoped_object_pending_v29()),
         }
     }
@@ -321,7 +328,7 @@ fn check_source_static_object_projects_v29(
         source_reference_owned_prepay_v29::<Option<&SemanticTypeDeclV1>>(plan, budget)?;
         source_reference_owned_prepay_v29::<Option<&SemanticTypeShapeV1>>(plan, budget)?;
         source_reference_owned_prepay_v29::<ScopedMemoryOccurrenceV29>(plan, budget)?;
-        budget.reserve_storage(std::mem::size_of::<(Vec<bool>, Vec<(usize, u32)>)>())?;
+        budget.reserve_storage(std::mem::size_of::<(Vec<bool>, Vec<(usize, bool, u32)>)>())?;
         let mut seen = emission_vec_v1(graph.projections.len(), budget)?;
         let mut original_keys = emission_vec_v1(graph.projections.len(), budget)?;
         budget.charge_work(graph.projections.len())?;
@@ -370,21 +377,22 @@ fn check_source_static_object_projects_v29(
                     payload,
                     budget,
                 )?;
-                let (site, role, component) = match projected.source {
+                let (site, role, generated, component) = match projected.source {
                     ScopedObjectSourceV29::AggregateComponent {
                         site,
                         operand,
                         variant: None,
                         ..
-                    } => (site, ExecutionOperandV29::Destination, operand),
+                    } => (site, ExecutionOperandV29::Destination, true, operand),
                     ScopedObjectSourceV29::Place {
                         site, role, prefix, ..
-                    } if prefix == 1
+                    } if prefix != 0
+                        && matches!(projected.object, ScopedObjectIdentityV29::Local { .. })
                         || matches!(projected.object,
                             ScopedObjectIdentityV29::Reference { dereference_prefix, .. }
                             if dereference_prefix != 0 && prefix.checked_sub(dereference_prefix) == Some(1)) =>
                     {
-                        (site, role, u32::MAX)
+                        (site, role, false, prefix)
                     }
                     _ => return Err(scoped_object_pending_v29()),
                 };
@@ -433,7 +441,9 @@ fn check_source_static_object_projects_v29(
                         .ok_or_else(scoped_object_error_v29)?;
                 if !matches!(
                     access,
-                    SourceReferenceAccessV29::Read | SourceReferenceAccessV29::Write
+                    SourceReferenceAccessV29::Read
+                        | SourceReferenceAccessV29::Write
+                        | SourceReferenceAccessV29::Address
                 ) {
                     return Err(scoped_object_pending_v29());
                 }
@@ -475,7 +485,7 @@ fn check_source_static_object_projects_v29(
                 if std::mem::replace(&mut seen[index], true) {
                     return Err(scoped_object_error_v29());
                 }
-                original_keys.push((access_ordinal, component));
+                original_keys.push((access_ordinal, generated, component));
                 projects.push(PendingSourceObjectProjectV29 {
                     instance,
                     anchor: ordinal,
@@ -488,7 +498,7 @@ fn check_source_static_object_projects_v29(
         if seen.iter().any(|seen| !seen) {
             return Err(scoped_object_error_v29());
         }
-        call_splice_sort_work_v1(argument_product_v1(original_keys.len(), 2)?, budget)
+        call_splice_sort_work_v1(argument_product_v1(original_keys.len(), 3)?, budget)
             .map_err(source_address_call_error_v29)?;
         original_keys.sort_unstable();
         budget.charge_work(original_keys.len())?;

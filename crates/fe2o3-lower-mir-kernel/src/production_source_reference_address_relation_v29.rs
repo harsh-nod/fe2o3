@@ -1746,11 +1746,15 @@ fn source_address_accesses_v29(
                             None,
                         )
                     } else {
-                        // This scalar slice does not reinterpret aggregate,
-                        // indexed or descriptor subobjects as whole cells.
-                        if prefix != 1
+                        // A nested holder must retain its exact original raw
+                        // crossing. The pointee still needs its full cell proof.
+                        let crossing = prefix
+                            .checked_sub(1)
+                            .ok_or_else(source_raw_physical_error_v29)?;
+                        if (prefix != 1
+                            && (object.is_none() || prefix != place.projections().len()))
                             || !matches!(
-                                place.projections()[0].kind(),
+                                place.projections()[crossing].kind(),
                                 SemanticProjectionKindV1::Dereference
                             )
                         {
@@ -1763,13 +1767,29 @@ fn source_address_accesses_v29(
                             references.plan.raw_accesses.len(),
                             budget,
                         )?;
-                        if let Some(source) = references.plan.raw_accesses.get(&(key, 0)) {
+                        let raw = if crossing == 0 {
+                            references
+                                .plan
+                                .raw_accesses
+                                .get(&(key, crossing))
+                                .map(|row| **row)
+                        } else {
+                            Some(source_static_raw_holder_v42(
+                                references.plan,
+                                site,
+                                place,
+                                access,
+                                crossing,
+                                budget,
+                            )?)
+                        };
+                        if let Some(source) = raw {
                             budget.charge_work(10)?;
                             if source.site != site
                                 || source.source != place as *const SemanticPlaceV1 as usize
                                 || source.access != access
                                 || source.crossing != access
-                                || source.projection != 0
+                                || source.projection != crossing
                                 || source.pointee != place.ty()
                                 || source.ty != place.ty()
                             {
@@ -1842,7 +1862,7 @@ fn source_address_accesses_v29(
                                 .ok_or_else(source_raw_physical_error_v29)? = true;
                             (
                                 target.ok_or_else(source_raw_physical_error_v29)?,
-                                Some(**source),
+                                Some(source),
                             )
                         } else {
                             charge_execution_cfg_lookup_v29(

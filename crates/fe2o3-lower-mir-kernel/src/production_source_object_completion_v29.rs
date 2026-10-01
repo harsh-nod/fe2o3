@@ -2,6 +2,7 @@
 // These helpers authenticate source recipes; they never seed physical origins.
 include!("production_source_static_object_source_v29.rs");
 include!("production_source_array_component_index_v29.rs");
+include!("production_source_static_raw_holders_v42.rs");
 fn source_address_local_slot_ranges_v29(
     slots: &[ScopedSourceSlotV29],
     local: u32,
@@ -256,7 +257,7 @@ fn source_address_object_payload_v29(
             && matches!(role, ScopedMemoryPayloadV29::IndexLoad { read: actual, .. } if actual == read) =>
             {}
         (ScopedObjectIdentityV29::Local { .. }, ScopedObjectSourceV29::Place { .. }) => {
-            if endpoint.source_path.count > 1 || endpoint.path.count > 1 {
+            if endpoint.source_path.count != endpoint.path.count {
                 return Err(scoped_object_pending_v29());
             }
             for component in anchors.object_path(endpoint.source_path, budget)? {
@@ -297,7 +298,8 @@ fn source_address_object_payload_v29(
                     !matches!(component, ScopedObjectComponentV29::Original { projection, selector: None }
                         if if index + 1 == path.len() {
                             projection.kind() == SemanticProjectionKindV1::Dereference
-                        } else { matches!(projection.kind(), SemanticProjectionKindV1::Field(_)) })
+                        } else { matches!(projection.kind(), SemanticProjectionKindV1::Field(_)
+                            | SemanticProjectionKindV1::ConstantIndex { .. }) })
                 }) { return Err(scoped_object_pending_v29()); }
         }
         (
@@ -421,14 +423,12 @@ fn source_address_object_direct_v29(
         return Err(source_raw_physical_error_v29());
     }
     budget.charge_work(place.projections().len())?;
-    if place.projections().len() <= 1
-        && place.projections().iter().all(|projection| {
-            matches!(
-                projection.kind(),
-                SemanticProjectionKindV1::Field(_) | SemanticProjectionKindV1::ConstantIndex { .. }
-            )
-        })
-    {
+    if place.projections().iter().all(|projection| {
+        matches!(
+            projection.kind(),
+            SemanticProjectionKindV1::Field(_) | SemanticProjectionKindV1::ConstantIndex { .. }
+        )
+    }) {
         let original = source_reference_access_at_v29(plan, site, place, access, budget)?;
         let projections = plan
             .projections
@@ -447,12 +447,21 @@ fn source_address_object_direct_v29(
             return Err(source_raw_physical_error_v29());
         }
     } else {
-        let key = (source_reference_access_key_v29(site, place, access), 0);
-        charge_execution_cfg_lookup_v29(plan.raw_accesses.len(), budget)?;
-        let raw = plan
-            .raw_accesses
-            .get(&key)
+        let crossing = place
+            .projections()
+            .len()
+            .checked_sub(1)
             .ok_or_else(source_raw_physical_error_v29)?;
+        let raw = if crossing == 0 {
+            let key = (source_reference_access_key_v29(site, place, access), 0);
+            charge_execution_cfg_lookup_v29(plan.raw_accesses.len(), budget)?;
+            **plan
+                .raw_accesses
+                .get(&key)
+                .ok_or_else(source_raw_physical_error_v29)?
+        } else {
+            source_static_raw_holder_v42(plan, site, place, access, crossing, budget)?
+        };
         let holder = raw.holder;
         if raw.site != site
             || raw.source != place as *const SemanticPlaceV1 as usize
@@ -460,10 +469,13 @@ fn source_address_object_direct_v29(
             || holder.instance != instance
             || holder.local != local
             || holder.generation != generation
-            || holder.count != 0
-            || holder.parent.is_some()
-            || holder.shared_path
-            || holder.selector_source.is_some()
+            || (crossing == 0
+                && (holder.count != 0
+                    || holder.parent.is_some()
+                    || holder.shared_path
+                    || holder.selector_source.is_some()))
+            || !matches!(endpoint.source, ScopedObjectSourceV29::Place { prefix, .. }
+                if prefix as usize <= crossing)
         {
             return Err(source_raw_physical_error_v29());
         }
@@ -804,10 +816,9 @@ fn check_source_object_effect_census_v29(
             }
         } else {
             if writing
-                || prefix != 0
                 || place
                     .projections()
-                    .first()
+                    .get(prefix as usize)
                     .map(|projection| projection.kind())
                     != Some(SemanticProjectionKindV1::Dereference)
             {
@@ -816,7 +827,7 @@ fn check_source_object_effect_census_v29(
             charge_execution_cfg_lookup_v29(plan.raw_accesses.len(), budget)?;
             let raw = plan
                 .raw_accesses
-                .get(&(key, 0))
+                .get(&(key, prefix as usize))
                 .ok_or_else(scoped_object_error_v29)?;
             let seen = holders
                 .get_mut(raw.ordinal)
@@ -1777,8 +1788,36 @@ fn check_source_object_holder_value_v29(
         }
         return Ok(());
     }
-    if prefix != 1 {
+    if prefix == 0
+        || prefix as usize != place.projections().len()
+        || place.projections()[prefix as usize - 1].kind() != SemanticProjectionKindV1::Dereference
+    {
         return Err(scoped_object_pending_v29());
+    }
+    let holder_prefix = prefix - 1;
+    if holder_prefix != 0 {
+        let (block, statement) = scoped_memory_site_key_v29(site);
+        let original_site = SourceReferenceSiteV29 {
+            instance: source.instance,
+            block: SemanticBlockIdV1::from_index(block),
+            statement: statement.map(|value| value as usize),
+        };
+        let access =
+            source_reference_raw_original_access_v29(function, original_site, place, budget)?
+                .ok_or_else(scoped_object_error_v29)?;
+        source_static_raw_holder_v42(
+            plan,
+            original_site,
+            place,
+            access,
+            holder_prefix as usize,
+            budget,
+        )?;
+        // Nested holders are stored pointer cells. An SSA value for the whole
+        // aggregate is not an authenticated pointer load from that cell.
+        if !matches!(capture, ScopedMemoryOccurrenceV29::Retained { .. }) {
+            return Err(scoped_object_pending_v29());
+        }
     }
     if let ScopedMemoryOccurrenceV29::Promoted { definition, .. } = capture {
         let binding =
@@ -1787,8 +1826,16 @@ fn check_source_object_holder_value_v29(
             return Err(scoped_object_error_v29());
         }
     } else {
-        let ordinal =
-            payload_index.read_anchor(index, source, anchors, site, role, 0, capture, budget)?;
+        let ordinal = payload_index.read_anchor(
+            index,
+            source,
+            anchors,
+            site,
+            role,
+            holder_prefix,
+            capture,
+            budget,
+        )?;
         let row = anchors
             .rows
             .get(ordinal)
@@ -1799,7 +1846,10 @@ fn check_source_object_holder_value_v29(
         else {
             return Err(scoped_object_error_v29());
         };
-        if read.site == site && read.role == role && read.prefix == 0 && read.occurrence == capture
+        if read.site == site
+            && read.role == role
+            && read.prefix == holder_prefix
+            && read.occurrence == capture
         {
             let actual = source_address_original_operation_v29(
                 index.pending,

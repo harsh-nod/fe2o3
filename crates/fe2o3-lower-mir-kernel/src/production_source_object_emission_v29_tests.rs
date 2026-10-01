@@ -679,7 +679,7 @@ fn projected_raw_pointer_stores_and_address_of_reach_original_observer() {
     let _restore =
         Restore(SCOPED_SLOT_OBSERVER_V29.replace(Some(observe_projected_pointer_emission_v29)));
     for immutable in [false, true] {
-        for mode in 0..6 {
+        for mode in 0..9 {
             PROJECTED_POINTER_FIXTURE.set((immutable, mode));
             PROJECTED_POINTER_MUTATION.set(0);
             PROJECTED_POINTER_OBSERVED.set(0);
@@ -4177,3 +4177,6 @@ include!("production_source_object_abi_claims_v29_tests.rs");
 include!("production_source_object_query_scratch_v29_tests.rs");
 include!("production_source_object_storage_check_scratch_v29_tests.rs");
 include!("production_source_partial_array_read_v29_tests.rs");
+
+#[path = "production_source_static_raw_holders_v42_tests.rs"]
+mod static_raw_holders_v42_tests;

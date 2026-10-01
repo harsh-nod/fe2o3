@@ -52,7 +52,7 @@ fn check_source_array_component_index_v29(
     else {
         return Err(scoped_object_pending_v29());
     };
-    let ScopedObjectRoleV29::Project { projected, .. } = payload.role else {
+    let ScopedObjectRoleV29::Project { source, projected } = payload.role else {
         return Err(scoped_object_error_v29());
     };
     let original = instances
@@ -71,17 +71,14 @@ fn check_source_array_component_index_v29(
             ..
         } => (site, u64::from(operand)),
         ScopedObjectSourceV29::Place {
-            site,
-            role,
-            prefix: 1,
-            ..
-        } => {
+            site, role, prefix, ..
+        } if prefix != 0 => {
             budget.charge_work(6)?;
             let place = scoped_object_original_place_v29(original, site, role)
                 .ok_or_else(scoped_object_error_v29)?;
             let projection = place
                 .projections()
-                .first()
+                .get(prefix as usize - 1)
                 .ok_or_else(scoped_object_error_v29)?;
             let SemanticProjectionKindV1::ConstantIndex {
                 offset,
@@ -95,14 +92,30 @@ fn check_source_array_component_index_v29(
                 .owner()
                 .source_semantic()
                 .types()
-                .get(projected.root_type.index() as usize)
+                .get(source.projected_type.index() as usize)
                 .map(SemanticTypeDeclV1::shape)
             else {
                 return Err(scoped_object_error_v29());
             };
             let expected =
                 source_static_constant_index_v29(*length, offset, minimum_length, from_end)?;
-            if *element != projection.result_type() || projected.projected_type != *element {
+            let parent_type = if prefix == 1 {
+                original
+                    .locals()
+                    .get(place.local().index() as usize)
+                    .ok_or_else(scoped_object_error_v29)?
+                    .ty()
+            } else {
+                place
+                    .projections()
+                    .get(prefix as usize - 2)
+                    .ok_or_else(scoped_object_error_v29)?
+                    .result_type()
+            };
+            if source.projected_type != parent_type
+                || *element != projection.result_type()
+                || projected.projected_type != *element
+            {
                 return Err(scoped_object_error_v29());
             }
             (site, expected)

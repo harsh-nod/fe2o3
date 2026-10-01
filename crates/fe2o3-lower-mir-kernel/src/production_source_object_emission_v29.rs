@@ -490,6 +490,25 @@ fn projected_pointer_test_owner_v29(
             .unwrap(),
         ),
     ));
+    let array_holder = if mode >= 7 {
+        let ty = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([184; 32]),
+            SemanticLayoutIdentityV1::from_sha256([184; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(16),
+                8,
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![array]).unwrap()),
+        ));
+        ty
+    } else {
+        array
+    };
     let plain =
         |local, ty| SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap();
     let projected = |local, steps: Vec<(SemanticProjectionKindV1, SemanticTypeIdV1)>| {
@@ -506,17 +525,19 @@ fn projected_pointer_test_owner_v29(
     };
     let field = |index, ty| projected(11, vec![(SemanticProjectionKindV1::Field(index), ty)]);
     let element = |offset, from_end| {
-        projected(
-            13,
-            vec![(
-                SemanticProjectionKindV1::ConstantIndex {
-                    offset,
-                    minimum_length: 2,
-                    from_end,
-                },
-                raw,
-            )],
-        )
+        let mut steps = Vec::new();
+        if array_holder != array {
+            steps.push((SemanticProjectionKindV1::Field(0), array));
+        }
+        steps.push((
+            SemanticProjectionKindV1::ConstantIndex {
+                offset,
+                minimum_length: 2,
+                from_end,
+            },
+            raw,
+        ));
+        projected(13, steps)
     };
     let deref = |local, ty| projected(local, vec![(SemanticProjectionKindV1::Dereference, ty)]);
     let assign = |destination: SemanticPlaceV1, value| {
@@ -552,7 +573,7 @@ fn projected_pointer_test_owner_v29(
             address(element(1, false), SemanticMutabilityV1::Mutable),
         ),
     ]);
-    let holder = if matches!(mode, 2 | 3 | 5) {
+    let holder = if matches!(mode, 2 | 3 | 5..=8) {
         element(1, mode == 3)
     } else {
         field(0, raw)
@@ -589,20 +610,14 @@ fn projected_pointer_test_owner_v29(
                 (SemanticProjectionKindV1::Dereference, word),
             ],
         ),
-        5 => projected(
-            13,
-            vec![
-                (
-                    SemanticProjectionKindV1::ConstantIndex {
-                        offset: 1,
-                        minimum_length: 2,
-                        from_end: false,
-                    },
-                    raw,
-                ),
-                (SemanticProjectionKindV1::Dereference, word),
-            ],
-        ),
+        5..=8 => {
+            let holder = element(1, matches!(mode, 6 | 8));
+            let mut steps = holder.projections().to_vec();
+            steps.push(
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, word).unwrap(),
+            );
+            SemanticPlaceV1::new(holder.local(), steps, word).unwrap()
+        }
         _ => panic!("projected pointer fixture mode"),
     };
     statements.push(assign(
@@ -626,7 +641,7 @@ fn projected_pointer_test_owner_v29(
         (240, raw),
         (241, record),
         (242, record_pointer),
-        (243, array),
+        (243, array_holder),
         (244, indirect),
     ] {
         locals.push(SemanticLocalDeclV1::new(
