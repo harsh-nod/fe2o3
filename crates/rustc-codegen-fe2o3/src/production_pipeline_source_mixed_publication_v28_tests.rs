@@ -45,6 +45,9 @@ fn mixed_publication_custody_cannot_be_constructed_from_extraction() {
 
 #[test]
 fn original_mir_worker_frames_cover_actual_capture_and_result_envelopes() {
+    use fe2o3_kernel_ir::{EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth};
+
+    type RuntimeFields<'a> = (&'a [ExplicitLaunchExtent], FormalIndexWidth, EndiannessV2);
     type Consumer = for<'a, 'v, 's, 'w> fn(
         PreparedMixedPublicationV28<'a, 'v, 's>,
         &mut Budget<'w>,
@@ -64,17 +67,19 @@ fn original_mir_worker_frames_cover_actual_capture_and_result_envelopes() {
         )
         + size_of::<
             Result<
-                fe2o3_verifier::OriginalSemanticMirRefinementSubjectV31,
+                fe2o3_verifier::OriginalSemanticMirRefinementSubjectV36,
                 fe2o3_verifier::MixedOptimizerRefinementErrorV26,
             >,
         >()
-        + size_of::<fe2o3_verifier::OriginalSemanticMirRefinementSubjectV31>()
+        + size_of::<fe2o3_verifier::OriginalSemanticMirRefinementSubjectV36>()
         + size_of::<Subject>()
         + size_of::<Result<Subject, fe2o3_verifier::MixedOptimizerRelocationErrorV28>>()
         + 4 * size_of::<Result<(), Error>>()
         + size_of::<std::thread::Result<Result<(), Error>>>()
         + 2 * size_of::<&()>()
-        + 3 * size_of::<usize>();
+        + 3 * size_of::<usize>()
+        + size_of::<RuntimeFields<'_>>()
+        + size_of::<Result<RuntimeFields<'_>, Error>>();
     assert_eq!(
         original_mir_v30::headers::<(), Consumer>().unwrap(),
         expected
