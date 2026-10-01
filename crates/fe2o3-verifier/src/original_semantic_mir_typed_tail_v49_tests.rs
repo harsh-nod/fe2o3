@@ -36,6 +36,17 @@ fn run_mode(
     consensus: bool,
     examine: impl FnOnce(&str),
 ) -> (Result<()>, usize, usize, usize) {
+    run_transform(work, storage, hostile, consensus, None, examine)
+}
+
+fn run_transform(
+    work: usize,
+    storage: usize,
+    hostile: bool,
+    consensus: bool,
+    transform: Option<fn(&mut Vec<SemanticTypeDeclV1>, &mut Vec<SemanticFunctionDeclV1>)>,
+    examine: impl FnOnce(&str),
+) -> (Result<()>, usize, usize, usize) {
     let consume = |plan: &mut InvocationPlan<'_, '_>, out: &mut Writer<'_, '_>| {
         source_function::tests::with_slots(plan, out, |slots, out| {
             let relation = slots.correspondence(out)?;
@@ -129,7 +140,9 @@ fn run_mode(
             Ok(())
         })
     };
-    if consensus {
+    if let Some(transform) = transform {
+        super::super::invocations::tests::run_source_transform(work, storage, transform, consume)
+    } else if consensus {
         super::super::invocations::tests::run_source_transform(
             work,
             storage,
@@ -140,6 +153,9 @@ fn run_mode(
         super::super::invocations::tests::run_variant(work, storage, true, consume)
     }
 }
+
+#[path = "original_semantic_mir_float_values_v52_tests.rs"]
+mod float_values;
 
 fn consensus_transform(
     types: &mut Vec<SemanticTypeDeclV1>,

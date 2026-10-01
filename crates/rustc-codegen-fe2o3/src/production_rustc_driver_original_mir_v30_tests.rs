@@ -8,6 +8,9 @@ mod reference_enum_tests;
 #[path = "production_rustc_driver_enum_frontend_v49_tests.rs"]
 mod enum_frontend_tests;
 
+#[path = "production_rustc_driver_float_values_v52_tests.rs"]
+mod float_values_tests;
+
 const ORIGINAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::publication_tests::original_mir_v30_tests::original_mir_worker_child";
 const SCALAR: &str = "let temporary = a ^ b; let _result = temporary | a;";
 const CONTROL: &str = "let _result = if a == b { a ^ b } else { a | b };";
@@ -49,6 +52,7 @@ struct OriginalObservation {
     peak: usize,
     witness_protocol: [bool; 6],
     reference_enums: reference_enum_tests::ReferenceEnumCensus,
+    floats: float_values_tests::FloatCensus,
 }
 
 fn original_witness_event_protocol(source: &str, roots: usize) -> [bool; 3] {
@@ -195,6 +199,7 @@ fn original_observe(
     let witness_events = original_witness_event_protocol(source, subject.census()[0]);
     let reference_enums =
         reference_enum_tests::observe_reference_enums(candidate.source(budget)?, source, budget)?;
+    let floats = float_values_tests::observe_floats(candidate.source(budget)?, source, budget)?;
     assert_eq!(budget.storage(), floor);
     assert!(budget.work_ledger_identity_v1() == ledger);
     Ok(OriginalObservation {
@@ -211,6 +216,7 @@ fn original_observe(
             witness_events[2],
         ],
         reference_enums,
+        floats,
     })
 }
 

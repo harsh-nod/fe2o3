@@ -22,7 +22,7 @@ fn scalar(types: &[Type], ty: TypeId) -> Option<ScalarV30> {
     let bytes = match scalar {
         ScalarV30::Unit => 0,
         ScalarV30::Bool => 1,
-        ScalarV30::Integer { width, .. } => u64::from(width / 8),
+        ScalarV30::Integer { width, .. } | ScalarV30::Float { width } => u64::from(width / 8),
     };
     (!declaration.layout().is_uninhabited() && declaration.layout().size_bytes() == Some(bytes))
         .then_some(scalar)

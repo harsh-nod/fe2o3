@@ -73,6 +73,7 @@ pub(super) enum ScalarV30 {
     Unit,
     Bool,
     Integer { width: u32, signed: bool },
+    Float { width: u32 },
 }
 
 impl ScalarV30 {
@@ -80,6 +81,11 @@ impl ScalarV30 {
         match types.get(ty.index() as usize).map(Type::shape) {
             Some(Shape::Unit) => Ok(Self::Unit),
             Some(Shape::Scalar(Scalar::Bool)) => Ok(Self::Bool),
+            Some(Shape::Scalar(Scalar::Float {
+                bits: bits @ (32 | 64),
+            })) => Ok(Self::Float {
+                width: u32::from(*bits),
+            }),
             Some(Shape::Scalar(Scalar::Integer { bits, signed }))
                 if matches!(bits, 8 | 16 | 32 | 64) =>
             {
@@ -98,7 +104,7 @@ impl ScalarV30 {
         match self {
             Self::Unit => 0,
             Self::Bool => 1,
-            Self::Integer { width, .. } => width,
+            Self::Integer { width, .. } | Self::Float { width } => width,
         }
     }
 }
@@ -580,7 +586,9 @@ impl SourceProgramV30 {
                 operand,
             } => {
                 let input = self.operand(types, function, operand, out)?;
-                if scalar == ScalarV30::Unit || self.nodes[input].scalar != scalar {
+                if matches!(scalar, ScalarV30::Unit | ScalarV30::Float { .. })
+                    || self.nodes[input].scalar != scalar
+                {
                     return Err(Error::Statement("original MIR unary scalar type differs"));
                 }
                 self.push(
@@ -600,7 +608,7 @@ impl SourceProgramV30 {
                 let left = self.operand(types, function, left, out)?;
                 let right = self.operand(types, function, right, out)?;
                 let input = self.nodes[left].scalar;
-                if input == ScalarV30::Unit
+                if matches!(input, ScalarV30::Unit | ScalarV30::Float { .. })
                     || self.nodes[right].scalar != input
                     || scalar
                         != if operation.comparison() {

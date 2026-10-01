@@ -45,6 +45,7 @@ fn guard(plan: &ByteOperationV30<'_, '_>, actual: &OperationKind) -> Result<Guar
         ByteOperationV30::Scalar(_)
         | ByteOperationV30::Index(_)
         | ByteOperationV30::Checked(_)
+        | ByteOperationV30::Float(_)
         | ByteOperationV30::IntegralCast(_) => Guard::None,
     };
     Ok(guard)

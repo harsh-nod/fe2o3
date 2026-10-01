@@ -792,7 +792,7 @@ impl Context<'_, '_, '_> {
         let width = match scalar {
             ScalarV30::Unit => 0,
             ScalarV30::Bool => 1,
-            ScalarV30::Integer { width, .. } => u64::from(width / 8),
+            ScalarV30::Integer { width, .. } | ScalarV30::Float { width } => u64::from(width / 8),
         };
         if declaration.layout().size_bytes() != Some(width) {
             return Err(mismatch());
