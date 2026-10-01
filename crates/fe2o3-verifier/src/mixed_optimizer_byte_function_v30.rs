@@ -41,6 +41,10 @@ use views::StorageViewByteOperationV39;
 mod integral;
 use integral::IntegralByteCastV40;
 
+#[path = "mixed_optimizer_checked_byte_operations_v48.rs"]
+mod checked;
+use checked::CheckedByteOperationV48;
+
 #[path = "mixed_optimizer_byte_trap_v40.rs"]
 mod trap;
 use trap::TrapByteOperationV40;
@@ -69,6 +73,7 @@ enum ByteOperationV30<'inventory, 'owner> {
     Storage(StorageByteOperationV37),
     View(StorageViewByteOperationV39),
     IntegralCast(IntegralByteCastV40),
+    Checked(CheckedByteOperationV48),
     Index(IndexByteOperationV37),
     Scalar(CanonicalByteScalarV30<'inventory, 'owner>),
     Trap(TrapByteOperationV40),
@@ -228,6 +233,16 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 ByteOperationV30::Pointer(pointer)
             } else if matches!(actual.operation.kind, OperationKind::Cast { .. }) {
                 ByteOperationV30::IntegralCast(IntegralByteCastV40::derive(
+                    inventory, operation, width, out,
+                )?)
+            } else if matches!(
+                actual.operation.kind,
+                OperationKind::Binary {
+                    op: fe2o3_kernel_ir::BinaryOp::Checked(_),
+                    ..
+                }
+            ) {
+                ByteOperationV30::Checked(CheckedByteOperationV48::derive(
                     inventory, operation, width, out,
                 )?)
             } else if let Some(index) =
@@ -539,6 +554,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 cast.emit_step(before, after, out)?;
                 PointerByteEffectV30::None
             }
+            ByteOperationV30::Checked(checked) => {
+                checked.emit_step(before, after, out)?;
+                PointerByteEffectV30::None
+            }
             ByteOperationV30::Pointer(pointer) => {
                 pointer.emit_step(
                     before,
@@ -694,6 +713,7 @@ fn headers<R>() -> usize {
         + interpretation::headers()
         + views::headers()
         + integral::headers()
+        + checked::headers()
         + trap::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()

@@ -21,6 +21,7 @@ include!("mixed_optimizer_private_byte_obligations_v38_tests.rs");
 include!("mixed_optimizer_target_view_contracts_v38_tests.rs");
 include!("mixed_optimizer_storage_view_byte_operations_v39_tests.rs");
 include!("mixed_optimizer_integral_byte_casts_v40_tests.rs");
+include!("mixed_optimizer_checked_byte_operations_v48_tests.rs");
 include!("mixed_optimizer_byte_trap_v40_tests.rs");
 
 #[test]
@@ -768,6 +769,8 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
     assert_eq!(views::headers(), views);
     let integral = integral_cast_header_oracle_v40();
     assert_eq!(integral::headers(), integral);
+    let checked = checked_byte_header_oracle_v48();
+    assert_eq!(checked::headers(), checked);
     let trap = trap_header_oracle_v40();
     assert_eq!(trap::headers(), trap);
     assert_eq!(
@@ -781,6 +784,7 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
             + interpretation
             + views
             + integral
+            + checked
             + trap
             + model
     );
