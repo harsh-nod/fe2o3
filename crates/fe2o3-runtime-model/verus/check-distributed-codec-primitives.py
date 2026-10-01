@@ -15,6 +15,8 @@ OWNER = SRC / 'distributed_publication_contract.rs'
 NATIVE = SRC / 'distributed_publication_contract/codec_primitives.rs'
 BODY = SRC / 'distributed_publication_contract/codec_primitives_body.rs'
 TESTS = SRC / 'distributed_publication_contract/codec_tests.rs'
+FIELD_NATIVE = SRC / 'distributed_publication_contract/codec_fields.rs'
+FIELD_BODY = SRC / 'distributed_publication_contract/codec_fields_body.rs'
 PROOF = V / 'distributed_codec_primitives_v1.rs'
 CONSTRUCTION = V / 'distributed_publication_construction_v1.rs'
 CLASSIFIER = V / 'distributed_publication_contract_v1.rs'
@@ -23,10 +25,10 @@ CONSTRUCTION_BODY = SRC / 'distributed_publication_contract/construction_body.rs
 CLASSIFIER_BODY = SRC / 'distributed_publication_contract/classifier_body.rs'
 IDENTITY = SRC / 'identity.rs'
 BRIDGE = V / 'check-distributed-publication-contract.py'
-BRIDGE_SHA = 'ea17c6a3791026233ad177a403ce7cdc89a49c71a497d9ae7b440bbdf7fdab54'
+BRIDGE_SHA = '14aa07a7da94ff0dfda91c0f12301ec8f74403255e0edd20eb985efa4221c129'
 FILES = [PROOF, CONSTRUCTION, CLASSIFIER, DECLARATIONS, CONSTRUCTION_BODY, CLASSIFIER_BODY, BODY]
-SOURCE_FILES = 302
-SOURCE_TREE_SHA = 'e49f3ace340708e3dc33d72d73efc308062cf50c881c8ead2fde2a71ef0717f3'
+SOURCE_FILES = 305
+SOURCE_TREE_SHA = '6813bf95c19da1d3c08b6047bb8095d1709fb9fbd4bd7adc3533b1c625d82adb'
 PROOF_SHA = '2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6'
 BODY_SHA = '222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c'
 FIXTURES = V / 'fixtures/distributed_codec_primitives_v1_diagnostics.json'
@@ -104,6 +106,45 @@ def snapshot():
     return result
 
 
+def field_forwarding(sources):
+    owner, native, body = (re.sub(r'\s+', '', sources[path])
+                           for path in (OWNER, FIELD_NATIVE, FIELD_BODY))
+    forwarders = (
+        'fnheader(&mutself,domain:&[u8]){codec_fields::write_header(self.bytes,&mutself.offset,domain);}',
+        'fnu64(&mutself,value:u64){codec_fields::write_u64(self.bytes,&mutself.offset,value);}',
+        'fnheader(&mutself,domain:&[u8])->Result<(),DistributedPublicationContractErrorV1>{codec_fields::read_header(self.bytes,&mutself.offset,domain)}',
+        'fnu64(&mutself)->Result<u64,DistributedPublicationContractErrorV1>{codec_fields::read_u64(self.bytes,&mutself.offset)}',
+    )
+    need(owner.count('modcodec_fields;') == 1 and all(owner.count(call) == 1 for call in forwarders),
+         'actual Reader/Writer field methods forward to the private field helpers')
+    need(native.count('usesuper::codec_primitives::{fixed,put,take,u16_from_le,u16_le,u64_from_le,u64_le};') == 1
+         and native.count('include!("codec_fields_body.rs");') == 1,
+         'field helpers use the real primitive functions and shared field bodies')
+    calls = {
+        'read_header': ('bytes,offset,domain', 'u16_from_le(schema)'),
+        'write_header': ('bytes,offset,domain', 'put($bytes,$offset,&u16_le(DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1),);'),
+        'read_u64': ('bytes,offset', 'Ok(u64_from_le(value))'),
+        'write_u64': ('bytes,offset,value', 'put($bytes,$offset,&u64_le($value));'),
+    }
+    signatures = {
+        'read_header': 'pub(super)fnread_header(bytes:&[u8],offset:&mutusize,domain:&[u8],)->Result<(),DistributedPublicationContractErrorV1>',
+        'write_header': 'pub(super)fnwrite_header(bytes:&mut[u8],offset:&mutusize,domain:&[u8])',
+        'read_u64': 'pub(super)fnread_u64(bytes:&[u8],offset:&mutusize,)->Result<u64,DistributedPublicationContractErrorV1>',
+        'write_u64': 'pub(super)fnwrite_u64(bytes:&mut[u8],offset:&mutusize,value:u64)',
+    }
+    for kind, (arguments, primitive) in calls.items():
+        macro = 'distributed_codec_' + kind + '_body_v1'
+        invocation = macro + '!(distributed_codec_fields_expr_v1,' + arguments + ')'
+        marker = 'macro_rules!' + macro + '{'
+        need(native.count(signatures[kind] + '{' + invocation + '}') == 1
+             and native.count(invocation) == 1
+             and body.count(marker) == 1, 'one actual shared field body per native helper')
+        start = body.index(marker)
+        end = body.find('macro_rules!', start + len(marker))
+        region = body[start:] if end < 0 else body[start:end]
+        need(region.count(primitive) == 1, 'endian primitive remains in its matching field operation')
+
+
 def audit(sources):
     implementation = {p: text for p, text in sources.items() if p.is_relative_to(SRC)}
     need(set(sources) == set(implementation) | {PROOF, CONSTRUCTION, CLASSIFIER}
@@ -121,12 +162,9 @@ def audit(sources):
         'codec_primitives::take(self.bytes,&mutself.offset,count)',
         'codec_primitives::fixed(self.bytes,&mutself.offset)',
         'codec_primitives::finish(self.bytes,self.offset)',
-        'self.put(&codec_primitives::u16_le(DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1,));',
-        'self.put(&codec_primitives::u64_le(value));',
-        'codec_primitives::u16_from_le(self.fixed()?)',
-        'Ok(codec_primitives::u64_from_le(self.fixed()?))',
     )
     need(all(compact.count(value) == 1 for value in forwarders), 'real Reader/Writer primitive forwarding')
+    field_forwarding(sources)
     need(native.count('include!("codec_primitives_body.rs");') == 1
          and proof.count('include!("distributed_publication_construction_v1.rs");') == 1
          and proof.count('include!("../src/distributed_publication_contract/codec_primitives_body.rs");') == 1

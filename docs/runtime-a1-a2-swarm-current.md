@@ -6,7 +6,8 @@ Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
 refreshed on 2026-10-01: the issue remained Open, with 33 comments and its latest
 update at 2026-10-01 02:01:40 UTC. Both runtime branch refs were confirmed through
-signed commit `4d5276cc9`, including the composition evidence publication.
+signed commit `1110974e4`, including the composition evidence publication and
+the subsequent draft-status checkpoint.
 The [published checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5923229932)
 records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
@@ -55,7 +56,16 @@ prove cursor construction or scheduling. The first CPU attempt stopped before
 compilation because sparse workspace example manifests were missing. Exactly
 119 signed files in 26 example directories were restored, with all preexisting
 files unchanged. Both new locked/offline workspace metadata checks and the
-no-default non-test library check pass; the full CPU campaign is ongoing.
+no-default non-test library check pass. The fresh full no-default suite passes
+all 1,831 tests with no failures, ignores or filtering; the fresh all-feature
+suite also passes all 1,837 tests. All nineteen CPU stages and owned groups now
+close, including both strict Clippy modes, source controls and the example
+build. A six-stage raw
+selector capture now completes all three mutations and process closures. All
+three report full 1/1 summaries; the short-ceiling mutations each produce two
+postcondition diagnostics. Exact per-case diagnostic calibration remains
+pending qualification; macro anchors establish source association, not branch
+execution. Earlier rejected captures remain preserved.
 No signed selector qualification, cadence GPU measurement or performance gain
 is accepted. Original preparation and CPU failures remain retained.
 
@@ -73,7 +83,8 @@ self-contained portable campaign. Three model source guards and two helper pins
 are explicitly rebound with their actual proof closures unchanged. All eighteen
 local CI commands pass. Whole-wire and distributed authority remain open.
 
-The equality-successor field-codec draft passes fresh CPU qualification:
+The [field-codec component](evidence/dev-distributed-codec-fields-2026-10-01/README.md)
+passes its signed proof campaign and reuses fresh CPU qualification:
 1,125 debug tests, 19 existing ignores, all sixteen selected release codec
 tests and strict Clippy, with both complete 1,144-test rosters and thirteen
 closed groups independently checked. Proof-only successors repair the header
@@ -89,12 +100,19 @@ completes all 41 stages and 34 raw mutation cases, with three full 63/0 positive
 and all 41 owned groups closed. Every mutation reports one logical error. The
 unchanged classifier returns 32 unqualified observations and rejects two
 auxiliary `vstd/seq.rs` recommendation notes. Those rejections are preserved as
-data, not relaxed into acceptance. Exact source-bound note handling and controls
-are being prepared before fresh signed qualification. Accepted negative
-classifications and qualified kills remain zero for this capture-only campaign.
-Neither raw diagnostic capture nor unsigned positive discovery is signed
-field-codec qualification or whole-wire proof.
-These draft results do not qualify the integrated primitive component anew.
+data, not relaxed into acceptance. Exact source-bound note handling now passes
+independent replay of all 34 immutable captures and adversarial controls. A
+separate signed candidate `da4ff4019` preserves the native and proof bytes while
+binding the calibrated classifier and mutation roster. Its fresh qualification
+passes all 41 stages: three unfiltered 63/0 positives, all 34 calibrated
+actual-body negatives and 41 owned group closures. Independent agent and root
+readbacks agree. Historical capture-only classifications and qualified kills
+remain zero; the signed fresh campaign supplies the qualification. Integration
+preserves the nine field proof inputs, seven primitive proof inputs and 36
+queued-query inputs. Four whole-model guards and two helper pins are rebound;
+the primitive guard also checks the new field forwarding chain with eighteen
+broken-edge controls. Public raw-archive packaging is pending. Whole-wire,
+native GPU, distributed authority and performance equivalence remain open.
 
 The [A2 producer-input composition](runtime-producer-input-composition.md)
 is integrated at signed `6c0718c1d`. Candidate `6b9e5d87c` passes all 102
@@ -118,8 +136,22 @@ proof at 165/0, covering the existing query closure and four new forwarding
 wrappers. Its earlier front-end rejection was corrected by removing an invalid
 `open` modifier from a private specification helper; no runtime body or theorem
 formula changed. All five discovery stages and owned groups close. This is
-unsigned positive discovery, not mutation or CPU qualification. Fresh runtime
-CPU validation and all nine proposed actual-body mutation captures are next.
+unsigned positive discovery, not signed qualification. Fresh runtime CPU
+validation passes locked/offline workspace metadata, the no-default library
+check and an all-feature build. The fresh executable reports 1,901 passed,
+32 expected ignores and no failures or filtering. Its original campaign
+parser rejected previously unrecognized abort-child output; a narrow corrected
+readback accepts the exact parent-associated output, and a separate four-stage
+continuation now passes the missing strict Clippy check and process closure.
+The original rejection is preserved. This is linked readback plus continuation,
+not one uninterrupted campaign. A later combined runtime regression is still
+needed after integrating the separately changed model codec dependency.
+The separate nine-case raw
+capture completes all fifteen stages and owned group closures with full 165/0
+proof brackets. Eight mutations fail actual result-equality contracts; the
+eager-status mutation fails only the wrapper's ghost-trace contract. That trace
+counts wrapper invocations, not inner native journal calls. All nine remain
+unqualified observations pending fresh signed qualification.
 Direct validator/fold composition, live-allocation checks, fresh credit locks,
 interior-state refinement and A2 closure remain open; these draft sources and
 raw discovery records are not yet integrated or published.
@@ -169,18 +201,23 @@ journal/live/credit observer refinements remain open;
 no native freshness, composed Context theorem or milestone exit follows. The
 signed campaign's broader evidence packet remains local.
 
-The [compiler-owner update at 01:21:02 UTC on October 1](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5922794589)
-reports r241 with 374 selected lowerer tests passing, 28 failing, and five
-verifier tests passing. Helper ABI and storage-origin controls pass; 27 failures
-stop at implicit helper-return availability and one negative at earlier source
-initialization. A return-authentication repair is under test, not credited.
-The MI350 runtime build reached its original timeout without a complete bundle,
-provisioning, proof or GPU run; owned processes and caches were cleaned up.
-These component counts overlap earlier suites and are not coverage to sum.
+The [compiler-owner handoff, edited at 02:26:51 UTC on October 1](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5922794589)
+reports r248 with 117 passing tests and six scoped-native failures. The next
+three attempts stopped during compilation without running tests; a receipt
+identity lifetime repair awaits the next integration run. The latest genuine
+Rust scoped-fill attempt, r244, still failed before proof or GPU execution at
+raw-address, lifecycle, or invocation type/move correspondence, depending on
+target and optimization level. An IR-fixture repair does not qualify those paths.
+The MI350 native component bundle now builds, with 137 tests passing, two
+ignored, and 15 CTests passing. It is not the complete protected compiler/proof
+runtime. Provisioning then failed because Docker rejected `--pid private`;
+the runner correction passes eleven local tests but protected provisioning,
+proof and GPU qualification remain unconfirmed. Owned cleanup is reported.
 The strict production/proof/safe-GPU chain remains 0/47: compiler M0 is complete,
-M1-M7 remain incomplete, and production handoffs remain open. Evidence commit
-`b7f96650e` is public on both mains; it grants no new protected runtime launch
-authority. The broader compiler implementation remains a separate candidate.
+M1-M7 remain incomplete, and production handoffs remain open. The owner reports
+component evidence commit `e9cfe0082` on both public mains; it grants no new
+protected runtime launch authority. The compiler implementation remains a
+separate candidate, and these component test counts are not additive coverage.
 
 The [retained KFD CPU regression](evidence/dev-kfd-retained-regression-2026-09-30/README.md)
 now passes all 1,824 tests with two test threads, zero failures, ignores or

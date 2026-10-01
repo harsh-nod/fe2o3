@@ -22,7 +22,7 @@ BODY = SRC / "context_queued_writers/read_query_bodies.rs"
 OUTER_BODY = SRC / "context_queued_writers/query_bodies.rs"
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "e49f3ace340708e3dc33d72d73efc308062cf50c881c8ead2fde2a71ef0717f3"
+SOURCE_TREE_SHA = "6813bf95c19da1d3c08b6047bb8095d1709fb9fbd4bd7adc3533b1c625d82adb"
 INHERITED_TREE_SHA = "246c85109c6b8edb1b952c70708ef4259837098aee3c612f045343f6f64fc189"
 PROOF_SHA = "fbe03df86e334dab6f08a3cb0e6ea219d5848ebf3f91e19678688795d5d62609"
 # Measured by the full, unfiltered development discovery on draft 2.

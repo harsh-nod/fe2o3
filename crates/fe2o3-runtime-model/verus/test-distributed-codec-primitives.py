@@ -277,7 +277,7 @@ def main():
 
     source = c.snapshot()
     c.audit(source)
-    for path in (c.OWNER, c.NATIVE, c.BODY, c.TESTS, c.PROOF, *c.UNCHANGED):
+    for path in (c.OWNER, c.NATIVE, c.BODY, c.TESTS, c.FIELD_NATIVE, c.FIELD_BODY, c.PROOF, *c.UNCHANGED):
         changed = dict(source)
         changed[path] += '\n'
         refused(lambda value=changed: c.audit(value))
@@ -287,6 +287,31 @@ def main():
     extra = dict(source)
     extra[c.SRC / 'unreviewed.rs'] = ''
     refused(lambda: c.audit(extra))
+
+    # Exercise the new forwarding edges independently of the whole-source hash.
+    c.field_forwarding(source)
+    edges = [
+        (c.OWNER, 'codec_fields::' + kind, 'different_fields::' + kind)
+        for kind in ('read_header', 'write_header', 'read_u64', 'write_u64')
+    ] + [
+        (c.FIELD_NATIVE, 'use super::codec_primitives::', 'use super::different_primitives::'),
+        (c.FIELD_NATIVE, 'include!("codec_fields_body.rs");', 'include!("different_body.rs");'),
+    ] + [
+        (c.FIELD_NATIVE, 'distributed_codec_' + kind + '_body_v1!', 'different_body!')
+        for kind in ('read_header', 'write_header', 'read_u64', 'write_u64')
+    ] + [
+        (c.FIELD_NATIVE, 'fn ' + kind + '(', 'fn unused_' + kind + '(')
+        for kind in ('read_header', 'write_header', 'read_u64', 'write_u64')
+    ] + [
+        (c.FIELD_BODY, name, 'different_primitive(')
+        for name in ('u16_from_le(', 'u16_le(', 'u64_from_le(', 'u64_le(')
+    ]
+    assert len(edges) == 18
+    for path, before, after in edges:
+        assert source[path].count(before) == 1
+        changed = dict(source)
+        changed[path] = changed[path].replace(before, after)
+        refused(lambda value=changed: c.field_forwarding(value))
 
     body = source[c.BODY]
     cases = c.mutations(body)
@@ -366,7 +391,7 @@ def main():
         refused(c.campaign)
     c.EXPECTED_VERIFIED = 54
     replay_controls(source, cases)
-    print('PASS: codec primitive source calibration (13 groups; 11 actual diagnostic fixtures replayed; 31 mutants constructed; no verifier execution)')
+    print('PASS: codec primitive source calibration (14 groups; 18 field forwarding controls; 11 actual diagnostic fixtures replayed; 31 mutants constructed; no verifier execution)')
 
 
 main()

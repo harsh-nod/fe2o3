@@ -16,6 +16,9 @@ include!("distributed_publication_contract/declarations.rs");
 mod classifier_body;
 #[macro_use]
 mod construction_body;
+mod codec_fields;
+#[cfg(test)]
+mod codec_fields_tests;
 mod codec_primitives;
 #[cfg(test)]
 mod codec_tests;
@@ -240,14 +243,10 @@ impl<'a> Writer<'a> {
         codec_primitives::put(self.bytes, &mut self.offset, value);
     }
     fn header(&mut self, domain: &[u8]) {
-        self.put(domain);
-        self.put(&codec_primitives::u16_le(
-            DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1,
-        ));
-        self.put(&[0; 2]);
+        codec_fields::write_header(self.bytes, &mut self.offset, domain);
     }
     fn u64(&mut self, value: u64) {
-        self.put(&codec_primitives::u64_le(value));
+        codec_fields::write_u64(self.bytes, &mut self.offset, value);
     }
     fn digest(&mut self, value: IdentityDigestV1) {
         self.put(value.as_bytes());
@@ -269,21 +268,10 @@ impl<'a> Reader<'a> {
         codec_primitives::fixed(self.bytes, &mut self.offset)
     }
     fn header(&mut self, domain: &[u8]) -> Result<(), DistributedPublicationContractErrorV1> {
-        if self.take(domain.len())? != domain {
-            return Err(DistributedPublicationContractErrorV1::WrongDomain);
-        }
-        if codec_primitives::u16_from_le(self.fixed()?)
-            != DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1
-        {
-            return Err(DistributedPublicationContractErrorV1::WrongSchema);
-        }
-        if self.fixed::<2>()? != [0; 2] {
-            return Err(DistributedPublicationContractErrorV1::NonzeroReserved);
-        }
-        Ok(())
+        codec_fields::read_header(self.bytes, &mut self.offset, domain)
     }
     fn u64(&mut self) -> Result<u64, DistributedPublicationContractErrorV1> {
-        Ok(codec_primitives::u64_from_le(self.fixed()?))
+        codec_fields::read_u64(self.bytes, &mut self.offset)
     }
     fn digest(&mut self) -> Result<IdentityDigestV1, DistributedPublicationContractErrorV1> {
         Ok(IdentityDigestV1::from_untrusted_bytes(self.fixed()?))
