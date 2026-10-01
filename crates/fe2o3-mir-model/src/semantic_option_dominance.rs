@@ -5,6 +5,10 @@
 
 use std::{error::Error, fmt};
 
+#[path = "unchecked_arithmetic_transport_v1.rs"]
+mod unchecked_arithmetic_transport;
+pub(crate) use unchecked_arithmetic_transport::semantic_unchecked_arithmetic_in_module_v1;
+
 #[path = "semantic_enum_payload_resources_v1.rs"]
 mod enum_payload_resources;
 pub use enum_payload_resources::{
@@ -664,9 +668,15 @@ struct CheckedArithmeticProducerV1<'a> {
 pub fn semantic_unchecked_arithmetic_violation_v1(
     function: &SemanticFunctionDeclV1,
 ) -> Result<Option<SemanticUncheckedArithmeticViolationV1>, SemanticOptionDominanceErrorV1> {
-    let mut budget = WorkBudgetV1::default();
-    let definitions = local_definition_counts(function, &mut budget)?;
-    let dominators = DominatorIntervalsV1::analyze(function, &mut budget)?;
+    semantic_unchecked_arithmetic_with_budget_v1(function, &mut WorkBudgetV1::default())
+}
+
+fn semantic_unchecked_arithmetic_with_budget_v1(
+    function: &SemanticFunctionDeclV1,
+    budget: &mut WorkBudgetV1<'_>,
+) -> Result<Option<SemanticUncheckedArithmeticViolationV1>, SemanticOptionDominanceErrorV1> {
+    let definitions = local_definition_counts(function, budget)?;
+    let dominators = DominatorIntervalsV1::analyze(function, budget)?;
     let mut aliases = vec![None; function.locals().len()];
     let mut producers = Vec::new();
     producers
@@ -727,7 +737,7 @@ pub fn semantic_unchecked_arithmetic_violation_v1(
             continue;
         };
         budget.charge(targets.values().len().saturating_add(1))?;
-        let Some(overflow_place) = resolve_alias_place(discriminant, &aliases, &mut budget)? else {
+        let Some(overflow_place) = resolve_alias_place(discriminant, &aliases, budget)? else {
             continue;
         };
         let [overflow_projection] = overflow_place.projections() else {

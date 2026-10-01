@@ -7846,6 +7846,12 @@ fn validate_request(
         validate_function(&mut context, SemanticFunctionIdV1(index as u32), function)?;
     }
     validate_exact_function_closure(&mut context)?;
+    // Cross-function value facts may only inspect bodies whose complete
+    // structural and callable contracts have already been validated.
+    for (index, function) in request.functions.iter().enumerate() {
+        context.one()?;
+        validate_unchecked_arithmetic(&mut context, SemanticFunctionIdV1(index as u32), function)?;
+    }
     Ok(())
 }
 
@@ -12678,11 +12684,25 @@ fn validate_function(
         validate_terminator(context, id, function, location, &block.terminator.kind)?;
     }
     validate_dynamic_lds_linearity(context, id, function)?;
+    Ok(())
+}
+
+fn validate_unchecked_arithmetic(
+    context: &mut ValidationContextV1<'_>,
+    id: SemanticFunctionIdV1,
+    function: &SemanticFunctionDeclV1,
+) -> Result<(), SemanticMirErrorV1> {
+    let function_location = SemanticMirLocationV1::Function(id);
     let unchecked_operation = first_unchecked_operation(function);
     let violation = match unchecked_operation {
         Some(operation) => {
-            crate::semantic_option_dominance::semantic_unchecked_arithmetic_violation_v1(function)
-                .map_err(|_| SemanticMirErrorV1::UnprovenUncheckedArithmetic {
+            crate::semantic_option_dominance::semantic_unchecked_arithmetic_in_module_v1(
+                function,
+                &context.request.types,
+                &context.request.functions,
+                &context.request.callables,
+            )
+            .map_err(|_| SemanticMirErrorV1::UnprovenUncheckedArithmetic {
                 operation,
                 location: function_location,
             })?
@@ -14544,10 +14564,33 @@ fn validate_rvalue(
             else {
                 return invalid_type_operation(SemanticTypeOperationV1::Borrow, location);
             };
+            // A raw address of an existing shared whole slice retains its
+            // metadata; it neither constructs a reference nor changes access.
+            let metadata_valid = pointer.metadata == SemanticPointerMetadataV1::None
+                || (pointer.metadata == SemanticPointerMetadataV1::SliceLength
+                    && pointer.mutability == SemanticMutabilityV1::Immutable
+                    && matches!(
+                        type_shape(context, place.ty),
+                        SemanticTypeShapeV1::Slice { .. }
+                    )
+                    && matches!(
+                        place.projections(),
+                        [projection] if projection.kind == SemanticProjectionKindV1::Dereference
+                            && projection.result_type == place.ty
+                    )
+                    && pointer_type(context.request, function.locals[place.local.0 as usize].ty)
+                        .is_some_and(|source| {
+                            source.kind == SemanticPointerKindV1::Reference
+                                && source.mutability == SemanticMutabilityV1::Immutable
+                                && source.address_space == 0
+                                && source.pointer_width_bits == 64
+                                && source.metadata == SemanticPointerMetadataV1::SliceLength
+                                && source.pointee == place.ty
+                        }));
             if pointer.kind != SemanticPointerKindV1::Raw
                 || pointer.address_space != 0
                 || pointer.pointer_width_bits != 64
-                || pointer.metadata != SemanticPointerMetadataV1::None
+                || !metadata_valid
                 || pointer.pointee != place.ty
                 || pointer.mutability != *mutability
             {

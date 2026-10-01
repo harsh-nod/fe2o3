@@ -425,3 +425,186 @@ fn slice_reborrow_keeps_target_layout_and_non_slice_thin_borrow_rules() {
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
 }
+
+#[derive(Clone, Copy, Debug)]
+enum RawSliceCase {
+    Shared,
+    RawSource,
+    MutableSource,
+    MutableResult,
+    ReferenceResult,
+    SourceSpace,
+    ResultSpace,
+    SourceWidth,
+    ResultWidth,
+    MissingSourceLength,
+    VtableResult,
+    DifferentElement,
+    NoProjection,
+    ExtraProjection,
+    IndexedProjection,
+    StrPointee,
+}
+
+fn raw_slice_address_request(case: RawSliceCase) -> InertSemanticMirRequestV1 {
+    let mut source = ReferenceShape::shared();
+    let mut result = ReferenceShape {
+        kind: SemanticPointerKindV1::Raw,
+        ..source
+    };
+    match case {
+        RawSliceCase::RawSource => source.kind = SemanticPointerKindV1::Raw,
+        RawSliceCase::MutableSource => source.mutability = SemanticMutabilityV1::Mutable,
+        RawSliceCase::MutableResult => result.mutability = SemanticMutabilityV1::Mutable,
+        RawSliceCase::ReferenceResult => result.kind = SemanticPointerKindV1::Reference,
+        RawSliceCase::SourceSpace => source.address_space = 1,
+        RawSliceCase::ResultSpace => result.address_space = 1,
+        RawSliceCase::SourceWidth => source.width = 32,
+        RawSliceCase::ResultWidth => result.width = 32,
+        RawSliceCase::MissingSourceLength => source.metadata = SemanticPointerMetadataV1::None,
+        RawSliceCase::VtableResult => result.metadata = SemanticPointerMetadataV1::VTable,
+        _ => {}
+    }
+    let mut types = vec![u32_type(1), slice_type(2, ELEMENT)];
+    let alignment = if matches!(case, RawSliceCase::StrPointee) {
+        types[1] = SemanticTypeDeclV1::new(
+            type_identity(2),
+            layout_identity(2),
+            unsized_layout(1, 1),
+            SemanticTypeShapeV1::Opaque,
+        )
+        .with_rust_type_kind(SemanticRustTypeKindV1::Str);
+        1
+    } else {
+        4
+    };
+    let raw_type = SemanticTypeIdV1::from_index(3);
+    let result_pointee = if matches!(case, RawSliceCase::DifferentElement) {
+        SemanticTypeIdV1::from_index(5)
+    } else {
+        POINTEE
+    };
+    types.push(reference_type(3, POINTEE, source, alignment));
+    types.push(reference_type(4, result_pointee, result, alignment));
+    if matches!(case, RawSliceCase::DifferentElement) {
+        types.push(i32_type(5));
+        types.push(slice_type(6, SemanticTypeIdV1::from_index(4)));
+    }
+    let mut projections =
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, POINTEE).unwrap()];
+    let mut place_type = POINTEE;
+    let source_type = if matches!(case, RawSliceCase::NoProjection) {
+        projections.clear();
+        POINTEE
+    } else {
+        REFERENCE
+    };
+    if matches!(case, RawSliceCase::IndexedProjection) {
+        projections.push(
+            SemanticProjectionV1::new(
+                SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(0)),
+                ELEMENT,
+            )
+            .unwrap(),
+        );
+        place_type = ELEMENT;
+    }
+    if matches!(case, RawSliceCase::ExtraProjection) {
+        projections.push(
+            SemanticProjectionV1::new(SemanticProjectionKindV1::OpaqueCast, POINTEE).unwrap(),
+        );
+    }
+    request_with_statement(
+        types,
+        abi(1, vec![], ELEMENT),
+        vec![
+            local(1, ELEMENT, SemanticLocalRoleV1::Return),
+            local(2, source_type, SemanticLocalRoleV1::Temporary),
+            local(3, raw_type, SemanticLocalRoleV1::Temporary),
+        ],
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], raw_type).unwrap(),
+            SemanticRvalueV1::new(
+                raw_type,
+                SemanticRvalueKindV1::AddressOf {
+                    mutability: result.mutability,
+                    place: SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(1),
+                        projections,
+                        place_type,
+                    )
+                    .unwrap(),
+                },
+            ),
+        )),
+    )
+}
+
+#[test]
+fn shared_slice_raw_address_roundtrips_exact_source_and_metadata_types() {
+    let limits = SemanticMirLimitsV1::default();
+    let admitted = raw_slice_address_request(RawSliceCase::Shared)
+        .admit_current_production(limits)
+        .unwrap();
+    let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+        admitted.canonical_encoding(),
+        limits,
+    )
+    .unwrap();
+    assert_eq!(decoded.types(), admitted.types());
+    assert_eq!(decoded.functions(), admitted.functions());
+    assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+    for (index, kind) in [
+        (2, SemanticPointerKindV1::Reference),
+        (3, SemanticPointerKindV1::Raw),
+    ] {
+        let SemanticTypeShapeV1::Pointer(pointer) = decoded.types()[index].shape() else {
+            panic!("expected distinct reference and raw slice carriers");
+        };
+        assert_eq!(pointer.kind(), kind);
+        assert_eq!(pointer.mutability(), SemanticMutabilityV1::Immutable);
+        assert_eq!(pointer.pointee(), POINTEE);
+        assert_eq!(pointer.metadata(), SemanticPointerMetadataV1::SliceLength);
+        assert_eq!(pointer.address_space(), 0);
+        assert_eq!(pointer.pointer_width_bits(), 64);
+    }
+}
+
+#[test]
+fn shared_slice_raw_address_refuses_unowned_or_changed_metadata_relations() {
+    for case in [
+        RawSliceCase::RawSource,
+        RawSliceCase::MutableSource,
+        RawSliceCase::MutableResult,
+        RawSliceCase::ReferenceResult,
+        RawSliceCase::SourceSpace,
+        RawSliceCase::ResultSpace,
+        RawSliceCase::MissingSourceLength,
+        RawSliceCase::VtableResult,
+        RawSliceCase::DifferentElement,
+        RawSliceCase::NoProjection,
+        RawSliceCase::ExtraProjection,
+        RawSliceCase::IndexedProjection,
+        RawSliceCase::StrPointee,
+    ] {
+        assert_eq!(
+            raw_slice_address_request(case)
+                .admit_current_production(SemanticMirLimitsV1::default())
+                .unwrap_err(),
+            SemanticMirErrorV1::InvalidTypeOperation {
+                operation: SemanticTypeOperationV1::Borrow,
+                location: statement_location(),
+            },
+            "{case:?}",
+        );
+    }
+    for case in [RawSliceCase::SourceWidth, RawSliceCase::ResultWidth] {
+        assert_eq!(
+            raw_slice_address_request(case)
+                .admit_current_production(SemanticMirLimitsV1::default())
+                .unwrap_err(),
+            SemanticMirErrorV1::InvalidTypeLayout,
+            "{case:?}",
+        );
+    }
+}
