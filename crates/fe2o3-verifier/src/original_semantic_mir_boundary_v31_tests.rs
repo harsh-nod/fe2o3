@@ -4,8 +4,9 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work,
 };
 use fe2o3_mir_model::{
-    SsaBlockInputV1, SsaConstructionInputV1, SsaDefinitionIdV1, SsaEdgeInputV1, SsaEdgeRoleV1,
-    SsaEventV1, SsaPlannerLimitsV1, SsaResolvedEventV1 as Event, plan_ssa_with_limits_v1,
+    SsaBlockInputV1, SsaConstructionInputV1, SsaDefinitionIdV1, SsaEdgeIdV1 as Edge,
+    SsaEdgeInputV1, SsaEdgeRoleV1, SsaEventV1, SsaPlannerLimitsV1, SsaResolvedEventV1 as Event,
+    plan_ssa_with_limits_v1,
 };
 
 fn logarithm(count: usize) -> usize {

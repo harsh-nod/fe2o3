@@ -81,7 +81,7 @@ fn prepared_root_variant(
                 },
             )
         };
-        let block = |id, statements, terminator| {
+        let block = |id: u8, statements, terminator| {
             SemanticBasicBlockV1::new(
                 SemanticBlockIdentityV1::from_sha256([60 + id; 32]),
                 source,

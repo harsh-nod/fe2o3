@@ -99,7 +99,7 @@ pub(crate) fn fixture(cyclic: bool, move_selector: bool) -> (Vec<Type>, Function
             },
         )
     };
-    let block = |ordinal, statements, terminator| {
+    let block = |ordinal: u8, statements, terminator| {
         SemanticBasicBlockV1::new(
             SemanticBlockIdentityV1::from_sha256([40 + ordinal; 32]),
             source,
