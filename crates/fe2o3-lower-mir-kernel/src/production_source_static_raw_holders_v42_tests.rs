@@ -56,10 +56,29 @@ fn headers() -> usize {
         size_of::<Fields<'_>>(),
         size_of::<SourceStaticRawHolderFrameV42<'_>>()
     );
+    type ShapeFields<'a> = (
+        &'a SemanticFunctionDeclV1,
+        &'a [SemanticTypeDeclV1],
+        &'a SemanticPlaceV1,
+        &'a [SemanticProjectionV1],
+        std::slice::Iter<'a, SemanticProjectionV1>,
+        &'a SemanticProjectionV1,
+        &'a SemanticTypeDeclV1,
+        &'a SemanticPointerTypeV1,
+        SemanticTypeIdV1,
+        SourceReferenceAccessV29,
+        usize,
+    );
+    assert_eq!(
+        size_of::<ShapeFields<'_>>(),
+        size_of::<SourceStaticRawHolderShapeFrameV42<'_>>()
+    );
     size_of::<Fields<'_>>()
         + 2 * size_of::<Result<Fields<'_>, E>>()
         + size_of::<SourceReferenceRawAccessV29>()
         + 2 * size_of::<Result<SourceReferenceRawAccessV29, E>>()
+        + size_of::<ShapeFields<'_>>()
+        + 2 * size_of::<Result<ShapeFields<'_>, E>>()
 }
 
 #[test]
@@ -208,6 +227,36 @@ fn original_static_raw_holders_refuse_changed_static_types_bounds_and_pointer_cr
             }
             let changed = SemanticPlaceV1::new(original.local(), path, original.ty()).unwrap();
             let floor = budget.storage();
+            let function = plan
+                .instances
+                .instance(site.instance)
+                .unwrap()
+                .declaration();
+            let types = plan.instances.owner().source_semantic().types();
+            // This validator has no access-map/occurrence query. The failure
+            // must be the malformed shape, not the cloned place identity.
+            let expected = match fault {
+                0 => "static raw holder field is outside its original type",
+                1 | 5 => "static raw holder projected type differs from its original child",
+                2..=4 => "static raw holder index exceeds its original array bounds",
+                6 => "static raw holder prefix is not a static field or array selection",
+                _ => unreachable!(),
+            };
+            assert!(matches!(source_static_raw_holder_shape_v42(
+                function, types, &changed, SourceReferenceAccessV29::Read, 2, budget,
+            ), Err(ProductionSemanticKirErrorV1::Unsupported { detail, .. }) if detail == expected));
+            assert_eq!(
+                source_static_raw_holder_shape_v42(
+                    function,
+                    types,
+                    original,
+                    SourceReferenceAccessV29::Read,
+                    2,
+                    budget,
+                )?,
+                pointer_type,
+                "a failed pure shape query cannot poison or authorize an occurrence"
+            );
             assert!(
                 source_static_raw_holder_v42(
                     plan,
@@ -368,4 +417,120 @@ fn original_static_raw_holder_custody_refuses_foreign_and_restored_credit() {
         });
         assert!(completed && result.is_err());
     }
+}
+
+fn original_projected_aggregate_owner() -> ProductionSemanticSsaOwnerV1 {
+    projected_pointer_test_owner_v29(entrance_control_owner(false), false, 9)
+}
+
+fn original_projected_aggregate_keys(
+    owner: &ProductionSemanticSsaOwnerV1,
+) -> Vec<(usize, bool, u32)> {
+    let function = &owner.source_semantic().functions()[0];
+    let mut found = None;
+    for (statement, row) in function.blocks()[0].statements().iter().enumerate() {
+        let SemanticStatementKindV1::Assign(assignment) = row.kind() else {
+            continue;
+        };
+        let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+            continue;
+        };
+        let place = assignment.destination();
+        if place.projections().is_empty() {
+            continue;
+        }
+        assert!(found.is_none());
+        assert_eq!(place.projections().len(), 1);
+        assert_eq!(
+            place.projections()[0].kind(),
+            SemanticProjectionKindV1::Field(0)
+        );
+        assert_eq!(aggregate.kind(), &SemanticAggregateKindV1::Array);
+        assert_eq!(aggregate.operands().len(), 2);
+        assert!(
+            aggregate
+                .operands()
+                .iter()
+                .all(|operand| matches!(operand, SemanticOperandV1::Copy(_)))
+        );
+        // One admitted original assignment supplies both ordinal families.
+        // The checker only compares these inert keys: this is not a fabricated
+        // physical operation, retained carrier, or source-access receipt.
+        let mut keys = Vec::new();
+        for prefix in 1..=place.projections().len() {
+            keys.push((statement, false, prefix as u32));
+        }
+        for operand in 0..aggregate.operands().len() {
+            keys.push((statement, true, operand as u32));
+        }
+        found = Some(keys);
+    }
+    found.expect("genuinely admitted projected aggregate assignment required")
+}
+
+#[test]
+fn original_projected_aggregate_operand_and_prefix_census_namespaces_are_distinct() {
+    let owner = original_projected_aggregate_owner();
+    let mut keys = original_projected_aggregate_keys(&owner);
+    assert_eq!(keys.len(), 3);
+    assert!(keys.iter().any(|left| {
+        keys.iter()
+            .any(|right| left.0 == right.0 && left.2 == right.2 && left.1 != right.1)
+    }));
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 31);
+    budget.reserve_storage(31).unwrap();
+    check_source_static_object_project_keys_v42(&mut keys, &mut budget).unwrap();
+    assert_eq!((budget.storage(), budget.peak_storage()), (31, 31));
+    assert!(keys.windows(2).all(|rows| rows[0] != rows[1]));
+}
+
+#[test]
+fn original_projected_aggregate_census_refuses_duplicates_within_either_family() {
+    let owner = original_projected_aggregate_owner();
+    let original = original_projected_aggregate_keys(&owner);
+    for family in [false, true] {
+        let mut keys = original.clone();
+        keys.push(
+            *original
+                .iter()
+                .find(|row| row.1 == family && row.2 == 1)
+                .unwrap(),
+        );
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 31);
+        budget.reserve_storage(31).unwrap();
+        assert!(check_source_static_object_project_keys_v42(&mut keys, &mut budget).is_err());
+        assert_eq!((budget.storage(), budget.peak_storage()), (31, 31));
+    }
+}
+
+#[test]
+fn original_projected_aggregate_key_coverage_does_not_admit_unsupported_full_emission() {
+    struct Restore(Option<ScopedSlotObserverV29>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED_SLOT_OBSERVER_V29.set(self.0);
+        }
+    }
+    let _restore = Restore(SCOPED_SLOT_OBSERVER_V29.replace(None));
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let prepared =
+        scalar_payload_prepared_from_v18(original_projected_aggregate_owner, &mut budget);
+    let mut completed = false;
+    let result =
+        prepared.with_source_consumer_v18(&mut budget, |_, _| -> SourceOwnedResultV18<()> {
+            completed = true;
+            Ok(())
+        });
+    assert!(
+        !completed && result.is_err(),
+        "key uniqueness is not aggregate memory authority"
+    );
+    assert!(format!("{:?}", result.unwrap_err()).contains(
+        "typed allocation identity or representation requires its exact source contract"
+    ));
+    assert_eq!(budget.storage(), MODULE_FLOOR);
 }

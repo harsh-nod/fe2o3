@@ -498,14 +498,23 @@ fn check_source_static_object_projects_v29(
         if seen.iter().any(|seen| !seen) {
             return Err(scoped_object_error_v29());
         }
-        call_splice_sort_work_v1(argument_product_v1(original_keys.len(), 3)?, budget)
-            .map_err(source_address_call_error_v29)?;
-        original_keys.sort_unstable();
-        budget.charge_work(original_keys.len())?;
-        if original_keys.windows(2).any(|rows| rows[0] == rows[1]) {
-            return Err(scoped_object_error_v29());
-        }
-        Ok(())
+        check_source_static_object_project_keys_v42(&mut original_keys, budget)
     })?;
     Ok(projects)
+}
+
+// These keys carry no memory authority. Their source/actual locators have
+// already been authenticated before the production census calls this check.
+fn check_source_static_object_project_keys_v42(
+    keys: &mut [(usize, bool, u32)],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    call_splice_sort_work_v1(argument_product_v1(keys.len(), 3)?, budget)
+        .map_err(source_address_call_error_v29)?;
+    keys.sort_unstable();
+    budget.charge_work(keys.len())?;
+    if keys.windows(2).any(|rows| rows[0] == rows[1]) {
+        return Err(scoped_object_error_v29());
+    }
+    Ok(())
 }

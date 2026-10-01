@@ -573,7 +573,26 @@ fn projected_pointer_test_owner_v29(
             address(element(1, false), SemanticMutabilityV1::Mutable),
         ),
     ]);
-    let holder = if matches!(mode, 2 | 3 | 5..=8) {
+    if mode == 9 {
+        let destination = projected(13, vec![(SemanticProjectionKindV1::Field(0), array)]);
+        statements.splice(
+            6..8,
+            [assign(
+                destination,
+                SemanticRvalueKindV1::Aggregate(
+                    SemanticAggregateRvalueV1::new(
+                        SemanticAggregateKindV1::Array,
+                        vec![
+                            SemanticOperandV1::Copy(plain(3, raw)),
+                            SemanticOperandV1::Copy(plain(10, raw)),
+                        ],
+                    )
+                    .unwrap(),
+                ),
+            )],
+        );
+    }
+    let holder = if matches!(mode, 2 | 3 | 5..=9) {
         element(1, mode == 3)
     } else {
         field(0, raw)
@@ -610,7 +629,7 @@ fn projected_pointer_test_owner_v29(
                 (SemanticProjectionKindV1::Dereference, word),
             ],
         ),
-        5..=8 => {
+        5..=9 => {
             let holder = element(1, matches!(mode, 6 | 8));
             let mut steps = holder.projections().to_vec();
             steps.push(
