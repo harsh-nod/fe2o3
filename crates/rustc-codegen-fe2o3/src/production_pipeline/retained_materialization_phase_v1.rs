@@ -173,3 +173,8 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
 #[cfg(test)]
 #[path = "retained_materialization_phase_v1_tests.rs"]
 mod tests;
+
+// Opt-in prepaid continuation; no BF16 normal admission or default selection.
+#[allow(dead_code)]
+#[path = "retained_ranked_allowance_v1.rs"]
+mod ranked_allowance;
