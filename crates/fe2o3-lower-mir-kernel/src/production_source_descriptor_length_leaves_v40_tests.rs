@@ -108,7 +108,7 @@ fn descriptor_length_leaf_run_v40(
                                     .map_err(source_pointer_inventory_error_v18)?
                                     .unwrap();
                                 assert_eq!(input.ty, &Type::INDEX);
-                                let SliceDefinition::Result {
+                                let fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::Result {
                                     operation,
                                     result: 0,
                                 } = input.coordinate
