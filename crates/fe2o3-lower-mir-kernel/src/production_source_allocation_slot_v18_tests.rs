@@ -1,4 +1,5 @@
 include!("production_source_allocation_frames_v32_tests.rs");
+include!("production_source_object_endpoints_v39_tests.rs");
 
 #[test]
 fn source_allocation_slot_queries_retain_actual_original_and_optimized_backing() {
