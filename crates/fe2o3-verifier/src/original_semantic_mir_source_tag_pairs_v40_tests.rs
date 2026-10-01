@@ -118,6 +118,32 @@ pub(in super::super::super::super) fn transform(
         declaration.layout().clone(),
         declaration.shape().clone(),
     ));
+    let raw = TypeId::from_index(types.len() as u32);
+    types.push(Declaration::new(
+        SemanticTypeIdentityV1::from_sha256([251; 32]),
+        SemanticLayoutIdentityV1::from_sha256([251; 32]),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            Backend::scalar(SemanticBackendScalarV1::initialized(
+                Primitive::pointer(0, 8, 8),
+                Validity::new(0, u64::MAX.into()),
+            )),
+            false,
+        )
+        .unwrap(),
+        Shape::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                enumeration,
+                SemanticPointerKindV1::Raw,
+                SemanticMutabilityV1::Mutable,
+                0,
+                64,
+                SemanticPointerMetadataV1::None,
+            )
+            .unwrap(),
+        ),
+    ));
     let helper = functions.last_mut().unwrap();
     let source = helper.source();
     let mut locals = helper.locals().to_vec();
@@ -138,6 +164,12 @@ pub(in super::super::super::super) fn transform(
         SemanticLocalDeclV1::new(
             SemanticLocalIdentityV1::from_sha256([253; 32]),
             unrelated,
+            SemanticLocalRoleV1::Temporary,
+            source,
+        ),
+        SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256([254; 32]),
+            raw,
             SemanticLocalRoleV1::Temporary,
             source,
         ),
@@ -172,6 +204,16 @@ pub(in super::super::super::super) fn transform(
                     .unwrap(),
             ),
         ),
+        // Taking the original address requires genuine typed object storage;
+        // a known-variant SSA value alone can fold the discriminant away.
+        assignment(
+            7,
+            raw,
+            SemanticRvalueKindV1::AddressOf {
+                place: place(4, enumeration),
+                mutability: SemanticMutabilityV1::Mutable,
+            },
+        ),
         assignment(
             5,
             logical,
@@ -184,6 +226,10 @@ pub(in super::super::super::super) fn transform(
                 kind: SemanticCastKindV1::Integer,
                 operand: SemanticOperandV1::Copy(place(5, logical)),
             },
+        ),
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(7)),
         ),
         SemanticStatementV1::new(
             source,
@@ -233,6 +279,30 @@ fn run(
                 out,
                 |slots, out| {
                     let (enumeration, unrelated) = ids.get().unwrap();
+                    let original = plan.source(out)?.source_semantic(out.budget)?;
+                    let mut objects = [0; 2];
+                    for root in 0..2 {
+                        for instance in 0..plan.root(root, out)?.instances.len() {
+                            let row = plan.instance(root, instance, out)?;
+                            if row.active
+                                && original.functions()[row.function.index() as usize]
+                                    .locals()
+                                    .get(4)
+                                    .is_some_and(|local| local.ty() == enumeration)
+                            {
+                                assert!(
+                                    slots.has_original_object(root, instance, 4, out)?,
+                                    "original address-taken enum needs a retained typed object"
+                                );
+                                assert!(
+                                    !slots.has_original_object(root, instance, 6, out)?,
+                                    "same-layout unrelated nominal enum is not the source object"
+                                );
+                                objects[root] += 1;
+                            }
+                        }
+                    }
+                    assert_eq!(objects, [2, 2], "two real helper invocations in each root");
                     examine(slots, enumeration, unrelated, out)
                 },
             )
