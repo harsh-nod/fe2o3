@@ -9,6 +9,78 @@ examples as qualified through the new production path.
 
 ## Latest Compiler Checkpoint
 
+The actual-source rerun **r332 failed** at local candidate
+`c13567f2f876bc4ed9b0c5edc1e4d1017a94f904`. Its backend built, then all 24
+ordinary fill, guarded-fill and vecadd configurations failed on gfx942/gfx950.
+The parent result was zero passed, one failed, none ignored and 4,284 filtered.
+Failures now include original scalar correspondence, global-effect coverage,
+and observer assumptions about helper count and retained transaction storage.
+These are under investigation; no assertion or admission check is waived.
+
+Some optimized fill cases emitted exact diagnostic proof text. The strict
+extractor rejected it: all three distinct payloads lack the required original
+path and control-memory join components. Emission is therefore neither complete
+proof preparation nor executed proof. No protected proof or GPU launch ran.
+The independent source/tool/runner audit passed; raw r332 log SHA-256 is
+`64e2068050e4ea8693a4dd26fc22de9a4e7289e4e36a84b98b0c3bf5fb3c849d`.
+
+Reviewed local integration now includes original Option-predicate transport
+through helpers and SSA joins, scalar-control correspondence, explicit pending
+proof-relay state, source-record inputs, artifact custody, shared V3 finalization
+traversal and a static-musl `close_range` linking repair. Actual helper-call
+activation and control/memory proof composition are still being implemented.
+Strict parent recovery also needs the checked optimization witnesses, not only
+record hashes or signatures. No partial record grants production authority.
+
+The nine-package checks r333-r336 stopped on internal schema visibility, a loan
+lifetime bound and two test-integration issues. Those narrow repairs are local.
+The latest combined check **r337 failed** at
+`1e5299e8fe9585375bb25591a3acc2dc1ab0f891`: four compile errors in the new
+scalar-control fixture prevented test execution. Its source/tool/runner audit
+passed; raw log SHA-256 is
+`3bc3e149992ba4b3ed898196d5727669df1bff8a1df39fc1a0cdd6abb735604c`.
+Focused lowerer r338 then failed on one incorrect test-probe module import,
+before test execution. Its independent audit passed; raw log SHA-256 is
+`2a3619cee2261404143e5aa3d1db8fe68b5d587ccfe44c087ccaa23147ac67cb`.
+The test-only scope repair is integrated without exposing private production
+methods. Focused lowerer execution **r339 is running** at frozen candidate
+`0811ebca0699ab17ff76fd38cd0c41069cea82ed`; no result is credited yet.
+That candidate also merges public retained-translation accounting while
+preserving authenticated launch-envelope checks and both semantic replays,
+and prevents compiler dispatch while an original proof response remains pending.
+
+A fresh isolated deployment retry on MI350 passed **166 tests**, with zero
+failures and eight ignored: 154 library, nine runtime CLI and three qualification
+tests. Both earlier descendant-reaping failures now pass under a measured init
+whose actual orphan-reaping behavior was checked before the build. Packaging
+still **failed** because the static qualification usage oracle omitted two
+existing V3 commands. The helper stage was not reached and no runtime was
+approved. The exact usage-check repair preserves exit-status and text-equality
+requirements. A fresh retry of candidate
+`676484cc2a97560c588a8e8b26ecd407ef5b41a0` has passed the deployment stage:
+166 tests passed, eight ignored, and all five static binaries passed their ELF
+and CLI checks. Its proof-helper stage is still running. This separate runtime
+candidate is not the newer integrated compiler, and neither has approval.
+The primary independently verified the failed run's archive and test summaries;
+archive SHA-256 is
+`3ae88b70323480bb4d27dfed87db24c8f25388c58952a9d8e02a89f5610c0fec`.
+Both private build/probe containers and their disposable cache were removed.
+Earlier successful V3 provisioning below remains prerequisite evidence for its
+own older bundle, not current compiler or proof execution.
+
+Both public mains were independently read at
+`b6fd9d1e678f81766ec0543a81b355ef8eedb17f`. Their concurrent retained helper
+translation work is preserved here; its reported tests are not credited as
+validation of this local integration candidate.
+The unfinished implementation remains local. Its full pending-range audit at
+`2eb0d14782270b892bdd47facf60810bc79a303d` found 154 missing author sign-offs
+and 96 hygiene findings: 65 file-size/growth findings and 31 test-gated panic
+placements the checker does not recognize. Those 31 are not newly established
+production panics, but the gate is still failing. Narrow new-commit checks do
+not supersede the full-range result. **M0 alone complete; strict coverage 0/47.**
+
+## Earlier Compiler Checkpoint: 14:35 UTC
+
 On 2026-10-01, M0 alone remains complete and strict coverage is
 **0/47**. The following results supersede the earlier checkpoint below.
 
