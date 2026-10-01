@@ -19,18 +19,23 @@ pub struct ProductionFormalMemoryExecutionWitnessV1 {
 }
 
 impl ProductionFormalMemoryExecutionWitnessV1 {
+    /// The only invocation that may reach the witnessed access.
     pub const fn invocation(self) -> u64 {
         self.invocation
     }
+    /// Actual SSA index used by the singleton comparison.
     pub const fn index(self) -> ValueId {
         self.index
     }
+    /// Actual SSA value defining the comparison threshold.
     pub const fn threshold(self) -> ValueId {
         self.threshold
     }
+    /// Actual SSA predicate selecting the dominating true edge.
     pub const fn predicate(self) -> ValueId {
         self.predicate
     }
+    /// Descriptive control-flow coordinates, not independent proof authority.
     pub const fn path(self) -> FormalGuardedPathV1 {
         self.path
     }
@@ -62,24 +67,31 @@ pub struct ProductionFormalMemoryExecutionDischargeV1 {
 }
 
 impl ProductionFormalMemoryExecutionDischargeV1 {
+    /// Position in the unchanged raw conflict roster.
     pub const fn conflict_ordinal(self) -> u32 {
         self.conflict_ordinal
     }
+    /// Actual first memory operation of the raw conflict.
     pub const fn left(self) -> FunctionOperationLocation {
         self.left
     }
+    /// Actual second memory operation of the raw conflict.
     pub const fn right(self) -> FunctionOperationLocation {
         self.right
     }
+    /// Formal parameter identity, not an authenticated runtime allocation.
     pub const fn allocation_parameter(self) -> u32 {
         self.allocation_parameter
     }
+    /// Singleton witness rederived for the first access.
     pub const fn left_witness(self) -> ProductionFormalMemoryExecutionWitnessV1 {
         self.left_witness
     }
+    /// Singleton witness rederived for the second access.
     pub const fn right_witness(self) -> ProductionFormalMemoryExecutionWitnessV1 {
         self.right_witness
     }
+    /// Descriptive evidence never grants source, native, or runtime authority.
     pub const fn grants_authority(self) -> bool {
         false
     }

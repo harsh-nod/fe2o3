@@ -21,7 +21,9 @@ use fe2o3_kernel_ir::{
 use sha2::{Digest, Sha256};
 use std::{error::Error, fmt};
 
+/// Additive wire version retaining raw conflicts and explicit execution exclusions.
 pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_VERSION_V5: u16 = 5;
+/// Closed singleton-exclusion policy requiring fresh same-graph replay.
 pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_EXECUTION_POLICY_V5: u16 = 1;
 const MAGIC: [u8; 8] = *b"F2FMA5\0\0";
 const DOMAIN: &[u8] = b"FE2O3/FORMAL-MEMORY-ADMISSION-EVIDENCE/V5\0";
@@ -29,9 +31,13 @@ const HEADER_BYTES: usize = 160;
 const ROW_BYTES: usize = 96;
 
 #[derive(Debug)]
+/// Failure to construct, decode, or replay inert formal-memory evidence.
 pub enum ProductionFormalMemoryEvidenceErrorV5 {
+    /// A legacy V4 value failed its unchanged codec checks.
     Legacy(ProductionFormalMemoryEvidenceErrorV4),
+    /// The live owner or current-graph analysis failed revalidation.
     LiveOwner(String),
+    /// Canonical syntax, a bound, or a required association did not hold.
     Invalid(&'static str),
 }
 impl fmt::Display for ProductionFormalMemoryEvidenceErrorV5 {
@@ -68,6 +74,7 @@ pub struct InertCanonicalFormalMemoryAdmissionEvidenceV5 {
 }
 
 impl InertCanonicalFormalMemoryAdmissionEvidenceV5 {
+    /// Revalidates one exact live-owner kernel and retains its nonempty exclusions.
     pub fn from_live_owner_kernel(
         owner: &ProductionFormalMemoryOwnerV1,
         ordinal: usize,
@@ -232,6 +239,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV5 {
         })
     }
 
+    /// Rechecks canonical syntax and retained identity, not current-graph coverage.
     pub fn revalidate(&self) -> Result<()> {
         if Self::decode(&self.bytes)? != *self {
             return Err(invalid("retained identity"));
@@ -273,30 +281,39 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV5 {
         }
         Ok(())
     }
+    /// Complete canonical V5 bytes including the unchanged raw receipt.
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.bytes
     }
+    /// Domain-separated digest of the exact complete canonical bytes.
     pub fn identity(&self) -> &[u8; 32] {
         &self.identity
     }
+    /// Versioned identity of the current graph named by this inert envelope.
     pub const fn canonical_kernel_ir_identity(&self) -> ProductionCanonicalKernelIrIdentityV1 {
         self.kir
     }
+    /// Original raw formal obligations, including every retained conflict.
     pub fn formal_obligation_receipt_bytes(&self) -> &[u8] {
         &self.bytes[self.receipt_offset..self.receipt_offset + self.receipt_length]
     }
+    /// Exact kernel identity within the committed module.
     pub fn kernel_id(&self) -> &str {
         &self.kernel
     }
+    /// Exact entry-function identity, independent of the kernel name.
     pub fn entry_id(&self) -> &str {
         &self.entry
     }
+    /// Exact physical kernel ordinal in the committed module.
     pub const fn kernel_ordinal(&self) -> usize {
         self.kernel_ordinal
     }
+    /// Descriptive exclusion rows whose coverage requires current-graph replay.
     pub fn discharges(&self) -> &[Discharge] {
         &self.discharges
     }
+    /// Decoded bytes never grant source, native, or runtime authority.
     pub const fn grants_authority(&self) -> bool {
         false
     }
@@ -305,10 +322,13 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV5 {
 /// Current singleton custody without reinterpreting any legacy validation policy.
 #[derive(Debug, Eq, PartialEq)]
 pub enum InertFormalMemoryAdmissionEvidenceFormatV5 {
+    /// Unchanged conflict-free V4 evidence with its original validation policy.
     Legacy(InertCanonicalFormalMemoryAdmissionEvidenceV4),
+    /// Additive V5 custody retaining explicit exclusions and the raw conflicts.
     ExecutionDischarged(InertCanonicalFormalMemoryAdmissionEvidenceV5),
 }
 impl InertFormalMemoryAdmissionEvidenceFormatV5 {
+    /// Revalidates a singleton live owner and selects its exact evidence format.
     pub fn from_live_owner(owner: &ProductionFormalMemoryOwnerV1) -> Result<Self> {
         let [kernel] = owner.kernels() else {
             return Err(invalid("singleton owner"));
@@ -322,6 +342,7 @@ impl InertFormalMemoryAdmissionEvidenceFormatV5 {
                 .map(Self::ExecutionDischarged)
         }
     }
+    /// Dispatches explicit V5 syntax; all other bytes use the unchanged V4 decoder.
     pub fn decode_current(bytes: &[u8]) -> Result<Self> {
         if bytes.starts_with(&MAGIC) {
             InertCanonicalFormalMemoryAdmissionEvidenceV5::decode(bytes)
@@ -332,33 +353,39 @@ impl InertFormalMemoryAdmissionEvidenceFormatV5 {
                 .map_err(ProductionFormalMemoryEvidenceErrorV5::Legacy)
         }
     }
+    /// Complete canonical bytes without upgrading or downgrading either format.
     pub fn canonical_bytes(&self) -> &[u8] {
         match self {
             Self::Legacy(v) => v.canonical_bytes(),
             Self::ExecutionDischarged(v) => v.canonical_bytes(),
         }
     }
+    /// Original format-specific content digest.
     pub fn identity(&self) -> &[u8; 32] {
         match self {
             Self::Legacy(v) => v.identity(),
             Self::ExecutionDischarged(v) => v.identity(),
         }
     }
+    /// Current graph identity committed by the selected format.
     pub fn canonical_kernel_ir_identity(&self) -> ProductionCanonicalKernelIrIdentityV1 {
         match self {
             Self::Legacy(v) => v.canonical_kernel_ir_identity(),
             Self::ExecutionDischarged(v) => v.canonical_kernel_ir_identity(),
         }
     }
+    /// Exact nested raw receipt, never a replacement admission envelope.
     pub fn formal_obligation_receipt_bytes(&self) -> &[u8] {
         match self {
             Self::Legacy(v) => v.formal_obligation_receipt_bytes(),
             Self::ExecutionDischarged(v) => v.formal_obligation_receipt_bytes(),
         }
     }
+    /// Neither inert format grants source, native, or runtime authority.
     pub const fn grants_authority(&self) -> bool {
         false
     }
+    /// Borrows actual legacy custody only; V5 never fabricates a V4 value.
     pub fn legacy_v4(&self) -> Option<&InertCanonicalFormalMemoryAdmissionEvidenceV4> {
         if let Self::Legacy(v) = self {
             Some(v)
@@ -366,6 +393,7 @@ impl InertFormalMemoryAdmissionEvidenceFormatV5 {
             None
         }
     }
+    /// Borrows actual execution-discharge custody when the envelope is V5.
     pub fn execution_discharged_v5(
         &self,
     ) -> Option<&InertCanonicalFormalMemoryAdmissionEvidenceV5> {
@@ -375,6 +403,7 @@ impl InertFormalMemoryAdmissionEvidenceFormatV5 {
             None
         }
     }
+    /// Replays exact graph and raw obligations, rejecting legacy conflict downgrades.
     pub fn revalidate_against_verified_module(
         &self,
         verified: VerifiedKernelIrModuleV1<'_>,
