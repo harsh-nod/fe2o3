@@ -891,7 +891,7 @@ fn public_operation_families_guard_before_effectful_route_validation() {
         concat!(
             "self.wait_batch_with_timer(",
             "source_session,destination_session,tickets,deadline,currentness,",
-            "&mutXgmiWaitTimer::<false>::new(),)"
+            "&mutXgmiWaitTimer::<false>::new(),XgmiWaitCadence::Ordinary1ms,)"
         )
     );
     for (method, mode) in [

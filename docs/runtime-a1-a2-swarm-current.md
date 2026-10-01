@@ -47,7 +47,7 @@ Point-idle checks are not exclusive reservations, comparator engine identities
 are unknown, and no A7 or parity exit follows. The compact packet discloses
 its retained local source-payload prerequisites and both packaging rejections.
 
-The separate wait-cadence draft retains ordinary 1 ms behavior and adds an
+The [wait-cadence experiment](runtime-retained-pair-cadence-v1.md) retains ordinary 1 ms behavior and adds an
 explicit 25 microsecond sleep-ceiling experiment, preserving the existing
 64-spin/16-yield prefix, deadline and custody checks. Its full three-input
 selector proof measures 2/0, including a derived Clone obligation; this does not
@@ -64,8 +64,10 @@ build. Signed candidate `3527956b6` has seventeen changed paths and binds all
 the relocated full 2/0 positive, all three full 1/1 actual-body negatives with
 the exact one/two/two diagnostic calibration, both tool-release checks and all
 six owned group closures. Macro anchors establish source association, not branch
-execution. Earlier rejected captures remain preserved. This candidate is not
-yet integrated; no cursor-construction proof, scheduler proof, cadence GPU
+execution. Earlier rejected captures remain preserved. Integration preserves
+all seventeen candidate paths and four existing affected proof closures, with
+only their wider source-inventory hashes refreshed; all 24 local source-workflow
+commands pass. No cursor-construction proof, scheduler proof, cadence GPU
 measurement or performance gain is accepted. Original preparation and CPU
 failures remain retained.
 

@@ -52,6 +52,7 @@ use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
 mod xgmi_creation;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;
 mod retained_pair;
+mod retained_pair_cadence;
 mod retained_pair_diagnostic;
 mod xgmi_diagnostic;
 mod xgmi_retirement;
@@ -63,6 +64,9 @@ pub use retained_pair::{
     Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairCompletedCopyV1,
     Gfx942XgmiRetainedPairEnvironmentAssumptionV1, Gfx942XgmiRetainedPairWaitFailureV1,
 };
+use retained_pair_cadence::Gfx942XgmiRetainedWaitCadenceV1 as XgmiWaitCadence;
+#[cfg(feature = "hardware-diagnostic")]
+pub use retained_pair_cadence::Gfx942XgmiRetainedWaitCadenceV1;
 #[cfg(feature = "hardware-diagnostic")]
 pub use retained_pair_diagnostic::{
     Gfx942XgmiRetainedWaitCountersV1, Gfx942XgmiRetainedWaitCpuV1,
@@ -3615,6 +3619,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             tickets,
             deadline,
             &mut XgmiWaitTimer::<false>::new(),
+            XgmiWaitCadence::Ordinary1ms,
         )
     }
 
@@ -3624,6 +3629,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         tickets: &[Gfx942SdmaCopyTicketV1],
         deadline: XgmiBatchDeadlineV1,
         timer: &mut XgmiWaitTimer<DIAGNOSTIC>,
+        cadence: XgmiWaitCadence,
     ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942SdmaErrorV1> {
         let validation_started = timer.start();
         self.require_live()?;
@@ -3644,7 +3650,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             slots.push(slot);
         }
         let deadline = deadline.resolve()?;
-        let mut wait = MonotonicWaitV1::until(deadline);
+        let mut wait = cadence.cursor(deadline);
         let mut ready = vec![false; slots.len()];
         timer.end(XgmiWaitPhase::Validation, validation_started);
         timer.begin_scan();
@@ -4917,9 +4923,11 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
             deadline,
             currentness,
             &mut XgmiWaitTimer::<false>::new(),
+            XgmiWaitCadence::Ordinary1ms,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn wait_batch_with_timer<const DIAGNOSTIC: bool>(
         &mut self,
         source_session: &mut SharedGttMemorySessionV1,
@@ -4928,6 +4936,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         deadline: XgmiBatchDeadlineV1,
         currentness: XgmiRouteCurrentnessV1,
         timer: &mut XgmiWaitTimer<DIAGNOSTIC>,
+        cadence: XgmiWaitCadence,
     ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
         if let Err(error) = self.require_live_queue_state_v1() {
             return Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets });
@@ -4945,8 +4954,14 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         }
         let result = match self.owner.as_mut() {
             Some(owner) => {
-                if DIAGNOSTIC {
-                    owner.wait_many_xgmi_with_timer(source_session, &tickets, deadline, timer)
+                if DIAGNOSTIC || cadence != XgmiWaitCadence::Ordinary1ms {
+                    owner.wait_many_xgmi_with_timer(
+                        source_session,
+                        &tickets,
+                        deadline,
+                        timer,
+                        cadence,
+                    )
                 } else {
                     owner.wait_many_xgmi_for_in_current_scope(source_session, &tickets, deadline)
                 }
@@ -7791,15 +7806,19 @@ mod tests {
             .split("pub(crate) fn destroy_queue(")
             .next()
             .unwrap();
-        for body in [
-            fused_synchronous,
-            xgmi_single,
-            xgmi_batch,
-            ordinary_batch_or_striped,
-        ] {
+        for body in [fused_synchronous, xgmi_single, ordinary_batch_or_striped] {
             assert!(!body.contains("SdmaWaitProfileV1"));
             assert!(body.contains("MonotonicWaitV1::until(deadline)"));
         }
+        assert!(!xgmi_batch.contains("SdmaWaitProfileV1"));
+        assert!(xgmi_batch.contains("XgmiWaitCadence::Ordinary1ms,"));
+        assert!(xgmi_batch.contains("let mut wait = cadence.cursor(deadline);"));
+        let cadence = include_str!("sdma/retained_pair_cadence.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(cadence.contains("Self::Ordinary1ms => MonotonicWaitV1::until(deadline)"));
+        assert!(!cadence.contains("until_with_active_spin_floor"));
 
         let persistent_compute = fixed
             .split("pub fn wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(")

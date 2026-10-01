@@ -171,7 +171,6 @@ class SourceTests(unittest.TestCase):
             "crates/fe2o3-kfd/examples/kfd_sdma_xgmi_peer_benchmark/retained_series.rs": "f51f6bf4d7de4d0bdf1452d3f28e28490424d1da795704c9f7c008624a7e4da8",
             "benchmarks/runtime_gfx942/xgmi_peer_hip.cpp": "15377c48b71066b9d5dfab8c1579c2a13b971e1dacfb3de2f4e57c293b0dad3c",
             "benchmarks/runtime_gfx942/xgmi_peer_hsa.cpp": "ff7570330c7ecdeeec4558f16035fdbb4418d871d61072c7973f048e841924c7",
-            "crates/fe2o3-kfd/src/wait.rs": "2e869b7c0f0fcd5de5984f797452de4d8eb8a35e6cddc28dc77807913d34ca39",
             "crates/fe2o3-kfd/src/currentness.rs": "9c42efb6c2fb3f0352e6fda0bf88a91006437e02e06f656e126d48356bb8c3f3",
             "crates/fe2o3-kfd/src/sdma/retained_pair_operation_body.rs": "54236918b01d7167878c4827e28ab0c4a103e3f3b069d311b56931daad86b7ac",
             "crates/fe2o3-kfd/src/sdma/retained_pair_policy_v1.txt": diagnostic.POLICY,
@@ -179,6 +178,9 @@ class SourceTests(unittest.TestCase):
         }
         for path, digest in pins.items():
             self.assertEqual(hashlib.sha256((ROOT / path).read_bytes()).hexdigest(), digest, path)
+        wait = (ROOT / "crates/fe2o3-kfd/src/wait.rs").read_bytes().split(b"#[cfg(test)]\n", 1)[0]
+        self.assertEqual(hashlib.sha256(wait).hexdigest(),
+                         "6374ded715f9c6eaa14e6d09a819951ae86c76821664785f7758237463c533ab")
 
     def test_wait_body_is_baseline_plus_only_explicit_instrumentation(self):
         source = (ROOT / "crates/fe2o3-kfd/src/sdma.rs").read_text("ascii")
@@ -196,6 +198,9 @@ class SourceTests(unittest.TestCase):
             body = body.replace(statement, "")
         self.assertEqual(body.count("            timer.pause(&mut wait);"), 1)
         body = body.replace("            timer.pause(&mut wait);", "            wait.pause();")
+        self.assertEqual(body.count("let mut wait = cadence.cursor(deadline);"), 1)
+        body = body.replace("let mut wait = cadence.cursor(deadline);",
+                            "let mut wait = MonotonicWaitV1::until(deadline);")
         self.assertEqual(hashlib.sha256(body.encode("ascii")).hexdigest(),
                          "3d2ff578498de8cf0b31412f3e54a8abf90d156615cd1de3f68a8540b95d11d9")
         packet = source.split("impl Gfx942SdmaCopySubmissionV1 {", 1)[1].split("#[derive(Debug)]", 1)[0]

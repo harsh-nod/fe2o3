@@ -83,6 +83,7 @@ jobs:
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-routing.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-owned-storage.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-post-catch.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-cadence.py
 
       # Keep subprocess lifecycle tests in their separately owned campaign.
       - name: Resource-domain source and classifier controls
@@ -104,3 +105,8 @@ jobs:
         run: >-
           python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
           -p 'test_xgmi_retained_host_diagnostic*.py'
+
+      - name: Retained cadence controls (no GPU or network)
+        run: >-
+          python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
+          -p 'test_xgmi_retained_wait_cadence.py'

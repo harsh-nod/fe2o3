@@ -572,6 +572,7 @@ impl Gfx942NativeXgmiSdmaRetainedPairV1<'_> {
                     XgmiBatchDeadlineV1::Relative(timeout),
                     XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
                     timer,
+                    XgmiWaitCadence::Ordinary1ms,
                 )
             },
             |timer| timer.finish(started),
@@ -599,6 +600,69 @@ impl Gfx942NativeXgmiSdmaRetainedPairV1<'_> {
         })
         .map(|inner| Gfx942XgmiRetainedPairCompletedBatchV1 { inner })
         .map_err(|inner| Gfx942XgmiRetainedPairWaitFailureV1 { inner })
+    }
+
+    /// Explicit host cadence experiment with no instrumentation or new authority.
+    /// All original deadline, completion and paired operational checks remain.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn wait_batch_for_cadence_experiment_v1(
+        &mut self,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        timeout: Duration,
+        cadence: Gfx942XgmiRetainedWaitCadenceV1,
+    ) -> Result<Gfx942XgmiRetainedPairCompletedBatchV1, Gfx942XgmiRetainedPairWaitFailureV1> {
+        run_operation(&mut self.scope.context, |pair| {
+            pair.queue.wait_batch_with_timer(
+                pair.source,
+                pair.destination,
+                tickets,
+                XgmiBatchDeadlineV1::Relative(timeout),
+                XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
+                &mut XgmiWaitTimer::<false>::new(),
+                cadence,
+            )
+        })
+        .map(|inner| Gfx942XgmiRetainedPairCompletedBatchV1 { inner })
+        .map_err(|inner| Gfx942XgmiRetainedPairWaitFailureV1 { inner })
+    }
+
+    /// Success-only diagnostics of the same explicitly selected cadence.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn wait_batch_for_cadence_diagnostic_v1(
+        &mut self,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        timeout: Duration,
+        cadence: Gfx942XgmiRetainedWaitCadenceV1,
+    ) -> Result<
+        (
+            Gfx942XgmiRetainedPairCompletedBatchV1,
+            Gfx942XgmiRetainedWaitDiagnosticsV1,
+        ),
+        Gfx942XgmiRetainedPairWaitFailureV1,
+    > {
+        let started = Instant::now();
+        let timer = XgmiWaitTimer::<true>::new();
+        let (completed, diagnostic) = run_diagnostic_operation(
+            &mut self.scope.context,
+            timer,
+            |pair, timer| {
+                pair.queue.wait_batch_with_timer(
+                    pair.source,
+                    pair.destination,
+                    tickets,
+                    XgmiBatchDeadlineV1::Relative(timeout),
+                    XgmiRouteCurrentnessV1::OrdinaryRetainedPair,
+                    timer,
+                    cadence,
+                )
+            },
+            |timer| timer.finish(started),
+        )
+        .map_err(|inner| Gfx942XgmiRetainedPairWaitFailureV1 { inner })?;
+        Ok((
+            Gfx942XgmiRetainedPairCompletedBatchV1 { inner: completed },
+            diagnostic,
+        ))
     }
 
     /// Ends a drained scope with operational checks, not fresh host discovery.

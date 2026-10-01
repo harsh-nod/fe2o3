@@ -171,6 +171,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cadence_cursors_keep_prefix_clip_deadlines_and_saturate_attempts() {
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(1);
+        for ceiling in [MAX_SLEEP_V1, Duration::from_micros(25)] {
+            let mut wait = if ceiling == MAX_SLEEP_V1 {
+                MonotonicWaitV1::until(deadline)
+            } else {
+                MonotonicWaitV1::until_with_sleep_ceiling(deadline, ceiling)
+            };
+            assert_eq!(wait.deadline, Some(deadline));
+            assert_eq!(wait.active_spin_until, None);
+            for _ in 0..64 {
+                assert_eq!(wait.next_action_at(started), WaitActionV1::Spin);
+            }
+            for _ in 0..16 {
+                assert_eq!(wait.next_action_at(started), WaitActionV1::Yield);
+            }
+            for exponent in 0..8 {
+                assert_eq!(
+                    wait.next_action_at(started),
+                    WaitActionV1::Sleep((INITIAL_SLEEP_V1 * (1 << exponent)).min(ceiling))
+                );
+            }
+            let remaining = Duration::from_micros(7);
+            assert_eq!(
+                wait.next_action_at(deadline - remaining),
+                WaitActionV1::Sleep(remaining)
+            );
+            assert_eq!(
+                wait.next_action_at(deadline),
+                WaitActionV1::Sleep(Duration::ZERO)
+            );
+            assert_eq!(
+                wait.next_action_at(deadline + Duration::from_nanos(1)),
+                WaitActionV1::Sleep(Duration::ZERO)
+            );
+            wait.attempts = u32::MAX - 1;
+            for _ in 0..3 {
+                assert_eq!(wait.next_action_at(started), WaitActionV1::Sleep(ceiling));
+                assert_eq!(wait.attempts, u32::MAX);
+            }
+            assert_eq!(wait.deadline, Some(deadline));
+            assert_eq!(wait.max_sleep, ceiling);
+        }
+    }
+
+    #[test]
     fn sustained_waits_progress_from_spin_to_yield_to_bounded_sleep() {
         let mut wait = MonotonicWaitV1::without_deadline();
         for expected_attempts in 1..=SPIN_ATTEMPTS_V1 {

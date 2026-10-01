@@ -260,7 +260,7 @@ fn completion_observation_panic_preserves_every_mapping_and_payload() {
     assert_eq!(retained_identities(&owner), identities);
 }
 
-fn diagnostic_semantics<const PROFILE: bool>(relative: bool) {
+fn diagnostic_semantics<const PROFILE: bool>(relative: bool, cadence: XgmiWaitCadence) {
     for scenario in ["ready", "pending", "unexpected", "duplicate", "panic"] {
         let (mut memory, mut owner, tickets, identities) = fixture();
         write_completion(&mut memory, &mut owner, 0, i64::from(tickets[0].generation));
@@ -290,7 +290,7 @@ fn diagnostic_semantics<const PROFILE: bool>(relative: bool) {
             XgmiBatchDeadlineV1::Absolute(started)
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            owner.wait_many_xgmi_with_timer(&mut memory, &roster, deadline, &mut timer)
+            owner.wait_many_xgmi_with_timer(&mut memory, &roster, deadline, &mut timer, cadence)
         }));
         match (scenario, result) {
             ("ready", Ok(Ok(completed))) => {
@@ -344,7 +344,91 @@ fn diagnostic_semantics<const PROFILE: bool>(relative: bool) {
 #[test]
 fn ordinary_and_profiled_batch_wait_preserve_custody_deadlines_and_panics() {
     for relative in [false, true] {
-        diagnostic_semantics::<false>(relative);
-        diagnostic_semantics::<true>(relative);
+        diagnostic_semantics::<false>(relative, XgmiWaitCadence::Ordinary1ms);
+        diagnostic_semantics::<true>(relative, XgmiWaitCadence::Ordinary1ms);
+    }
+}
+
+#[test]
+fn experimental_cadence_preserves_the_same_success_error_panic_and_deadline_matrix() {
+    for relative in [false, true] {
+        diagnostic_semantics::<false>(relative, XgmiWaitCadence::Ceiling25us);
+        diagnostic_semantics::<true>(relative, XgmiWaitCadence::Ceiling25us);
+    }
+}
+
+#[test]
+fn cadence_timeout_keeps_exact_mappings_until_a_fresh_valid_retry() {
+    for cadence in [XgmiWaitCadence::Ordinary1ms, XgmiWaitCadence::Ceiling25us] {
+        let (mut memory, mut owner, tickets, identities) = fixture();
+        write_completion(&mut memory, &mut owner, 0, i64::from(tickets[0].generation));
+        let pending = owner.wait_many_xgmi_with_timer(
+            &mut memory,
+            &tickets,
+            XgmiBatchDeadlineV1::Relative(Duration::ZERO),
+            &mut XgmiWaitTimer::<false>::new(),
+            cadence,
+        );
+        assert!(matches!(pending, Err(Gfx942SdmaErrorV1::Timeout)));
+        assert_eq!(retained_identities(&owner), identities);
+        assert!(!owner.is_poisoned());
+        write_completion(&mut memory, &mut owner, 1, i64::from(tickets[1].generation));
+        let completed = owner
+            .wait_many_xgmi_with_timer(
+                &mut memory,
+                &tickets,
+                XgmiBatchDeadlineV1::Relative(Duration::ZERO),
+                &mut XgmiWaitTimer::<false>::new(),
+                cadence,
+            )
+            .unwrap();
+        assert_eq!(completed_identities(completed), identities);
+        assert!(owner.xgmi_records.iter().all(Option::is_none));
+    }
+}
+
+#[test]
+fn cadence_cannot_admit_a_malformed_roster_or_overflowing_deadline() {
+    for cadence in [XgmiWaitCadence::Ordinary1ms, XgmiWaitCadence::Ceiling25us] {
+        let (mut memory, mut owner, tickets, identities) = fixture();
+        let mut stale = tickets[0];
+        stale.generation += 1;
+        let mut foreign = tickets[0];
+        foreign.owner = queue_key(8, 11, 13);
+        for (roster, message) in [
+            (Vec::new(), "XGMI SDMA wait batch size"),
+            (
+                vec![tickets[0]; GFX942_SDMA_MAX_IN_FLIGHT_V1 + 1],
+                "XGMI SDMA wait batch size",
+            ),
+            (vec![tickets[0]; 2], "duplicate XGMI SDMA wait ticket"),
+            (vec![stale], "XGMI SDMA ticket generation"),
+            (vec![foreign], "XGMI SDMA ticket queue occurrence"),
+        ] {
+            assert_contract(
+                owner.wait_many_xgmi_with_timer(
+                    &mut memory,
+                    &roster,
+                    XgmiBatchDeadlineV1::Relative(Duration::ZERO),
+                    &mut XgmiWaitTimer::<false>::new(),
+                    cadence,
+                ),
+                message,
+            );
+            assert_eq!(retained_identities(&owner), identities);
+            assert!(!owner.is_poisoned());
+        }
+        assert_contract(
+            owner.wait_many_xgmi_with_timer(
+                &mut memory,
+                &tickets,
+                XgmiBatchDeadlineV1::Relative(Duration::MAX),
+                &mut XgmiWaitTimer::<false>::new(),
+                cadence,
+            ),
+            "XGMI SDMA batch wait deadline",
+        );
+        assert_eq!(retained_identities(&owner), identities);
+        assert!(!owner.is_poisoned());
     }
 }
