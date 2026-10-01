@@ -81,8 +81,7 @@ fn source_allocation_frames_keep_multiple_roots_and_repeated_helper_locals_disti
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared =
-        retained_index_prepared_v29(RetainedIndexCaseV29::Constant, &mut budget).unwrap();
+    let prepared = scalar_payload_prepared_v18(&mut budget);
     let completed = std::cell::Cell::new(false);
     with_production_optimizer_result_v18(prepared, &mut budget, |original, _, budget| {
         source_scalar_normalization_scratch_v18(original.source.cleanup, budget, 0, |budget| {
@@ -123,8 +122,7 @@ fn source_allocation_frames_reject_wrong_root_and_preserve_sticky_refusal() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared =
-        retained_index_prepared_v29(RetainedIndexCaseV29::Constant, &mut budget).unwrap();
+    let prepared = scalar_payload_prepared_v18(&mut budget);
     let reached = std::cell::Cell::new(false);
     let result =
         with_production_optimizer_result_v18(prepared, &mut budget, |original, _, budget| {
@@ -165,25 +163,50 @@ fn source_allocation_frames_reject_wrong_root_and_preserve_sticky_refusal() {
 #[test]
 fn source_allocation_frames_keep_callback_owned_index_credit_after_header_disposal() {
     run_production_optimized_consumer_v18(stored_physical_owner_v29, |original, _, budget| {
-        let count = original.source.root_row(0)?.source_slots.slots.len();
-        assert!(count > 0);
-        let floor = budget.storage();
-        let mut rows = Vec::new();
-        original.visit_allocation_frames_v32(0, budget, |row, budget| {
-            if rows.capacity() == 0 {
-                rows = emission_vec_v1(count, budget).map_err(source_emission_error_v18)?;
-            }
-            rows.push(row);
+        source_scalar_normalization_scratch_v18(original.source.cleanup, budget, 0, |budget| {
+            let count = original.source.root_row(0)?.source_slots.slots.len();
+            assert!(count > 0);
+            let query_credit = allocation_query_credit_v39(original, count, budget)?;
+            let floor = budget.storage();
+            let mut rows = Vec::new();
+            original.visit_allocation_frames_v32(0, budget, |row, budget| {
+                if rows.capacity() == 0 {
+                    rows = emission_vec_v1(count, budget).map_err(source_emission_error_v18)?;
+                }
+                rows.push(row);
+                Ok(())
+            })?;
+            assert_eq!(rows.len(), count);
+            let credit = rows.capacity() * size_of::<ProductionSourceAllocationFrameV32>();
+            assert_eq!(budget.storage(), floor + query_credit + credit);
+            drop(rows);
+            budget.release_storage(credit)?;
+            assert_eq!(budget.storage(), floor + query_credit);
             Ok(())
-        })?;
-        assert_eq!(rows.len(), count);
-        let credit = rows.capacity() * size_of::<ProductionSourceAllocationFrameV32>();
-        assert_eq!(budget.storage(), floor + credit);
-        drop(rows);
-        budget.release_storage(credit)?;
-        assert_eq!(budget.storage(), floor);
-        Ok(())
+        })
     });
+}
+
+// The visitor refunds its own fixed frame, not its caller-owned query phase.
+// A direct census measures that separate charge without a visitor or callback.
+fn allocation_query_credit_v39(
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    count: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<usize> {
+    let floor = budget.storage();
+    let mut credit = 0;
+    source_scalar_normalization_scratch_v18(original.source.cleanup, budget, 0, |budget| {
+        let query_floor = budget.storage();
+        for ordinal in 0..count {
+            let _ = original.allocation_frame_v32(0, ordinal, budget)?;
+        }
+        credit = budget.storage() - query_floor;
+        Ok(())
+    })?;
+    assert_eq!(budget.storage(), floor);
+    assert!(credit > 0);
+    Ok(credit)
 }
 
 struct AllocationVisitorDropV32(std::rc::Rc<std::cell::Cell<usize>>);
@@ -198,21 +221,28 @@ fn source_allocation_frames_dispose_callback_and_headers_on_ordinary_refusal() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared =
-        retained_index_prepared_v29(RetainedIndexCaseV29::Constant, &mut budget).unwrap();
+    let prepared = scalar_payload_prepared_v18(&mut budget);
     let drops = std::rc::Rc::new(std::cell::Cell::new(0));
+    let completed = std::cell::Cell::new(false);
     let result =
         with_production_optimizer_result_v18(prepared, &mut budget, |original, _, budget| {
+            assert!(!original.source.root_row(0)?.source_slots.slots.is_empty());
             let captured = AllocationVisitorDropV32(drops.clone());
             let floor = budget.storage();
-            let error = original
-                .visit_allocation_frames_v32(0, budget, move |_, _| {
-                    let _ = &captured;
-                    Err(ProductionSourceOwnedViewErrorV18::Binding(
-                        "allocation visitor callback refusal",
-                    ))
-                })
-                .unwrap_err();
+            let error = source_scalar_normalization_scratch_v18(
+                original.source.cleanup,
+                budget,
+                0,
+                |budget| {
+                    original.visit_allocation_frames_v32(0, budget, move |_, _| {
+                        let _ = &captured;
+                        Err(ProductionSourceOwnedViewErrorV18::Binding(
+                            "allocation visitor callback refusal",
+                        ))
+                    })
+                },
+            )
+            .unwrap_err();
             assert_eq!(drops.get(), 1);
             assert_eq!(budget.storage(), floor);
             assert!(matches!(
@@ -228,9 +258,11 @@ fn source_allocation_frames_dispose_callback_and_headers_on_ordinary_refusal() {
                 error.to_string()
             );
             assert_eq!((budget.work(), budget.storage()), before);
+            completed.set(true);
             Err(error)
         });
     assert!(result.is_err());
+    assert!(completed.get());
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
 
@@ -239,11 +271,12 @@ fn source_allocation_frames_refuse_callback_loss_of_the_live_visitor_floor() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared =
-        retained_index_prepared_v29(RetainedIndexCaseV29::Constant, &mut budget).unwrap();
+    let prepared = scalar_payload_prepared_v18(&mut budget);
     let reached = std::cell::Cell::new(false);
+    let completed = std::cell::Cell::new(false);
     let result =
         with_production_optimizer_result_v18(prepared, &mut budget, |original, _, budget| {
+            assert!(!original.source.root_row(0)?.source_slots.slots.is_empty());
             let error = original
                 .visit_allocation_frames_v32(0, budget, |_, budget| {
                     budget.release_storage(1)?;
@@ -265,9 +298,11 @@ fn source_allocation_frames_refuse_callback_loss_of_the_live_visitor_floor() {
                     .is_err()
             );
             assert_eq!((budget.work(), budget.storage()), before);
+            completed.set(true);
             Err(error)
         });
     assert!(result.is_err());
+    assert!(completed.get());
     assert!(reached.get());
     assert!(budget.storage() > MODULE_FLOOR);
 }
@@ -277,22 +312,38 @@ fn source_allocation_frames_unwind_drops_callback_before_refunding_headers() {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared =
-        retained_index_prepared_v29(RetainedIndexCaseV29::Constant, &mut budget).unwrap();
+    let prepared = scalar_payload_prepared_v18(&mut budget);
     let drops = std::rc::Rc::new(std::cell::Cell::new(0));
     let reached = std::cell::Cell::new(false);
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let caught = std::cell::Cell::new(false);
+    let result =
         with_production_optimizer_result_v18(prepared, &mut budget, |original, _, budget| {
+            assert!(!original.source.root_row(0)?.source_slots.slots.is_empty());
+            let query_credit = allocation_query_credit_v39(original, 1, budget)?;
+            let floor = budget.storage();
             let captured = AllocationVisitorDropV32(drops.clone());
             let reached = &reached;
-            original.visit_allocation_frames_v32(0, budget, move |_, _| {
-                let _ = &captured;
-                reached.set(true);
-                panic!("allocation visitor unwind")
-            })
-        })
-    }));
-    assert!(caught.is_err());
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                original.visit_allocation_frames_v32(0, budget, move |_, _| {
+                    let _ = &captured;
+                    reached.set(true);
+                    panic!("allocation visitor unwind")
+                })
+            }))
+            .unwrap_err();
+            assert_eq!(
+                panic.downcast_ref::<&str>(),
+                Some(&"allocation visitor unwind")
+            );
+            assert_eq!(drops.get(), 1);
+            assert_eq!(budget.storage(), floor + query_credit);
+            caught.set(true);
+            Err(ProductionSourceOwnedViewErrorV18::Binding(
+                "observed allocation visitor unwind",
+            ))
+        });
+    assert!(result.is_err());
+    assert!(caught.get());
     assert!(reached.get());
     assert_eq!(drops.get(), 1);
     assert_eq!(budget.storage(), MODULE_FLOOR);
@@ -302,11 +353,11 @@ fn allocation_visitor_resource_cut_v32(cut: Option<(bool, usize)>) -> (usize, us
     let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
-    let prepared =
-        retained_index_prepared_v29(RetainedIndexCaseV29::Constant, &mut budget).unwrap();
+    let prepared = scalar_payload_prepared_v18(&mut budget);
     let observed = std::cell::Cell::new(None);
     let result =
         with_production_optimizer_result_v18(prepared, &mut budget, |original, _, budget| {
+            assert!(!original.source.root_row(0)?.source_slots.slots.is_empty());
             let floor = budget.storage();
             // Test-owned padding isolates this visitor's peak from earlier source
             // constructors, without changing either production resource limit.
@@ -320,10 +371,22 @@ fn allocation_visitor_resource_cut_v32(cut: Option<(bool, usize)>) -> (usize, us
                 budget.charge_work(OPTIMIZED_SOURCE_WORK_LIMIT_V18 - budget.work() - remaining)?;
             }
             let before = (budget.work(), budget.storage());
-            let result = original.visit_allocation_frames_v32(0, budget, |_, _| Ok(()));
+            let mut visited = 0;
+            let result = source_scalar_normalization_scratch_v18(
+                original.source.cleanup,
+                budget,
+                0,
+                |budget| {
+                    original.visit_allocation_frames_v32(0, budget, |_, _| {
+                        visited += 1;
+                        Ok(())
+                    })
+                },
+            );
             assert_eq!(budget.storage(), before.1);
             let output = match result {
                 Ok(()) => {
+                    assert!(visited > 0);
                     observed.set(Some((
                         budget.work() - before.0,
                         budget.peak_storage() - before.1,

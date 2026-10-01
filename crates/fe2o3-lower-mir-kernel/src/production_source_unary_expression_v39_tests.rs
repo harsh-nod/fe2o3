@@ -5,26 +5,44 @@ fn unary_owner_v39() -> ProductionSemanticSsaOwnerV1 {
     let base = private_entry_non_neutral_owner_v20();
     let semantic = base.source_semantic();
     let mut functions = semantic.functions().to_vec();
-    let prior = &functions[3];
-    let mut statements = prior.blocks()[0].statements().to_vec();
-    let SemanticStatementKindV1::Assign(assignment) = statements[2].kind() else {
-        panic!("source fixture must retain its private write");
-    };
-    let destination = assignment.destination().clone();
-    statements[2] = assign(
-        destination,
-        SemanticRvalueKindV1::Unary {
-            operation: SemanticUnaryOpV1::Not,
-            operand: SemanticOperandV1::Copy(place(3, U32)),
-        },
-    );
-    functions[3] = function(
-        150,
-        SemanticFunctionRoleV1::InternalHelper,
-        prior.abi().clone(),
-        prior.locals().to_vec(),
-        vec![block(170, statements, SemanticTerminatorKindV1::Return)],
-    );
+    // Root zero reaches the helper; root one owns the same captured write.
+    for (index, identity, block_identity) in [(1, 90, 110), (3, 150, 170)] {
+        let prior = &functions[index];
+        let mut statements = prior.blocks()[0].statements().to_vec();
+        let SemanticStatementKindV1::Assign(assignment) = statements[2].kind() else {
+            panic!("source fixture must retain its private write");
+        };
+        assert!(matches!(
+            assignment.value().kind(),
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Add,
+                ..
+            }
+        ));
+        let destination = assignment.destination().clone();
+        statements[2] = assign(
+            destination,
+            SemanticRvalueKindV1::Unary {
+                operation: SemanticUnaryOpV1::Not,
+                operand: SemanticOperandV1::Copy(place(3, U32)),
+            },
+        );
+        let mut replacement = function(
+            identity,
+            prior.role(),
+            prior.abi().clone(),
+            prior.locals().to_vec(),
+            vec![block(
+                block_identity,
+                statements,
+                SemanticTerminatorKindV1::Return,
+            )],
+        );
+        if let Some(entry) = prior.kernel_entry() {
+            replacement = replacement.with_kernel_entry(entry.clone());
+        }
+        functions[index] = replacement;
+    }
     let callables = (0..functions.len())
         .map(|i| SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(i as u32)))
         .collect();
