@@ -4,11 +4,12 @@
 
 Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
-2026-10-01: the issue remained Open. The previously published baseline on both
-runtime branch refs is signed commit `6c36c2ab1`, including the qualified
-operation codec, earlier field-codec and journal-wrapper integrations, combined
-CPU regression and matched wait-cadence measurements. Concrete journal
-composition is the next integrated component, not a milestone exit.
+2026-10-01: the issue remained Open. Both runtime branch refs now include signed
+commit `0dcf69d36`: concrete producer-journal composition, the shared native
+wait-arithmetic component and its proof packet, provisioned peer receipt-origin
+ingress, and repaired source-guard bindings. Earlier combined CPU regression
+and matched wait-cadence measurements remain scoped to their recorded sources;
+they are not qualification of this whole integration tree.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
@@ -33,6 +34,29 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [receipt-origin ingress](runtime-distributed-receipt-origin-ingress-v1.md)
+is integrated at `ce789b7eb`. Its separate CPU campaign passes all 28 stages,
+including 17 focused tests in each of debug and release, 1,918 runtime tests,
+1,130 model tests, six doctests and strict Clippy. The original failed SSH
+transport remains rejected; only the complete recovered CPU result was
+independently adopted. This authenticates provisioned peer-origin claims, not
+truthful native completion, durable replay protection or two-host operation.
+
+The next A1 candidate joins an accounted ordinary primary queue to Context for
+one fixed coherent HostVisible generation. Its 32-path implementation and
+37-stage full CPU qualification plan have passed source review and 34 controller
+tests. The first local admission window expired below its unchanged 24 GiB
+available-memory threshold; no compiler or test executable ran. Remote CPU
+qualification and the single exact vecadd/retirement hardware witness remain
+pending. This profile does not admit generated dispatch, device-local storage,
+SDMA, dependencies, rebinding or whole-process resource accounting.
+
+The separate A2 live-allocation candidate retains its accepted 1,901-test
+runtime CPU result and full 219/0 positive proof captures. Fresh leaf/concrete
+mutation qualification is incomplete. The remote raw-capture adapter passes
+32 controller tests, but has not executed a remote proof; controller coverage
+and historical mutation observations are not qualified negative evidence.
+
 The [monotonic wait arithmetic component](runtime-monotonic-wait-arithmetic-v1.md)
 is qualified at signed source `a7d110af1`: four complete two-input 7/0 positives,
 seventeen calibrated actual-body negatives and all four metadata plus 23 proof
@@ -52,7 +76,7 @@ compact public packet includes all command records and support sources;
 toolchain/OS and retained local executable prerequisites remain explicit.
 This closes the combined CPU regression gap below, not a milestone exit.
 
-The next A2 concrete composition connects the actual journal observers to the
+The integrated A2 concrete composition connects the actual journal observers to the
 validator and receipt fold. A full unsigned discovery passes at 42/0 for the
 changed leaf closure, 64/0 for the changed conditional closure and 213/0 for the
 concrete root; all seven stages and groups close. An earlier visibility-related
