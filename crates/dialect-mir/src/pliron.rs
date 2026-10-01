@@ -4770,3 +4770,5 @@ mod direct_semantic_tests {
         );
     }
 }
+
+mod locator_storage_v1;

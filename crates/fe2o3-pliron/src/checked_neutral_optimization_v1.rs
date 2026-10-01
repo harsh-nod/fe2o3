@@ -464,3 +464,6 @@ where
 #[cfg(test)]
 #[path = "checked_neutral_optimization_v1_tests.rs"]
 mod tests;
+
+#[path = "checked_native_parts_retained_storage_v1.rs"]
+mod retained_storage_v1;

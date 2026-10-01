@@ -892,3 +892,5 @@ fn hash_u32(digest: &mut Sha256, value: u32) {
 fn hash_usize(digest: &mut Sha256, value: usize) {
     digest.update((value as u64).to_le_bytes());
 }
+
+mod retained_storage_v1;

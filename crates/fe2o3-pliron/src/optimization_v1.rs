@@ -1004,3 +1004,6 @@ mod graph_custody_tests_v1;
 
 include!("optimization_integer_continuation_v1.rs");
 include!("optimization_commutative_owner_v1.rs");
+
+#[path = "optimization_report_retained_storage_v1.rs"]
+mod retained_storage_v1;
