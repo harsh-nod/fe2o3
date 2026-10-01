@@ -1,5 +1,10 @@
 use super::*;
 
+mod enum_spill_relocation_tests {
+    use super::*;
+    include!("production_scoped_enum_spill_relocation_v55_tests.rs");
+}
+
 include!("production_execution_identity_emission_v1_tests.rs");
 
 mod function_frame_tests {

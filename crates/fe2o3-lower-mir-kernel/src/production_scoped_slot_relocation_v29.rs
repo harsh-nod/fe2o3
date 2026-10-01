@@ -1,12 +1,15 @@
 // A private emission transaction, not native admission or allocation-trace equivalence.
 use super::*;
 
+include!("production_scoped_enum_spill_relocation_v55.rs");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PrefixV29 {
     instance: ProductionCallInstanceIdV1,
     block: BlockId,
     count: u32,
     initializers: u32,
+    spills: u32,
     first: u32,
 }
 
@@ -21,9 +24,13 @@ pub(super) struct RelocationV29 {
     root: BlockId,
     root_prefix: u32,
     root_initializers: u32,
+    root_spills: u32,
     moved: u32,
     prefixes: Vec<PrefixV29>,
+    // Original source objects only; compiler spill geometry remains in its
+    // independently authenticated typed roster, never in the source census.
     storage: StorageV29,
+    compiler_spills: Vec<CompilerSpillV55>,
 }
 
 pub(super) struct PreparedV29<'a, 'scope> {
@@ -44,6 +51,7 @@ pub(super) struct PendingRawPreparedV29<'a, 'scope> {
 pub(super) struct FramePermitV29<'a, 'scope> {
     instances: &'a ExecutionInstancesV29<'scope>,
     slots: &'a OwnedScopedSourceSlotsV29,
+    compiler_spills: &'a [CompilerSpillV55],
 }
 
 #[derive(Clone, Copy)]
@@ -293,29 +301,42 @@ fn prepare_source_inputs_v29<'a, 'scope>(
         let entry = body.blocks.first().ok_or_else(invalid)?.id;
         let (root_prefix, root_initializers) =
             prologue_counts(instances, root, slots, entry, budget)?;
-        let mut prefixes = emission_vec_v1(slots.instances.len().saturating_sub(1), budget)?;
+        let compiler_spills = capture_compiler_spills_v55(instances, emitted, slots, budget)?;
+        let root_spills = enum_spill_count_v55(emitted[0].as_ref().ok_or_else(invalid)?)?;
+        let mut prefixes: Vec<PrefixV29> =
+            emission_vec_v1(slots.instances.len().saturating_sub(1), budget)?;
         let mut first = root_prefix;
         for row in slots.instances.iter().skip(1) {
             budget.charge_work(2)?;
-            let source = emitted
+            let lowered = emitted
                 .get(row.instance.index())
                 .and_then(Option::as_ref)
-                .and_then(|row| row.function.body.as_ref())
                 .ok_or_else(invalid)?;
+            let source = lowered.function.body.as_ref().ok_or_else(invalid)?;
             let block = source.blocks.first().ok_or_else(invalid)?.id;
             let (count, initializers) = prologue_counts(instances, row, slots, block, budget)?;
-            if count == 0 {
+            let spills = enum_spill_count_v55(lowered)?;
+            if count == 0 && spills == 0 {
                 continue;
+            }
+            // Preserve emission order; the checked order also indexes instances.
+            if prefixes
+                .last()
+                .is_some_and(|prefix| prefix.instance >= row.instance)
+            {
+                return Err(invalid());
             }
             prefixes.push(PrefixV29 {
                 instance: row.instance,
                 block,
                 count,
                 initializers,
+                spills,
                 first,
             });
             first = first
                 .checked_add(count)
+                .and_then(|value| value.checked_add(spills))
                 .ok_or(ArgumentResourceV1::Arithmetic)?;
         }
         // A previously slot-free root did not run the slot-history entry check.
@@ -345,9 +366,11 @@ fn prepare_source_inputs_v29<'a, 'scope>(
                 root: entry,
                 root_prefix,
                 root_initializers,
+                root_spills,
                 moved: first - root_prefix,
                 prefixes,
                 storage: allocation_storage,
+                compiler_spills,
             },
         })
     })
@@ -375,13 +398,24 @@ impl FramePermitV29<'_, '_> {
         if !std::ptr::eq(plan, self.instances) {
             return Err(CallInstanceEmissionErrorV1::CalleeFrameAllocation);
         }
-        let slot = self
-            .slots
-            .slots
-            .iter()
-            .find(|slot| slot.allocation.block == block && slot.allocation.operation == ordinal)
-            .ok_or(CallInstanceEmissionErrorV1::CalleeFrameAllocation)?;
-        let mut owner = slot.instance;
+        let slot =
+            self.slots.slots.iter().find(|slot| {
+                slot.allocation.block == block && slot.allocation.operation == ordinal
+            });
+        charge_execution_cfg_lookup_v29(self.compiler_spills.len(), budget)
+            .map_err(frame_error_v55)?;
+        let spill = self
+            .compiler_spills
+            .binary_search_by_key(&(block, ordinal), |row| {
+                (row.origin.emitted_block, row.origin.emitted_operation)
+            })
+            .ok()
+            .map(|index| &self.compiler_spills[index]);
+        let mut owner = match (slot, spill) {
+            (Some(slot), None) => slot.instance,
+            (None, Some(spill)) => spill.instance,
+            _ => return Err(CallInstanceEmissionErrorV1::CalleeFrameAllocation),
+        };
         while owner != child {
             budget.charge_work(1)?;
             owner = self
@@ -391,10 +425,12 @@ impl FramePermitV29<'_, '_> {
                 .occurrence()
                 .caller;
         }
-        check_scoped_slot_alloca_v29(slot, operation, budget).map_err(|error| match error {
-            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error) => error.into(),
-            _ => CallInstanceEmissionErrorV1::CalleeFrameAllocation,
-        })
+        match (slot, spill) {
+            (Some(slot), None) => check_scoped_slot_alloca_v29(slot, operation, budget),
+            (None, Some(spill)) => check_enum_spill_alloca_v55(&spill.origin, operation, budget),
+            _ => unreachable!(),
+        }
+        .map_err(frame_error_v55)
     }
 }
 
@@ -408,25 +444,37 @@ impl RelocationV29 {
             root,
             root_prefix,
             root_initializers,
+            root_spills,
             moved,
             prefixes,
             storage,
+            compiler_spills,
         } = self;
         budget.charge_work(size_of::<Self>())?;
-        if (*root, *root_prefix, *root_initializers, *moved, *storage)
-            != (
-                other.root,
-                other.root_prefix,
-                other.root_initializers,
-                other.moved,
-                other.storage,
-            )
-            || prefixes.len() != other.prefixes.len()
+        if (
+            *root,
+            *root_prefix,
+            *root_initializers,
+            *root_spills,
+            *moved,
+            *storage,
+        ) != (
+            other.root,
+            other.root_prefix,
+            other.root_initializers,
+            other.root_spills,
+            other.moved,
+            other.storage,
+        ) || prefixes.len() != other.prefixes.len()
+            || compiler_spills.len() != other.compiler_spills.len()
         {
             return Ok(false);
         }
         budget.charge_work(argument_product_v1(prefixes.len(), size_of::<PrefixV29>())?)?;
-        Ok(prefixes == &other.prefixes)
+        if prefixes != &other.prefixes {
+            return Ok(false);
+        }
+        compiler_spills_match_v55(compiler_spills, &other.compiler_spills, budget)
     }
 
     fn ordinary_span(
@@ -449,8 +497,31 @@ impl RelocationV29 {
             });
         }
         if let Some(prefix) = self.prefixes.iter().find(|row| row.block == span.block) {
+            let spill_first = prefix
+                .count
+                .checked_add(prefix.initializers)
+                .ok_or(ArgumentResourceV1::Arithmetic)?;
+            let spill_end = spill_first
+                .checked_add(prefix.spills)
+                .ok_or(ArgumentResourceV1::Arithmetic)?;
+            let removed = if span.first >= spill_end {
+                prefix
+                    .count
+                    .checked_add(prefix.spills)
+                    .ok_or(ArgumentResourceV1::Arithmetic)?
+            } else if span.first >= prefix.count
+                && span
+                    .first
+                    .checked_add(span.count)
+                    .ok_or(ArgumentResourceV1::Arithmetic)?
+                    <= spill_first
+            {
+                prefix.count
+            } else {
+                return Err(invalid());
+            };
             return Ok(InstancePhysicalSpanV1 {
-                first: span.first.checked_sub(prefix.count).ok_or_else(invalid)?,
+                first: span.first.checked_sub(removed).ok_or_else(invalid)?,
                 ..span
             });
         }
@@ -504,11 +575,7 @@ impl RelocationV29 {
                     },
                 ];
             } else {
-                let prefix = self
-                    .prefixes
-                    .iter()
-                    .find(|prefix| prefix.instance == row.instance)
-                    .ok_or_else(invalid)?;
+                let prefix = self.prefix_for_instance_v55(row.instance)?;
                 if original.block != prefix.block
                     || original.count
                         != prefix
@@ -535,6 +602,10 @@ impl RelocationV29 {
                     },
                 ];
             }
+        } else if matches!(row.source, InstanceSpanSourceV1::Synthetic(source)
+            if source.rule == SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage)
+        {
+            mapped = self.mapped_enum_spill_v55(row)?;
         } else {
             for span in mapped.segments.iter_mut().flatten() {
                 *span = self.ordinary_span(*span)?;
@@ -582,7 +653,7 @@ impl RelocationV29 {
                 }
             }
         }
-        if count != self.storage.allocations {
+        if count != argument_sum_v1(&[self.storage.allocations, self.compiler_spills.len()])? {
             return Err(invalid());
         }
         for slot in &slots.slots {
@@ -590,11 +661,7 @@ impl RelocationV29 {
             let offset = if slot.instance == slots.instances[0].instance {
                 0
             } else {
-                self.prefixes
-                    .iter()
-                    .find(|row| row.instance == slot.instance)
-                    .ok_or_else(invalid)?
-                    .first as usize
+                self.prefix_for_instance_v55(slot.instance)?.first as usize
             };
             let operation = argument_sum_v1(&[offset, slot.allocation.operation])?;
             let allocation = entry.operations.get(operation).ok_or_else(invalid)?;
@@ -620,6 +687,7 @@ impl RelocationV29 {
                 }
             }
         }
+        self.check_relocated_compiler_spills_v55(entry, budget)?;
         with_canonical_call_scratch_v1(budget, |budget| {
             let parts =
                 ScopedDeferredScalarViewV29::for_pending_root(instances, pending, self, budget)?;
@@ -666,7 +734,12 @@ impl RelocationV29 {
                 .iter()
                 .position(|block| block.id == prefix.block)
                 .ok_or_else(invalid)?;
-            if index == 0 || body.blocks[index].operations.len() < prefix.count as usize {
+            let end = argument_sum_v1(&[
+                prefix.count as usize,
+                prefix.initializers as usize,
+                prefix.spills as usize,
+            ])?;
+            if index == 0 || body.blocks[index].operations.len() < end {
                 return Err(invalid());
             }
             donor_indices.push(index);
@@ -698,13 +771,16 @@ impl RelocationV29 {
                 pending.coordinates.spans.rows.len(),
                 argument_sum_v1(&[16, argument_product_v1(2, self.prefixes.len())?])?,
             )?,
-            shifted_operations,
+            argument_product_v1(2, shifted_operations)?,
         ])?)?;
         let body = pending.function.body.as_mut().unwrap();
         let mut root = std::mem::take(&mut body.blocks[0].operations);
         replacement.extend(root.drain(..self.root_prefix as usize));
         for (prefix, &index) in self.prefixes.iter().zip(&donor_indices) {
             replacement.extend(body.blocks[index].operations.drain(..prefix.count as usize));
+            let first = prefix.initializers as usize;
+            let end = first + prefix.spills as usize;
+            replacement.extend(body.blocks[index].operations.drain(first..end));
         }
         replacement.append(&mut root);
         body.blocks[0].operations = replacement;
@@ -746,6 +822,7 @@ impl PreparedV29<'_, '_> {
         let permit = FramePermitV29 {
             instances: self.instances,
             slots: self.slots,
+            compiler_spills: &self.relocation.compiler_spills,
         };
         let pending = assemble_pending_scoped_root_inner_v29(
             self.instances,
@@ -777,6 +854,7 @@ impl PendingRawPreparedV29<'_, '_> {
         let permit = FramePermitV29 {
             instances: self.fields.instances,
             slots: self.fields.slots,
+            compiler_spills: &self.fields.relocation.compiler_spills,
         };
         let pending = scoped_raw_admission_v29::assemble_pending_raw_scoped_root_v29(
             original,
