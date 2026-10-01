@@ -160,15 +160,16 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "4c84447dc3e7bc692fb9d75f7e1e3dd0c9ae42ada71c9818beffdd192e931d26")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "871392dc05b488d7ec628efcb6ce77f24d4b3fe29d0d24d3c873f301f8f058c4")
         mixed_tabs = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][7:]
         self.assertEqual([tab["label"] for tab in mixed_tabs], [
             "Mixed tile source", "Mixed tile oracle", "Public CLI workflow",
             "Recorded mixed CPU observations",
         ])
         self.assertEqual([tab["sourceItemStatus"] for tab in mixed_tabs],
-                         ["pending", "not-applicable", "not-applicable", "not-applicable"])
-        self.assertTrue(all(tab["sourceItem"] is None for tab in mixed_tabs))
+                         ["contract-bound", "not-applicable", "not-applicable", "not-applicable"])
+        self.assertIsNotNone(mixed_tabs[0]["sourceItem"])
+        self.assertTrue(all(tab["sourceItem"] is None for tab in mixed_tabs[1:]))
         self.assertEqual([tab["sourceCommit"] for tab in mixed_tabs[:2]],
                          ["fed6998b1a5eaf2530e94664a1ede650382a8990"] * 2)
 
@@ -295,7 +296,6 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         gaps = {}
         self.validator.validate_manifest(ROOT, self.manifest, curriculum_gaps=gaps)
         self.assertEqual(gaps, {
-            "cpu-semantic-simulation": ["examples/workgroup_sync_v1/src/kernel_mixed_tile_u32.rs"],
             "gemm-proof-plan": ["examples/tiled_gemm_v1/src/kernel.rs"],
         })
         lesson = self.curriculum_lesson("cpu-semantic-simulation")
@@ -469,11 +469,11 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(report["schema"], "fe2o3-tutorial-kernel-pair-obligations-v2")
         identities = report["kernelInventory"]
         for counts in (report, identities):
-            self.assertEqual(counts["knownVariantObligationCount"], 123)
-            self.assertEqual(counts["pendingVariantCount"], 106)
-            self.assertEqual(counts["unregisteredDisplayItemCount"], 25)
+            self.assertEqual(counts["knownVariantObligationCount"], 126)
+            self.assertEqual(counts["pendingVariantCount"], 108)
+            self.assertEqual(counts["unregisteredDisplayItemCount"], 7)
         self.assertIs(identities["runtimeCensusValidated"], False)
-        self.assertEqual(identities["knownKernelIdentityCount"], 61)
+        self.assertEqual(identities["knownKernelIdentityCount"], 62)
         self.assertEqual(identities["negativeCaseCount"], 3)
         self.assertTrue(identities["unresolvedBindings"])
         self.assertIs(report["qualified"], False)
@@ -482,15 +482,15 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertEqual(report["requiredModes"], ["simt", "tile"])
         self.assertEqual(len(report["fixtureSelections"]), 50)
-        self.assertEqual(len(report["sourceDriverCases"]), 14)
+        self.assertEqual(len(report["sourceDriverCases"]), 15)
         self.assertEqual(len(report["displayObservations"]), 55)
         self.assertEqual(sum(row["sourceItemStatus"] == "pending"
-                             for row in report["displayObservations"]), 53)
+                             for row in report["displayObservations"]), 52)
         self.assertTrue(all(row["lexicalKernelNames"] is None
                             for row in report["displayObservations"]))
         self.assertEqual(report["stageStatus"], "not-evaluated")
         self.assertEqual(report["variantBindingStatus"], "partial")
-        self.assertEqual(report["sourceBoundVariantCount"], 17)
+        self.assertEqual(report["sourceBoundVariantCount"], 18)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["productionContract"], self.original["productionContract"])
 
@@ -651,12 +651,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "a09f3fe28e0d189ab23cf3ee2c0a65cf151c22b085b3599c49452edea3ff96e7")
-        self.assertEqual(len(inventory["kernels"]), 61)
+                         "5e15e06052ecd3a5c7dd2e86fac4f42aef548cca64669b48add3aa80c6dc087a")
+        self.assertEqual(len(inventory["kernels"]), 62)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 76, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 26, "source-driver-contract": 14, "fixture-source-contract": 39,
+                         {"pending": 8, "source-driver-contract": 15, "fixture-source-contract": 56,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
@@ -680,10 +680,11 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ("fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix", "simt"),
             ("fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix", "simt"),
             ("source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1", "simt"),
+            ("source-driver:cpu-semantic-simulation:7:mixed_tile_probe", "mixed"),
         ])
         pending = [variant for row in inventory["kernels"] for variant in row["variants"]
                    if variant["status"] == "pending"]
-        self.assertEqual(len(pending), 106)
+        self.assertEqual(len(pending), 108)
         self.assertTrue(all(variant["source"] is None for variant in pending))
         display = {(row["lessonId"], row["tabOrdinal"], row["kernelSymbol"]): row
                    for row in inventory["displayItems"]}
@@ -694,8 +695,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         mixed = display[("cpu-semantic-simulation", 7, "mixed_tile_probe")]
         self.assertEqual(mixed["functionUtf8Offset"], 468)
         self.assertEqual(mixed["classification"], "kernel")
-        self.assertEqual(mixed["bindingStatus"], "pending")
-        self.assertEqual(mixed["kernelIds"], [])
+        self.assertEqual(mixed["bindingStatus"], "source-driver-contract")
+        self.assertEqual(mixed["kernelIds"], ["source-driver:cpu-semantic-simulation:7:mixed_tile_probe"])
         self.assertEqual(mixed["negativeCases"], [])
         for row in inventory["displayItems"]:
             if row["lessonId"] == "typed-vecadd" and row["classification"] == "kernel":
@@ -909,7 +910,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(self.manifest, before)
         self.assertEqual(expected["sourcePath"], "examples/fill/src/lib.rs")
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 17)
+        self.assertEqual(report["sourceBoundVariantCount"], 18)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertEqual(report["stageStatus"], "not-evaluated")
@@ -960,7 +961,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
         binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 18)
+        self.assertEqual(report["sourceBoundVariantCount"], 19)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertEqual(report["variantBindingStatus"], "partial")
         self.assertIs(report["qualified"], False)
@@ -1184,10 +1185,10 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(
             [(row["lessonId"], row["tabOrdinal"], row["caseOrdinal"]) for row in cases],
             [("cpu-semantic-simulation", 0, index) for index in range(13)]
-            + [("cpu-semantic-simulation", 6, 0)],
+            + [("cpu-semantic-simulation", 6, 0), ("cpu-semantic-simulation", 7, 0)],
         )
         self.assertEqual(Counter(row["expectation"]["kind"] for row in cases),
-                         {"verified-bundle-export": 11, "rejected": 3})
+                         {"verified-bundle-export": 11, "rejected": 3, "diagnostic-kir-export-v1": 1})
         self.assertTrue(all(row["expectation"]["outputArtifact"] == "absent"
                             for row in cases if row["expectation"]["kind"] == "rejected"))
         self.assertEqual(report["qualifiedPairCount"], 0)

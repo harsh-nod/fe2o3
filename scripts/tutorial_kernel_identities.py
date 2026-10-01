@@ -748,11 +748,15 @@ def validate_kernel_inventory(
             if item is None:
                 continue
             for index, case in enumerate(budget.rows(item["cases"], "source cases")):
+                expectation = case.get("expectation")
+                kind = expectation.get("kind") if isinstance(expectation, dict) else None
+                if kind not in ("verified-bundle-export", "rejected", "diagnostic-kir-export-v1"):
+                    _fail("unsupported source-driver expectation kind")
                 key = ("source-driver-case", lesson_id, ordinal, index)
                 inputs = {**item["compilerInput"], "features": case["features"]}
                 add_selection(key, {"identity": _selection_identity(inputs, case["kernelSymbol"], budget),
                                     "symbol": case["kernelSymbol"], "case": case, "tab": tab})
-                if case["expectation"]["kind"] == "rejected":
+                if kind == "rejected":
                     expected_negative.add(key)
     expected_positive = selections.keys() - expected_negative
     consumed = set()
