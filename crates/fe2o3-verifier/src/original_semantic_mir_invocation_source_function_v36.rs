@@ -641,7 +641,8 @@ pub(super) mod tests {
 
     #[test]
     fn original_mir_byte_program_consumes_every_active_instance_and_ordered_call_argument() {
-        super::super::super::invocations::tests::run_variant(LIMIT, LIMIT, true, |plan, out| {
+        for unit_return in [false, true] {
+            super::super::super::invocations::tests::run_variant(LIMIT, LIMIT, unit_return, |plan, out| {
             with_slots(plan, out, |slots, out| {
                 let mut program = SourceByteProgram::derive(plan, slots, out)?;
                 assert_eq!(program.roots.len(), 2);
@@ -656,8 +657,8 @@ pub(super) mod tests {
                 assert!(out.text.contains("let arguments = seq![evaluated_0.value, evaluated_1.value]"));
                 assert!(out.text.contains("role: InvocationSourceOperandRoleV36::CallArgument(0)"));
                 assert!(out.text.contains("before: evaluated_0.source, after: evaluated_1.source, value: evaluated_1.value"));
-                // This fixture has empty root blocks and one unit assignment
-                // in each of the two active helper instances per root.
+                // Root blocks are empty. Arithmetic uses the scalar graph;
+                // assigning Unit uses the typed byte-transfer dispatcher.
                 for root in 0..2 {
                     assert!(!out.text.contains(&format!(
                         "invocation_source_scalar_{root}_0_0_0_v36(cursor.source)"
@@ -665,7 +666,10 @@ pub(super) mod tests {
                     for instance in 1..=2 {
                         assert_eq!(out.text.matches(&format!(
                             "invocation_source_scalar_{root}_{instance}_0_0_v36(cursor.source)"
-                        )).count(), 1);
+                        )).count(), usize::from(!unit_return));
+                        assert_eq!(out.text.matches(&format!(
+                            "match invocation_source_byte_event_{root}_{instance}_v36(0, 0) {{ Some(event) => invocation_source_byte_step_v36(cursor.source, event, {root}, {instance}, little_endian)"
+                        )).count(), usize::from(unit_return));
                     }
                 }
                 assert!(out.text.contains("cursor.next_statement != cursor.observations.len()"));
@@ -675,6 +679,7 @@ pub(super) mod tests {
                 Ok(())
             })
         }).0.unwrap();
+        }
     }
 
     #[test]
