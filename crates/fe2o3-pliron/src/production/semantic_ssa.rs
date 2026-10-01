@@ -907,6 +907,7 @@ fn semantic_ssa_auxiliary_resources_for_parts_v1(
     )?;
     let (projected_moves, deinitializations, maximum_projection_depth) =
         projected_local_move_metrics_v1(function)?;
+    let borrow_graph = adapter::borrow_graph_resources_v41(function, 0)?;
     let removals = projected_moves
         .checked_add(deinitializations)
         .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
@@ -941,6 +942,7 @@ fn semantic_ssa_auxiliary_resources_for_parts_v1(
     let storage_words = adapter_items
         .checked_add(failure_boundary_words)
         .and_then(|value| value.checked_add(partial_state_copies))
+        .and_then(|value| value.checked_add(borrow_graph.storage_words))
         .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
 
     // A block can be revisited once for each newly merged path. On each visit,
@@ -969,6 +971,7 @@ fn semantic_ssa_auxiliary_resources_for_parts_v1(
         storage_words,
         work_units: adapter_work
             .checked_add(partial_work)
+            .and_then(|value| value.checked_add(borrow_graph.work_units))
             .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
     })
 }

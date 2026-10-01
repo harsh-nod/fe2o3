@@ -143,6 +143,15 @@ fn index_reader_owner_with_transfers_v40(
     move_witnesses: bool,
     copy_references: bool,
 ) -> ProductionSemanticSsaOwnerV1 {
+    index_reader_owner_with_fanout_v41(move_witnesses, copy_references, false)
+}
+
+fn index_reader_owner_with_fanout_v41(
+    move_witnesses: bool,
+    copy_references: bool,
+    fanout: bool,
+) -> ProductionSemanticSsaOwnerV1 {
+    assert!(!fanout || copy_references);
     let base = owner(Case::Shared);
     let mut types = base.source_semantic().types()[..2].to_vec();
     for (tag, witness) in [(3, THREAD), (5, DISJOINT)] {
@@ -323,6 +332,52 @@ fn index_reader_owner_with_transfers_v40(
                 4,
             ),
         );
+    }
+    if fanout {
+        blocks[1] = block(
+            11,
+            blocks[1].statements().to_vec(),
+            index_call(
+                2,
+                vec![SemanticOperandV1::Copy(place(7, THREAD_REF))],
+                3,
+                INDEX,
+                5,
+            ),
+        );
+        blocks[3] = block(
+            13,
+            blocks[3].statements().to_vec(),
+            index_call(
+                4,
+                vec![SemanticOperandV1::Copy(place(10, DISJOINT_REF))],
+                6,
+                INDEX,
+                6,
+            ),
+        );
+        blocks.push(block(
+            15,
+            vec![],
+            index_call(
+                2,
+                vec![SemanticOperandV1::Copy(place(2, THREAD_REF))],
+                3,
+                INDEX,
+                2,
+            ),
+        ));
+        blocks.push(block(
+            16,
+            vec![],
+            index_call(
+                4,
+                vec![SemanticOperandV1::Copy(place(5, DISJOINT_REF))],
+                6,
+                INDEX,
+                4,
+            ),
+        ));
     }
     let mut local_types = vec![
         UNIT,
@@ -747,6 +802,32 @@ fn original_index_witness_moves_and_shared_reference_copies_preserve_reader_rece
             },
         )
         .unwrap_or_else(|error| panic!("moves={moves} copies={copies}: {error:?}"));
+    }
+}
+
+#[test]
+fn original_shared_index_reference_fanout_keeps_both_consumers_authenticated() {
+    let _guard = ObserverGuard;
+    for moves in [false, true] {
+        READER_CHECKS.set(0);
+        SOURCE_INDEX_READER_OBSERVER_V29.set(Some(reader_checks));
+        cell_emission_tests::with_cell_source_lowered(
+            index_reader_owner_with_fanout_v41(moves, true, true),
+            |plan, references, emitted, _| {
+                assert_eq!(plan.loans.len(), 2);
+                assert_eq!(references.index_witnesses.len(), 2);
+                assert!(
+                    references
+                        .index_witnesses
+                        .iter()
+                        .all(|proof| proof.get().is_some())
+                );
+                assert_eq!(emitted.len(), 1);
+                assert_eq!(READER_CHECKS.get(), 4);
+                Ok(())
+            },
+        )
+        .unwrap_or_else(|error| panic!("fanout moves={moves}: {error:?}"));
     }
 }
 

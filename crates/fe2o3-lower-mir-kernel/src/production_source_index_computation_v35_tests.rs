@@ -222,6 +222,63 @@ fn production_index_reader_correspondence_accepts_witness_moves_and_shared_refer
 }
 
 #[test]
+fn production_index_reader_correspondence_preserves_original_and_copied_reference_fanout() {
+    for moves in [false, true] {
+        let owner = index_production_owner_from_component_v40(index_reader_owner_with_fanout_v41(
+            moves, true, true,
+        ));
+        let completed = std::cell::Cell::new(false);
+        let (result, _, _, retained) =
+            index_relation_probe_owner_v40(owner, 1_000_000_000, 256 << 20, |relation, budget| {
+                source_scalar_normalization_scratch_v18(
+                    relation.source.cleanup,
+                    budget,
+                    0,
+                    |budget| {
+                        let readers = &relation
+                            .source
+                            .root_row(0)?
+                            .rvalue_results
+                            .as_ref()
+                            .unwrap()
+                            .index_readers;
+                        assert_eq!(readers.len(), 4);
+                        for block in [1, 3, 5, 6] {
+                            let reader = relation
+                                .index_reader_computation_v35(
+                                    0,
+                                    0,
+                                    SemanticBlockIdV1::from_index(block),
+                                    budget,
+                                )?
+                                .unwrap();
+                            assert_eq!(
+                                reader.expression(budget)?,
+                                ProductionSemanticExpressionV2::GlobalInvocation1d {
+                                    scalar: ProductionSemanticScalarTypeV2::Integer {
+                                        signed: false,
+                                        bits: 64
+                                    },
+                                }
+                            );
+                            let definition = reader.original_definition(budget)?;
+                            assert_eq!(
+                                relation.inventory.definitions()[definition].ty,
+                                &Type::INDEX
+                            );
+                        }
+                        completed.set(true);
+                        Ok(())
+                    },
+                )
+            });
+        result.unwrap_or_else(|error| panic!("fanout moves={moves}: {error:?}"));
+        assert!(completed.get());
+        assert_eq!(retained, 0);
+    }
+}
+
+#[test]
 fn source_index_computation_retains_both_original_readers_and_explicit_global_x() {
     with_index_relation_v35(|relation, budget| {
         let retained = relation
