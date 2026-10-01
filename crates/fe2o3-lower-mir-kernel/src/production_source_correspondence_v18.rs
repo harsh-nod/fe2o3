@@ -1,5 +1,6 @@
 include!("production_source_inventory_rows_v18.rs");
 include!("production_source_rvalue_results_v30.rs");
+include!("production_source_allocation_frames_v32.rs");
 
 // The attachment index contains source metadata only. All graph lookups reuse
 // the caller's existing canonical inventory; no graph/definition index is built.

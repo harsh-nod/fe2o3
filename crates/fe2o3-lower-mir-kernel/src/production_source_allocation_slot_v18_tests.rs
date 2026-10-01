@@ -1,3 +1,5 @@
+include!("production_source_allocation_frames_v32_tests.rs");
+
 #[test]
 fn source_allocation_slot_queries_retain_actual_original_and_optimized_backing() {
     let mut kinds = [0usize; 2];
