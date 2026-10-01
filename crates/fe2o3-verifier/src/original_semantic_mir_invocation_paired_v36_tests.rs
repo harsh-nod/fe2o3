@@ -4,6 +4,37 @@ use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInt
 
 const LIMIT: usize = 256 * 1024 * 1024;
 
+#[test]
+fn original_mir_paired_trace_joins_every_observation_at_its_own_allocation_generation() {
+    run(LIMIT, LIMIT, |paired, out| {
+        paired.emit(out)?;
+        for root in 0..paired.roots.len() {
+            for required in [
+                format!("invocation_source_byte_map_valid_{root}_v36(source[i].before, target[i].before)"),
+                format!("invocation_source_byte_map_valid_{root}_v36(source[i].after, target[i].after)"),
+                format!("invocation_source_byte_map_{root}_v36(source[i].before, target[i].before)"),
+                format!("invocation_source_byte_map_{root}_v36(source[i].after, target[i].after)"),
+                format!("invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events)"),
+                format!("invocation_paired_observations_append_{root}_v39(original.events, actual.events"),
+            ] {
+                assert!(out.text.contains(&required), "{required}");
+            }
+            assert!(!out.text.contains(&format!(
+                "invocation_paired_source_step_{root}_v36(source).events =="
+            )));
+        }
+        assert!(out.text.contains("CfgStepV26<InvocationSourceByteStateV36, InvocationSourceEffectObservationV39>"));
+        assert!(out.text.contains("CfgStepV26<MemoryStateV30, MemoryOperationObservationV30>"));
+        assert!(out.text.contains("source.len() == target.len() && (forall|i: int|"));
+        assert!(out.text.contains("events: invocation_source_observations_v39(next"));
+        assert!(out.text.contains("events: invocation_actual_observations_v39(next.observations)"));
+        assert!(!out.text.contains("assume("));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
 fn run(
     work: usize,
     storage: usize,
@@ -225,9 +256,7 @@ fn original_mir_paired_source_readiness_is_an_independent_native_input_obligatio
             )));
             assert!(predicate.contains("byte_memory_well_formed_v30(external)"));
             assert!(predicate.contains("byte_native_view_inputs_v38(external, arguments)"));
-            assert!(predicate.contains(
-                "external.live.contains_key(allocation) ==> !invocation_private_allocation_v36(allocation)"
-            ));
+            assert!(predicate.contains("invocation_native_provenance_v39(external, arguments)"));
             assert!(!predicate.contains("source_initial"));
             assert!(!predicate.contains("source_ready"));
             assert!(!predicate.contains("machine.valid"));

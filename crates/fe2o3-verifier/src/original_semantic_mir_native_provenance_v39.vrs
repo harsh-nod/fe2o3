@@ -1,0 +1,30 @@
+// Native callers cannot mint an identity from any private allocation generation,
+// including one the kernel will create later. Dead, uninitialized fragments are
+// inert; neither a typed read nor a complete relocation can recover them.
+open spec fn invocation_native_value_provenance_v39(value: MemoryValueV30) -> bool {
+    match value {
+        MemoryValueV30::Pointer(pointer) => !invocation_private_allocation_v36(pointer.allocation),
+        MemoryValueV30::Slice(slice) => !invocation_private_allocation_v36(slice.pointer.allocation),
+        MemoryValueV30::Undefined | MemoryValueV30::Unit
+        | MemoryValueV30::Scalar(_) | MemoryValueV30::Vector(_) => true,
+    }
+}
+
+open spec fn invocation_native_provenance_v39(memory: ByteMemoryV30,
+    arguments: Seq<MemoryValueV30>,
+) -> bool {
+    (forall|i: int| 0 <= i < arguments.len() ==>
+        invocation_native_value_provenance_v39(arguments[i]))
+    && (forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) ==>
+        !invocation_private_allocation_v36(allocation) && ({
+            let object = memory.live[allocation];
+            (forall|i: int| 0 <= i < object.bytes.len() && object.initialized[i] ==>
+                match object.bytes[i] {
+                    MemoryByteV37::Octet(_) => true,
+                    MemoryByteV37::PointerFragment { pointer, .. } =>
+                        !invocation_private_allocation_v36(pointer.allocation),
+                })
+            && (forall|at: int| object.relocations.contains_key(at) ==>
+                !invocation_private_allocation_v36(object.relocations[at].pointer.allocation))
+        }))
+}

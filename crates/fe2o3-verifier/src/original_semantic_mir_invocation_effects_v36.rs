@@ -2,16 +2,14 @@
 //! statement and terminator dispatchers. Private initialization is related by
 //! the mandatory heap predicate, never by erasing source validity checks.
 
-pub(super) const INVOCATION_EFFECTS_V36: &str = r#"
+pub(super) const INVOCATION_EFFECTS_V36: &str = concat!(
+    include_str!("original_semantic_mir_native_provenance_v39.vrs"),
+    include_str!("original_semantic_mir_observed_effects_v39.vrs"),
+    r#"
 open spec fn invocation_external_effect_v36(effect: MemoryOperationEffectV30) -> bool {
-    match effect {
-        MemoryOperationEffectV30::Read { address, .. }
-        | MemoryOperationEffectV30::Write { address, .. } => match address {
-            MemoryValueV30::Pointer(pointer) => !invocation_private_allocation_v36(pointer.allocation),
-            _ => false,
-        },
-        MemoryOperationEffectV30::Refused => true,
-        _ => false,
+    match invocation_project_effect_v39(effect) {
+        Some(_) => true,
+        None => false,
     }
 }
 
@@ -21,9 +19,13 @@ open spec fn invocation_actual_effects_v36(observations: Seq<MemoryOperationObse
 {
     if observations.len() == 0 { seq![] } else {
         let head = observations[0];
-        let effects = if !head.valid_before || !head.valid_after {
+        let effects = if !head.valid_before || !head.valid_after
+            || !byte_observation_snapshots_valid_v39(head) {
             seq![MemoryOperationEffectV30::Refused]
-        } else if invocation_external_effect_v36(head.effect) { seq![head.effect] } else { seq![] };
+        } else { match invocation_project_effect_v39(head.effect) {
+            Some(effect) => seq![effect],
+            None => seq![],
+        } };
         effects + invocation_actual_effects_v36(observations.drop_first())
     }
 }
@@ -45,7 +47,8 @@ open spec fn invocation_source_read_effect_v36(
                 None => seq![MemoryOperationEffectV30::Refused],
             }
         }
-        _ => seq![],
+        InvocationSourceByteValueV36::Constant(_)
+        | InvocationSourceByteValueV36::Local { .. } => seq![],
     }
 }
 
@@ -72,12 +75,18 @@ open spec fn invocation_source_statement_effects_v36(
                                     alignment: access.alignment, value: evaluated.value }] },
                             None => seq![MemoryOperationEffectV30::Refused],
                         },
-                    _ => seq![],
+                    InvocationSourceByteDestinationV36::Local(_) => seq![],
                 };
                 read + write
             }
             // Borrow formation checks initialized bytes but is not a Load.
-            Some(_) => seq![],
+            Some(InvocationSourceByteEventV36::Scalar)
+            | Some(InvocationSourceByteEventV36::WitnessBorrow { .. })
+            | Some(InvocationSourceByteEventV36::Pointer(_))
+            | Some(InvocationSourceByteEventV36::Address { .. })
+            | Some(InvocationSourceByteEventV36::Deinitialize(_))
+            | Some(InvocationSourceByteEventV36::StorageLive { .. })
+            | Some(InvocationSourceByteEventV36::StorageDead { .. }) => seq![],
         }
     }
 }
@@ -106,7 +115,8 @@ open spec fn invocation_source_operands_effects_v36(
             InvocationSourceOperandV36::Scalar { value, bits } =>
                 invocation_source_read_effect_v36(head.before, value, bits,
                     head.root, head.instance, little_endian),
-            _ => seq![],
+            InvocationSourceOperandV36::Pointer { .. }
+            | InvocationSourceOperandV36::Slice { .. } => seq![],
         } };
         effects + invocation_source_operands_effects_v36(observations.drop_first(), little_endian)
     }
@@ -118,7 +128,8 @@ open spec fn invocation_source_effects_v36(result: InvocationSourceBlockResultV3
     invocation_source_statements_effects_v36(result.observations, little_endian)
         + invocation_source_operands_effects_v36(result.operands, little_endian)
 }
-"#;
+"#
+);
 
 #[cfg(test)]
 mod tests {
@@ -147,3 +158,7 @@ mod tests {
         assert!(!text.contains("byte_end_frame_v30"));
     }
 }
+
+#[cfg(test)]
+#[path = "original_semantic_mir_observed_effects_v39_tests.rs"]
+mod observed_tests_v39;
