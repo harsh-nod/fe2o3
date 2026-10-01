@@ -104,6 +104,7 @@ fn retained_source_rvalue_replay_detects_type_endpoint_omission_and_source_chang
                     ledger: original.ledger,
                     rows: original.rows.clone(),
                     values: original.values.clone(),
+                    carriers: original.carriers.clone(),
                     index_readers: original.index_readers.clone(),
                     storage: original.storage,
                 };
@@ -226,6 +227,7 @@ fn typed_endpoint_header_oracle_v36() -> usize {
         + h::<SourceSsaLoanV36>()
         + h::<SourceSsaPhysicalV36>()
         + h::<SourceSsaEndpointRowV36>()
+        + carrier_tree_header_oracle_v37()
         + h::<ProductionSourceSsaEndpointV36<'_, '_>>()
         + h::<Vec<Option<SemanticLocalIdV1>>>()
         + h::<&mut [Option<SemanticLocalIdV1>]>()
@@ -255,6 +257,36 @@ fn typed_endpoint_header_oracle_v36() -> usize {
         + h::<SemanticLocalIdV1>()
         + h::<SemanticTypeIdV1>()
         + 12 * h::<usize>()
+}
+
+fn carrier_tree_header_oracle_v37() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    h::<SourceSsaComponentV37>()
+        + h::<SourceCarrierFrameV37<'_>>()
+        + h::<ProductionSourceSsaCarrierShapeV37>()
+        + h::<Vec<SourceSsaComponentV37>>()
+        + h::<&mut Vec<SourceSsaComponentV37>>()
+        + h::<&[SourceSsaComponentV37]>()
+        + h::<Vec<SourceCarrierFrameV37<'_>>>()
+        + h::<Option<SourceCarrierFrameV37<'_>>>()
+        + h::<&SemanticTypeShapeV1>()
+        + h::<&Vec<SemanticValueBindingV1>>()
+        + h::<std::ops::Range<usize>>()
+        + h::<std::iter::Rev<std::iter::Enumerate<std::slice::Iter<'_, SemanticValueBindingV1>>>>()
+        + h::<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>()
+        + h::<fe2o3_kernel_ir::FixedVectorTypeV12>()
+        + h::<(
+            &ExecutionInstancesV29<'_>,
+            &SourceReferenceEmissionV29<'_, '_>,
+            &mut Vec<SourceCarrierFrameV37<'_>>,
+            &mut Vec<SourceSsaComponentV37>,
+            &mut ArgumentBudgetV1<'_>,
+        )>()
+        + 10 * h::<usize>()
 }
 
 fn index_reader_header_oracle_v35() -> usize {

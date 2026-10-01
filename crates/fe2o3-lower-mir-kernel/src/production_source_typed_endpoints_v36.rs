@@ -1,8 +1,10 @@
 // Exact source SSA carriers retained before the original emission archive dies.
 // These locators do not establish pointer validity, aliasing, or heap equality.
+include!("production_source_carrier_tree_v37.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceSsaElementV36 {
     Scalar(ScalarType),
+    Vector(fe2o3_kernel_ir::FixedVectorTypeV12),
     Storage(fe2o3_kernel_ir::StorageLayoutIdV1),
 }
 
@@ -10,6 +12,7 @@ impl SourceSsaElementV36 {
     fn from_type(ty: &Type) -> Option<Self> {
         match ty {
             Type::Scalar(scalar) => Some(Self::Scalar(*scalar)),
+            Type::Vector(vector) => Some(Self::Vector(*vector)),
             Type::StorageObject(layout) => Some(Self::Storage(*layout)),
             _ => None,
         }
@@ -23,6 +26,7 @@ impl SourceSsaElementV36 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceSsaCarrierTypeV36 {
     Scalar(ScalarType),
+    Vector(fe2o3_kernel_ir::FixedVectorTypeV12),
     Pointer {
         element: SourceSsaElementV36,
         space: fe2o3_kernel_ir::AddressSpace,
@@ -39,6 +43,7 @@ impl SourceSsaCarrierTypeV36 {
     fn from_type(ty: &Type) -> Option<Self> {
         match ty {
             Type::Scalar(scalar) => Some(Self::Scalar(*scalar)),
+            Type::Vector(vector) => Some(Self::Vector(*vector)),
             Type::Pointer(pointer) => Some(Self::Pointer {
                 element: SourceSsaElementV36::from_type(&pointer.pointee)?,
                 space: pointer.address_space,
@@ -56,6 +61,7 @@ impl SourceSsaCarrierTypeV36 {
     fn matches(self, ty: &Type) -> bool {
         match (self, ty) {
             (Self::Scalar(expected), Type::Scalar(actual)) => expected == *actual,
+            (Self::Vector(expected), Type::Vector(actual)) => expected == *actual,
             (
                 Self::Pointer {
                     element,
@@ -98,6 +104,10 @@ struct SourceSsaLoanV36 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceSsaPhysicalV36 {
     Unit,
+    Aggregate {
+        start: usize,
+        length: usize,
+    },
     Value {
         value: ValueId,
         ty: SourceSsaCarrierTypeV36,
@@ -197,6 +207,7 @@ fn retain_source_typed_endpoint_v36(
     definitions: &[Option<SemanticLocalIdV1>],
     original: SsaValueV1,
     binding: &SemanticValueBindingV1,
+    carriers: &mut Vec<SourceSsaComponentV37>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<SourceSsaEndpointRowV36, ProductionSemanticKirErrorV1> {
     budget.charge_work(7)?;
@@ -228,6 +239,22 @@ fn retain_source_typed_endpoint_v36(
         .get(local.index() as usize)
         .ok_or_else(source_typed_endpoint_error_v36)?
         .ty();
+    let physical =
+        retain_source_carrier_tree_v37(instances, references, ty, binding, carriers, budget)?;
+    Ok(SourceSsaEndpointRowV36 {
+        local,
+        ty,
+        physical,
+    })
+}
+
+fn retain_source_carrier_leaf_v37(
+    instances: &ExecutionInstancesV29<'_>,
+    references: &SourceReferenceEmissionV29<'_, '_>,
+    ty: SemanticTypeIdV1,
+    binding: &SemanticValueBindingV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<SourceSsaPhysicalV36, ProductionSemanticKirErrorV1> {
     let shape = instances
         .owner()
         .source_semantic()
@@ -238,24 +265,11 @@ fn retain_source_typed_endpoint_v36(
     let physical = match (binding, shape) {
         (SemanticValueBindingV1::Unit, SemanticTypeShapeV1::Unit) => SourceSsaPhysicalV36::Unit,
         (SemanticValueBindingV1::Value { id, ty: actual }, _) => {
-            let kind = SourceSsaCarrierTypeV36::from_type(actual);
-            let supported = match (kind, shape) {
-                (
-                    Some(SourceSsaCarrierTypeV36::Scalar(_)),
-                    SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_),
-                ) => true,
-                (
-                    Some(SourceSsaCarrierTypeV36::Pointer { .. }),
-                    SemanticTypeShapeV1::Pointer(pointer),
-                ) => pointer.metadata() == SemanticPointerMetadataV1::None,
-                (
-                    Some(SourceSsaCarrierTypeV36::Slice { .. }),
-                    SemanticTypeShapeV1::Pointer(pointer),
-                ) => pointer.metadata() == SemanticPointerMetadataV1::SliceLength,
-                _ => false,
-            };
-            match (supported, kind) {
-                (true, Some(ty)) => SourceSsaPhysicalV36::Value {
+            // This records the original emitted carrier, not an interpretation
+            // of its source type. Descriptor wrappers require a separate
+            // authenticated source ABI recipe before a consumer uses Slice.
+            match SourceSsaCarrierTypeV36::from_type(actual) {
+                Some(ty) => SourceSsaPhysicalV36::Value {
                     value: *id,
                     ty,
                     loan: None,
@@ -316,19 +330,20 @@ fn retain_source_typed_endpoint_v36(
         }
         _ => SourceSsaPhysicalV36::Unmodeled,
     };
-    Ok(SourceSsaEndpointRowV36 {
-        local,
-        ty,
-        physical,
-    })
+    Ok(physical)
 }
 
 /// Borrowed original-emission locator. Pointer validity and the source/target
 /// heap relation must be supplied by the consuming semantic interpreter.
+/// A physical carrier shape does not classify the original source type.
 pub struct ProductionSourceSsaEndpointV36<'a, 'source> {
     owner: &'a ProductionSourceCorrespondenceV18<'source>,
     row: &'a SourceSsaRowV30,
     function: SemanticFunctionIdV1,
+    coordinate: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    source_type: SemanticTypeIdV1,
+    physical: &'a SourceSsaPhysicalV36,
+    carriers: &'a [SourceSsaComponentV37],
     definition: Option<usize>,
 }
 
@@ -355,7 +370,7 @@ impl ProductionSourceSsaEndpointV36<'_, '_> {
             Ok(self.row.typed.local)
         })())
     }
-    /// Returns the original local's source type, without asserting a value relation.
+    /// Returns this endpoint's original source type without asserting a value relation.
     pub fn source_type(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -363,10 +378,11 @@ impl ProductionSourceSsaEndpointV36<'_, '_> {
         self.owner.retain_query((|| {
             self.owner.query(budget)?;
             budget.charge_work(1)?;
-            Ok(self.row.typed.ty)
+            Ok(self.source_type)
         })())
     }
     /// Returns the exact original canonical definition, or `None` for Unit.
+    /// Aggregate endpoints require a component query and are refused here.
     pub fn original_definition(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -374,6 +390,12 @@ impl ProductionSourceSsaEndpointV36<'_, '_> {
         self.owner.retain_query((|| {
             self.owner.query(budget)?;
             budget.charge_work(1)?;
+            if matches!(self.physical, SourceSsaPhysicalV36::Aggregate { .. }) {
+                return self
+                    .owner
+                    .source
+                    .missing("aggregate SSA carrier has multiple components");
+            }
             Ok(self.definition)
         })())
     }
@@ -385,6 +407,12 @@ impl ProductionSourceSsaEndpointV36<'_, '_> {
         self.owner.retain_query((|| {
             self.owner.query(budget)?;
             budget.charge_work(1)?;
+            if matches!(self.physical, SourceSsaPhysicalV36::Aggregate { .. }) {
+                return self
+                    .owner
+                    .source
+                    .missing("aggregate SSA carrier has multiple components");
+            }
             Ok(self
                 .definition
                 .map(|index| self.owner.inventory.definitions()[index].ty))
@@ -457,42 +485,25 @@ impl ProductionSourceCorrespondenceV18<'_> {
             {
                 return self.source.missing("original typed SSA local type differs");
             }
-            let definition = match row.typed.physical {
-                SourceSsaPhysicalV36::Unmodeled => {
-                    return self
-                        .source
-                        .missing("original SSA whole binding has no typed carrier");
-                }
-                SourceSsaPhysicalV36::Unit => None,
-                SourceSsaPhysicalV36::Value { value, ty, .. } => {
-                    let function = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
-                        u32::try_from(owner.function_ordinal)
-                            .map_err(|_| ArgumentResourceV1::Arithmetic)?,
-                    );
-                    let index = self
-                        .inventory
-                        .definition_index_for_value(function, value, budget)
-                        .map_err(|error| {
-                            ProductionSourceOwnedViewErrorV18::from(
-                                fe2o3_pliron::CanonicalAnalysisScopeErrorV1::Inventory(error),
-                            )
-                        })?
-                        .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
-                            "original typed SSA canonical value is absent",
-                        ))?;
-                    budget.charge_work(4)?;
-                    if !ty.matches(self.inventory.definitions()[index].ty) {
-                        return self
-                            .source
-                            .missing("original typed SSA canonical type differs");
-                    }
-                    Some(index)
-                }
-            };
+            let coordinate = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
+                u32::try_from(owner.function_ordinal)
+                    .map_err(|_| ArgumentResourceV1::Arithmetic)?,
+            );
+            let definition = source_carrier_definition_v37(
+                self,
+                coordinate,
+                &row.typed.physical,
+                &results.carriers,
+                budget,
+            )?;
             Ok(ProductionSourceSsaEndpointV36 {
                 owner: self,
                 row,
                 function,
+                coordinate,
+                source_type: row.typed.ty,
+                physical: &row.typed.physical,
+                carriers: &results.carriers,
                 definition,
             })
         })())
@@ -513,6 +524,7 @@ fn source_typed_endpoint_headers_v36() -> Result<usize, ArgumentResourceV1> {
         h::<SourceSsaLoanV36>()?,
         h::<SourceSsaPhysicalV36>()?,
         h::<SourceSsaEndpointRowV36>()?,
+        source_carrier_tree_headers_v37()?,
         h::<ProductionSourceSsaEndpointV36<'_, '_>>()?,
         h::<Vec<Option<SemanticLocalIdV1>>>()?,
         h::<&mut [Option<SemanticLocalIdV1>]>()?,

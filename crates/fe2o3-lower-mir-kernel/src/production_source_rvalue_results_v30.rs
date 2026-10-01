@@ -34,6 +34,7 @@ struct OwnedSourceRvaluesV30 {
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     rows: Vec<SourceRvalueRowV30>,
     values: Vec<SourceSsaRowV30>,
+    carriers: Vec<SourceSsaComponentV37>,
     index_readers: Vec<SourceIndexReaderRowV35>,
     storage: usize,
 }
@@ -133,6 +134,7 @@ fn retain_source_rvalues_v30(
     }
     let mut rows = emission_vec_v1(count, budget)?;
     let mut values = emission_vec_v1(value_count, budget)?;
+    let mut carriers = emission_vec_v1(0, budget)?;
     for (ordinal, selected) in pending.active_instances.rows.iter().enumerate() {
         budget.charge_work(1)?;
         let Some(selected) = *selected else { continue };
@@ -170,6 +172,7 @@ fn retain_source_rvalues_v30(
                     &definitions,
                     *original,
                     binding,
+                    &mut carriers,
                     budget,
                 )?,
             });
@@ -235,6 +238,7 @@ fn retain_source_rvalues_v30(
         ledger: budget.work_ledger_identity_v1(),
         rows,
         values,
+        carriers,
         index_readers,
         storage,
     });
@@ -258,6 +262,10 @@ impl OwnedSourceRvaluesV30 {
                 size_of::<SourceSsaRowV30>(),
             )?,
             argument_product_v1(
+                argument_sum_v1(&[self.carriers.len(), other.carriers.len()])?,
+                size_of::<SourceSsaComponentV37>(),
+            )?,
+            argument_product_v1(
                 argument_sum_v1(&[self.index_readers.len(), other.index_readers.len()])?,
                 size_of::<SourceIndexReaderRowV35>(),
             )?,
@@ -272,6 +280,7 @@ impl OwnedSourceRvaluesV30 {
             && self.ledger == other.ledger
             && self.rows == other.rows
             && self.values == other.values
+            && self.carriers == other.carriers
             && self.index_readers == other.index_readers)
     }
 }

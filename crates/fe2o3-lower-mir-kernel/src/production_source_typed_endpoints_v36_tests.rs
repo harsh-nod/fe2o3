@@ -1,4 +1,6 @@
 use super::*;
+#[path = "production_source_carrier_tree_v37_tests.rs"]
+mod carrier_tree_tests;
 
 fn slice_owner() -> ProductionSemanticSsaOwnerV1 {
     descriptor_source_owner(DescriptorCase::READ)
@@ -109,6 +111,15 @@ fn checked_rows(
                         SemanticTypeShapeV1::Unit
                     ));
                 }
+                SourceSsaPhysicalV36::Aggregate { length, .. } => {
+                    assert_eq!(
+                        endpoint.carrier_shape(budget)?,
+                        ProductionSourceSsaCarrierShapeV37::Aggregate { components: length }
+                    );
+                    for field in 0..length {
+                        endpoint.component(field, budget)?;
+                    }
+                }
                 SourceSsaPhysicalV36::Value {
                     value,
                     ty: carrier,
@@ -123,6 +134,7 @@ fn checked_rows(
                         SourceSsaCarrierTypeV36::Pointer { .. } => counts[1] += 1,
                         SourceSsaCarrierTypeV36::Slice { .. } => counts[2] += 1,
                         SourceSsaCarrierTypeV36::Scalar(_) => {}
+                        SourceSsaCarrierTypeV36::Vector(_) => {}
                     }
                     counts[3] += usize::from(loan.is_some());
                 }
@@ -221,6 +233,7 @@ fn source_typed_endpoint_replay_detects_local_type_carrier_loan_and_instance_mut
                     storage: original.storage,
                     rows: original.rows.clone(),
                     values: original.values.clone(),
+                    carriers: original.carriers.clone(),
                     index_readers: original.index_readers.clone(),
                 };
                 let row = &mut altered.values[at];
@@ -403,6 +416,11 @@ fn source_typed_endpoint_carrier_identity_rejects_relabel_nested_pointer_and_vec
     assert!(expected.matches(&pointer));
     for changed in [
         slice,
+        Type::vector(fe2o3_kernel_ir::FixedVectorTypeV12::new(
+            ScalarType::U32,
+            4,
+            fe2o3_kernel_ir::VectorLayoutV12::Contiguous,
+        )),
         Type::Scalar(ScalarType::U32),
         Type::pointer(
             Type::Scalar(ScalarType::U32),
