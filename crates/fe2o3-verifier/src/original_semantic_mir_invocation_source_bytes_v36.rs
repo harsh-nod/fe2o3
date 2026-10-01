@@ -1634,6 +1634,7 @@ fn headers() -> usize {
 }
 
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
+    include_str!("original_semantic_mir_source_descriptor_indices_v52.vrs"),
     include_str!("original_semantic_mir_source_memory_values_v51.vrs"),
     include_str!("original_semantic_mir_source_memory_laws_v51.vrs"),
     include_str!("original_semantic_mir_source_aggregate_values_v42.vrs"),

@@ -126,6 +126,7 @@ enum SourceSsaPhysicalV36 {
         start: usize,
         length: usize,
         known_variant: Option<u32>,
+        presence: Option<SemanticOptionAvailabilityV1>,
     },
     EnumVariant {
         variant: u32,

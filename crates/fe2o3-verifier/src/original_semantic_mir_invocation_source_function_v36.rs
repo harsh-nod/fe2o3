@@ -20,6 +20,8 @@ use std::{fmt::Write as _, mem::size_of, ops::Range};
 
 #[path = "original_semantic_mir_source_descriptor_calls_v51.rs"]
 mod descriptor_calls;
+#[path = "original_semantic_mir_source_descriptor_indices_v52.rs"]
+mod descriptor_indices;
 #[path = "original_semantic_mir_invocation_source_index_v37.rs"]
 mod index_calls;
 
@@ -41,6 +43,7 @@ enum End {
     },
     Index(index_calls::IndexCall),
     Descriptor(descriptor_calls::DescriptorCall),
+    DescriptorIndex(descriptor_indices::DescriptorIndexCall),
     Assert(assertions::SourceAssertControlV40),
     Return,
 }
@@ -89,7 +92,10 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
             .as_ref()
             .ok_or_else(mismatch)?;
         let row = function.control.get(block).ok_or_else(mismatch)?;
-        Ok(matches!(row.end, End::Index(_) | End::Descriptor(_)))
+        Ok(matches!(
+            row.end,
+            End::Index(_) | End::Descriptor(_) | End::DescriptorIndex(_)
+        ))
     }
 
     pub(super) fn source_slots(
@@ -377,6 +383,17 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                             out,
                         )? {
                             End::Descriptor(descriptor)
+                        } else if let Some(index) = descriptor_indices::DescriptorIndexCall::derive(
+                            slots,
+                            plan,
+                            root,
+                            instance,
+                            block,
+                            call,
+                            &semantic.callables()[call.callee().index() as usize],
+                            out,
+                        )? {
+                            End::DescriptorIndex(index)
                         } else {
                             End::Index(index_calls::IndexCall::derive(
                                 slots,
@@ -526,6 +543,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             match &row.end {
                 End::Index(call) => call.emit(out)?,
                 End::Descriptor(call) => call.emit(out)?,
+                End::DescriptorIndex(call) => call.emit(out)?,
                 End::Assert(assertion) => assertion.emit(r, i, block, out)?,
                 End::Abort => {
                     write!(out, " let source = invocation_source_byte_trap_v40(cursor.source);\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }}\n").map_err(|_| out.error())?;
