@@ -13,7 +13,6 @@ import json
 from pathlib import Path
 import re
 import runpy
-import sys
 import types
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -25,7 +24,11 @@ BODY = SRC / "context/versions/producer_input_fold_body.rs"
 JOURNAL_BODY = SRC / "context/versions/producer_journal_observer_bodies.rs"
 PROOF = V / "context_producer_input_validate_v1.rs"
 DEFINITIONS = V / "producer_input_validate_definitions_v1.rs"
-FILES = [PROOF, DEFINITIONS, BODY]
+RUNTIME_DECLARATIONS = V / "producer_input_runtime_declarations_v1.rs"
+JOURNAL_DECLARATIONS = V / "producer_input_journal_comparison_declarations_v1.rs"
+OUTCOMES = V / "producer_input_outcome_spec_v1.rs"
+PARTS = [DEFINITIONS, RUNTIME_DECLARATIONS, JOURNAL_DECLARATIONS, OUTCOMES]
+FILES = [PROOF, *PARTS, BODY]
 DECLARATIONS = [MODEL / name for name in (
     "context_version_journal/declarations.rs",
     "context_version_journal/enrollment_declarations.rs",
@@ -38,8 +41,13 @@ BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
 SOURCE_TREE_SHA = "c0bca8b621147063de1af629ea7b525c718a91562f8f3bf853586840c64bdbac"
 SOURCE_FILES = 333
 PROOF_SHA = "750a1ae6be20bed3c6dc9b3ebaa6cca4a869713b3187da8dabe32091b8fa5817"
-DEFINITIONS_SHA = "18628bbcab588eeae7302fe39f2ade8bbc27f8506cc9ee440bc35381e17aa58b"
-EXPECTED_VERIFIED = 42
+PART_PINS = {
+    DEFINITIONS: "44e8a46f132d86d610e693a2a5a877988b125b9019595b373d976774efcdca49",
+    RUNTIME_DECLARATIONS: "25221501f5f3d7ec63fad45e14e015c01edb993f57881b5d61cc4274c34469db",
+    JOURNAL_DECLARATIONS: "5b1ddfe8dea991d6e3a17d98da8774746913e5fc6e65153e4901d6a2d1cee3eb",
+    OUTCOMES: "f6fb6dd9739e4a6c30e2053350e66422dded9d9a54e436c8e8dd10495aff7634",
+}
+EXPECTED_VERIFIED = None  # Changed closure: predecessor 42 is not inherited.
 SELECTOR = "*Observations::validate"
 SCAN_SELECTORS = ("*producer_dependency_contains_v1", "*producer_source_pair_contains_v1")
 SELECTION_NOTES = None  # Extraction requires fresh selector calibration.
@@ -62,7 +70,7 @@ def tree_hash(sources):
 
 
 def snapshot():
-    paths = {PROOF, DEFINITIONS, *DECLARATIONS} | {p.relative_to(ROOT) for p in (ROOT / SRC).rglob("*.rs")}
+    paths = {PROOF, *PARTS, *DECLARATIONS} | {p.relative_to(ROOT) for p in (ROOT / SRC).rglob("*.rs")}
     result = {}
     for path in paths:
         selected = ROOT / path
@@ -92,7 +100,7 @@ def normalized(text):
 
 
 def schemas(sources):
-    proof = sources[DEFINITIONS]
+    proof = "\n".join(sources[path] for path in PARTS)
     pairs = {
         SRC / "context.rs": ["RuntimeMemoryKindV1", "RuntimeAccessV1", "RuntimeMemoryRegionV1", "AllocationRecordV1"],
         SRC / "context/peer_custody.rs": ["ScalarPeerDependencyV1"],
@@ -132,7 +140,7 @@ def scan_bridges(sources):
         native = block(sources[OWNER], "fn " + name + "(")
         expected = "{" + macro + "!(completion_journal_rust_syntax," + values + "," + needle + ",index,[])}"
         need(normalized(native) == expected, "one private actual scan body: " + name)
-        need(sources[DEFINITIONS].count(macro + "!(verus_exec_expr, " + values + ", " + needle + ", index,") == 1,
+        need(sources[OUTCOMES].count(macro + "!(verus_exec_expr, " + values + ", " + needle + ", index,") == 1,
              "proof invokes the identical scan macro: " + name)
     need(".any(" not in sources[BODY], "membership no longer depends on concrete iterator default contracts")
     need(sources[BODY].count("producer_dependency_contains_v1(") == 2
@@ -140,14 +148,35 @@ def scan_bridges(sources):
          "two dependency sites and one full source-pair site")
 
 
+def closure(sources, root, expected):
+    reached, pending = set(), [root]
+    while pending:
+        path = pending.pop()
+        if path in reached:
+            continue
+        need(path in expected and path in sources, "declared recursive proof input")
+        reached.add(path)
+        text = sources[path]
+        includes = re.findall(r'\binclude!\("([^"\n]+)"\);', text)
+        modules = re.findall(r'\bmod\s+(\w+)\s*;', text)
+        need(text.count("include!(") == len(includes) and "#[path" not in text,
+             "literal closed include edges")
+        for name in includes + [name + ".rs" for name in modules]:
+            target = (ROOT / path.parent / name).resolve()
+            need(target.is_relative_to(ROOT), "contained proof source edge")
+            pending.append(target.relative_to(ROOT))
+    need(reached == set(expected), "complete exact recursive proof closure")
+
+
 def audit(sources):
-    implementation = {p: text for p, text in sources.items() if p not in (PROOF, DEFINITIONS)}
-    need(set(sources) == ({p for p in sources if p.is_relative_to(SRC)} | set(DECLARATIONS) | {PROOF, DEFINITIONS}),
+    implementation = {p: text for p, text in sources.items() if p not in (PROOF, *PARTS)}
+    need(set(sources) == ({p for p in sources if p.is_relative_to(SRC)} | set(DECLARATIONS) | {PROOF, *PARTS}),
          "exact runtime plus schema plus proof roster")
     need(len(implementation) == SOURCE_FILES and tree_hash(implementation) == SOURCE_TREE_SHA,
          "reviewed whole runtime and exact native value schema source")
     need(sha(sources[PROOF]) == PROOF_SHA, "reviewed exact per-input proof and contracts")
-    need(sha(sources[DEFINITIONS]) == DEFINITIONS_SHA, "reviewed complete shared validator definitions")
+    need(set(PART_PINS) == set(PARTS) and all(sha(sources[path]) == digest for path, digest in PART_PINS.items()),
+         "reviewed exact factored validator definitions")
     schemas(sources)
     scan_bridges(sources)
     need(sha(sources[JOURNAL_BODY]) == "5fb7f1572c41a6f2c6dffa74f040e870bb4ae874133c127ee5ae87d52c3fce59",
@@ -169,10 +198,9 @@ def audit(sources):
     need(sources[PROOF].count('include!("producer_input_validate_definitions_v1.rs");') == 1
          and len(re.findall(r"\binclude!\(", sources[PROOF])) == 1,
          "thin leaf root includes exact shared definitions")
-    proof = sources[DEFINITIONS]
-    need(proof.count('include!("../../fe2o3-runtime/src/context/versions/producer_input_fold_body.rs");') == 1
-         and len(re.findall(r"\binclude!\(", proof)) == 1
-         and not re.search(r"\binclude!\(", sources[BODY]), "exact three-file executable proof closure")
+    proof = "\n".join(sources[path] for path in PARTS)
+    closure(sources, PROOF, FILES)
+    need(len(FILES) == 6, "changed six-file executable proof closure")
     need(not re.search(r"\bmod\s+\w+\s*;", sources[PROOF] + proof + sources[BODY]),
          "no undeclared proof module")
     need(proof.count("producer_input_validate_body!(") == 1 and "producer_input_fold_body!(" not in proof,
@@ -274,15 +302,7 @@ def controller_source():
 
 def controller():
     audit(snapshot())
-    need(type(EXPECTED_VERIFIED) is int and EXPECTED_VERIFIED == 42, "exact measured full positive count")
-    module = types.ModuleType("producer_input_validate_campaign")
-    module.__file__ = str(ROOT / BASE)
-    sys.modules[module.__name__] = module
-    exec(compile(controller_source(), module.__file__, "exec"), module.__dict__)
-    module.FILES, module.PROOF, module.BODY = FILES, PROOF, BODY
-    module.EXPECTED = dict(module.EXPECTED, verified=EXPECTED_VERIFIED)
-    module.mutations, module.selection_notes = mutations, selection_notes
-    return module
+    raise ValueError("changed six-file validator closure requires fresh discovery and a reviewed campaign")
 
 
 def campaign():

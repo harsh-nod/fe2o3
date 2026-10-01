@@ -32,10 +32,10 @@ class MutationControls(unittest.TestCase):
         cls.sources = check.snapshot()
         cls.rows = check.mutations(cls.sources)
 
-    def test_complete_four_file_closure_and_observed_count(self):
+    def test_complete_changed_closure_and_no_inherited_count(self):
         check.audit(self.sources)
-        self.assertEqual(check.FILES, [check.PROOF, check.DEFINITIONS, check.SPEC, check.BODY])
-        self.assertEqual(check.EXPECTED_VERIFIED, 64)
+        self.assertEqual(len(check.FILES), 8)
+        self.assertIsNone(check.EXPECTED_VERIFIED)
         self.assertEqual(check.DIAGNOSTIC_CALIBRATION["selected_fixtures"], 4)
         self.assertEqual(check.DIAGNOSTIC_CALIBRATION["full_composition_fixtures"], 21)
         self.assertFalse(check.DIAGNOSTIC_CALIBRATION["captured_kills_qualified"])
@@ -110,7 +110,7 @@ class MutationControls(unittest.TestCase):
                 check.audit({**self.sources, path: "// not in candidate\n"})
         original = check.EXPECTED_VERIFIED
         try:
-            for value in (None, True, "64", 63, 65):
+            for value in (True, "64", 63, 64, 65):
                 check.EXPECTED_VERIFIED = value
                 with self.assertRaises(ValueError):
                     check.audit(self.sources)

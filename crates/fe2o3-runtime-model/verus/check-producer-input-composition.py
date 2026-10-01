@@ -2,7 +2,7 @@
 """Conditional actual fold/validator composition source and mutation bindings.
 
 Mutation construction is not verification. All composition mutants must run the
-complete four-file closure; selecting only the caller would skip changed callees.
+complete eight-file closure; selecting only the caller would skip changed callees.
 The native journal/live/credit implementations remain explicit open boundaries.
 """
 import hashlib
@@ -18,20 +18,28 @@ PROOF = V / "context_producer_input_composition_v1.rs"
 DEFINITIONS = V / "producer_input_validate_definitions_v1.rs"
 SPEC = V / "producer_input_fold_spec_v1.rs"
 BODY = SRC / "context/versions/producer_input_fold_body.rs"
-FILES = [PROOF, DEFINITIONS, SPEC, BODY]
+RUNTIME_DECLARATIONS = V / "producer_input_runtime_declarations_v1.rs"
+JOURNAL_DECLARATIONS = V / "producer_input_journal_comparison_declarations_v1.rs"
+OUTCOMES = V / "producer_input_outcome_spec_v1.rs"
+LOGIC = V / "producer_input_composition_logic_v1.rs"
+FILES = [PROOF, DEFINITIONS, RUNTIME_DECLARATIONS, JOURNAL_DECLARATIONS, OUTCOMES, LOGIC, SPEC, BODY]
 PROOF_PINS = {
-    PROOF: "bca4d7dfa5611cd993d810dd36be7d15225b7b97c524cc68760be71596a37b60",
-    DEFINITIONS: "18628bbcab588eeae7302fe39f2ade8bbc27f8506cc9ee440bc35381e17aa58b",
+    PROOF: "c9fc2ad697f1711863560319e44d149077cd8c6d3450e56d76963c02e86c6c7f",
+    DEFINITIONS: "44e8a46f132d86d610e693a2a5a877988b125b9019595b373d976774efcdca49",
+    RUNTIME_DECLARATIONS: "25221501f5f3d7ec63fad45e14e015c01edb993f57881b5d61cc4274c34469db",
+    JOURNAL_DECLARATIONS: "5b1ddfe8dea991d6e3a17d98da8774746913e5fc6e65153e4901d6a2d1cee3eb",
+    OUTCOMES: "f6fb6dd9739e4a6c30e2053350e66422dded9d9a54e436c8e8dd10495aff7634",
+    LOGIC: "8d2b020e5fd562ace00abd9cd4bb9459eb12410fde6f8e6b51cc2cac19c9214f",
     SPEC: "5542b8152f39e4de0c6d3644efb8f612488c8e11158f5250c0c9ae297df38031",
     BODY: "701824a7cf27d45d9ec93e36401bffd988e2d6e8e27da281868507a51f74f158",
 }
 CHECKER_PINS = {
-    "check-producer-input-validate.py": "2e82fcea3d00ebaf7599e3bf46627b239d80503f5324b0e0e22d72dcce637293",
+    "check-producer-input-validate.py": "176246db3b93f699d59bfd5e212b55459ad8e08eba3895dc48b08f5a15c8d549",
     "check-producer-input-fold.py": "7bdf453325e7bdc8044acce2306bca367058e5b4f4a6a31f022d11c456f77eef",
 }
-EXPECTED_VERIFIED = 64
+EXPECTED_VERIFIED = None  # Changed closure: predecessor 64 is not inherited.
 MUTANT_COUNT = 21
-MUTATION_ROSTER_SHA = "3568fd947902e7db6f3b556b1a39e851ef49501932896fbfe6ae1482fefe4fb2"
+MUTATION_ROSTER_SHA = "479573e4031b9bdc65d2ce1805f800c256aa7070c71e23000477db5bc41b3c4b"
 DIAGNOSTICS = V / "producer-input-diagnostics-v1.py"
 DIAGNOSTICS_SHA = "318a29f9067618c2168a8e1d3585b1e8e3f8c78abe40359d52b0a20458238be4"
 DIAGNOSTIC_FIXTURES = V / "producer-input-diagnostic-fixtures-v1.json"
@@ -66,6 +74,7 @@ def load_checker(name):
 
 
 def diagnostic_classifier():
+    # These are retained predecessor fixtures, not current-root diagnostics.
     path = ROOT / DIAGNOSTICS
     fixture = ROOT / DIAGNOSTIC_FIXTURES
     need(all(item.is_file() and not item.is_symlink() and item.resolve() == item for item in (path, fixture)),
@@ -84,7 +93,7 @@ def snapshot():
     leaf = load_checker("check-producer-input-validate.py")
     sources = leaf.snapshot()
     del sources[leaf.PROOF]
-    for path in (PROOF, SPEC):
+    for path in (PROOF, SPEC, LOGIC):
         selected = ROOT / path
         need(selected.is_file() and not selected.is_symlink() and selected.resolve() == selected,
              "ordinary exact composition proof source")
@@ -97,28 +106,24 @@ def audit(sources):
     implementation = {path: text for path, text in sources.items() if path.is_relative_to(SRC)}
     need(set(leaf.DECLARATIONS).issubset(sources), "all native value schemas present")
     schemas = {path: sources[path] for path in leaf.DECLARATIONS}
-    need(set(sources) == set(implementation) | set(schemas) | {PROOF, DEFINITIONS, SPEC},
+    need(set(sources) == set(implementation) | set(schemas) | set(FILES),
          "exact complete runtime/schema and composition source roster")
     need(len(implementation) == 328 and len(schemas) == 5
          and leaf.tree_hash({**implementation, **schemas}) == leaf.SOURCE_TREE_SHA,
          "exact complete native/schema binding")
     need(all(sha(sources[path]) == digest for path, digest in PROOF_PINS.items()),
-         "exact accepted four-file composition closure")
+         "exact candidate eight-file composition closure; not inherited acceptance")
     leaf.schemas(sources)
     leaf.scan_bridges(sources)
     need(re.findall(r'\binclude!\("([^"]+)"\);', sources[PROOF])
-         == ["producer_input_validate_definitions_v1.rs"], "exact composition include edge")
+         == ["producer_input_validate_definitions_v1.rs", "producer_input_composition_logic_v1.rs"],
+         "exact composition include edges")
     need(re.findall(r"\bmod\s+(\w+)\s*;", sources[PROOF]) == ["producer_input_fold_spec_v1"],
          "exact composition spec edge")
-    need(re.findall(r'\binclude!\("([^"]+)"\);', sources[DEFINITIONS])
-         == ["../../fe2o3-runtime/src/context/versions/producer_input_fold_body.rs"],
-         "exact shared definitions to actual body edge")
-    need(not re.search(r"\binclude!|\bmod\s+\w+\s*;", sources[SPEC] + sources[BODY]),
-         "no additional source closure edges")
+    leaf.closure(sources, PROOF, FILES)
     need(not re.search(r"\b(?:assume|admit|assume_specification)\b|verifier::external|\buninterp\b",
                        "\n".join(sources[path] for path in FILES)), "no new assumptions or external bodies")
-    need(type(EXPECTED_VERIFIED) is int and EXPECTED_VERIFIED == 64,
-         "exact fresh full composition discovery count")
+    need(EXPECTED_VERIFIED is None, "no count inherited across changed composition closure")
 
 
 def mutations(sources):

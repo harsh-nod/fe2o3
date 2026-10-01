@@ -5,10 +5,10 @@
 Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
 2026-10-01: the issue remained Open. The previously published baseline on both
-runtime branch refs is signed commit `99c07511e`, including the qualified
-field-codec and journal-wrapper integrations, combined CPU regression and
-matched wait-cadence measurements. The operation-codec qualification below is
-the next integrated component, not a milestone exit.
+runtime branch refs is signed commit `6c36c2ab1`, including the qualified
+operation codec, earlier field-codec and journal-wrapper integrations, combined
+CPU regression and matched wait-cadence measurements. Concrete journal
+composition is the next integrated component, not a milestone exit.
 The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
@@ -57,8 +57,17 @@ a signed 112-stage qualification campaign. Its first 109 stages complete, but
 the unchanged 16 GiB available-RAM gate rejects admission to the closing
 positive, release and signature checks. All 109 attempted groups are closed;
 the original campaign is rejected, with its durable archive retained. A
-separately reviewed completion/adoption run is being prepared, not accepted.
-Native runtime and model bytes are unchanged
+separately reviewed completion now passes exactly those three missing checks,
+including the full 214/0 closing proof. Independent root readback accepts the
+explicitly composed 109+3 result, all 89 unique prefix negatives and three
+positive brackets each at 42/0, 64/0 and 214/0. The original campaign remains
+rejected; no historical calibration is promoted. The
+[public packet](evidence/dev-producer-journal-composition-2026-10-01/README.md)
+retains both exact durable archives and the thin signed-source bundle, with
+explicit external replay prerequisites. Integration preserves the 6/8/44 and
+inherited 3/36/38 proof closures. All 30 merged source-workflow commands pass,
+with complete group closure and independent raw-record readback. Native runtime
+and model bytes are unchanged
 in the signed proof-only candidate. The separate seven-path live-allocation
 draft now passes a full 47-input frontend check, with zero verified obligations
 and no CPU acceptance. Its earlier duplicate-helper rejection remains retained.
@@ -90,16 +99,25 @@ are excluded because their inherited environment captured an authentication
 header; their originals remain private. All 27 source-workflow commands
 pass after metadata-only guard rebinding, with inherited proof closures exact.
 Native CPU reuse remains explicit, and some replay prerequisites remain
-external. The complete receipt-codec successor has passed frontend checking
-only and still needs fresh CPU and proof qualification. None of these results
+external. The complete receipt-codec successor now passes two full 114/0
+positive proofs, including relocation, with all four groups closed and durable
+custody. Its earlier 113/1 logical rejection remains retained; three explicit
+header-index proof statements repair the obligation without changing native
+bytes or contracts. Fresh CPU testing and signed mutation qualification remain
+pending. None of these results
 qualifies two-host transport, distributed authority or a milestone exit.
 
 The complete wait-cursor extraction has passed all 1,836 no-default and 1,842
 all-feature CPU tests with no ignores or filtering. Both strict Clippy commands
 exit zero, but the last post-stage check rejects the unchanged 16 GiB RAM gate
 before closing HEAD/signature checks. All 17 attempted groups are closed; the
-original campaign is rejected, not a complete CPU qualification. A separately
-reviewed completion/adoption run remains pending. Four attempts to model the standard-library boundary
+original campaign remains rejected. A separately reviewed completion now
+accepts the 17 retained groups plus two fresh HEAD/signature checks. Independent
+root readback verifies both full test rosters, strict Clippy, all source/tool
+and executable identities, and both closing groups. Its durable archive has
+280 members and includes both test executables; no CPU suite was rerun or
+earlier rejection erased. This is qualification of the private extraction
+candidate, not a new integrated-source or GPU result. Four attempts to model the standard-library boundary
 remain rejected, including the explicit no-cheating policy rejection. A
 separate small arithmetic-core draft preserves native Duration/Instant state
 and keeps the standard-library adapter outside its proposed proof boundary.

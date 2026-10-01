@@ -1,0 +1,186 @@
+{
+  "acceptance_requires_original_completion_terminal_directory_fsync_acknowledgment": true,
+  "admission_and_owned_receipts_use_different_clock_domains": true,
+  "admission_before_launch_is_source_bound_not_cross_clock_arithmetic": true,
+  "completion_packet_files": 293,
+  "completion_packet_tree_sha256": "37d1272731d21ffa533cbbdd615623a267685a0214359236cb3c4e843d953b12",
+  "composed_readback_passed": true,
+  "durable": {
+    "archive_sha256": "9694c4cefdc4dd4c6267379bfa98ca587f3598e2f9e166156894995c4ea9227b",
+    "directory_fsync_evidence": "original live owner terminal acknowledgment; not re-executed by this readback",
+    "files": 293,
+    "logical_bytes": 56176765,
+    "manifest_sha256": "dc44f452fc0a942c33856182d08cbb4b7093fa6ddf3607eb1b62cbd621989af9",
+    "member_readback_verified": true,
+    "members": 403,
+    "receipt_sha256": "e29bab9010f13d64e75381384cfc65f031bd1adaa28e408f32e6ce0ae76f4dc9",
+    "tree_sha256": "37d1272731d21ffa533cbbdd615623a267685a0214359236cb3c4e843d953b12"
+  },
+  "fresh_closing_stages": 3,
+  "fresh_stages": [
+    {
+      "admission": {
+        "accepted": true,
+        "budget_ns": 300000000000,
+        "floor_bytes": 17179869184,
+        "samples": [
+          {
+            "available_bytes": 14135328768,
+            "elapsed_ns": 163030
+          },
+          {
+            "available_bytes": 14058934272,
+            "elapsed_ns": 1000842667
+          },
+          {
+            "available_bytes": 13986230272,
+            "elapsed_ns": 2001362467
+          },
+          {
+            "available_bytes": 13923471360,
+            "elapsed_ns": 3002179006
+          },
+          {
+            "available_bytes": 13775765504,
+            "elapsed_ns": 4002728362
+          },
+          {
+            "available_bytes": 13996314624,
+            "elapsed_ns": 5003333064
+          },
+          {
+            "available_bytes": 13936156672,
+            "elapsed_ns": 6003912973
+          },
+          {
+            "available_bytes": 13886103552,
+            "elapsed_ns": 7004476119
+          },
+          {
+            "available_bytes": 13833031680,
+            "elapsed_ns": 8004960188
+          },
+          {
+            "available_bytes": 13723770880,
+            "elapsed_ns": 9005415999
+          },
+          {
+            "available_bytes": 14045986816,
+            "elapsed_ns": 10005869895
+          },
+          {
+            "available_bytes": 16572776448,
+            "elapsed_ns": 11006367554
+          },
+          {
+            "available_bytes": 17358168064,
+            "elapsed_ns": 12006832868
+          }
+        ],
+        "spent_ns_after": 12006842414,
+        "spent_ns_before": 0,
+        "started_monotonic_ns": 58381471457022
+      },
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 214,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 214
+          },
+          "observed_verified": 214
+        }
+      },
+      "elapsed_ns": 53701384858,
+      "name": "110-concrete-after",
+      "record_sha256": "b8df9f9b42b3f022b50c79c2d4f99a35f93b9f8ea0db21be9425e2e56af8f96d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "b10c93e5bdc212d6fff11326adc7cd75791802eb8bc2b2f63143386c6e526e97"
+    },
+    {
+      "admission": {
+        "accepted": true,
+        "budget_ns": 300000000000,
+        "floor_bytes": 17179869184,
+        "samples": [
+          {
+            "available_bytes": 25279397888,
+            "elapsed_ns": 139962
+          }
+        ],
+        "spent_ns_after": 12006986219,
+        "spent_ns_before": 12006842414,
+        "started_monotonic_ns": 58452905018935
+      },
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 1993717678,
+      "name": "111-tool-release-after",
+      "record_sha256": "d8f7b22ee3f2ddc3b9540ec8fa74ffca292e6f592b0419966399fd0b458e23ab",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+    },
+    {
+      "admission": {
+        "accepted": true,
+        "budget_ns": 300000000000,
+        "floor_bytes": 17179869184,
+        "samples": [
+          {
+            "available_bytes": 24771981312,
+            "elapsed_ns": 306998
+          }
+        ],
+        "spent_ns_after": 12007302188,
+        "spent_ns_before": 12006986219,
+        "started_monotonic_ns": 58461935814808
+      },
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 47735480,
+      "name": "112-signature-after",
+      "record_sha256": "744c682da4ebabe9aa12d2267ae7d05d56405eddc13adcaf3a198778225eb31d",
+      "stderr_sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "historical_pid_probes": false,
+  "new_negative_cases": 0,
+  "original_campaign_qualified": false,
+  "original_packets_changed": false,
+  "positive_counts": {
+    "concrete": [
+      214,
+      214,
+      214
+    ],
+    "conditional": [
+      64,
+      64,
+      64
+    ],
+    "leaf": [
+      42,
+      42,
+      42
+    ]
+  },
+  "prefix_packet_tree_sha256": "108c15a35ae2f768b5bf2e41e13bd76bcff7b3cedc04389a58cd7ea9a7a55f2a",
+  "prefix_readback_reused_by_exact_immutable_binding": true,
+  "prefix_report_sha256": "c5b3bda8d16123440f8a960a6fd8df25222be1d9fa9f616381349515e315ee1d",
+  "prefix_stages": 109,
+  "qualified_unique_prefix_negative_cases": 89,
+  "saved_new_groups": 3,
+  "saved_original_prefix_groups": 109,
+  "scope": "Explicitly composed109+3 evidence, never success of the original RAM-rejected112-stage campaign. The independently read-back immutable prefix contains89 unique actual-body logical observations and8 positives; only the original missing110 closing214 positive,111 release and112 signature are freshly executed. Composed acceptance requires exact source/tools/pre-sign/signed blobs, all prefix raw classifications/92 projections/109 closed groups, all3 new accepted closed groups and complete durable custody. No calibration capture is adopted or rerun. Eight forwarding result-equality faults and one ghost-trace-only fault retain their exact scope; no inner query-count claim. Live/credit/Arc/mutex/interior-state/compiler/ISA/hardware/performance/parity remain outside this theorem; old CPU is custody only. The16GiB RAM minimum is admission-only, immediately before every new command, with one cumulative300-second monotonic wait budget and1-second polls. Budget is checked after observing memory and before accepting recovery, including oversleep. No solver starts below the floor, no command retry, no mid-command pause or proof-bound relaxation. Ordinary source/tool/raw/disk/packet/census continuity has no post-command RAM success condition. All original4-thread120-inner/130-owned proof bounds and130/60 release/signature bounds remain exact. Admission waits have a lifetime budget; there is no hard total-owner deadline. Disk/packet checks remain boundary-only, not continuous quotas. Originals and tmpfs remain retained; new complete archive is member-verified and directory-fsynced. Publication remains a separate security-reviewed action.",
+  "solver_or_cpu_rerun": false,
+  "total_admission_ns": 12007302188
+}

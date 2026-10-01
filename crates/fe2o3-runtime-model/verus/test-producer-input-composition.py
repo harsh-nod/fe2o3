@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import types
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -30,10 +31,29 @@ DECLARATIONS = tuple(Path("crates/fe2o3-runtime-model/src") / name for name in (
     "context_queued_writers/read_declarations.rs",
 ))
 CHECKER_PINS = {
-    "check-producer-input-validate.py": "2e82fcea3d00ebaf7599e3bf46627b239d80503f5324b0e0e22d72dcce637293",
+    "check-producer-input-validate.py": "176246db3b93f699d59bfd5e212b55459ad8e08eba3895dc48b08f5a15c8d549",
     "check-producer-input-fold.py": "7bdf453325e7bdc8044acce2306bca367058e5b4f4a6a31f022d11c456f77eef",
-    "check-producer-input-composition.py": "cd0be41ca1f1c89693a21903b956bbab0d36b0d83442acfc0f517cbc1fbaa0e7",
+    "check-producer-input-composition.py": "2eeab939e0d4a732b1238e14d64f6701226167485ff4d44ad4e88bb3374f180b",
 }
+PARTS = (DEFINITIONS, COMPOSITION, "producer_input_runtime_declarations_v1.rs",
+         "producer_input_journal_comparison_declarations_v1.rs", "producer_input_outcome_spec_v1.rs",
+         "producer_input_composition_logic_v1.rs")
+
+
+def extraction():
+    path = HERE / "producer-input-source-extraction-v2.py"
+    raw = path.read_bytes()
+    need(hashlib.sha256(raw).hexdigest() == "b1986ef96f58d0f50fc7fa0dfe961683f44f7382bed42a3c6b7dfc656365aa71",
+         "exact reversible factoring helper")
+    module = types.ModuleType("producer_input_extraction")
+    exec(compile(raw, str(path), "exec"), module.__dict__)
+    return module
+
+
+def predecessor_sources():
+    parts = {name: raw_source(HERE / name).decode() for name in PARTS}
+    helper = extraction()
+    return {DEFINITIONS: helper.definitions(parts), COMPOSITION: helper.composition(parts)}
 
 
 def need(value, message):
@@ -49,7 +69,7 @@ def raw_source(path):
 
 def baseline(name, digest):
     if name == VALIDATOR:
-        text = reconstruct_validator(raw_source(HERE / DEFINITIONS).decode())
+        text = reconstruct_validator(predecessor_sources()[DEFINITIONS])
     else:
         need(name == FOLD, "known reversible source extraction")
         text = reconstruct_fold(raw_source(HERE / FOLD).decode(), raw_source(HERE / SPEC).decode())
@@ -227,6 +247,24 @@ class SourceControls(unittest.TestCase):
         cls.old_validator = baseline(VALIDATOR, "8f0b816a5d9e4e08e5598a538273a9f25bb918633543a2b71a8f778ae0727c4d")
         cls.old_fold = baseline(FOLD, "0588fd557956b177b7b7be56fda006f25a82e509e23c40920907fecb78830184")
         cls.sources = {name: (HERE / name).read_text() for name in (VALIDATOR, FOLD, DEFINITIONS, SPEC, COMPOSITION)}
+        cls.sources.update(predecessor_sources())
+
+    def test_current_factoring_is_reversible_not_qualified(self):
+        parts = {name: raw_source(HERE / name).decode() for name in PARTS}
+        helper = extraction()
+        self.assertNotEqual(parts[DEFINITIONS], self.sources[DEFINITIONS])
+        self.assertNotEqual(parts[COMPOSITION], self.sources[COMPOSITION])
+        for name, inverse in ((DEFINITIONS, helper.definitions), (COMPOSITION, helper.composition)):
+            self.assertEqual(inverse(parts), self.sources[name])
+        for name, old, new, inverse in (
+            ("producer_input_runtime_declarations_v1.rs", "backend_submission: u64", "backend_submission: u32", helper.definitions),
+            ("producer_input_outcome_spec_v1.rs", "if !local", "if local", helper.definitions),
+            ("producer_input_composition_logic_v1.rs", "step.active, step.queued", "step.queued, step.active", helper.composition),
+        ):
+            changed = dict(parts)
+            changed[name] = once(changed[name], old, new)
+            with self.assertRaises(ValueError):
+                inverse(changed)
 
     def test_reviewed_native_production_and_actual_tests(self):
         for name, digest in PINS.items():

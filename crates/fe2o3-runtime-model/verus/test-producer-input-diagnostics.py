@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only strict classifier controls; fixture replay is not qualification."""
+"""Retained predecessor classifier controls; not changed-root qualification."""
 import copy
 import hashlib
 import json
@@ -47,6 +47,24 @@ class DiagnosticControls(unittest.TestCase):
                                               "text": text, "selector": selector}
         for name, row in cls.checks["composition"].mutations(cls.snapshots["composition"]).items():
             cls.rows["composition/" + name] = dict(row, family="composition", name=name)
+        # The fixtures retain exact old spans and bodies. Recover their signed
+        # predecessor bytes; never reinterpret them against the changed closure.
+        extraction = load(BASE / "test-producer-input-composition.py", "historical_source_extraction")
+        predecessor = extraction.predecessor_sources()
+        for family in ("leaf", "composition"):
+            cls.snapshots[family][check.DEFINITIONS] = predecessor[extraction.DEFINITIONS]
+        cls.snapshots["composition"][check.PROOFS["composition"]] = predecessor[extraction.COMPOSITION]
+        cls.fixture_files = {
+            "leaf": [check.PROOFS["leaf"], check.DEFINITIONS, check.BODY],
+            "fold": cls.checks["fold"].FILES,
+            "composition": [check.PROOFS["composition"], check.DEFINITIONS, cls.checks["composition"].SPEC, check.BODY],
+        }
+        for row in cls.rows.values():
+            if row["family"] == "composition":
+                original = cls.snapshots["composition"][row["path"]]
+                if original.count(row["before"]) != 1:
+                    raise ValueError("exact predecessor mutation anchor")
+                row["text"] = original.replace(row["before"], row["after"])
         raw = (BASE / "producer-input-diagnostic-fixtures-v1.json").read_bytes()
         if hashlib.sha256(raw).hexdigest() != "50bbc125bf95aa9ee283d89a6aa784c8e8b935b1fb2d106ee942a3dc35c3041d":
             raise ValueError("exact reviewed normalized fixture corpus")
@@ -56,7 +74,7 @@ class DiagnosticControls(unittest.TestCase):
         item = materialize(copy.deepcopy(self.corpus["fixtures"][key]))
         mutation = self.rows[key]
         family = mutation["family"]
-        sources = {path: self.snapshots[family][path] for path in self.checks[family].FILES}
+        sources = {path: self.snapshots[family][path] for path in self.fixture_files[family]}
         sources[mutation["path"]] = mutation["text"]
         self.assertEqual({str(path): hashlib.sha256(text.encode()).hexdigest() for path, text in sources.items()}, item["sources"])
         return sources, item["case"], item["result"], item["diagnostics"]
@@ -84,10 +102,10 @@ class DiagnosticControls(unittest.TestCase):
     def test_every_original_roster_is_preserved(self):
         self.assertEqual(len(self.checks["leaf"].mutations(self.snapshots["leaf"][check.BODY])), 38)
         self.assertEqual(len(self.checks["fold"].mutations(self.snapshots["fold"][check.BODY])), 22)
-        self.assertEqual(len(self.checks["composition"].mutations(self.snapshots["composition"])), 21)
+        self.assertEqual(sum(row["family"] == "composition" for row in self.rows.values()), 21)
         for path, family in ((check.DEFINITIONS, "leaf"), (check.PROOFS["fold"], "fold")):
             for row in (row for row in self.rows.values() if row["family"] == family):
-                sources = {p: self.snapshots[family][p] for p in self.checks[family].FILES}
+                sources = {p: self.snapshots[family][p] for p in self.fixture_files[family]}
                 sources[row["path"]] = row["text"]
                 case = {"family": family, "selector": row["selector"]}
                 ranges = check.target_ranges(sources, ROOT, case)

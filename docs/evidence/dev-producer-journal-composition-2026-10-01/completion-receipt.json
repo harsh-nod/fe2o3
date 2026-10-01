@@ -1,0 +1,9 @@
+{
+  "archive_member_readback_verified": true,
+  "archive_sha256": "9694c4cefdc4dd4c6267379bfa98ca587f3598e2f9e166156894995c4ea9227b",
+  "durability_acknowledgment": "requires successful returned terminal receipt after directory fsync",
+  "manifest_sha256": "dc44f452fc0a942c33856182d08cbb4b7093fa6ddf3607eb1b62cbd621989af9",
+  "members": 403,
+  "source_packet": "/run/shm/fe2o3-a2-signed-concrete-completion-20261001-attempt-1",
+  "tmpfs_retained": true
+}

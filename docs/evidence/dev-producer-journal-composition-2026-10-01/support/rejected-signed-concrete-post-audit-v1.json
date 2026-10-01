@@ -1,0 +1,3648 @@
+{
+  "current_readback_source_reconstruction_matches": true,
+  "durable": {
+    "archive_sha256": "cc3135a54ac6fa7271641a8fb9d7052075eba107070c25cee4bd754b4bc43ff1",
+    "directory_fsync_evidence": "original live owner terminal acknowledgment; not re-executed by this readback",
+    "files": 2583,
+    "logical_bytes": 60263336,
+    "manifest_sha256": "87c0eab6bebfea56289cb338d4f0469d663709a8e42c68e43361411ae0e54a7e",
+    "member_readback_verified": true,
+    "members": 3795,
+    "receipt_sha256": "20c3b2e314ee4e566fe18f7dac53798143f448d9922fdf407685a2be8a8028c7",
+    "tree_sha256": "108c15a35ae2f768b5bf2e41e13bd76bcff7b3cedc04389a58cd7ea9a7a55f2a"
+  },
+  "durable_custody_requires_original_terminal_directory_fsync_acknowledgment": true,
+  "historical_pid_probes": false,
+  "observed_fresh_negative_cases": {
+    "concrete": 30,
+    "conditional": 21,
+    "leaf": 38
+  },
+  "old_cpu_custody_only": true,
+  "original_closing_input_binding_missing": true,
+  "original_errors": [
+    "ValueError: at least 16 GiB available local RAM",
+    "111-tool-release-after: ValueError: at least 16 GiB available local RAM",
+    "112-signature-after: ValueError: at least 16 GiB available local RAM",
+    "closing source/archive: ValueError: at least 16 GiB available local RAM",
+    "closing census: ValueError: at least 16 GiB available local RAM"
+  ],
+  "original_packet_changed": false,
+  "packet_files": 2583,
+  "packet_tree_sha256": "108c15a35ae2f768b5bf2e41e13bd76bcff7b3cedc04389a58cd7ea9a7a55f2a",
+  "positive_counts": {
+    "concrete": [
+      214,
+      214
+    ],
+    "conditional": [
+      64,
+      64,
+      64
+    ],
+    "leaf": [
+      42,
+      42,
+      42
+    ]
+  },
+  "pre_sign_sha256": "49c06cd5907e74d169bac740d5ba7de7231a248892ca6b994cef20f598465548",
+  "prepared_sha256": "3ce4ea80523dd394647b471289696444b4b2ae1d6537b8eccd4102696865c92e",
+  "proof_closures": {
+    "concrete": 44,
+    "conditional": 8,
+    "leaf": 6
+  },
+  "qualified_fresh_negative_cases": 0,
+  "rejected_signed_concrete_readback_passed": true,
+  "saved_original_groups": 109,
+  "scope": "One fresh signed 112-stage campaign: 38 leaf, 21 conditional and 30 concrete full-root actual-body mutations, with before/independently relocated/after positives for each 6/8/44-input closure, ten source/diagnostic control suites and signature/tool-release brackets. Counts 42/64/214 are verifier obligations, not additive independent runtime properties. Concrete execution composes actual journal decisions and four shared forwarding bodies with the actual validator and fold. Eight forwarding faults establish result-equality sensitivity; eager-status establishes only wrapper ghost-trace sensitivity at early question-mark return, never inner query counts or an observed result-equality failure. Per-reached live and credit observations remain external. Standalone fold/wrapper proof qualification is separate. No native live/credit freshness, mutex, Arc identity, shared interior, compiler/ISA, GPU, performance or HIP/HSA parity claim. The old CPU ELF is custody only, not qualification for this source. Historical observations remain unqualified. Dynamic loader/host dependencies are not hermetic. No automatic retry, source edits or CPU/GPU execution. Same four threads and 120/130-second per-command proof bounds; no total-owner deadline. Tmpfs/RAM/packet checks are startup/stage-boundary checks, not continuous or quotas. Complete terminal archive is member-readback-verified and directory-fsynced; tmpfs originals are retained. Historical packets, tools and CPU ELF remain prerequisites for full replay and are not recursively copied.",
+  "signed_blobs": 6591,
+  "signed_campaign_qualified": false,
+  "signed_commit": "fef0f92cb6385c57d1b77c2eff41db967490beb1",
+  "solver_or_cpu_rerun": false,
+  "source_files": 6591,
+  "stages": [
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 33721523,
+      "kind": "signature",
+      "name": "001-signature-before",
+      "record_sha256": "b5946b3052515d6f0a9dfb5656e52beb3b2a657cf1b5df0f4d7fb1c429167617",
+      "returncode": 0,
+      "stderr_sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 1049805461,
+      "kind": "control",
+      "name": "002-test-producer-input-validate",
+      "record_sha256": "c133b6ffa3b43ae43a37c8d22d2a9fe0afa3e1226f344d371b049e00df57de5d",
+      "returncode": 0,
+      "stderr_sha256": "5c3a8f1bd4b9cdb6f47b511d2686d675db1367c416c8dadbbbfead4e2532f35d",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 1562298875,
+      "kind": "control",
+      "name": "003-test-producer-input-fold",
+      "record_sha256": "e0ccacd6aac7877ac968f49803853a5debbbb7036c69f833229a0a40c6292f5b",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "7e02a520d1051f591ed9327def796b5f1a15d99ba2750f6299d3315cb8df5aea"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 313102887,
+      "kind": "control",
+      "name": "004-test-producer-input-composition",
+      "record_sha256": "4b3b4e508fe34fc125cc62a7c916d536d5347b3d735ad1d5f99be1c1e8d06906",
+      "returncode": 0,
+      "stderr_sha256": "7aff98b759044d1c537c8e4cd321cae47b6804be081aacb6013a6f02d35a8d33",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 1334847621,
+      "kind": "control",
+      "name": "005-test-producer-input-composition-qualification",
+      "record_sha256": "b650d8e4dc9361898391d64a65bb6edb34a0b26138d29a2fa74ec4ce8a4d23ff",
+      "returncode": 0,
+      "stderr_sha256": "53785fa10145d65362fc4935481a76f769cc4365fa8eb9b25bab99d118b5abb0",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 658621230,
+      "kind": "control",
+      "name": "006-test-producer-input-diagnostics",
+      "record_sha256": "db48d6c308be9af763733af25da88e4913f89cd79f47f652a77cdd4c8478a849",
+      "returncode": 0,
+      "stderr_sha256": "5b8e3d9523dc7bb736cdc730052f78bda91c904a53dabd434d3a240ed01cda30",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 637501965,
+      "kind": "control",
+      "name": "007-test-producer-journal-observers",
+      "record_sha256": "489bfc0ee6d5b27d0ea78f543dfc9fe0357c58ab32de1a148d7a1a2f9df153d3",
+      "returncode": 0,
+      "stderr_sha256": "d66783311ad1a5e56c537fc5e25ae9c4866f9d6a2d39beee8ac0560a671d709c",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 1441318498,
+      "kind": "control",
+      "name": "008-test-producer-journal-diagnostics",
+      "record_sha256": "88555a692d51054905ab7061770ffe2d1402bd7cd4b0c96f118bd150fa5f67ac",
+      "returncode": 0,
+      "stderr_sha256": "ea2e8d610e9839c4d4d205b94b3afb06def3e3c0845fc7edcce24888c84d2e0d",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 11869817639,
+      "kind": "control",
+      "name": "009-test-producer-journal-composition",
+      "record_sha256": "e88934cc4b565d14ee68d1599d6437dd9f373ece336f4c8233997e62269faf97",
+      "returncode": 0,
+      "stderr_sha256": "e77d1e5fd406e81b7a2930c7946095dff8cb72816fe9fc1367ca7122102fa081",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 2400973453,
+      "kind": "control",
+      "name": "010-test-producer-journal-composition-mutations",
+      "record_sha256": "6fd284842bb163cb67cf2876725780820a3caab868320e943be7d193d8580f0f",
+      "returncode": 0,
+      "stderr_sha256": "47162f7dc7b4f9b3bf0263cc56b58874af27f7eaee921f0e8930f9eba4a46e24",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 3147233638,
+      "kind": "control",
+      "name": "011-test-producer-journal-composition-diagnostics",
+      "record_sha256": "f4c5e2b5adca2a27e94ca88d9e8cd0dff980a831b61da15858bddca6b8697162",
+      "returncode": 0,
+      "stderr_sha256": "79b4d700ea2e97ea9b744b6b294a8f87605aaaf142901935faaf0467dc19b075",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "classification": {
+        "accepted": true
+      },
+      "elapsed_ns": 2680314067,
+      "kind": "release",
+      "name": "012-tool-release-before",
+      "record_sha256": "41141d4a22e27edde7d76edd716cb3ef657b2f746647fa8f593137fdd1052d45",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "66e512188a3c4229b0d6bb87da1e4d9efce6d8344b72e9d8cf8d63f0e4ac80f0"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 42,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 42
+          },
+          "observed_verified": 42
+        }
+      },
+      "elapsed_ns": 4967979702,
+      "kind": "positive",
+      "name": "013-leaf-before",
+      "record_sha256": "056917e52401bc63468e8ca17bd32014c8c14f8a71e4bfa4bb477dc2329eb2f2",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "bbf701804fc17eb8a892a0e71f608c4c1fa93cdc228b50c930a37a8dbecc545e"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 42,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 42
+          },
+          "observed_verified": 42
+        }
+      },
+      "elapsed_ns": 5179603294,
+      "kind": "positive",
+      "name": "014-leaf-relocated",
+      "record_sha256": "62f27b02994e1844455f22043e93693b7e81a3ecf5b3409ea49d7e199c4d3085",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "0d6514b04f848004e5e823119866aadb2cf1f9d84e0be8c17877aaf588cd02d4"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active-lookup-error-substituted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-active-lookup-error-substituted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4400273169,
+      "kind": "negative",
+      "name": "015-leaf-active-lookup-error-substituted",
+      "record_sha256": "e61cc5211d28cadcd9631d32e63abce6cc8fbabf36de542c68795e0b0d468c7d",
+      "returncode": 1,
+      "stderr_sha256": "c12e0ae133d742daf7d5ab3f49eac23ce8cb67717bb67ccf2c845d7ca47a373c",
+      "stdout_sha256": "4c41025ca54838630466a0e207b33cc5d77a240be7b6d260142d5008057d4631"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active-status-error-substituted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-active-status-error-substituted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5309680465,
+      "kind": "negative",
+      "name": "016-leaf-active-status-error-substituted",
+      "record_sha256": "892889040d61adad724073e18ad16e2081ab40857b0f3d987f7420cad102d9ad",
+      "returncode": 1,
+      "stderr_sha256": "cc9a603a4a5c5b999199e2f91bc77b1b39883dcc31a5ebb7e804ff46b348fa19",
+      "stdout_sha256": "047a2bc865ae9884c835bac44acb169cde974686adff63d62d654a65ea150b09"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active-lookup-duplicated",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-active-lookup-duplicated/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4942537356,
+      "kind": "negative",
+      "name": "017-leaf-active-lookup-duplicated",
+      "record_sha256": "91e065c7c57015d5a3e8c86f880518da287e3458e02c1a147a712f1b09a91cc3",
+      "returncode": 1,
+      "stderr_sha256": "4db51d9685cf61240bda7d232edf4144fd7e581338355a0113370980a39c2eb3",
+      "stdout_sha256": "45d40ce175b2a6ee8040438d5eb4e3fa5a72d32382189e80f75239343d8b8315"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active-cursor-not-advanced",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4687,
+              "byte_start": 4562,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-active-cursor-not-advanced/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4646069687,
+      "kind": "negative",
+      "name": "018-leaf-active-cursor-not-advanced",
+      "record_sha256": "ccf54d23c7164ef6c126ae9728cd85f7116fb3783f52902f9d895f4a97c20feb",
+      "returncode": 1,
+      "stderr_sha256": "961735facf019cc5c6d6d1e70152c3f0e9b8666a836ab04e3006ed934f89a232",
+      "stdout_sha256": "b3e43d8f571aa0b77df23bad689ee654d00bd5a854e8a10f2eb2ab6458a382a9"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active-lookup-value-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-active-lookup-value-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5284068282,
+      "kind": "negative",
+      "name": "019-leaf-active-lookup-value-ignored",
+      "record_sha256": "e278558a02e9e68fac28ac0b86f0eff30578541c601019eb5fed658052b4a550",
+      "returncode": 1,
+      "stderr_sha256": "c9d1cac07c2e5a0494840442a52ff66c26e03dcde264073687ee72d56b48c0c9",
+      "stdout_sha256": "9f0eb49d20dfc50ca95fd43a3b8d5023da3eb4dd31ffebcb40f9653f71e508ce"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active-stored-request-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-active-stored-request-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4234989604,
+      "kind": "negative",
+      "name": "020-leaf-active-stored-request-ignored",
+      "record_sha256": "369318906b48121e443a265dc4b656444aa60ed053786ec21983384b6d89898d",
+      "returncode": 1,
+      "stderr_sha256": "34920c4f64401f67608a9d6ccf7419419573cee1225b0dc2afa3271358e2f76b",
+      "stdout_sha256": "db4bd321eb129962f0c526962acc794849926d42fc5b9ab5be5155c819f14b3d"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued-lookup-error-substituted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-queued-lookup-error-substituted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4857346488,
+      "kind": "negative",
+      "name": "021-leaf-queued-lookup-error-substituted",
+      "record_sha256": "4541508f7f9300e4fc3acbdd87de48533f3198163644ed17251da9f96e07b62f",
+      "returncode": 1,
+      "stderr_sha256": "1e8b565c3135c81a11de8b353d7e6be929f7937a17dfde32ed72fcdaa195a418",
+      "stdout_sha256": "f147967bc081291efbfa8f34b5d43dc9549d0a2b3b4a206d6c71b66100043607"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued-status-error-substituted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-queued-status-error-substituted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4744446762,
+      "kind": "negative",
+      "name": "022-leaf-queued-status-error-substituted",
+      "record_sha256": "023557d9c15c583a16fa1cbe3ad5ecfb647c1bd90d27953f5b8e43193c47840b",
+      "returncode": 1,
+      "stderr_sha256": "0682e8d5892b82bcee0f32247357554416048809e959a3f3e36de22c40b039db",
+      "stdout_sha256": "06683b8ede024d16272a27692bcc7ec33fb4c620183df7fbe0d4d2fb3c12bf03"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued-lookup-duplicated",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-queued-lookup-duplicated/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5768827571,
+      "kind": "negative",
+      "name": "023-leaf-queued-lookup-duplicated",
+      "record_sha256": "2188bbe0cb53b26d20974fab361901f02bfddc80f885bb7fa33a09950a5340e7",
+      "returncode": 1,
+      "stderr_sha256": "b4f4f541d6c92f8aea77c3e59450f45589f0a08ef951536c61c51fe146886306",
+      "stdout_sha256": "1cd2e03578690b68651b47698ffc6dc6bdcae4619cb3dafc51d368b6cac4987b"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued-cursor-not-advanced",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4826,
+              "byte_start": 4701,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-queued-cursor-not-advanced/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5716309174,
+      "kind": "negative",
+      "name": "024-leaf-queued-cursor-not-advanced",
+      "record_sha256": "c80ee9f2e304514180977f90e9175560412265b33238173d22a5e613c90bd797",
+      "returncode": 1,
+      "stderr_sha256": "3874910f1a01fe11222a31965a235005ec40f8d9135d7dbdc991a2da042df291",
+      "stdout_sha256": "a8a2114cfdc37515bd80a1a4ee8e7d8c6354a356e8111187f957314ec7db63bc"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued-lookup-value-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-queued-lookup-value-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5140457634,
+      "kind": "negative",
+      "name": "025-leaf-queued-lookup-value-ignored",
+      "record_sha256": "d67e2c771dd07220001f395340e4390037618389df8f75cd3b24a7fd387ac42a",
+      "returncode": 1,
+      "stderr_sha256": "581ae18d89c6d4016da446299412e94eae6c198e8e64ab49437cbea4fe84f2fc",
+      "stdout_sha256": "fd39d1aa763b74a53152a707dbff500d12d2808ccadb4a24dcb53d8a17fa343f"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued-stored-request-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-queued-stored-request-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4555576777,
+      "kind": "negative",
+      "name": "026-leaf-queued-stored-request-ignored",
+      "record_sha256": "307d2c06b8e798f4c385351cab96e7e5058ec912b86c7a54818eaa21dda8fed4",
+      "returncode": 1,
+      "stderr_sha256": "46233dea2c358eb2e25f5d037f740d6de235122f4e24461ead1733238335ada5",
+      "stdout_sha256": "c9fe64d50ffe7fa0b559992678d2bdfd4b3690d87cc21fe24c679fa3f3a0c410"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "bound-root-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-bound-root-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-bound-root-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 7973320342,
+      "kind": "negative",
+      "name": "027-leaf-bound-root-ignored",
+      "record_sha256": "383731319d0ba468186f7b35955312f5f4b7f000fca97517cf330bbe8d06b568",
+      "returncode": 1,
+      "stderr_sha256": "e085a9737bc452049bbf96f943319a59d9a844767707919edb1797026802737f",
+      "stdout_sha256": "9b802d169173721f239a6e0cfc6a2667798f94a2692566187b4c3e7c71ba9aef"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "launch-dependency-membership-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-launch-dependency-membership-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-launch-dependency-membership-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5583697663,
+      "kind": "negative",
+      "name": "028-leaf-launch-dependency-membership-ignored",
+      "record_sha256": "ee3a10955bf6adad4377a5486a38c1c1ad161ef397d532caab6d376b034c55ec",
+      "returncode": 1,
+      "stderr_sha256": "3406390fd4ffaa154a7a6c3b333daa8479b545a7d5c5dac3d4c3d2089c3d0655",
+      "stdout_sha256": "d9e800e5c487c0a333b7da8a1d73ce3faf6e38311f669524ce9031e61999481c"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "peer-dependency-membership-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-peer-dependency-membership-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-peer-dependency-membership-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 6461431344,
+      "kind": "negative",
+      "name": "029-leaf-peer-dependency-membership-ignored",
+      "record_sha256": "2393a421fa8f791a1ff390c9490b06db5af001552fe9fd621994c94d9c22d101",
+      "returncode": 1,
+      "stderr_sha256": "cd4dc4dff62ee448624c4732a0d1ced2d849d74c4554a2b00369ceb8cea78514",
+      "stdout_sha256": "fb3226182393f97de67e6b99438e7bbc8e3ffd67cf1584a59a21d32f3aebb589"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "launch-absent-root-accepted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-launch-absent-root-accepted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-launch-absent-root-accepted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5830433207,
+      "kind": "negative",
+      "name": "030-leaf-launch-absent-root-accepted",
+      "record_sha256": "37f0ef1a603a62140071b1fbd047f8ad2f1b13bf0c2f0986dfaca8f7f53a5512",
+      "returncode": 1,
+      "stderr_sha256": "62fdb9d5ee8c50dbf86d2c25e1dd7e2566ea195295d4e8280ec122a3c8d4f358",
+      "stdout_sha256": "6b2ad8558a75f9057e74ef03b70b507d1c2fab2f0708a05242da69ae0a6ad621"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "peer-absent-root-accepted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-peer-absent-root-accepted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-peer-absent-root-accepted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5121886076,
+      "kind": "negative",
+      "name": "031-leaf-peer-absent-root-accepted",
+      "record_sha256": "9aa2420d9b9262f106ed511cf984a356a286c92b673f91f6e9fcc0729504fb1d",
+      "returncode": 1,
+      "stderr_sha256": "f4c89256f1132f5e016e883810fc1599fd51c2e902d61e5f51b80f2b403e50c3",
+      "stdout_sha256": "7baf2e7841b345cc570bc2685169abd5d4e001105a5f2349e23d2cd963a0cd5c"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "producer-local-order-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-producer-local-order-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-producer-local-order-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5357598065,
+      "kind": "negative",
+      "name": "032-leaf-producer-local-order-ignored",
+      "record_sha256": "fe5f4c1e533d934bf4db142b39ddecb5563058ac7b5f070865651d6688f665e1",
+      "returncode": 1,
+      "stderr_sha256": "d896c767924ee4d71513450b3c742429ffb65474d9d1d4d6a0140c0aa62448c6",
+      "stdout_sha256": "b1cf63b0433197944caa4d2ffed7f68349d018d1499ee1cf2feb4eb81895502b"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "allocation-order-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-allocation-order-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-allocation-order-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5437598160,
+      "kind": "negative",
+      "name": "033-leaf-allocation-order-ignored",
+      "record_sha256": "8aeea577dca3b3e7f691857cbffbaa49351f09f6ec8700c7b68fcfbdb178fc72",
+      "returncode": 1,
+      "stderr_sha256": "18bd1a215c2c64c34711ffdb84a4b607d414806cd081552b57dca6d0b00f3c11",
+      "stdout_sha256": "2d56d83c6f5a0621eef22b6ed0be6a08224b9ced880231a592f8b815e25dedfb"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "record-map-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-record-map-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-record-map-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5141107886,
+      "kind": "negative",
+      "name": "034-leaf-record-map-ignored",
+      "record_sha256": "6e8c4cb3c48914dc5d91861c9917aa0be7ac00ede784f9bfafb1223dbc75a05b",
+      "returncode": 1,
+      "stderr_sha256": "72a4321065ec17e07434ecc9c805dce35a6ab7526e43d31f07627e39306e096f",
+      "stdout_sha256": "f1a6e24f0c5ca363fc859954c900392472f78c2bfbbefb04e53192acc6b7a0a9"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "backend-membership-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-backend-membership-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            },
+            {
+              "byte_end": 4987,
+              "byte_start": 4840,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-backend-membership-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied",
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4940263285,
+      "kind": "negative",
+      "name": "035-leaf-backend-membership-ignored",
+      "record_sha256": "9d8be79975b7414ed962dc5a83dbc4b2468ef3679fb5645d60473275507b5f7b",
+      "returncode": 1,
+      "stderr_sha256": "db76bda9ff9707c6a0ca6a55efd92cbca768238fba447bab3a15d5e547fcdedd",
+      "stdout_sha256": "c31e992e827b77660c4276639d2be8b25c02e953bd725b8b068f1bfb1da79346"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "credit-observation-skipped",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-credit-observation-skipped/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5227697931,
+      "kind": "negative",
+      "name": "036-leaf-credit-observation-skipped",
+      "record_sha256": "18353ba25e4e8975fb561d98154107b725c5b438a2595d69f06807bd31ed37a1",
+      "returncode": 1,
+      "stderr_sha256": "b27dbfacaeafccc05d7bf2b19e040d39ab5154a73ccf6d032d6279d51e2d6fdb",
+      "stdout_sha256": "b46a8760277b5d70db7c671afd687e264fc4b84d03ad8fa05e7742d4031e191c"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "credit-answer-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-credit-answer-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5094095091,
+      "kind": "negative",
+      "name": "037-leaf-credit-answer-ignored",
+      "record_sha256": "217a93b415c2084348cfac636b7b29d8189efa522f866408b6b60a2db9b5cdb3",
+      "returncode": 1,
+      "stderr_sha256": "814bd2cb03bf4d05bebca430517d0f0cc03729a3dc560a552dff70d33f462a2c",
+      "stdout_sha256": "5818630940dcb19cf4e54d107eec43e8ebf09b608a3c6844bae41ac11da3d7d3"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "live-error-substituted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-live-error-substituted/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5702021364,
+      "kind": "negative",
+      "name": "038-leaf-live-error-substituted",
+      "record_sha256": "44f2cd78a5c4585d1be492d4d1466ceaddf4a64c5ed186360cfb78c559f42073",
+      "returncode": 1,
+      "stderr_sha256": "db4afb9b0ea8d5e287c8de78b5f2f6b7f9599ac64144b15cdbfde6ab37f6c814",
+      "stdout_sha256": "673113200ee938b9863a44a0c9bc9a52809f678d97d32c1a4e28a9691fa75886"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "live-observation-skipped",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-live-observation-skipped/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 6154648981,
+      "kind": "negative",
+      "name": "039-leaf-live-observation-skipped",
+      "record_sha256": "fd2929f2a44e60d2092ef1aa4156b41ae575892a7166ecae469f197e2e009cd4",
+      "returncode": 1,
+      "stderr_sha256": "a63f63773d6893077fda7769782d45648615ea72944c20a7268ac8f34d2bd91f",
+      "stdout_sha256": "5e1febf6b635fb014482bd722b5bd3f10cbfe982d85b133c1fcd6f3e67e5e4e3"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "extent-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-extent-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 6954693014,
+      "kind": "negative",
+      "name": "040-leaf-extent-ignored",
+      "record_sha256": "55fc550cea4564ffbab6fa34f5939505d76da0c693b49a3ee2bf41f2f87088cd",
+      "returncode": 1,
+      "stderr_sha256": "20279d2c14170ef706059f221f617ee0d2b1c209b7a63c84f4231454c5432e6a",
+      "stdout_sha256": "166a18f856ad808f1a8426b804b7a68eb5e8822ef19aaa2aabd6da3f5ad2eb93"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "offset-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-offset-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 6792983265,
+      "kind": "negative",
+      "name": "041-leaf-offset-ignored",
+      "record_sha256": "e521dc0c64706693776340abf8fa09cc6a99a8cc334257ed866c58e351e16be0",
+      "returncode": 1,
+      "stderr_sha256": "d3588d124c49e1c96c989b1026fb90d7292f43e6816ae92f8e5ca7bfd06b6940",
+      "stdout_sha256": "18b2ebc14797b54cb407df55bff87ba4513fd42773f2fbf3200974ba7c12ef2a"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "length-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4548,
+              "byte_start": 4434,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-length-ignored/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 8205559122,
+      "kind": "negative",
+      "name": "042-leaf-length-ignored",
+      "record_sha256": "80932d96664ade9b4133075c1f45126bf87d916ec9a5407b09cb4be53ff02b91",
+      "returncode": 1,
+      "stderr_sha256": "b10e674daa0a743dfa26b5ef4e83df8cdd386707a0d2fab63cc750861a6ff818",
+      "stdout_sha256": "2f56bc84b2fde8e084221db03db344e4f31efc6cddc56ecbdf6a2bda1d4763d0"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "dependency-scan-match-rejected",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2282,
+              "byte_start": 2238,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-dependency-scan-match-rejected/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4625999432,
+      "kind": "negative",
+      "name": "043-leaf-dependency-scan-match-rejected",
+      "record_sha256": "a1b0ff929c4726f020a2db2987a2b4ba3d7b72d443a42b17afaaf4040086c17c",
+      "returncode": 1,
+      "stderr_sha256": "690e35feb7de4cad530b0476283fbf348f63eb494ea37988da429ec6ef4f42c5",
+      "stdout_sha256": "1ef1250ad7fc768f9f1eaf97442982b82963111353cff9c79bd0180a12da158f"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "dependency-scan-exhaustion-accepted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2282,
+              "byte_start": 2238,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-dependency-scan-exhaustion-accepted/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5848942493,
+      "kind": "negative",
+      "name": "044-leaf-dependency-scan-exhaustion-accepted",
+      "record_sha256": "3e6a40df57f03c0335d4d45ecd0b174699236a2f0fb872ba92ebdaca1c93d079",
+      "returncode": 1,
+      "stderr_sha256": "e5ffc0a7d47082beaff27295d1846f17b2623e7b04f59eb171f5e223641fa22a",
+      "stdout_sha256": "0b7d1eebb51b72b744ec9500e6a2cefeb2eb3fc8f989a7eff3448e8ed5ac40f9"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "source-scan-match-rejected",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2833,
+              "byte_start": 2698,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-source-scan-match-rejected/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 6830213853,
+      "kind": "negative",
+      "name": "045-leaf-source-scan-match-rejected",
+      "record_sha256": "f65a02a7456e83652e168dbb52367d96243ee064de6b771c0ce55604fcce6d81",
+      "returncode": 1,
+      "stderr_sha256": "11505f8b01f73e536ba6f9ab545dcf1d7d186a650548e99045c85097a3a04160",
+      "stdout_sha256": "34252d751055f5085a71a67fe06b8b10b2b7f1c3bb7eab135cfc5094fe7383f4"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "source-scan-exhaustion-accepted",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2833,
+              "byte_start": 2698,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-source-scan-exhaustion-accepted/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 6789432915,
+      "kind": "negative",
+      "name": "046-leaf-source-scan-exhaustion-accepted",
+      "record_sha256": "4ed6733d9a4e9329207c2490a816874e9e9787c5322b0d34a79b471cf1c25841",
+      "returncode": 1,
+      "stderr_sha256": "8cba9630174d9e0bd99580b09b5c9b14e996349de63b3715e85e76f38360d61e",
+      "stdout_sha256": "0d77339893403e1d19b2185c622e291c5c5278b9de762d32a4f4775a7644cc2e"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "dependency-scan-predicate-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2282,
+              "byte_start": 2238,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-dependency-scan-predicate-ignored/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5037048818,
+      "kind": "negative",
+      "name": "047-leaf-dependency-scan-predicate-ignored",
+      "record_sha256": "cc6b0e6c2b8a0fd6dabdf1f6557c1fa52bc5abbbc3e66c41bc1429f3b2ba9fec",
+      "returncode": 1,
+      "stderr_sha256": "f64a9e814ff20fa394255cb999b69d2425c8cb3e8f554052408d9f17ae2f9d9f",
+      "stdout_sha256": "fa319c85e3f4cb2a823a0a5622c2e8a34b828717dc05cd928634c5f5a1a00fd6"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "dependency-scan-first-mismatch-terminal",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2282,
+              "byte_start": 2238,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-dependency-scan-first-mismatch-terminal/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5366533380,
+      "kind": "negative",
+      "name": "048-leaf-dependency-scan-first-mismatch-terminal",
+      "record_sha256": "d75a25adfbd540d65657773cb627215311bfa1260b43c91811c179b3e8ae9968",
+      "returncode": 1,
+      "stderr_sha256": "ce284e29e89bd1bb9fe04243d243de5142680404954579bc06fb131d2156e9ae",
+      "stdout_sha256": "1f15b73cea55a5a878f9128adb4a52b4be579206ce15ad06dfacc322cc6d657f"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "dependency-scan-local-only",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2282,
+              "byte_start": 2238,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-dependency-scan-local-only/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 4889048049,
+      "kind": "negative",
+      "name": "049-leaf-dependency-scan-local-only",
+      "record_sha256": "2b7dc7a54dc175fd5d3309dc6b3da9f04b6401d4e05091ab48c02a23dd6958d7",
+      "returncode": 1,
+      "stderr_sha256": "bc2efe76fd55727670886d95125a22a2677684a47120d1af8a47be0cf67be2e1",
+      "stdout_sha256": "5e3dc82a30b6ccc8cfb823c0caec067c88bb01be80d2b8d304acb15debe60636"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "source-scan-region-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2833,
+              "byte_start": 2698,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-source-scan-region-ignored/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 6318552484,
+      "kind": "negative",
+      "name": "050-leaf-source-scan-region-ignored",
+      "record_sha256": "56b0f87a49b017def5296accbab01fc94e4b0f31202a26c229dc248b0039fbbb",
+      "returncode": 1,
+      "stderr_sha256": "86ac82ac224f0e78527e53410a0e7b3efc3185d21caf6a1f722eeda9215ac7e9",
+      "stdout_sha256": "69c3c8d75f29628c4a6857e4e0b5bf39a2af5e2890700ad6dd6d7a2958e6b1b0"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "source-scan-record-ignored",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2833,
+              "byte_start": 2698,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-source-scan-record-ignored/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 6520198332,
+      "kind": "negative",
+      "name": "051-leaf-source-scan-record-ignored",
+      "record_sha256": "d46c29a13aac3ce0644434da06fcdd33210d15dac06dba4ab78e6273a384a641",
+      "returncode": 1,
+      "stderr_sha256": "d7d0dac383687234ad99585bfd0e2bdc899125b312fc957e9f406c54d2c8d349",
+      "stdout_sha256": "0dbd44436d9caec3724cea7fd593cb319ec248fb379a264844b6fc4bc3517c71"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "source-scan-first-mismatch-terminal",
+          "errors": 1,
+          "family": "leaf",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 2833,
+              "byte_start": 2698,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/leaf-source-scan-first-mismatch-terminal/crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 41
+        }
+      },
+      "elapsed_ns": 5892138883,
+      "kind": "negative",
+      "name": "052-leaf-source-scan-first-mismatch-terminal",
+      "record_sha256": "0814d586dbe617002048515cd32d96537f7db53a9d15c5f4f85efc76d0756e74",
+      "returncode": 1,
+      "stderr_sha256": "20529610967de0645b8f14dcefa0b47af6030d12242e6c135a57290d57c18736",
+      "stdout_sha256": "f041ce8a50670b023d59cbf74d2e859cc3dead79930618d4a02e63909d67d159"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 42,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 42
+          },
+          "observed_verified": 42
+        }
+      },
+      "elapsed_ns": 5236512213,
+      "kind": "positive",
+      "name": "053-leaf-after",
+      "record_sha256": "e81147b0935c9d249d020ff40fbbe16fc1b7c222816c1afaeffe3d416a3b9272",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "9af8ed3f66a4b14d18692582010b40414cc7e72d469175378cb3bf61cb65b4fc"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 64,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 64
+          },
+          "observed_verified": 64
+        }
+      },
+      "elapsed_ns": 23207468087,
+      "kind": "positive",
+      "name": "054-conditional-before",
+      "record_sha256": "e5dad5b51a79aa0283a3e198b2ee55c774315bf2c22a4287e0fabe5410843358",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "9f3186d84fc80c6227055f3af049ecb880c9d2108d99ecfdb3c67b1d66a207c3"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 64,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 64
+          },
+          "observed_verified": 64
+        }
+      },
+      "elapsed_ns": 24262664505,
+      "kind": "positive",
+      "name": "055-conditional-relocated",
+      "record_sha256": "314ad06b0c37ff32120276cc0f45fb9363a4573c308f3cee46bda83e943e8de4",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "851f77fbcf953c8d9e3b7bf84e402a7eaf52b5b38241275a8a357301e0b7683c"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "per-input-answer-index-zero",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6684,
+              "byte_start": 6623,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-per-input-answer-index-zero/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 29003856704,
+      "kind": "negative",
+      "name": "056-conditional-per-input-answer-index-zero",
+      "record_sha256": "68aad3cfd89590a99df4af49accf7dfb36c0960b2cd59722c323f4518d105a1d",
+      "returncode": 1,
+      "stderr_sha256": "9abcf5a3554c68db76d5bdb47d6793293657be26d462ffad1bc7ec7febdc0234",
+      "stdout_sha256": "94a1ccc209884ff9ece6d56310486886f1f41ed5c5f6d8ce1cd28f1ce57f3c46"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-launch-flag-inverted",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6689,
+              "byte_start": 6628,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-actual-launch-flag-inverted/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 29497773525,
+      "kind": "negative",
+      "name": "057-conditional-actual-launch-flag-inverted",
+      "record_sha256": "9e3f77f7c29857b0485fa7e152a64be111f759095493c75d12d2c0785224887f",
+      "returncode": 1,
+      "stderr_sha256": "af4b19f377534f2921c46fdd00bbf7532999676bf9ece8ae980ed75532ff0bbc",
+      "stdout_sha256": "a893ceba0950262416a36d1ae19d425b0af2fc111b132332d125071ee8aefc7d"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-submission-generation-zero",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6750,
+              "byte_start": 6689,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-actual-submission-generation-zero/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 28800415811,
+      "kind": "negative",
+      "name": "058-conditional-actual-submission-generation-zero",
+      "record_sha256": "63de7a1907986e6cb266990f88b4eef679edd139985b43d2c50e14008d2f12fb",
+      "returncode": 1,
+      "stderr_sha256": "83e5b797b2d38eb67a98b7f0d22aa39e1bd1fa9cc9aca62c46f7a8fc32d2bd96",
+      "stdout_sha256": "74d32716fe307893c4e4e2cff96d6985493f7330bcd6440fb59fa931452c8cf7"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-family-cursors-swapped",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6688,
+              "byte_start": 6627,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-actual-family-cursors-swapped/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 28085711967,
+      "kind": "negative",
+      "name": "059-conditional-actual-family-cursors-swapped",
+      "record_sha256": "daef9844e62eac415c07c14e8c5f7dd876627120d7742e0645f98e175ec636e4",
+      "returncode": 1,
+      "stderr_sha256": "7efe0a7f23faf93905a289aae6b545aef438f93597f0db43d511c8a1afdf4ca3",
+      "stdout_sha256": "f397e31199813d55d81360ccfab20a4ace0169d8a446e760926c8e6592cf7115"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "returned-error-substituted",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4586,
+              "byte_start": 4516,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-returned-error-substituted/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 45128947041,
+      "kind": "negative",
+      "name": "060-conditional-returned-error-substituted",
+      "record_sha256": "63d10db4b968d73fe8627a8e381c9c80755918425b5d85b56c44da7521c18f75",
+      "returncode": 1,
+      "stderr_sha256": "32a9b0765807b91ec9e9e37f70b643fef4e513cf804377ec4e816ae511dbe79b",
+      "stdout_sha256": "e189bc37ce78abe9812228bae52899617725243ddb5a4526d583451c87daf98c"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "returned-pending-demoted",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4586,
+              "byte_start": 4516,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-returned-pending-demoted/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 44198546841,
+      "kind": "negative",
+      "name": "061-conditional-returned-pending-demoted",
+      "record_sha256": "f93e65ada56b032daf9e038ad417db1d8aba7ca03d70da5f1186c983b287fca0",
+      "returncode": 1,
+      "stderr_sha256": "d90c53e4e1a2a0d108c1941bfbd00baef07db9f525b64ac5c829c3e5adf1c020",
+      "stdout_sha256": "27484655f98aaa8a9e867ae710782614b0179186aca9262a9f015eb9b0d44978"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "returned-unknown-demoted",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4586,
+              "byte_start": 4516,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-returned-unknown-demoted/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 39436926554,
+      "kind": "negative",
+      "name": "062-conditional-returned-unknown-demoted",
+      "record_sha256": "9a49bf15d6193e45b077789b5cb4ad5d8e07700836b6ea1497f0e0adbd008391",
+      "returncode": 1,
+      "stderr_sha256": "fdc72ff67fd24e4c0828725b375a6d79e94f77369a1cff01a7029045ae5443e7",
+      "stdout_sha256": "d377e28a75145a3181711f2801f61ecd5088550c6dbe2795685eb9d46858d0ed"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "consumed-only-on-success",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3916,
+              "byte_start": 3900,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-consumed-only-on-success/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 28657718018,
+      "kind": "negative",
+      "name": "063-conditional-consumed-only-on-success",
+      "record_sha256": "0f488529afad74151a3bf0292eb0208a2cc3e7d5c31792cb12232642f960350f",
+      "returncode": 1,
+      "stderr_sha256": "d1aa7fa3f7d639365cdaca2c740bd1593e1533f1434ff7197429357d0f05f84c",
+      "stdout_sha256": "be6e5bf40af2c18585c789890d2b3a2f42baff60a8315e3865493228c06e17e0"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "receipt-advance-derived-from-success",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6849,
+              "byte_start": 6788,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-receipt-advance-derived-from-success/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 27234568291,
+      "kind": "negative",
+      "name": "064-conditional-receipt-advance-derived-from-success",
+      "record_sha256": "19b7b7763438be52443302814d2962ea1328c901d9c73e54ce59317d60e2bbae",
+      "returncode": 1,
+      "stderr_sha256": "76bd022b71dd7b89bc565d0aa820d2bb782477e9467d8e5c6523e3c4eada427b",
+      "stdout_sha256": "4eacd9f98d6de17affe058052f4a9871334a1f50ebfe6b0f8706614c21730ade"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "trace-prefix-dropped",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3916,
+              "byte_start": 3900,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-trace-prefix-dropped/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 27580967513,
+      "kind": "negative",
+      "name": "065-conditional-trace-prefix-dropped",
+      "record_sha256": "abae94de205783d9f6c4509ab251ca5fe16e413044e8d77d29de9c1b8d98984f",
+      "returncode": 1,
+      "stderr_sha256": "2388337587e2e0c3295329e267fb08eca88abd608e6c2d3a9d19627283bcc0a8",
+      "stdout_sha256": "bb56d252a2a7d2d0b10f22d61e37ececacf37e0ec5a0848ab5e8fc0262943cf0"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "trace-prefix-reversed",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3916,
+              "byte_start": 3900,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-trace-prefix-reversed/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 28489366374,
+      "kind": "negative",
+      "name": "066-conditional-trace-prefix-reversed",
+      "record_sha256": "e8ee17ff52729016456ead3f7b058c706728205c1bef4bd662865af4023dc528",
+      "returncode": 1,
+      "stderr_sha256": "21c5f69355de1a444f4af110c856a3a02ebac7e2019b06ea7777ede6a7c19eb2",
+      "stdout_sha256": "2a9d0f201a0abe79fc19bdc5ed6bab8c0921b77cf6b5634a99bcb34d8e3ebc3a"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "receipt-credit-answer-inverted",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6689,
+              "byte_start": 6628,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-receipt-credit-answer-inverted/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 26318828607,
+      "kind": "negative",
+      "name": "067-conditional-receipt-credit-answer-inverted",
+      "record_sha256": "ef5d6049969f7f65d1837073b97f4e8dfb4d12095edb42190b68f8f0fade5e39",
+      "returncode": 1,
+      "stderr_sha256": "ff29bbec39d9a5b0fa0a9580dfde19bcb2cb4bf7d37e19ed654c33b209945876",
+      "stdout_sha256": "c1655460516ac5da430253b8a03b93d6add72fc7e4e38e9d4778aafd8bfaf4a1"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-allocation-generation-zero",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3287,
+              "byte_start": 3203,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-observed-credit-allocation-generation-zero/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 45137499916,
+      "kind": "negative",
+      "name": "068-conditional-observed-credit-allocation-generation-zero",
+      "record_sha256": "20655d4e188853c8a3cadca7c5276f16cf497896b661e77d3b3ae03714e278c9",
+      "returncode": 1,
+      "stderr_sha256": "b13f89e4e7efb72ce9866d09ec9c7f00d293bfa1e2feb0f5e24160782d409da8",
+      "stdout_sha256": "d7f5aa840749d9ac109fed1d257befaf52daf37a9fb69186fb7f752ce007cb6b"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-allocation-local-zero",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3287,
+              "byte_start": 3203,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-observed-credit-allocation-local-zero/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 50034925234,
+      "kind": "negative",
+      "name": "069-conditional-observed-credit-allocation-local-zero",
+      "record_sha256": "85826813e70499926c79df89e0ab06af6160fd7ab020b330762277f179d707c0",
+      "returncode": 1,
+      "stderr_sha256": "6d95969ab2723759207c6b32c83eeb537f1d3ca9a434dc6c35348a0c62614f14",
+      "stdout_sha256": "93554da414ef997f02de5ca7cbd014af20fe37d88a91c1cdc64ccf40bc986e66"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-device-generation-zero",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3287,
+              "byte_start": 3203,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-observed-credit-device-generation-zero/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 53758501891,
+      "kind": "negative",
+      "name": "070-conditional-observed-credit-device-generation-zero",
+      "record_sha256": "f440f9f4e35f2df7146baa880b24112eb9198f3ef39e8b544c8450ee1f200895",
+      "returncode": 1,
+      "stderr_sha256": "b4cf1811150def33fd90cb7424a38409d7091b7a579940271734aa7f381c210e",
+      "stdout_sha256": "09e662737323ca0f45fef98dc582b8360427d1b1ff72889adb4a9b3411fda777"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-device-local-zero",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3287,
+              "byte_start": 3203,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-observed-credit-device-local-zero/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 41891308096,
+      "kind": "negative",
+      "name": "071-conditional-observed-credit-device-local-zero",
+      "record_sha256": "c439649af60995f615b61ed7a0f8f5ea60ac36afe8bccfd66748afabd02e8713",
+      "returncode": 1,
+      "stderr_sha256": "be73d1a26477ebe8fdc3dc20c465cbb27bc574ced881f6032bbe2bca0bfbac3f",
+      "stdout_sha256": "10835b39704dc062f26a1f6c6a2ac208ca984d337f081d5fac1646934f48d3e8"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-byte-length-zero",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3287,
+              "byte_start": 3203,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-observed-credit-byte-length-zero/crates/fe2o3-runtime-model/verus/producer_input_validate_definitions_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 41602121662,
+      "kind": "negative",
+      "name": "072-conditional-observed-credit-byte-length-zero",
+      "record_sha256": "85e322b98a1819b55b8fe9a364a1b6562c04892ff324c28ae78eec3265ad55b5",
+      "returncode": 1,
+      "stderr_sha256": "bcbfbfb03c64f0077e22ccaf7802858ea4c303f1da67be1143509e0b104e08f6",
+      "stdout_sha256": "6823ebb4669a8c93bfd209631a05f4f636bbfad0a1e493c967c7265a63d11cd1"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-active-count-cross-wired",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3132,
+              "byte_start": 3092,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-actual-active-count-cross-wired/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 40411582015,
+      "kind": "negative",
+      "name": "073-conditional-actual-active-count-cross-wired",
+      "record_sha256": "3fcbf8596b388c0a86ce9d93c1a884d9de46ba0d92c8b1ed1cf47d8c0c0dccff",
+      "returncode": 1,
+      "stderr_sha256": "ed9bda785527a0864e4f5965e1916d8d8ea8ce397dccca61197fc83cbfa26b5f",
+      "stdout_sha256": "4816c55551791acfb7b7f3502efebc096cffb993f64c930c7d57a708fc2129b7"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-queued-count-cross-wired",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 3282,
+              "byte_start": 3235,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-actual-queued-count-cross-wired/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 35749744719,
+      "kind": "negative",
+      "name": "074-conditional-actual-queued-count-cross-wired",
+      "record_sha256": "baabf14cc593eb4ba0e7a938be9b85c992bff612140ed7a3765c5102792e173d",
+      "returncode": 1,
+      "stderr_sha256": "2dc325ef4f8155c9d00cada801e4d9f34099aa7bf3b4b79532951168879326f2",
+      "stdout_sha256": "c6cb02f8bb1b70b43c91d0ac0d288bf001d8ad3b6342b3f405a440d3b9ac5f31"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "composed-unknown-stops-later-validation",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 7380,
+              "byte_start": 7317,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-composed-unknown-stops-later-validation/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 20625678622,
+      "kind": "negative",
+      "name": "075-conditional-composed-unknown-stops-later-validation",
+      "record_sha256": "5a9c7bd87f00b0f5090b1aa02bdee25305cccbe297a1487c14d7843c88182eb4",
+      "returncode": 1,
+      "stderr_sha256": "fc608705434e2e0929d4379aceb061fc1b3ba342af2d8c8bf2575a4520df63fc",
+      "stdout_sha256": "14a57241dc452752840d3dbd0882940619a506510c0b2c0131342ede297cc654"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "composed-error-swallowed",
+          "errors": 1,
+          "family": "conditional",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 10470,
+              "byte_start": 9965,
+              "message": "invariant not satisfied at end of loop body",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/conditional-composed-error-swallowed/crates/fe2o3-runtime-model/verus/context_producer_input_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "invariant not satisfied at end of loop body"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 63
+        }
+      },
+      "elapsed_ns": 20130411870,
+      "kind": "negative",
+      "name": "076-conditional-composed-error-swallowed",
+      "record_sha256": "2aad1eafbbcca980ed64188525a8df71d68f043d9d5648f532927baef7ec3efa",
+      "returncode": 1,
+      "stderr_sha256": "f4d948d58ed4360f30bfbdd1e69f6ff5c0f550230b8f0fa4e741b10469229ad0",
+      "stdout_sha256": "9d3340eb8a31a07b0c5d823987ce331e11270ec9ac6acf2131e2f2945170bc1a"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 64,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 64
+          },
+          "observed_verified": 64
+        }
+      },
+      "elapsed_ns": 20784006101,
+      "kind": "positive",
+      "name": "077-conditional-after",
+      "record_sha256": "64bd5b82e15aee49236568a49587ef3eebd25d236561bd8d9755bad032d3d540",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "09780f5a524137698db4a41bbcf16714e495036fb7c4e8066054dcfe79fcbc67"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 214,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 214
+          },
+          "observed_verified": 214
+        }
+      },
+      "elapsed_ns": 63009483667,
+      "kind": "positive",
+      "name": "078-concrete-before",
+      "record_sha256": "95d56b0ef4f1bf50e28c736f369b87c40daadada12c7407ae9004b03d5993d09",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "004f120d9ae6ef0d00bf3b9a818ede38941f5b09f9130919274f6f9b97593970"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "candidate_accepted": true,
+          "candidate_verified": 214,
+          "expected_result": {
+            "encountered-error": false,
+            "encountered-vir-error": false,
+            "errors": 0,
+            "is-verifying-entire-crate": true,
+            "success": true,
+            "verified": 214
+          },
+          "observed_verified": 214
+        }
+      },
+      "elapsed_ns": 64622041965,
+      "kind": "positive",
+      "name": "079-concrete-relocated",
+      "record_sha256": "39b9ea8bfe7b0e1b9871a7403aa378cb8a10f3e5ffc3396a9e782dd224a8fc10",
+      "returncode": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "9627547a7572c0bab58d1e75eef92ce13dc9d7148998625ffd02c6e9db3f9a29"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "per-input-answer-index-zero",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 17075,
+              "byte_start": 17014,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-per-input-answer-index-zero/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 49595678408,
+      "kind": "negative",
+      "name": "080-concrete-per-input-answer-index-zero",
+      "record_sha256": "24ead530fc0065277e86898e5f5a0ff8772bd794b77529a92bf77134a404bc6e",
+      "returncode": 1,
+      "stderr_sha256": "00da4dad40c680283c289d763f456c19d7745c97cb660ab312493d7724e45421",
+      "stdout_sha256": "8236a198cebddac3660ad1bc130d7d40f029b4f65c44cb0cb154221f96d88091"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-launch-flag-inverted",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 17080,
+              "byte_start": 17019,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-actual-launch-flag-inverted/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 56047888295,
+      "kind": "negative",
+      "name": "081-concrete-actual-launch-flag-inverted",
+      "record_sha256": "4f31b1cd0e5be653f6ea7a0270a91d9fad6422cb3cc300ba2be3e76c16e006b1",
+      "returncode": 1,
+      "stderr_sha256": "95357f00f4e9b6bc2d5bc311e7cae64d09fce8b7393365881427f578aae677e0",
+      "stdout_sha256": "970c127651806b3d0beea112efefbc08dcf2eac453170c360cb690da55aed815"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-submission-generation-zero",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 17141,
+              "byte_start": 17080,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-actual-submission-generation-zero/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 53569262114,
+      "kind": "negative",
+      "name": "082-concrete-actual-submission-generation-zero",
+      "record_sha256": "28174d376a326ca2b27b889825c6c6534ff00db09e2daa3c61644c450b4747b8",
+      "returncode": 1,
+      "stderr_sha256": "88a32c6acc28d93b65d4493b39c20fcf48002c77bb2f5def7ffbe8fd4c24f3e2",
+      "stdout_sha256": "8866118d6d91088bfdefc55dec7ce6d5b2ad270226c305afdd15fc2414a04433"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-family-cursors-swapped",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 17079,
+              "byte_start": 17018,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-actual-family-cursors-swapped/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 52570421523,
+      "kind": "negative",
+      "name": "083-concrete-actual-family-cursors-swapped",
+      "record_sha256": "dc05c97437e658dc67097a6d87473f0716e51b13f63db03576d8fb9a74638f8e",
+      "returncode": 1,
+      "stderr_sha256": "e2060d145c0ba7ae762ecd3b9507bc1a24c301ec30562a71a8a2a4cae6403fc3",
+      "stdout_sha256": "9dca660e9da0096358d470bade08143ef4aa0370522d7aad16e569f3c5c7b5ea"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "returned-error-substituted",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 14412,
+              "byte_start": 14342,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-returned-error-substituted/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 80224159357,
+      "kind": "negative",
+      "name": "084-concrete-returned-error-substituted",
+      "record_sha256": "f61183fd11a398126ce24503c885c9d55a3c9cf22964dc8da39bac55aceabfd4",
+      "returncode": 1,
+      "stderr_sha256": "6cc876e586cda540416fce0931e831c4297fe2e400ae5de42afc827bd853f48a",
+      "stdout_sha256": "4e8e3fc29a99d29c79a266183c210861ceead3d2854313b8a2a398234c1f8c85"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "returned-pending-demoted",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 14412,
+              "byte_start": 14342,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-returned-pending-demoted/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 77690022494,
+      "kind": "negative",
+      "name": "085-concrete-returned-pending-demoted",
+      "record_sha256": "f6df051bd8082f930337ca4db31bc393091511de083c5fd53849cb4b9f938f9e",
+      "returncode": 1,
+      "stderr_sha256": "fddc510aa41031851c733a71b2fa1adf4b1d28c71a2d58b5ed6ca1815020e29e",
+      "stdout_sha256": "adbc4b5a638e694e8d3a649867d3df058cca500c52e57f57bd80dfc66527976e"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "returned-unknown-demoted",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 14412,
+              "byte_start": 14342,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-returned-unknown-demoted/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 98228633212,
+      "kind": "negative",
+      "name": "086-concrete-returned-unknown-demoted",
+      "record_sha256": "2ae3db6c02ee6c0698add3a147f9dabd37489b32b7029cf96999d0237444b0b1",
+      "returncode": 1,
+      "stderr_sha256": "55f2127c1f33ff5fe738c59df1488c1e2477212d63f5f347b388d42791c255ed",
+      "stdout_sha256": "68deb15bdad1c7d17d3a00cb6af99682014b3a834251a2a3cead762f6b5e6af5"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "consumed-only-on-success",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 13905,
+              "byte_start": 13889,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-consumed-only-on-success/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 80409950658,
+      "kind": "negative",
+      "name": "087-concrete-consumed-only-on-success",
+      "record_sha256": "b9db20e48f47c7bb4933630e18bc6e25014ce2fd72f55112abed348c195b7197",
+      "returncode": 1,
+      "stderr_sha256": "0fec4c24e53211b55c4cbe24162369be6d97d0c979e3f2e93326c7ae36f435f1",
+      "stdout_sha256": "a3e3a2005a8563550527fc97dc172e9b8245374214c0feba1d6bcbfd8d6cea1d"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "receipt-advance-derived-from-success",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 17248,
+              "byte_start": 17187,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-receipt-advance-derived-from-success/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 67035170296,
+      "kind": "negative",
+      "name": "088-concrete-receipt-advance-derived-from-success",
+      "record_sha256": "43c4a5e39b2317676d17e6a2da9e093ff2d128d5d4c7f5cb201a4dc4453fea0c",
+      "returncode": 1,
+      "stderr_sha256": "199e0665bf94e3be2b742ca0c5065caef1e39b1454d6051a0871399abf75bf34",
+      "stdout_sha256": "f7236628ca0155f7a156614ba50ae789b8d290eded76a5c14de1c5b48d7ddccf"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "trace-prefix-dropped",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 13905,
+              "byte_start": 13889,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-trace-prefix-dropped/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 70771080729,
+      "kind": "negative",
+      "name": "089-concrete-trace-prefix-dropped",
+      "record_sha256": "494d3b2ec8ec857b66bc79bf5a73c37c6cd3559c0833b29ced698d50849a3f48",
+      "returncode": 1,
+      "stderr_sha256": "78411e241cd9f201ed8f29838248404be24f45947d092017785c024a014bee15",
+      "stdout_sha256": "89a512636fcef014d99a435faa3468b617b0fb9b8f27e3e4aad14903d03810ea"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "trace-prefix-reversed",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 13905,
+              "byte_start": 13889,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-trace-prefix-reversed/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 95497917775,
+      "kind": "negative",
+      "name": "090-concrete-trace-prefix-reversed",
+      "record_sha256": "ce1b01ba7589752ec4c81a5b835fa5146afc3c002412e9eb8090ef67b15ff74c",
+      "returncode": 1,
+      "stderr_sha256": "53cafa4c7c6b755a8de4a5630258e16718105238b526f2275b6c349b18a78569",
+      "stdout_sha256": "b5e5989a59a04bc071258a32a04e0dbf6d4f69b7a5647f919d083f2f48657947"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "receipt-credit-answer-inverted",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 17080,
+              "byte_start": 17019,
+              "message": "assertion failed",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-receipt-credit-answer-inverted/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "assertion failed"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 43580327001,
+      "kind": "negative",
+      "name": "091-concrete-receipt-credit-answer-inverted",
+      "record_sha256": "3909b7c94e2e33fee7d6fc5691ef40b19a16476e7ea8a94489208de9f5d3cbdd",
+      "returncode": 1,
+      "stderr_sha256": "5cd18b8ddf0d174f1544b04cb01eb19f43207d9cfdd9a21cda24683f6fbee112",
+      "stdout_sha256": "47bc92babf4660e60d93204d4ba3a1baa2cf66321434f4e9fff9936e9147b2c4"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-allocation-generation-zero",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6974,
+              "byte_start": 6890,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-observed-credit-allocation-generation-zero/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 71833435986,
+      "kind": "negative",
+      "name": "092-concrete-observed-credit-allocation-generation-zero",
+      "record_sha256": "824642fdd0acd548b45691a1a60fc97e417b5d61242c141e5e6a6e041fbf4cf3",
+      "returncode": 1,
+      "stderr_sha256": "af30203cd10cb88a9fa2258bea996b11a3b1e4aa2322bf5bbf36fa59ef582005",
+      "stdout_sha256": "2c16163c6fff99d36d84422034412747fc1f489a7824b4cef5849cca7f1328ad"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-allocation-local-zero",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6974,
+              "byte_start": 6890,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-observed-credit-allocation-local-zero/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 75648847541,
+      "kind": "negative",
+      "name": "093-concrete-observed-credit-allocation-local-zero",
+      "record_sha256": "626913c7c39472bcfe968170a6c01586044d1141a37bb86c6b64618e8e64acbf",
+      "returncode": 1,
+      "stderr_sha256": "6b28414c2fd4799c059731d51aa3fabe38a33825339d05194f3df952bc75a583",
+      "stdout_sha256": "b2e57f3467b24ab9c5ff05469cb5bf6515e499c3b47fb08d6db65e37b263dfe3"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-device-generation-zero",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6974,
+              "byte_start": 6890,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-observed-credit-device-generation-zero/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 75394210731,
+      "kind": "negative",
+      "name": "094-concrete-observed-credit-device-generation-zero",
+      "record_sha256": "f59980f694c692408c391b0e954df7dc1a18e2f3e5538bf9dcc521af6db0125a",
+      "returncode": 1,
+      "stderr_sha256": "a8013eea85fa339514a825e179a7ad074aff89d6da9c542798536d27ea15bc8e",
+      "stdout_sha256": "775b7d6a9c6b8d93dad233df87a9727340454e69c203b45bfa8d78ceb942a46f"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-device-local-zero",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6974,
+              "byte_start": 6890,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-observed-credit-device-local-zero/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 72967959386,
+      "kind": "negative",
+      "name": "095-concrete-observed-credit-device-local-zero",
+      "record_sha256": "3d81329896c9da796940e4a4a60c741c41b7e335e82e20e812c9c8e9623ed923",
+      "returncode": 1,
+      "stderr_sha256": "75376fd4ff0b46657657ccc5be6b578dafe3728789e4c191c5008fcddd6ac9bf",
+      "stdout_sha256": "20fab10148991ec081c74605e66cfc46ad70fad4fd6b0cb67810a4c60a40acf6"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "observed-credit-byte-length-zero",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6974,
+              "byte_start": 6890,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-observed-credit-byte-length-zero/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 73672087560,
+      "kind": "negative",
+      "name": "096-concrete-observed-credit-byte-length-zero",
+      "record_sha256": "a172e1427aacb42e035024cc80b727b340c8d9cb97c2a78d73a199355013b037",
+      "returncode": 1,
+      "stderr_sha256": "4cb076fa3487300f5fed9929fc7724e91185c994572e5855524c187dc67ec92f",
+      "stdout_sha256": "fe48e75c84e100add9e1bab800a36b9e68c3374c142288308f108ec76f8ae38b"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-active-count-cross-wired",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 13097,
+              "byte_start": 13063,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-actual-active-count-cross-wired/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 58359240430,
+      "kind": "negative",
+      "name": "097-concrete-actual-active-count-cross-wired",
+      "record_sha256": "23d6a92ab077e587258cf814f6b9a85d63463af46c719592e1c700028fc288b2",
+      "returncode": 1,
+      "stderr_sha256": "89b4be0b43ee765cb3b0c8a410ad6541ed009ef7971c22b6673d7274473ad384",
+      "stdout_sha256": "d0f0c5225b3093cccd96ffdfb21defb549d329a0c2a76f355d19b33fabc05a96"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "actual-queued-count-cross-wired",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 13247,
+              "byte_start": 13206,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-actual-queued-count-cross-wired/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 67497002684,
+      "kind": "negative",
+      "name": "098-concrete-actual-queued-count-cross-wired",
+      "record_sha256": "bc41bf46371fa50ffe2d05fdd196286487270059704102fd8aab0f5c907a4667",
+      "returncode": 1,
+      "stderr_sha256": "7b9f027d973d37fab2cb2f03c6e626316eb7320064c5736393da96a9e73bb45d",
+      "stdout_sha256": "c27bc60ef9c054948499ad1b6139c3ff1161496f18ab65d86af0bcabae392c2f"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "composed-unknown-stops-later-validation",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 17628,
+              "byte_start": 17565,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-composed-unknown-stops-later-validation/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 69657474573,
+      "kind": "negative",
+      "name": "099-concrete-composed-unknown-stops-later-validation",
+      "record_sha256": "ffc891e9fcb40d2b6c7b63415455f3984bcec9755537df106d5c146d69e0e886",
+      "returncode": 1,
+      "stderr_sha256": "bccef1d792549a39effdebe4c2db1fc0a9ba0fce986a781d4ae77a034553c152",
+      "stdout_sha256": "1b544c970c3382e048a6ba9c61625528996859d80cb7087f2836f19ac3f7cfce"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "composed-error-swallowed",
+          "errors": 1,
+          "family": "concrete",
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 20688,
+              "byte_start": 20187,
+              "message": "invariant not satisfied at end of loop body",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-composed-error-swallowed/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "invariant not satisfied at end of loop body"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 64564042649,
+      "kind": "negative",
+      "name": "100-concrete-composed-error-swallowed",
+      "record_sha256": "4d98f4c24f4f8c5d7a0fdddd68cfb5323cd48e489a92b619da8de411004a5dda",
+      "returncode": 1,
+      "stderr_sha256": "8f32039409d348b7641a60920b7e844189e16d5e887617dad7b4bc6239b9d19f",
+      "stdout_sha256": "41e322736a8b80edd07dd7d00d0746651f4371bac095abf99b07f812db0cfb9e"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active_lookup-constant-error",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": true,
+            "boundary": "actual-journal-result-equality",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "result == queued_active_lookup_decision_v1(old(self).versions.journal, reference)"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4656,
+              "byte_start": 4575,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-active_lookup-constant-error/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 67887536753,
+      "kind": "negative",
+      "name": "101-concrete-active_lookup-constant-error",
+      "record_sha256": "271628dde6f2c49956e288889a1f0f9bfe9a18b158b1fc76f9d6efced3f23717",
+      "returncode": 1,
+      "stderr_sha256": "a15f82bdbdd2439a6b262f60906cb9b80e2049b9f12f9acf2b43b808eeaeec05",
+      "stdout_sha256": "d6031d8f196493f04a1a0889be502e5a60cf76c8764a1ed2e20a6642a444bf89"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active_lookup-error-coerced",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": true,
+            "boundary": "actual-journal-result-equality",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "result == queued_active_lookup_decision_v1(old(self).versions.journal, reference)"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4656,
+              "byte_start": 4575,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-active_lookup-error-coerced/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 81579513567,
+      "kind": "negative",
+      "name": "102-concrete-active_lookup-error-coerced",
+      "record_sha256": "d9495cab6c219006037bcd7d21b458ef7c316c2fafae7baf9180b10283240616",
+      "returncode": 1,
+      "stderr_sha256": "cbe91067b958d5265367bfcc314c926ffa2895702156cce213ad44dad42b3470",
+      "stdout_sha256": "df8bb5c0b9ebfcc4800d5fa294d06826ae4a4c870c0afe19e5dfd666b9b4c305"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active_lookup-prefetch-status",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": false,
+            "boundary": "wrapper-ghost-trace-only",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "final(self).calls@ == old(self).calls@.push(Call::ActiveLookup(reference))"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 4557,
+              "byte_start": 4483,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-active_lookup-prefetch-status/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 73581089712,
+      "kind": "negative",
+      "name": "103-concrete-active_lookup-prefetch-status",
+      "record_sha256": "9b3d85c36a6091094fbed1da9624397b739fe36542f115a7ff807b51ca2c3d37",
+      "returncode": 1,
+      "stderr_sha256": "6ea67de6c6878f93d61cb19fee2f1c18257bfac12db5ffbc9b695325046e1455",
+      "stdout_sha256": "ff668894a18652650c612800be4b5feee58874c5419a266c9b927e86421e3412"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active_status-constant-error",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": true,
+            "boundary": "actual-journal-result-equality",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "result == queued_active_status_decision_v1(old(self).versions.journal, reference)"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 5225,
+              "byte_start": 5144,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-active_status-constant-error/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 76377953657,
+      "kind": "negative",
+      "name": "104-concrete-active_status-constant-error",
+      "record_sha256": "1797bb4366a153365e5fb20e72001a93e14ca7143e0bcbbfd3b5576d56bd12f8",
+      "returncode": 1,
+      "stderr_sha256": "bc6a5c3f3e361caf9c79a974d240f295685ec81b9cd80ee14a91d566c4071128",
+      "stdout_sha256": "6320d2338cbb926a45199ba8a5f7e63731cfb737a65bc5d10b02b8562afea5ed"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "active_status-error-coerced",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": true,
+            "boundary": "actual-journal-result-equality",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "result == queued_active_status_decision_v1(old(self).versions.journal, reference)"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 5225,
+              "byte_start": 5144,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-active_status-error-coerced/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 89728147178,
+      "kind": "negative",
+      "name": "105-concrete-active_status-error-coerced",
+      "record_sha256": "7908c321b4f4cc627141416408a5410af76f529204df44107b1c3116c9d0d2bb",
+      "returncode": 1,
+      "stderr_sha256": "2b0f5be6518c472fabc95dbf1c04d413da0593452362611b5be544fa02c37b20",
+      "stdout_sha256": "3af68eff4fdb2f03ebedee1a718c88e095c45ef7ed4eea69a0bcf115a6489ce4"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued_lookup-constant-error",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": true,
+            "boundary": "actual-journal-result-equality",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "result == reads::lookup_decision_v1(old(self).versions.journal, reference)"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 5858,
+              "byte_start": 5784,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-queued_lookup-constant-error/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 85031449495,
+      "kind": "negative",
+      "name": "106-concrete-queued_lookup-constant-error",
+      "record_sha256": "d7ed4a1451590b9d39cf0a810baec3369595c18c186714c654dd03eba0c0922d",
+      "returncode": 1,
+      "stderr_sha256": "21ed298b1a740f7a043acc4005381681265444078b55b52b39e359aa35e93a83",
+      "stdout_sha256": "c3deb4aea1884de181fb94edaea9cb2e04062070efee57420a94fcb16c66ce88"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued_lookup-error-coerced",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": true,
+            "boundary": "actual-journal-result-equality",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "result == reads::lookup_decision_v1(old(self).versions.journal, reference)"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 5858,
+              "byte_start": 5784,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-queued_lookup-error-coerced/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 85887436403,
+      "kind": "negative",
+      "name": "107-concrete-queued_lookup-error-coerced",
+      "record_sha256": "fd3859ba0bd6a3a8e251142ecde072635466a308277e9b8544df72161249f3f9",
+      "returncode": 1,
+      "stderr_sha256": "c76b802f338b9d48378e94d286725e77c6e84920abcfd5eb5d577f948c35b4f7",
+      "stdout_sha256": "7763d9b4736910f922e96f0d3c3ee0aef4aa98c46fa0321203499734cb08ac8b"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued_status-constant-error",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": true,
+            "boundary": "actual-journal-result-equality",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "result == reads::status_decision_v1(old(self).versions.journal, reference)"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6426,
+              "byte_start": 6352,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-queued_status-constant-error/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 98934135532,
+      "kind": "negative",
+      "name": "108-concrete-queued_status-constant-error",
+      "record_sha256": "94cd5b5561deb696a2ff7622c81e56547cc53675dd910f2cdbe7fed43498c76c",
+      "returncode": 1,
+      "stderr_sha256": "31f85019bffa34db0b1219628e2847036fb6bcf50580c5b8f5f92997eee0cc75",
+      "stdout_sha256": "23a6c197b6ce4aa1365a63b0c6fcbae3aea7ec9c374cc850a39b6cc6c2904669"
+    },
+    {
+      "classification": {
+        "accepted": true,
+        "classification": {
+          "case": "queued_status-error-coerced",
+          "errors": 1,
+          "family": "concrete",
+          "forwarding": {
+            "actual_result_failure_observed": true,
+            "boundary": "actual-journal-result-equality",
+            "inner_query_call_count_proved": false,
+            "primary_expression": "result == reads::status_decision_v1(old(self).versions.journal, reference)"
+          },
+          "full_root": true,
+          "historical_capture_is_qualified_kill": false,
+          "intended_primary_spans": [
+            {
+              "byte_end": 6426,
+              "byte_start": 6352,
+              "message": "postcondition not satisfied",
+              "path": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1/projections/concrete-queued_status-error-coerced/crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs"
+            }
+          ],
+          "logical_diagnostic_accepted": true,
+          "logical_messages": [
+            "postcondition not satisfied"
+          ],
+          "qualified_kill": false,
+          "signed_campaign_qualified": false,
+          "source_and_process_binding_required": true,
+          "verified": 213
+        }
+      },
+      "elapsed_ns": 81808721505,
+      "kind": "negative",
+      "name": "109-concrete-queued_status-error-coerced",
+      "record_sha256": "93c7b584f5b663373f5b825542074c3c9fe6a85a69db5ca113a09f1340918318",
+      "returncode": 1,
+      "stderr_sha256": "3bfc7387acba9049076d61a8409fbf77f38c2f6eef340790331df4026eaf269c",
+      "stdout_sha256": "f1f3e664a1b77d0415695cca21d1a5a9f8a450732e49dbff43216f2c0dbeb4f6"
+    }
+  ],
+  "unlaunched_stages": [
+    "110-concrete-after",
+    "111-tool-release-after",
+    "112-signature-after"
+  ]
+}

@@ -83,6 +83,9 @@ jobs:
           python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-input-diagnostics.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-journal-observers.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-journal-diagnostics.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-journal-composition.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-journal-composition-mutations.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-journal-composition-diagnostics.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-routing.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-owned-storage.py
           python3 -I -B crates/fe2o3-runtime-model/verus/test-retained-pair-post-catch.py

@@ -17,22 +17,26 @@ class Calibration(unittest.TestCase):
 
     def test_exact_production_closure_and_schemas(self):
         check.audit(self.sources)
-        self.assertEqual(check.FILES, [check.PROOF, check.DEFINITIONS, check.BODY])
+        self.assertEqual(check.FILES, [check.PROOF, *check.PARTS, check.BODY])
+        self.assertEqual(len(check.FILES), 6)
         self.assertNotIn("producer_input_fold_body!(", self.sources[check.DEFINITIONS])
         self.assertIn("producer_input_validate_body!(", self.sources[check.DEFINITIONS])
         check.controller_source()
 
     def test_complete_fields_and_native_forwarders(self):
-        proof = self.sources[check.DEFINITIONS]
         for old, new in (
             ("content_lineage: u64", "content_lineage: u32"),
             ("backend_submission: u64", "backend_submission: u32"),
             ("journal: Option<ContextAllocationReferenceV1>", "journal: Option<u64>"),
             ("enum RuntimeAccessV1 { Read, Write, ReadWrite }", "enum RuntimeAccessV1 { Read, Write }"),
         ):
+            paths = [path for path in check.PARTS if old in self.sources[path]]
+            self.assertEqual(len(paths), 1)
+            path = paths[0]
+            proof = self.sources[path]
             self.assertEqual(proof.count(old), 1)
             altered = dict(self.sources, **{})
-            altered[check.DEFINITIONS] = proof.replace(old, new)
+            altered[path] = proof.replace(old, new)
             with self.assertRaises(ValueError):
                 check.schemas(altered)
         for name in ("observe_active_lookup", "observe_active_status", "observe_queued_lookup", "observe_queued_status", "observe_live", "observe_expected_credit"):
@@ -95,13 +99,13 @@ class Calibration(unittest.TestCase):
             changed[check.OWNER] = changed[check.OWNER].replace(old, new)
             with self.assertRaises(ValueError):
                 check.scan_bridges(changed)
-        proof = self.sources[check.DEFINITIONS]
+        proof = self.sources[check.OUTCOMES]
         self.assertEqual(proof.count("decreases "), 2)
         self.assertIn("dependencies@.contains(*dependency)", proof)
         self.assertIn("sources@[j].region == source.region && sources@[j].record == source.record", proof)
 
     def test_measured_count_and_exact_selector_policy(self):
-        self.assertEqual(check.EXPECTED_VERIFIED, 42)
+        self.assertIsNone(check.EXPECTED_VERIFIED)
         leaf = types.SimpleNamespace(LOGICAL_ERRORS={"postcondition not satisfied"})
         self.assertIsNone(check.SELECTION_NOTES)
         for focus in (check.SELECTOR, *check.SCAN_SELECTORS):
@@ -112,7 +116,8 @@ class Calibration(unittest.TestCase):
                 check.selection_notes(leaf, focus)
         with self.assertRaises(ValueError):
             check.campaign()
-        self.assertEqual(check.controller().EXPECTED["verified"], 42)
+        with self.assertRaises(ValueError):
+            check.controller()
         original = check.EXPECTED_VERIFIED
         try:
             for value in (None, True, 0, -1, 41, 43, "42"):

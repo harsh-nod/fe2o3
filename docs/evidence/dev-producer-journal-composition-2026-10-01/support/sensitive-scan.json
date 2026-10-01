@@ -1,0 +1,20 @@
+{
+  "accepted": true,
+  "errors": [],
+  "hits": [],
+  "limitations": [
+    "Known current environment values and JSON credential fields only.",
+    "JSON keys must be literal ASCII; very long split values may exceed overlap.",
+    "Git pack/bundle compression is not decoded by this scanner."
+  ],
+  "scanner_sha256": "d67d508215343edce6b34185927c9efb93dda5c0ab68f84a82be75538f35f99f",
+  "scope": [
+    "/mnt/c/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1",
+    "/mnt/c/fe2o3-a2-signed-concrete-completion-20261001-attempt-1"
+  ],
+  "stats": {
+    "archive_members": 2876,
+    "bytes": 117402649,
+    "files": 6
+  }
+}

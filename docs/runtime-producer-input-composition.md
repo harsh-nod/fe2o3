@@ -8,16 +8,25 @@ implementations behind the typed observation interface.
 
 ## Source Structure
 
+The current source factors runtime declarations, compared journal
+declarations, outcome formulas, and prefix logic for the
+[concrete journal composition](runtime-producer-journal-composition.md).
+The predecessor evidence below remains bound to its original signed sources;
+the changed conditional roots have separate composed 109+3 qualification, as
+described in the concrete composition record. The original 112-stage campaign
+remains rejected; this is not an A2 milestone-completion claim.
+
 The native `producer_input_fold_body.rs` file is unchanged. The validator and
 fold specifications have been extracted into shared proof modules; the native
 runtime still invokes the same allocation-free validation and scan bodies.
 
-- The leaf proof has three inputs: its root, shared validator definitions, and
+- The current leaf proof has six inputs: its root, conditional adapter, shared
+  runtime declarations, compared journal declarations, outcome formulas, and
   the actual native macro file.
 - The standalone fold has three inputs: its root, shared fold specification,
   and the actual native macro file.
-- The composition has four inputs: its root, both shared proof modules, and
-  the actual native macro file.
+- The current conditional composition has eight inputs: the leaf components
+  without its root, the composition root, shared prefix logic, and fold spec.
 
 The composition adapter executes the actual validator with the correct input
 index, submission identity, launch flag, and active/queued cursors. Ghost
@@ -30,11 +39,14 @@ are not an assumed coherent snapshot of an interior-mutable native account.
 Each reached native credit predicate must still be related to its actual fresh
 call by subsequent refinement work.
 
-## Current Evidence
+## Prior Signed Evidence
 
-Complete, unfiltered component proofs have reported 42 leaf obligations,
+The preceding complete, unfiltered component proofs reported 42 leaf obligations,
 13 fold obligations, and 64 composition obligations, each with zero errors.
-These are separate verifier obligation counts, not additive runtime properties.
+These are separate verifier obligation counts, not additive runtime properties
+or current-root qualifications. The current six- and eight-input closures were
+separately qualified at 42/0 and 64/0 through the composed evidence described
+in the concrete composition record; the older results are not promoted.
 Source-only controls reconstruct the preceding complete proof definitions and
 bind all 323 native Rust files and five compared model-schema files in the
 qualified candidate. The integrated guards bind 327 native files plus the same

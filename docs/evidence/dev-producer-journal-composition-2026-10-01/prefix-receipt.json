@@ -1,0 +1,9 @@
+{
+  "archive_member_readback_verified": true,
+  "archive_sha256": "cc3135a54ac6fa7271641a8fb9d7052075eba107070c25cee4bd754b4bc43ff1",
+  "durability_acknowledgment": "requires successful returned terminal receipt after directory fsync",
+  "manifest_sha256": "87c0eab6bebfea56289cb338d4f0469d663709a8e42c68e43361411ae0e54a7e",
+  "members": 3795,
+  "source_packet": "/run/shm/fe2o3-a2-signed-concrete-qualification-20261001-attempt-1",
+  "tmpfs_retained": true
+}
