@@ -946,10 +946,13 @@ and their new tests are not yet qualified by successful integrated execution.
 | r251 | `976394c8688ef756ceaa510fb9af657e8b0358a4` | Five temporary-identity borrow errors; no tests ran |
 | r252 | `8c2c00387cd219cb5a813768861cf9e3454ee44d` | One lowerer test match omitted `CopyIndex`; no tests ran |
 | r253 | `2abc332a16194fe6fbfd7d4c831e91ce251686f9` | Compiler/test-target check stopped on eight expansions of a missing codec-error import |
+| r254 | `ad9b422a134cb1cf0ed5e98e598edfa7d4259feb` | Compiler/test-target check stopped on three private-field accesses in a Pliron test helper |
+| r255 | `024e660d6d68c22c0757642b338aed973b1f2ca0` | Compiler/test-target check stopped on one temporary-array lifetime error in the KFD formation test |
 
-All five runs retained unchanged source/tool inventories. The candidate repairs
+All seven runs retained unchanged source/tool inventories. The candidate repairs
 use the actual current owner APIs, own receipt digest bytes, retain exhaustive
-test mutation classification, and import the existing shared codec error. No
+test mutation classification, import the existing shared codec error, use the
+sealed graph interface in the mutation test, and retain borrowed test rows. No
 acceptance rule, proof requirement, or resource assertion was removed.
 Log SHA-256, respectively:
 
@@ -958,6 +961,41 @@ Log SHA-256, respectively:
 - r251: `18c3efb693c2dc51701e0a5d624359ce66edb26afb02f47e53cfd64c408b1de1`
 - r252: `b4d9f94861d0f97344be704dcad6a50f45b2adeef180f48797365e73120ff114`
 - r253: `e8e16ec352f58a078a7236cd3b79c011fd62ee123fe1a3217ffa3ccc986f4b16`
+- r254: `7456378f6741103bcd2dada5cec3916a601222558f27796c5326eb8d1521faf6`
+- r255: `39eb74c478aa58bb72c0884430ff15d29e131e206ebab117981b51db5cd145bf`
+
+### Scoped Formal and Contract Tests
+
+The shared formal engine now analyzes actual scoped index reads, checked
+accesses, and unconditional pointer formations without inventing a scalar
+slice-length definition. Unused formations retain independent obligations.
+Global-X indexing is not treated as injective across multiple Y/Z invocations;
+unsupported ancestry, alignment, arithmetic, and legacy receipt encodings refuse.
+These reports describe required checks, not discharged runtime or proof premises.
+
+Run r256 on frozen candidate `28e06556cb488bced5f003dc726789a53ce31e09`
+passed **531 tests, zero failures, zero ignored**:
+
+| Component | Selected Tests Passed |
+| --- | ---: |
+| Kernel IR and formal memory | 465 |
+| Kernel analysis | 7 |
+| Target replay | 8 |
+| Descriptor contracts | 27 |
+| KFD contracts | 24 |
+
+The selection includes all new scoped formal/index controls, the exact-owner
+formal report tests, typed target-coordinate and LLVM replay, and V28 descriptor
+and KFD formation controls, alongside selected historical formal-memory tests.
+It is not the full workspace suite. The run ended at 2026-10-01 03:03:26 UTC
+with unchanged source/tool snapshots. Log SHA-256:
+`e22ae3517b37b6d799036fa92e287135a5261c62d4d0959fd45d3efd5790fb41`.
+
+Candidate operation-level source clauses and genuine-Rust harness probes are
+also authored. They remain unexecuted: generated content is not a signed source
+proof, and these tests do not validate the original-to-final compiler path.
+Source completion, host/runtime integration, protected proof execution, and GPU
+qualification remain outstanding. No milestone or kernel gains end-to-end credit.
 
 ### Isolated Install Reached, Provisioning Incomplete
 
