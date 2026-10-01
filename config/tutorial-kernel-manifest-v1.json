@@ -11813,12 +11813,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-attnres-aggregate-explicit-reuse",
+                "kernelSymbol": "gfx950_attnres_aggregate"
+              },
+              "selectionSha256": "89817ec0dbfca467bd53f1708bb29c962a9e629e981b78baec21e01d147819aa",
+              "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
+              "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
+              "functionUtf8Offset": 1111
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -11845,12 +11856,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-attnres-aggregate",
+                "kernelSymbol": "gfx950_attnres_aggregate"
+              },
+              "selectionSha256": "306cd82a30afbf6d0961c57c6e84caaf4c2b3fb0f60dd382d7335299187a5ae2",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 66151
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -11909,12 +11931,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-compressed-hybrid-attention-division-baseline",
+                "kernelSymbol": "gfx950_compressed_hybrid_attention"
+              },
+              "selectionSha256": "be1bdcd6e4ebf00df3f9fb678b31b203abc58e28346c5d233382d558c508d55a",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 55423
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -11941,12 +11974,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-compressed-hybrid-attention",
+                "kernelSymbol": "gfx950_compressed_hybrid_attention"
+              },
+              "selectionSha256": "983b3023d94d82b7fd005cc1b2f226ad1a14a9a107c6d0ab97620bd35580d602",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 55423
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -11973,12 +12017,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-content-sparse-attention-reciprocal-reuse",
+                "kernelSymbol": "gfx950_content_sparse_attention"
+              },
+              "selectionSha256": "ff02eaf9d25136405a3b1cf6867a734add857b44171db7f0b2b01c58b82b6e6d",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 24024
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12005,12 +12060,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-content-sparse-attention",
+                "kernelSymbol": "gfx950_content_sparse_attention"
+              },
+              "selectionSha256": "931ed24b1a99d7ee27c3b3c0cd06f94243ebacd52cf8b2a5c71e886b6fce5715",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 24024
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12037,12 +12103,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-deepseek-sparse-attention",
+                "kernelSymbol": "gfx950_deepseek_sparse_attention"
+              },
+              "selectionSha256": "bcbe1cc54c99b39d67e2ad9f2c623d3086d9c58657b937de63b91f99d260828c",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 42129
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12069,12 +12146,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-four-branch-residual-explicit",
+                "kernelSymbol": "gfx950_four_branch_residual"
+              },
+              "selectionSha256": "3e57210c996d9f54a8b95e361f11ee927e23dabb0f7d9e6580b0f0d9cd292df2",
+              "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
+              "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
+              "functionUtf8Offset": 3730
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12101,12 +12189,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-four-branch-residual:gfx950_four_branch_residual",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-four-branch-residual",
+                "kernelSymbol": "gfx950_four_branch_residual"
+              },
+              "selectionSha256": "9bba0fc57c0b73b0e797e25fa8a7d8e6c3e5c4ddac66398e001f1f21f6fd2ecf",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 69970
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12485,12 +12584,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-kda-decode-baseline:gfx950_kda_decode",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-kda-decode-baseline",
+                "kernelSymbol": "gfx950_kda_decode"
+              },
+              "selectionSha256": "98a190aa4512db7247e0f7d312c28f4b019a8df19428f21db69622c71d32d0fc",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kda_baseline.rs",
+              "sourceSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
+              "functionUtf8Offset": 1610
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12517,12 +12627,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-kda-decode:gfx950_kda_decode",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-kda-decode",
+                "kernelSymbol": "gfx950_kda_decode"
+              },
+              "selectionSha256": "a78891ad119696efad8362c5c4dae73e514cdee4d4d7e3d8a38474b150915fb2",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 10324
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12549,12 +12670,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-kda-prefill-baseline",
+                "kernelSymbol": "gfx950_kda_chunkwise_prefill"
+              },
+              "selectionSha256": "54d4f5cde9b489bafa31c2fdd0e97c202ff08dac8a165d735e42784ebf08d791",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kda_baseline.rs",
+              "sourceSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
+              "functionUtf8Offset": 4908
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12581,12 +12713,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-kda-prefill",
+                "kernelSymbol": "gfx950_kda_chunkwise_prefill"
+              },
+              "selectionSha256": "87b5e4c374d3e3ab39c643a03cdb198c474386f25e710458a5a98abd0bbcd507",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 15126
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12613,12 +12756,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-mhc-sinkhorn-mix-scalar",
+                "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+              },
+              "selectionSha256": "53b278247016d0ad73826ae24e5a39dab5e6016f32301f2a982c65366cc2ab2d",
+              "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
+              "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
+              "functionUtf8Offset": 5895
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -12645,12 +12799,23 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-mhc-sinkhorn-mix",
+                "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+              },
+              "selectionSha256": "78c388fe55698cdad7a999e592d5c511c6d5f8da1d88d978c165f6ab1ae3c0d3",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
+              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "functionUtf8Offset": 73034
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact SIMT source association is bound to this fixture's current feature-selected declaration; compile, simulation, native artifact, generated-host admission, and direct-KFD qualification remain pending on gfx950/mi350."
             }
           },
           {
@@ -14145,10 +14310,12 @@
         "functionUtf8Offset": 1111,
         "kernelSymbol": "gfx950_attnres_aggregate",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact feature-selected ablation declaration is associated with the unchanged whole-file display; this source association does not qualify compilation, simulation, proof, or hardware execution."
       },
       {
         "lessonId": "gfx950-attnres-gr-mhc",
@@ -14156,10 +14323,12 @@
         "functionUtf8Offset": 3730,
         "kernelSymbol": "gfx950_four_branch_residual",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact feature-selected ablation declaration is associated with the unchanged whole-file display; this source association does not qualify compilation, simulation, proof, or hardware execution."
       },
       {
         "lessonId": "gfx950-attnres-gr-mhc",
@@ -14167,10 +14336,12 @@
         "functionUtf8Offset": 5895,
         "kernelSymbol": "gfx950_mhc_sinkhorn_mix",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Exact feature-selected ablation declaration is associated with the unchanged whole-file display; this source association does not qualify compilation, simulation, proof, or hardware execution."
       },
       {
         "lessonId": "gfx950-attnres-performance-lab",
