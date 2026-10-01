@@ -94,12 +94,16 @@ pub use fixed_checked_output_policy8_v1::run_production_fixed_checked_output_pol
 #[path = "production_source_census_driver_v1.rs"]
 mod source_census_driver;
 
+#[path = "production_rustc_driver_v1/engineering_capture_v1.rs"]
+mod engineering_capture_v1;
+
 #[cfg(test)]
 #[path = "production_rustc_driver_fixed_census_invocation_observer_v1_tests.rs"]
 mod fixed_census_invocation_observer_v1_tests;
 
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
+    engineering_capture: bool,
     ranked_memory: bool,
     amdgpu_llvm_output: Option<PathBuf>,
     expected_llvm_target: Option<&'static str>,
@@ -161,6 +165,7 @@ impl Callbacks for ProductionExtractionCallbacksV1 {
                     output,
                     *expected_target,
                     self.census.as_ref(),
+                    self.engineering_capture,
                 )
             } else if let Some(output) = self.amdgpu_llvm_output.as_deref() {
                 extract_amdgpu_llvm_in_active_session_v1(
@@ -682,6 +687,7 @@ pub fn run_production_extraction_driver_v1(args: &[String]) -> Result<(), String
 /// construction and verification, without granting artifact authority.
 pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: true,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -707,6 +713,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: None,
@@ -731,6 +738,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
@@ -767,6 +775,25 @@ pub fn run_production_amdgpu_compiler_handoff_extraction_driver_v1(
     )
 }
 
+/// Retains bounded diagnostic KIR/LLVM beside an inert V2 handoff, without authority.
+pub fn run_production_amdgpu_compiler_handoff_capture_driver_v1(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    engineering_capture_v1::require_v2(
+        env::var_os(EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1).is_none(),
+    )?;
+    run_production_driver_v1(
+        args,
+        ProductionExtractionCallbacksV1 {
+            engineering_capture: true,
+            compiler_handoff_output: Some((output.to_path_buf(), None)),
+            ..ProductionExtractionCallbacksV1::default()
+        },
+        "production diagnostic extraction callback did not reach rustc analysis",
+    )
+}
+
 /// Runs the complete production analysis and lowering transaction and emits
 /// its compiler-bound nested handoff for inert worker integration testing.
 /// The result carries no publication, artifact, load, or launch authority.
@@ -776,6 +803,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -805,6 +833,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -830,6 +859,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -855,6 +885,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v3(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -880,6 +911,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v4(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -905,6 +937,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v5(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
@@ -930,6 +963,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
     output: &Path,
 ) -> Result<(), String> {
     let callbacks = ProductionExtractionCallbacksV1 {
+        engineering_capture: false,
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,

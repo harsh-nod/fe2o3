@@ -125,8 +125,12 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
     output: &Path,
     expected_target: Option<&str>,
     census: Option<&SourceCensusRecorder>,
+    capture: bool,
 ) -> Result<(), String> {
     if env::var_os(EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1).is_some() {
+        if capture {
+            engineering_capture_v1::require_v2(false)?;
+        }
         return extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
             tcx,
             output,
@@ -140,6 +144,7 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
         census,
     )?;
     if ordered_composition_normal_v1::selected()? {
+        engineering_capture_v1::require_generic_v2_route(capture, "ordered-composition")?;
         return ordered_composition_normal_v1::extract_handoff(
             transaction,
             output,
@@ -147,15 +152,25 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
         );
     }
     if transaction.has_authenticated_physical_lds_exchange_v22() {
+        engineering_capture_v1::require_generic_v2_route(
+            capture,
+            "MIR39/KIR22 physical-lds-exchange",
+        )?;
         return physical_lds_exchange_v22::extract_handoff(transaction, output, expected_target);
     }
     if transaction.has_authenticated_physical_global_copy_v21() {
+        engineering_capture_v1::require_generic_v2_route(
+            capture,
+            "MIR38/KIR21 physical-global-copy",
+        )?;
         return physical_global_copy_v21::extract_handoff(transaction, output, expected_target);
     }
     if transaction.has_authenticated_physical_entry_v20() {
+        engineering_capture_v1::require_generic_v2_route(capture, "MIR37/KIR20 physical-entry")?;
         return physical_entry_v20::extract_handoff(transaction, output, expected_target);
     }
     if transaction.has_authenticated_complete_body_v19() {
+        engineering_capture_v1::require_generic_v2_route(capture, "MIR36/KIR19 complete-body")?;
         return complete_body_v19::extract_handoff(transaction, output, expected_target);
     }
     let mut target_account =
@@ -164,12 +179,29 @@ pub(super) fn extract_amdgpu_compiler_handoff_in_active_session_v1(
         .with_budget(|budget| transaction.lower_production_target(budget))
         .map_err(|error| error.to_string())?;
     validate_compiler_handoff_target(lowered.target_name(), expected_target)?;
+    let diagnostic_kir = if capture {
+        match engineering_capture_v1::prepare_kir(&lowered) {
+            Ok(kir) => Some(kir),
+            Err(error) => {
+                eprintln!("fe2o3 engineering diagnostic capture omitted: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let target_name = lowered.target_name().to_owned();
     let canonical_kernel_ir_version = lowered.canonical_kernel_ir_version();
     let guarded_store_count = lowered.guarded_store_count();
     let handoff = lowered
         .into_inert_worker_handoff_for_extraction()
         .map_err(|error| error.to_string())?;
+    if let Some(kir) = diagnostic_kir
+        && let Err(error) =
+            engineering_capture_v1::capture(&kir, handoff.module_bytes(), &target_name, output)
+    {
+        eprintln!("fe2o3 engineering diagnostic capture omitted: {error}");
+    }
     std::fs::write(output, handoff.canonical_bytes()).map_err(|error| {
         format!(
             "failed to write inert production compiler-module handoff extraction `{}`: {error}",

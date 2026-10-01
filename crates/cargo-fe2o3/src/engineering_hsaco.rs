@@ -85,6 +85,7 @@ struct Options {
     profile: ProductionAmdTargetProfileV1,
     crate_name: String,
     output_root: PathBuf,
+    diagnostic_capture_root: Option<PathBuf>,
     extractor: FileClaim,
     extractor_backend: FileClaim,
     worker: FileClaim,
@@ -128,6 +129,9 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
         .map_err(|error| format!("cannot identify invocation directory: {error}"))?;
     let options = parse(args, &current_dir)?;
     validate_fresh_output_root(&options.output_root)?;
+    if let Some(root) = &options.diagnostic_capture_root {
+        support::diagnostic_capture::validate_root(root, &options.output_root)?;
+    }
 
     let scratch = ScratchDirectory::new()?;
     let pinned_cargo = pin_claimed_executable("Cargo", &options.cargo)?;
@@ -257,7 +261,27 @@ fn run(args: &[OsString]) -> Result<PathBuf, String> {
         &extractor_bytes,
         &extractor_backend_bytes,
     )?;
-    publish_observation(&options.output_root, &manifest, observation.hsaco_bytes())
+    let published =
+        publish_observation(&options.output_root, &manifest, observation.hsaco_bytes())?;
+    if let Some(root) = &options.diagnostic_capture_root {
+        match support::diagnostic_capture::retain(
+            root,
+            &options.output_root,
+            &scratch.path,
+            &handoff,
+            &manifest,
+            options.profile.device_target(),
+        ) {
+            Ok(Some((sha256, byte_len))) => {
+                eprintln!("FE2O3_ENGINEERING_CAPTURE_COMPLETE_V1 sha256={sha256} bytes={byte_len}")
+            }
+            Ok(None) => eprintln!("fe2o3 engineering diagnostic capture: omitted, ineligible"),
+            Err(error) => {
+                eprintln!("fe2o3 engineering diagnostic capture: omitted, ineligible: {error}")
+            }
+        }
+    }
+    Ok(published)
 }
 
 fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
@@ -266,6 +290,7 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
     }
     let mut crate_name = None;
     let mut output_root = None;
+    let mut diagnostic_capture_root = None;
     let mut extractor = None;
     let mut extractor_sha256 = None;
     let mut extractor_backend = None;
@@ -310,6 +335,9 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
         match argument {
             "--crate" => set_once_string(&mut crate_name, value, argument)?,
             "--output-root" => set_once_path(&mut output_root, value, argument)?,
+            "--diagnostic-capture-root" => {
+                set_once_path(&mut diagnostic_capture_root, value, argument)?
+            }
             "--extractor" => set_once_path(&mut extractor, value, argument)?,
             "--extractor-sha256" => set_once_digest(&mut extractor_sha256, value, argument)?,
             "--extractor-backend" => set_once_path(&mut extractor_backend, value, argument)?,
@@ -412,6 +440,8 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
         profile,
         crate_name,
         output_root,
+        diagnostic_capture_root: diagnostic_capture_root
+            .map(|path| absolute_path(current_dir, path)),
         extractor: required_file_claim(
             current_dir,
             extractor,
@@ -748,12 +778,42 @@ fn conflicting_environment_name(name: &OsStr) -> bool {
 }
 
 const fn usage() -> &'static str {
-    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target <gfx942:xnack-|gfx950:xnack-> --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> --cargo-vendor <absolute-versioned-directory> [--cargo-git-source <https://URL@40-hex-rev>]... [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
+    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target <gfx942:xnack-|gfx950:xnack-> --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> --cargo-vendor <absolute-versioned-directory> [--cargo-git-source <https://URL@40-hex-rev>]... [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] [--diagnostic-capture-root </same-parent/fe2o3-engineering-diagnostics-v1>] -- [Cargo package/feature args]"
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engineering_capture_cli_is_absent_by_default_and_rejects_duplicates() {
+        let root = Path::new("/tmp");
+        let mut args = base_args(root);
+        assert!(
+            parse(&args, root)
+                .unwrap()
+                .diagnostic_capture_root
+                .is_none()
+        );
+        let option = [
+            OsString::from("--diagnostic-capture-root"),
+            root.join("fe2o3-engineering-diagnostics-v1")
+                .into_os_string(),
+        ];
+        args.splice(0..0, option.clone());
+        assert_eq!(
+            parse(&args, root)
+                .unwrap()
+                .diagnostic_capture_root
+                .as_deref(),
+            Some(root.join("fe2o3-engineering-diagnostics-v1").as_path())
+        );
+        args.splice(0..0, option);
+        assert!(parse(&args, root).is_err());
+        assert!(conflicting_environment_name(OsStr::new(
+            "FE2O3_EXTRACT_ENGINEERING_CAPTURE_V1"
+        )));
+    }
 
     fn base_args(root: &Path) -> Vec<OsString> {
         let digest = "11".repeat(32);

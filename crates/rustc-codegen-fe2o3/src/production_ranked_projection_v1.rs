@@ -4731,6 +4731,9 @@ fn retained_ranked_access_source_v1(
 #[path = "production_ranked_projection_v1/private_array_read_source_v1.rs"]
 mod private_array_read_source_v1;
 
+#[path = "production_ranked_projection_v1/ranked_access_source_row_v1.rs"]
+mod ranked_access_source_row_v1;
+
 fn production_access_sources(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -4746,95 +4749,22 @@ fn production_access_sources(
         )
     })?;
     for source in sources {
-        let operation = blocks
-            .get(source.block)
-            .and_then(|block| block.operations().get(source.operation))
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "ranked access correspondence is outside the projected graph",
-            ))?;
-        if source.memory_space == MemorySpaceAttr::Private
-            && matches!(
-                operation,
-                ProductionRankedOperationV1::Access {
-                    kind: AccessKindAttr::Read,
-                    ..
-                }
-            )
-        {
-            if !private_array_read_source_v1::retained_read(types, function, source, facts)? {
-                continue;
-            }
-            if source
-                .semantic_site
-                .is_some_and(|site| ordinals.contains_key(&(site.block, site.statement)))
-            {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "private array read has duplicate source correspondence",
-                ));
-            }
-        } else if !retained_ranked_access_source_v1(source.memory_space, operation) {
-            // Scalar indexed writes are final effects. Literal initializer
-            // components contain no RHS slice queries; later sites reset the
-            // shared cursor. Other private reads remain excluded.
-            if source.memory_space != MemorySpaceAttr::Private
-                || !matches!(
-                    operation,
-                    ProductionRankedOperationV1::Access {
-                        kind: AccessKindAttr::Write,
-                        ..
-                    }
-                )
-            {
-                continue;
-            }
-            // Fixed source/statement/local/type/projection checks only;
-            // no projection, ancestry or value-definition walk.
-            // Existing indexed predicate40 + initializer-dispatch4 + exact
-            // source-site component-counter lookup4 also covers the literal case.
-            facts.charge_private_array_work(48)?;
-            let component = source
-                .semantic_site
-                .and_then(|site| ordinals.get(&(site.block, site.statement)))
-                .copied()
-                .unwrap_or(0);
-            if !private_array_write_source_v1(types, function, source, component) {
-                continue;
-            }
-        }
+        let Some(row) = ranked_access_source_row_v1::row(
+            types,
+            function,
+            blocks,
+            source,
+            |site| ordinals.get(&(site.block, site.statement)).copied(),
+            facts,
+        )?
+        else {
+            continue;
+        };
         let site = source
             .semantic_site
-            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                "ranked access correspondence has no exact semantic site",
-            ))?;
+            .expect("original row requires exact semantic site");
         let ordinal = ordinals.entry((site.block, site.statement)).or_default();
-        let mut retained_source = ProductionRankedAccessSourceV1::new(
-            u32::try_from(site.block).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "semantic access block does not fit u32",
-                )
-            })?,
-            site.statement.map(u32::try_from).transpose().map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "semantic access statement does not fit u32",
-                )
-            })?,
-            *ordinal,
-            u32::try_from(source.block).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "ranked access block does not fit u32",
-                )
-            })?,
-            u32::try_from(source.operation).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "ranked access operation does not fit u32",
-                )
-            })?,
-        );
-        if let Some(extent) = source.output_extent {
-            facts.charge_private_array_work(8)?;
-            retained_source = retained_source.with_output_extent(extent);
-        }
-        retained.push(retained_source);
+        retained.push(row);
         *ordinal = ordinal
             .checked_add(1)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(

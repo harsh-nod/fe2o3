@@ -162,6 +162,7 @@ pub use production_rustc_driver_v1::{
     run_diagnostic_physical_entry_extraction_driver_v20,
     run_diagnostic_physical_global_copy_extraction_driver_v21,
     run_diagnostic_physical_lds_exchange_extraction_driver_v22,
+    run_production_amdgpu_compiler_handoff_capture_driver_v1,
     run_production_amdgpu_compiler_handoff_extraction_driver_v1,
     run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,
     run_production_fixed_checked_output_extraction_driver_v1,

@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) mod diagnostic_capture;
+
 #[derive(Serialize)]
 struct Manifest<'a> {
     schema: &'static str,
