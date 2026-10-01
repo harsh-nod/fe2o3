@@ -9,6 +9,7 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, KirLocalMemoryEffectRefV1 as Effect, MemoryAccess,
+    StorageLayoutKindV1 as LayoutKind, StorageOperationV1 as Storage,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +87,32 @@ fn integer_bits(ty: &Type) -> Result<u16> {
         .ok_or(Error::Statement("consensus fixed cell width"))?)
 }
 
+fn cell_scalar(inv: &Inventory<'_>, ty: &Type, out: &mut Writer<'_, '_>) -> Result<ScalarType> {
+    out.budget.charge_work(5)?;
+    match ty {
+        Type::Scalar(scalar) => {
+            integer_bits(ty)?;
+            Ok(*scalar)
+        }
+        Type::StorageObject(id) => {
+            let layout = inv
+                .owner()
+                .module()
+                .storage_layouts
+                .get(id.0 as usize)
+                .ok_or(Error::Statement("consensus owned scalar storage layout"))?;
+            let LayoutKind::Scalar(scalar) = layout.kind else {
+                return Err(Error::Statement("consensus whole scalar storage only"));
+            };
+            if layout.size != u64::from(integer_bits(&Type::Scalar(scalar))? / 8) {
+                return Err(Error::Statement("consensus exact scalar storage extent"));
+            }
+            Ok(scalar)
+        }
+        _ => Err(Error::Statement("consensus scalar cell representation")),
+    }
+}
+
 fn access(
     inv: &Inventory<'_>,
     ordinal: usize,
@@ -98,15 +125,20 @@ fn access(
         .ok_or(Error::Statement("consensus actual access coordinate"))?;
     let (pointer, memory, stored) = match row.operation.kind {
         OperationKind::Load { pointer, access }
-            if row.operands.len() == 1 && row.results.len() == 1 =>
-        {
-            (pointer, access, None)
-        }
+        | OperationKind::Storage(Storage::ReadValue {
+            address: pointer,
+            access,
+        }) if row.operands.len() == 1 && row.results.len() == 1 => (pointer, access, None),
         OperationKind::Store {
             pointer,
             value,
             access,
-        } if row.operands.len() == 2 && row.results.is_empty() => (pointer, access, Some(value)),
+        }
+        | OperationKind::Storage(Storage::WriteValue {
+            address: pointer,
+            value,
+            access,
+        }) if row.operands.len() == 2 && row.results.is_empty() => (pointer, access, Some(value)),
         _ => return Err(Error::Statement("consensus actual Load or Store")),
     };
     if memory.volatile
@@ -130,10 +162,10 @@ fn access(
     {
         return Err(Error::Statement("consensus private pointer access rights"));
     }
-    integer_bits(&pointer_type.pointee)?;
+    let value_type = Type::Scalar(cell_scalar(inv, &pointer_type.pointee, out)?);
     let value = if let Some(value) = stored {
         if uses[1].value != value
-            || inv.definitions()[uses[1].definition].ty != &*pointer_type.pointee
+            || inv.definitions()[uses[1].definition].ty != &value_type
             || !matches!(
                 inv.effects()[row.effects.start].effect,
                 Effect::Write(AddressSpace::Private)
@@ -143,7 +175,7 @@ fn access(
         }
         Some(uses[1].definition)
     } else {
-        if inv.definitions()[row.results.start].ty != &*pointer_type.pointee
+        if inv.definitions()[row.results.start].ty != &value_type
             || !matches!(
                 inv.effects()[row.effects.start].effect,
                 Effect::Read(AddressSpace::Private)
@@ -180,7 +212,7 @@ fn allocation(inv: &Inventory<'_>, pointer: usize, out: &mut Writer<'_, '_>) -> 
             "consensus exact scalar private allocation",
         ));
     };
-    let bits = integer_bits(element)?;
+    let bits = integer_bits(&Type::Scalar(cell_scalar(inv, element, out)?))?;
     if row.results.len() != 1
         || row.results.start != pointer
         || !row.operands.is_empty()
@@ -378,7 +410,12 @@ impl MemoryPlan {
             let value = value.ok_or(Error::Statement(
                 "consensus representative is an actual Store",
             ))?;
-            if pointer != stored_pointer || access != stored_access {
+            // Each actual access is separately bounded by the allocation above;
+            // an alignment annotation is not part of the stored value identity.
+            if pointer != stored_pointer
+                || access.address_space != stored_access.address_space
+                || access.volatile != stored_access.volatile
+            {
                 return Err(Error::Statement("consensus exact selected access class"));
             }
             let actual = &output.operations()[ordinal];

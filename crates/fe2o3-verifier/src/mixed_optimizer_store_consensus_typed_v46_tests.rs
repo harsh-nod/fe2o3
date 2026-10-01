@@ -17,6 +17,22 @@ const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
     object_bytes: 0,
 };
 
+#[path = "mixed_optimizer_storage_consensus_v53_tests.rs"]
+mod storage_v53;
+
+fn layouts(module: &Module) -> StorageLayoutLimitsV1 {
+    if module.storage_layouts.is_empty() {
+        LAYOUTS
+    } else {
+        StorageLayoutLimitsV1 {
+            rows: 8,
+            edges: 8,
+            containment_depth: 8,
+            object_bytes: 16,
+        }
+    }
+}
+
 fn block(id: u32, operations: Vec<KirOperation>, terminator: Terminator) -> BasicBlock {
     let mut block = BasicBlock::new(BlockId(id));
     block.operations = operations;
@@ -89,15 +105,16 @@ fn diamond(scalar: ScalarType) -> Module {
 }
 
 fn assert_load_not_erased(module: Module) {
+    let layouts = layouts(&module);
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
     let (input, receipt) =
-        Owner::from_module_ref_with_verification_budget_v18(&module, LAYOUTS, &mut budget).unwrap();
+        Owner::from_module_ref_with_verification_budget_v18(&module, layouts, &mut budget).unwrap();
     budget.reserve_storage(receipt.retained_storage()).unwrap();
     let tail = fe2o3_kernel_opt::prepare_owned_cross_block_forwarding_v18(
         &input,
         Default::default(),
-        LAYOUTS,
+        layouts,
         &mut budget,
     )
     .unwrap();
@@ -187,15 +204,16 @@ fn with_pair(
         usize,
     ),
 ) {
+    let layouts = layouts(module);
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
     let (input, receipt) =
-        Owner::from_module_ref_with_verification_budget_v18(module, LAYOUTS, &mut budget).unwrap();
+        Owner::from_module_ref_with_verification_budget_v18(module, layouts, &mut budget).unwrap();
     budget.reserve_storage(receipt.retained_storage()).unwrap();
     let tail = fe2o3_kernel_opt::prepare_owned_cross_block_forwarding_v18(
         &input,
         Default::default(),
-        LAYOUTS,
+        layouts,
         &mut budget,
     )
     .unwrap();
