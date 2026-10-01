@@ -618,8 +618,9 @@ fn byte_function_full_emission_has_independent_work_and_exact_capacity_boundary(
         let text = measured.0.unwrap();
         // Derivation246; two owner checks2, scalar-plan scan3, operation scan6,
         // pointer emission3, block frame2, ordered operation/observation scans6,
-        // return operands2, micro begin1/step6/finish1, dispatcher1; text bytes.
-        let work = 246 + 2 + 3 + 6 + 3 + 2 + 6 + 2 + 1 + 6 + 1 + 1 + text.len();
+        // return operands2, micro begin1/step6/finish1, dispatcher1; the block
+        // and micro-finish each query the final Trap plan once; text bytes.
+        let work = 246 + 2 + 3 + 6 + 3 + 2 + 6 + 2 + 1 + 6 + 1 + 1 + 2 + text.len();
         let storage = floor
             + super::super::super::SOURCE_LIMIT
             + headers::<NoAllocations<'_>>()
