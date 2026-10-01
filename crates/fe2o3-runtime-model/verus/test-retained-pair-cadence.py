@@ -84,10 +84,20 @@ class SourceTests(unittest.TestCase):
             self.reject(guard.SRC / "sdma.rs", before, after, anchor)
             self.sources = guard.snapshot()
 
-    def test_wait_production_change_rejected_but_test_comment_allowed(self):
+    def test_wait_and_both_extracted_numeric_sources_are_bound(self):
+        for path, before, after in (
+            (guard.WAIT, "self.attempts = increment_wait_attempts_v1(self.attempts);", "self.attempts = 0;"),
+            (guard.WAIT_ARITHMETIC, "Duration::new(seconds, nanos)", "Duration::ZERO"),
+            (guard.WAIT_BODY, "const SPIN_ATTEMPTS_V1: u32 = 64;", "const SPIN_ATTEMPTS_V1: u32 = 640;"),
+        ):
+            with self.subTest(path=path):
+                self.sources = guard.snapshot()
+                self.reject(path, before, after)
+
+    def test_wait_test_suffix_is_now_bound_too(self):
         self.sources[guard.WAIT] += "\n// source-only test comment\n"
-        guard.audit(self.sources)
-        self.reject(guard.WAIT, "const SPIN_ATTEMPTS_V1: u32 = 64;", "const SPIN_ATTEMPTS_V1: u32 = 640;")
+        with self.assertRaises(ValueError):
+            guard.audit(self.sources)
 
 
 if __name__ == "__main__":

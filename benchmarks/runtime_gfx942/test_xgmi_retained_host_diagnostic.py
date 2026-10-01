@@ -175,12 +175,12 @@ class SourceTests(unittest.TestCase):
             "crates/fe2o3-kfd/src/sdma/retained_pair_operation_body.rs": "54236918b01d7167878c4827e28ab0c4a103e3f3b069d311b56931daad86b7ac",
             "crates/fe2o3-kfd/src/sdma/retained_pair_policy_v1.txt": diagnostic.POLICY,
             "crates/fe2o3-kfd/src/shared_memory/pair_operational.rs": "dd6bf6f9decf9f3135393dc6b937c7bea31e7a25ce8b12821713de8d69d6eca0",
+            "crates/fe2o3-kfd/src/wait.rs": "6c586d97d7dbb4cf9be4f06d279f80758afe05d4d6b772ae85d372d8c28aac0c",
+            "crates/fe2o3-kfd/src/wait_arithmetic.rs": "1d4dc372f72480f102aaa07f2f6fc81b3034cf561b85849bb81ff292f90ad605",
+            "crates/fe2o3-kfd/src/wait_arithmetic_body.rs": "1d4e8a628e42cf8dd7607f6902d55f92dc0df8a4d1e4fc69afd3f6844f006c57",
         }
         for path, digest in pins.items():
             self.assertEqual(hashlib.sha256((ROOT / path).read_bytes()).hexdigest(), digest, path)
-        wait = (ROOT / "crates/fe2o3-kfd/src/wait.rs").read_bytes().split(b"#[cfg(test)]\n", 1)[0]
-        self.assertEqual(hashlib.sha256(wait).hexdigest(),
-                         "6374ded715f9c6eaa14e6d09a819951ae86c76821664785f7758237463c533ab")
 
     def test_wait_body_is_baseline_plus_only_explicit_instrumentation(self):
         source = (ROOT / "crates/fe2o3-kfd/src/sdma.rs").read_text("ascii")

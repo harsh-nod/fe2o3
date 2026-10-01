@@ -18,6 +18,9 @@ DECL = SRC / "sdma/retained_pair_cadence_declarations.rs"
 BODY = SRC / "sdma/retained_pair_cadence_body.rs"
 RUST = SRC / "sdma/retained_pair_cadence.rs"
 PROOF = V / "retained_pair_cadence_v1.rs"
+WAIT = SRC / "wait.rs"
+WAIT_ARITHMETIC = SRC / "wait_arithmetic.rs"
+WAIT_BODY = SRC / "wait_arithmetic_body.rs"
 FILES = [PROOF, DECL, BODY]
 PINS = {
     DECL: "540520a35407a0dbd9c3210af733cbc07137f80643210557baf066c7d5f91591",
@@ -31,9 +34,10 @@ PINS = {
     SRC / "sdma/retained_pair_policy_v1.txt": "18cfe1c56d270d9cab1cdc2f67a2b26b35e7cf1540a2962e4dc2f5cb42155b61",
     Path("crates/fe2o3-kfd/examples/kfd-xgmi-retained-host-diagnostic.rs"): "788f520f4905610142afc98cd4186037d9ca883f1b2313c27223985e90def1fd",
     Path("benchmarks/runtime_gfx942/xgmi_retained_host_diagnostic.py"): "2240bd0a94d35f65171c4814397ae91ef9552d6917ac311c4da16ea577c82a4b",
+    WAIT: "6c586d97d7dbb4cf9be4f06d279f80758afe05d4d6b772ae85d372d8c28aac0c",
+    WAIT_ARITHMETIC: "1d4dc372f72480f102aaa07f2f6fc81b3034cf561b85849bb81ff292f90ad605",
+    WAIT_BODY: "1d4e8a628e42cf8dd7607f6902d55f92dc0df8a4d1e4fc69afd3f6844f006c57",
 }
-WAIT = SRC / "wait.rs"
-WAIT_PRODUCTION_SHA = "6374ded715f9c6eaa14e6d09a819951ae86c76821664785f7758237463c533ab"
 
 
 def need(condition, message):
@@ -47,7 +51,7 @@ def sha(text):
 
 def snapshot():
     result = {}
-    for path in set(PINS) | {WAIT}:
+    for path in PINS:
         selected = ROOT / path
         need(selected.is_file() and not selected.is_symlink() and selected.resolve() == selected,
              "ordinary exact source path")
@@ -56,13 +60,14 @@ def snapshot():
 
 
 def audit(sources):
-    need(set(sources) == set(PINS) | {WAIT}, "exact reviewed source roster")
+    need(set(sources) == set(PINS), "exact reviewed source roster")
     for path, digest in PINS.items():
         need(sha(sources[path]) == digest, "reviewed source bytes: " + str(path))
     wait = sources[WAIT]
-    need(wait.count("#[cfg(test)]\n") == 1 and
-         sha(wait.split("#[cfg(test)]\n", 1)[0]) == WAIT_PRODUCTION_SHA,
-         "unchanged wait production prefix; test-only additions allowed")
+    # Bind the extracted numeric implementation too, not just its caller.
+    need(re.findall(r'include!\("([^"]+)"\);', wait) == [WAIT_ARITHMETIC.name] and
+         re.findall(r'include!\("([^"]+)"\);', sources[WAIT_ARITHMETIC]) == [WAIT_BODY.name],
+         "exact wait arithmetic include chain")
     for path, prefix in ((RUST, ""), (PROOF, "../../fe2o3-kfd/src/sdma/")):
         includes = re.findall(r'include!\("([^"]+)"\);', sources[path])
         need(includes == [prefix + DECL.name, prefix + BODY.name], "exact two shared includes")
