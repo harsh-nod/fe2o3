@@ -1233,7 +1233,10 @@ fn serialized_tag(value: impl Serialize) -> String {
 
 fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
     let mut arguments = arguments.peekable();
-    if arguments.peek().is_some_and(|argument| argument == "inspect") {
+    if arguments
+        .peek()
+        .is_some_and(|argument| argument == "inspect")
+    {
         arguments.next();
         return kernel_inventory_v1::run(arguments);
     }
