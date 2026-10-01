@@ -499,7 +499,9 @@ mod tests {
             .unwrap();
             assert!(text.contains("4294967291int"));
             assert!(text.contains("(!(m0 as u32)) as int"));
-            assert!(text.contains("as i32"));
+            assert!(text.contains(
+                "if source_signed_v30(m0, 4294967296) < source_signed_v30(m1, 4294967296) { 1int } else { 0int }"
+            ));
             assert!(text.contains("< 2int"));
             let start = text
                 .find("original_canonical_byte_scalar_trace_9_v30")

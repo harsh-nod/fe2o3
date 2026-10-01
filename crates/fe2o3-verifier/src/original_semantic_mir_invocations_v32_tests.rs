@@ -125,7 +125,20 @@ fn prepared_root_variant(
     types.push(SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([80; 32]),
         SemanticLayoutIdentityV1::from_sha256([81; 32]),
-        SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            0,
+            1,
+            SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            1,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
         SemanticTypeShapeV1::Unit,
     ));
     let source = SemanticSourceProvenanceV1::unavailable();
@@ -296,7 +309,29 @@ fn prepared_root_variant(
             )),
         );
     }
-    functions.push(helper);
+    // Preserve all source function indices while sorting the appended helper
+    // after every root's deterministic identity, including eight-root fixtures.
+    functions.push(
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([255; 32]),
+            helper.role(),
+            helper.item_definition_identity(),
+            helper.monomorphization_identity(),
+            helper.generic_type_arguments_identity(),
+            helper.const_generic_arguments_identity(),
+            helper.source(),
+            helper.abi().clone(),
+            helper.locals().to_vec(),
+            helper.entry(),
+            helper.blocks().to_vec(),
+        )
+        .unwrap(),
+    );
+    assert!(
+        functions
+            .windows(2)
+            .all(|pair| { pair[0].identity().as_bytes() < pair[1].identity().as_bytes() })
+    );
     let semantic = InertSemanticMirRequestV1::new_with_callables(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
         types,

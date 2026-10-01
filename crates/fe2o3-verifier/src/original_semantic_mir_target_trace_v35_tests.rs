@@ -1,5 +1,5 @@
 use super::*;
-use fe2o3_kernel_analysis::CanonicalKirInventoryV18;
+use fe2o3_kernel_analysis::{CanonicalKirInventoryErrorV1, CanonicalKirInventoryV18};
 use fe2o3_kernel_ir::{
     BasicBlock, BinaryOp, BlockId, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrWorkBudgetV1 as Work, Function as KirFunction, Module, Operation,
@@ -172,14 +172,28 @@ fn original_mir_actual_connector_trace_has_exact_and_one_short_resources() {
     let exact = run(false, false, measured.1, measured.2, inspect);
     exact.0.unwrap();
     assert_eq!((exact.1, exact.2), (measured.1, measured.2));
-    assert!(matches!(
-        run(false, false, measured.1 - 1, measured.2, inspect).0,
-        Err(Error::Resource(Resource::Work(_)))
-    ));
-    assert!(matches!(
-        run(false, false, measured.1, measured.2 - 1, inspect).0,
-        Err(Error::Resource(Resource::Storage(_)))
-    ));
+    let work_short = run(false, false, measured.1 - 1, measured.2, inspect).0;
+    assert!(
+        matches!(
+            &work_short,
+            Err(Error::Resource(Resource::Work(error)))
+                | Err(Error::Inventory(CanonicalKirInventoryErrorV1::Resource(
+                    Resource::Work(error)
+                ))) if error.limit() == measured.1 - 1 && error.actual() == measured.1
+        ),
+        "unexpected one-short work result: {work_short:?}"
+    );
+    let storage_short = run(false, false, measured.1, measured.2 - 1, inspect).0;
+    assert!(
+        matches!(
+            &storage_short,
+            Err(Error::Resource(Resource::Storage(error)))
+                | Err(Error::Inventory(CanonicalKirInventoryErrorV1::Resource(
+                    Resource::Storage(error)
+                ))) if error.limit() == measured.2 - 1 && error.actual() == measured.2
+        ),
+        "unexpected one-short storage result: {storage_short:?}"
+    );
 }
 
 #[test]

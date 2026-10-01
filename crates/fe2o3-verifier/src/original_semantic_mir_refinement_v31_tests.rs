@@ -28,7 +28,20 @@ fn prepared_roster(
     types.push(SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([90; 32]),
         SemanticLayoutIdentityV1::from_sha256([91; 32]),
-        SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            0,
+            1,
+            SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            1,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
         SemanticTypeShapeV1::Unit,
     ));
     let word = SemanticTypeIdV1::from_index(0);
