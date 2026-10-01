@@ -12,7 +12,9 @@ use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::{
     SsaBlockIdV1 as Block,
     semantic_mir_v1::{
-        SemanticCallableDeclV1 as Callable, SemanticEdgeRoleV1 as EdgeRole,
+        SemanticCallableDeclV1 as Callable, SemanticCompilerIntrinsicOperationV1 as Intrinsic,
+        SemanticDirectCallV1 as Call, SemanticEdgeRoleV1 as EdgeRole,
+        SemanticTypeDeclV1 as TypeDecl, SemanticTypeShapeV1 as TypeShape,
         SemanticUnwindActionV1 as Unwind,
     },
 };
@@ -94,7 +96,7 @@ impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
         let row = function.control.get(block).ok_or_else(mismatch)?;
         Ok(matches!(
             row.end,
-            End::Index(_) | End::Descriptor(_) | End::DescriptorIndex(_)
+            End::Index(_) | End::Descriptor(_) | End::DescriptorIndex(_) | End::Abort
         ))
     }
 
@@ -250,6 +252,62 @@ fn abort_headers() -> usize {
 #[path = "original_semantic_mir_source_abort_control_v50_tests.rs"]
 mod abort_tests;
 
+#[cfg(test)]
+#[path = "original_semantic_mir_source_trap_control_v55_tests.rs"]
+mod trap_tests;
+
+fn source_trap_call_v55(
+    call: &Call,
+    callables: &[Callable],
+    types: &[TypeDecl],
+    out: &mut Writer<'_, '_>,
+) -> Result<bool> {
+    out.budget.charge_work(18)?;
+    let Some(callable) = callables.get(call.callee().index() as usize) else {
+        return Err(mismatch());
+    };
+    let Callable::CompilerIntrinsic {
+        binding,
+        operation: Intrinsic::Trap,
+        ..
+    } = callable
+    else {
+        return Ok(false);
+    };
+    // The admitted original callable owns the no-return semantics. There is no
+    // invented destination, return edge, helper frame, or operand observation.
+    if !call.arguments().is_empty()
+        || !call.variadic_argument_abis().is_empty()
+        || call.destination().is_some()
+        || call.unwind() != Unwind::Unreachable
+        || !binding.abi().source_input_types().is_empty()
+        || !binding.abi().arguments().is_empty()
+        || binding.abi().c_variadic()
+        || !matches!(
+            types
+                .get(binding.abi().return_type().index() as usize)
+                .map(TypeDecl::shape),
+            Some(TypeShape::Never)
+        )
+    {
+        return Err(mismatch());
+    }
+    Ok(true)
+}
+
+fn trap_headers_v55() -> usize {
+    size_of::<(
+        &Call,
+        &[Callable],
+        &[TypeDecl],
+        &fe2o3_mir_model::semantic_mir_v1::SemanticNonBodyCallableBindingV1,
+    )>() + size_of::<Option<&Callable>>()
+        + size_of::<Option<&TypeDecl>>()
+        + size_of::<Option<&TypeShape>>()
+        + size_of::<Result<bool>>()
+        + size_of::<bool>()
+}
+
 fn mismatch() -> Error {
     Error::Statement("original MIR byte control differs from its exact invocation")
 }
@@ -372,7 +430,10 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                         {
                             return Err(mismatch());
                         }
-                        if let Some(descriptor) = descriptor_calls::DescriptorCall::derive(
+                        if source_trap_call_v55(call, semantic.callables(), semantic.types(), out)?
+                        {
+                            End::Abort
+                        } else if let Some(descriptor) = descriptor_calls::DescriptorCall::derive(
                             slots,
                             plan,
                             root,
@@ -627,6 +688,7 @@ fn headers() -> usize {
         + h::<Vec<TypedOperand>>()
         + h::<TypedOperand>()
         + assertions::headers()
+        + trap_headers_v55()
         + h::<Range<usize>>()
         + 32 * size_of::<usize>()
         + 28 * size_of::<&()>()
