@@ -9,7 +9,7 @@ fn source_object_endpoints_run_v39(
     let mut budget = ArgumentBudgetV1::new(&mut ledger, storage);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
     let mut visited = 0;
-    let mut refused_storage = None;
+    let mut denied_storage = None;
     let result = (|| {
         let prepared = physical_prepared_result_v29(&mut budget)?;
         prepared.with_source_consumer_v18(&mut budget, |source, budget| {
@@ -60,7 +60,6 @@ fn source_object_endpoints_run_v39(
                                                     _ => unreachable!(),
                                                 };
                                                 if fault != 3 {
-                                                    refused_storage = Some(before.1);
                                                     assert!(matches!(error, ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting)));
                                                 } else {
                                                     assert!(matches!(error, ProductionSourceOwnedViewErrorV18::Binding("object endpoint ordinal")));
@@ -69,6 +68,9 @@ fn source_object_endpoints_run_v39(
                                                 assert!(endpoint.source_types(budget).is_err());
                                                 assert!(recipe.original_operation(budget).is_err());
                                                 assert_eq!(budget.work(), stopped);
+                                                assert_eq!(budget.storage(), before.1, "live callback retains its owned credit after refusal");
+                                                assert_eq!(source.cleanup.is_denied(), fault == 2, "only foreign-ledger custody denies the enclosing refund");
+                                                if fault == 2 { denied_storage = Some(before.1); }
                                                 return Err(error);
                                             }
                                             assert!(std::ptr::eq(recipe.object.anchor, archived));
@@ -136,8 +138,8 @@ fn source_object_endpoints_run_v39(
     })();
     assert_eq!(
         budget.storage(),
-        refused_storage.unwrap_or(MODULE_FLOOR),
-        "{result:?}"
+        denied_storage.unwrap_or(MODULE_FLOOR),
+        "disposed source scopes honor their exact refund custody: {result:?}"
     );
     (result, budget.work(), budget.peak_storage(), visited)
 }
@@ -154,7 +156,14 @@ fn source_object_endpoints_reject_restored_undercut_foreign_ledger_and_bad_ordin
     for fault in 1..=3 {
         let result = source_object_endpoints_run_v39(MODULE_LIMIT, MODULE_LIMIT, fault);
         assert_eq!(result.3, 1, "the authentic first object is reached");
-        assert!(result.0.is_err());
+        match (fault, result.0) {
+            (
+                1 | 2,
+                Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting)),
+            ) => {}
+            (3, Err(ProductionSourceOwnedViewErrorV18::Binding("object endpoint ordinal"))) => {}
+            (_, other) => panic!("exact endpoint refusal survived scope cleanup: {other:?}"),
+        }
     }
 }
 

@@ -8,7 +8,7 @@ fn source_object_lifetimes_run_v40(
     let mut budget = ArgumentBudgetV1::new(&mut ledger, storage);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
     let mut census = [0; 3];
-    let mut refused_storage = None;
+    let mut denied_storage = None;
     let result = (|| {
         let projection = physical_address_owner(case);
         let owner = physical_address_owner(case);
@@ -69,7 +69,6 @@ fn source_object_lifetimes_run_v40(
                                                         budget.release_storage(lost)?;
                                                         let error = lifetime.activation_count(budget).unwrap_err();
                                                         budget.reserve_storage(lost)?;
-                                                        refused_storage = Some(before);
                                                         error
                                                     }
                                                     2 => {
@@ -78,7 +77,6 @@ fn source_object_lifetimes_run_v40(
                                                         foreign.reserve_storage(before)?;
                                                         let error = lifetime.activation_count(&mut foreign).unwrap_err();
                                                         assert_eq!((foreign.work(), foreign.storage()), (0, before));
-                                                        refused_storage = Some(before);
                                                         error
                                                     }
                                                     3 => lifetime.activation(usize::MAX, budget).unwrap_err(),
@@ -90,6 +88,9 @@ fn source_object_lifetimes_run_v40(
                                                 assert!(lifetime.identity(budget).is_err());
                                                 assert!(lifetime.activation(0, budget).is_err());
                                                 assert_eq!(budget.work(), stopped);
+                                                assert_eq!(budget.storage(), before, "live callback retains its owned credit after refusal");
+                                                assert_eq!(source.cleanup.is_denied(), fault == 2, "only foreign-ledger custody denies the enclosing refund");
+                                                if fault == 2 { denied_storage = Some(before); }
                                                 return Err(error);
                                             }
                                             let (root_type, _) = endpoint.source_types(budget)?;
@@ -137,8 +138,8 @@ fn source_object_lifetimes_run_v40(
     })();
     assert_eq!(
         budget.storage(),
-        refused_storage.unwrap_or(MODULE_FLOOR),
-        "{result:?}"
+        denied_storage.unwrap_or(MODULE_FLOOR),
+        "disposed source scopes honor their exact refund custody: {result:?}"
     );
     (result, budget.work(), budget.peak_storage(), census)
 }
@@ -165,7 +166,19 @@ fn source_object_lifetimes_latch_restored_undercut_foreign_ledger_and_invalid_me
             fault,
         );
         assert_eq!(result.3[0], 1, "actual source lifetime must be reached");
-        assert!(result.0.is_err());
+        match (fault, result.0) {
+            (
+                1 | 2,
+                Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Accounting)),
+            ) => {}
+            (
+                3,
+                Err(ProductionSourceOwnedViewErrorV18::Binding(
+                    "original object activation ordinal",
+                )),
+            ) => {}
+            (_, other) => panic!("exact lifetime refusal survived scope cleanup: {other:?}"),
+        }
     }
 }
 
