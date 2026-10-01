@@ -1384,6 +1384,12 @@ impl<'a> ReaderV5<'a> {
 mod tests {
     use super::*;
 
+    // Reuse the original codec fixture for retained-storage controls only.
+    pub(super) fn retained_storage_test_fixture_v1() -> InertProductionMiddleEndEvidenceV5 {
+        let encoded = specimen();
+        InertProductionMiddleEndEvidenceV5::decode(&encoded.canonical_bytes).unwrap()
+    }
+
     const IR: &str = "func @evidence_v5 {\n  kernel.return\n}\n";
 
     #[derive(Clone, Copy)]
@@ -1754,3 +1760,6 @@ mod tests {
         ));
     }
 }
+
+#[path = "middle_end_evidence_retained_storage_v1.rs"]
+mod retained_storage_v1;

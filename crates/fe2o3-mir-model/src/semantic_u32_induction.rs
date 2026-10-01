@@ -2138,6 +2138,24 @@ fn fallible_nested_vec<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Reuse original admitted MIR and ordinary analyzers; no observer fixture
+    // is promoted to producer or lowering authority.
+    pub(super) fn retained_storage_test_fixture_v1(
+        reachable: bool,
+    ) -> SemanticU32InductionNoOverflowReportV1 {
+        let admitted = admitted(Shape::default());
+        if reachable {
+            analyze_semantic_u32_induction_no_overflow_reachable_with_limits_v2(
+                &admitted,
+                SemanticFunctionIdV1::from_index(0),
+                SemanticU32InductionAnalysisLimitsV1::default(),
+            )
+            .unwrap()
+        } else {
+            report(&admitted)
+        }
+    }
     use crate::semantic_mir_v1::{
         InertSemanticMirRequestV1, SemanticAbiExtensionV1, SemanticAbiIdentityV1,
         SemanticAbiPassModeV1, SemanticAbiRegularAttributesV1, SemanticAbiValueAttributesV1,
@@ -2851,3 +2869,6 @@ mod retained_preparation;
 pub use retained_preparation::{
     RetainedSemanticU32InductionV1, SemanticU32InductionRetainedFailureV1,
 };
+
+#[path = "semantic_u32_induction_retained_storage_v1.rs"]
+mod retained_storage_v1;
