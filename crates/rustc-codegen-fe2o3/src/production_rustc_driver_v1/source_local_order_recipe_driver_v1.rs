@@ -209,3 +209,7 @@ pub(crate) fn run_source_local_order_recipe_probe_v1(
     callbacks.fatal_after_first = fatal_after_first;
     run(args, callbacks)
 }
+
+#[cfg(test)]
+#[path = "source_local_order_recipe_warm_series_v1_tests.rs"]
+mod warm_series;

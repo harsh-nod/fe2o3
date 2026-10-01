@@ -512,3 +512,6 @@ mod controls;
 
 #[path = "ordered_program_stage_operational_v1_tests.rs"]
 mod operational;
+
+#[path = "ordered_program_const_provider_v1_tests.rs"]
+mod const_provider;
