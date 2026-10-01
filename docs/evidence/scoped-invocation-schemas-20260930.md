@@ -807,3 +807,71 @@ the original 47-kernel goal or evidence of completed kernel pairs.
 
 M0 remains complete; M1-M7 remain incomplete and strict end-to-end coverage
 remains **0/47**.
+
+### Original Rust and Deferred Pointer Definitions
+
+r242 tested frozen candidate `1720bf184f69fb3c76106318f5d4365bc8f57ffe` with
+unchanged source/tool snapshots: **380 lowerer tests passed, 30 failed**, and
+the five selected verifier tests passed. Twenty-eight failures advanced beyond
+implicit helper-return availability to the source pointer-definition census.
+Two new return tests failed in fixture setup: the first root call is an intrinsic,
+not the expected helper. Their correction selects an actual child call; it is
+not credited by this run. Log SHA-256:
+`264cc46c5251a59e4809388e3834a5b21292d863072a8f9cc7f8535edb7719e2`.
+
+A debugger stopped at the actual pointer-ordinal lookup: a checked invocation
+slice pointer is retained as a deferred lifecycle result before insertion, but
+the existing census counted only physical parameters and operation results.
+The candidate repair adds authenticated deferred definitions to the same
+preallocated, sorted, unique census through the existing source lifecycle
+visitor. It does not invent an access, skip missing-definition checks, or grant
+final source or launch authority. New tests cover original formation, changed
+type/source, omitted and duplicate values, and a physical-definition collision.
+These new tests still require a completed integration run.
+
+r243 built the backend's library-test executable with `--no-run` on the same
+frozen candidate. It completed at 2026-10-01 01:45:47 UTC with exit zero and
+unchanged snapshots. No tests executed. Log SHA-256:
+`0a953928376cd49856c639d72f67805a101596ba97f2d724dc6ce7f2ae831835`.
+
+r244 then ran the enabled actual-Rust fill optimizer parent on that candidate.
+It completed at 2026-10-01 01:51:05 UTC with exit 101: **zero passed, one failed**.
+Both gfx942 and gfx950, optimization/MIR settings `(0, 0)` and `(3, 2)`, and
+duplicate fresh source sessions were attempted. Unoptimized input stopped at
+raw-address formation/history checking; optimized input stopped at the scoped
+invocation slice index type/move check. No session reached the expected checked
+optimizer consumer. The parent used its genuine source/import path, not a
+reconstructed graph; it produced no kernel artifact, protected proof or GPU run.
+Snapshots were unchanged. Log SHA-256:
+`96fbfb804fe81b2d9fcc84f5dad3b8842585c6346a8bc87bf8c3204b67420566`.
+
+### Completed Service Bundle, Pending Provisioning
+
+A separate bounded completion of the terminal MI350 build succeeded at
+2026-10-01 01:33:32 UTC. It reused the five preserved component binaries with
+byte-for-byte hash and ELF checks, built the missing provisioner and deployment
+tools from `768b62d8a64ebc3d7d2d16248a81e42195e19a1f`, and completed the original
+bundle assembly. **137 deployment tests passed, two were ignored, and all 15
+CTests passed.** The production V3 bundle verifier and independent post-cleanup
+verification passed. Manifest SHA-256:
+`9d49bc3863dd009edaaa6e7d79f0d9aeda806a064ef65726d964585fb67e3d42`.
+Build log SHA-256:
+`add9ebc730fe809efab9462898a712f4c0060ff3ac30665bc538706dbc82ce02`.
+The process group drained and owned build caches were cleaned; binaries and
+allowlisted evidence were preserved. This service bundle is not a complete
+approved compiler/proof-runtime release or an installed runtime.
+
+Genuine isolated provisioning was then attempted with root-owned protected
+staging and the existing pinned image. It stopped before container creation:
+Docker 29.1.3 rejects the runner's `--pid private` option. A separate create-only
+diagnostic reproduced that exact error; neither attempted container name existed
+in the final independent check. Both runner processes were absent. No install,
+provision, readback or reacquisition stage completed, and no client profile or
+seed was produced. The original incomplete report was preserved, not rewritten
+as success. A supported private-PID encoding and pre-start inspection must be
+validated before another attempt. Public evidence archive SHA-256:
+`108011cfef6b908c02001dbbe30a0d6ee7997100a8d843e836a4c4d436687c8e`.
+
+M0 remains complete; M1-M7 and strict production-to-required-proof-to-safe-GPU
+coverage remain **0/47**. Candidate compiler and launch-contract changes are
+separate from the published evidence checkpoint.
