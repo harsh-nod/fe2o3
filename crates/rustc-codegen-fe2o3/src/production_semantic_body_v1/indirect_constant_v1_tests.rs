@@ -134,7 +134,7 @@ fn exact_and_one_short_work_limits_use_the_supplied_ledger() {
 #[test]
 fn exhausted_work_refuses_before_reading_initialization_or_copying_bytes() {
     let reads = Cell::new(0);
-    let remaining = Cell::new(1);
+    let remaining = Cell::new(1_usize);
     let mut value = Bytes {
         raw: &[1, 2],
         initialized: |_| {
@@ -242,7 +242,7 @@ fn raw_pointer_and_union_scalar_representations_remain_refused() {
             value: Primitive::Int(Integer::I64, false),
         },
         Scalar::Initialized {
-            value: Primitive::Pointer(rustc_abi::AddressSpace::DATA),
+            value: Primitive::Pointer(rustc_abi::AddressSpace::ZERO),
             valid_range: WrappingRange {
                 start: 0,
                 end: u64::MAX.into(),
