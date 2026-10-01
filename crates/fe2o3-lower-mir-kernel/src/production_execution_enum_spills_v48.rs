@@ -61,6 +61,39 @@ fn enum_spill_types_equal_v48(
     }
 }
 
+fn check_enum_spill_alloca_v55(
+    spill: &ExecutionEnumSpillV48,
+    operation: &Operation,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.charge_work(8)?;
+    let OperationKind::Alloca {
+        element,
+        count: None,
+        address_space: AddressSpace::Private,
+        alignment,
+    } = &operation.kind
+    else {
+        return Err(execution_archive_error_v29());
+    };
+    let [result] = operation.results.as_slice() else {
+        return Err(execution_archive_error_v29());
+    };
+    let Type::Pointer(pointer) = &result.ty else {
+        return Err(execution_archive_error_v29());
+    };
+    if result.id != spill.pointer
+        || *alignment != spill.alignment
+        || pointer.address_space != AddressSpace::Private
+        || pointer.access != AccessMode::ReadWrite
+        || !enum_spill_types_equal_v48(element, &spill.element, budget)?
+        || !enum_spill_types_equal_v48(&pointer.pointee, element, budget)?
+    {
+        return Err(execution_archive_error_v29());
+    }
+    Ok(())
+}
+
 fn capture_execution_enum_spills_v48(
     lowering: &SemanticFunctionLoweringV1<'_, '_>,
     blocks: &[BasicBlock],
@@ -336,30 +369,7 @@ fn check_scoped_allocation_census_v55(
             return Err(execution_archive_error_v29());
         }
         let operation = &block.operations[spill.emitted_operation];
-        let OperationKind::Alloca {
-            element,
-            count: None,
-            address_space: AddressSpace::Private,
-            alignment,
-        } = &operation.kind
-        else {
-            return Err(execution_archive_error_v29());
-        };
-        let [result] = operation.results.as_slice() else {
-            return Err(execution_archive_error_v29());
-        };
-        let Type::Pointer(pointer) = &result.ty else {
-            return Err(execution_archive_error_v29());
-        };
-        if result.id != spill.pointer
-            || *alignment != spill.alignment
-            || pointer.address_space != AddressSpace::Private
-            || pointer.access != AccessMode::ReadWrite
-            || !enum_spill_types_equal_v48(element, &spill.element, budget)?
-            || !enum_spill_types_equal_v48(&pointer.pointee, element, budget)?
-        {
-            return Err(execution_archive_error_v29());
-        }
+        check_enum_spill_alloca_v55(spill, operation, budget)?;
         pointers.push(spill.pointer);
     }
     // Prove the two allocation classes disjoint without rescanning each prior
