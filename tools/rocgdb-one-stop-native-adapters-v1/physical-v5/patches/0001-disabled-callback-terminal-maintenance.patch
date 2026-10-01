@@ -1,0 +1,1472 @@
+--- a/gdb/amd-dbgapi-one-stop-native-events-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-events-v1.inc
+@@ -1,15 +1,244 @@
+ /* SPDX-License-Identifier: GPL-3.0-or-later
+    Called solely at the existing client's actual callback/sole-ACK sites.
+    No synthetic event, second ACK or serialized owner construction. */
+ namespace amd_owned_one_stop_v1 {
++// Only the original CODE_OBJECT_LIST_UPDATED lexical scope can arm this.
++// The two variants borrow distinct existing callback facts; neither ACKs,
++// resumes, proves wave completion, or reconstructs an owner from a record.
++void native_adapter::breakpoint_refresh_current (refresh_kind kind,bool observed) {
++  debit (counter::work,256);
++  require (kind!=refresh_kind::none && m_inferior!=nullptr
++           && m_inferior_ref.get ()==m_inferior && current_inferior ()==m_inferior
++           && current_program_space==m_inferior->pspace && m_host!=nullptr
++           && m_host_ref.get ()==m_host && m_loaded_process_ref.get ()!=nullptr
++           && m_loaded_base_ref.get ()!=nullptr && m_loaded_top_ref.get ()!=nullptr,
++           failure::owner_changed);
++  auto *const proc=m_inferior->process_target ();
++  auto *const base=m_loaded_base_ref.get ();
++  auto *const top=m_inferior->top_target ();
++  require (proc==m_loaded_process_ref.get () && proc==get_native_target ()
++           && top==m_loaded_top_ref.get () && top==&the_amd_dbgapi_target
++           && m_inferior->target_is_pushed (proc) && m_inferior->target_is_pushed (base)
++           && m_inferior->target_is_pushed (top) && m_inferior->find_target_beneath (top)==base
++           && (base==proc || (base->stratum ()==thread_stratum
++                             && m_inferior->find_target_beneath (base)==proc)),
++           failure::owner_changed);
++  require (m_owner.check_owner (current_identity ()),failure::owner_changed);
++  require (m_owner.m_runtime && m_owner.m_callback
++           && m_owner.m_callbacks!=0 && m_owner.m_callbacks<=limits::callbacks
++           && m_owner.m_completed_callbacks+1==m_owner.m_callbacks
++           && m_callback_object!=0 && m_callback_object==m_owner.m_callback_object
++           && m_callback_object==m_owner.m_origin_callback_object
++           && m_owner.m_callback_id!=0
++           && m_owner.m_callback_id==m_owner.m_origin_callback_id
++           && m_callback_pc!=0 && m_callback_number!=0
++           && info ().runtime_state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS
++           && !info ().forward_progress_required && !m_owner.m_allocation_active
++           && !m_query_output && !m_in_allocate
++           && m_path==path::none && m_callback_progress==callback_progress::none
++           && !m_generic_returned && !m_generic_commit && !m_amd_body_returned
++           && !m_amd_commit_returned && !m_command_continue && !m_exit_requested
++           && !m_infrun_origin && m_entry_epoch==entry_epoch::retired
++           && !m_entry_maintenance_inflight && m_loaded_epoch==loaded_epoch::retired
++           && m_callback_epoch==callback_epoch::inactive
++           && m_terminal_epoch==callback_epoch::inactive,
++           failure::callback_identity);
++  // infrun marks execution/resume false before bpstat check_status. Frontend
++  // state may still be THREAD_RUNNING until a user-visible stop is reported.
++  require (m_host==inferior_thread () && m_host->state!=THREAD_EXITED
++           && !m_host->executing () && !m_host->resumed ()
++           && !m_host->has_pending_waitstatus ()
++           && regcache_read_pc (get_thread_regcache (m_host))==m_callback_pc,
++           failure::callback_identity);
++  require (!info ().breakpoint_map.empty () && info ().breakpoint_map.size ()<=64,
++           failure::callback_identity);
++  const auto callback=info ().breakpoint_map.find (m_owner.m_callback_id);
++  require (callback!=info ().breakpoint_map.end () && callback->second!=nullptr
++           && reinterpret_cast<std::uintptr_t> (callback->second)==m_callback_object
++           && static_cast<std::uint64_t> (callback->second->number)==m_callback_number
++           && callback->second->pspace==m_inferior->pspace
++           && callback->second->has_single_location ()
++           && callback->second->first_loc ().pspace==m_inferior->pspace
++           && callback->second->first_loc ().address==m_callback_pc
++           && callback->second->disposition==disp_donttouch,
++           failure::callback_identity);
++  if (kind==refresh_kind::initial) {
++    require (m_owner.state ()==phase::host_running && !m_owner.m_object
++             && !m_origin_complete && !m_owner.m_empty_objects
++             && (observed ? (m_origin_pending && m_object.handle!=0)
++                          : (!m_origin_pending && m_object.handle==0))
++             && m_gpu_thread==nullptr && m_gpu_thread_ref.get ()==nullptr,
++             failure::order);
++    std::size_t host=0,gpu=0; thread_roster (host,gpu);
++    require (host==1 && gpu==0,failure::resume_scope);
++  } else {
++    require (kind==refresh_kind::terminal
++             && m_owner.state ()==phase::awaiting_target_completion
++             && m_owner.m_terminal==terminal_stage::consistent
++             && m_owner.m_resume==resume_kind::completion
++             && m_owner.m_object!=0 && m_owner.m_object==m_object.handle
++             && m_origin_complete && !m_origin_pending
++             && m_owner.m_empty_objects==observed,
++             failure::order);
++    // Same retained wave/cache identity, not a fresh wave or a completion
++    // claim. At this host callback live threads have all-stop bookkeeping.
++    require (m_gpu_thread!=nullptr && m_gpu_thread_ref.get ()==m_gpu_thread
++             && m_gpu_thread->inf==m_inferior && m_gpu_thread->global_num>0
++             && static_cast<std::uint64_t> (m_gpu_thread->global_num)==m_owner.m_stop.thread
++             && ptid_is_gpu (m_gpu_thread->ptid)
++             && m_gpu_thread->ptid.pid ()==m_inferior->pid
++             && get_amd_dbgapi_wave_id (m_gpu_thread->ptid).handle==m_owner.m_stop.wave
++             && m_owner.m_stop.wave!=0 && m_owner.m_stop.queue!=0
++             && m_owner.m_stop.dispatch!=0 && m_owner.m_stop.agent!=0
++             && m_inferior->ptid_thread_map.size ()<=2
++             && info ().wave_info_map.size ()==1,failure::stop_changed);
++    const auto active=m_inferior->ptid_thread_map.find (m_gpu_thread->ptid);
++    const auto cached=info ().wave_info_map.begin ();
++    require (cached->first==m_owner.m_stop.wave
++             && cached->second.coords.wave_id.handle==m_owner.m_stop.wave
++             && cached->second.coords.queue_id.handle==m_owner.m_stop.queue
++             && cached->second.coords.dispatch_id.handle==m_owner.m_stop.dispatch
++             && cached->second.coords.agent_id.handle==m_owner.m_stop.agent
++             && cached->second.last_resume_mode==AMD_DBGAPI_RESUME_MODE_NORMAL
++             && !cached->second.stopping,failure::stop_changed);
++    if (m_gpu_thread->state==THREAD_EXITED) {
++      require (m_inferior->ptid_thread_map.size ()==1
++               && active==m_inferior->ptid_thread_map.end (),failure::stop_changed);
++      // Exited-but-held flags are not reset by set_thread_exited.
++    } else {
++      require (m_inferior->ptid_thread_map.size ()==2
++               && active!=m_inferior->ptid_thread_map.end () && active->second==m_gpu_thread
++               && m_gpu_thread->state==THREAD_RUNNING && !m_gpu_thread->executing ()
++               && !m_gpu_thread->resumed () && !m_gpu_thread->has_pending_waitstatus (),
++               failure::stop_changed);
++    }
++    std::size_t inferiors=0,total=0,host=0,gpu=0;
++    for (auto *inf : all_inferiors ()) {
++      debit (counter::work,8);
++      require (++inferiors<=1 && inf==m_inferior,failure::resume_scope);
++    }
++    require (inferiors==1,failure::resume_scope);
++    for (auto *thread : m_inferior->threads ()) {
++      debit (counter::work,32);
++      require (++total<=16 && thread->inf==m_inferior
++               && thread->ptid.pid ()==m_inferior->pid,failure::resume_scope);
++      if (thread==m_host) ++host;
++      else { require (thread==m_gpu_thread,failure::resume_scope); ++gpu; }
++    }
++    require (host==1 && gpu==1,failure::resume_scope);
++  }
++}
++void native_adapter::before_breakpoint_refresh (amd_dbgapi_inferior_info &actual,
++                                                amd_dbgapi_event_id_t event) {
++  if (!selected ()) return;
++  breakpoint_check (m_refresh_kind==refresh_kind::none && m_reset_state==reset_state::idle
++                    && event.handle!=0,nullptr,breakpoint_site::refresh_begin);
++  require (&actual==&info (),failure::owner_changed);
++  const auto kind=m_owner.state ()==phase::host_running
++    ? refresh_kind::initial : refresh_kind::terminal;
++  breakpoint_refresh_current (kind,false);
++  debit (counter::work,64); // Includes fixed retirement/error bookkeeping.
++  m_refresh_kind=kind; m_refresh_event=event.handle;
++  m_refresh_generation=m_owner.m_callbacks; m_reset_count=0;
++}
++void native_adapter::after_breakpoint_refresh (amd_dbgapi_inferior_info &actual,
++                                               amd_dbgapi_event_id_t event) {
++  if (!selected ()) return;
++  breakpoint_check (m_refresh_kind!=refresh_kind::none && m_reset_state==reset_state::idle
++                    && event.handle==m_refresh_event
++                    && m_refresh_generation==m_owner.m_callbacks,
++                    nullptr,breakpoint_site::refresh_end);
++  require (&actual==&info (),failure::owner_changed);
++  breakpoint_refresh_current (m_refresh_kind,true);
++  clear_breakpoint_refresh ();
++}
++void native_adapter::clear_breakpoint_refresh () noexcept {
++  m_refresh_kind=refresh_kind::none; m_refresh_event=0; m_refresh_generation=0;
++  m_reset_state=reset_state::idle; m_reset_object=nullptr; m_reset_location=nullptr;
++  m_reset_number=0; m_reset_type=0; m_reset_address=0; m_reset_count=0;
++}
++void native_adapter::abort_breakpoint_refresh () noexcept {
++  if (!selected ()) return;
++  // Fixed cleanup was prepaid at entry; never allocate, refund or throw.
++  invalidate (failure::breakpoint_changed);
++  clear_breakpoint_refresh ();
++}
++bool native_adapter::before_internal_breakpoint_reset (breakpoint *bp,program_space *pspace) {
++  if (!selected ()) return false;
++  breakpoint_check (m_refresh_kind!=refresh_kind::none && m_refresh_event!=0
++                    && m_refresh_generation==m_owner.m_callbacks
++                    && m_reset_state==reset_state::idle,
++                    bp,breakpoint_site::reset_begin);
++  breakpoint_refresh_current (m_refresh_kind,true);
++  debit (counter::work,128);
++  breakpoint_check (m_reset_count<64,bp,breakpoint_site::reset_bound);
++  ++m_reset_count; // Attempt consumed before any candidate can be admitted.
++  breakpoint_check (bp!=nullptr && bp!=m_breakpoint
++                    && reinterpret_cast<std::uintptr_t> (bp)!=m_callback_object
++                    && bp->number<0 && bp->enable_state==bp_disabled
++                    && (bp->type==bp_overlay_event || bp->type==bp_longjmp_master
++                        || bp->type==bp_std_terminate_master || bp->type==bp_exception_master)
++                    && pspace==m_inferior->pspace && bp->pspace==pspace
++                    && bp->has_single_location () && bp->first_loc ().owner==bp
++                    && bp->first_loc ().pspace==pspace && bp->first_loc ().address!=0
++                    && bp->first_loc ().address!=m_entry_pc
++                    && bp->first_loc ().address!=m_checkpoint_pc
++                    && bp->first_loc ().address!=m_callback_pc
++                    && bp->disposition==disp_donttouch && bp->related_breakpoint==bp
++                    && !bp->commands && bp->cond_string==nullptr && bp->extra_string==nullptr,
++                    bp,breakpoint_site::reset_candidate);
++  m_reset_object=bp; m_reset_location=&bp->first_loc ();
++  m_reset_number=bp->number; m_reset_type=static_cast<unsigned> (bp->type);
++  m_reset_address=bp->first_loc ().address; m_reset_state=reset_state::armed;
++  return true;
++}
++void native_adapter::consume_internal_breakpoint_reset (breakpoint *bp) {
++  breakpoint_check (m_refresh_kind!=refresh_kind::none && m_reset_state==reset_state::armed
++                    && m_refresh_generation==m_owner.m_callbacks && bp!=nullptr
++                    && bp==m_reset_object,bp,breakpoint_site::reset_consume);
++  breakpoint_refresh_current (m_refresh_kind,true);
++  debit (counter::work,64);
++  breakpoint_check (bp->number==m_reset_number && static_cast<unsigned> (bp->type)==m_reset_type
++                    && bp->enable_state==bp_disabled && bp->pspace==m_inferior->pspace
++                    && bp->has_single_location () && &bp->first_loc ()==m_reset_location
++                    && bp->first_loc ().owner==bp && bp->first_loc ().pspace==m_inferior->pspace
++                    && bp->first_loc ().address==m_reset_address
++                    && bp->disposition==disp_donttouch && bp->related_breakpoint==bp
++                    && !bp->commands && bp->cond_string==nullptr && bp->extra_string==nullptr,
++                    bp,breakpoint_site::reset_mutated);
++  // Observer precedes delete. No retained pointer may be dereferenced afterward.
++  m_reset_object=nullptr; m_reset_location=nullptr; m_reset_state=reset_state::consumed;
++}
++void native_adapter::after_internal_breakpoint_reset () {
++  breakpoint_check (m_refresh_kind!=refresh_kind::none && m_reset_state==reset_state::consumed
++                    && m_refresh_generation==m_owner.m_callbacks,
++                    nullptr,breakpoint_site::reset_end);
++  m_reset_state=reset_state::idle; m_reset_number=0; m_reset_type=0; m_reset_address=0;
++}
++void native_adapter::remember_breakpoint_failure (const breakpoint *bp,breakpoint_site site,
++                                                  bool was_valid) noexcept {
++  if (!was_valid || m_first_breakpoint_site!=breakpoint_site::none) return;
++  m_first_breakpoint_site=site;
++  m_first_breakpoint_type=bp==nullptr ? 0u : static_cast<unsigned> (bp->type);
++  m_first_breakpoint_number=bp==nullptr ? 0 : bp->number;
++}
++void native_adapter::breakpoint_check (bool yes,const breakpoint *bp,breakpoint_site site) {
++  if (!yes && !m_owner.invalid ()) remember_breakpoint_failure (bp,site,true);
++  require (yes,failure::breakpoint_changed);
++}
+ void native_adapter::callback_begin (amd_dbgapi_inferior_info &actual,breakpoint *bp,
+                                     amd_dbgapi_breakpoint_id_t id,thread_info *thread) {
+   if (!selected ()) return;
++  breakpoint_check (m_refresh_kind==refresh_kind::none && m_reset_state==reset_state::idle,
++                    bp,breakpoint_site::callback_boundary);
++  retire_unloaded_maintenance ();
++  retire_terminal_maintenance ();
++  retire_callback_maintenance ();
+   retire_loaded_maintenance ();
+   retire_entry_maintenance ();
+   require (&actual==&info () && thread==m_host && thread==inferior_thread ()
+            && m_path==path::none && m_callback_progress==callback_progress::none
+            && bp!=nullptr && bp->pspace==m_inferior->pspace
+            && bp->has_single_location () && bp->disposition==disp_donttouch,
+            failure::callback_identity);
+   const auto found=actual.breakpoint_map.find (id.handle);
+@@ -39,16 +268,18 @@
+              failure::callback_identity);
+   }
+ }
+ void native_adapter::callback_end (amd_dbgapi_inferior_info &actual,breakpoint *bp,
+                                   amd_dbgapi_breakpoint_id_t id,thread_info *thread,
+                                   amd_dbgapi_event_id_t event,amd_dbgapi_breakpoint_action_t action,
+                                   amd_dbgapi_status_t status) {
+   if (!selected ()) return;
++  breakpoint_check (m_refresh_kind==refresh_kind::none && m_reset_state==reset_state::idle,
++                    bp,breakpoint_site::callback_boundary);
+   require (&actual==&info () && thread==m_host && bp!=nullptr
+            && reinterpret_cast<std::uintptr_t> (bp)==m_callback_object
+            && bp->has_single_location () && bp->first_loc ().address==m_callback_pc,
+            failure::callback_identity);
+   const auto actual_owner=current_identity ();
+   const bool accepted=m_owner.state ()==phase::awaiting_target_completion
+     ? m_owner.terminal_callback_complete (actual_owner,m_callback_object,id.handle,
+                                           thread->global_num,event.handle,action,status)
+@@ -58,29 +289,33 @@
+   m_callback_progress=callback_progress::step_ready;
+   // This admits no effect here. Actual infrun/target fences still consume the
+   // one precisely identified internal host step and subsequent continuation.
+   flush ();
+ }
+ void native_adapter::runtime_ack (amd_dbgapi_inferior_info &actual,amd_dbgapi_event_id_t event,
+                                  amd_dbgapi_runtime_state_t state,amd_dbgapi_status_t status) {
+   if (!selected ()) return;
++  retire_unloaded_maintenance ();
++  retire_terminal_maintenance ();
++  retire_callback_maintenance ();
+   if (state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS) prepare_loaded_maintenance (actual);
+   else retire_loaded_maintenance ();
+   retire_entry_maintenance ();
+   require (&actual==&info () && actual.runtime_state==state
+            && m_path==path::none && m_callback_progress==callback_progress::none,
+            failure::owner_changed);
+   if (state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS) {
+     require (m_owner.runtime_loaded (current_identity (),event.handle,status),failure::acknowledgement);
+   } else if (state==AMD_DBGAPI_RUNTIME_STATE_UNLOADED) {
+     require (m_owner.runtime_unloaded (current_identity (),event.handle,status),failure::acknowledgement);
+   } else reject (failure::native_result);
+   flush ();
+   if (state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS) arm_loaded_maintenance ();
++  if (state==AMD_DBGAPI_RUNTIME_STATE_UNLOADED) arm_unloaded_maintenance ();
+ }
+ void native_adapter::objects_ack (amd_dbgapi_inferior_info &actual,amd_dbgapi_event_id_t event,
+                                  amd_dbgapi_status_t status) {
+   if (!selected ()) return;
+   require (&actual==&info (),failure::owner_changed);
+   if (m_owner.state ()==phase::awaiting_target_completion) {
+     require (m_owner.terminal_object_completed (current_identity (),event.handle,status),
+              failure::acknowledgement);
+@@ -103,16 +338,19 @@
+   require (m_owner.stopped_after_ack (current_identity (),event.handle,m_candidate_stop,status),
+            failure::stop_changed);
+   m_gpu_thread=thread; m_gpu_thread_ref=thread_info_ref::new_reference (thread);
+   capture_physical_snapshot (); // Source-disabled; private provisional bytes only.
+   // No diagnostic output until actual MI stop and post-auto-delete safe point.
+ }
+ void native_adapter::after_host_or_gpu_stop (thread_info *thread) {
+   if (!selected ()) return;
++  retire_unloaded_maintenance ();
++  retire_terminal_maintenance ();
++  retire_callback_maintenance ();
+   retire_loaded_maintenance ();
+   retire_entry_maintenance ();
+   if (m_owner.state ()==phase::lifecycle_disappeared && thread==nullptr) return;
+   // Lifecycle disappearance is not a claim that the separate MI exit was normal.
+   require (thread!=nullptr && thread==inferior_thread (),failure::stop_changed);
+   if (m_owner.state ()==phase::provisional_checkpoint) {
+     require (thread==m_host
+              && m_owner.host_stop_output_completed
+@@ -127,29 +365,36 @@
+   } else reject (failure::order);
+   // MI *stopped alone never means checkpoint retirement. Do not flush here.
+ }
+ void native_adapter::deleting_breakpoint (breakpoint *bp) {
+   if (!selected () || m_owner.invalid ()) return;
+   if (bp==m_breakpoint) {
+     const auto object=reinterpret_cast<std::uintptr_t> (bp);
+     const auto number=static_cast<std::uint64_t> (bp->number);
+-    require (m_owner.deleting_breakpoint (object,number),failure::breakpoint_changed);
++    const bool was_valid=!m_owner.invalid ();
++    const bool accepted=m_owner.deleting_breakpoint (object,number);
++    if (!accepted) remember_breakpoint_failure (bp,breakpoint_site::owned_delete,was_valid);
++    require (accepted,failure::breakpoint_changed);
+     m_breakpoint=nullptr; // Observer precedes deletion; never dereference it later.
+     return;
+   }
+   if (reinterpret_cast<std::uintptr_t> (bp)==m_callback_object) {
+-    require (m_owner.state ()==phase::awaiting_target_completion && !m_owner.m_callback
+-             && m_owner.m_terminal==owner::terminal_stage::withdrawal_complete
+-             && m_callback_progress==callback_progress::none,
+-             failure::breakpoint_changed);
++    breakpoint_check (m_owner.state ()==phase::awaiting_target_completion && !m_owner.m_callback
++                      && m_owner.m_terminal==owner::terminal_stage::withdrawal_complete
++                      && m_callback_progress==callback_progress::none,
++                      bp,breakpoint_site::callback_delete);
+     // This notification is not a retirement proof and grants no further resume.
+     return;
+   }
+-  reject (failure::breakpoint_changed);
++  if (m_reset_state==reset_state::armed) {
++    consume_internal_breakpoint_reset (bp);
++    return;
++  }
++  breakpoint_check (false,bp,breakpoint_site::unrelated_delete);
+ }
+ void native_adapter::after_auto_delete () {
+   if (!selected ()) return;
+   if (m_owner.state ()==phase::provisional_checkpoint) {
+     require (m_breakpoint==nullptr && inferior_thread ()==m_host,
+              failure::retirement_incomplete);
+     std::size_t objects=0,locations=0,count=0;
+     for (auto &bp : all_breakpoints ()) {
+@@ -170,16 +415,19 @@
+              failure::stop_changed);
+     m_stop_retired=true;
+     seal_physical_snapshot (); // No public value accessor or diagnostic is added.
+   }
+   flush (); // After actual breakpoint_auto_delete has fully returned.
+ }
+ void native_adapter::disappearing (inferior *actual) {
+   if (!selected () || m_owner.invalid ()) return;
++  retire_unloaded_maintenance ();
++  retire_terminal_maintenance ();
++  retire_callback_maintenance ();
+   retire_loaded_maintenance ();
+   retire_entry_maintenance ();
+   // exit_inferior clears threads before this observer, but has not cleared PID.
+   // Retained strong references prevent address reuse; do not pretend a live
+   // stopped host thread still exists or query target memory here.
+   const bool same_owner=actual==m_inferior && m_info!=nullptr
+     && amd_dbgapi_inferior_data.get (actual)==m_info && m_info->inf==actual
+     && actual->pspace==reinterpret_cast<program_space *> (m_owner.m_identity.program_space)
+@@ -189,14 +437,16 @@
+     && m_inferior_ref.get ()==actual && m_host_ref.get ()==m_host;
+   if (!same_owner || !m_owner.lifecycle_disappeared (m_owner.m_identity)) {
+     m_owner.poison (failure::lifecycle);
+     return; // Never interrupt ordinary known-owner teardown with a thrown error.
+   }
+   flush ();
+ }
+ void native_adapter::invalidate (failure why) {
+-  if (selected ()) { m_snapshot.revoke (snapshot_issue::owner_changed); m_owner.poison (why); retire_loaded_maintenance (); retire_entry_maintenance (); }
++  clear_breakpoint_refresh ();
++  if (selected ()) { m_snapshot.revoke (snapshot_issue::owner_changed); m_owner.poison (why); retire_unloaded_maintenance (); retire_terminal_maintenance (); retire_callback_maintenance (); retire_loaded_maintenance (); retire_entry_maintenance (); }
+ }
+ void native_adapter::native_unwind () noexcept {
+-  if (selected ()) { m_snapshot.revoke (snapshot_issue::native_error); m_owner.poison (failure::native_result); retire_loaded_maintenance (); retire_entry_maintenance (); }
++  clear_breakpoint_refresh ();
++  if (selected ()) { m_snapshot.revoke (snapshot_issue::native_error); m_owner.poison (failure::native_result); retire_unloaded_maintenance (); retire_terminal_maintenance (); retire_callback_maintenance (); retire_loaded_maintenance (); retire_entry_maintenance (); }
+ }
+ } // namespace amd_owned_one_stop_v1
+--- a/gdb/amd-dbgapi-one-stop-native-io-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-io-v1.inc
+@@ -4,18 +4,25 @@
+ namespace amd_owned_one_stop_v1 {
+ native_adapter &native_adapter::instance () noexcept {
+   static native_adapter retained;
+   return retained;
+ }
+ [[noreturn]] void native_adapter::reject (failure why, commit_site site) {
+   m_snapshot.revoke (snapshot_issue::owner_changed);
+   m_owner.poison (why, site);
++  clear_breakpoint_refresh ();
+   retire_loaded_maintenance ();
+   retire_entry_maintenance ();
++  if (m_first_breakpoint_site!=breakpoint_site::none)
++    error ("fixed owned one-stop native relation refused (%u); commit-site=%u; breakpoint-site=%u; breakpoint-type=%u; breakpoint-number=%d",
++           static_cast<unsigned> (m_owner.why ()),
++           static_cast<unsigned> (m_owner.first_commit_site ()),
++           static_cast<unsigned> (m_first_breakpoint_site),
++           m_first_breakpoint_type,m_first_breakpoint_number);
+   error (_("fixed owned one-stop native relation refused (%u); commit-site=%u"),
+          static_cast<unsigned> (m_owner.why ()),
+          static_cast<unsigned> (m_owner.first_commit_site ()));
+ }
+ void native_adapter::require (bool yes, failure why, commit_site site) {
+   if (!yes || m_owner.invalid ()) reject (why, site);
+ }
+ void native_adapter::debit (counter kind, std::uint64_t amount) {
+--- a/gdb/amd-dbgapi-one-stop-native-owner-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-owner-v1.inc
+@@ -236,21 +236,21 @@
+     m_candidate.breakpoint_number=static_cast<std::uint64_t> (installed->number);
+     flush ();
+   } catch (...) { m_owner.poison (failure::owner_changed); throw; }
+ }
+ void native_adapter::check_owned_breakpoint_owner () {
+   require (m_owner.check_owner (current_identity ()),failure::owner_changed);
+ }
+ void native_adapter::check_owned_breakpoint_reset (const owned_checkpoint_breakpoint *bp) {
+-  require (m_owner.selected () && bp==m_breakpoint
+-           && bp->pspace==m_inferior->pspace && bp->has_single_location ()
+-           && bp->first_loc ().address==m_checkpoint_pc
+-           && bp->first_loc ().pspace==m_inferior->pspace
+-           && bp->disposition==disp_del,failure::breakpoint_changed);
++  breakpoint_check (m_owner.selected () && bp==m_breakpoint && bp!=nullptr
++                    && bp->pspace==m_inferior->pspace && bp->has_single_location ()
++                    && bp->first_loc ().address==m_checkpoint_pc
++                    && bp->first_loc ().pspace==m_inferior->pspace
++                    && bp->disposition==disp_del,bp,breakpoint_site::owned_reset);
+   // Fixed address remains unchanged through the legitimate selected solib refresh.
+ }
+ void native_adapter::checkpoint_hit (owned_checkpoint_breakpoint *bp,bpstat *status) {
+   require (m_owner.selected () && bp==m_breakpoint && status!=nullptr
+            && status->breakpoint_at==bp && status->bp_location_at!=nullptr
+            && status->bp_location_at->address==m_checkpoint_pc
+            && bp->disposition==disp_del,failure::breakpoint_changed);
+   inspect_checkpoint (false);
+--- a/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
+@@ -154,29 +154,368 @@
+   if (m_loaded_epoch==loaded_epoch::unused || m_loaded_epoch==loaded_epoch::retired) return;
+   if (!m_owner.invalid ()) m_owner.debit (counter::work,32);
+   if (m_loaded_epoch==loaded_epoch::in_flight || m_loaded_epoch==loaded_epoch::amd_returned)
+     m_owner.poison (failure::commit,commit_site::loaded_retirement);
+   m_loaded_epoch=loaded_epoch::retired;
+   // Inert refs remain physically retained through debugger teardown. No reset,
+   // last-reference close, allocation, or authority reconstruction on this path.
+ }
++// Only the pre-publication host callback interval is covered here. This is a
++// distinct lineage from the permanently retired entry/loaded epochs. The
++// already-retained loaded refs are lifetime holders, never their old permit.
++void native_adapter::callback_maintenance_current (bool progress_required) {
++  debit (counter::work,192); // Fixed checks prepaid; roster traversal separately paid.
++  require (m_inferior!=nullptr && m_inferior_ref.get ()==m_inferior
++           && current_inferior ()==m_inferior && m_host!=nullptr
++           && m_host_ref.get ()==m_host && m_loaded_process_ref.get ()!=nullptr
++           && m_loaded_base_ref.get ()!=nullptr && m_loaded_top_ref.get ()!=nullptr,
++           failure::owner_changed);
++  auto *const proc=m_inferior->process_target ();
++  auto *const base=m_loaded_base_ref.get ();
++  auto *const top=m_inferior->top_target ();
++  require (proc!=nullptr && proc==m_loaded_process_ref.get () && proc==get_native_target ()
++           && top==m_loaded_top_ref.get () && top==&the_amd_dbgapi_target
++           && m_inferior->target_is_pushed (proc) && m_inferior->target_is_pushed (base)
++           && m_inferior->target_is_pushed (top) && m_inferior->find_target_beneath (top)==base
++           && (base==proc || (base->stratum ()==thread_stratum
++                             && m_inferior->find_target_beneath (base)==proc)),
++           failure::owner_changed);
++  require (m_owner.check_owner (current_identity ()),failure::owner_changed);
++  require (m_entry_epoch==entry_epoch::retired && !m_entry_maintenance_inflight
++           && m_loaded_epoch==loaded_epoch::retired
++           && m_owner.state ()==phase::host_running && m_owner.m_runtime
++           && !m_owner.m_callback && m_owner.m_callbacks!=0
++           && m_owner.m_callbacks<=limits::callbacks
++           && m_owner.m_callbacks==m_owner.m_completed_callbacks
++           && m_callback_generation==m_owner.m_completed_callbacks
++           && m_callback_object!=0 && m_callback_object==m_owner.m_origin_callback_object
++           && m_owner.m_origin_callback_id!=0 && m_callback_pc!=0 && m_callback_number!=0
++           && info ().runtime_state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS
++           && (!progress_required || info ().forward_progress_required)
++           && m_path==path::none && !m_generic_returned && !m_generic_commit
++           && !m_amd_body_returned && !m_amd_commit_returned
++           && !m_command_continue && !m_exit_requested && !m_infrun_origin
++           && m_gpu_thread==nullptr && m_gpu_thread_ref.get ()==nullptr,
++           failure::commit,commit_site::callback_environment);
++  // No inferior_thread() or PC access: generic commit deliberately selects no
++  // thread and the original retained host may currently be executing.
++  require (m_host->state==THREAD_RUNNING && m_host->executing () && m_host->resumed ()
++           && !m_host->has_pending_waitstatus () && proc->threads_executing
++           && proc->commit_resumed_state && !proc->has_resumed_with_pending_wait_status ()
++           && m_infrun_signal==GDB_SIGNAL_0 && !m_infrun_software && !m_infrun_user_step,
++           failure::commit,commit_site::callback_thread_state);
++  if (m_callback_stepping) {
++    require (m_callback_progress==callback_progress::step_inflight
++             && m_host->control.trap_expected && m_infrun_step
++             && m_infrun_trap && m_infrun_inline && m_infrun_scope==m_host->ptid,
++             failure::commit,commit_site::callback_thread_state);
++  } else {
++    require (m_callback_progress==callback_progress::none
++             && !m_host->control.trap_expected && !m_infrun_step
++             && !m_infrun_trap && !m_infrun_inline
++             && (m_infrun_scope==m_host->ptid || m_infrun_scope==minus_one_ptid
++                 || m_infrun_scope==ptid_t (m_inferior->pid)),
++             failure::commit,commit_site::callback_thread_state);
++  }
++  std::size_t host=0,gpu=0; thread_roster (host,gpu);
++  require (host==1 && gpu==0,failure::resume_scope);
++}
++void native_adapter::arm_callback_maintenance (bool stepping) {
++  debit (counter::work,32);
++  require (m_callback_epoch==callback_epoch::inactive
++           && (stepping
++               ? m_owner.m_completed_callbacks>m_callback_generation
++               : (m_callback_stepping
++                  && m_owner.m_completed_callbacks==m_callback_generation)),
++           failure::commit,commit_site::callback_arm);
++  m_callback_generation=m_owner.m_completed_callbacks;
++  m_callback_stepping=stepping;
++  callback_maintenance_current (true);
++  // Called only after the actual original generic and AMD resume/commit pair
++  // returned and flushed. No callback record or serialized state can arm this.
++  m_callback_epoch=callback_epoch::armed;
++}
++void native_adapter::retire_callback_maintenance () noexcept {
++  if (m_callback_epoch==callback_epoch::inactive) return;
++  if (!m_owner.invalid ()) m_owner.debit (counter::work,32);
++  if (m_callback_epoch==callback_epoch::in_flight
++      || m_callback_epoch==callback_epoch::amd_returned)
++    m_owner.poison (failure::commit,commit_site::callback_retirement);
++  m_callback_epoch=callback_epoch::inactive;
++  // Preserve generation/kind for the one actual continuation join. No target
++  // refs are released, counters refunded or retired earlier epochs rearmed.
++}
++// A terminal maintenance commit borrows one original completed wave owner.
++// Raw-list membership and active-map membership are deliberately different:
++// set_thread_exited erases only the latter while our strong ref keeps the
++// original object and wave cache alive. Absence never proves GPU completion.
++void native_adapter::terminal_gpu_current () {
++  debit (counter::work,160);
++  require (m_gpu_thread!=nullptr && m_gpu_thread_ref.get ()==m_gpu_thread
++           && m_gpu_thread->inf==m_inferior && m_gpu_thread->global_num>0
++           && static_cast<std::uint64_t> (m_gpu_thread->global_num)==m_owner.m_stop.thread
++           && ptid_is_gpu (m_gpu_thread->ptid)
++           && m_gpu_thread->ptid.pid ()==m_inferior->pid
++           && get_amd_dbgapi_wave_id (m_gpu_thread->ptid).handle==m_owner.m_stop.wave
++           && m_owner.m_stop.wave!=0 && m_owner.m_stop.queue!=0
++           && m_owner.m_stop.dispatch!=0 && m_owner.m_stop.agent!=0,
++           failure::commit,commit_site::terminal_wave_identity);
++  // Both maps are bounded BEFORE any lookup/iterator acquisition. No native
++  // query, cached fetch(), temporary roster or owner reconstruction is used.
++  require (m_inferior->ptid_thread_map.size ()<=2 && info ().wave_info_map.size ()==1,
++           failure::commit,commit_site::terminal_wave_identity);
++  const auto active=m_inferior->ptid_thread_map.find (m_gpu_thread->ptid);
++  const auto cached=info ().wave_info_map.begin ();
++  require (cached->first==m_owner.m_stop.wave
++           && cached->second.coords.wave_id.handle==m_owner.m_stop.wave
++           && cached->second.coords.queue_id.handle==m_owner.m_stop.queue
++           && cached->second.coords.dispatch_id.handle==m_owner.m_stop.dispatch
++           && cached->second.coords.agent_id.handle==m_owner.m_stop.agent
++           && cached->second.last_resume_mode==AMD_DBGAPI_RESUME_MODE_NORMAL
++           && !cached->second.stopping,
++           failure::commit,commit_site::terminal_wave_identity);
++  if (m_gpu_thread->state==THREAD_EXITED) {
++    require (m_inferior->ptid_thread_map.size ()==1
++             && active==m_inferior->ptid_thread_map.end (),
++             failure::commit,commit_site::terminal_wave_membership);
++    // Executing/resumed/pending bits are not reset by set_thread_exited.
++    // This is retained bookkeeping only, not a currently running/stopped wave.
++  } else {
++    require (m_inferior->ptid_thread_map.size ()==2
++             && active!=m_inferior->ptid_thread_map.end () && active->second==m_gpu_thread
++             && m_gpu_thread->state==THREAD_RUNNING && m_gpu_thread->executing ()
++             && m_gpu_thread->resumed () && !m_gpu_thread->has_pending_waitstatus (),
++             failure::commit,commit_site::terminal_wave_membership);
++  }
++  std::size_t inferiors=0,total=0,host=0,gpu=0;
++  // Do not use the non-exited filter: its hidden skips would leave unmetered
++  // traversal and would conceal the still-held exited GPU object.
++  for (auto *inf : all_inferiors ()) {
++    debit (counter::work,8);
++    require (++inferiors<=1 && inf==m_inferior,failure::resume_scope);
++  }
++  require (inferiors==1,failure::resume_scope);
++  for (auto *thread : m_inferior->threads ()) {
++    debit (counter::work,32);
++    require (++total<=16 && thread->inf==m_inferior
++             && thread->ptid.pid ()==m_inferior->pid,failure::resume_scope);
++    if (thread==m_host) ++host;
++    else {
++      require (thread==m_gpu_thread && ptid_is_gpu (thread->ptid),failure::resume_scope);
++      ++gpu;
++    }
++  }
++  require (host==1 && gpu==1,failure::resume_scope); // Includes the held exited object.
++}
++void native_adapter::terminal_maintenance_current (bool progress_required) {
++  debit (counter::work,256); // Fixed checks prepaid; roster traversal separately paid.
++  require (m_inferior!=nullptr && m_inferior_ref.get ()==m_inferior
++           && current_inferior ()==m_inferior && m_host!=nullptr
++           && m_host_ref.get ()==m_host && m_loaded_process_ref.get ()!=nullptr
++           && m_loaded_base_ref.get ()!=nullptr && m_loaded_top_ref.get ()!=nullptr,
++           failure::owner_changed);
++  auto *const proc=m_inferior->process_target ();
++  auto *const base=m_loaded_base_ref.get ();
++  auto *const top=m_inferior->top_target ();
++  require (proc!=nullptr && proc==m_loaded_process_ref.get () && proc==get_native_target ()
++           && top==m_loaded_top_ref.get () && top==&the_amd_dbgapi_target
++           && m_inferior->target_is_pushed (proc) && m_inferior->target_is_pushed (base)
++           && m_inferior->target_is_pushed (top) && m_inferior->find_target_beneath (top)==base
++           && (base==proc || (base->stratum ()==thread_stratum
++                             && m_inferior->find_target_beneath (base)==proc)),
++           failure::owner_changed);
++  require (m_inferior->ptid_thread_map.size ()<=2,failure::resume_scope);
++  require (m_owner.check_owner (current_identity ()),failure::owner_changed);
++  require (m_entry_epoch==entry_epoch::retired && !m_entry_maintenance_inflight
++           && m_loaded_epoch==loaded_epoch::retired
++           && m_owner.state ()==phase::awaiting_target_completion && m_owner.m_runtime
++           && !m_owner.m_callback && m_owner.m_callbacks!=0
++           && m_owner.m_callbacks<=limits::callbacks
++           && m_owner.m_callbacks==m_owner.m_completed_callbacks
++           && m_terminal_generation==m_owner.m_completed_callbacks
++           && m_callback_object!=0 && m_callback_object==m_owner.m_origin_callback_object
++           && m_owner.m_origin_callback_id!=0 && m_callback_pc!=0 && m_callback_number!=0
++           && info ().runtime_state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS
++           && (!progress_required || info ().forward_progress_required)
++           && m_path==path::none && !m_generic_returned && !m_generic_commit
++           && !m_amd_body_returned && !m_amd_commit_returned
++           && !m_command_continue && !m_exit_requested && !m_infrun_origin
++           && m_callback_epoch==callback_epoch::inactive
++           && m_owner.m_resume==resume_kind::completion
++           && !m_owner.m_cpu_returned && !m_owner.m_wave_returned
++           && !m_owner.m_body_returned && !m_owner.m_commit_started
++           && m_terminal_stage==m_owner.m_terminal,
++           failure::commit,commit_site::terminal_environment);
++  // No inferior_thread() or PC access: generic commit deliberately selects no
++  // thread and the original retained host may currently be executing.
++  require (m_host->state==THREAD_RUNNING && m_host->executing () && m_host->resumed ()
++           && !m_host->has_pending_waitstatus () && proc->threads_executing
++           && proc->commit_resumed_state && !proc->has_resumed_with_pending_wait_status ()
++           && m_infrun_signal==GDB_SIGNAL_0 && !m_infrun_software && !m_infrun_user_step,
++           failure::commit,commit_site::terminal_thread_state);
++  if (m_terminal_origin==terminal_origin::completion) {
++    require (m_terminal_stage==terminal_stage::idle
++             && !m_owner.m_empty_objects && m_callback_progress==callback_progress::none
++             && !m_host->control.trap_expected && !m_infrun_step
++             && !m_infrun_trap && !m_infrun_inline
++             && (m_infrun_scope==minus_one_ptid || m_infrun_scope==ptid_t (m_inferior->pid)),
++             failure::commit,commit_site::terminal_thread_state);
++  } else {
++    // Two exact completed terminal callback stages, each retaining the source
++    // owner's own empty-object acknowledgement state; no arbitrary phase OR.
++    if (m_terminal_stage==terminal_stage::delete_complete)
++      require (!m_owner.m_empty_objects,failure::commit,commit_site::terminal_environment);
++    else
++      require (m_terminal_stage==terminal_stage::withdrawal_complete
++               && m_owner.m_empty_objects,failure::commit,commit_site::terminal_environment);
++    require (m_infrun_scope==m_host->ptid,failure::commit,commit_site::terminal_thread_state);
++    if (m_terminal_origin==terminal_origin::callback_step) {
++      require (m_callback_progress==callback_progress::step_inflight
++               && m_host->control.trap_expected && m_infrun_step
++               && m_infrun_trap && m_infrun_inline,
++               failure::commit,commit_site::terminal_thread_state);
++    } else {
++      require (m_terminal_origin==terminal_origin::callback_continue
++               && m_callback_progress==callback_progress::none
++               && !m_host->control.trap_expected && !m_infrun_step
++               && !m_infrun_trap && !m_infrun_inline,
++               failure::commit,commit_site::terminal_thread_state);
++    }
++  }
++  terminal_gpu_current ();
++}
++void native_adapter::arm_terminal_maintenance (terminal_origin origin) {
++  debit (counter::work,64);
++  require (m_terminal_epoch==callback_epoch::inactive
++           && m_callback_epoch==callback_epoch::inactive,
++           failure::commit,commit_site::terminal_arm);
++  if (origin==terminal_origin::completion) {
++    require (m_terminal_origin==terminal_origin::none && m_terminal_generation==0
++             && m_owner.m_terminal==terminal_stage::idle,
++             failure::commit,commit_site::terminal_arm);
++  } else if (origin==terminal_origin::callback_step) {
++    require (m_terminal_generation<limits::callbacks
++             && m_owner.m_completed_callbacks==m_terminal_generation+1
++             && ((m_terminal_origin==terminal_origin::completion
++                  && m_terminal_stage==terminal_stage::idle
++                  && m_owner.m_terminal==terminal_stage::delete_complete)
++                 || (m_terminal_origin==terminal_origin::callback_continue
++                     && m_terminal_stage==terminal_stage::delete_complete
++                     && m_owner.m_terminal==terminal_stage::withdrawal_complete)),
++             failure::commit,commit_site::terminal_arm);
++  } else {
++    require (origin==terminal_origin::callback_continue
++             && m_terminal_origin==terminal_origin::callback_step
++             && m_owner.m_completed_callbacks==m_terminal_generation
++             && m_owner.m_terminal==m_terminal_stage,
++             failure::commit,commit_site::terminal_arm);
++  }
++  m_terminal_origin=origin;
++  m_terminal_generation=m_owner.m_completed_callbacks;
++  m_terminal_stage=m_owner.m_terminal;
++  terminal_maintenance_current (true);
++  m_terminal_epoch=callback_epoch::armed; // Only after the actual original commit/flush.
++}
++void native_adapter::retire_terminal_maintenance () noexcept {
++  if (m_terminal_epoch==callback_epoch::inactive) return;
++  if (!m_owner.invalid ()) m_owner.debit (counter::work,32);
++  if (m_terminal_epoch==callback_epoch::in_flight
++      || m_terminal_epoch==callback_epoch::amd_returned)
++    m_owner.poison (failure::commit,commit_site::terminal_retirement);
++  m_terminal_epoch=callback_epoch::inactive;
++  // Origin/stage/generation persist only for the next exact original join.
++}
++// Armed only by the original accepted runtime-unload ACK after its flush.
++// The AMD target has already been unpushed; this lineage expects ONLY the
++// existing host base/process commit, never an AMD-after callback.
++void native_adapter::unloaded_maintenance_current (bool commit_required) {
++  debit (counter::work,256);
++  require (m_inferior!=nullptr && m_inferior_ref.get ()==m_inferior
++           && current_inferior ()==m_inferior && m_host!=nullptr
++           && m_host_ref.get ()==m_host && m_loaded_process_ref.get ()!=nullptr
++           && m_loaded_base_ref.get ()!=nullptr && m_loaded_top_ref.get ()==&the_amd_dbgapi_target,
++           failure::owner_changed);
++  auto *const proc=m_inferior->process_target ();
++  auto *const base=m_loaded_base_ref.get ();
++  require (proc!=nullptr && proc==m_loaded_process_ref.get () && proc==get_native_target ()
++           && m_inferior->top_target ()==base
++           && m_inferior->target_is_pushed (proc) && m_inferior->target_is_pushed (base)
++           && !m_inferior->target_is_pushed (&the_amd_dbgapi_target)
++           && (base==proc || (base->stratum ()==thread_stratum
++                             && m_inferior->find_target_beneath (base)==proc))
++           && m_inferior->ptid_thread_map.size ()<=2,
++           failure::owner_changed);
++  require (m_owner.check_owner (current_identity ()),failure::owner_changed);
++  require (m_owner.state ()==phase::awaiting_target_completion && !m_owner.m_runtime
++           && m_owner.m_terminal==terminal_stage::unloaded && !m_owner.m_callback
++           && !m_owner.m_allocation_active && m_owner.m_empty_objects
++           && m_owner.m_resume==resume_kind::completion
++           && !m_owner.m_cpu_returned && !m_owner.m_wave_returned
++           && !m_owner.m_body_returned && !m_owner.m_commit_started
++           && m_owner.m_callbacks!=0 && m_owner.m_callbacks<=limits::callbacks
++           && m_owner.m_callbacks==m_owner.m_completed_callbacks
++           && m_terminal_generation==m_owner.m_completed_callbacks
++           && m_terminal_stage==terminal_stage::withdrawal_complete
++           && m_terminal_origin==terminal_origin::callback_continue
++           && m_terminal_epoch==callback_epoch::inactive
++           && m_callback_epoch==callback_epoch::inactive
++           && m_entry_epoch==entry_epoch::retired && !m_entry_maintenance_inflight
++           && m_loaded_epoch==loaded_epoch::retired
++           && m_callback_object!=0 && m_callback_object==m_owner.m_origin_callback_object
++           && m_owner.m_origin_callback_id!=0 && m_callback_pc!=0 && m_callback_number!=0
++           && info ().runtime_state==AMD_DBGAPI_RUNTIME_STATE_UNLOADED
++           && !info ().forward_progress_required
++           && m_path==path::none && !m_generic_returned && !m_generic_commit
++           && !m_amd_body_returned && !m_amd_commit_returned
++           && !m_command_continue && !m_exit_requested && !m_infrun_origin
++           && m_callback_progress==callback_progress::none,
++           failure::commit,commit_site::unloaded_environment);
++  require (m_host->state==THREAD_RUNNING && m_host->executing () && m_host->resumed ()
++           && !m_host->has_pending_waitstatus () && proc->threads_executing
++           && (!commit_required || proc->commit_resumed_state)
++           && !proc->has_resumed_with_pending_wait_status ()
++           && !m_host->control.trap_expected && m_infrun_scope==m_host->ptid
++           && m_infrun_signal==GDB_SIGNAL_0 && !m_infrun_step && !m_infrun_trap
++           && !m_infrun_inline && !m_infrun_software && !m_infrun_user_step,
++           failure::commit,commit_site::unloaded_thread_state);
++  // Same original retained wave/cache/roster checks, including the distinct
++  // exited-but-held branch. No absent-wave or runtime-unload completion claim.
++  terminal_gpu_current ();
++}
++void native_adapter::arm_unloaded_maintenance () {
++  debit (counter::work,32);
++  require (m_unloaded_epoch==unloaded_epoch::unused,
++           failure::commit,commit_site::unloaded_arm);
++  unloaded_maintenance_current (false);
++  m_unloaded_epoch=unloaded_epoch::armed;
++}
++void native_adapter::retire_unloaded_maintenance () noexcept {
++  if (m_unloaded_epoch==unloaded_epoch::unused || m_unloaded_epoch==unloaded_epoch::retired) return;
++  if (!m_owner.invalid ()) m_owner.debit (counter::work,32);
++  if (m_unloaded_epoch==unloaded_epoch::in_flight)
++    m_owner.poison (failure::commit,commit_site::unloaded_retirement);
++  m_unloaded_epoch=unloaded_epoch::retired; // Never rearm, release refs or grant resume.
++}
+ void native_adapter::infrun_begin (thread_info *thread,ptid_t scope,bool step,gdb_signal signal,
+                                   bool trap,bool inline_step,bool software,bool user_step) {
+   if (!selected ()) return;
+   require (!m_infrun_origin && m_path==path::none && thread!=nullptr
+            && thread==inferior_thread () && (thread==m_host || thread==m_gpu_thread)
+            && m_owner.check_owner (current_identity ()),failure::resume_scope);
+   m_infrun_origin=true; m_infrun_scope=scope; m_infrun_step=step; m_infrun_signal=signal;
+   m_infrun_trap=trap; m_infrun_inline=inline_step; m_infrun_software=software;
+   m_infrun_user_step=user_step;
+ }
+ void native_adapter::infrun_end () noexcept { m_infrun_origin=false; }
+ void native_adapter::before_generic_resume (ptid_t scope,int step,gdb_signal signal) {
+   if (!selected ()) return;
++  retire_unloaded_maintenance ();
++  retire_terminal_maintenance ();
++  retire_callback_maintenance ();
+   retire_loaded_maintenance ();
+   retire_entry_maintenance ();
+   require (m_infrun_origin && m_path==path::none && !m_generic_returned
+            && !m_generic_commit && m_infrun_scope==scope && m_infrun_step==(step!=0)
+            && m_infrun_signal==signal && signal==GDB_SIGNAL_0
+            && !m_infrun_software && !m_infrun_user_step
+            && !inferior_thread ()->executing () && !inferior_thread ()->resumed ()
+            && m_owner.check_owner (current_identity ()),failure::resume_scope);
+@@ -252,16 +591,34 @@
+   if (!selected ()) return;
+   require (m_path!=path::none && !m_generic_returned
+            && (m_path==path::entry ? !m_amd_body_returned : m_amd_body_returned),
+            failure::native_result);
+   m_generic_returned=true;
+ }
+ void native_adapter::before_generic_commit () {
+   if (!selected ()) return;
++  if (m_unloaded_epoch==unloaded_epoch::armed || m_unloaded_epoch==unloaded_epoch::in_flight) {
++    require (m_unloaded_epoch==unloaded_epoch::armed,failure::commit,commit_site::unloaded_before);
++    unloaded_maintenance_current (true);
++    m_unloaded_epoch=unloaded_epoch::in_flight;
++    return; // Consume before original host-only commit; no resume/ACK/owner credit.
++  }
++  if (m_terminal_epoch!=callback_epoch::inactive) {
++    require (m_terminal_epoch==callback_epoch::armed,failure::commit,commit_site::terminal_before);
++    terminal_maintenance_current (false);
++    m_terminal_epoch=callback_epoch::in_flight;
++    return; // Original commit only; no owner resume credit, ACK or output.
++  }
++  if (m_path==path::none && m_callback_epoch!=callback_epoch::inactive) {
++    require (m_callback_epoch==callback_epoch::armed,failure::commit,commit_site::callback_before);
++    callback_maintenance_current (false);
++    m_callback_epoch=callback_epoch::in_flight; // Before the original commit effect.
++    return;
++  }
+   if (m_path==path::none && m_loaded_epoch!=loaded_epoch::unused
+       && m_loaded_epoch!=loaded_epoch::retired) {
+     require (m_loaded_epoch==loaded_epoch::armed,failure::commit,commit_site::loaded_before);
+     loaded_maintenance_current (true,false);
+     m_loaded_epoch=loaded_epoch::in_flight; // Before original top/beneath/progress effects.
+     return;
+   }
+   if (m_path==path::none) {
+@@ -276,28 +633,60 @@
+            failure::commit, commit_site::before_pending);
+   if (m_path==path::entry) retain_entry_commit_targets ();
+   if (m_path==path::publication || m_path==path::completion)
+     require (m_owner.commit_started (current_identity ()),failure::commit, commit_site::owner_start_bridge);
+   m_generic_commit=true; // Before beneath/forward-progress effects.
+ }
+ void native_adapter::after_amd_commit () {
+   if (!selected ()) return;
++  require (m_unloaded_epoch==unloaded_epoch::unused || m_unloaded_epoch==unloaded_epoch::retired,
++           failure::commit,commit_site::unloaded_unexpected_amd);
++  if (m_terminal_epoch!=callback_epoch::inactive) {
++    require (m_terminal_epoch==callback_epoch::in_flight,failure::commit,commit_site::terminal_after_amd);
++    terminal_maintenance_current (true);
++    m_terminal_epoch=callback_epoch::amd_returned;
++    return; // Original commit only; no owner resume credit, ACK or output.
++  }
++  if (m_callback_epoch!=callback_epoch::inactive) {
++    require (m_callback_epoch==callback_epoch::in_flight,failure::commit,commit_site::callback_after_amd);
++    callback_maintenance_current (true);
++    m_callback_epoch=callback_epoch::amd_returned;
++    return; // No owner resume/commit credit.
++  }
+   if (m_loaded_epoch==loaded_epoch::in_flight || m_loaded_epoch==loaded_epoch::amd_returned) {
+     require (m_loaded_epoch==loaded_epoch::in_flight,failure::commit,commit_site::loaded_after_amd);
+     loaded_maintenance_current (true,true);
+     m_loaded_epoch=loaded_epoch::amd_returned;
+     return; // Original beneath/progress returned; no owner resume credit.
+   }
+   require (m_generic_commit && !m_amd_commit_returned && m_path!=path::entry
+            && m_amd_body_returned,failure::commit, commit_site::after_amd);
+   m_amd_commit_returned=true;
+ }
+ void native_adapter::after_generic_commit () {
+   if (!selected ()) return;
++  if (m_unloaded_epoch==unloaded_epoch::armed || m_unloaded_epoch==unloaded_epoch::in_flight) {
++    require (m_unloaded_epoch==unloaded_epoch::in_flight,failure::commit,commit_site::unloaded_after);
++    unloaded_maintenance_current (true);
++    m_unloaded_epoch=unloaded_epoch::armed;
++    return; // Original host base/process returned; no AMD-after is expected.
++  }
++  if (m_terminal_epoch!=callback_epoch::inactive) {
++    require (m_terminal_epoch==callback_epoch::amd_returned,failure::commit,commit_site::terminal_after);
++    terminal_maintenance_current (true);
++    m_terminal_epoch=callback_epoch::armed;
++    return; // Original commit only; no owner resume credit, ACK or output.
++  }
++  if (m_callback_epoch!=callback_epoch::inactive) {
++    require (m_callback_epoch==callback_epoch::amd_returned,failure::commit,commit_site::callback_after);
++    callback_maintenance_current (true);
++    m_callback_epoch=callback_epoch::armed;
++    return; // No flush, diagnostic, ACK, new resume or owner transition.
++  }
+   if (m_loaded_epoch==loaded_epoch::in_flight || m_loaded_epoch==loaded_epoch::amd_returned) {
+     require (m_loaded_epoch==loaded_epoch::amd_returned,failure::commit,commit_site::loaded_after);
+     loaded_maintenance_current (true,true);
+     m_loaded_epoch=loaded_epoch::armed;
+     return; // Maintenance only: no new ACK, row, stop or packet transition.
+   }
+   if (m_entry_maintenance_inflight) {
+     require (m_entry_epoch==entry_epoch::armed && m_path==path::none
+@@ -309,58 +698,81 @@
+   }
+   require (m_generic_commit && m_generic_returned
+            && (m_path==path::entry ? !m_amd_commit_returned : m_amd_commit_returned),
+            failure::commit, commit_site::after_pending);
+   if (m_path==path::publication || m_path==path::completion)
+     require (m_owner.commit_returned (),failure::commit, commit_site::owner_return_bridge);
+   if (m_path==path::callback_continue) m_callback_progress=callback_progress::none;
+   const bool entry=m_path==path::entry;
++  const bool callback=m_owner.state ()==phase::host_running
++    && (m_path==path::callback_step || m_path==path::callback_continue);
++  const bool stepping=m_path==path::callback_step;
++  const terminal_origin terminal=m_path==path::completion ? terminal_origin::completion
++    : (m_owner.state ()==phase::awaiting_target_completion
++       ? (m_path==path::callback_step ? terminal_origin::callback_step
++          : (m_path==path::callback_continue ? terminal_origin::callback_continue
++             : terminal_origin::none))
++       : terminal_origin::none);
+   m_path=path::none; m_generic_returned=m_generic_commit=false;
+   m_amd_body_returned=m_amd_commit_returned=false;
+   flush ();
++  if (callback) arm_callback_maintenance (stepping);
++  if (terminal!=terminal_origin::none) arm_terminal_maintenance (terminal);
+   if (entry) {
+     require (m_entry_epoch==entry_epoch::entry_commit,failure::commit, commit_site::after_entry_epoch);
+     entry_maintenance_current ();
+     m_entry_epoch=entry_epoch::armed; // Only after that actual first commit/flush.
+   }
+ }
+ void native_adapter::before_finish_step (thread_info *thread,const target_waitstatus &wait,
+                                         bool had_inline,bool trap_expected,std::uint64_t inline_address) {
+   if (!selected ()) return;
+   if (m_callback_progress!=callback_progress::step_inflight) return;
+-  // Borrow only the null-thread event context; retain every native check.
++  // Prepay this bounded event-context visit in the original selection ledger.
+   debit (counter::work,1);
++  // infrun selects the event inferior, but intentionally no thread, before
++  // finish_step_over. Never repair a foreign inferior or selected thread.
+   require (thread!=nullptr && thread==m_host && m_inferior!=nullptr
+            && current_inferior ()==m_inferior && thread->inf==m_inferior
+            && (inferior_ptid==null_ptid || inferior_thread ()==thread),
+            failure::resume_scope);
+   std::optional<scoped_restore_current_thread> event_context;
+   if (inferior_ptid==null_ptid) {
+     event_context.emplace ();
+     switch_to_thread (thread);
+   }
++  // The original full native predicate runs in that borrowed event context.
++  // Destruction restores the original no-thread context on return or unwind.
+   require (m_path==path::none && thread==m_host && thread==inferior_thread ()
+            && wait.kind ()==TARGET_WAITKIND_STOPPED && wait.sig ()==GDB_SIGNAL_TRAP
+            && had_inline && trap_expected && inline_address==m_callback_pc
+            && !thread->executing () && !thread->resumed ()
+            && m_owner.check_owner (current_identity ()),failure::resume_scope);
++  retire_unloaded_maintenance ();
++  retire_terminal_maintenance ();
++  retire_callback_maintenance (); // Actual stopped step ends the running interval.
+   m_callback_progress=callback_progress::continue_ready;
++  // Actual native stopped event, not a CLI step claim. The source hook precedes
++  // finish_step_over clearing the actual inline/trap identity.
+ }
+ void native_adapter::about_to_proceed () {
+   if (!selected ()) return;
+   require (m_command_continue && !m_infrun_origin && m_path==path::none
+            && m_callback_progress==callback_progress::none,failure::resume_scope);
+   if (m_owner.state ()==phase::armed_entry)
+     require (inferior_thread ()==m_host && m_owner.check_owner (current_identity ()),
+              failure::resume_scope);
+   else require (m_owner.early_proceed (current_identity ()),failure::resume_scope);
+ }
+ void native_adapter::mi_input (const char *text) {
+   if (!selected ()) return;
++  retire_unloaded_maintenance ();
++  retire_terminal_maintenance ();
++  retire_callback_maintenance ();
+   retire_loaded_maintenance ();
+   retire_entry_maintenance ();
+   m_snapshot.revoke (snapshot_issue::resumed); // EVERY next input, before parsing.
+   m_output.forget (); // Serialized history is never a live value accessor.
+   require (text!=nullptr && current_ui==m_ui && top_level_interpreter ()==m_interpreter,
+            failure::command);
+   std::size_t size=0;
+   while (size<128 && text[size]!=0) ++size;
+--- a/gdb/amd-dbgapi-one-stop-native-v1.h
++++ b/gdb/amd-dbgapi-one-stop-native-v1.h
+@@ -9,16 +9,17 @@
+ #include "amd-dbgapi-one-stop-output-v2.h"
+ #include "pager.h"
+ #include "amd-dbgapi-one-stop-activation-v1.h"
+ #include "amd-dbgapi-one-stop-profile-v1.h"
+ #include "amd-dbgapi-one-stop-locator-v1.h"
+ #include "amd-dbgapi-one-stop-sha256-v1.h"
+ #include <sys/stat.h>
+ #include <optional>
++#include <utility>
+ namespace amd_owned_one_stop_v1 {
+ class owned_checkpoint_breakpoint;
+ // Source-owned logical envelopes, not an optimized C++ stack/RSS assertion.
+ // Rows name the selected added/helper vertices; reference views are pointer-sized.
+ // No object of this type is constructed and no retained target is duplicated.
+ struct loaded_maintenance_scratch final {
+   struct ack_frame { native_adapter *self; amd_dbgapi_inferior_info *actual;
+     amd_dbgapi_event_id_t event; amd_dbgapi_runtime_state_t state; amd_dbgapi_status_t status; } ack;
+@@ -40,16 +41,82 @@
+     counter kind; std::uint64_t amount; } core;
+   struct ref_frame { target_ops *source; target_ops_ref result;
+     target_ops_ref *destination,*incoming; target_ops *incref,*decref; } refs[3];
+ };
+ // Debug-type observability only: no call or object construction.
+ [[gnu::used]] static const loaded_maintenance_scratch *
+ loaded_maintenance_debug_type (const loaded_maintenance_scratch *p) noexcept
+ { return p; }
++// Extra bounded borrowed/helper frames for callback-only maintenance. Retained
++// fields are already in sizeof(native_adapter); existing targets are not copied.
++struct callback_maintenance_scratch final {
++  struct current_frame { native_adapter *self; bool progress_required;
++    process_stratum_target *proc; target_ops *base,*top; identity observed;
++    std::size_t host,gpu; } current;
++  struct arm_frame { native_adapter *self; bool stepping; } arm;
++  struct retire_frame { native_adapter *self; } retire;
++  struct commit_frames { native_adapter *before,*amd_after,*generic_after;
++    bool entry,callback,stepping; } hooks;
++  loaded_maintenance_scratch::identity_frame owner_identity;
++  loaded_maintenance_scratch::info_frame info;
++  loaded_maintenance_scratch::roster_frame roster;
++  loaded_maintenance_scratch::require_frame require;
++  loaded_maintenance_scratch::debit_frame debit;
++  loaded_maintenance_scratch::core_frames core;
++};
++[[gnu::used]] static const callback_maintenance_scratch *
++callback_maintenance_debug_type (const callback_maintenance_scratch *p) noexcept
++{ return p; }
++// Separate terminal-only borrowed frames; no actual owner or cache is copied.
++struct terminal_maintenance_scratch final {
++  callback_maintenance_scratch common;
++  struct gpu_frame { native_adapter *self; thread_info *retained;
++    decltype (std::declval<inferior &> ().ptid_thread_map.begin ()) active;
++    decltype (std::declval<amd_dbgapi_inferior_info &> ().wave_info_map.begin ()) cached;
++    std::size_t inferiors,total,host,gpu;
++    decltype (all_inferiors ()) inferior_range;
++    decltype (all_inferiors ().begin ()) inferior_begin,inferior_end;
++    decltype (std::declval<inferior &> ().threads ()) thread_range;
++    decltype (std::declval<inferior &> ().threads ().begin ()) thread_begin,thread_end;
++    inferior *inf; thread_info *thread; } gpu;
++  struct origin_frames { native_adapter *arm,*retire; std::uint64_t generation;
++    std::uint8_t origin,stage; } origins;
++};
++[[gnu::used]] static const terminal_maintenance_scratch *
++terminal_maintenance_debug_type (const terminal_maintenance_scratch *p) noexcept
++{ return p; }
++// Unload-ACK-specific borrowed/helper frames, independently prepaid.
++struct unloaded_maintenance_scratch final {
++  callback_maintenance_scratch common;
++  terminal_maintenance_scratch::gpu_frame gpu;
++  struct frames { native_adapter *current,*arm,*retire,*before,*after;
++    bool commit_required; process_stratum_target *proc; target_ops *base; } hooks;
++};
++[[gnu::used]] static const unloaded_maintenance_scratch *
++unloaded_maintenance_debug_type (const unloaded_maintenance_scratch *p) noexcept
++{ return p; }
++// Separately prepaid typed helper frames for the exact solib/reset lineage.
++// This is a logical source envelope, not a compiler stack/RSS claim.
++struct breakpoint_refresh_scratch final {
++  terminal_maintenance_scratch common;
++  struct refresh_frames { native_adapter *before,*current,*after,*abort,*clear;
++    amd_dbgapi_inferior_info *actual; amd_dbgapi_event_id_t event;
++    program_space *pspace; std::uint8_t kind; bool observed; } refresh;
++  struct reset_frames { native_adapter *begin,*consume,*end,*remember,*check;
++    breakpoint *bp; const breakpoint *diagnostic; bp_location *location;
++    program_space *pspace; std::uint64_t generation,address; int number;
++    unsigned type,site; bool yes,was_valid; } reset;
++  decltype (std::declval<amd_dbgapi_inferior_info &> ().breakpoint_map.begin ()) callback;
++  amd_owned_one_stop_native_v1::internal_breakpoint_reset_guard guard;
++  char fatal_error_payload[224]; // Separate bounded error text, not client output.
++};
++[[gnu::used]] static const breakpoint_refresh_scratch *
++breakpoint_refresh_debug_type (const breakpoint_refresh_scratch *p) noexcept
++{ return p; }
+ class native_adapter final {
+ public:
+   native_adapter (const native_adapter &) = delete;
+   native_adapter &operator= (const native_adapter &) = delete;
+   native_adapter (native_adapter &&) = delete;
+   native_adapter &operator= (native_adapter &&) = delete;
+   static native_adapter &instance () noexcept;
+   bool selected () const noexcept { return m_owner.selected (); }
+@@ -69,16 +136,21 @@
+   void nested_mi ();
+   void after_amd_cpu_resume ();
+   void after_amd_wave_resume (amd_dbgapi_wave_id_t, amd_dbgapi_status_t);
+   void after_amd_resume ();
+   void before_generic_commit ();
+   void after_amd_commit ();
+   void after_auto_delete ();
+   void deleting_breakpoint (breakpoint *);
++  void before_breakpoint_refresh (amd_dbgapi_inferior_info &,amd_dbgapi_event_id_t);
++  void after_breakpoint_refresh (amd_dbgapi_inferior_info &,amd_dbgapi_event_id_t);
++  void abort_breakpoint_refresh () noexcept;
++  bool before_internal_breakpoint_reset (breakpoint *,program_space *);
++  void after_internal_breakpoint_reset ();
+   void after_host_or_gpu_stop (thread_info *);
+   void about_to_proceed ();
+   void callback_begin (amd_dbgapi_inferior_info &, breakpoint *,
+                        amd_dbgapi_breakpoint_id_t, thread_info *);
+   void callback_end (amd_dbgapi_inferior_info &, breakpoint *,
+                      amd_dbgapi_breakpoint_id_t, thread_info *,
+                      amd_dbgapi_event_id_t, amd_dbgapi_breakpoint_action_t,
+                      amd_dbgapi_status_t);
+@@ -92,28 +164,52 @@
+   void invalidate (failure);
+   void flush ();
+   /* Existing solib loop calls this only in selected profile. It obtains the
+      real sole handle and bounded URI before its ordinary solib bookkeeping. */
+   bool selected_object (amd_dbgapi_inferior_info &, amd_dbgapi_code_object_id_t &,
+                         std::ptrdiff_t &, const char *&);
+ private:
+   friend class owned_checkpoint_breakpoint;
++  using terminal_stage = owner::terminal_stage;
++  enum class refresh_kind : std::uint8_t { none,initial,terminal };
++  enum class reset_state : std::uint8_t { idle,armed,consumed };
++  enum class breakpoint_site : std::uint8_t {
++    none,refresh_begin,refresh_end,reset_begin,reset_bound,reset_candidate,
++    reset_consume,reset_mutated,reset_end,unrelated_delete,owned_delete,
++    callback_delete,owned_reset,callback_boundary
++  };
++  void breakpoint_refresh_current (refresh_kind,bool);
++  void clear_breakpoint_refresh () noexcept;
++  void consume_internal_breakpoint_reset (breakpoint *);
++  void remember_breakpoint_failure (const breakpoint *,breakpoint_site,bool) noexcept;
++  void breakpoint_check (bool,const breakpoint *,breakpoint_site);
++  enum class terminal_origin : std::uint8_t { none,completion,callback_step,callback_continue };
+   native_adapter () noexcept = default;
+   [[noreturn]] void reject (failure, commit_site = commit_site::none);
+   void require (bool, failure, commit_site = commit_site::none);
+   void debit (counter, std::uint64_t);
+   void api ();
+   void entry_maintenance_current ();
+   void retain_entry_commit_targets ();
+   void retire_entry_maintenance () noexcept;
+   void prepare_loaded_maintenance (amd_dbgapi_inferior_info &);
+   void loaded_maintenance_current (bool,bool);
+   void arm_loaded_maintenance ();
+   void retire_loaded_maintenance () noexcept;
++  void callback_maintenance_current (bool);
++  void arm_callback_maintenance (bool);
++  void retire_callback_maintenance () noexcept;
++  void terminal_gpu_current ();
++  void terminal_maintenance_current (bool);
++  void arm_terminal_maintenance (terminal_origin);
++  void retire_terminal_maintenance () noexcept;
++  void unloaded_maintenance_current (bool);
++  void arm_unloaded_maintenance ();
++  void retire_unloaded_maintenance () noexcept;
+   identity current_identity ();
+   amd_dbgapi_inferior_info &info ();
+   void thread_roster (std::size_t &, std::size_t &);
+   void checkpoint_hit (owned_checkpoint_breakpoint *, bpstat *);
+   void inspect_checkpoint (bool recheck);
+   void read (std::uint64_t, std::uint8_t *, std::size_t);
+   void hash_inferior (std::uint64_t, std::uint64_t, const digest_bytes &);
+   void hash_executable ();
+@@ -135,16 +231,18 @@
+   void query (Get, Id, Query, Value &);
+   template<typename Handle, typename Call>
+   Handle list_one (Call);
+   void client_scope_failed () noexcept;
+   static constexpr std::uint64_t constant_and_scratch = 4096;
+   static constexpr std::uint64_t snapshot_scalar_scratch = 1024;
+   static constexpr std::uint64_t entry_maintenance_scalar_scratch = 256;
+   static constexpr std::uint64_t loaded_maintenance_scalar_scratch = sizeof (loaded_maintenance_scratch);
++  static constexpr std::uint64_t finish_step_context_scratch
++    = sizeof (std::optional<scoped_restore_current_thread>);
+   static constexpr std::uint64_t logical_storage () noexcept;
+   owner m_owner;
+   physical_snapshot m_snapshot; // Private, same selected-lifetime sizeof reservation.
+   workspace m_work;
+   sha256 m_hash;
+   digest_bytes m_digest {};
+   checkpoint m_candidate {};
+   gpu_stop m_candidate_stop {};
+@@ -169,45 +267,74 @@
+   std::ptrdiff_t m_object_bias = 0;
+   std::uint64_t m_original_address = 0;
+   std::uint64_t m_callback_pc = 0, m_callback_number = 0;
+   std::uintptr_t m_callback_object = 0;
+   int m_exec_fd = -1;
+   unsigned m_file_passes = 0, m_checkpoint_passes = 0;
+   bool m_query_output = false, m_in_allocate = false;
+   bool m_origin_pending = false, m_origin_complete = false;
++  refresh_kind m_refresh_kind=refresh_kind::none;
++  reset_state m_reset_state=reset_state::idle;
++  std::uint64_t m_refresh_event=0,m_refresh_generation=0,m_reset_address=0;
++  breakpoint *m_reset_object=nullptr;
++  bp_location *m_reset_location=nullptr;
++  std::size_t m_reset_count=0;
++  int m_reset_number=0;
++  unsigned m_reset_type=0;
++  breakpoint_site m_first_breakpoint_site=breakpoint_site::none;
++  unsigned m_first_breakpoint_type=0;
++  int m_first_breakpoint_number=0;
+   enum class path : std::uint8_t { none,entry,callback_step,callback_continue,publication,completion };
+   enum class callback_progress : std::uint8_t { none,step_ready,step_inflight,continue_ready };
+   enum class entry_epoch : std::uint8_t { unused,entry_commit,armed,retired };
+   enum class loaded_epoch : std::uint8_t { unused,prospective,armed,in_flight,amd_returned,retired };
++  enum class callback_epoch : std::uint8_t { inactive,armed,in_flight,amd_returned };
++  callback_epoch m_callback_epoch=callback_epoch::inactive;
++  std::uint64_t m_callback_generation=0;
++  bool m_callback_stepping=false;
++  callback_epoch m_terminal_epoch=callback_epoch::inactive;
++  terminal_origin m_terminal_origin=terminal_origin::none;
++  terminal_stage m_terminal_stage=terminal_stage::idle;
++  std::uint64_t m_terminal_generation=0;
++  enum class unloaded_epoch : std::uint8_t { unused,armed,in_flight,retired };
++  unloaded_epoch m_unloaded_epoch=unloaded_epoch::unused;
+   target_ops_ref m_loaded_process_ref,m_loaded_base_ref,m_loaded_top_ref;
+   loaded_epoch m_loaded_epoch=loaded_epoch::unused;
+   target_ops_ref m_entry_process_ref,m_entry_top_ref;
+   entry_epoch m_entry_epoch=entry_epoch::unused;
+   bool m_entry_maintenance_inflight=false;
+   path m_path=path::none;
+   callback_progress m_callback_progress=callback_progress::none;
+   bool m_infrun_origin=false,m_infrun_step=false,m_infrun_inline=false;
+   bool m_infrun_trap=false,m_infrun_software=false,m_infrun_user_step=false;
+   bool m_generic_returned=false,m_generic_commit=false;
+   bool m_amd_body_returned=false,m_amd_commit_returned=false;
+   bool m_command_continue=false,m_exit_requested=false,m_stop_retired=false;
+   ptid_t m_infrun_scope;
+   gdb_signal m_infrun_signal=GDB_SIGNAL_0;
+ };
+ constexpr std::uint64_t native_adapter::logical_storage () noexcept {
+-  /* sizeof owns all retained members. Additions separately prepay scalar/RAII,
+-     snapshot, entry, loaded-maintenance and publication scratch, the one
+-     library callback allocation, and the finish-step context guard. These are
+-     logical reservations, not allocator overhead or stack-peak measurements. */
++  /* sizeof includes owner + every concrete scratch/data member. Additional
++     4096 prepays fixed constants, parser/scalar stack scratch and fixed RAII
++     guards, with the sole128-byte library callback allocation separate.
++     The new snapshot adds its own1024-byte fixed scalar/temporary envelope;
++     retained snapshot arrays are already included in sizeof(native_adapter).
++     Another256 bytes prepay simultaneous borrowed output pointers/closures,
++     without silently reusing any of those existing reservations.
++     The finish-step event-context guard has a separate sizeof reservation;
++     it only borrows existing owners and is constructed from no-thread state. */
+   return sizeof (native_adapter) + constant_and_scratch + snapshot_scalar_scratch
+     + entry_maintenance_scalar_scratch + loaded_maintenance_scalar_scratch
+-    + sizeof (std::optional<scoped_restore_current_thread>)
++    + finish_step_context_scratch + sizeof (callback_maintenance_scratch) + sizeof (terminal_maintenance_scratch) + sizeof (unloaded_maintenance_scratch)
++    + sizeof (breakpoint_refresh_scratch)
+     + limits::client_output_bytes + publication_output::scratch_bytes;
+ }
+ static_assert (sizeof (native_adapter) + 4096 + 1024 + 256 + sizeof (loaded_maintenance_scratch) + limits::client_output_bytes + 256
+                + sizeof (std::optional<scoped_restore_current_thread>)
++               + sizeof (callback_maintenance_scratch) + sizeof (terminal_maintenance_scratch) + sizeof (unloaded_maintenance_scratch)
++               + sizeof (breakpoint_refresh_scratch)
+                <= limits::logical_bytes, "all new fixed retained data is prepaid");
+ static_assert (limits::file_requested_bytes == target_file_read_cap
+                && limits::file_rounds == target_file_round_cap,
+                "measured executable and file ledger must remain joined");
+ }
+ #endif
+--- a/gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc
+@@ -1,13 +1,18 @@
+ /* SPDX-License-Identifier: GPL-3.0-or-later
+    Single-instance wrappers compiled in the existing AMD client TU. */
+ namespace amd_owned_one_stop_native_v1 {
+ using adapter=amd_owned_one_stop_v1::native_adapter;
+ bool selected () noexcept { return adapter::instance ().selected (); }
++bool before_internal_breakpoint_reset (breakpoint *bp,program_space *pspace) {
++  return adapter::instance ().before_internal_breakpoint_reset (bp,pspace);
++}
++void after_internal_breakpoint_reset () { adapter::instance ().after_internal_breakpoint_reset (); }
++void abort_breakpoint_refresh () noexcept { adapter::instance ().abort_breakpoint_refresh (); }
+ void unwind () noexcept { adapter::instance ().native_unwind (); }
+ void before_resume (ptid_t p,int step,gdb_signal sig) { adapter::instance ().before_generic_resume (p,step,sig); }
+ void after_resume () { adapter::instance ().after_generic_resume (); }
+ void before_commit () { adapter::instance ().before_generic_commit (); }
+ void after_commit () { adapter::instance ().after_generic_commit (); }
+ void infrun_begin (thread_info *t,ptid_t p,bool step,gdb_signal sig,bool trap,bool inl,bool soft,bool user) {
+   adapter::instance ().infrun_begin (t,p,step,sig,trap,inl,soft,user);
+ }
+--- a/gdb/amd-dbgapi-one-stop-observation-v1.h
++++ b/gdb/amd-dbgapi-one-stop-observation-v1.h
+@@ -3,18 +3,39 @@
+ #ifndef GDB_AMD_DBGAPI_ONE_STOP_OBSERVATION_V1_H
+ #define GDB_AMD_DBGAPI_ONE_STOP_OBSERVATION_V1_H
+ #if HAVE_AMD_DBGAPI
+ #include "target.h"
+ #include <amd-dbgapi/amd-dbgapi.h>
+ #include <cstddef>
+ #include <cstdint>
+ #include <exception>
++struct breakpoint;
++struct program_space;
+ namespace amd_owned_one_stop_native_v1 {
+ bool selected () noexcept;
++// This guard is constructed only by the stock internal_breakpoint::re_set
++// deletion cases. It retains no breakpoint pointer beyond begin/consume.
++bool before_internal_breakpoint_reset (breakpoint *,program_space *);
++void after_internal_breakpoint_reset ();
++void abort_breakpoint_refresh () noexcept;
++class internal_breakpoint_reset_guard final {
++  bool m_active;
++public:
++  internal_breakpoint_reset_guard (breakpoint *bp,program_space *pspace)
++    : m_active (before_internal_breakpoint_reset (bp,pspace)) {}
++  internal_breakpoint_reset_guard (const internal_breakpoint_reset_guard &)=delete;
++  internal_breakpoint_reset_guard &operator= (const internal_breakpoint_reset_guard &)=delete;
++  ~internal_breakpoint_reset_guard () noexcept {
++    if (m_active) abort_breakpoint_refresh ();
++  }
++  void complete () {
++    if (m_active) { after_internal_breakpoint_reset (); m_active=false; }
++  }
++};
+ void before_resume (ptid_t,int,gdb_signal);
+ void after_resume ();
+ void before_commit ();
+ void after_commit ();
+ void unwind () noexcept;
+ void infrun_begin (thread_info *,ptid_t,bool,gdb_signal,bool,bool,bool,bool);
+ void infrun_end () noexcept;
+ void before_finish_step (thread_info *,const target_waitstatus &,bool,bool,std::uint64_t);
+--- a/gdb/amd-dbgapi-owned-one-stop-v1.h
++++ b/gdb/amd-dbgapi-owned-one-stop-v1.h
+@@ -47,17 +47,40 @@
+   after_entry_epoch = 14,
+   loaded_prepare = 15,
+   loaded_environment = 16,
+   loaded_thread_state = 17,
+   loaded_arm = 18,
+   loaded_before = 19,
+   loaded_after_amd = 20,
+   loaded_after = 21,
+-  loaded_retirement = 22
++  loaded_retirement = 22,
++  callback_environment = 23,
++  callback_thread_state = 24,
++  callback_arm = 25,
++  callback_before = 26,
++  callback_after_amd = 27,
++  callback_after = 28,
++  callback_retirement = 29,
++  terminal_environment = 30,
++  terminal_thread_state = 31,
++  terminal_wave_identity = 32,
++  terminal_wave_membership = 33,
++  terminal_arm = 34,
++  terminal_before = 35,
++  terminal_after_amd = 36,
++  terminal_after = 37,
++  terminal_retirement = 38,
++  unloaded_environment = 39,
++  unloaded_thread_state = 40,
++  unloaded_arm = 41,
++  unloaded_before = 42,
++  unloaded_unexpected_amd = 43,
++  unloaded_after = 44,
++  unloaded_retirement = 45
+ };
+ enum class resume_kind : std::uint8_t { publication, completion };
+ enum class counter : std::uint8_t {
+   api, read_bytes, read_calls, work, diagnostic_rows,
+   file_requested_bytes, file_observed_bytes, file_probe_bytes, file_rounds, proc_requested_bytes
+ };
+ struct usage {
+   std::uint64_t logical_bytes = 0, api = 0, read_bytes = 0, read_calls = 0, work = 0, rows = 0;
+--- a/gdb/amd-dbgapi-target.c
++++ b/gdb/amd-dbgapi-target.c
+@@ -2063,17 +2063,27 @@
+ 	   - amd_dbgapi_target_breakpoint::check_status calls
+ 	     process_event_queue, which pulls the event out of dbgapi, and
+ 	     gets us here
+ 
+ 	 When amd_dbgapi_target_breakpoint::check_status is called, the current
+ 	 inferior is the inferior that hit the breakpoint, which should still be
+ 	 the case now.  */
+       gdb_assert (info.inf == current_inferior ());
+-      handle_solib_event ();
++      one_stop_native::native_adapter::instance ().before_breakpoint_refresh (info,event_id);
++      try
++        {
++          handle_solib_event ();
++          one_stop_native::native_adapter::instance ().after_breakpoint_refresh (info,event_id);
++        }
++      catch (...)
++        {
++          one_stop_native::native_adapter::instance ().abort_breakpoint_refresh ();
++          throw;
++        }
+       break;
+ 
+     case AMD_DBGAPI_EVENT_KIND_BREAKPOINT_RESUME:
+       /* Breakpoint resume events should be handled by the breakpoint
+ 	 action, and this code should not reach this.  */
+       gdb_assert_not_reached ("unhandled event kind");
+       break;
+ 
+--- a/gdb/breakpoint.c
++++ b/gdb/breakpoint.c
+@@ -33,16 +33,17 @@
+ #include "gdbcore.h"
+ #include "cli/cli-cmds.h"
+ #include "value.h"
+ #include "command.h"
+ #include "inferior.h"
+ #include "infrun.h"
+ #include "gdbthread.h"
+ #include "target.h"
++#include "amd-dbgapi-one-stop-observation-v1.h"
+ #include "language.h"
+ #include "gdb-demangle.h"
+ #include "filenames.h"
+ #include "annotate.h"
+ #include "symfile.h"
+ #include "objfiles.h"
+ #include "source.h"
+ #include "linespec.h"
+@@ -12330,17 +12331,26 @@
+   switch (type)
+     {
+       /* Delete overlay event and longjmp master breakpoints; they
+ 	 will be reset later by breakpoint_re_set.  */
+     case bp_overlay_event:
+     case bp_longjmp_master:
+     case bp_std_terminate_master:
+     case bp_exception_master:
+-      delete_breakpoint (this);
++      {
++#if HAVE_AMD_DBGAPI
++        amd_owned_one_stop_native_v1::internal_breakpoint_reset_guard
++          one_stop_reset (this,pspace);
++#endif
++        delete_breakpoint (this);
++#if HAVE_AMD_DBGAPI
++        one_stop_reset.complete ();
++#endif
++      }
+       break;
+ 
+       /* This breakpoint is special, it's set up when the inferior
+ 	 starts and we really don't want to touch it.  */
+     case bp_shlib_event:
+ 
+       /* Like bp_shlib_event, this breakpoint type is special.  Once
+ 	 it is set up, we do not want to touch it.  */

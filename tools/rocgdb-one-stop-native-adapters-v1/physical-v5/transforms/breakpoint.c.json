@@ -1,0 +1,26 @@
+{
+  "schema": "fe2o3-disabled-physical-v5-byte-ranges-v1",
+  "path": "gdb/breakpoint.c",
+  "before": {
+    "bytes": 461818,
+    "sha256": "ba04b11724dabbf142057775ad553fda9248de7e7b33ffcc71eb2cd17e5ecd8e"
+  },
+  "after": {
+    "bytes": 462084,
+    "sha256": "3deadac5c09ff724ea583c9f2f8c398a88ff849f6eb7520e5eef9c87d31dbef4"
+  },
+  "changes": [
+    {
+      "beforeOffset": 1150,
+      "afterOffset": 1150,
+      "before": "#include \"gdbcore.h\"\n#include \"cli/cli-cmds.h\"\n#include \"value.h\"\n#include \"command.h\"\n#include \"inferior.h\"\n#include \"infrun.h\"\n#include \"gdbthread.h\"\n#include \"target.h\"\n#include \"language.h\"\n#include \"gdb-demangle.h\"\n#include \"filenames.h\"\n#include \"annotate.h\"\n#include \"symfile.h\"\n#include \"objfiles.h\"\n#include \"source.h\"\n#include \"linespec.h\"\n",
+      "after": "#include \"gdbcore.h\"\n#include \"cli/cli-cmds.h\"\n#include \"value.h\"\n#include \"command.h\"\n#include \"inferior.h\"\n#include \"infrun.h\"\n#include \"gdbthread.h\"\n#include \"target.h\"\n#include \"amd-dbgapi-one-stop-observation-v1.h\"\n#include \"language.h\"\n#include \"gdb-demangle.h\"\n#include \"filenames.h\"\n#include \"annotate.h\"\n#include \"symfile.h\"\n#include \"objfiles.h\"\n#include \"source.h\"\n#include \"linespec.h\"\n"
+    },
+    {
+      "beforeOffset": 364656,
+      "afterOffset": 364704,
+      "before": "  switch (type)\n    {\n      /* Delete overlay event and longjmp master breakpoints; they\n\t will be reset later by breakpoint_re_set.  */\n    case bp_overlay_event:\n    case bp_longjmp_master:\n    case bp_std_terminate_master:\n    case bp_exception_master:\n      delete_breakpoint (this);\n      break;\n\n      /* This breakpoint is special, it's set up when the inferior\n\t starts and we really don't want to touch it.  */\n    case bp_shlib_event:\n\n      /* Like bp_shlib_event, this breakpoint type is special.  Once\n\t it is set up, we do not want to touch it.  */\n",
+      "after": "  switch (type)\n    {\n      /* Delete overlay event and longjmp master breakpoints; they\n\t will be reset later by breakpoint_re_set.  */\n    case bp_overlay_event:\n    case bp_longjmp_master:\n    case bp_std_terminate_master:\n    case bp_exception_master:\n      {\n#if HAVE_AMD_DBGAPI\n        amd_owned_one_stop_native_v1::internal_breakpoint_reset_guard\n          one_stop_reset (this,pspace);\n#endif\n        delete_breakpoint (this);\n#if HAVE_AMD_DBGAPI\n        one_stop_reset.complete ();\n#endif\n      }\n      break;\n\n      /* This breakpoint is special, it's set up when the inferior\n\t starts and we really don't want to touch it.  */\n    case bp_shlib_event:\n\n      /* Like bp_shlib_event, this breakpoint type is special.  Once\n\t it is set up, we do not want to touch it.  */\n"
+    }
+  ]
+}

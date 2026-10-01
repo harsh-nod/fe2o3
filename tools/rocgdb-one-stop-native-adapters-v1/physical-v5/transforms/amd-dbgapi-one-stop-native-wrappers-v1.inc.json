@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v5-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-wrappers-v1.inc",
+  "before": {
+    "bytes": 2281,
+    "sha256": "ecc3094c8dc18c30f49f54ce6f266e1b0e63ef8564d4b17a5165bb907d9a8fa6"
+  },
+  "after": {
+    "bytes": 2635,
+    "sha256": "912a2d2fa2355230cf677b757f0ac7f956cef0fefdcc14ff5323e097f7a46d8f"
+  },
+  "changes": [
+    {
+      "beforeOffset": 0,
+      "afterOffset": 0,
+      "before": "/* SPDX-License-Identifier: GPL-3.0-or-later\n   Single-instance wrappers compiled in the existing AMD client TU. */\nnamespace amd_owned_one_stop_native_v1 {\nusing adapter=amd_owned_one_stop_v1::native_adapter;\nbool selected () noexcept { return adapter::instance ().selected (); }\nvoid unwind () noexcept { adapter::instance ().native_unwind (); }\nvoid before_resume (ptid_t p,int step,gdb_signal sig) { adapter::instance ().before_generic_resume (p,step,sig); }\nvoid after_resume () { adapter::instance ().after_generic_resume (); }\nvoid before_commit () { adapter::instance ().before_generic_commit (); }\nvoid after_commit () { adapter::instance ().after_generic_commit (); }\nvoid infrun_begin (thread_info *t,ptid_t p,bool step,gdb_signal sig,bool trap,bool inl,bool soft,bool user) {\n  adapter::instance ().infrun_begin (t,p,step,sig,trap,inl,soft,user);\n}\n",
+      "after": "/* SPDX-License-Identifier: GPL-3.0-or-later\n   Single-instance wrappers compiled in the existing AMD client TU. */\nnamespace amd_owned_one_stop_native_v1 {\nusing adapter=amd_owned_one_stop_v1::native_adapter;\nbool selected () noexcept { return adapter::instance ().selected (); }\nbool before_internal_breakpoint_reset (breakpoint *bp,program_space *pspace) {\n  return adapter::instance ().before_internal_breakpoint_reset (bp,pspace);\n}\nvoid after_internal_breakpoint_reset () { adapter::instance ().after_internal_breakpoint_reset (); }\nvoid abort_breakpoint_refresh () noexcept { adapter::instance ().abort_breakpoint_refresh (); }\nvoid unwind () noexcept { adapter::instance ().native_unwind (); }\nvoid before_resume (ptid_t p,int step,gdb_signal sig) { adapter::instance ().before_generic_resume (p,step,sig); }\nvoid after_resume () { adapter::instance ().after_generic_resume (); }\nvoid before_commit () { adapter::instance ().before_generic_commit (); }\nvoid after_commit () { adapter::instance ().after_generic_commit (); }\nvoid infrun_begin (thread_info *t,ptid_t p,bool step,gdb_signal sig,bool trap,bool inl,bool soft,bool user) {\n  adapter::instance ().infrun_begin (t,p,step,sig,trap,inl,soft,user);\n}\n"
+    }
+  ]
+}
