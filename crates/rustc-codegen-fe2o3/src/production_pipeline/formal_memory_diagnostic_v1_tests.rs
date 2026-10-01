@@ -488,6 +488,71 @@ fn admitted_execution_json(
     json!({"kernels": rows, "observationGrantsAuthority": false})
 }
 
+fn retain_admitted_evidence(
+    owner: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    captured_identity: fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrIdentityV1,
+    captured_sha256: [u8; 32],
+    capture_succeeded: bool,
+    directory: &Path,
+) -> Result<Value, String> {
+    use fe2o3_lower_mir_kernel::InertFormalMemoryAdmissionEvidenceFormatV5 as Evidence;
+    let semantic = owner.semantic_kir();
+    let kir = semantic.canonical_kernel_ir_bytes();
+    if !capture_succeeded
+        || kir.len() > BYTE_LIMIT
+        || semantic.canonical_kernel_ir_identity() != captured_identity
+        || <[u8; 32]>::from(Sha256::digest(kir)) != captured_sha256
+    {
+        return Err("admitted owner differs from the retained pre-formal graph".into());
+    }
+    let [kernel] = owner.kernels() else {
+        return Err("singleton diagnostic evidence requires one actual kernel".into());
+    };
+    // This constructor revalidates the same live owner; it does not rebuild the pipeline.
+    let evidence = Evidence::from_live_owner(owner).map_err(|error| error.to_string())?;
+    let bytes = evidence.canonical_bytes();
+    if bytes.len() > fe2o3_lower_mir_kernel::MAX_FORMAL_MEMORY_ADMISSION_EVIDENCE_BYTES_V4
+        || evidence.canonical_kernel_ir_identity() != captured_identity
+        || evidence.grants_authority()
+    {
+        return Err("unexpected live-owner evidence bounds or identity".into());
+    }
+    let raw = fe2o3_kernel_ir::InertFormalMemoryReceiptFormatV4::from_current_obligations(
+        kernel.obligations(),
+    )
+    .map_err(|error| error.to_string())?;
+    if evidence.formal_obligation_receipt_bytes() != raw.canonical_bytes() {
+        return Err("live-owner evidence changed the raw formal obligations".into());
+    }
+    let format = match &evidence {
+        Evidence::Legacy(_) if kernel.execution_discharges().is_empty() => "F2FMA4",
+        Evidence::ExecutionDischarged(value)
+            if value.kernel_ordinal() == 0
+                && value.kernel_id() == kernel.obligations().kernel().as_str()
+                && value.entry_id() == kernel.obligations().entry().as_str()
+                && value.discharges() == kernel.execution_discharges() =>
+        {
+            "F2FMA5"
+        }
+        _ => return Err("live-owner evidence changed the execution discharge roster".into()),
+    };
+    fresh_bytes(&directory.join("formal-admission.evidence"), bytes)?;
+    Ok(json!({
+        "status": "retained", "format": format, "path": "formal-admission.evidence",
+        "byteLength": bytes.len(), "bytesSha256": hex(&Sha256::digest(bytes)),
+        "identity": hex(evidence.identity()), "identityIsRawBytesSha256": false,
+        "canonicalIdentity": hex(captured_identity.digest()),
+        "canonicalVersion": format!("{:?}", captured_identity.version()),
+        "canonicalLength": captured_identity.canonical_length(),
+        "kernelOrdinal": 0, "kernel": kernel.obligations().kernel().as_str(),
+        "entry": kernel.obligations().entry().as_str(),
+        "rawReceiptLength": raw.canonical_bytes().len(),
+        "rawReceiptSha256": hex(&Sha256::digest(raw.canonical_bytes())),
+        "executionDischargeCount": kernel.execution_discharges().len(),
+        "grantsAuthority": false,
+    }))
+}
+
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn observe_pre_formal_memory_v1(
         self,
@@ -509,6 +574,8 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let identity = owner.canonical_kernel_ir_identity();
         let bytes = owner.canonical_kernel_ir_bytes();
         let kir_capture = fresh_bytes(&directory.join("pre-formal-owner.kir"), bytes);
+        let capture_succeeded = kir_capture.is_ok();
+        let captured_sha256: [u8; 32] = Sha256::digest(bytes).into();
         let layouts =
             exact_debug_map_functions_from_owner_v1(ExactDebugSourceOwnerV1::Normal(owner))
                 .map(|_| ());
@@ -523,7 +590,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             "canonicalOwner": {
                 "version": format!("{:?}", identity.version()),
                 "identity": hex(identity.digest()), "canonicalLength": identity.canonical_length(),
-                "bytesSha256": hex(&Sha256::digest(bytes)),
+                "bytesSha256": hex(&captured_sha256),
                 "capture": match kir_capture { Ok(()) => json!({"path": "pre-formal-owner.kir"}), Err(error) => json!({"error": error}) },
             },
             "kernels": owner.module().kernels.iter().map(|kernel| kernel.id.as_str()).collect::<Vec<_>>(),
@@ -558,12 +625,27 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         // No diagnostic limitation turns a genuine refusal into a different
         // compiler result, and no second owner or optimizer is constructed.
         report["formalAdmission"] = match neutral.admit_formal_memory() {
-            Ok(admitted) => json!({
-                "status": "admitted", "nativeLowering": "not attempted",
-                "execution": admitted_execution_json(
-                    &admitted.admitted, operations.as_deref().unwrap_or(&[]), layouts.is_ok(),
-                ),
-            }),
+            Ok(admitted) => {
+                let evidence = retain_admitted_evidence(
+                    &admitted.admitted,
+                    identity,
+                    captured_sha256,
+                    capture_succeeded,
+                    directory,
+                )
+                .unwrap_or_else(|error| {
+                    json!({
+                        "status": "unavailable", "error": error, "grantsAuthority": false,
+                    })
+                });
+                json!({
+                    "status": "admitted", "nativeLowering": "not attempted",
+                    "execution": admitted_execution_json(
+                        &admitted.admitted, operations.as_deref().unwrap_or(&[]), layouts.is_ok(),
+                    ),
+                    "evidence": evidence,
+                })
+            }
             Err(error) => {
                 let conflicts = match &error {
                     ProductionPipelineError::FormalMemoryAdmission(

@@ -43,6 +43,13 @@ pub(super) fn bounded_output(
 }
 
 pub(super) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+    read_bounded_with_limit(path, BYTE_LIMIT)
+}
+
+fn read_bounded_with_limit(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+    if limit > BYTE_LIMIT {
+        return Err("diagnostic read limit exceeds byte bound".into());
+    }
     let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
     if !file
         .metadata()
@@ -53,10 +60,10 @@ pub(super) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     }
     let mut bytes = Vec::new();
     (&mut file)
-        .take(BYTE_LIMIT as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
-    if bytes.len() > BYTE_LIMIT {
+    if bytes.len() > limit {
         return Err("diagnostic input exceeds byte bound".into());
     }
     Ok(bytes)
@@ -91,6 +98,156 @@ fn fresh_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
 
 fn digest(bytes: &[u8]) -> String {
     crate::encode_hex(&Sha256::digest(bytes))
+}
+
+fn assert_retained_formal_evidence(directory: &Path, report: &Value, kir: Vec<u8>) {
+    use fe2o3_lower_mir_kernel::{
+        InertCanonicalFormalMemoryAdmissionEvidenceV4,
+        InertFormalMemoryAdmissionEvidenceFormatV5 as Evidence,
+        ProductionCanonicalKernelIrVersionV1 as Version,
+        revalidate_legacy_formal_memory_receipt_against_verified_module_v1,
+    };
+    let recorded = &report["formalAdmission"]["evidence"];
+    assert_eq!(recorded["status"], "retained", "{recorded}");
+    assert_eq!(recorded["format"], "F2FMA5");
+    assert_eq!(recorded["path"], "formal-admission.evidence");
+    assert_eq!(recorded["grantsAuthority"], false);
+    assert_eq!(recorded["identityIsRawBytesSha256"], false);
+    let bytes = read_bounded_with_limit(
+        &directory.join("formal-admission.evidence"),
+        fe2o3_lower_mir_kernel::MAX_FORMAL_MEMORY_ADMISSION_EVIDENCE_BYTES_V4,
+    )
+    .unwrap();
+    assert_eq!(recorded["byteLength"], bytes.len());
+    assert_eq!(recorded["bytesSha256"], digest(&bytes));
+    let facade = Evidence::decode_current(&bytes).unwrap();
+    assert_eq!(facade.canonical_bytes(), bytes);
+    assert_eq!(recorded["identity"], crate::encode_hex(facade.identity()));
+    assert!(!facade.grants_authority() && facade.legacy_v4().is_none());
+    let evidence = facade.execution_discharged_v5().unwrap();
+    assert!(!evidence.grants_authority());
+    let identity = evidence.canonical_kernel_ir_identity();
+    assert_eq!(
+        recorded["canonicalIdentity"],
+        crate::encode_hex(identity.digest())
+    );
+    assert_eq!(
+        recorded["canonicalIdentity"],
+        report["canonicalOwner"]["identity"]
+    );
+    assert_eq!(
+        recorded["canonicalVersion"],
+        format!("{:?}", identity.version())
+    );
+    assert_eq!(
+        recorded["canonicalVersion"],
+        report["canonicalOwner"]["version"]
+    );
+    assert_eq!(recorded["canonicalLength"], identity.canonical_length());
+    assert_eq!(
+        recorded["canonicalLength"],
+        report["canonicalOwner"]["canonicalLength"]
+    );
+    assert_eq!(identity.canonical_length(), kir.len() as u64);
+    assert!(kir.len() <= BYTE_LIMIT);
+    // Decode only the saved same-run graph; never construct a replacement source owner.
+    let (canonical_digest, canonical_length, module) = match identity.version() {
+        Version::V8 => {
+            let (canonical, module) =
+                fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(kir)
+                    .unwrap();
+            (
+                *canonical.identity().digest(),
+                canonical.canonical_bytes().len(),
+                module,
+            )
+        }
+        Version::V9 => {
+            let (canonical, module) =
+                fe2o3_kernel_ir::VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(kir)
+                    .unwrap();
+            (
+                *canonical.identity().digest(),
+                canonical.canonical_bytes().len(),
+                module,
+            )
+        }
+        Version::V11 => {
+            let (canonical, module) =
+                fe2o3_kernel_ir::VerifiedCanonicalKernelIrV11::from_canonical_bytes_with_module(
+                    kir,
+                )
+                .unwrap();
+            (
+                *canonical.identity().digest(),
+                canonical.canonical_bytes().len(),
+                module,
+            )
+        }
+    };
+    assert_eq!(canonical_digest, *identity.digest());
+    assert_eq!(canonical_length as u64, identity.canonical_length());
+    let verified = fe2o3_kernel_ir::verify_module_ref(&module).unwrap();
+    facade.revalidate_against_verified_module(verified).unwrap();
+    let [kernel] = report["formalAdmission"]["execution"]["kernels"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("one actual kernel evidence report is required")
+    };
+    assert_eq!(evidence.kernel_ordinal(), 0);
+    assert_eq!(recorded["kernelOrdinal"], evidence.kernel_ordinal());
+    assert_eq!(recorded["kernel"], evidence.kernel_id());
+    assert_eq!(recorded["entry"], evidence.entry_id());
+    assert_eq!(kernel["kernel"], evidence.kernel_id());
+    assert_eq!(kernel["entry"], evidence.entry_id());
+    let raw = evidence.formal_obligation_receipt_bytes();
+    assert_eq!(recorded["rawReceiptLength"], raw.len());
+    assert_eq!(recorded["rawReceiptSha256"], digest(raw));
+    let [discharge] = evidence.discharges() else {
+        panic!("the actual self-conflict requires one retained execution discharge")
+    };
+    assert_eq!(recorded["executionDischargeCount"], 1);
+    assert!(!discharge.grants_authority());
+    let witness = |value: fe2o3_lower_mir_kernel::ProductionFormalMemoryExecutionWitnessV1| {
+        let path = match value.path() {
+            fe2o3_kernel_ir::FormalGuardedPathV1::ExplicitPredicate => {
+                json!({"kind": "explicitPredicate"})
+            }
+            fe2o3_kernel_ir::FormalGuardedPathV1::TrueEdge {
+                source,
+                ordinal,
+                target,
+            } => {
+                json!({"kind": "trueEdge", "sourceBlock": source.0,
+                    "successorOrdinal": ordinal, "targetBlock": target.0})
+            }
+        };
+        json!({"invocation": value.invocation(), "index": value.index().0,
+            "threshold": value.threshold().0, "predicate": value.predicate().0, "path": path})
+    };
+    let location = |value: fe2o3_kernel_ir::FunctionOperationLocation| json!({"blockId": value.block.0, "operationOrdinal": value.operation_index});
+    assert_eq!(
+        kernel["executionDischarges"],
+        json!([{
+            "conflictOrdinal": discharge.conflict_ordinal(),
+            "left": location(discharge.left()), "right": location(discharge.right()),
+            "allocationParameter": discharge.allocation_parameter(),
+            "leftWitness": witness(discharge.left_witness()),
+            "rightWitness": witness(discharge.right_witness()),
+        }])
+    );
+    assert!(InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(&bytes).is_err());
+    assert!(
+        revalidate_legacy_formal_memory_receipt_against_verified_module_v1(
+            verified,
+            evidence.kernel_ordinal(),
+            raw,
+        )
+        .is_err()
+    );
+    assert!(Evidence::decode_current(&bytes[..bytes.len() - 1]).is_err());
 }
 
 fn original_native_rustflags(target: &str) -> String {
@@ -588,6 +745,7 @@ fn ordinary_lds_source_retains_owner_bound_execution_discharge() {
     );
     assert!(report["correspondence"].is_array());
     assert!(!report["liveSource"]["files"].as_array().unwrap().is_empty());
+    assert_retained_formal_evidence(&directory, &report, kir);
     // Source-map gaps and non-unique conflict ownership remain visible; the
     // diagnostic does not replace them with a guessed source line.
 }
@@ -735,6 +893,13 @@ fn diagnostic_json_is_bounded_and_create_new() {
         serde_json::from_slice::<Value>(&read_bounded(&path).unwrap()).unwrap(),
         json!({"first": true})
     );
+    let length = read_bounded(&path).unwrap().len();
+    assert_eq!(
+        read_bounded_with_limit(&path, length).unwrap().len(),
+        length
+    );
+    assert!(read_bounded_with_limit(&path, length - 1).is_err());
+    assert!(read_bounded_with_limit(&path, BYTE_LIMIT + 1).is_err());
     let mut bounded = LimitedJson(Vec::new());
     assert!(bounded.write(&vec![0; BYTE_LIMIT + 1]).is_err());
     assert!(bounded.0.is_empty());
