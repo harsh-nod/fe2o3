@@ -132,8 +132,7 @@ fn private_source_unary_operator_matrix_preserves_types_and_metadata_refusal() {
 fn private_source_unary_reconstructs_real_helper_writes_for_every_root() {
     let counts = std::cell::Cell::new([0usize; 2]);
     with_entry_fixture_v18(unary_owner_v39, |original, optimized, budget| {
-        let floor = budget.storage();
-        scoped_source_attempt_v29(original.source.cleanup, budget, floor, |budget| {
+        source_scalar_normalization_scratch_v18(original.source.cleanup, budget, 0, |budget| {
             budget.reserve_storage(private_source_completion_headers_v20()?)?;
             let index = OriginalEntryIndexV20::build(original, budget)?;
             for root in 0..2 {
