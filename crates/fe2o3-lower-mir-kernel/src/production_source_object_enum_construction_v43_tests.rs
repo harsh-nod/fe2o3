@@ -303,10 +303,11 @@ fn original_retained_enum_construction_commits_scalar_payloads_before_the_tag() 
         let prepared =
             scalar_payload_prepared_from_v18(original_enum_construction_owner_v43, &mut budget);
         let completed = std::cell::Cell::new(false);
-        let result = prepared.with_source_consumer_v18(&mut budget, |_, _| {
-            completed.set(true);
-            Ok(())
-        });
+        let result =
+            prepared.with_source_consumer_v18(&mut budget, |_, _| -> SourceOwnedResultV18<()> {
+                completed.set(true);
+                Ok(())
+            });
         assert!(result.is_ok(), "fields={fields}: {result:?}");
         assert!(completed.get());
         assert!(ENUM_CONSTRUCTION_OBSERVED_V43.get() > 0);
