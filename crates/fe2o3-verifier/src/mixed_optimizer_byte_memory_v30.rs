@@ -123,6 +123,7 @@ enum MemoryTagReadPurposeV39 {
 
 enum MemoryOperationEffectV30 {
     Refused,
+    Trap,
     Pure,
     Allocate { address: MemoryValueV30, extent: int, alignment: int },
     Read { address: MemoryValueV30, width: int, alignment: int, value: MemoryValueV30 },
@@ -147,6 +148,23 @@ struct MemoryOperationObservationV30 {
 open spec fn byte_observation_snapshots_valid_v39(observation: MemoryOperationObservationV30) -> bool {
     observation.valid_before == observation.before.valid
         && observation.valid_after == observation.after.valid
+}
+
+// Only the exact registered final operation may preserve a valid trap terminal.
+// Plain Unreachable and arbitrary negative PCs remain invalid executions.
+open spec fn byte_trap_terminal_v40(
+    state: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>,
+    operation: MemorySourceOperationV30, block: int, count: int,
+) -> bool {
+    count > 0 && observations.len() == count && state.valid && state.pc == -2
+        && ({
+            let last = observations[count - 1];
+            byte_observation_snapshots_valid_v39(last)
+                && last.operation == operation && last.effect == MemoryOperationEffectV30::Trap
+                && last.before.valid && last.before.pc == block && last.after == state
+                && last.before.values == state.values && last.before.memory == state.memory
+                && last.before.generations == state.generations && last.before.frames == state.frames
+        })
 }
 
 struct MemoryOperationResultV30 {

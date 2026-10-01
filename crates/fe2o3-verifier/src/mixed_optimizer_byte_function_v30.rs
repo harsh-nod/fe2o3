@@ -41,6 +41,10 @@ use views::StorageViewByteOperationV39;
 mod integral;
 use integral::IntegralByteCastV40;
 
+#[path = "mixed_optimizer_byte_trap_v40.rs"]
+mod trap;
+use trap::TrapByteOperationV40;
+
 /// The original canonical Alloca occurrence and its physical root's original
 /// MIR declaration. A declaring callee is deliberately not the physical owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,6 +71,7 @@ enum ByteOperationV30<'inventory, 'owner> {
     IntegralCast(IntegralByteCastV40),
     Index(IndexByteOperationV37),
     Scalar(CanonicalByteScalarV30<'inventory, 'owner>),
+    Trap(TrapByteOperationV40),
 }
 
 /// Complete supported operation census over the exact retained Inventory.
@@ -229,6 +234,8 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 IndexByteOperationV37::derive(inventory, operation, width, out)?
             {
                 ByteOperationV30::Index(index)
+            } else if let Some(trap) = TrapByteOperationV40::derive(inventory, operation, out)? {
+                ByteOperationV30::Trap(trap)
             } else {
                 ByteOperationV30::Scalar(CanonicalByteScalarV30::derive(
                     inventory, operation, width, out,
@@ -442,7 +449,12 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             out.budget.charge_work(1)?;
             emit!(
                 out,
-                " if m.next_operation == -1 && m.state.pc == {block} && m.observations.len() == {} {{ byte_control_{namespace}_{block}_v30(m.state, m.observations) }} else\n",
+                " if m.next_operation == -1 && (m.state.pc == {block} || ("
+            );
+            self.emit_trap_terminal(block, "m.state", "m.observations", out)?;
+            emit!(
+                out,
+                ")) && m.observations.len() == {} {{ byte_control_{namespace}_{block}_v30(m.state, m.observations) }} else\n",
                 self.inventory.blocks()[block].operations.len()
             );
         }
@@ -511,6 +523,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             valid: "valid",
         };
         let effect = match plan {
+            ByteOperationV30::Trap(trap) => {
+                trap.emit_step(before, after, out)?;
+                PointerByteEffectV30::None
+            }
             ByteOperationV30::Scalar(scalar) => {
                 scalar.emit_step(namespace, before, after, out)?;
                 PointerByteEffectV30::None
@@ -568,7 +584,12 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             }
         };
         emit!(out, " let effect = ");
-        if let ByteOperationV30::Alloca(alloca) = plan {
+        if matches!(plan, ByteOperationV30::Trap(_)) {
+            emit!(
+                out,
+                "if valid {{ MemoryOperationEffectV30::Trap }} else {{ MemoryOperationEffectV30::Refused }}"
+            );
+        } else if let ByteOperationV30::Alloca(alloca) = plan {
             emit!(
                 out,
                 "MemoryOperationEffectV30::Allocate {{ address: values[{}], extent: {}, alignment: {} }}",
@@ -612,10 +633,53 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 ),
             }
         }
+        let pc = if matches!(plan, ByteOperationV30::Trap(_)) {
+            "if valid { -2 } else { s.pc }"
+        } else {
+            "s.pc"
+        };
         emit!(
             out,
-            ";\n let state = MemoryStateV30 {{ pc: s.pc, values, memory, generations, frames, valid }}; MemoryOperationResultV30 {{ state, observation: MemoryOperationObservationV30 {{ operation, before: s, after: state, valid_before: s.valid, valid_after: valid, effect }} }}\n }}\n}}\n"
+            ";\n let state = MemoryStateV30 {{ pc: {pc}, values, memory, generations, frames, valid }}; MemoryOperationResultV30 {{ state, observation: MemoryOperationObservationV30 {{ operation, before: s, after: state, valid_before: s.valid, valid_after: valid, effect }} }}\n }}\n}}\n"
         );
+        Ok(())
+    }
+
+    fn emit_trap_terminal(
+        &self,
+        block: usize,
+        state: &str,
+        observations: &str,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        out.budget.charge_work(1)?;
+        let row = &self.inventory.blocks()[block];
+        let start = self.inventory.functions()[self.function.0 as usize]
+            .operations
+            .start;
+        let last = row
+            .operations
+            .end
+            .checked_sub(1)
+            .filter(|last| row.operations.contains(last));
+        if let Some(operation) = last.filter(|last| {
+            matches!(
+                self.operations.get(last - start),
+                Some(ByteOperationV30::Trap(_))
+            )
+        }) {
+            let coordinate = self.inventory.operations()[operation].coordinate;
+            emit!(
+                out,
+                "byte_trap_terminal_v40({state}, {observations}, MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, {block}, {})",
+                coordinate.block.function.0,
+                coordinate.block.block,
+                coordinate.operation,
+                row.operations.len()
+            );
+        } else {
+            emit!(out, "false");
+        }
         Ok(())
     }
 }
@@ -630,6 +694,7 @@ fn headers<R>() -> usize {
         + interpretation::headers()
         + views::headers()
         + integral::headers()
+        + trap::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()
         + size_of::<ByteOperationV30<'_, '_>>()

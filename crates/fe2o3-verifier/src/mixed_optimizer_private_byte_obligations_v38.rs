@@ -15,11 +15,13 @@ pub(super) enum Guard {
     Read,
     Write,
     Copy,
+    Trap,
     View(views::ViewGuard),
 }
 
 fn guard(plan: &ByteOperationV30<'_, '_>, actual: &OperationKind) -> Result<Guard> {
     let guard = match plan {
+        ByteOperationV30::Trap(_) => Guard::Trap,
         ByteOperationV30::Alloca(_) => Guard::Allocate,
         ByteOperationV30::View(view) => Guard::View(view.guard()),
         ByteOperationV30::Storage(storage) => match storage.effect() {
@@ -66,6 +68,7 @@ pub(super) fn check(
         Guard::Read => Kind::Read,
         Guard::Write => Kind::Write,
         Guard::Copy => Kind::Copy,
+        Guard::Trap => Kind::Unmodeled,
         Guard::View(
             views::ViewGuard::Form | views::ViewGuard::Construction | views::ViewGuard::Variant,
         ) => Kind::Project,
@@ -128,6 +131,7 @@ pub(super) fn check(
                         | Guard::Write
                         | Guard::Copy
                         | Guard::View(_)
+                        | Guard::Trap
                 )
             }
             // Exact tag plans borrow checked row contracts. Read/formation

@@ -194,7 +194,12 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
     );
     emit!(
         out,
-        "open spec fn byte_control_{namespace}_{block}_v30(done: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>) -> MemoryBlockResultV30 {{\n if done.values.len() != {definitions} || done.pc != {block} || !byte_state_memory_well_formed_v30(done) || !"
+        "open spec fn byte_control_{namespace}_{block}_v30(done: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>) -> MemoryBlockResultV30 {{\n let trapped = "
+    );
+    model.emit_trap_terminal(block, "done", "observations", out)?;
+    emit!(
+        out,
+        ";\n if done.values.len() != {definitions} || (done.pc != {block} && !trapped) || !byte_state_memory_well_formed_v30(done) || !"
     );
     model
         .interpretation
@@ -202,6 +207,10 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
     emit!(
         out,
         " {{ MemoryBlockResultV30 {{ state: MemoryStateV30 {{ valid: false, ..done }}, observations, returned: Seq::empty() }} }} else {{\n"
+    );
+    emit!(
+        out,
+        " if trapped {{ MemoryBlockResultV30 {{ state: done, observations, returned: Seq::empty() }} }} else {{\n"
     );
     let uses = &model.inventory.uses()[row.terminator_uses.clone()];
     match row.terminator {
@@ -272,7 +281,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
             " MemoryBlockResultV30 {{ state: MemoryStateV30 {{ pc: -1, valid: false, ..done }}, observations, returned: Seq::empty() }}"
         ),
     }
-    emit!(out, "\n }}\n}}\n");
+    emit!(out, "\n }}\n }}\n}}\n");
     Ok(())
 }
 

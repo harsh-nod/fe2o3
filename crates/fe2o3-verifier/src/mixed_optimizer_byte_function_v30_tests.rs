@@ -21,6 +21,7 @@ include!("mixed_optimizer_private_byte_obligations_v38_tests.rs");
 include!("mixed_optimizer_target_view_contracts_v38_tests.rs");
 include!("mixed_optimizer_storage_view_byte_operations_v39_tests.rs");
 include!("mixed_optimizer_integral_byte_casts_v40_tests.rs");
+include!("mixed_optimizer_byte_trap_v40_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
@@ -352,9 +353,9 @@ fn byte_function_edges_read_immutable_preedge_values_in_operand_order() {
         .unwrap();
         assert!(text.contains("let values = preedge.update(3, preedge[4]).update(4, preedge[3])"));
         assert!(text.contains("MemoryValueV30::Scalar(0) | MemoryValueV30::Scalar(1)"));
-        assert!(
-            text.contains("m.next_operation == -1 && m.state.pc == 1 && m.observations.len() == 0")
-        );
+        assert!(text.contains(
+            "m.next_operation == -1 && (m.state.pc == 1 || (false)) && m.observations.len() == 0"
+        ));
     });
 }
 
@@ -766,6 +767,8 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
     assert_eq!(views::headers(), views);
     let integral = integral_cast_header_oracle_v40();
     assert_eq!(integral::headers(), integral);
+    let trap = trap_header_oracle_v40();
+    assert_eq!(trap::headers(), trap);
     assert_eq!(
         headers::<R<'_>>(),
         pointer
@@ -777,6 +780,7 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
             + interpretation
             + views
             + integral
+            + trap
             + model
     );
 }
