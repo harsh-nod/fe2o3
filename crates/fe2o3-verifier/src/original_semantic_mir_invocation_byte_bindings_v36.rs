@@ -3,7 +3,7 @@
 
 use super::super::super::byte_function_v30::ByteAllocationResolverV30;
 use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
-use fe2o3_kernel_ir::OperationKind;
+use fe2o3_kernel_ir::{FunctionRole, OperationKind};
 use std::{fmt::Write as _, mem::size_of, ops::Range};
 
 #[derive(Clone, Copy, Debug)]
@@ -25,6 +25,41 @@ fn mismatch() -> Error {
     Error::Statement("original MIR byte map differs from its authenticated Alloca results")
 }
 
+fn check_root_census(
+    functions: &[fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>],
+    selected: &[bool],
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    out.budget.charge_work(1)?;
+    if functions.len() != selected.len() {
+        return Err(mismatch());
+    }
+    for (function, selected) in functions.iter().zip(selected) {
+        out.budget.charge_work(12)?;
+        let exact = if *selected {
+            function.function.role == FunctionRole::KernelEntry
+                && function.function.body.is_some()
+                && !function.blocks.is_empty()
+        } else {
+            // An inlined helper can leave a declaration, but cannot leave an
+            // unaccounted executable body in this source-bound root census.
+            function.function.role == FunctionRole::ExternalImport
+                && function.function.body.is_none()
+                && function.blocks.is_empty()
+                && function.operations.is_empty()
+                && function.uses.is_empty()
+                && function.edges.is_empty()
+                && function.edge_arguments.is_empty()
+                && function.effects.is_empty()
+                && function.calls.is_empty()
+        };
+        if !exact {
+            return Err(mismatch());
+        }
+    }
+    Ok(())
+}
+
 impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
     pub(super) fn derive(
         slots: &'slots SourceSlots<'view, 'source>,
@@ -42,14 +77,14 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
                 count = count.checked_add(1).ok_or(Resource::Arithmetic)?;
             }
         }
-        if roots != inventory.functions().len() {
+        if roots > inventory.functions().len() {
             return Err(mismatch());
         }
         let mut rows = vector(count, out)?;
         let mut ranges = vector(roots, out)?;
-        let mut seen = vector(roots, out)?;
-        out.budget.charge_work(roots)?;
-        seen.resize(roots, false);
+        let mut seen = vector(inventory.functions().len(), out)?;
+        out.budget.charge_work(inventory.functions().len())?;
+        seen.resize(inventory.functions().len(), false);
         for root in 0..roots {
             let (_, physical) = source.root(root, out.budget)?;
             out.budget.charge_work(2)?;
@@ -58,6 +93,10 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
             }
             seen[physical] = true;
             let function = inventory.functions().get(physical).ok_or_else(mismatch)?;
+            out.budget.charge_work(1)?;
+            if function.function.role != FunctionRole::KernelEntry {
+                return Err(mismatch());
+            }
             let begin = rows.len();
             for operation in inventory
                 .operations()
@@ -102,6 +141,7 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
         if rows.len() != count {
             return Err(mismatch());
         }
+        check_root_census(inventory.functions(), &seen, out)?;
         let released = seen
             .capacity()
             .checked_mul(size_of::<bool>())
@@ -149,6 +189,10 @@ impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "original_semantic_mir_byte_binding_roots_v48_tests.rs"]
+mod tests;
 
 fn headers() -> usize {
     fn h<T>() -> usize {
