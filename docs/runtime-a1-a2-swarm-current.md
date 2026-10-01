@@ -4,11 +4,11 @@
 
 Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
-refreshed on 2026-10-01: the issue remained Open, with 33 comments and its latest
-update at 2026-10-01 02:01:40 UTC. Both runtime branch refs were confirmed through
-signed commit `1cfb7580f`, including the qualified field-codec and journal-wrapper
+refreshed on 2026-10-01: the issue remained Open, with 34 comments and its latest
+update at 2026-10-01 04:40:07 UTC. Both runtime branch refs were confirmed through
+signed commit `c88acfb42`, including the qualified field-codec and journal-wrapper
 integrations, public raw evidence and the matched wait-cadence campaign helpers.
-The [published checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5923229932)
+The [published checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5924866701)
 records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
@@ -47,9 +47,15 @@ changed leaf closure, 64/0 for the changed conditional closure and 213/0 for the
 concrete root; all seven stages and groups close. An earlier visibility-related
 frontend rejection is preserved, and the corrected three-root frontend check
 passes. These are positive discovery results only. The 89-case full-root
-negative roster passes sixteen source-only controls, but signed qualification,
-live-allocation checks and fresh credit-lock refinement remain open. Native
-runtime and model bytes are unchanged in this proof-only candidate.
+negative roster passes sixteen source-only controls. Its capture stops on a
+timeout at the sixth concrete mutation, after 38 leaf, 21 conditional and five
+concrete normal observations. That timeout is rejected, not a qualified
+negative; the closing release and durable archive complete, with the original
+packet retained. Signed qualification, live-allocation checks and fresh
+credit-lock refinement remain open. Native runtime and model bytes are
+unchanged in this proof-only candidate. A separate seven-path live-allocation
+source draft passes six structural controls but has no frontend, solver or CPU
+acceptance yet.
 
 The operation-level distributed codec now passes full unsigned discovery at
 99/0 over eleven proof inputs, including executable encode/decode roundtrip
@@ -58,14 +64,31 @@ groups close; independent root readback agrees. Explicit header-byte and
 schema-bitvector lemmas repair the earlier rejected attempts without changing
 native bytes or weakening contracts. The 1,130-pass/19-ignore CPU result and
 sixteen retained executables are reused through unchanged actual compiler
-inputs. Signed qualification and actual-body negative controls remain pending;
-this does not qualify two-host transport or distributed authority.
+inputs. Its first operation mutation campaign stops on a resource-limit error
+in decode alongside the intended logical failure in digest writing. Independent
+readback confirms all six groups closed and all 914 archived members match
+their originals; no negative is accepted. A subsequent proof-opacity draft is
+rejected by the frontend for nested header placement, and that attempt is also
+preserved. Correct top-level opacity headers now pass a fresh full 99/0 proof
+with unchanged contracts and limits; independent readback joins all three
+groups and 7,532 archived members. The new forty-case capture is underway,
+not qualified. Signed qualification and actual-body negative controls remain
+pending; this does not qualify two-host transport or distributed authority.
 
-The 36-trial wait-cadence campaign has a reviewed signed payload with all 6,529
-selected source objects and thirteen helper identities independently checked.
-Its six ordinary comparison cells and twelve diagnostic cells are covered by
-synthetic controls. Preparation is not hardware execution; no new native
-cadence result or performance gain is accepted at this checkpoint.
+The [36-trial wait-cadence campaign](runtime-retained-pair-cadence-v1.md#mi300x-measurement)
+now completes at signed source `1cfb7580f`, with all 471 native and six transport
+groups closed, four fresh executables, independent full readback and verified
+owned remote cleanup. The 25 us experiment lowers ordinary depth-16 latency by
+29.94-31.51% and depth-32 latency by 21.51-21.66% versus its 1 ms control.
+Those deep cells are 11.08-13.95% lower latency than HSA and 4.64-9.74% lower
+than HIP, while depth 1 remains slower than both. All 240 separate diagnostic
+samples are complete; deeper waits use more scan-thread CPU and sleep calls.
+This is one nonexclusive shared-host run with unknown comparator engine
+identities, not a default-policy promotion, parity claim or A7 exit. The
+[public packet](evidence/dev-xgmi-retained-wait-cadence-native-2026-10-01/README.md)
+contains the original native archive, signed source bundle and independent
+readbacks; all original raw and durable archives remain retained. Its external
+source/tool replay prerequisites are explicit.
 
 The [24-trial retained XGMI diagnostic campaign](evidence/dev-xgmi-retained-host-diagnostic-native-2026-10-01/README.md)
 is complete at signed source `a26dbebb5`: eighteen ordinary and six profiled
@@ -78,7 +101,8 @@ operational checks total about 24-25 microseconds per sample at the median;
 depths 16 and 32 consistently reach four and five sleeps, respectively.
 Scan time includes overlapping GPU progress and requested sleep is not actual
 sleep duration, so these observations do not quantify avoidable latency.
-Wait cadence is the next bounded experiment, not an accepted optimization.
+At that checkpoint wait cadence was the next bounded experiment; the separate
+36-trial result above now supplies its scoped measurement.
 Point-idle checks are not exclusive reservations, comparator engine identities
 are unknown, and no A7 or parity exit follows. The compact packet discloses
 its retained local source-payload prerequisites and both packaging rejections.
@@ -103,9 +127,10 @@ six owned group closures. Macro anchors establish source association, not branch
 execution. Earlier rejected captures remain preserved. Integration preserves
 all seventeen candidate paths and four existing affected proof closures, with
 only their wider source-inventory hashes refreshed; all 24 local source-workflow
-commands pass. No cursor-construction proof, scheduler proof, cadence GPU
-measurement or performance gain is accepted. Original preparation and CPU
-failures remain retained.
+commands pass. That CPU/selector packet supplies no cursor-construction proof,
+scheduler proof or performance evidence. The separate native result above now
+supplies a scoped cadence measurement. Original preparation and CPU failures
+remain retained.
 
 The [distributed codec primitives](evidence/dev-distributed-codec-primitives-2026-10-01/README.md)
 are integrated at `a8a908878` and `8fd3b7ddb`. Signed candidate `e02b7229a`

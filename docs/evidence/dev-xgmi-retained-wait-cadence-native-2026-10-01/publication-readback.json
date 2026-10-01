@@ -1,0 +1,15 @@
+{
+  "all_originals_preserved": true,
+  "closed_package_groups": 7,
+  "controller_sha256": "7231caf2389d27f5172aae102665bc39ddc34734b9765442956248ffdc57c7fd",
+  "durable_archive_sha256": "1aa7dc18d20609fdc65b8fe017cecf251dacdc4220532bac0dd717c5971267f8",
+  "durable_manifest_sha256": "40e7f74bd37816fed05f1cd25a71db21b70048ed91947c024c491a7499b767c9",
+  "full_replay_self_contained": false,
+  "historical_pid_probes": false,
+  "nested_native_files": 1484,
+  "new_gpu_execution": false,
+  "packet_files": 42,
+  "public_packet_readback_pass": true,
+  "raw_files": 89,
+  "signed_bundle_sha256": "5c183cbf013c987b48e1c54e8fabe085ec2f9ddf6aba8704afc41d72ce1ef5e5"
+}
