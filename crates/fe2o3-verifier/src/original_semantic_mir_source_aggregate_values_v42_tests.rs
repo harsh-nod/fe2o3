@@ -173,7 +173,7 @@ fn schema(
             Some((3..4, *unit))
         );
         assert_eq!(slots.aggregate_leaf_count(*unit, out)?, Some(1));
-        assert_eq!(slots.aggregate_leaf(*unit, 0, out)?.path(out)?, &[]);
+        assert!(slots.aggregate_leaf(*unit, 0, out)?.path(out)?.is_empty());
         assert_eq!(
             slots.aggregate_leaf(*unit, 0, out)?.scalar(out)?,
             ScalarV30::Unit
