@@ -13,14 +13,15 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BinaryOp, CanonicalKernelIrReplayAdmissionErrorV12 as AdmissionError,
+    CanonicalKernelIrReplayAdmissionErrorV18 as AdmissionError18,
     CanonicalKernelIrReplayStorageV12 as OutputStorage,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirControlFlowScopeErrorV1 as FlowError,
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirOperationCoordinateV1 as Site,
-    KirLocalMemoryEffectRefV1 as Effect, MemoryAccess, OperationKind as Kind, ScalarType, Type,
-    UnaryOp, ValueId, VerifiedCanonicalKernelIrIdentityV12 as Identity,
-    VerifiedCanonicalKernelIrModuleV12 as Owner, with_canonical_kir_control_flow_v1,
+    KirLocalMemoryEffectRefV1 as Effect, MemoryAccess, Module, OperationKind as Kind, ScalarType,
+    Type, UnaryOp, ValueId, VerifiedCanonicalKernelIrIdentityV12 as Identity,
+    VerifiedCanonicalKernelIrModuleV12 as Owner,
 };
 use std::{fmt, mem::size_of};
 
@@ -37,6 +38,8 @@ pub enum OwnedCrossBlockForwardingErrorV1 {
     ControlFlow(FlowError),
     /// Fresh actual output admission failed.
     Admission(AdmissionError),
+    /// Fresh storage-capable actual output admission failed.
+    AdmissionV18(AdmissionError18),
     /// Independent actual input/output relation failed.
     Pair(PairError),
     /// A dense index, bounded queue or exact recipe invariant failed.
@@ -82,6 +85,11 @@ impl From<AdmissionError> for Error {
 impl From<PairError> for Error {
     fn from(v: PairError) -> Self {
         Self::Pair(v)
+    }
+}
+impl From<AdmissionError18> for Error {
+    fn from(v: AdmissionError18) -> Self {
+        Self::AdmissionV18(v)
     }
 }
 impl fmt::Display for Error {
@@ -172,8 +180,9 @@ impl OwnedCrossBlockForwardingV1 {
 
 /// Replaces eligible cross-block private integer Loads at their original sites.
 /// Every other operation, Store, allocation, ValueId and CFG edge stays exact.
-/// Phi consensus includes all syntactic incoming occurrences; unresolved cycles
-/// become Unknown. Other Defs are terminal clobbers. Non-total scalar intervals
+/// Phi consensus includes all syntactic incoming occurrences and compares exact
+/// pointer/value definitions and typed accesses, not Store coordinates. Unresolved
+/// cycles become Unknown. Other Defs are terminal clobbers. Non-total scalar intervals
 /// and each prior Load are conservative cuts, not a claim of instruction motion.
 ///
 /// Added selection is O(B+O+D+U+M+I) work and scratch, beyond existing inventory,
@@ -198,31 +207,7 @@ pub fn prepare_owned_cross_block_forwarding_v1(
         let (mut candidate, storage) =
             meter.derive(|b| Ok(input.copy_module_for_transformation_v12(b)?))?;
         meter.reserve(storage.retained_storage())?;
-        for row in &origins {
-            meter.work(5)?;
-            let Some(store) = row.store else {
-                continue;
-            };
-            let store_at = operation_index(&inventory, store)?;
-            let Kind::Store { value, .. } = inventory.operations()[store_at].operation.kind else {
-                return Err(Error::Recipe("selected initializing Store"));
-            };
-            let body = candidate
-                .functions
-                .get_mut(row.output.block.function.0 as usize)
-                .and_then(|f| f.body.as_mut())
-                .ok_or(Error::Recipe("candidate function"))?;
-            let operation = body
-                .blocks
-                .get_mut(row.output.block.block as usize)
-                .and_then(|b| b.operations.get_mut(row.output.operation as usize))
-                .ok_or(Error::Recipe("candidate operation"))?;
-            operation.kind = Kind::Binary {
-                op: BinaryOp::BitOr,
-                lhs: value,
-                rhs: value,
-            };
-        }
+        materialize(&inventory, &origins, &mut candidate, meter)?;
         let (output, output_storage) = meter.derive(|b| {
             Ok(Owner::from_module_ref_with_verification_budget_v12(
                 &candidate, b,
@@ -254,6 +239,47 @@ pub fn prepare_owned_cross_block_forwarding_v1(
     })
 }
 
+fn materialize<O>(
+    inventory: &Inventory<'_, O>,
+    origins: &[Row],
+    candidate: &mut Module,
+    meter: &mut Meter<'_, '_>,
+) -> Result<()> {
+    for row in origins {
+        meter.work(5)?;
+        let Some(store) = row.store else {
+            continue;
+        };
+        let at = operation_index(inventory, store)?;
+        let Kind::Store { value, .. } = inventory.operations()[at].operation.kind else {
+            return Err(Error::Recipe("selected initializing Store"));
+        };
+        let body = candidate
+            .functions
+            .get_mut(row.output.block.function.0 as usize)
+            .and_then(|function| function.body.as_mut())
+            .ok_or(Error::Recipe("candidate function"))?;
+        let operation = body
+            .blocks
+            .get_mut(row.output.block.block as usize)
+            .and_then(|block| block.operations.get_mut(row.output.operation as usize))
+            .ok_or(Error::Recipe("candidate operation"))?;
+        operation.kind = Kind::Binary {
+            op: BinaryOp::BitOr,
+            lhs: value,
+            rhs: value,
+        };
+    }
+    Ok(())
+}
+
+#[path = "owned_cross_block_forwarding_profiles_v45.rs"]
+mod profiles;
+use profiles::Profile;
+#[path = "owned_cross_block_forwarding_v18.rs"]
+mod storage_v18;
+pub use storage_v18::{OwnedCrossBlockForwardingV18, prepare_owned_cross_block_forwarding_v18};
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum State {
     Pending,
@@ -261,10 +287,14 @@ enum State {
     Unknown,
 }
 impl State {
-    fn join(self, other: Self) -> Self {
+    fn join(self, other: Self, stores: &[Option<Access>]) -> Self {
         match (self, other) {
             (Self::Pending, value) | (value, Self::Pending) => value,
-            (Self::Exact(a), Self::Exact(b)) if a == b => self,
+            (Self::Exact(a), Self::Exact(b))
+                if a == b || stores[a].is_some() && stores[a] == stores[b] =>
+            {
+                self
+            }
             _ => Self::Unknown,
         }
     }
@@ -324,7 +354,7 @@ impl Queue {
         Ok(Some(node))
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct Access {
     pointer: ValueId,
     definition: usize,
@@ -337,9 +367,9 @@ struct Candidate {
     value_definition: usize,
 }
 
-fn plan(
-    a: &Inventory<'_>,
-    memory: &Memory<'_, '_>,
+fn plan<O: Profile>(
+    a: &Inventory<'_, O>,
+    memory: &Memory<'_, '_, O>,
     limits: Limits,
     meter: &mut Meter<'_, '_>,
 ) -> Result<Vec<Row>> {
@@ -363,6 +393,10 @@ fn plan(
     let mut changes = filled(n, 0u8, meter)?;
     let mut queue = Queue::new(n, meter)?;
     let slots = slots(a, meter)?;
+    let mut stores = filled(a.operations().len(), None::<Access>, meter)?;
+    for (at, entry) in stores.iter_mut().enumerate() {
+        *entry = access(a, at, &slots, meter)?.filter(|value| value.stored.is_some());
+    }
     let mut candidates = filled(a.operations().len(), None::<Candidate>, meter)?;
     let (mut origins, _) = meter.table::<Row>(a.operations().len())?;
     for row in a.operations() {
@@ -479,6 +513,7 @@ fn plan(
         &reverse,
         &mut changes,
         &mut queue,
+        &stores,
         meter,
     )?;
     for (at, value) in state.iter_mut().enumerate() {
@@ -498,6 +533,7 @@ fn plan(
         &reverse,
         &mut changes,
         &mut queue,
+        &stores,
         meter,
     )?;
     for at in 0..a.operations().len() {
@@ -514,7 +550,7 @@ fn plan(
         let Some(load) = access(a, at, &slots, meter)?.filter(|v| v.stored.is_none()) else {
             continue;
         };
-        let Some(store) = access(a, store_at, &slots, meter)?.filter(|v| v.stored.is_some()) else {
+        let Some(store) = stores[store_at] else {
             continue;
         };
         let (_, definition) = store.stored.ok_or(Error::Recipe("Store value"))?;
@@ -540,8 +576,7 @@ fn plan(
             continue;
         }
         meter.derive(|budget| {
-            with_canonical_kir_control_flow_v1(
-                a.owner(),
+            a.owner().with_flow(
                 function.coordinate,
                 limits.control_flow,
                 budget,
@@ -553,9 +588,7 @@ fn plan(
                         };
                         let load = a.operations()[at].coordinate;
                         let store = a.operations()[candidate.store].coordinate;
-                        if !flow.is_reachable(load.block, budget)?
-                            || !flow.dominates(store.block, load.block, budget)?
-                        {
+                        if !flow.is_reachable(load.block, budget)? {
                             continue;
                         }
                         let available = match a.definitions()[candidate.value_definition].coordinate
@@ -599,6 +632,7 @@ fn plan_headers() -> Result<usize> {
         size_of::<Vec<u8>>(),
         size_of::<Vec<u32>>(),
         size_of::<Vec<Option<Candidate>>>(),
+        size_of::<Vec<Option<Access>>>(),
         size_of::<Queue>(),
     ]
     .into_iter()
@@ -614,16 +648,19 @@ fn settle(
     parents: &[usize],
     changes: &mut [u8],
     queue: &mut Queue,
+    stores: &[Option<Access>],
     meter: &mut Meter<'_, '_>,
 ) -> Result<()> {
     while let Some(child) = queue.pop(meter)? {
         for parent in &parents[offsets[child]..offsets[child + 1]] {
-            meter.work(5)?;
+            meter.work(13)?;
             let parent = *parent;
             if parent >= state.len() {
                 return Err(Error::Recipe("reverse dependency parent"));
             }
-            let value = state[parent].join(state[child]);
+            // Keep the first equal-key representative: equivalent incoming
+            // Stores cannot cause extra lattice changes around cycles.
+            let value = state[parent].join(state[child], stores);
             if value != state[parent] {
                 changes[parent] = changes[parent]
                     .checked_add(1)
@@ -661,7 +698,7 @@ fn integer(ty: &Type) -> bool {
 fn scalar(ty: &Type) -> bool {
     *ty == Type::BOOL || integer(ty)
 }
-fn slots(a: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
+fn slots<O>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
     let mut alignments = filled(a.definitions().len(), 0u32, meter)?;
     for row in a.operations() {
         meter.work(7)?;
@@ -742,8 +779,8 @@ fn slots(a: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
     }
     Ok(alignments)
 }
-fn access(
-    a: &Inventory<'_>,
+fn access<O>(
+    a: &Inventory<'_, O>,
     at: usize,
     slots: &[u32],
     meter: &mut Meter<'_, '_>,
@@ -813,7 +850,7 @@ fn access(
         stored,
     }))
 }
-fn transparent(a: &Inventory<'_>, at: usize, meter: &mut Meter<'_, '_>) -> Result<bool> {
+fn transparent<O>(a: &Inventory<'_, O>, at: usize, meter: &mut Meter<'_, '_>) -> Result<bool> {
     meter.work(5)?;
     let row = &a.operations()[at];
     if row.results.len() != 1
@@ -847,7 +884,7 @@ fn transparent(a: &Inventory<'_>, at: usize, meter: &mut Meter<'_, '_>) -> Resul
     }
     Ok(true)
 }
-fn block_index(a: &Inventory<'_>, block: Block) -> Result<usize> {
+fn block_index<O>(a: &Inventory<'_, O>, block: Block) -> Result<usize> {
     let function = a
         .functions()
         .get(block.function.0 as usize)
@@ -859,7 +896,7 @@ fn block_index(a: &Inventory<'_>, block: Block) -> Result<usize> {
         .filter(|at| *at < function.blocks.end && a.blocks()[*at].coordinate == block)
         .ok_or(Error::Recipe("block coordinate"))
 }
-fn operation_index(a: &Inventory<'_>, site: Site) -> Result<usize> {
+fn operation_index<O>(a: &Inventory<'_, O>, site: Site) -> Result<usize> {
     let block = &a.blocks()[block_index(a, site.block)?];
     block
         .operations
