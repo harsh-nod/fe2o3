@@ -109,6 +109,12 @@ fn store_consensus_owned_v18_keeps_exact_layout_owner_and_replays_after_noop() {
         VerifiedCanonicalKernelIrModuleV18 as Owner18,
     };
     let mut module = diamond(ScalarType::U32);
+    let layouts = StorageLayoutLimitsV1 {
+        rows: 1,
+        edges: 0,
+        containment_depth: 1,
+        object_bytes: 4,
+    };
     module.storage_layouts.push(StorageLayoutV1 {
         size: 4,
         alignment: 4,
@@ -116,21 +122,14 @@ fn store_consensus_owned_v18_keeps_exact_layout_owner_and_replays_after_noop() {
     });
     let mut work = Work::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
-    let (input, size) = Owner18::from_module_ref_with_verification_budget_v18(
-        &module,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let (input, size) =
+        Owner18::from_module_ref_with_verification_budget_v18(&module, layouts, &mut budget)
+            .unwrap();
     budget.reserve_storage(size.retained_storage()).unwrap();
     let floor = budget.storage();
-    let tail = prepare_owned_cross_block_forwarding_v18(
-        &input,
-        Limits::default(),
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let tail =
+        prepare_owned_cross_block_forwarding_v18(&input, Limits::default(), layouts, &mut budget)
+            .unwrap();
     budget.reserve_storage(tail.retained_storage()).unwrap();
     assert_eq!(
         tail.origins()
@@ -151,7 +150,7 @@ fn store_consensus_owned_v18_keeps_exact_layout_owner_and_replays_after_noop() {
     let second = prepare_owned_cross_block_forwarding_v18(
         tail.output(),
         Limits::default(),
-        StorageLayoutLimitsV1::default(),
+        layouts,
         &mut budget,
     )
     .unwrap();
