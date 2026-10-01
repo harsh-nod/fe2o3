@@ -719,3 +719,91 @@ The subsequent MI350 build began at 2026-10-01 00:28:09 UTC under its own
 
 M0 is complete; M1-M7 remain incomplete and strict end-to-end coverage is
 **0/47**. None of these observations supplies protected proof or GPU execution.
+
+### Scoped Helper Integration
+
+r238 tested frozen candidate `af14ff85bf09db5c088b49a5dc01630105431b78` with
+unchanged source/tool snapshots. The selected lowerer tests completed with
+**360 passed, 28 failed, zero ignored**. Both new external-store regressions
+passed: storing through a checked reference preserves the holder and its scoped
+lifetime dependencies. The remaining failures stopped at
+`scoped source dependency differs from its original formation`, including the
+optional helper ABI tests; downstream optimizer and replay controls that stopped
+there receive no positive or intended-negative credit. The verifier filter in
+this run selected zero tests, so it supplies no verifier coverage.
+
+r239 used the correct `scoped_cfg_v41_` filter against the same frozen candidate.
+All **five selected verifier tests passed**, with zero failures or ignored tests
+and unchanged source/tool snapshots. These cover source-bound CFG request
+preparation/replay, exact and short resource limits, operand mutations, subject
+identity changes, and preservation of the legacy request schedule. They do not
+execute the protected proof runtime or establish complete semantic refinement.
+
+Both runs used the same pinned offline toolchain and runner recorded above,
+one build worker, serial tests, disabled GPU runtimes, and a 16 GiB virtual-memory
+build limit. r238 completed with exit 101 at 2026-10-01 00:37:51 UTC; r239 completed
+with exit zero at 00:38:57 UTC. Log SHA-256:
+
+- r238: `8b6d5587236315d0931aed37625218568f4d7e7a998844a9c614e1c79f6495df`
+- r239: `3d998e8ab6bc2a6123e657a5ccc430bb84824065925dd2e71244d34b36ae7dc1`
+
+r240 integrated the exact storage-origin check and optional helper transport on
+candidate `67b7ec8712d1004a59d54495870cda49b350bc66`. Production library
+compilation completed, but test compilation failed because two new fixture
+branches called an unavailable `edge` helper. No tests executed. The run ended
+with exit 101 at 2026-10-01 00:53:30 UTC and unchanged source/tool snapshots.
+Log SHA-256:
+`d0db2138325c0727875def74b7c909816a742bff58580808a9e46983aa03cf8b`.
+The fixture correction uses the existing explicit control-flow-edge constructor;
+it requires a new run, not reinterpretation of this failed result.
+
+r241 tested that correction, exact optional storage origins, helper transport,
+and formation diagnostics on candidate
+`31543a624a969646e1903ac46d5f0038ec15d762`. With unchanged source/tool snapshots,
+the selected lowerer tests completed with **374 passed, 28 failed, zero ignored**;
+the five selected verifier tests passed. Both optional helper ABI tests, the
+13-axis storage-origin mutation control, external-store regressions, and all four
+new diagnostic tests passed. Seven of nine helper-transport tests passed.
+Twenty-seven failures now stop at helper-return availability; the remaining
+negative fixture encounters source initialization rejection before its expected
+enum-projection boundary. Downstream tests stopping at these earlier boundaries
+do not receive their intended coverage. The run ended with exit 101 at
+2026-10-01 01:09:41 UTC. Log SHA-256:
+`f7afd829136a14317011eaa5cc7d4a92dc56b4a8197db94878a2528632cec1a4`.
+
+The helper-return defect concerns implicit MIR operands: `Return` has no
+explicit place object, whereas the checker requires object identity for explicit
+operands. A subsequent candidate authenticates the implicit declared return
+local, exact type, return terminator, and already-claimed original SSA use.
+Explicit operand object identity remains required. Its new positive, mutation,
+accounting, and regression tests require a separate result; r241 does not
+validate this repair.
+
+The MI350 build started at 00:28:09 UTC is terminal: exit **124** at
+2026-10-01 01:13:17 UTC after its original timeout. Independent observation at
+01:14:03 UTC confirmed both recorded processes absent, the process group empty,
+and owned caches cleaned. Five component executables and their inspection
+reports were preserved; the provisioner build was interrupted. The deployment
+tools, package tests, manifest, and final bundle publication remain incomplete.
+No installation, provisioning, service activation, protected proof, or GPU
+execution occurred. Recovered reports archive SHA-256:
+`e07acba0108a9394937a9f35f7bf36cfba9d255af0ebd8c755703920916e4087`.
+Build log SHA-256:
+`66ee0b36292544679fe65782583bb61523672ec5cf4e0f81f5d06af5d620526f`.
+
+Separately, an inactive, owned local structural-test target cache was checked
+for open files and cleaned with Cargo: 1,511 files / 1.9 GiB removed. Source
+worktrees, evidence, and the active integration cache were preserved.
+
+Separately, the publication-tree tutorial-manifest suite exceeded its 180-second
+deadline and is incomplete. Two explicitly selected controls then passed:
+`test_original_47_source_feature_symbol_and_semantic_obligations_are_preserved`
+and `test_full_runtime_curriculum_snapshot_preserves_pending_obligations`.
+They ran against `76aec7187b64b3eb6a26534b4d0c0a66f46caa18` with only this
+evidence document changed. These are source-obligation/snapshot checks, not
+compiler, simulator, proof, or hardware coverage. The manifest's 61 known
+implementation identities are not a replacement qualification denominator for
+the original 47-kernel goal or evidence of completed kernel pairs.
+
+M0 remains complete; M1-M7 remain incomplete and strict end-to-end coverage
+remains **0/47**.

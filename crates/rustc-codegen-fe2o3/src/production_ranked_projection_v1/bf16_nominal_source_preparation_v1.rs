@@ -314,3 +314,16 @@ pub(crate) use option_first_prelude::observe_actual_capability_prefix_for_test_v
 
 #[allow(unused_imports)]
 pub(in crate::production_ranked_projection_v1) use option_first_prelude::PendingWholeRootBeforeArgumentWritersV1;
+
+#[cfg(test)]
+pub(crate) fn observe_initial_nonempty_reads_for_test_v1(
+    owner: &ProductionPreRankedKirOwnerV1,
+    source: &fe2o3_lower_mir_kernel::CheckedBf16CallInstanceV1<'_>,
+    actual: &crate::production_pipeline::ActualRetainedRankedInputsV1<'_>,
+    inventory: &CanonicalKirInventoryV1<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<()> {
+    PendingWholeRootBeforeArgumentWritersV1::observe_initial_nonempty_for_test_v1(
+        owner, source, actual, inventory, budget,
+    )
+}

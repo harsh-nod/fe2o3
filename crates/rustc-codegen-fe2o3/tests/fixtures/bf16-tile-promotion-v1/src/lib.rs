@@ -34,6 +34,18 @@ pub fn bf16_tile_promotion_v1(
             [values[0], values[1], values[2], values[3]]
         }
     }
+    // Separate source-only profile. The historical five-session ladder does not
+    // select this feature or qualify this read as ordinary compilation.
+    #[cfg(feature = "single-strided-read")]
+    {
+        let Ok(read_view) = fe2o3_device::StridedReadView2D::from_shared_slice(a, 0, 1, 1, 1)
+        else {
+            fe2o3_device::trap();
+        };
+        // Keep the actual intrinsic call in source; an observer must verify its
+        // presence in extracted MIR rather than infer it from this statement.
+        let _read_prefix = read_view.load_or(0, 0, 0u16);
+    }
     let lane = WaveLane::<Wave64>::current();
     let Ok(a_matrix) = Bf16MfmaAMatrix::row_major(a, 0, 16, 16, 16) else {
         fe2o3_device::trap();

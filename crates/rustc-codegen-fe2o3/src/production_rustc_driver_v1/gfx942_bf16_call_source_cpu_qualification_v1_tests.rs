@@ -602,3 +602,6 @@ fn helper_cpu_acceptance_does_not_count_transport_or_normal_flags_as_execution()
     }
     assert!(accept("identity,swap01", &Value::Null).is_err());
 }
+
+#[path = "gfx942_bf16_single_strided_read_source_v1_tests.rs"]
+mod single_strided_read;
