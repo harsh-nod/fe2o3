@@ -4,6 +4,11 @@ Subsequent implementation status is recorded in the
 [2026-09-20 review refresh](assembly-authoring-contract-review-20260920.md).
 The historical assessment below retains its original scope and acceptance criteria.
 
+For the later bounded M2 decision and current milestone count, see the
+[2026-10-01 M2 acceptance record](evidence/basic-assembly-m2-acceptance-20261001.md).
+That integration decision does not accept this M0/V0/U0 owner-review proposal
+or rewrite its historical assessment.
+
 Status: **proposed, not accepted**. Tracking: [#280](https://github.com/harsh-nod/fe2o3/issues/280)
 M0, [#281](https://github.com/harsh-nod/fe2o3/issues/281) V0 and
 [#282](https://github.com/harsh-nod/fe2o3/issues/282) U0. Assessment base:
