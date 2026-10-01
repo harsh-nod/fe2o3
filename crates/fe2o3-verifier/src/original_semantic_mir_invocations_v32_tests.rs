@@ -475,7 +475,19 @@ fn prepared_callable_transform(
             .with_kernel_entry(SemanticKernelEntryV1::new(
                 SemanticLinkSymbolV1::new(root_names[root as usize].as_bytes().to_vec()).unwrap(),
                 SemanticKernelBindingIdentityV1::from_sha256([tag + 9; 32]),
-                SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+                SemanticKernelSourceContractV1::new(
+                    Some(
+                        SemanticKernelLaunchBoundsV1::new(
+                            Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                            None,
+                            None,
+                        )
+                        .unwrap(),
+                    ),
+                    None,
+                    None,
+                )
+                .unwrap(),
             )),
         );
     }
@@ -538,7 +550,7 @@ fn prepared_callable_transform(
                             .launch()
                             .and_then(|launch| launch.required())
                             .map(|required| required.as_array())
-                            .unwrap_or([64, 1, 1]),
+                            .expect("fixture source declares exact workgroup dimensions"),
                     ),
                     [1, 1, 1],
                 ),

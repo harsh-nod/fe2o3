@@ -156,7 +156,19 @@ fn prepared_roster(
                 })
                 .unwrap(),
                 SemanticKernelBindingIdentityV1::from_sha256([tag + 9; 32]),
-                SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+                SemanticKernelSourceContractV1::new(
+                    Some(
+                        SemanticKernelLaunchBoundsV1::new(
+                            Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                            None,
+                            None,
+                        )
+                        .unwrap(),
+                    ),
+                    None,
+                    None,
+                )
+                .unwrap(),
             )),
         );
     }
@@ -410,6 +422,7 @@ fn original_mir_cfg_request_uses_exact_generic_field_and_result_frames() {
         Ledger,
         usize,
         usize,
+        Option<[u8; 32]>,
     );
     assert_eq!(size_of::<V31>(), size_of::<Fields>());
     assert_eq!(size_of::<V30>(), size_of::<V31>());

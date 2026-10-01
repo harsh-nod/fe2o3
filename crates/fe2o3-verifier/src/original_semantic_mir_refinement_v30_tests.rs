@@ -199,7 +199,19 @@ fn prepared_roster(
                 })
                 .unwrap(),
                 SemanticKernelBindingIdentityV1::from_sha256([tag + 9; 32]),
-                SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+                SemanticKernelSourceContractV1::new(
+                    Some(
+                        SemanticKernelLaunchBoundsV1::new(
+                            Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                            None,
+                            None,
+                        )
+                        .unwrap(),
+                    ),
+                    None,
+                    None,
+                )
+                .unwrap(),
             )),
         );
     }
