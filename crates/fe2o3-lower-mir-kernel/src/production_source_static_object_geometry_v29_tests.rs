@@ -711,7 +711,7 @@ fn static_pointer_field_geometry_preserves_exact_child_and_parent_bounds() {
                 },
                 StorageLayoutV1 {
                     size: width,
-                    alignment: width,
+                    alignment: u32::from(bits / 8),
                     kind: Kind::Pointer(StoragePointerV1 {
                         pointee: Id(0),
                         value_space: AddressSpace::Private,
@@ -722,7 +722,7 @@ fn static_pointer_field_geometry_preserves_exact_child_and_parent_bounds() {
                 },
                 StorageLayoutV1 {
                     size: 2 * width,
-                    alignment: width,
+                    alignment: u32::from(bits / 8),
                     kind: Kind::Record(
                         vec![StorageFieldV1 {
                             offset: width,
