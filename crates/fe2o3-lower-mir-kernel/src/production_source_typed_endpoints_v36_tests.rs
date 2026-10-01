@@ -385,9 +385,11 @@ fn source_typed_endpoint_capture_and_query_exact_and_one_short_complete_resource
             consume,
         )
         .0;
+        let error = entrance_resource(result.expect_err("one-short account must be refused"));
         assert!(
-            matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Work(_))) if short_work)
-                || matches!(result, Err(ProductionSourceOwnedViewErrorV18::Resource(ArgumentResourceV1::Storage(_))) if !short_work)
+            matches!(error, ArgumentResourceV1::Work(_) if short_work)
+                || matches!(error, ArgumentResourceV1::Storage(_) if !short_work),
+            "short_work={short_work}, work={work}, storage={storage}, error={error:?}"
         );
     }
 }

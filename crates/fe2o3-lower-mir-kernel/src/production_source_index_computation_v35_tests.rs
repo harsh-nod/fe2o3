@@ -1,5 +1,60 @@
 use super::*;
 
+fn index_production_owner_v35() -> ProductionSemanticSsaOwnerV1 {
+    let component = index_reader_owner();
+    let semantic = component.source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    for root in semantic.roots() {
+        let function = &mut functions[root.index() as usize];
+        let entry = function.kernel_entry().unwrap();
+        assert!(entry.source_contract().launch().is_none());
+        // The structural component fixture has no launch contract. This
+        // production fixture declares one before semantic admission and hashing.
+        let entry = SemanticKernelEntryV1::new(
+            entry.export_symbol().clone(),
+            entry.kernel_binding_identity(),
+            SemanticKernelSourceContractV1::new(
+                Some(
+                    SemanticKernelLaunchBoundsV1::new(
+                        Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                        None,
+                        None,
+                    )
+                    .unwrap(),
+                ),
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        *function = function.clone().with_kernel_entry(entry);
+    }
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        semantic.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        semantic.callables().to_vec(),
+        semantic.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    let mut owner = ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    owner
+        .try_capture_occurrences_with_budget_v1(&mut ArgumentBudgetV1::new(&mut work, usize::MAX))
+        .unwrap();
+    owner
+}
+
 fn with_index_relation_v35(
     consume: impl FnOnce(
         &ProductionSourceCorrespondenceV18<'_>,
@@ -17,7 +72,7 @@ fn index_relation_probe_v35(
         &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<()>,
 ) -> (SourceOwnedResultV18<()>, usize, usize, usize) {
-    let owner = index_reader_owner();
+    let owner = index_production_owner_v35();
     let semantic = owner.source_semantic();
     let inputs: Vec<_> = semantic
         .roots()
