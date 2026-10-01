@@ -40,6 +40,7 @@
         "fe2o3-semantic-trace",
         "fe2o3-service-model",
         "fe2o3-source-isa-observation",
+        "fe2o3-static-executable-format",
         "fe2o3-static-preexec-manifest",
         "fe2o3-target-spec",
         "reserved-fe2o3-symbols"
@@ -162,6 +163,20 @@
     }
   ],
   "allowed_dependency_edges": [
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-protected-service-spawn",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-protected-static-executable",
+      "kinds": [
+        "normal"
+      ]
+    },
     {
       "from": "fe2o3-verifier",
       "to": "fe2o3-kernel-opt",
