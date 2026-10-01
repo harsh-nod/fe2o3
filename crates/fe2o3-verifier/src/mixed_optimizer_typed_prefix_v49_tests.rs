@@ -3,6 +3,164 @@ use super::*;
 use fe2o3_kernel_ir::FormalIndexWidth;
 
 #[test]
+fn typed_prefix_prepaid_dominance_matches_scoped_queries_including_disconnected_blocks() {
+    use super::super::prefix_v49::models;
+    let mut module = fixture();
+    for id in 5..10 {
+        module.functions[0]
+            .body
+            .as_mut()
+            .unwrap()
+            .blocks
+            .push(block(
+                id,
+                vec![],
+                Terminator::Return {
+                    values: vec![ValueId(0)],
+                },
+            ));
+    }
+    with_chain_module(&module, |prefix, _, _, floor| {
+        run(floor, LIMIT, LIMIT, |out| {
+            let inventory = prefix.input();
+            let before = out.budget.storage();
+            models::with_dominance(inventory, 0, out, |prepared, out| {
+                let text = std::mem::take(&mut out.text);
+                let failure = out.failure.take();
+                let (text, failure) = fe2o3_kernel_ir::with_canonical_kir_control_flow_v18(
+                    inventory.owner(),
+                    inventory.functions()[0].coordinate,
+                    Default::default(),
+                    out.budget,
+                    |flow, budget| {
+                        let mut writer = Writer {
+                            text,
+                            budget,
+                            failure,
+                        };
+                        for (block, row) in inventory.blocks().iter().enumerate() {
+                            for gap in row.operations.start..=row.operations.end {
+                                for definition in inventory.definitions() {
+                                    assert_eq!(
+                                        prepared.available(
+                                            definition.coordinate,
+                                            block,
+                                            gap,
+                                            &mut writer
+                                        )?,
+                                        models::available(
+                                            inventory,
+                                            flow,
+                                            definition.coordinate,
+                                            block,
+                                            gap,
+                                            &mut writer
+                                        )?
+                                    );
+                                }
+                            }
+                        }
+                        Ok::<_, Error>((writer.text, writer.failure))
+                    },
+                )?;
+                out.text = text;
+                out.failure = failure;
+                Ok(())
+            })?;
+            assert_eq!(out.budget.storage(), before);
+            Ok(())
+        })
+        .0
+        .unwrap();
+    });
+}
+
+#[test]
+fn typed_prefix_prepaid_dominance_rejects_foreign_and_underpaid_queries_before_work() {
+    use super::super::prefix_v49::models;
+    with_chain(|prefix, _, _, floor| {
+        for foreign in [false, true] {
+            run(floor, LIMIT, LIMIT, |out| {
+                let inventory = prefix.input();
+                let mut paid = 0;
+                let result = models::with_dominance(inventory, 0, out, |prepared, out| {
+                    paid = out.budget.storage();
+                    let definition = inventory.definitions()[0].coordinate;
+                    if foreign {
+                        let mut work = Work::new(LIMIT);
+                        let mut budget = Budget::new(&mut work, LIMIT);
+                        budget.reserve_storage(out.budget.storage())?;
+                        let mut foreign = Writer::new(&mut budget)?;
+                        assert!(matches!(
+                            prepared.available(definition, 0, 0, &mut foreign),
+                            Err(Error::Resource(Resource::Accounting))
+                        ));
+                        assert_eq!(foreign.budget.work(), 0);
+                    } else {
+                        out.budget.release_storage(1)?;
+                        let before = out.budget.work();
+                        assert!(matches!(
+                            prepared.available(definition, 0, 0, out),
+                            Err(Error::Resource(Resource::Accounting))
+                        ));
+                        assert_eq!(out.budget.work(), before);
+                        out.budget.reserve_storage(1)?;
+                    }
+                    let before = out.budget.work();
+                    assert!(matches!(
+                        prepared.available(definition, 0, 0, out),
+                        Err(Error::Resource(Resource::Accounting))
+                    ));
+                    assert_eq!(out.budget.work(), before);
+                    Ok(())
+                });
+                assert!(matches!(result, Err(Error::Resource(Resource::Accounting))));
+                assert_eq!(out.budget.storage(), paid);
+                Ok(())
+            })
+            .0
+            .unwrap();
+        }
+    });
+}
+
+#[test]
+fn typed_prefix_prepaid_dominance_does_not_refund_rejected_cfg_callback_storage() {
+    use super::super::prefix_v49::models;
+    with_chain(|prefix, _, _, floor| {
+        run(floor, LIMIT, LIMIT, |out| {
+            let inventory = prefix.input();
+            let before = out.budget.storage();
+            let result = models::with_dominance(inventory, 0, out, |_, out| {
+                fe2o3_kernel_ir::with_canonical_kir_control_flow_v18(
+                    inventory.owner(),
+                    inventory.functions()[0].coordinate,
+                    Default::default(),
+                    out.budget,
+                    |_, budget| {
+                        budget.reserve_storage(7)?;
+                        Ok::<_, Error>(())
+                    },
+                )
+            });
+            assert!(matches!(
+                result,
+                Err(Error::Flow(
+                    fe2o3_kernel_ir::CanonicalKirControlFlowScopeErrorV1::Resource(
+                        Resource::Accounting
+                    )
+                ))
+            ));
+            assert_eq!(out.budget.storage(), before + 7);
+            out.budget.release_storage(7)?;
+            Ok(())
+        })
+        .0
+        .unwrap();
+    });
+}
+
+#[test]
 fn typed_prefix_checked_segments_partition_merged_operations_and_keep_empty_cuts() {
     with_chain(|prefix, licm, output, floor| {
         let origins = Origins {

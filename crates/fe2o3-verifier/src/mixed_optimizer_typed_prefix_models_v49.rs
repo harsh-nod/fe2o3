@@ -6,6 +6,155 @@ use fe2o3_kernel_ir::{
 };
 use std::ops::Range;
 
+// A second live CFG scope would invalidate the first scope's exact storage
+// floor. Retain only prepaid dominance bits, then query the first CFG alone.
+pub(super) struct Dominance<'a, 'owner> {
+    inventory: &'a Inventory<'owner>,
+    blocks: Range<usize>,
+    bits: Vec<usize>,
+    required: usize,
+    slot: usize,
+    ledger: Ledger,
+    failure: Cell<Option<Resource>>,
+    cleanup: Cell<bool>,
+}
+
+pub(super) fn with_dominance<T>(
+    inventory: &Inventory<'_>,
+    function: usize,
+    out: &mut Writer<'_, '_>,
+    run: impl FnOnce(&Dominance<'_, '_>, &mut Writer<'_, '_>) -> Result<T>,
+) -> Result<T> {
+    let floor = out.budget.storage();
+    let mut retained = None;
+    let mut cleanup = true;
+    let result = (|| {
+        out.budget.reserve_storage(
+            size_of::<Dominance<'_, '_>>() + size_of::<([usize; 8], Result<()>)>(),
+        )?;
+        let row = inventory.functions().get(function).ok_or_else(mismatch)?;
+        let count = row.blocks.len();
+        let cells = count.checked_mul(count).ok_or(Resource::Arithmetic)?;
+        let words = cells.div_ceil(usize::BITS as usize);
+        let mut bits = allocate(words, out)?;
+        out.budget.charge_work(words)?;
+        bits.fill(0);
+        retained = Some(
+            out.budget
+                .storage()
+                .checked_sub(floor)
+                .ok_or(Resource::Accounting)?,
+        );
+        with_flow(
+            inventory.owner(),
+            row.coordinate,
+            Default::default(),
+            out.budget,
+            |flow, budget| {
+                for (definition, original) in row.blocks.clone().enumerate() {
+                    for (use_block, actual) in row.blocks.clone().enumerate() {
+                        if flow.dominates(
+                            inventory.blocks()[original].coordinate,
+                            inventory.blocks()[actual].coordinate,
+                            budget,
+                        )? {
+                            budget.charge_work(1)?;
+                            let cell = definition * count + use_block;
+                            bits[cell / usize::BITS as usize] |=
+                                1usize << (cell % usize::BITS as usize);
+                        }
+                    }
+                }
+                Ok::<_, Error>(())
+            },
+        )?;
+        let prepared = Dominance {
+            inventory,
+            blocks: row.blocks.clone(),
+            bits,
+            required: out.budget.storage(),
+            slot: std::ptr::from_ref(out.budget) as usize,
+            ledger: out.budget.work_ledger_identity_v1(),
+            failure: Cell::new(None),
+            cleanup: Cell::new(true),
+        };
+        let result = run(&prepared, out);
+        let custody = prepared.check(out);
+        cleanup = prepared.cleanup.get();
+        custody.and(result)
+    })();
+    // Only construction owns its full accepted delta. Once a CFG or callback
+    // runs, release exactly the table's reservation, never their extra credit.
+    let retained = match retained {
+        Some(retained) => retained,
+        None => out
+            .budget
+            .storage()
+            .checked_sub(floor)
+            .ok_or(Resource::Accounting)?,
+    };
+    if cleanup {
+        out.budget.release_storage(retained)?;
+    }
+    result
+}
+
+impl Dominance<'_, '_> {
+    fn check(&self, out: &Writer<'_, '_>) -> Result<()> {
+        if let Some(error) = self.failure.get() {
+            return Err(error.into());
+        }
+        if self.slot != std::ptr::from_ref(out.budget) as usize
+            || self.ledger != out.budget.work_ledger_identity_v1()
+            || out.budget.storage() < self.required
+        {
+            self.failure.set(Some(Resource::Accounting));
+            self.cleanup.set(false);
+            return Err(Resource::Accounting.into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn available(
+        &self,
+        definition: Definition,
+        block: usize,
+        gap: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<bool> {
+        self.check(out)?;
+        out.budget.charge_work(3).map_err(|error| {
+            self.failure.set(Some(error));
+            Error::Resource(error)
+        })?;
+        if !self.blocks.contains(&block) {
+            return Err(mismatch());
+        }
+        let coordinate = self.inventory.blocks()[block].coordinate;
+        let origin = match definition {
+            Definition::FunctionArgument { function, .. } => {
+                return Ok(function == coordinate.function);
+            }
+            Definition::BlockArgument { block: origin, .. } => origin,
+            Definition::Result { operation, .. } => {
+                if operation.block == coordinate {
+                    return Ok(operation_index(self.inventory, operation)? < gap);
+                }
+                operation.block
+            }
+        };
+        if origin.function != coordinate.function {
+            return Ok(false);
+        }
+        let origin = block_index(self.inventory, origin)?;
+        if !self.blocks.contains(&origin) {
+            return Err(mismatch());
+        }
+        let cell = (origin - self.blocks.start) * self.blocks.len() + block - self.blocks.start;
+        Ok(self.bits[cell / usize::BITS as usize] & (1usize << (cell % usize::BITS as usize)) != 0)
+    }
+}
+
 pub(super) fn available(
     inventory: &Inventory<'_>,
     flow: &mut Flow<'_, '_>,
@@ -55,115 +204,105 @@ impl<'b, 'a, 'owner, 'rows, R: ByteAllocationResolverV30>
             input.definitions().len(),
             output.definitions().len()
         );
-        let text = std::mem::take(&mut out.text);
-        let failure = out.failure.take();
-        let (text, failure) = with_flow(
-            input.owner(),
-            association.input,
-            Default::default(),
-            out.budget,
-            |original_flow, budget| {
-                with_flow(
-                    output.owner(),
-                    association.output,
-                    Default::default(),
-                    budget,
-                    |actual_flow, budget| {
-                        let mut writer = Writer {
-                            text,
-                            budget,
-                            failure,
+        with_dominance(output, function, out, |actual_flow, out| {
+            let text = std::mem::take(&mut out.text);
+            let failure = out.failure.take();
+            let (text, failure) = with_flow(
+                input.owner(),
+                association.input,
+                Default::default(),
+                out.budget,
+                |original_flow, budget| {
+                    let mut writer = Writer {
+                        text,
+                        budget,
+                        failure,
+                    };
+                    let out = &mut writer;
+                    for original_block in input_row.blocks.clone() {
+                        let Some(segment) = self.segment(original_block, out)? else {
+                            continue;
                         };
-                        let out = &mut writer;
-                        for original_block in input_row.blocks.clone() {
-                            let Some(segment) = self.segment(original_block, out)? else {
+                        if !output_row.blocks.contains(&segment.output_block) {
+                            return Err(mismatch());
+                        }
+                        emit!(out, " if before.pc == {original_block} {{ true");
+                        // Every available target register has its checked original
+                        // anchor, or is an independently executed actual constant.
+                        for target in output_row.definitions.clone() {
+                            if !actual_flow.available(
+                                output.definitions()[target].coordinate,
+                                segment.output_block,
+                                segment.start,
+                                out,
+                            )? {
                                 continue;
-                            };
-                            if !output_row.blocks.contains(&segment.output_block) {
-                                return Err(mismatch());
                             }
-                            emit!(out, " if before.pc == {original_block} {{ true");
-                            // Every available target register has its checked original
-                            // anchor, or is an independently executed actual constant.
-                            for target in output_row.definitions.clone() {
-                                if !available(
-                                    output,
-                                    actual_flow,
-                                    output.definitions()[target].coordinate,
+                            let anchor = self.anchors[target];
+                            if anchor != NONE {
+                                emit!(
+                                    out,
+                                    "\n && before.values[{anchor}] == after.values[{target}]"
+                                );
+                            } else {
+                                let Definition::Result { operation, .. } =
+                                    output.definitions()[target].coordinate
+                                else {
+                                    return Err(mismatch());
+                                };
+                                let ordinal = operation_index(output, operation)?;
+                                let block = block_index(output, operation.block)?;
+                                let namespace = input.functions().len() + function;
+                                emit!(
+                                    out,
+                                    "\n && ({{ let constant = byte_operation_{namespace}_{ordinal}_v30(MemoryStateV30 {{ pc: {block}, ..after }}, little_endian); constant.state.valid && constant.state.values[{target}] == after.values[{target}] && constant.observation.effect == MemoryOperationEffectV30::Pure && constant.state.memory == after.memory && constant.state.generations == after.generations && constant.state.frames == after.frames }})"
+                                );
+                            }
+                            emit!(out, " && ({{ let compared = after.values[{target}]; ");
+                            super::super::super::byte_function_v30::emit_value_type(
+                                output.definitions()[target].ty,
+                                width,
+                                "compared",
+                                out,
+                            )?;
+                            emit!(out, " }})");
+                        }
+                        for original in input_row.definitions.clone() {
+                            if !available(
+                                input,
+                                original_flow,
+                                input.definitions()[original].coordinate,
+                                original_block,
+                                input.blocks()[original_block].operations.start,
+                                out,
+                            )? {
+                                continue;
+                            }
+                            for descendant in descendants(self.bridge.prefix.rows(), original)? {
+                                self.bridge.charge(2, out)?;
+                                let target = definition_index(output, descendant.output)?;
+                                if actual_flow.available(
+                                    descendant.output,
                                     segment.output_block,
                                     segment.start,
                                     out,
                                 )? {
-                                    continue;
-                                }
-                                let anchor = self.anchors[target];
-                                if anchor != NONE {
                                     emit!(
                                         out,
-                                        "\n && before.values[{anchor}] == after.values[{target}]"
-                                    );
-                                } else {
-                                    let Definition::Result { operation, .. } =
-                                        output.definitions()[target].coordinate
-                                    else {
-                                        return Err(mismatch());
-                                    };
-                                    let ordinal = operation_index(output, operation)?;
-                                    let block = block_index(output, operation.block)?;
-                                    let namespace = input.functions().len() + function;
-                                    emit!(
-                                        out,
-                                        "\n && ({{ let constant = byte_operation_{namespace}_{ordinal}_v30(MemoryStateV30 {{ pc: {block}, ..after }}, little_endian); constant.state.valid && constant.state.values[{target}] == after.values[{target}] && constant.observation.effect == MemoryOperationEffectV30::Pure && constant.state.memory == after.memory && constant.state.generations == after.generations && constant.state.frames == after.frames }})"
+                                        "\n && before.values[{original}] == after.values[{target}]"
                                     );
                                 }
-                                emit!(out, " && ({{ let compared = after.values[{target}]; ");
-                                super::super::super::byte_function_v30::emit_value_type(
-                                    output.definitions()[target].ty,
-                                    width,
-                                    "compared",
-                                    out,
-                                )?;
-                                emit!(out, " }})");
                             }
-                            for original in input_row.definitions.clone() {
-                                if !available(
-                                    input,
-                                    original_flow,
-                                    input.definitions()[original].coordinate,
-                                    original_block,
-                                    input.blocks()[original_block].operations.start,
-                                    out,
-                                )? {
-                                    continue;
-                                }
-                                for descendant in descendants(self.bridge.prefix.rows(), original)?
-                                {
-                                    self.bridge.charge(2, out)?;
-                                    let target = definition_index(output, descendant.output)?;
-                                    if available(
-                                        output,
-                                        actual_flow,
-                                        descendant.output,
-                                        segment.output_block,
-                                        segment.start,
-                                        out,
-                                    )? {
-                                        emit!(
-                                            out,
-                                            "\n && before.values[{original}] == after.values[{target}]"
-                                        );
-                                    }
-                                }
-                            }
-                            emit!(out, " }} else\n");
                         }
-                        Ok::<_, Error>((writer.text, writer.failure))
-                    },
-                )
-            },
-        )?;
-        out.text = text;
-        out.failure = failure;
+                        emit!(out, " }} else\n");
+                    }
+                    Ok::<_, Error>((writer.text, writer.failure))
+                },
+            )?;
+            out.text = text;
+            out.failure = failure;
+            Ok(())
+        })?;
         emit!(out, " {{ false }}) }})\n}}\n");
         self.check(out)
     }
