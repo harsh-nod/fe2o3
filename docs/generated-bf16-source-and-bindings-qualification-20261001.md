@@ -8,8 +8,11 @@ owner without changing its exposed ordinary compilation result.
 
 These are compiler-developer qualifications at
 [254eb55f43aabc40b627d5dca2e80725b52ac599](https://github.com/harsh-nod/fe2o3/commit/254eb55f43aabc40b627d5dca2e80725b52ac599).
-They do not qualify a public promotion command, the normal BF16 ranked route,
-physical register control, a GPU launch, or all-action memory usage.
+That earlier campaign did not qualify a public promotion command, the normal
+BF16 ranked route, physical register control, a GPU launch, or all-action memory
+usage. The later [public source-authoring guide](bf16-source-authoring.md)
+records separate qualification of the actual source-only CLI at
+[89e06d9619ef89302e1399906b293a86f6f4d6ad](https://github.com/harsh-nod/fe2o3/commit/89e06d9619ef89302e1399906b293a86f6f4d6ad).
 Accepted broad exits remain **M1/V1/V2/U1/U2/U3 (6/18)**.
 
 ## Generated source and fresh compilation
@@ -131,6 +134,8 @@ documentation change.
 
 The source adapters and inert controls are committed. The campaign orchestration
 and machine-specific preparation are retained qualification tooling, not a
-supported public workflow. A clean-checkout public command, normal BF16
-production continuation, debugger integration and hardware qualification remain
-separate work.
+supported public workflow. The later public guide covers direct extractor
+inspection and source publication with a current rustc invocation; it does not
+turn this historical parent into a public replay command. A clean-checkout
+end-to-end setup, normal BF16 production continuation, debugger integration and
+hardware qualification remain separate work.
