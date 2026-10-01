@@ -347,8 +347,8 @@ fn owner_with_carrier_access(live: bool, observation: u8) -> ProductionSemanticS
         .unwrap()
     };
     match observation {
-        0 => {}
-        1 => continuation.push(assign(
+        0 | 5 => {}
+        1 | 6 => continuation.push(assign(
             3,
             LENGTH,
             SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(field())),
@@ -395,6 +395,7 @@ fn owner_with_carrier_access(live: bool, observation: u8) -> ProductionSemanticS
         [UNIT, CARRIER, BORROW, LENGTH]
             .into_iter()
             .chain(matches!(observation, 2 | 4).then_some(observed_pointer))
+            .chain(matches!(observation, 5 | 6).then_some(CARRIER))
             .enumerate()
             .map(|(index, ty)| {
                 SemanticLocalDeclV1::new(
@@ -414,14 +415,30 @@ fn owner_with_carrier_access(live: bool, observation: u8) -> ProductionSemanticS
             SemanticBasicBlockV1::new(
                 SemanticBlockIdentityV1::from_sha256([60; 32]),
                 source(),
-                vec![assign(
-                    2,
-                    BORROW,
-                    SemanticRvalueKindV1::Borrow {
-                        kind: SemanticBorrowKindV1::Shared,
-                        place: place(1, CARRIER),
-                    },
-                )],
+                {
+                    let mut statements = Vec::new();
+                    if matches!(observation, 5 | 6) {
+                        statements.push(assign(
+                            4,
+                            CARRIER,
+                            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(1, CARRIER))),
+                        ));
+                        statements.push(assign(
+                            1,
+                            CARRIER,
+                            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(4, CARRIER))),
+                        ));
+                    }
+                    statements.push(assign(
+                        2,
+                        BORROW,
+                        SemanticRvalueKindV1::Borrow {
+                            kind: SemanticBorrowKindV1::Shared,
+                            place: place(1, CARRIER),
+                        },
+                    ));
+                    statements
+                },
                 SemanticTerminatorV1::new(source(), SemanticTerminatorKindV1::Call(call)),
             )
             .unwrap(),
@@ -852,7 +869,7 @@ fn allocation_receiver_full_pending_access_v29(
         assert_eq!(budget.storage(), FLOOR);
         return;
     }
-    if observation != 0 {
+    if observation != 0 && observation != 5 {
         let error = match result {
             Err(error) => error,
             Ok(_) => panic!("wrapper layout observation needs object materialization"),
@@ -924,6 +941,66 @@ fn allocation_receiver_existing_entry_keeps_original_restarts_raw_and_field_borr
     for observation in [2, 3, 4] {
         allocation_receiver_full_pending_access_v29(true, false, observation);
     }
+}
+
+#[test]
+fn allocation_receiver_whole_owner_moves_preserve_the_native_slice_without_wrapper_storage() {
+    for live in [false, true] {
+        allocation_receiver_full_pending_access_v29(live, false, 5);
+        allocation_receiver_full_pending_access_v29(live, false, 6);
+        allocation_receiver_full_pending_access_v29(live, true, 5);
+    }
+}
+
+#[test]
+fn allocation_receiver_whole_owner_write_rechecks_exact_original_destination_and_role() {
+    let reached = std::cell::Cell::new(false);
+    super::source_reference_plan_v29_tests::run_owner_with_storage(
+        owner_with_carrier_access(false, 5),
+        |plan, budget| {
+            let original = plan
+                .accesses
+                .iter()
+                .find(|access| {
+                    access.key.access == SourceReferenceAccessV29::Write
+                        && access.local.index() == 1
+                })
+                .expect("original owner replacement");
+            let before = budget.work();
+            assert!(source_existing_receiver_write_v53(plan, original, budget)?);
+            assert_eq!(budget.work() - before, 20);
+            for fault in 0..5 {
+                let mut changed = SourceReferenceAccessRecordV29 {
+                    key: original.key,
+                    source_local: original.source_local,
+                    ty: original.ty,
+                    instance: original.instance,
+                    local: original.local,
+                    generation: original.generation,
+                    projections: original.projections.clone(),
+                    loan: original.loan,
+                    traversed: original.traversed.clone(),
+                    shared_path: original.shared_path,
+                };
+                match fault {
+                    0 => changed.key.source = 0,
+                    1 => changed.key.access = SourceReferenceAccessV29::Read,
+                    2 => changed.key.site.statement = None,
+                    3 => changed.source_local = SemanticLocalIdV1::from_index(4),
+                    4 => changed.ty = LENGTH,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    !source_existing_receiver_write_v53(plan, &changed, budget)?,
+                    "fault {fault}"
+                );
+            }
+            reached.set(true);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(reached.get());
 }
 
 #[test]
