@@ -157,8 +157,8 @@ fn source_existing_receiver_rows_v29(
     budget.reserve_storage(argument_sum_v1(&[
         std::mem::size_of::<Vec<SourceExistingReceiverRowV29>>(),
         std::mem::size_of::<Result<Vec<SourceExistingReceiverRowV29>, ProductionSemanticKirErrorV1>>(),
-        std::mem::size_of::<(&SourceReferenceAccessRecordV29, &SemanticFunctionDeclV1, &SemanticAssignmentV1, &SemanticPlaceV1, &SemanticPlaceV1)>(),
-        std::mem::size_of::<(&SourceReferenceRepresentationDemandV29, &SemanticLocalDeclV1, &SourceReferenceNodeV29, SourceReferenceAnchorV29, Option<Type>, bool)>(),
+        std::mem::size_of::<(&SourceReferenceAccessRecordV29, &SemanticFunctionDeclV1, &fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1, &SemanticPlaceV1, &SemanticPlaceV1)>(),
+        std::mem::size_of::<(&SourceReferenceRepresentationDemandV29, &fe2o3_mir_model::semantic_mir_v1::SemanticLocalDeclV1, &SourceReferenceNodeV29, SourceReferenceAnchorV29, Option<Type>, bool)>(),
         std::mem::size_of::<Result<bool, ProductionSemanticKirErrorV1>>(),
     ])?)?;
     let mut rows = emission_vec_v1(plan.loans.len(), budget)?;
