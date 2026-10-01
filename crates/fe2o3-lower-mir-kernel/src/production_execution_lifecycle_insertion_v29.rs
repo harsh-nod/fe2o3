@@ -136,6 +136,7 @@ fn lifecycle_operation_v29(
 ) -> Result<Operation, ProductionSemanticKirErrorV1> {
     use fe2o3_kernel_ir::{ExecutionOperationV15 as Op, ExecutionRoleV15 as Role};
     let (result, kind) = match event.kind {
+        DeferredLifecycleKindV29::Tile(tile) => return tile.operation(budget),
         DeferredLifecycleKindV29::Issue { result } => {
             (Some((result.value, Role::Context)), Op::ContextIssue)
         }
@@ -215,6 +216,7 @@ fn prepare_lifecycle_events_v29(
     )?;
     let mut prepared = emission_vec_v1::<PreparedLifecycleEventV29>(count, budget)?;
     let mut issued = None;
+    let mut has_tiles = false;
     for (index, sidecar) in pending.sidecars.rows.iter().enumerate() {
         let events = sidecar
             .lifecycle_events
@@ -326,6 +328,25 @@ fn prepare_lifecycle_events_v29(
             }
             let result = match (event.source, event.kind) {
                 (
+                    DeferredLifecycleSourceV29::Intrinsic { .. },
+                    DeferredLifecycleKindV29::Tile(tile),
+                ) => {
+                    let range = tile.result_range()?;
+                    if tile.producer
+                        != (ProductionCallOccurrenceV1 {
+                            caller: source.instance,
+                            block: event.block,
+                        })
+                        || range.start < events.placement.first_value
+                        || range.end > sidecar.next_value
+                    {
+                        return Err(execution_lifecycle_error_v29());
+                    }
+                    check_lifecycle_result_range_v29(range, body, &prepared, budget)?;
+                    has_tiles = true;
+                    None
+                }
+                (
                     DeferredLifecycleSourceV29::Issuance { .. },
                     DeferredLifecycleKindV29::Issue { result },
                 ) => {
@@ -377,33 +398,17 @@ fn prepare_lifecycle_events_v29(
                 {
                     return Err(execution_lifecycle_error_v29());
                 }
-                budget.charge_work(argument_sum_v1(&[body.parameters.len(), prepared.len()])?)?;
-                if body.parameters.contains(&result.value)
-                    || prepared.iter().any(|prior| {
-                        prior
-                            .operation
-                            .as_ref()
-                            .is_some_and(|op| op.results.iter().any(|def| def.id == result.value))
-                    })
-                {
-                    return Err(execution_lifecycle_error_v29());
-                }
-                budget.charge_work(body.blocks.len())?;
-                for block in &body.blocks {
-                    budget.charge_work(argument_sum_v1(&[
-                        block.parameters.len(),
-                        block.operations.len(),
-                    ])?)?;
-                    if block.parameters.iter().any(|def| def.id == result.value) {
-                        return Err(execution_lifecycle_error_v29());
-                    }
-                    for op in &block.operations {
-                        budget.charge_work(op.results.len())?;
-                        if op.results.iter().any(|def| def.id == result.value) {
-                            return Err(execution_lifecycle_error_v29());
-                        }
-                    }
-                }
+                check_lifecycle_result_range_v29(
+                    result.value.0
+                        ..result
+                            .value
+                            .0
+                            .checked_add(1)
+                            .ok_or(ArgumentResourceV1::Arithmetic)?,
+                    body,
+                    &prepared,
+                    budget,
+                )?;
             }
             prepared.push(PreparedLifecycleEventV29 {
                 block: block_index,
@@ -439,6 +444,9 @@ fn prepare_lifecycle_events_v29(
             row.witness.event,
         )
     });
+    if has_tiles {
+        prepare_tile_discards_v29(body, &mut prepared, budget)?;
+    }
     Ok(prepared)
 }
 

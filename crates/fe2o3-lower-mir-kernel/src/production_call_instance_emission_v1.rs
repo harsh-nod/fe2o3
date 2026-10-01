@@ -474,12 +474,38 @@ fn splice_production_call_instance_v1(
 }
 
 fn splice_production_call_instance_with_scoped_frame_v29(
+    caller: Function,
+    callee: Function,
+    site: FunctionOperationLocation,
+    entry: BlockId,
+    continuation: BlockId,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<SplicedCallInstanceV1, CallInstanceEmissionErrorV1> {
+    splice_production_call_instance_with_scoped_parts_v29(
+        caller,
+        callee,
+        site,
+        entry,
+        continuation,
+        frame,
+        None,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn splice_production_call_instance_with_scoped_parts_v29(
     mut caller: Function,
     mut callee: Function,
     site: FunctionOperationLocation,
     entry: BlockId,
     continuation: BlockId,
     frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    parts: Option<(
+        &ScopedDeferredScalarViewV29<'_, '_, '_>,
+        &ScopedDeferredScalarViewV29<'_, '_, '_>,
+    )>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<SplicedCallInstanceV1, CallInstanceEmissionErrorV1> {
     let mut scratch = 0_usize;
@@ -492,8 +518,18 @@ fn splice_production_call_instance_with_scoped_frame_v29(
             return Err(CallInstanceEmissionErrorV1::InvalidRole);
         }
         let (block_index, returns, callee_entry, callee_blocks, result_components) = {
-            let caller_index = call_splice_index_v1(&caller, budget, &mut scratch)?;
-            let callee_index = call_splice_index_v1(&callee, budget, &mut scratch)?;
+            let caller_index = call_splice_index_with_deferred_parts_v29(
+                &caller,
+                parts.map(|pair| pair.0),
+                budget,
+                &mut scratch,
+            )?;
+            let callee_index = call_splice_index_with_deferred_parts_v29(
+                &callee,
+                parts.map(|pair| pair.1),
+                budget,
+                &mut scratch,
+            )?;
             if !call_splice_disjoint_v1(
                 caller_index.blocks.iter(),
                 callee_index.blocks.iter(),

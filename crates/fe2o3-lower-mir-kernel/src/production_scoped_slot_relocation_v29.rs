@@ -382,10 +382,12 @@ impl RelocationV29 {
 
     fn final_census(
         &self,
-        function: &Function,
+        pending: &PendingScopedRootEmissionV29,
+        instances: &ProductionCallInstancePlanV1<'_>,
         slots: &OwnedScopedSourceSlotsV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let function = &pending.function;
         let body = function.body.as_ref().ok_or_else(invalid)?;
         let entry = body.blocks.first().ok_or_else(invalid)?;
         if entry.id != self.root || storage(&slots.slots, budget)? != self.storage {
@@ -448,8 +450,16 @@ impl RelocationV29 {
             }
         }
         with_canonical_call_scratch_v1(budget, |budget| {
+            let parts =
+                ScopedDeferredScalarViewV29::for_pending_root(instances, pending, self, budget)?;
             let mut scratch = 0;
-            let index = call_splice_index_v1(function, budget, &mut scratch).map_err(map_error)?;
+            let index = call_splice_index_with_deferred_parts_v29(
+                function,
+                Some(&parts),
+                budget,
+                &mut scratch,
+            )
+            .map_err(map_error)?;
             call_splice_check_body_v1(function, &index, false, budget).map_err(map_error)?;
             Ok(())
         })
@@ -458,11 +468,12 @@ impl RelocationV29 {
     fn apply(
         &self,
         pending: &mut PendingScopedRootEmissionV29,
+        instances: &ProductionCallInstancePlanV1<'_>,
         slots: &OwnedScopedSourceSlotsV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         if self.moved == 0 {
-            return self.final_census(&pending.function, slots, budget);
+            return self.final_census(pending, instances, slots, budget);
         }
         let body = pending.function.body.as_ref().ok_or_else(invalid)?;
         let entry = body.blocks.first().ok_or_else(invalid)?;
@@ -533,7 +544,7 @@ impl RelocationV29 {
         }
         drop(donor_indices);
         budget.release_storage(donor_bytes)?;
-        self.final_census(&pending.function, slots, budget)
+        self.final_census(pending, instances, slots, budget)
     }
 }
 
@@ -563,7 +574,8 @@ impl PreparedV29<'_, '_> {
             Some(&permit),
             budget,
         )?;
-        self.relocation.apply(&mut pending, self.slots, budget)?;
+        self.relocation
+            .apply(&mut pending, self.instances, self.slots, budget)?;
         pending.slot_relocation = Some(self.relocation);
         replay_pending_instance_asserts_v1(&pending, self.instances, budget)?;
         pending.additional_storage_bytes = budget

@@ -67,7 +67,8 @@ fn check_scoped_defined_call_phases_v29(
                 {
                     return Err(mismatch());
                 }
-                let values = CallFunctionIndexV1::new(&lowered.function, budget)?;
+                let values =
+                    scoped_call_index_with_deferred_parts_v29(instances, id, lowered, budget)?;
                 check_scoped_call_census_v29(lowered, emitted, budget)?;
                 check_call_signature_v1(
                     instances.owner().source_semantic(),

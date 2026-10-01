@@ -12646,6 +12646,7 @@ include!("production_execution_call_parameters_v29.rs");
 include!("production_execution_call_sink_v29.rs");
 include!("production_execution_lifecycle_consumer_v29.rs");
 include!("production_execution_lifecycle_producer_v29.rs");
+include!("production_execution_tile_producer_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
 include!("production_scoped_root_emission_v29.rs");
 include!("production_scoped_source_slots_v29.rs");

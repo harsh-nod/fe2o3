@@ -791,3 +791,4 @@ pub(in super::super) fn repeated_slot_owner() -> ProductionSemanticSsaOwnerV1 {
         semantic.callables().to_vec(),
     )
 }
+include!("production_scoped_tile_source_fixtures_v29_tests.rs");

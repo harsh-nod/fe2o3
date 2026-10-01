@@ -332,25 +332,16 @@ fn assemble_pending_scoped_root_inner_v29(
                 .ok_or(InstanceCorrespondenceErrorV1::Source)?;
             let entry = BlockId(next_block);
             let continuation = BlockId(next_block + 1);
-            let mut expanded = match frame {
-                Some(frame) => map.splice_with_scoped_frame_v29(
-                    call,
-                    caller_function,
-                    callee_function,
-                    entry,
-                    continuation,
-                    Some(frame),
-                    budget,
-                ),
-                None => map.splice(
-                    call,
-                    caller_function,
-                    callee_function,
-                    entry,
-                    continuation,
-                    budget,
-                ),
-            }?;
+            let mut expanded = map.splice_with_scoped_parts_v29(
+                call,
+                caller_function,
+                callee_function,
+                entry,
+                continuation,
+                frame,
+                &sidecars.rows,
+                budget,
+            )?;
             next_block += 2;
             merge_pending_scope_capabilities_v29(
                 &mut expanded.caller.required_capabilities,

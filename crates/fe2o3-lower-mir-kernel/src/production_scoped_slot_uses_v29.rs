@@ -94,10 +94,13 @@ impl<'a> SlotUseGraphV29<'a> {
         function: &'a Function,
         slots: &[ScopedSourceSlotV29],
         first_slot: usize,
+        parts: Option<&ScopedDeferredScalarViewV29<'_, '_, '_>>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> UseResult<Self> {
         let mut scratch = 0;
-        let index = call_splice_index_v1(function, budget, &mut scratch).map_err(graph_error)?;
+        let index =
+            call_splice_index_with_deferred_parts_v29(function, parts, budget, &mut scratch)
+                .map_err(graph_error)?;
         call_splice_check_body_v1(function, &index, false, budget).map_err(graph_error)?;
         let body = function
             .body
@@ -469,13 +472,24 @@ fn transport_result(operation: &Operation) -> Option<&ValueDef> {
     .then_some(result)
 }
 
+#[cfg(test)]
 fn checked_graph<'a>(
     function: &'a Function,
     slots: &[ScopedSourceSlotV29],
     first_slot: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> UseResult<SlotUseGraphV29<'a>> {
-    let mut graph = SlotUseGraphV29::new(function, slots, first_slot, budget)?;
+    checked_graph_with_parts(function, slots, first_slot, None, budget)
+}
+
+fn checked_graph_with_parts<'a>(
+    function: &'a Function,
+    slots: &[ScopedSourceSlotV29],
+    first_slot: usize,
+    parts: Option<&ScopedDeferredScalarViewV29<'_, '_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<SlotUseGraphV29<'a>> {
+    let mut graph = SlotUseGraphV29::new(function, slots, first_slot, parts, budget)?;
     graph.solve(budget)?;
     graph.check_uses(budget)?;
     Ok(graph)
@@ -544,7 +558,19 @@ pub(super) fn check_scoped_source_slot_uses_v29(
                 if candidates.is_empty() {
                     return Ok(());
                 }
-                let graph = checked_graph(&lowered.function, candidates, row.slots.start, budget)?;
+                let parts = ScopedDeferredScalarViewV29::for_instance(
+                    instances,
+                    row.instance,
+                    lowered,
+                    budget,
+                )?;
+                let graph = checked_graph_with_parts(
+                    &lowered.function,
+                    candidates,
+                    row.slots.start,
+                    Some(&parts),
+                    budget,
+                )?;
                 history::check_with_source_kills(
                     &lowered.function,
                     &graph,
