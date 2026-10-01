@@ -41,7 +41,8 @@
         "cross_crate_typed_binding",
         "g2_layout",
         "g2_semantics",
-        "general_two_kernel_import"
+        "general_two_kernel_import",
+        "source_local_order_recipe_measurement_api_v1"
       ]
     }
   ]

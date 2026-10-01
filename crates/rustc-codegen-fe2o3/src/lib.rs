@@ -83,7 +83,9 @@ mod source_local_order_recipe_v1;
 #[cfg(target_os = "linux")]
 pub use production_rustc_driver_v1::run_bitselect_source_promotion_driver_v1;
 #[cfg(target_os = "linux")]
-pub use production_rustc_driver_v1::run_source_local_order_recipe_driver_v1;
+pub use production_rustc_driver_v1::{
+    run_source_local_order_recipe_driver_measured_v1, run_source_local_order_recipe_driver_v1,
+};
 #[cfg(target_os = "linux")]
 pub use source_bitselect_promotion_v1::{
     BitselectPromotionAttemptV1, BitselectPromotionFailureV1, BitselectPromotionRequestV1,
@@ -94,7 +96,8 @@ pub use source_local_order_recipe_api_v1::{
     SourceLocalOrderConstraintOutcomeV1, SourceLocalOrderIdentityObservationV1,
     SourceLocalOrderOrderV1, SourceLocalOrderRecipeAttemptV1, SourceLocalOrderRecipeEvidenceV1,
     SourceLocalOrderRecipeFailurePhaseV1, SourceLocalOrderRecipeFailureV1,
-    SourceLocalOrderRecipeOutputV1, SourceLocalOrderRecipeRequestV1, SourceLocalOrderRelationV1,
+    SourceLocalOrderRecipeOutputV1, SourceLocalOrderRecipeRequestV1,
+    SourceLocalOrderRecipeRetainedStorageV1, SourceLocalOrderRelationV1,
     SourceLocalOrderSourceBindingModeV1, SourceLocalOrderStrengthV1,
 };
 mod production_rustc_drop_v1;
