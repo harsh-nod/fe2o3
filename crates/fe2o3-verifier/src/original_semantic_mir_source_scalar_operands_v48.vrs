@@ -1,0 +1,145 @@
+struct InvocationSourceScalarOperandsV48 {
+    destination: InvocationSourceByteDestinationV36,
+    left: InvocationSourceByteValueV36,
+    right: Option<InvocationSourceByteValueV36>,
+    operation: int,
+    input_bits: int,
+    input_signed: bool,
+    output_bits: int,
+}
+
+struct InvocationSourceScalarOperandsResultV48 {
+    source: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+}
+
+open spec fn invocation_source_scalar_operands_shape_v48(event: InvocationSourceScalarOperandsV48) -> bool {
+    0 <= event.operation < 10
+        && (event.input_bits == 1 || event.input_bits == 8 || event.input_bits == 16
+            || event.input_bits == 32 || event.input_bits == 64)
+        && (event.input_bits != 1 || !event.input_signed)
+        && event.output_bits == (if event.operation >= 4 { 1int } else { event.input_bits })
+        && (event.operation == 0) == event.right.is_none()
+}
+
+open spec fn invocation_source_scalar_operands_value_v48(
+    event: InvocationSourceScalarOperandsV48, left: MemoryValueV30, right: MemoryValueV30,
+) -> MemoryValueV30 {
+    if !invocation_source_scalar_operands_shape_v48(event)
+        || !invocation_source_byte_value_typed_v36(left, event.input_bits)
+        || event.operation != 0 && !invocation_source_byte_value_typed_v36(right, event.input_bits) {
+        MemoryValueV30::Undefined
+    } else { match left {
+        MemoryValueV30::Scalar(left) => {
+            let modulus = if event.input_bits == 1 { 2int }
+                else { memory_value_modulus_v30(event.input_bits / 8) };
+            if event.operation == 0 { MemoryValueV30::Scalar(modulus - 1 - left) }
+            else { match right {
+                MemoryValueV30::Scalar(right) => {
+                    // Validated operands fit u64 at every admitted width, so
+                    // bitwise operations preserve their original bit width.
+                    let a = if event.input_signed { source_signed_v30(left, modulus) } else { left };
+                    let b = if event.input_signed { source_signed_v30(right, modulus) } else { right };
+                    let value = if event.operation == 1 { ((left as u64) & (right as u64)) as int }
+                        else if event.operation == 2 { ((left as u64) | (right as u64)) as int }
+                        else if event.operation == 3 { ((left as u64) ^ (right as u64)) as int }
+                        else { if (event.operation == 4 && a == b)
+                            || (event.operation == 5 && a != b)
+                            || (event.operation == 6 && a < b)
+                            || (event.operation == 7 && a <= b)
+                            || (event.operation == 8 && a > b)
+                            || (event.operation == 9 && a >= b) { 1int } else { 0int } };
+                    MemoryValueV30::Scalar(value)
+                },
+                _ => MemoryValueV30::Undefined,
+            } }
+        },
+        _ => MemoryValueV30::Undefined,
+    } }
+}
+
+open spec fn invocation_source_scalar_operands_refused_v48(
+    source: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+) -> InvocationSourceScalarOperandsResultV48 {
+    let after = invocation_source_byte_refused_v36(source);
+    InvocationSourceScalarOperandsResultV48 { source: after,
+        observations: observations + invocation_source_observe_effects_v39(
+            seq![MemoryOperationEffectV30::Refused], source, after) }
+}
+
+open spec fn invocation_source_scalar_operands_write_v48(
+    source: InvocationSourceByteStateV36, event: InvocationSourceScalarOperandsV48,
+    value: MemoryValueV30, observations: Seq<InvocationSourceEffectObservationV39>,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceScalarOperandsResultV48 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !invocation_source_byte_value_typed_v36(value, event.output_bits) {
+        invocation_source_scalar_operands_refused_v48(source, observations)
+    } else { match event.destination {
+        InvocationSourceByteDestinationV36::Local(local) => {
+            let after = invocation_source_byte_put_local_v36(source, local, value);
+            if !after.machine.valid { invocation_source_scalar_operands_refused_v48(after, observations) }
+            else { InvocationSourceScalarOperandsResultV48 { source: after, observations } }
+        },
+        InvocationSourceByteDestinationV36::Component(place) => {
+            let after = invocation_source_aggregate_place_replace_v42(source, place,
+                InvocationSourceAggregateV42 { source_type: place.result_type,
+                    leaves: Map::empty().insert(seq![], value) });
+            if !after.machine.valid { invocation_source_scalar_operands_refused_v48(after, observations) }
+            else { InvocationSourceScalarOperandsResultV48 { source: after, observations } }
+        },
+        InvocationSourceByteDestinationV36::Memory(access) => {
+            match invocation_source_byte_address_v36(source, access, root, instance) {
+                None => invocation_source_scalar_operands_refused_v48(source, observations),
+                Some(pointer) => {
+                    let after = if event.output_bits == access.width * 8
+                        || event.output_bits == 1 && access.width == 1 {
+                        InvocationSourceByteStateV36 { machine: invocation_source_store_v36(
+                            source.machine, pointer, access.width, access.alignment, value, little_endian),
+                            ..source }
+                    } else { invocation_source_byte_refused_v36(source) };
+                    let effects = if !after.machine.valid { seq![MemoryOperationEffectV30::Refused] }
+                        else if invocation_private_allocation_v36(pointer.allocation) { seq![] }
+                        else { seq![MemoryOperationEffectV30::Write {
+                            address: MemoryValueV30::Pointer(pointer), width: access.width,
+                            alignment: access.alignment, value }] };
+                    InvocationSourceScalarOperandsResultV48 { source: after,
+                        observations: observations + invocation_source_observe_effects_v39(effects, source, after) }
+                },
+            }
+        },
+    } }
+}
+
+open spec fn invocation_source_scalar_operands_v48(
+    source: InvocationSourceByteStateV36, event: InvocationSourceScalarOperandsV48,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceScalarOperandsResultV48 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !invocation_source_scalar_operands_shape_v48(event) {
+        invocation_source_scalar_operands_refused_v48(source, seq![])
+    } else {
+        let left = invocation_source_byte_evaluate_v36(source, event.left, event.input_bits,
+            root, instance, little_endian);
+        let reads = invocation_source_observe_effects_v39(invocation_source_read_effect_v36(
+            source, event.left, event.input_bits, root, instance, little_endian), source, left.source);
+        if !left.source.machine.valid { invocation_source_scalar_operands_refused_v48(left.source, reads) }
+        else { match event.right {
+            None => invocation_source_scalar_operands_write_v48(left.source, event,
+                invocation_source_scalar_operands_value_v48(event, left.value, MemoryValueV30::Undefined),
+                reads, root, instance, little_endian),
+            Some(operand) => {
+                // The right operand observes the state after the left Move;
+                // neither destination addressing nor a store happens earlier.
+                let right = invocation_source_byte_evaluate_v36(left.source, operand, event.input_bits,
+                    root, instance, little_endian);
+                let reads = reads + invocation_source_observe_effects_v39(invocation_source_read_effect_v36(
+                    left.source, operand, event.input_bits, root, instance, little_endian), left.source, right.source);
+                invocation_source_scalar_operands_write_v48(right.source, event,
+                    invocation_source_scalar_operands_value_v48(event, left.value, right.value),
+                    reads, root, instance, little_endian)
+            },
+        } }
+    }
+}

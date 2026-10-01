@@ -26,6 +26,8 @@ mod discriminants;
 mod enum_construction;
 #[path = "original_semantic_mir_source_integer_casts_v43.rs"]
 mod integer_casts;
+#[path = "original_semantic_mir_source_scalar_operands_v48.rs"]
+mod scalar_operands;
 #[path = "original_semantic_mir_source_slice_reads_v41.rs"]
 mod slice_reads;
 #[path = "original_semantic_mir_source_witness_borrows_v38.rs"]
@@ -196,6 +198,7 @@ pub(super) enum Event {
     Discriminant(discriminants::Read),
     EnumConstruct(enum_construction::Construct),
     IntegerCast(integer_casts::Cast),
+    ScalarOperands(scalar_operands::Operation),
     Checked(aggregates::Checked),
     AggregateTransfer(aggregates::Transfer),
     AggregateDeinitialize(aggregates::AggregatePlace),
@@ -1229,19 +1232,10 @@ impl Context<'_, '_, '_> {
                             access: self.access(place, out)?,
                         })
                     }
-                    value @ (Rvalue::Unary { .. } | Rvalue::Binary { .. }) => {
-                        if !matches!(destination, Destination::Local(_)) {
-                            return Err(unsupported());
-                        }
-                        self.scalar(assignment.destination().ty(), out)?;
-                        value.try_visit_operands(|operand| {
-                            if matches!(self.value(operand, out)?, Value::Read { .. }) {
-                                return Err(unsupported());
-                            }
-                            Ok(())
-                        })?;
-                        Ok(Event::Scalar)
-                    }
+                    Rvalue::Unary { .. } | Rvalue::Binary { .. } => Ok(
+                        scalar_operands::Operation::derive(self, assignment, destination, out)?
+                            .map_or(Event::Scalar, Event::ScalarOperands),
+                    ),
                     // Non-integer casts remain closed; the integer branch
                     // above requires independently typed original scalars.
                     _ => Err(unsupported()),
@@ -1455,6 +1449,7 @@ fn emit_event(
         Event::Discriminant(read) => read.emit(out)?,
         Event::EnumConstruct(constructed) => constructed.emit(enum_payloads, out)?,
         Event::IntegerCast(cast) => cast.emit(out)?,
+        Event::ScalarOperands(operation) => operation.emit(out)?,
         Event::WitnessBorrow(borrow) => borrow.emit(out)?,
         Event::WitnessTransfer(transfer) => transfer.emit(out)?,
         Event::Scalar => {
@@ -1545,6 +1540,7 @@ fn headers() -> usize {
         + aggregates::headers()
         + enum_construction::headers()
         + integer_casts::headers()
+        + scalar_operands::headers()
         + 24 * size_of::<usize>()
         + 20 * size_of::<&()>()
 }
@@ -1554,6 +1550,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_checked_objects_v44.vrs"),
     include_str!("original_semantic_mir_source_aggregate_laws_v42.vrs"),
     include_str!("original_semantic_mir_source_integer_casts_v43.vrs"),
+    include_str!("original_semantic_mir_source_scalar_operands_v48.vrs"),
     include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
     include_str!("original_semantic_mir_source_slice_reads_v41.vrs"),
     include_str!("original_semantic_mir_source_discriminants_v41.vrs"),
@@ -1656,6 +1653,7 @@ enum InvocationSourceByteEventV36 {
     Discriminant(InvocationSourceDiscriminantReadV41),
     EnumConstruct(InvocationSourceEnumConstructV43),
     IntegerCast(InvocationSourceIntegerCastV43),
+    ScalarOperands(InvocationSourceScalarOperandsV48),
     Scalar,
     WitnessBorrow { destination: int, origin: int, source_type: int, generation: int,
         instance: int, block: int, statement: int, parent: Option<InvocationSourceWitnessParentV43> },
@@ -2006,6 +2004,8 @@ open spec fn invocation_source_byte_step_v36(
             invocation_source_enum_construct_v43(source, constructed, root, instance, little_endian).source,
         InvocationSourceByteEventV36::IntegerCast(cast) =>
             invocation_source_integer_cast_v43(source, cast, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::ScalarOperands(operation) =>
+            invocation_source_scalar_operands_v48(source, operation, root, instance, little_endian).source,
         InvocationSourceByteEventV36::Checked { destination, source_type, operation, bits, signed, left, right } =>
             invocation_source_checked_v42(source, destination, source_type, operation, bits, signed, left, right, root, instance, little_endian),
         InvocationSourceByteEventV36::CheckedObject(event) =>
