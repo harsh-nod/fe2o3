@@ -84,7 +84,10 @@ fn original_enum_construction_joins_original_payloads_geometry_and_current_objec
                                 assert_eq!(payloads[0].offset, 4);
                                 assert_eq!(payloads[0].bytes, 4);
                                 assert_eq!(payloads[0].alignment, 4);
-                                assert_eq!(payloads[0].bits, 32);
+                                assert!(matches!(
+                                    payloads[0].value,
+                                    PayloadValue::Scalar { bits: 32, .. }
+                                ));
                             } else {
                                 assert!(payloads.is_empty());
                             }
@@ -104,6 +107,111 @@ fn original_enum_construction_joins_original_payloads_geometry_and_current_objec
                 }
             }
             assert_eq!(reached, [2, 2]);
+            Ok(())
+        })
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn original_reference_enum_payloads_preserve_typed_shared_copy_and_mutable_move() {
+    for (fixture, mutable) in [(Fixture::SharedSome, false), (Fixture::MutableSome, true)] {
+        run(fixture, LIMIT, LIMIT, |plan, slots, out| {
+            out.budget.reserve_storage(super::super::headers())?;
+            let semantic = slots
+                .correspondence(out)?
+                .source(out.budget)?
+                .source_semantic(out.budget)?;
+            let mut counts = [[0usize; 2]; 2];
+            for root in 0..2 {
+                for instance in 0..plan.root(root, out)?.instances.len() {
+                    let row = plan.instance(root, instance, out)?;
+                    if !row.active {
+                        continue;
+                    }
+                    let function = &semantic.functions()[row.function.index() as usize];
+                    let context = Context {
+                        slots,
+                        types: semantic.types(),
+                        function,
+                        root,
+                        instance,
+                        locals: row.locals.clone(),
+                    };
+                    for block in function.blocks() {
+                        let mut variants = Vec::new();
+                        for statement in block.statements() {
+                            let Statement::Assign(assignment) = statement.kind() else {
+                                continue;
+                            };
+                            let Rvalue::Aggregate(aggregate) = assignment.value().kind() else {
+                                continue;
+                            };
+                            if !matches!(aggregate.kind(), AggregateKind::EnumVariant(_)) {
+                                continue;
+                            }
+                            let mut payloads = vector(aggregate.operands().len(), out)?;
+                            let constructor =
+                                Construct::derive(&context, assignment, &mut payloads, out)?
+                                    .unwrap();
+                            variants.push(constructor.variant);
+                            assert_eq!(constructor.source_type, assignment.destination().ty());
+                            assert_eq!(constructor.access.bytes, 8);
+                            assert_eq!(constructor.tag_alignment, 8);
+                            assert_eq!(constructor.count, payloads.len());
+                            if constructor.variant == 0 {
+                                assert!(payloads.is_empty());
+                                counts[root][0] += 1;
+                                continue;
+                            }
+                            assert_eq!(constructor.variant, 1);
+                            assert_eq!(payloads.len(), 1);
+                            let field = payloads[0];
+                            assert_eq!((field.offset, field.bytes, field.alignment), (0, 8, 8));
+                            let PayloadValue::Reference {
+                                operand,
+                                referent_bits,
+                                referent_bytes,
+                                referent_alignment,
+                                mutable: actual_mutable,
+                            } = field.value
+                            else {
+                                panic!("a nominal original Reference cannot become scalar bits");
+                            };
+                            assert_eq!(operand.ty, aggregate.operands()[0].ty());
+                            assert_eq!(
+                                (referent_bits, referent_bytes, referent_alignment),
+                                (32, 4, 4)
+                            );
+                            assert_eq!(actual_mutable, mutable);
+                            assert_eq!(
+                                operand.kind,
+                                OperandKind::Pointer {
+                                    local: row.locals.start + 9,
+                                    moved: mutable,
+                                }
+                            );
+                            let start = out.text.len();
+                            constructor.emit(&payloads, out)?;
+                            let text = &out.text[start..];
+                            assert!(text.contains("InvocationSourceEnumValueV44::Reference"));
+                            assert!(text.contains("InvocationSourceOperandV36::Pointer"));
+                            assert!(text.contains(if mutable {
+                                "moved: true"
+                            } else {
+                                "moved: false"
+                            }));
+                            assert!(!text.contains("InvocationSourceEnumValueV44::Scalar"));
+                            counts[root][1] += 1;
+                        }
+                        if !variants.is_empty() {
+                            assert_eq!(variants, [0, 1, 0]);
+                        }
+                    }
+                }
+            }
+            assert_eq!(counts, [[4, 2], [4, 2]]);
             Ok(())
         })
         .0
@@ -138,6 +246,25 @@ fn emit_program(
                 assert!(table.contains("InvocationSourceByteEventV36::IntegerCast("));
                 assert!(table.contains("InvocationSourceByteEventV36::ObjectLive"));
                 assert!(table.contains("InvocationSourceByteEventV36::ObjectDead"));
+                if matches!(fixture, Fixture::SharedSome | Fixture::MutableSome) {
+                    assert_eq!(
+                        table
+                            .matches("InvocationSourceByteEventV36::EnumConstruct(")
+                            .count(),
+                        3
+                    );
+                    assert_eq!(
+                        table
+                            .matches("InvocationSourceEnumValueV44::Reference")
+                            .count(),
+                        1
+                    );
+                    assert!(table.contains(if matches!(fixture, Fixture::MutableSome) {
+                        "referent_alignment: 4int, mutable: true"
+                    } else {
+                        "referent_alignment: 4int, mutable: false"
+                    }));
+                }
             }
         }
         assert!(!out.text.contains("assume("));
@@ -191,6 +318,41 @@ fn original_enum_complete_program_has_exact_and_one_short_resources() {
 }
 
 #[test]
+fn original_reference_enum_complete_program_has_exact_and_one_short_resources() {
+    for fixture in [Fixture::SharedSome, Fixture::MutableSome] {
+        let generous = emit_program(fixture, LIMIT, LIMIT);
+        generous.0.unwrap();
+        let exact = emit_program(fixture, generous.1, generous.3);
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (generous.1, generous.2, generous.3)
+        );
+        for (work, storage, is_work) in [
+            (generous.1 - 1, generous.3, true),
+            (generous.1, generous.3 - 1, false),
+        ] {
+            let resource = match emit_program(fixture, work, storage).0.unwrap_err() {
+                Error::Resource(resource)
+                | Error::Source(
+                    fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(resource),
+                ) => resource,
+                other => panic!("exact reference constructor resource refusal: {other:?}"),
+            };
+            match (is_work, resource) {
+                (true, Resource::Work(error)) => {
+                    assert_eq!((error.actual(), error.limit()), (generous.1, work));
+                }
+                (false, Resource::Storage(error)) => {
+                    assert_eq!((error.actual(), error.limit()), (generous.3, storage));
+                }
+                other => panic!("reference constructor resource boundary: {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
 fn original_enum_source_constructor_keeps_snapshot_order_and_pointer_validity_closed() {
     let runtime = include_str!("original_semantic_mir_source_enum_construction_v43.vrs");
     let source = include_str!("original_semantic_mir_source_enum_construction_v43.rs");
@@ -202,7 +364,11 @@ fn original_enum_source_constructor_keeps_snapshot_order_and_pointer_validity_cl
         "field.offset + field.width > extent",
         "byte_range_aligned_v30(source.machine.memory, pointer, field.width, field.alignment)",
         "selected != Some(event.variant)",
-        "if variant == null { Some(Some(0int)) } else { None }",
+        "if variant == null { Some(Some(0int)) }",
+        "else if variant == nonnull { Some(None) } else { None }",
+        "invocation_source_enum_field_valid_v44(tagged,",
+        "invocation_source_borrow_enabled_v36(source, pointer,",
+        "byte_pointer_store_v37(",
     ] {
         assert!(runtime.contains(required), "{required}");
     }
@@ -214,7 +380,9 @@ fn original_enum_source_constructor_keeps_snapshot_order_and_pointer_validity_cl
         .unwrap();
     let tag = runtime.find("let tagged = match tag_bits").unwrap();
     assert!(operands < payload && payload < tag);
-    assert!(source.contains("let scalar = context.scalar(field, out)?;"));
+    assert!(source.contains("context.scalar(field, out)?.width()"));
+    assert!(source.contains("pointer.kind() != PointerKind::Reference"));
+    assert!(source.contains("mutable && !matches!(operand, Operand::Move(_))"));
     assert!(super::super::SOURCE_BYTES_V36.contains(runtime));
     for text in [
         include_str!("original_semantic_mir_observed_effects_v39.vrs"),
@@ -233,13 +401,28 @@ fn original_enum_constructor_emission_has_independent_headers_and_exact_byte_cos
         CanonicalKernelIrWorkBudgetV1 as Work,
     };
     type Fields = (Access, TypeId, u32, u64, usize, usize);
-    type Field = (Value, u32, u64, u64, u64);
+    #[allow(dead_code)]
+    enum ValueFields {
+        Scalar {
+            value: Value,
+            bits: u32,
+        },
+        Reference {
+            operand: TypedOperand,
+            referent_bits: u32,
+            referent_bytes: u64,
+            referent_alignment: u64,
+            mutable: bool,
+        },
+    }
+    type Field = (ValueFields, u64, u64, u64);
     fn h<T>() -> usize {
         size_of::<T>() + 2 * size_of::<Result<T>>()
     }
     let expected_header = h::<Fields>()
         + h::<Option<Fields>>()
         + h::<Field>()
+        + h::<ValueFields>()
         + h::<Vec<Field>>()
         + h::<Class>()
         + h::<super::super::super::slots::SourceTagRecipeV39<'_, '_, '_>>()
@@ -248,6 +431,7 @@ fn original_enum_constructor_emission_has_independent_headers_and_exact_byte_cos
         + 10 * size_of::<&()>();
     assert_eq!(size_of::<Construct>(), size_of::<Fields>());
     assert_eq!(size_of::<Payload>(), size_of::<Field>());
+    assert_eq!(size_of::<PayloadValue>(), size_of::<ValueFields>());
     assert_eq!(headers(), expected_header);
     let constructor = Construct {
         access: Access {
@@ -266,13 +450,15 @@ fn original_enum_constructor_emission_has_independent_headers_and_exact_byte_cos
         count: 1,
     };
     let fields = [Payload {
-        value: Value::Constant(7),
-        bits: 32,
+        value: PayloadValue::Scalar {
+            value: Value::Constant(7),
+            bits: 32,
+        },
         offset: 4,
         bytes: 4,
         alignment: 4,
     }];
-    let expected = "InvocationSourceByteEventV36::EnumConstruct(InvocationSourceEnumConstructV43 { access: InvocationSourceByteAccessV36 { base: InvocationSourceByteBaseV36::ObjectLocal(4int), offset: 0int, width: 8int, alignment: 4int }, source_type: 2int, variant: 0int, tag_alignment: 1int, fields: seq![InvocationSourceEnumPayloadV43 { value: InvocationSourceByteValueV36::Constant(7int), bits: 32int, offset: 4int, width: 4int, alignment: 4int },] })";
+    let expected = "InvocationSourceByteEventV36::EnumConstruct(InvocationSourceEnumConstructV43 { access: InvocationSourceByteAccessV36 { base: InvocationSourceByteBaseV36::ObjectLocal(4int), offset: 0int, width: 8int, alignment: 4int }, source_type: 2int, variant: 0int, tag_alignment: 1int, fields: seq![InvocationSourceEnumPayloadV43 { value: InvocationSourceEnumValueV44::Scalar { value: InvocationSourceByteValueV36::Constant(7int), bits: 32int }, offset: 4int, width: 4int, alignment: 4int },] })";
     let work = 5 + expected.len();
     let storage = SOURCE_LIMIT + expected_header;
     let emit = |work_limit, storage_limit| {
@@ -298,4 +484,75 @@ fn original_enum_constructor_emission_has_independent_headers_and_exact_byte_cos
     assert_eq!(inherited_alignment(1, 1, 4), 1);
     assert_eq!(inherited_alignment(8, 4, 8), 4);
     assert_eq!(inherited_alignment(4, 0, 8), 4);
+}
+
+#[test]
+fn original_reference_enum_emission_has_independent_exact_resource_cost() {
+    use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+    for mutable in [false, true] {
+        let constructor = Construct {
+            access: Access {
+                address: Address::Object {
+                    local: 4,
+                    offset: 0,
+                },
+                ty: TypeId::from_index(2),
+                bytes: 8,
+                alignment: 8,
+            },
+            source_type: TypeId::from_index(2),
+            variant: 1,
+            tag_alignment: 8,
+            first: 0,
+            count: 1,
+        };
+        let fields = [Payload {
+            value: PayloadValue::Reference {
+                operand: TypedOperand {
+                    ty: TypeId::from_index(3),
+                    kind: OperandKind::Pointer {
+                        local: 9,
+                        moved: mutable,
+                    },
+                },
+                referent_bits: 32,
+                referent_bytes: 4,
+                referent_alignment: 4,
+                mutable,
+            },
+            offset: 0,
+            bytes: 8,
+            alignment: 8,
+        }];
+        let expected = format!(
+            "InvocationSourceByteEventV36::EnumConstruct(InvocationSourceEnumConstructV43 {{ access: InvocationSourceByteAccessV36 {{ base: InvocationSourceByteBaseV36::ObjectLocal(4int), offset: 0int, width: 8int, alignment: 8int }}, source_type: 2int, variant: 1int, tag_alignment: 8int, fields: seq![InvocationSourceEnumPayloadV43 {{ value: InvocationSourceEnumValueV44::Reference {{ operand: InvocationSourceOperandV36::Pointer {{ local: 9int, moved: {mutable} }}, referent_bits: 32int, referent_width: 4int, referent_alignment: 4int, mutable: {mutable} }}, offset: 0int, width: 8int, alignment: 8int }},] }})"
+        );
+        // Constructor entry two, access one, payload one, typed operand one.
+        let work = 5 + expected.len();
+        let storage = SOURCE_LIMIT + headers();
+        let emit = |work_limit, storage_limit| {
+            let mut work = Work::new(work_limit);
+            let mut budget = Budget::new(&mut work, storage_limit);
+            let result = (|| {
+                budget.reserve_storage(SOURCE_LIMIT + headers())?;
+                let mut out = Writer::new(&mut budget)?;
+                constructor.emit(&fields, &mut out)?;
+                out.finish()
+            })();
+            (result, budget.work(), budget.peak_storage())
+        };
+        let exact = emit(work, storage);
+        assert_eq!(exact.0.unwrap(), expected);
+        assert_eq!((exact.1, exact.2), (work, storage));
+        assert!(matches!(emit(work - 1, storage).0,
+            Err(Error::Resource(Resource::Work(error)))
+                if error.actual() == work && error.limit() == work - 1));
+        assert!(matches!(emit(work, storage - 1).0,
+            Err(Error::Resource(Resource::Storage(error)))
+                if error.actual() == storage && error.limit() == storage - 1));
+    }
 }

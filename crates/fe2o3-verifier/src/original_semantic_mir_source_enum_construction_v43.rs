@@ -7,9 +7,23 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PayloadValue {
+    Scalar {
+        value: Value,
+        bits: u32,
+    },
+    Reference {
+        operand: TypedOperand,
+        referent_bits: u32,
+        referent_bytes: u64,
+        referent_alignment: u64,
+        mutable: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Payload {
-    value: Value,
-    bits: u32,
+    value: PayloadValue,
     offset: u64,
     bytes: u64,
     alignment: u64,
@@ -114,20 +128,52 @@ impl Construct {
                 .types
                 .get(field.index() as usize)
                 .ok_or_else(mismatch)?;
-            let scalar = context.scalar(field, out)?;
             let bytes = original.layout().size_bytes().ok_or_else(unsupported)?;
             if operand.ty() != field
                 || offset.checked_add(bytes).ok_or(Resource::Arithmetic)? > access.bytes
             {
                 return Err(mismatch());
             }
-            let value = context.value(operand, out)?;
+            let value = if let Shape::Pointer(pointer) = original.shape() {
+                out.budget.charge_work(7)?;
+                let mutable = pointer.mutability()
+                    == fe2o3_mir_model::semantic_mir_v1::SemanticMutabilityV1::Mutable;
+                if pointer.kind() != PointerKind::Reference
+                    || pointer.metadata() != PointerMetadata::None
+                    || pointer.address_space() != 0
+                    || pointer.pointer_width_bits() != 64
+                    || bytes != 8
+                    || mutable && !matches!(operand, Operand::Move(_))
+                {
+                    return Err(unsupported());
+                }
+                let referent = context
+                    .types
+                    .get(pointer.pointee().index() as usize)
+                    .ok_or_else(mismatch)?;
+                let scalar = context.scalar(pointer.pointee(), out)?;
+                let operand = context.typed_operand(operand, out)?;
+                if !matches!(operand.kind, OperandKind::Pointer { .. }) {
+                    return Err(unsupported());
+                }
+                PayloadValue::Reference {
+                    operand,
+                    referent_bits: scalar.width(),
+                    referent_bytes: referent.layout().size_bytes().ok_or_else(unsupported)?,
+                    referent_alignment: referent.layout().alignment_bytes(),
+                    mutable,
+                }
+            } else {
+                PayloadValue::Scalar {
+                    value: context.value(operand, out)?,
+                    bits: context.scalar(field, out)?.width(),
+                }
+            };
             if payloads.len() == payloads.capacity() {
                 return Err(Resource::Accounting.into());
             }
             payloads.push(Payload {
                 value,
-                bits: scalar.width(),
                 offset,
                 bytes,
                 alignment: inherited_alignment(
@@ -172,11 +218,31 @@ impl Construct {
         for field in fields {
             out.budget.charge_work(1)?;
             write!(out, "InvocationSourceEnumPayloadV43 {{ value: ").map_err(|_| out.error())?;
-            emit_value(field.value, out)?;
+            match field.value {
+                PayloadValue::Scalar { value, bits } => {
+                    write!(out, "InvocationSourceEnumValueV44::Scalar {{ value: ")
+                        .map_err(|_| out.error())?;
+                    emit_value(value, out)?;
+                    write!(out, ", bits: {bits}int }}").map_err(|_| out.error())?;
+                }
+                PayloadValue::Reference {
+                    operand,
+                    referent_bits,
+                    referent_bytes,
+                    referent_alignment,
+                    mutable,
+                } => {
+                    write!(out, "InvocationSourceEnumValueV44::Reference {{ operand: ")
+                        .map_err(|_| out.error())?;
+                    operand.emit(out)?;
+                    write!(out, ", referent_bits: {referent_bits}int, referent_width: {referent_bytes}int, referent_alignment: {referent_alignment}int, mutable: {mutable} }}")
+                        .map_err(|_| out.error())?;
+                }
+            }
             write!(
                 out,
-                ", bits: {}int, offset: {}int, width: {}int, alignment: {}int }},",
-                field.bits, field.offset, field.bytes, field.alignment
+                ", offset: {}int, width: {}int, alignment: {}int }},",
+                field.offset, field.bytes, field.alignment
             )
             .map_err(|_| out.error())?;
         }
@@ -191,6 +257,7 @@ pub(super) fn headers() -> usize {
     h::<Construct>()
         + h::<Option<Construct>>()
         + h::<Payload>()
+        + h::<PayloadValue>()
         + h::<Vec<Payload>>()
         + h::<Class>()
         + h::<super::super::slots::SourceTagRecipeV39<'_, '_, '_>>()
