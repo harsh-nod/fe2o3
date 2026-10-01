@@ -2246,6 +2246,30 @@ impl ProductionSemanticKirOwnerV1 {
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.verify_equivalence_with_translation_allowance_v1(budget, None)
+    }
+
+    /// Replays the same complete checks, charging helper translation work and
+    /// scratch to the original caller ledger while preserving this owner's
+    /// legacy local translation ceilings across all roots. All non-helper
+    /// lowering, canonical, SSA and correspondence costs retain their old scope.
+    pub fn verify_equivalence_with_bounded_translation_budget_v1(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let mut allowance = native_helper_value_expansion_v1::TranslationAllowanceV1::new(
+            budget,
+            self.limits.max_argument_correspondence_work,
+            self.limits.max_argument_correspondence_storage,
+        );
+        self.verify_equivalence_with_translation_allowance_v1(budget, Some(&mut allowance))
+    }
+
+    fn verify_equivalence_with_translation_allowance_v1(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+        mut allowance: Option<&mut native_helper_value_expansion_v1::TranslationAllowanceV1>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.semantic_ssa
             .verify_replay()
             .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
@@ -2301,7 +2325,7 @@ impl ProductionSemanticKirOwnerV1 {
             {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
-            let revalidated = validate_mir_pliron_translation_with_semantic_and_budget_v1(
+            let revalidated = validate_mir_pliron_translation_with_allowance_v1(
                 Some(self.semantic_ssa.source_semantic()),
                 &self.module,
                 &self.correspondence,
@@ -2311,6 +2335,7 @@ impl ProductionSemanticKirOwnerV1 {
                 &generic_checks.executable_effect_sources,
                 self.limits.max_operations,
                 budget,
+                allowance.as_deref_mut(),
             )
             .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
             if revalidated != generic_checks.translation_validation {
@@ -25864,6 +25889,9 @@ mod shared_slice_helper_parameter_tests {
 mod resource_tests {
     mod scalar_enum_payload_tests_v1 {
         include!("production_scalar_enum_payload_v1_tests.rs");
+    }
+    mod paid_translation_attachment_v1_tests {
+        include!("production_semantic_kir_v1/paid_translation_attachment_v1_tests.rs");
     }
     mod source_catalog_callback_tests {
         include!("production_source_catalog_callback_v1_tests.rs");

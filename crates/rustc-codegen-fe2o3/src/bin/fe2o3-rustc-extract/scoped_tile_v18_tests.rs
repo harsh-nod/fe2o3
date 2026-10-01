@@ -7,13 +7,13 @@ fn scoped_tile_v18_environment_is_paired_closed_and_disjoint_before_passthrough(
             scoped_tile_v18::validate_options(
                 Some(OsStr::new("out")),
                 Some(OsStr::new(name)),
-                [false; 24]
+                [false; 25]
             )
             .unwrap(),
             Some(order)
         );
-        for conflict in 0..24 {
-            let mut others = [false; 24];
+        for conflict in 0..25 {
+            let mut others = [false; 25];
             others[conflict] = true;
             assert!(
                 scoped_tile_v18::validate_options(
@@ -35,13 +35,13 @@ fn scoped_tile_v18_environment_is_paired_closed_and_disjoint_before_passthrough(
             scoped_tile_v18::validate_options(
                 output.map(OsStr::new),
                 order.map(OsStr::new),
-                [false; 24]
+                [false; 25]
             )
             .is_err()
         );
     }
     assert!(
-        scoped_tile_v18::validate_options(None, None, [true; 24])
+        scoped_tile_v18::validate_options(None, None, [true; 25])
             .unwrap()
             .is_none()
     );
@@ -78,6 +78,7 @@ fn scoped_tile_v18_selection_preserves_actual_bindings_and_refuses_other_modes()
         ExtractionModeV1::PhysicalEntryDiagnosticV20("other".into()),
         ExtractionModeV1::OrderedCompositionDiagnosticV1("other".into()),
         ExtractionModeV1::Bf16TileSourceV1("other".into()),
+        ExtractionModeV1::Bf16GeneratedSourceV1("other".into()),
     ] {
         let mut selected = selected_compile("unit", &["actual"]);
         selected.mode = mode;
@@ -124,6 +125,7 @@ fn scoped_tile_v18_passthrough_scrubs_both_diagnostic_controls() {
         scoped_tile_v18::ORDER_ENV,
         EXTRACT_BF16_TILE_SOURCE_DIRECTORY_ENV_V1,
         EXTRACT_BF16_TILE_PROMOTION_REQUEST_ENV_V1,
+        EXTRACT_BF16_GENERATED_SOURCE_DIRECTORY_ENV_V1,
     ] {
         assert!(
             command
@@ -137,10 +139,19 @@ fn scoped_tile_v18_passthrough_scrubs_both_diagnostic_controls() {
 fn scoped_tile_v18_bf16_conflicts_refuse_before_passthrough_preparation() {
     use std::ffi::OsStr;
     for order in ["blocked", "striped"] {
-        for (directory, request) in [(true, false), (false, true), (true, true)] {
-            let mut others = [false; 24];
+        for (directory, request, generated) in [
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, false, true),
+            (true, false, true),
+            (false, true, true),
+            (true, true, true),
+        ] {
+            let mut others = [false; 25];
             others[22] = directory;
             others[23] = request;
+            others[24] = generated;
             let prepared_passthrough = std::cell::Cell::new(false);
             let result = scoped_tile_v18::validate_options(
                 Some(OsStr::new("tile.kir")),

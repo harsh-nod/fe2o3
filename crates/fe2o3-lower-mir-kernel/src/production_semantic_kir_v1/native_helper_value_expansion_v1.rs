@@ -3,8 +3,95 @@ use super::native_helper_value_context_v1::{NativeHelperValues, with_native_help
 use super::native_helper_value_template_v1::{Ledger, Meter};
 use super::*;
 
+/// One legacy translation-phase allowance shared across every root in that
+/// phase. It carries no source authority and owns no alternate resource ledger.
+/// All accepted work/storage charges still enter the original caller Budget.
+pub(super) struct TranslationAllowanceV1 {
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    floor: usize,
+    work: usize,
+    work_limit: usize,
+    storage_limit: usize,
+    failed: bool,
+}
+
+impl TranslationAllowanceV1 {
+    pub(super) fn new(
+        budget: &ArgumentBudgetV1<'_>,
+        work_limit: usize,
+        storage_limit: usize,
+    ) -> Self {
+        Self {
+            ledger: budget.work_ledger_identity_v1(),
+            floor: budget.storage(),
+            work: 0,
+            work_limit,
+            storage_limit,
+            failed: false,
+        }
+    }
+
+    fn refuse<T>(&mut self) -> Result<T, &'static str> {
+        self.failed = true;
+        Err("native helper local translation allowance exhausted")
+    }
+
+    fn live(&mut self, budget: &ArgumentBudgetV1<'_>) -> Result<usize, &'static str> {
+        if self.failed || budget.work_ledger_identity_v1() != self.ledger {
+            return self.refuse();
+        }
+        match budget.storage().checked_sub(self.floor) {
+            Some(live) if live <= self.storage_limit => Ok(live),
+            _ => self.refuse(),
+        }
+    }
+
+    fn work(
+        &mut self,
+        budget: &ArgumentBudgetV1<'_>,
+        amount: usize,
+    ) -> Result<usize, &'static str> {
+        self.live(budget)?;
+        match self.work.checked_add(amount) {
+            Some(next) if next <= self.work_limit => Ok(next),
+            _ => self.refuse(),
+        }
+    }
+
+    fn reserve(
+        &mut self,
+        budget: &ArgumentBudgetV1<'_>,
+        amount: usize,
+    ) -> Result<(), &'static str> {
+        let live = self.live(budget)?;
+        match live.checked_add(amount) {
+            Some(next) if next <= self.storage_limit => Ok(()),
+            _ => self.refuse(),
+        }
+    }
+
+    // Cleanup remains permitted after denial, but never releases the caller's
+    // incoming floor or charges/resets a replacement ledger.
+    fn release(
+        &mut self,
+        budget: &ArgumentBudgetV1<'_>,
+        amount: usize,
+    ) -> Result<(), &'static str> {
+        if budget.work_ledger_identity_v1() != self.ledger
+            || budget
+                .storage()
+                .checked_sub(self.floor)
+                .is_none_or(|live| amount > live)
+        {
+            return self.refuse();
+        }
+        Ok(())
+    }
+}
+
 struct NativeValueMeter<'a, 'w> {
     budget: &'a mut ArgumentBudgetV1<'w>,
+    allowance: Option<&'a mut TranslationAllowanceV1>,
     failed: bool,
 }
 
@@ -12,6 +99,9 @@ impl NativeValueMeter<'_, '_> {
     fn resource<T>(&mut self, result: Result<T, ArgumentResourceV1>) -> Result<T, &'static str> {
         result.map_err(|_| {
             self.failed = true;
+            if let Some(allowance) = &mut self.allowance {
+                allowance.failed = true;
+            }
             "native helper caller resource ledger exhausted"
         })
     }
@@ -19,24 +109,44 @@ impl NativeValueMeter<'_, '_> {
 
 impl Meter for NativeValueMeter<'_, '_> {
     fn work(&mut self, amount: usize) -> Result<(), &'static str> {
+        let next = match &mut self.allowance {
+            Some(allowance) => Some(allowance.work(self.budget, amount)?),
+            None => None,
+        };
         let result = self.budget.charge_work(amount);
-        self.resource(result)
+        self.resource(result)?;
+        if let (Some(allowance), Some(next)) = (&mut self.allowance, next) {
+            allowance.work = next;
+        }
+        Ok(())
     }
     fn reserve(&mut self, amount: usize) -> Result<(), &'static str> {
+        if let Some(allowance) = &mut self.allowance {
+            allowance.reserve(self.budget, amount)?;
+        }
         let result = self.budget.reserve_storage(amount);
         self.resource(result)
     }
     fn release(&mut self, amount: usize) -> Result<(), &'static str> {
+        if let Some(allowance) = &mut self.allowance {
+            allowance.release(self.budget, amount)?;
+        }
         let result = self.budget.release_storage(amount);
         self.resource(result)
     }
     fn exhausted(&self) -> bool {
         self.failed
+            || self
+                .allowance
+                .as_ref()
+                .is_some_and(|allowance| allowance.failed)
     }
     fn storage(&self) -> Result<usize, &'static str> {
         Ok(self.budget.storage())
     }
     fn identity(&mut self) -> Result<Ledger, &'static str> {
+        // Identity must remain readable after refusal so existing cleanup can
+        // release its exact owned scratch. This does not revive the allowance.
         Ok(Ledger {
             slot: self.budget as *const ArgumentBudgetV1<'_> as usize,
             work: self.budget.work_ledger_identity_v1(),
@@ -59,6 +169,7 @@ pub(super) fn with_no_helpers_for_test_v1<R>(
 ) -> R {
     let mut meter = NativeValueMeter {
         budget,
+        allowance: None,
         failed: false,
     };
     let mut expansion = NativeValueExpansion {
@@ -222,6 +333,7 @@ fn run<'a>(
 /// Shared entry for the additive caller-budgeted validator. Full existing
 /// source lowering, original Module/correspondence equality and mandatory
 /// effect checks remain outside this expression-only scope and unchanged.
+#[allow(dead_code)] // Preserve the existing private compatibility entry.
 pub(super) fn with_native_value_expansion_v1(
     semantic: Option<&AdmittedInertSemanticMirV1>,
     module: &Module,
@@ -235,8 +347,35 @@ pub(super) fn with_native_value_expansion_v1(
         ProductionMirPlironTranslationErrorV1,
     >,
 ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
+    with_native_value_expansion_and_allowance_v1(
+        semantic,
+        module,
+        correspondence,
+        kernel,
+        budget,
+        None,
+        action,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn with_native_value_expansion_and_allowance_v1(
+    semantic: Option<&AdmittedInertSemanticMirV1>,
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    kernel: &str,
+    budget: &mut ArgumentBudgetV1<'_>,
+    allowance: Option<&mut TranslationAllowanceV1>,
+    action: impl FnOnce(
+        &mut NativeValueExpansion<'_, '_>,
+    ) -> Result<
+        ProductionMirPlironTranslationValidationV1,
+        ProductionMirPlironTranslationErrorV1,
+    >,
+) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
     let mut meter = NativeValueMeter {
         budget,
+        allowance,
         failed: false,
     };
     let Some(semantic) = semantic else {
@@ -307,7 +446,7 @@ pub(super) fn with_native_value_expansion_v1(
             Ok(())
         },
     );
-    if meter.failed {
+    if meter.exhausted() {
         return Err(ProductionMirPlironTranslationErrorV1::ResourceLimit);
     }
     checked.map_err(|_| ProductionMirPlironTranslationErrorV1::KernelShape)?;
@@ -317,3 +456,7 @@ pub(super) fn with_native_value_expansion_v1(
 #[cfg(test)]
 #[path = "native_helper_value_node_cap_v1_tests.rs"]
 mod node_cap_tests;
+
+#[cfg(test)]
+#[path = "native_helper_translation_allowance_v1_tests.rs"]
+mod allowance_tests;

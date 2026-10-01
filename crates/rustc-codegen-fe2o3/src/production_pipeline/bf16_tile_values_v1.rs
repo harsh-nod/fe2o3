@@ -23,11 +23,33 @@ fn unavailable(why: &'static str) -> ProductionPipelineError {
     inspection(Error::Unavailable(why))
 }
 
+// Private fixed selector: the legacy entry never opts into nominal inspection.
+// Neither variant changes the normal ranked/admission gate.
+#[derive(Clone, Copy)]
+enum MaterializationModeV1 {
+    Legacy,
+    NominalInspection,
+}
+
+#[path = "bf16_generated_source_admission_v1.rs"]
+mod generated_admission;
+
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
-    // Intentionally no public command/selector and no post-ranked repeatable view.
-    // The dedicated importer result, never bytes or a bool, owns the live seed.
+    // The legacy entry remains unchanged in behavior. The dedicated importer
+    // result, never bytes or a bool, owns the live seed.
     pub(super) fn materialize_with_bf16_tile_values_inspection_v1<R: Copy + 'static>(
         self,
+        inspect: impl for<'a, 'work> FnOnce(
+            &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    ) -> Result<(MaterializedNeutralProductionCompilation, R), Box<ProductionPipelineError>> {
+        self.materialize_bf16_tile_values_with_mode_v1(MaterializationModeV1::Legacy, inspect)
+    }
+
+    fn materialize_bf16_tile_values_with_mode_v1<R: Copy + 'static>(
+        self,
+        mode: MaterializationModeV1,
         inspect: impl for<'a, 'work> FnOnce(
             &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
             &mut Budget<'work>,
@@ -78,10 +100,18 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                     // SAME owner; ordinary Preexisting capture convention. No
                     // new constructor, flattening, CalleeCollective exception,
                     // pass suppression or alternate emission graph exists here.
-                    let owner = fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-                        semantic_ssa, launch,
-                        fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(), budget,
-                    ).map_err(ProductionPipelineError::PreRankedMaterialization)?;
+                    let owner = match mode {
+                        MaterializationModeV1::Legacy =>
+                            fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                                semantic_ssa, launch,
+                                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(), budget,
+                            ),
+                        MaterializationModeV1::NominalInspection =>
+                            fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_bf16_nominal_with_budget_v1(
+                                semantic_ssa, launch,
+                                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(), budget,
+                            ),
+                    }.map_err(ProductionPipelineError::PreRankedMaterialization)?;
                     let retained = owner.retained_analysis_storage_v1();
                     Ok(((owner, observed), retained))
                 },
