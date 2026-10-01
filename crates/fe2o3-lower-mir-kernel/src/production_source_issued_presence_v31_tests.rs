@@ -488,6 +488,7 @@ fn issued_presence_fixed_frames_match_independent_fields_and_result_envelopes() 
         Vec<SourceWrappingValueV23>,
         OptimizedSourceScalarBoundariesV31,
         Vec<Output>,
+        Vec<slice_view_v1::OptimizedDescriptorLengthV40>,
         &'a fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'a>,
         usize,
     );

@@ -332,6 +332,7 @@ fn optimized_scalar_inner_attempt_header_exact_and_short_keep_first_refusal() {
                         Vec<SourceWrappingValueV23>,
                         OptimizedSourceScalarBoundariesV31,
                         Vec<OptimizedIssuedPresenceV31>,
+                        Vec<slice_view_v1::OptimizedDescriptorLengthV40>,
                         &fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>,
                         usize,
                     ),

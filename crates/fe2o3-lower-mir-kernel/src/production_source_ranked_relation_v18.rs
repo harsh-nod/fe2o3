@@ -177,6 +177,7 @@ struct SourceScalarLeavesV18<'relation, 'source> {
     wrapping: Vec<SourceWrappingValueV23>,
     boundaries: SourceScalarBoundariesV31,
     presences: SourceIssuedPresencesV31,
+    lengths: slice_view_v1::SourceDescriptorLengthsV40,
     floor: usize,
     ordinary_values: bool,
 }
@@ -248,6 +249,13 @@ impl SemanticExpressionLeavesV18 for SourceExpressionLeavesV18<'_, '_, '_, '_, '
                 self.leaves.query(budget)?;
                 let relation = self.leaves.relation;
                 if symbol < PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2 {
+                    if !self.leaves.lengths.is_empty()
+                        && self
+                            .leaves
+                            .descriptor_length_symbol_v40(symbol, scalar, budget)?
+                    {
+                        return Ok(NormalizedScalarExpressionV1::Symbol { symbol, scalar });
+                    }
                     if !self.leaves.presences.rows.is_empty()
                         && self.leaves.presence_symbol_v31(symbol, budget)?.is_some()
                     {
@@ -1914,7 +1922,10 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
             let presences = if matches!(namespace, SourceScalarNamespaceV18::PrivateSourceWritesV22) {
                 source_issued_presences_v31(relation, root, &rows, &boundaries, budget)?
             } else { SourceIssuedPresencesV31::empty() };
-            let leaves = Self { relation, root, rows, lookup, wrapping, boundaries, presences,
+            let lengths = if ordinary_values {
+                slice_view_v1::source_descriptor_lengths_v40(relation, root, &rows, &boundaries, &presences, budget)?
+            } else { slice_view_v1::SourceDescriptorLengthsV40::empty() };
+            let leaves = Self { relation, root, rows, lookup, wrapping, boundaries, presences, lengths,
                 floor: budget.storage(), ordinary_values };
             leaves.check_boundary_equations_v31(budget)?;
             Ok(leaves)
@@ -2093,6 +2104,11 @@ impl<'relation, 'source> SourceScalarLeavesV18<'relation, 'source> {
                     .relation
                     .source
                     .missing("scalar leaf substituted physical root");
+            }
+            if !self.lengths.is_empty() {
+                if let Some(length) = self.descriptor_length_value_v40(value, budget)? {
+                    return Ok(Some(length));
+                }
             }
             if let Some(row) = if self.presences.rows.is_empty() {
                 None

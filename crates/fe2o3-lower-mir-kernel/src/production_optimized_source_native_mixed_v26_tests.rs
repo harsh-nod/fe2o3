@@ -1,4 +1,5 @@
 include!("production_source_descriptor_length_native_v30_tests.rs");
+include!("production_source_descriptor_length_leaves_v40_tests.rs");
 
 fn mixed_native_launches_v26(
     original: &ProductionSourceCorrespondenceV18<'_>,

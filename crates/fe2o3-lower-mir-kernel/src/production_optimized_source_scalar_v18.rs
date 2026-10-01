@@ -35,6 +35,7 @@ pub struct ProductionOptimizedSourceScalarLeavesV18<'scope> {
     wrapping: &'scope [SourceWrappingValueV23],
     boundaries: &'scope OptimizedSourceScalarBoundariesV31,
     presences: &'scope [OptimizedIssuedPresenceV31],
+    lengths: &'scope [slice_view_v1::OptimizedDescriptorLengthV40],
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     floor: usize,
@@ -250,42 +251,60 @@ impl ProductionSourceCorrespondenceV18<'_> {
             #[cfg(test)]
             test_optimized_scalar_attempt_header_v18(budget);
             let floor = budget.storage();
-            let (reads, wrapping, boundaries, presences, function, retained) = self.retain_query(
-                scoped_source_attempt_v29(self.source.cleanup, budget, floor, |budget| {
-                    let floor = budget.storage();
-                    self.retain_query((|| {
-                        budget.reserve_storage(argument_sum_v1(&[
-                            size_of::<ProductionOptimizedSourceScalarLeavesV18<'_>>(),
-                            size_of::<Vec<OptimizedSourceScalarReadV18>>(),
-                            size_of::<Vec<SourceWrappingValueV23>>(),
-                            size_of::<SourceWrappingValueV23>(),
-                            optimized_source_boundary_headers_v31()?,
-                            slice_view_v1::optimized_presence_headers_v31()?,
-                            size_of::<std::thread::Result<Result<T, E>>>(),
-                            source_reference_cleanup_headers_v29()?,
-                        ])?)?;
-                        budget.charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)?;
-                        let function =
-                            optimized_source_root_function_v18(self, optimized, root, budget)?;
-                        let reads = optimized_source_scalar_reads_v18(original, optimized, budget)?;
-                        let wrapping =
-                            optimized_source_wrapping_values_v23(original, optimized, budget)?;
-                        let boundaries =
-                            optimized_source_scalar_boundaries_v31(original, optimized, budget)?;
-                        let presences = slice_view_v1::optimized_issued_presences_v31(
-                            original.leaves,
-                            optimized,
-                            function,
-                            budget,
-                        )?;
-                        let retained = budget
-                            .storage()
-                            .checked_sub(floor)
-                            .ok_or(ArgumentResourceV1::Accounting)?;
-                        Ok((reads, wrapping, boundaries, presences, function, retained))
-                    })())
-                }),
-            )?;
+            let (reads, wrapping, boundaries, presences, lengths, function, retained) = self
+                .retain_query(scoped_source_attempt_v29(
+                    self.source.cleanup,
+                    budget,
+                    floor,
+                    |budget| {
+                        let floor = budget.storage();
+                        self.retain_query((|| {
+                            budget.reserve_storage(argument_sum_v1(&[
+                                size_of::<ProductionOptimizedSourceScalarLeavesV18<'_>>(),
+                                size_of::<Vec<OptimizedSourceScalarReadV18>>(),
+                                size_of::<Vec<SourceWrappingValueV23>>(),
+                                size_of::<SourceWrappingValueV23>(),
+                                optimized_source_boundary_headers_v31()?,
+                                slice_view_v1::optimized_presence_headers_v31()?,
+                                size_of::<std::thread::Result<Result<T, E>>>(),
+                                source_reference_cleanup_headers_v29()?,
+                            ])?)?;
+                            budget.charge_work(1 + SOURCE_REFERENCE_PAYLOAD_ATTEMPTS_V29)?;
+                            let function =
+                                optimized_source_root_function_v18(self, optimized, root, budget)?;
+                            let reads =
+                                optimized_source_scalar_reads_v18(original, optimized, budget)?;
+                            let wrapping =
+                                optimized_source_wrapping_values_v23(original, optimized, budget)?;
+                            let boundaries = optimized_source_scalar_boundaries_v31(
+                                original, optimized, budget,
+                            )?;
+                            let presences = slice_view_v1::optimized_issued_presences_v31(
+                                original.leaves,
+                                optimized,
+                                function,
+                                budget,
+                            )?;
+                            let lengths = if original.leaves.lengths.is_empty() {
+                                Vec::new()
+                            } else {
+                                slice_view_v1::optimized_descriptor_lengths_v40(
+                                    original.leaves,
+                                    optimized,
+                                    function,
+                                    budget,
+                                )?
+                            };
+                            let retained = budget
+                                .storage()
+                                .checked_sub(floor)
+                                .ok_or(ArgumentResourceV1::Accounting)?;
+                            Ok((
+                                reads, wrapping, boundaries, presences, lengths, function, retained,
+                            ))
+                        })())
+                    },
+                ))?;
             let leaves = ProductionOptimizedSourceScalarLeavesV18 {
                 original,
                 optimized,
@@ -294,6 +313,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
                 wrapping: &wrapping,
                 boundaries: &boundaries,
                 presences: &presences,
+                lengths: &lengths,
                 slot: std::ptr::from_ref(budget) as usize,
                 ledger: budget.work_ledger_identity_v1(),
                 floor: budget.storage(),
@@ -330,6 +350,7 @@ impl ProductionSourceCorrespondenceV18<'_> {
             drop(wrapping);
             drop(boundaries);
             drop(presences);
+            drop(lengths);
             let released = if self.source.cleanup.is_denied() {
                 Err(ArgumentResourceV1::Accounting)
             } else {
@@ -537,6 +558,11 @@ impl ProductionOptimizedSourceScalarLeavesV18<'_> {
                 return relation
                     .source
                     .missing("optimized scalar read foreign output function");
+            }
+            if !self.lengths.is_empty() {
+                if let Some(length) = self.descriptor_length_value_v40(value, budget)? {
+                    return Ok(Some(length));
+                }
             }
             if let Some(row) = if self.presences.is_empty() {
                 None

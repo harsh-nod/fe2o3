@@ -682,8 +682,8 @@ impl OriginalEntryIndexV20<'_, '_> {
                     }
                     SemanticRvalueKindV1::Unary { operation, operand } => {
                         if *operation == SemanticUnaryOpV1::PointerMetadata {
-                            return self.source.source.missing(
-                                "private source expression pointer metadata needs authenticated descriptor length",
+                            return leaves.leaves.descriptor_length_expression_v40(
+                                instance, block, statement, value, scalar, budget,
                             );
                         }
                         budget.charge_work(6)?;
@@ -734,8 +734,8 @@ impl OriginalEntryIndexV20<'_, '_> {
                     SemanticRvalueKindV1::AddressOf { .. } => self.source.source.missing(
                         "private source expression unsupported original address-of derivation",
                     ),
-                    SemanticRvalueKindV1::Length(_) => self.source.source.missing(
-                        "private source expression unsupported original length derivation",
+                    SemanticRvalueKindV1::Length(_) => leaves.leaves.descriptor_length_expression_v40(
+                        instance, block, statement, value, scalar, budget,
                     ),
                     SemanticRvalueKindV1::Discriminant(_) => self.source.source.missing(
                         "private source expression unsupported original discriminant derivation",

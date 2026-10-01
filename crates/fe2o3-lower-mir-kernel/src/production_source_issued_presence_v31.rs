@@ -39,6 +39,7 @@ type OptimizedScalarPreparedV31<'a> = (
     Vec<SourceWrappingValueV23>,
     OptimizedSourceScalarBoundariesV31,
     Vec<OptimizedIssuedPresenceV31>,
+    Vec<slice_view_v1::OptimizedDescriptorLengthV40>,
     &'a fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'a>,
     usize,
 );

@@ -12,6 +12,7 @@ pub(super) enum CompletedGlobalOperationV26 {
 }
 
 include!("production_source_descriptor_length_completion_v30.rs");
+include!("production_source_descriptor_length_leaves_v40.rs");
 
 /// An exact source-bound parameter contract whose concrete allocation and
 /// launch requirements must be transported to the runtime, not assumed here.
