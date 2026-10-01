@@ -4,6 +4,7 @@ thread_local! {
 }
 
 include!("production_scoped_storage_constructor_views_v44_tests.rs");
+include!("production_source_object_reference_payloads_v44_tests.rs");
 
 fn original_enum_construction_owner_v43() -> ProductionSemanticSsaOwnerV1 {
     let fields = ENUM_CONSTRUCTION_FIELDS_V43.get();

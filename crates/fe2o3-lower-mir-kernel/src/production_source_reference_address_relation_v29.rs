@@ -2691,7 +2691,44 @@ fn check_source_address_payloads_v29(
                             ScopedMemoryOperandSourceV29::Place(occurrence) => {
                                 let place = scoped_payload_place_v29(original, site, role)
                                     .ok_or_else(source_raw_physical_error_v29)?;
-                                if object.is_some()
+                                if instances
+                                    .owner()
+                                    .source_semantic()
+                                    .types()
+                                    .get(ty.index() as usize)
+                                    .is_some_and(source_object_reference_field_v44)
+                                {
+                                    let (endpoint, _) = object
+                                        .ok_or_else(source_object_reference_payload_error_v44)?;
+                                    if endpoint.projected_type != ty || place.ty() != ty {
+                                        return Err(source_object_reference_payload_error_v44());
+                                    }
+                                    let binding = source_object_archived_reference_v44(
+                                        references.plan,
+                                        archive,
+                                        source.instance,
+                                        site,
+                                        role,
+                                        place,
+                                        occurrence,
+                                        budget,
+                                    )?;
+                                    let expected = source_object_reference_value_v44(
+                                        references.plan,
+                                        binding,
+                                        endpoint.projected_schema,
+                                        budget,
+                                    )?;
+                                    if expected.id != value
+                                        || !invocation_equal_types_v1(
+                                            &expected.ty,
+                                            graph.ty(value, budget)?,
+                                            budget,
+                                        )?
+                                    {
+                                        return Err(source_object_reference_payload_error_v44());
+                                    }
+                                } else if object.is_some()
                                     && matches!(
                                         occurrence,
                                         ScopedMemoryOccurrenceV29::Retained { .. }

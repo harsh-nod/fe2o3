@@ -1,5 +1,7 @@
 // Construction does not assert an already-active variant. Every payload comes
 // from the exact original aggregate operand; the tag is committed last.
+include!("production_source_object_reference_payloads_v44.rs");
+
 fn source_object_enum_field_types_v43<'types>(
     types: &'types [SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
@@ -30,10 +32,14 @@ fn source_object_enum_field_types_v43<'types>(
             .ok_or_else(scoped_object_error_v29)?;
         require_ordinary_execution_representation_v29(declaration)?;
         if operand.ty() != ty
-            || !matches!(
+            || !(matches!(
                 declaration.shape(),
                 SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
-            )
+            ) || source_object_reference_field_v44(declaration)
+                && matches!(
+                    operand,
+                    SemanticOperandV1::Copy(_) | SemanticOperandV1::Move(_)
+                ))
         {
             return Err(scoped_object_pending_v29());
         }
@@ -302,11 +308,10 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 let ty = types[index];
                 let declaration = this.types.get(ty.index() as usize).ok_or(ArgumentResourceV1::Accounting)?;
                 require_ordinary_execution_representation_v29(declaration)?;
-                if operand.ty() != ty || !matches!(declaration.shape(),
+                if operand.ty() != ty || !(matches!(declaration.shape(),
                     SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+                    || source_object_reference_field_v44(declaration))
                 { return Err(scoped_object_allocation_error_v29()) }
-                let SemanticValueBindingV1::Value { id: value, ty: actual } = binding
-                else { return Err(scoped_object_allocation_error_v29()) };
                 let ordinal = u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?;
                 let path = [
                     SemanticProjectionV1::new(SemanticProjectionKindV1::Downcast(*variant), place.ty())
@@ -333,12 +338,33 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 else { return Err(scoped_object_allocation_error_v29()) };
                 if original != ordinal { return Err(ArgumentResourceV1::Accounting.into()) }
                 let schema = field.result_schema.ok_or(ArgumentResourceV1::Accounting)?;
-                source_reference_owned_prepay_v29::<Type>(plan, budget)?;
-                let expected = lower_scalar_type(this.types, ty)?;
-                if !invocation_equal_types_v1(actual, &expected, budget)? {
-                    return Err(ArgumentResourceV1::Accounting.into());
-                }
                 let role = ExecutionOperandV29::RvalueOperand(ordinal);
+                let (value, reference_source) = match binding {
+                    SemanticValueBindingV1::Value { id, ty: actual }
+                        if !source_object_reference_field_v44(declaration) => {
+                        source_reference_owned_prepay_v29::<Type>(plan, budget)?;
+                        let expected = lower_scalar_type(this.types, ty)?;
+                        if !invocation_equal_types_v1(actual, &expected, budget)? {
+                            return Err(ArgumentResourceV1::Accounting.into());
+                        }
+                        (*id, None)
+                    }
+                    SemanticValueBindingV1::SourceReference(binding)
+                        if source_object_reference_field_v44(declaration) => {
+                        let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand
+                        else { return Err(source_object_reference_payload_error_v44()) };
+                        let occurrence = scoped_payload_occurrence_v29(cursor, site, role, place, budget)?
+                            .ok_or_else(source_object_reference_payload_error_v44)?;
+                        let original = this.source_object_current_reference_v44(
+                            plan, site, role, place, occurrence, budget,
+                        )?;
+                        source_object_reference_same_v44(plan, binding, original, budget)?;
+                        let value = budget.source_object_reference_value_v44(plan, original, schema)?.id;
+                        (value, Some(ScopedMemoryOperandSourceV29::Place(occurrence)))
+                    }
+                    _ => return Err(scoped_object_allocation_error_v29()),
+                };
+                let source = if let Some(source) = reference_source { source } else {
                 let source = match operand {
                     SemanticOperandV1::Constant(_) => ScopedMemoryOperandSourceV29::Constant,
                     SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
@@ -346,7 +372,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                             .ok_or_else(scoped_object_allocation_error_v29)?;
                         match occurrence {
                             ScopedMemoryOccurrenceV29::Promoted { .. } =>
-                                check_scoped_payload_archive_v29(&this.semantic_ssa_bindings, place, occurrence, *value, budget)?,
+                                check_scoped_payload_archive_v29(&this.semantic_ssa_bindings, place, occurrence, value, budget)?,
                             ScopedMemoryOccurrenceV29::Retained { .. } => {
                                 if reads.is_none() {
                                     reads = Some(this.source_object_aggregate_reads_v29(site, fields.len(), operations, budget)?);
@@ -354,7 +380,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                                 budget.source_reference_charge_v29(plan, 7)?;
                                 let Some((actual, read)) = reads.as_ref().and_then(|reads| reads.get(index)).copied().flatten()
                                 else { return Err(scoped_object_allocation_error_v29()) };
-                                if !place.projections().is_empty() || actual != *value || read.site != site
+                                if !place.projections().is_empty() || actual != value || read.site != site
                                     || read.role != role || read.ty != ty || read.prefix != 0 || read.occurrence != occurrence
                                 { return Err(scoped_object_allocation_error_v29()) }
                             }
@@ -362,10 +388,12 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                         ScopedMemoryOperandSourceV29::Place(occurrence)
                     }
                 };
+                source
+                };
                 prepared.push(SourceObjectAggregateFieldV29 {
                     operand: ordinal, projection: ScopedObjectViewProjectionV29::Field(
                         u32::try_from(physical).map_err(|_| ArgumentResourceV1::Arithmetic)?),
-                    ty, schema, value: *value,
+                    ty, schema, value,
                     source: ScopedMemoryStoreSourceV29::Operand { site, role, ty, source },
                 });
             }

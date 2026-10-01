@@ -149,6 +149,18 @@ trait SemanticEmissionBudgetV1 {
             .inspect_err(|error| source_reference_record_failure_v29(plan, error))
     }
 
+    fn source_object_reference_value_v44<'binding>(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        binding: &'binding SemanticSourceReferenceBindingV29,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    ) -> Result<&'binding ValueDef, ProductionSemanticKirErrorV1> {
+        let _ = (binding, schema);
+        self.source_reference_owner_v29(plan)?;
+        Err(ArgumentResourceV1::Accounting.into())
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
     fn source_object_projection_v29<'path>(
         &mut self,
         plan: &SourceReferencePlanV29<'_, '_>,
@@ -207,6 +219,16 @@ trait SemanticEmissionBudgetV1 {
 }
 
 impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
+    fn source_object_reference_value_v44<'binding>(
+        &mut self,
+        plan: &SourceReferencePlanV29<'_, '_>,
+        binding: &'binding SemanticSourceReferenceBindingV29,
+        schema: fe2o3_kernel_ir::StorageLayoutIdV1,
+    ) -> Result<&'binding ValueDef, ProductionSemanticKirErrorV1> {
+        source_object_reference_value_v44(plan, binding, schema, self)
+            .inspect_err(|error| source_reference_record_failure_v29(plan, error))
+    }
+
     fn source_external_reference_borrow_v29(
         &mut self,
         plan: &SourceReferencePlanV29<'_, '_>,
