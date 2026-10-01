@@ -191,6 +191,10 @@ impl Bf16MfmaSourceFileObservationV1 {
         }
         Ok(())
     }
+    /// Point-in-time metadata join only; not a writer lease or source constructor.
+    pub(super) fn matches_original_snapshot(&self, current: &Metadata) -> bool {
+        stamp(&self.before, current)
+    }
     pub(crate) fn bytes(&self) -> &str {
         self.file.src.as_deref().expect("sealed source bytes")
     }

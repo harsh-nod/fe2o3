@@ -4903,3 +4903,6 @@ mod reference_retained_storage_v1;
 
 #[path = "production_bindings_retained_storage_v1.rs"]
 pub(crate) mod bindings_retained_storage_v1;
+
+#[path = "production_pipeline/bf16_tile_source_promotion_v1.rs"]
+mod bf16_tile_source_promotion_v1;
