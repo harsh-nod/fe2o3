@@ -19,6 +19,9 @@ mod construction_body;
 mod codec_fields;
 #[cfg(test)]
 mod codec_fields_tests;
+mod codec_operation;
+#[cfg(test)]
+mod codec_operation_tests;
 mod codec_primitives;
 #[cfg(test)]
 mod codec_tests;
@@ -81,56 +84,13 @@ impl ModelDistributedOperationBindingV1 {
 
     /// Canonical descriptive preimage, not a signature, digest or authority token.
     pub fn canonical_description(self) -> [u8; DISTRIBUTED_OPERATION_DESCRIPTION_BYTES_V1] {
-        let mut bytes = [0; DISTRIBUTED_OPERATION_DESCRIPTION_BYTES_V1];
-        let mut writer = Writer::new(&mut bytes);
-        writer.header(DISTRIBUTED_OPERATION_DESCRIPTION_DOMAIN_V1);
-        let c = self.coordinates;
-        writer.digest(c.runtime_instance.digest());
-        writer.digest(c.participant.digest());
-        writer.u64(c.participant_incarnation);
-        writer.digest(c.coordinator.digest());
-        writer.u64(c.coordinator_epoch);
-        writer.digest(c.membership.digest());
-        writer.u64(c.membership_epoch);
-        writer.digest(c.run.digest());
-        writer.digest(c.operation.digest());
-        writer.u64(c.attempt);
-        writer.digest(c.artifact.digest());
-        writer.digest(c.execution_plan.digest());
-        writer.digest(c.placement_plan.digest());
-        writer.digest(c.target.digest());
-        writer.digest(c.runtime_model.digest());
-        debug_assert_eq!(writer.offset, DISTRIBUTED_OPERATION_DESCRIPTION_BYTES_V1);
-        bytes
+        codec_operation::encode(self)
     }
 
     pub fn decode_untrusted_description(
         bytes: &[u8],
     ) -> Result<Self, DistributedPublicationContractErrorV1> {
-        if bytes.len() != DISTRIBUTED_OPERATION_DESCRIPTION_BYTES_V1 {
-            return Err(DistributedPublicationContractErrorV1::WrongLength);
-        }
-        let mut r = Reader::new(bytes);
-        r.header(DISTRIBUTED_OPERATION_DESCRIPTION_DOMAIN_V1)?;
-        let coordinates = UntrustedDistributedOperationCoordinatesV1 {
-            runtime_instance: DistributedRuntimeInstanceIdV1::from_untrusted_digest(r.digest()?),
-            participant: DistributedParticipantIdV1::from_untrusted_digest(r.digest()?),
-            participant_incarnation: r.u64()?,
-            coordinator: DistributedParticipantIdV1::from_untrusted_digest(r.digest()?),
-            coordinator_epoch: r.u64()?,
-            membership: DistributedMembershipIdV1::from_untrusted_digest(r.digest()?),
-            membership_epoch: r.u64()?,
-            run: DistributedRunIdV1::from_untrusted_digest(r.digest()?),
-            operation: DistributedOperationIdV1::from_untrusted_digest(r.digest()?),
-            attempt: r.u64()?,
-            artifact: RuntimeArtifactIdV1::from_untrusted_digest(r.digest()?),
-            execution_plan: DistributedExecutionPlanIdV1::from_untrusted_digest(r.digest()?),
-            placement_plan: DistributedPlacementPlanIdV1::from_untrusted_digest(r.digest()?),
-            target: DistributedTargetDescriptionIdV1::from_untrusted_digest(r.digest()?),
-            runtime_model: RuntimeModelIdV1::from_untrusted_digest(r.digest()?),
-        };
-        r.finish()?;
-        Self::from_untrusted_coordinates(coordinates)
+        codec_operation::decode(bytes)
     }
 }
 
@@ -248,9 +208,6 @@ impl<'a> Writer<'a> {
     fn u64(&mut self, value: u64) {
         codec_fields::write_u64(self.bytes, &mut self.offset, value);
     }
-    fn digest(&mut self, value: IdentityDigestV1) {
-        self.put(value.as_bytes());
-    }
 }
 
 struct Reader<'a> {
@@ -272,9 +229,6 @@ impl<'a> Reader<'a> {
     }
     fn u64(&mut self) -> Result<u64, DistributedPublicationContractErrorV1> {
         codec_fields::read_u64(self.bytes, &mut self.offset)
-    }
-    fn digest(&mut self) -> Result<IdentityDigestV1, DistributedPublicationContractErrorV1> {
-        Ok(IdentityDigestV1::from_untrusted_bytes(self.fixed()?))
     }
     fn finish(&self) -> Result<(), DistributedPublicationContractErrorV1> {
         codec_primitives::finish(self.bytes, self.offset)

@@ -312,7 +312,7 @@ fn real_digest_and_header_writes_preserve_nonuniform_payloads_and_frames() {
         offset: 1,
     };
     writer.header(b"abc");
-    writer.digest(digest);
+    super::codec_operation::write_digest(writer.bytes, &mut writer.offset, digest);
     assert_eq!(writer.offset, 40);
     assert_eq!(&storage[1..8], &[b'a', b'b', b'c', 1, 0, 0, 0]);
     assert_eq!(&storage[8..40], &payload);
@@ -322,11 +322,17 @@ fn real_digest_and_header_writes_preserve_nonuniform_payloads_and_frames() {
         offset: 1,
     };
     assert_eq!(reader.header(b"abc"), Ok(()));
-    assert_eq!(reader.digest(), Ok(digest));
+    assert_eq!(
+        super::codec_operation::read_digest(reader.bytes, &mut reader.offset),
+        Ok(digest)
+    );
     assert_eq!(reader.offset, 40);
     for length in 0..32 {
         let mut reader = Reader::new(&payload[..length]);
-        assert_eq!(reader.digest(), Err(E::WrongLength));
+        assert_eq!(
+            super::codec_operation::read_digest(reader.bytes, &mut reader.offset),
+            Err(E::WrongLength)
+        );
         assert_eq!(reader.offset, 0);
     }
 }

@@ -1,0 +1,20 @@
+{
+  "archive": "/mnt/c/fe2o3-codec-header-view-evidence-20261001/w16-signed-operation/w16-source-records.tar.gz",
+  "archive_bytes": 30777143,
+  "archive_sha256": "5d88b07174d9c0d4731faafe340b28d84fec5b4fc386714ff73eb1ea405d6426",
+  "bundle_prerequisite": "da4ff4019ebad1aecde1bdff3942f7f4e0383e33",
+  "controller_sha256": "faa8723d505ef0031e45f85c7a6a3bbffb8698f461f9964a1ac8b0bedf249168",
+  "full_git_or_inherited_dependency_archive": false,
+  "incremental_bundle_sha256": "5bcbb71585c1c5af1a326454cfdb1ef1194bbff9b8834edf8d718631bf665ce9",
+  "logical_bytes": 153685352,
+  "members": 9680,
+  "members_sha256": "b39b4b55bec2b3fef8c60f964a0b9dd51e11aa609b36cd41561195d8655fe5e2",
+  "original_root": "/run/shm/fe2o3-codec-operation-qualified-20261001-uZkEy7tj",
+  "originals_preserved": true,
+  "per_member_readback": true,
+  "private_git_directory_excluded": true,
+  "qualification": false,
+  "regular_files": 8054,
+  "schema": "fe2o3-codec-w16-custody-v1",
+  "signed_commit": "d0d24274c69043ae1205376489cf41179740a564"
+}

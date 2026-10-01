@@ -3,12 +3,13 @@
 ## Milestone Snapshot
 
 Local qualification snapshot: 2026-10-01 UTC.
-The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
-refreshed on 2026-10-01: the issue remained Open, with 34 comments and its latest
-update at 2026-10-01 04:40:07 UTC. Both runtime branch refs were confirmed through
-signed commit `c88acfb42`, including the qualified field-codec and journal-wrapper
-integrations, public raw evidence and the matched wait-cadence campaign helpers.
-The [published checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5924866701)
+The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
+2026-10-01: the issue remained Open. The previously published baseline on both
+runtime branch refs is signed commit `99c07511e`, including the qualified
+field-codec and journal-wrapper integrations, combined CPU regression and
+matched wait-cadence measurements. The operation-codec qualification below is
+the next integrated component, not a milestone exit.
+The [published baseline checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5925538925)
 records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
@@ -51,11 +52,17 @@ negative roster passes sixteen source-only controls. Its capture stops on a
 timeout at the sixth concrete mutation, after 38 leaf, 21 conditional and five
 concrete normal observations. That timeout is rejected, not a qualified
 negative; the closing release and durable archive complete, with the original
-packet retained. Signed qualification, live-allocation checks and fresh
-credit-lock refinement remain open. Native runtime and model bytes are
-unchanged in this proof-only candidate. A separate seven-path live-allocation
-source draft passes six structural controls but has no frontend, solver or CPU
-acceptance yet.
+packet retained. An opacity correction preserves the contracts and now supplies
+a signed 112-stage qualification campaign. Its first 109 stages complete, but
+the unchanged 16 GiB available-RAM gate rejects admission to the closing
+positive, release and signature checks. All 109 attempted groups are closed;
+the original campaign is rejected, with its durable archive retained. A
+separately reviewed completion/adoption run is being prepared, not accepted.
+Native runtime and model bytes are unchanged
+in the signed proof-only candidate. The separate seven-path live-allocation
+draft now passes a full 47-input frontend check, with zero verified obligations
+and no CPU acceptance. Its earlier duplicate-helper rejection remains retained.
+Full live-allocation discovery and fresh credit-lock refinement remain open.
 
 The operation-level distributed codec now passes full unsigned discovery at
 99/0 over eleven proof inputs, including executable encode/decode roundtrip
@@ -71,9 +78,34 @@ their originals; no negative is accepted. A subsequent proof-opacity draft is
 rejected by the frontend for nested header placement, and that attempt is also
 preserved. Correct top-level opacity headers now pass a fresh full 99/0 proof
 with unchanged contracts and limits; independent readback joins all three
-groups and 7,532 archived members. The new forty-case capture is underway,
-not qualified. Signed qualification and actual-body negative controls remain
-pending; this does not qualify two-host transport or distributed authority.
+groups and 7,532 archived members. The complete unsigned forty-case capture
+remains unqualified historical calibration. A separate signed candidate
+`d0d24274c` now passes all 47 qualification stages: three full 99/0 positives,
+all forty fresh strict actual-body negatives and every owned process closure.
+Independent agent/root audits agree. Its exact durable archive preserves 9,680
+members, including signed source and the complete campaign records. The
+[public packet](evidence/dev-distributed-codec-operation-2026-10-01/README.md)
+includes a fresh clean-environment integration run. Two earlier local attempts
+are excluded because their inherited environment captured an authentication
+header; their originals remain private. All 27 source-workflow commands
+pass after metadata-only guard rebinding, with inherited proof closures exact.
+Native CPU reuse remains explicit, and some replay prerequisites remain
+external. The complete receipt-codec successor has passed frontend checking
+only and still needs fresh CPU and proof qualification. None of these results
+qualifies two-host transport, distributed authority or a milestone exit.
+
+The complete wait-cursor extraction has passed all 1,836 no-default and 1,842
+all-feature CPU tests with no ignores or filtering. Both strict Clippy commands
+exit zero, but the last post-stage check rejects the unchanged 16 GiB RAM gate
+before closing HEAD/signature checks. All 17 attempted groups are closed; the
+original campaign is rejected, not a complete CPU qualification. A separately
+reviewed completion/adoption run remains pending. Four attempts to model the standard-library boundary
+remain rejected, including the explicit no-cheating policy rejection. A
+separate small arithmetic-core draft preserves native Duration/Instant state
+and keeps the standard-library adapter outside its proposed proof boundary.
+That draft has source-control acceptance only, no frontend, proof, fresh CPU
+or performance acceptance. The original cursor oracle and all rejected
+evidence remain retained.
 
 The [36-trial wait-cadence campaign](runtime-retained-pair-cadence-v1.md#mi300x-measurement)
 now completes at signed source `1cfb7580f`, with all 471 native and six transport
