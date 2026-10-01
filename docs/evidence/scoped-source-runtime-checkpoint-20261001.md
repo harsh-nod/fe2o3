@@ -9,6 +9,58 @@ examples as qualified through the new production path.
 
 ## Latest Compiler Checkpoint
 
+The latest completed six-package `cargo check --tests`, r313 at
+`683a2724f9b9a84dd4bf19982c5b2d39a7d4d46e`, ended at 12:13 UTC with one
+lowerer test borrow-checking error. No tests ran. Its narrow fix drops the
+borrowed descriptor view before its backing bytes; that fix is local.
+
+The latest actual Rust source run, r312 at
+`414549a7f201f6d37e179da2307fef0dadf19e08`, built the backend test binary but
+finished with **zero passed, one failed**, none ignored and 4,213 filtered:
+
+- Fill: gfx942 opt0/MIR0 and gfx950 opt3/MIR2 stop during original source
+  assembly. The other two configurations reach the native-policy callback,
+  then refuse an uninterpreted execution intrinsic before completed-source use.
+- Vecadd: both targets at opt0/MIR0 reject execution availability against the
+  original SSA instance; both at opt3/MIR2 reject inconsistent scopes at a
+  control-flow join.
+
+All ordinary configurations failed. Later planned negative controls are not
+credited. No source clauses, Verus execution, protected proof or GPU run were
+reached. The strict source-clause extractor was not run for r312.
+
+Local repairs now join source events to exact value IDs independently of event
+ordering, and bind genuine context-derived coordinates into scalar expressions.
+The attachment census releases only its own temporary bookkeeping before
+emitting retained output. Coordinate interpretation uses the already-global
+cell instead of applying the invocation mapping twice. New regression tests
+are authored but not yet executed. Control-condition coordinate binding and
+the proof-client/runtime changes also remain local, not end-to-end acceptance.
+Complete source-bound proof execution, paired publication/finalization and
+continuous protected compiler enforcement remain implementation work.
+
+The r314 static musl runtime-test build at the same r313 revision failed because
+`libc` does not expose `PTRACE_GET_SYSCALL_INFO` on musl. A local repair uses
+the unchanged Linux UAPI request value. The twelve new native process-tree
+controls have **not run**. Their launcher's seven local input/result tests
+passed, which does not qualify native execution. MI350 is reachable; read-only
+probes identified GCC 13 and the expected login account. No remote test scratch
+was created by these probes.
+
+The primary independently audited source inventories, tool identities, raw logs
+and runner before moving each validation worktree. Raw log SHA-256 values:
+
+- r312: `482e16514b9452bc22a9f45f964ebe6a98a72c6e474d859d1bb1a4e56603ea03`
+- r313: `01cc23abaaae6b60c8537da43bdf6c6ab115623b85b9d7463e1c318e3795649d`
+- r314: `e13e2c722b2af41947160143cff05885cb6320b5afe2e2723a5bebdb9f58e86a`
+
+Both public mains were read at
+`f0145ab1a71a2dcaa888623e6035c47144f59c38` before this update. This publishes
+evidence, not the unfinished compiler candidate. **M0 alone is complete;
+M1-M7 remain incomplete; strict coverage remains 0/47.**
+
+## Previous Compiler Checkpoint
+
 At 11:34 UTC, r310 completed the five-package `cargo check --tests` at
 `3dabc6f3791f6cf876f609f4be6d2ffa854d670b` with **five verifier compilation
 errors**: three unavailable formation-type imports/uses and two mutable-budget
