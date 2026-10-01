@@ -93,6 +93,54 @@ fn prepared_callable_transform(
         &mut Vec<Callable>,
     ),
 ) -> Result<ProductionPreparedSourceV18> {
+    prepared_captured_callable_transform(
+        budget,
+        unit_return,
+        control,
+        root_count,
+        retained_storage,
+        transform,
+        |owner, launch, budget| {
+            let callable_count = owner.source_semantic().callables().len();
+            let semantic_sha256 = *owner.source_semantic_sha256();
+            Ok(
+                ProductionPendingScopedSourceOwnerV29::prepare_source_with_budget_v18(
+                    owner,
+                    launch,
+                    ProductionExecutionSourceInputV29 {
+                        semantic_sha256: &semantic_sha256,
+                        roots: &[],
+                        classes: &vec![
+                            ProductionScopeCallableCandidateV29::Ordinary;
+                            callable_count
+                        ],
+                        events: &[],
+                    },
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                )?,
+            )
+        },
+    )
+}
+
+fn prepared_captured_callable_transform(
+    budget: &mut Budget<'_>,
+    unit_return: bool,
+    control: bool,
+    root_count: u8,
+    retained_storage: u8,
+    transform: impl FnOnce(
+        &mut Vec<SemanticTypeDeclV1>,
+        &mut Vec<SemanticFunctionDeclV1>,
+        &mut Vec<Callable>,
+    ),
+    capture: impl FnOnce(
+        ProductionSemanticSsaOwnerV1,
+        ProductionSourceLaunchRosterV1,
+        &mut Budget<'_>,
+    ) -> Result<ProductionPreparedSourceV18>,
+) -> Result<ProductionPreparedSourceV18> {
     assert!((2..=8).contains(&root_count));
     let root_names: Vec<_> = (0..root_count)
         .map(|root| match root {
@@ -558,28 +606,13 @@ fn prepared_callable_transform(
         })
         .collect();
     let launch = ProductionSourceLaunchRosterV1::try_new(&semantic, &launches).unwrap();
-    let callable_count = semantic.callables().len();
     let owner = ProductionSemanticSsaOwnerV1::try_new(
         ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
             .unwrap(),
         ProductionSemanticSsaLimitsV1::default(),
     )
     .unwrap();
-    let semantic_sha256 = *owner.source_semantic_sha256();
-    Ok(
-        ProductionPendingScopedSourceOwnerV29::prepare_source_with_budget_v18(
-            owner,
-            launch,
-            ProductionExecutionSourceInputV29 {
-                semantic_sha256: &semantic_sha256,
-                roots: &[],
-                classes: &vec![ProductionScopeCallableCandidateV29::Ordinary; callable_count],
-                events: &[],
-            },
-            ProductionSemanticKirLimitsV1::default(),
-            budget,
-        )?,
-    )
+    capture(owner, launch, budget)
 }
 
 fn retain(error: Error, source: &Source<'_>) -> Error {
@@ -876,6 +909,31 @@ pub(in super::super) fn run_callable_transform(
         work,
         storage,
         |budget| prepared_callable_transform(budget, false, false, 2, 0, transform),
+        examine,
+    )
+}
+
+pub(in super::super) fn run_captured_callable_transform(
+    work: usize,
+    storage: usize,
+    transform: impl FnOnce(
+        &mut Vec<SemanticTypeDeclV1>,
+        &mut Vec<SemanticFunctionDeclV1>,
+        &mut Vec<Callable>,
+    ),
+    capture: impl FnOnce(
+        ProductionSemanticSsaOwnerV1,
+        ProductionSourceLaunchRosterV1,
+        &mut Budget<'_>,
+    ) -> Result<ProductionPreparedSourceV18>,
+    examine: impl FnOnce(&mut InvocationPlan<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_prepared(
+        work,
+        storage,
+        |budget| {
+            prepared_captured_callable_transform(budget, false, false, 2, 0, transform, capture)
+        },
         examine,
     )
 }

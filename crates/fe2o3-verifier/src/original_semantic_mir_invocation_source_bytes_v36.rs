@@ -35,6 +35,10 @@ pub(super) mod witness_events;
 #[path = "original_semantic_mir_source_witness_transfers_v40.rs"]
 mod witness_transfers;
 
+#[cfg(test)]
+#[path = "original_semantic_mir_descriptor_dispatch_v48_tests.rs"]
+mod descriptor_dispatch_tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Address {
     Slot {
@@ -1143,6 +1147,11 @@ impl Context<'_, '_, '_> {
         {
             return Ok(Event::WitnessTransfer(transfer));
         }
+        // Compiler-classified descriptors keep their tagged carrier semantics
+        // even when the original Rust declaration has Aggregate shape.
+        if let Some(event) = pointer_events::derive(self, statement, out)? {
+            return Ok(Event::Pointer(event));
+        }
         if let Statement::Assign(assignment) = statement
             && let Some(transfer) = aggregates::Transfer::derive(self, assignment, out)?
         {
@@ -1162,9 +1171,6 @@ impl Context<'_, '_, '_> {
             && let Some(read) = discriminants::Read::derive(self, assignment, out)?
         {
             return Ok(Event::Discriminant(read));
-        }
-        if let Some(event) = pointer_events::derive(self, statement, out)? {
-            return Ok(Event::Pointer(event));
         }
         match statement {
             Statement::Assign(assignment) => {
