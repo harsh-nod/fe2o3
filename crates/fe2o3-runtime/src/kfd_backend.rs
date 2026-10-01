@@ -1413,6 +1413,7 @@ pub struct KfdRuntimeBackendV1 {
     device_pool_limits: Option<Gfx942DevicePoolLimitsV1>,
     staged_context_bytes: u64,
     sdma_enabled: bool,
+    peer_visible_device_allocations: bool,
     native_available: bool,
     launch_gate: KfdRuntimeLaunchGateV1,
     profiler: Option<KfdRuntimeProfileRecorderV1>,
@@ -1526,6 +1527,10 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
             )
             .field("staged_context_bytes", &self.staged_context_bytes)
             .field("sdma_enabled", &self.sdma_enabled)
+            .field(
+                "peer_visible_device_allocations",
+                &self.peer_visible_device_allocations,
+            )
             .field("staging_budgets", &self.staging_budgets)
             .field("device_backing_budget", &self.device_backing_budget)
             .field(
@@ -1928,6 +1933,7 @@ impl KfdRuntimeBackendV1 {
             host_pool_limits: None,
             staged_context_bytes: 0,
             sdma_enabled: false,
+            peer_visible_device_allocations: false,
             native_available,
             launch_gate,
             profiler: None,

@@ -2,6 +2,7 @@
 
 mod allocation;
 mod coherent_initialization;
+mod compute_xgmi_transition;
 mod control_cleanup;
 mod data_cleanup;
 mod device_allocation;
@@ -18,6 +19,7 @@ pub use xgmi_allocation::{Gfx942XgmiAllocationDispositionV1, Gfx942XgmiAllocatio
 #[cfg(test)]
 pub(crate) use pair_currentness::with_terminal_pair as test_xgmi_pair_terminal;
 
+pub(crate) use compute_xgmi_transition::ComputeXgmiBufferV1;
 pub(crate) use control_cleanup::ControlCleanupCustodyV1;
 #[cfg(test)]
 pub(crate) use control_cleanup::{CleanupStageV1, ControlCleanupObservationV1};
@@ -376,6 +378,15 @@ pub(crate) fn local_mapping_for_persistent_sdma_test(
     id: u64,
 ) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
     xgmi_mapping_for_sdma_test(id).lease
+}
+
+#[cfg(test)]
+pub(crate) fn private_local_mapping_for_sdma_pool_test(
+    id: u64,
+) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
+    let mut lease = local_mapping_for_persistent_sdma_test(id);
+    lease.layout.uapi_flags = KfdAllocMemoryFlags::DEVICE_LOCAL.bits();
+    lease
 }
 
 #[cfg(test)]
@@ -4891,6 +4902,10 @@ impl DeviceAllocationCustodyV1 {
         Self(device_allocation::DeviceAllocationCustodyV1::new())
     }
 
+    pub(crate) fn new_public_v1() -> Self {
+        Self(device_allocation::DeviceAllocationCustodyV1::new_public_v1())
+    }
+
     pub(crate) fn completed(
         &self,
     ) -> Result<&Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, MemorySessionError> {
@@ -7196,6 +7211,7 @@ pub(crate) use tests::queue_construction::{
 mod tests {
     mod allocation;
     mod composed_backing;
+    mod compute_xgmi_transition;
     mod device_backing;
     pub(super) mod device_initialization;
     mod device_pool;

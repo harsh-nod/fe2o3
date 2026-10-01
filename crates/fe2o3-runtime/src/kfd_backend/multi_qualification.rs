@@ -95,6 +95,23 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let gates = admit_qualification_devices_v1(unique_ids, admit_r57_n3_v2)?;
         Self::open_default_with_gates_v1(gates)
     }
+
+    /// Opens the exact R57 N3 V2 fixture with peer-visible DeviceLocal backing.
+    ///
+    /// This opt-in selects genuine KFD PUBLIC allocations before any child
+    /// queue or allocation exists. Private and PUBLIC cached buffers remain
+    /// separate; HostVisible storage and the existing launch policies are
+    /// unchanged. PUBLIC backing is a prerequisite, not authority, for native
+    /// peer transfer: this constructor does not enable XGMI copy routing.
+    pub fn open_gfx942_r57_n3_peer_qualification_v2(
+        unique_ids: &[u64],
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let mut backend = Self::open_gfx942_r57_n3_qualification_v2(unique_ids)?;
+        for child in &mut backend.children {
+            child.peer_visible_device_allocations = true;
+        }
+        Ok(backend)
+    }
 }
 
 #[cfg(test)]

@@ -5,6 +5,9 @@ use super::*;
 use crate::sdma::{Gfx942NativeXgmiSdmaQueueCreationRootV1, Gfx942NativeXgmiSdmaQueueV1};
 use crate::topology::Gfx942XgmiRouteV1;
 
+#[path = "compute_xgmi/transfer.rs"]
+mod transfer;
+
 /// Caller-owned custody spanning native creation and both model retakes.
 ///
 /// Terminal custody grants no retry or cleanup authority. Keep this root and
@@ -56,12 +59,21 @@ pub(super) struct Attachment {
 ///
 /// Each compute owner retains an exact private attachment certificate. It
 /// cannot be destroyed or acquire another peer queue until explicit retirement.
-/// This initial interface supports attachment and explicit retirement only;
-/// it does not authorize a compute/XGMI data pipeline.
+/// The synchronous full-extent copy adapter accepts exact recycled PUBLIC
+/// compute data. Any indeterminate transfer retains its data in this owner.
 #[must_use = "the peer queue must be explicitly destroyed before releasing either compute session"]
 pub struct Gfx942ComputeXgmiQueueV1 {
     attachment: Attachment,
     queue: Gfx942NativeXgmiSdmaQueueV1,
+    transfer: Option<transfer::TransferRoot>,
+}
+
+impl Drop for Gfx942ComputeXgmiQueueV1 {
+    fn drop(&mut self) {
+        if self.transfer.is_some() {
+            std::process::abort();
+        }
+    }
 }
 
 impl Gfx942ComputeXgmiQueueV1 {
@@ -344,7 +356,11 @@ impl ComputeAqlQueueSessionV1 {
                 self.xgmi_attachment = Some(attachment);
                 peer.xgmi_attachment = Some(attachment);
                 root.armed = false;
-                Ok(Gfx942ComputeXgmiQueueV1 { attachment, queue })
+                Ok(Gfx942ComputeXgmiQueueV1 {
+                    attachment,
+                    queue,
+                    transfer: None,
+                })
             }
             Err(failure) => {
                 if !failure.terminal {
@@ -362,7 +378,8 @@ impl ComputeAqlQueueSessionV1 {
         peer: &mut Self,
         queue: &mut Gfx942ComputeXgmiQueueV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        if !attachment_matches(self, peer, queue.attachment)
+        if queue.transfer.is_some()
+            || !attachment_matches(self, peer, queue.attachment)
             || queue.queue.route() != queue.attachment.route
             || queue
                 .queue

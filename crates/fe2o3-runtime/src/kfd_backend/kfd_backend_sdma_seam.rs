@@ -769,7 +769,28 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         byte_len: u64,
         alignment: u64,
     ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
+        self.allocate_device_buffer_with_visibility_v1(byte_len, alignment, false)
+    }
+
+    pub(super) fn allocate_public_device_buffer(
+        &mut self,
+        byte_len: u64,
+        alignment: u64,
+    ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
+        self.allocate_device_buffer_with_visibility_v1(byte_len, alignment, true)
+    }
+
+    fn allocate_device_buffer_with_visibility_v1(
+        &mut self,
+        byte_len: u64,
+        alignment: u64,
+        peer_visible: bool,
+    ) -> Result<SdmaBufferOwnerV1, SdmaAllocationFailureV1> {
         match self {
+            Self::Native(queue) if peer_visible => queue
+                .allocate_sdma_pooled_public_device_buffer_classified_v1(byte_len, alignment)
+                .map(SdmaBufferOwnerV1::Native)
+                .map_err(SdmaAllocationFailureV1::from),
             Self::Native(queue) => queue
                 .allocate_sdma_pooled_device_buffer_classified_v1(byte_len, alignment)
                 .map(SdmaBufferOwnerV1::Native)
@@ -781,7 +802,14 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                         "scripted device allocation length overflow".to_owned(),
                     )
                 })?;
-                driver.allocate_buffer(len, ScriptedBufferKindV1::Device)
+                driver.allocate_buffer(
+                    len,
+                    if peer_visible {
+                        ScriptedBufferKindV1::PublicDevice
+                    } else {
+                        ScriptedBufferKindV1::Device
+                    },
+                )
             }
         }
     }
@@ -2372,6 +2400,7 @@ mod scripted {
     pub(crate) enum ScriptedBufferKindV1 {
         Host,
         Device,
+        PublicDevice,
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2782,6 +2811,13 @@ mod scripted {
                         "scripted SDMA allocation mismatch: {step:?}"
                     )));
                 }
+            };
+            // The allocation script observes visibility selection. Both device
+            // profiles then use the same persistent ownership transitions.
+            let kind = if kind == ScriptedBufferKindV1::PublicDevice {
+                ScriptedBufferKindV1::Device
+            } else {
+                kind
             };
             Ok(SdmaBufferOwnerV1::Scripted(ScriptedBufferOwnerV1 {
                 token: ScriptedOwnerTokenV1::new(

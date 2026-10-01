@@ -3,6 +3,8 @@
 use super::*;
 #[path = "integration_sdma_promotion_tests.rs"]
 mod promotion;
+#[path = "integration_sdma_public_allocation_tests.rs"]
+mod public_allocation;
 #[path = "integration_sdma_recycle_tests.rs"]
 mod recycle;
 use crate::queue::live::sdma_allocation::{

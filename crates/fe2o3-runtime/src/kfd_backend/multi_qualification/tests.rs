@@ -36,6 +36,10 @@ fn qualification_constructor_rejects_every_invalid_roster_before_native_open() {
         let error = KfdMultiDeviceRuntimeBackendV1::open_gfx942_r57_n3_qualification_v2(&devices)
             .unwrap_err();
         assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::InvalidLaunch);
+        let error =
+            KfdMultiDeviceRuntimeBackendV1::open_gfx942_r57_n3_peer_qualification_v2(&devices)
+                .unwrap_err();
+        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::InvalidLaunch);
     }
 }
 

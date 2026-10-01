@@ -84,8 +84,8 @@ release either compute VM while the attachment remains. Ordinary compute stays
 available; additional peer, auxiliary or ordinary SDMA queue creation is refused
 while attached. Create any required ordinary SDMA queues before attachment.
 
-This initial interface permits one peer attachment per compute owner and exposes
-attachment/retirement only. It does **not** yet route runtime peer copies through
+This interface permits one peer attachment per compute owner. Its original
+attachment/retirement checkpoint did **not** route runtime peer copies through
 XGMI, expose peer-mapped compute buffers, or establish native success. Nineteen
 focused CPU regressions pass, including eleven new settlement/attachment tests;
 strict all-feature KFD Clippy passes. Native creation/retirement and real-engine
@@ -98,14 +98,48 @@ separates the completed checks from the KFD timeout. Source-guard metadata was
 rebound with all 22 associated proof-closure files unchanged; no new formal
 verification claim follows.
 
-## Next Dependencies
+## Bounded Native Transfer
 
-The next bounded data-path increment is a full-extent transfer of exact recycled
-PUBLIC device data: retain both data owners, transition local mappings into
-two-device peer mappings, copy with the existing native XGMI engine, restore
-owner-local mappings, then return data only after both foundation restorations.
-Partial mappings, timeout tickets and uncertain results must remain owned.
-Initialization may survive the transfer; stale content-digest authority must not.
+`Gfx942ComputeXgmiQueueV1::copy_recycled_data_full_extent_with_peer_v1` adds a
+synchronous transfer of exact recycled fixed-dispatch DATA between those two
+compute VMs. Both inputs must be fully initialized PUBLIC device allocations,
+with matching complete requested extents no larger than `0x003fffe0` bytes
+(one native copy packet). The exact detached ordinals, generations, storage
+variants, endpoint attachments and native queue identity are checked before
+either input is consumed.
+
+The queue retains both data owners through local unmapping, exact two-device
+mapping, copy submission/completion, peer unmapping and owner-local remapping.
+Both VM models must be restored before either output or detached ledger update
+is published. Outputs retain initialization but not stale content digests.
+Preflight rejection leaves the caller's slots intact. After admission, any
+error or panic, including timeout, is terminal: partial native mappings and
+copy tickets remain owned, both endpoints are poisoned, and teardown cannot
+release their VMs. This API does not provide retry, asynchronous completion,
+multi-packet transfers or runtime `peer_copy` routing.
+
+CPU tests exercise the actual borrowed mapping driver with injected native
+prefix errors, malformed results, currentness failures and panics, plus
+transfer ordering and paired model restoration. They do not yet execute the
+entire concrete two-session adapter as one composed test. Native execution
+and machine-code refinement remain unqualified.
+
+On the final source, 19 compute-XGMI, seven paired-restoration and 53
+PUBLIC-related CPU tests pass. Strict combined all-feature Clippy, the runtime
+no-default library check and all 32 source-CI commands pass. The independent
+full runtime run has 1,929 passes, 32 existing hardware ignores and three
+failures: the unchanged telemetry fixture's socket inspection is denied with
+`EPERM` in this environment. That is not a full-suite pass. The
+[DATA/PUBLIC CPU check packet](evidence/dev-compute-xgmi-data-cpu-2026-10-01/README.md)
+records scope, raw failures and the separate broad KFD result. Source-hash
+updates leave 75 associated executable proof files unchanged and do not
+establish formal verification of the new transfer.
+The full optimized KFD run also remains incomplete: both the build-and-test
+attempt and the cached-build retry exceed their 1,800-second bounds, without
+a reported assertion failure before timeout. Focused results do not replace
+that missing full-suite result.
+
+## Peer-Visible Runtime Storage
 
 The original vecadd authority still requires HostVisible memory and exact
 initial digests. The existing separate DeviceLocal R57 N3 V2 authority can
@@ -117,6 +151,29 @@ CPU tests pass, covering roster rejection, admission failure, routing and
 independent authority advancement with identical local handles on three GPUs.
 This constructor does not by itself enable native peer routing or PUBLIC storage.
 
+The separate opt-in
+`KfdMultiDeviceRuntimeBackendV1::open_gfx942_r57_n3_peer_qualification_v2`
+selects genuine PUBLIC DeviceLocal allocations before lazy child queue or
+allocation creation. Ordinary constructors retain private allocations, and
+HostVisible behavior is unchanged. Pooled checkout matches exact allocation
+flags as well as kind, extent and alignment; private and PUBLIC leases cannot
+be substituted or relabeled. Both classes use the existing shared accounting
+and capacity classification. This constructor still uses host-staged peer
+copies: PUBLIC backing alone is not native transfer authority.
+
+## Next Dependencies
+
+R57 DeviceLocal launches use persistent SDMA allocations, not recycled
+fixed-dispatch DATA. Runtime native peer routing therefore still needs a
+persistent-owner adapter. It must preserve directional attachment, allocation
+identity and pool generation, copy only the full logical extent, and leave each
+pooled physical extent unchanged. Producer release alone does not retire all
+retained compute caches; both endpoints must release those references before
+mapping transitions. The first route can use an ephemeral peer queue inside
+the existing cooperative-copy submission, retiring it before publishing success.
+Errors after native effects must retain both owners and poison both children,
+not fall back to staging.
+
 The planned native witness runs `A+B -> C` on each GPU, releases both producers,
 overwrites the destination's existing C allocation with a full-buffer `-1.0`
 sentinel, and verifies that sentinel before the peer copy. Copying the source C
@@ -125,9 +182,10 @@ the destination then runs its existing `C+B -> D` second phase. This preserves
 the authority's exact local C/B identities while ensuring a no-op copy fails.
 Transfer completion must dirty the destination shadow, clear both its content
 digest and last-host-write evidence, and restore initialized native custody.
-Ordinary runtime SDMA DeviceLocal allocations are not PUBLIC, whereas the
-direct fixed-dispatch initializer already is; runtime integration must address
-that difference explicitly, not retag private allocations.
+Ordinary runtime SDMA DeviceLocal allocations remain private; the new peer
+qualification constructor supplies PUBLIC backing explicitly. The direct
+fixed-dispatch initializer was already PUBLIC. Neither path retags private
+allocations.
 
 Async submission custody, runtime routing and dependency readiness follow the
 typed data transition; host-staged transfers remain the fallback.

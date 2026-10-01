@@ -79,6 +79,27 @@ records these checks separately from incomplete native and full-KFD qualificatio
 The prior MI300X CPU scratch directory was
 removed and its absence independently checked after complete durable recovery.
 
+The next implementation now provides a bounded synchronous native transfer of
+fully initialized, equal-extent PUBLIC fixed-dispatch DATA within those compute
+VMs, plus explicit PUBLIC SDMA allocation/pooling and an opt-in R57 peer
+qualification constructor. Ordinary allocation defaults and exact launch
+authorities are unchanged. Runtime-produced persistent SDMA buffers still need
+their own adapter and cooperative-copy routing; this is not yet a working native
+runtime peer pipeline. The next adapter must preserve logical versus pooled
+physical extents and retire retained compute references on both children.
+All 32 source-CI commands pass on this increment, with hash metadata updated
+and 75 associated executable proof files unchanged. No new formal verification
+claim follows. Final-source focused checks pass 19 compute-XGMI, seven paired
+restoration and 53 PUBLIC-related tests; strict combined Clippy and the runtime
+no-default check pass. The independent full runtime run has 1,929 passes,
+three socket-inspection `EPERM` failures in unchanged telemetry tests, and
+32 existing hardware ignores. Both new runtime allocation tests pass, but the
+full runtime suite is not qualified in this environment. The
+[DATA/PUBLIC CPU packet](evidence/dev-compute-xgmi-data-cpu-2026-10-01/README.md)
+keeps these outcomes distinct from incomplete native and broad KFD acceptance.
+The latest read-only hardware attempt failed at SSH hostname resolution before
+any remote command; no workload or scratch was created.
+
 ## Latest Qualification
 
 The [receipt-origin ingress](runtime-distributed-receipt-origin-ingress-v1.md)

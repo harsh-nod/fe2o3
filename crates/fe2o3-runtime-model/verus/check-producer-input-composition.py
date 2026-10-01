@@ -34,8 +34,8 @@ PROOF_PINS = {
     BODY: "701824a7cf27d45d9ec93e36401bffd988e2d6e8e27da281868507a51f74f158",
 }
 CHECKER_PINS = {
-    "check-producer-input-validate.py": "23d1cc4961170a2a5f68e682d94970bc7e9178e5c4b5bc04c0b09fbafab8b41a",
-    "check-producer-input-fold.py": "c92fcd33bf4bb7bcb9f8d7101a2ae8104399127bc3ddea295a5d7a03d4c51559",
+    "check-producer-input-validate.py": "fc65ba04e753a104dc62c2a1a0f745829a9b43fd548075a38ca5236e69f8c1e8",
+    "check-producer-input-fold.py": "16520f6dd281fc985914326a7e8cdd12157e490dcc34d3ab957bf177d669a0cb",
 }
 EXPECTED_VERIFIED = None  # Changed closure: predecessor 64 is not inherited.
 MUTANT_COUNT = 21

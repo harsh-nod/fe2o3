@@ -11,6 +11,7 @@ pub(super) enum AllocationLeaseV1 {
 
 pub(super) struct DeviceAllocationCustodyV1 {
     pub(super) lease: AllocationLeaseV1,
+    pub(super) flags: KfdAllocMemoryFlags,
     pub(super) native_started: bool,
     pub(super) progress: NativeTransitionProgressV1,
     pub(super) failed: bool,
@@ -21,10 +22,18 @@ impl DeviceAllocationCustodyV1 {
     pub(super) fn new() -> Self {
         Self {
             lease: AllocationLeaseV1::None,
+            flags: KfdAllocMemoryFlags::DEVICE_LOCAL,
             native_started: false,
             progress: NativeTransitionProgressV1::default(),
             failed: false,
             started: false,
+        }
+    }
+
+    pub(super) fn new_public_v1() -> Self {
+        Self {
+            flags: KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+            ..Self::new()
         }
     }
 
@@ -51,7 +60,7 @@ impl DeviceAllocationCustodyV1 {
                     vm,
                     requested_bytes,
                     alignment,
-                    KfdAllocMemoryFlags::DEVICE_LOCAL,
+                    self.flags,
                     &mut self.native_started,
                 )
             })?;

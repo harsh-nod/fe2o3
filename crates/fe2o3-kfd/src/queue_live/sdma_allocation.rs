@@ -74,6 +74,90 @@ fn is_backing_capacity(error: &ComputeAqlQueueSessionErrorV1) -> bool {
 pub(super) enum SdmaAllocationRequestV1 {
     Host(usize),
     Device { bytes: u64, alignment: u64 },
+    PublicDevice { bytes: u64, alignment: u64 },
+}
+
+impl ComputeAqlQueueSessionV1 {
+    /// Allocates genuinely PUBLIC VRAM for later explicit peer mapping.
+    /// This does not map another device or initialize the returned buffer.
+    pub fn allocate_sdma_public_device_buffer_v1(
+        &mut self,
+        bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+        allocate_in_place(
+            self,
+            SdmaAllocationRequestV1::PublicDevice { bytes, alignment },
+        )
+    }
+
+    pub fn allocate_sdma_pooled_public_device_buffer_v1(
+        &mut self,
+        bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
+        self.allocate_sdma_pooled_public_device_buffer_classified_v1(bytes, alignment)
+            .map_err(Gfx942SdmaAllocationFailureV1::into_error)
+    }
+
+    /// PUBLIC-only pool checkout with the same settled capacity classification
+    /// as ordinary private allocations. Private cached owners are never relabeled.
+    pub fn allocate_sdma_pooled_public_device_buffer_classified_v1(
+        &mut self,
+        bytes: u64,
+        alignment: u64,
+    ) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
+        self.allocate_sdma_pooled_device_request_v1(SdmaAllocationRequestV1::PublicDevice {
+            bytes,
+            alignment,
+        })
+    }
+
+    pub(super) fn allocate_sdma_pooled_device_request_v1(
+        &mut self,
+        request: SdmaAllocationRequestV1,
+    ) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaAllocationFailureV1> {
+        let (bytes, alignment, flags) = match request {
+            SdmaAllocationRequestV1::Device { bytes, alignment } => (
+                bytes,
+                alignment,
+                fe2o3_kfd_uapi::KfdAllocMemoryFlags::DEVICE_LOCAL,
+            ),
+            SdmaAllocationRequestV1::PublicDevice { bytes, alignment } => (
+                bytes,
+                alignment,
+                fe2o3_kfd_uapi::KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+            ),
+            SdmaAllocationRequestV1::Host(_) => {
+                return Err(Gfx942SdmaAllocationFailureV1::unclassified(
+                    ComputeAqlQueueSessionErrorV1::Contract("device-only SDMA pool request"),
+                ));
+            }
+        };
+        self.require_no_sdma_recycle_v1()
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+        self.require_no_sdma_owner_transition_v1()
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?;
+        self.sdma_device_pool.begin_activity();
+        if alignment == 0 || !alignment.is_power_of_two() {
+            return Err(Gfx942SdmaAllocationFailureV1::unclassified(
+                ComputeAqlQueueSessionErrorV1::Contract("pooled device-buffer alignment"),
+            ));
+        }
+        if let Some(mut buffer) = self
+            .checkout_sdma_pool(
+                Gfx942SdmaBufferKindV1::DeviceLocal,
+                bytes,
+                alignment,
+                Some(flags.bits()),
+            )
+            .map_err(Gfx942SdmaAllocationFailureV1::unclassified)?
+        {
+            buffer.set_logical_bytes(bytes);
+            return Ok(buffer);
+        }
+        allocate_classified_in_place(self, request)
+    }
 }
 
 pub(super) enum SdmaAllocationCustodyV1 {
@@ -99,6 +183,11 @@ impl SdmaAllocationCustodyV1 {
                 logical_bytes: bytes,
                 alignment,
                 allocation: DeviceAllocationCustodyV1::new(),
+            },
+            SdmaAllocationRequestV1::PublicDevice { bytes, alignment } => Self::Device {
+                logical_bytes: bytes,
+                alignment,
+                allocation: DeviceAllocationCustodyV1::new_public_v1(),
             },
         }
     }

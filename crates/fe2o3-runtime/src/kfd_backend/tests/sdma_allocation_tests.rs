@@ -117,6 +117,79 @@ fn sdma_allocation_capacity_preserves_neighbors_and_retries_after_warm_or_cold_a
 }
 
 #[test]
+fn peer_visible_allocation_is_opt_in_and_only_changes_device_factory_selection() {
+    for peer_visible in [false, true] {
+        for kind in [
+            RuntimeMemoryKindV1::HostVisible,
+            RuntimeMemoryKindV1::DeviceLocal,
+        ] {
+            let mut steps = success(kind);
+            if peer_visible && kind == RuntimeMemoryKindV1::DeviceLocal {
+                steps[0] = ScriptedSdmaStepV1::Allocate {
+                    kind: ScriptedBufferKindV1::PublicDevice,
+                    byte_len: 8,
+                };
+            }
+            let (backend, _, _, _) = fixture(8, steps);
+            let mut backend = ManuallyDrop::new(backend);
+            assert!(!backend.peer_visible_device_allocations);
+            backend.peer_visible_device_allocations = peer_visible;
+            let allocation = backend.allocate_v1(7, kind, 8, 8).unwrap();
+            let record = &backend.allocations[&allocation];
+            assert_eq!(record.kind, kind);
+            assert!(record.sdma_initialized);
+            assert_eq!(&*record.bytes, &[0; 8]);
+            let driver = backend.scripted_sdma.as_ref().unwrap();
+            assert!(driver.is_exhausted());
+            assert_eq!(driver.live_owner_count(), 3);
+            assert_eq!(driver.unexpected_drops(), 0);
+            discard_scripted_fixture(backend);
+        }
+    }
+}
+
+#[test]
+fn public_device_capacity_rejection_retains_retry_classification_and_factory_selection() {
+    for warm in [false, true] {
+        let mut steps = vec![ScriptedSdmaStepV1::AllocateFailure {
+            kind: ScriptedBufferKindV1::PublicDevice,
+            byte_len: 8,
+            failure: capacity(RuntimeMemoryKindV1::DeviceLocal, false),
+        }];
+        let mut retry = success(RuntimeMemoryKindV1::DeviceLocal);
+        retry[0] = ScriptedSdmaStepV1::Allocate {
+            kind: ScriptedBufferKindV1::PublicDevice,
+            byte_len: 8,
+        };
+        steps.extend(retry);
+        let (backend, _, _, _) = fixture(8, steps);
+        let mut backend = ManuallyDrop::new(backend);
+        backend.peer_visible_device_allocations = true;
+        backend.sdma_enabled = warm;
+        let failure = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
+            .unwrap_err();
+        let error = match failure {
+            RuntimeBackendFailureV1::Rejected(error) if warm => error,
+            RuntimeBackendFailureV1::Quiescent(error) if !warm => error,
+            _ => panic!("PUBLIC allocation lost settled capacity classification"),
+        };
+        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
+        assert!(!backend.terminal && backend.peer_visible_device_allocations);
+        assert!(backend.terminal_sdma_custody.is_none());
+        let allocation = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
+            .unwrap();
+        assert!(backend.allocations[&allocation].sdma_initialized);
+        let driver = backend.scripted_sdma.as_ref().unwrap();
+        assert!(driver.is_exhausted());
+        assert_eq!(driver.live_owner_count(), 3);
+        assert_eq!(driver.unexpected_drops(), 0);
+        discard_scripted_fixture(backend);
+    }
+}
+
+#[test]
 fn sdma_allocation_terminal_capacity_protocol_error_and_panic_seal_without_new_owner() {
     for kind in [
         RuntimeMemoryKindV1::HostVisible,

@@ -25,10 +25,14 @@ impl KfdRuntimeBackendV1 {
         operation: &'static str,
     ) -> Result<SdmaBufferOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let result = catch_unwind(AssertUnwindSafe(|| {
+            let peer_visible = self.peer_visible_device_allocations;
             let result = match kind {
                 RuntimeMemoryKindV1::HostVisible => {
                     self.directional_sdma_ops_v1().allocate_host(byte_len)
                 }
+                RuntimeMemoryKindV1::DeviceLocal if peer_visible => self
+                    .directional_sdma_ops_v1()
+                    .allocate_public_device_buffer(byte_len as u64, alignment),
                 RuntimeMemoryKindV1::DeviceLocal => self
                     .directional_sdma_ops_v1()
                     .allocate_device_buffer(byte_len as u64, alignment),

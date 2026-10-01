@@ -7,6 +7,7 @@ use crate::shared_memory::device_allocation::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AllocationSnapshot {
     lease: Option<(LeaseIdentity, bool)>,
+    flags: u32,
     started: bool,
     failed: bool,
     native_started: bool,
@@ -39,6 +40,7 @@ pub(in crate::shared_memory) fn allocation_snapshot(root: &Root) -> AllocationSn
     };
     AllocationSnapshot {
         lease,
+        flags: root.flags.bits(),
         started: root.started,
         failed: root.failed,
         native_started: root.native_started,
@@ -155,7 +157,7 @@ fn assert_actual_lease(fixture: &Fixture, root: &Root, mapped: bool, bytes: u64)
         1,
         fixture.memory.device.model_key(),
         fixture.memory.vm,
-        device_memory_layout(bytes, 4096, KfdAllocMemoryFlags::DEVICE_LOCAL).unwrap(),
+        device_memory_layout(bytes, 4096, root.flags).unwrap(),
     );
     assert_eq!(state.lease, Some((expected, mapped)));
     assert_eq!(
@@ -329,6 +331,95 @@ fn device_allocator_success_retains_exact_device_local_owner_until_single_extrac
             );
             assert_usage(&fixture, 4096 + output.layout.backing_bytes, 2, 0);
             fixture.assert_anchor();
+        }
+    }
+}
+
+#[test]
+fn public_device_allocator_selects_native_flags_without_changing_private_default() {
+    for configured in [false, true] {
+        for public in [false, true] {
+            let mut fixture = Fixture::new(configured);
+            let before = counters(&fixture);
+            let mut root = if public {
+                Root::new_public_v1()
+            } else {
+                Root::new()
+            };
+            let flags = if public {
+                KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC
+            } else {
+                KfdAllocMemoryFlags::DEVICE_LOCAL
+            };
+            prepare(&mut fixture, &mut root, 4097, 4096).unwrap();
+            assert_prefix(&fixture, before, [4, 1, 1, 0, 1]);
+            assert_actual_lease(&fixture, &root, true, 4097);
+            assert_eq!(fixture.memory.engine.backend.flags[1], flags.bits());
+            let output = root.take_complete().unwrap();
+            assert_eq!(output.layout().uapi_flags(), flags.bits());
+            assert_usage(&fixture, 12_288, 2, 0);
+            fixture.assert_anchor();
+        }
+    }
+}
+
+#[test]
+fn public_device_allocator_ambiguous_map_keeps_exact_public_lease_and_budget() {
+    for configured in [false, true] {
+        for prefix in [0, 1, 2] {
+            for errno in [false, true] {
+                let mut fixture = Fixture::new(configured);
+                fixture.memory.engine.backend.map_progress = prefix;
+                fixture.memory.engine.backend.map_errno = errno;
+                let mut root = Root::new_public_v1();
+                let result = prepare(&mut fixture, &mut root, 4097, 4096);
+                let success = prefix == 1 && !errno;
+                assert_eq!(result.is_ok(), success);
+                assert_actual_lease(&fixture, &root, success, 4097);
+                assert_eq!(root.progress.returned_map_prefix, Some(prefix));
+                assert_eq!(root.progress.returned_success, Some(!errno));
+                assert_usage(&fixture, 12_288, 2, 0);
+                if success {
+                    let _output = root.take_complete().unwrap();
+                } else {
+                    retain_failure(&mut fixture, root);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn public_device_allocator_currentness_failures_retain_native_owner() {
+    for configured in [false, true] {
+        for panic in [false, true] {
+            for ordinal in 2..=4 {
+                let mut fixture = Fixture::new(configured);
+                let before = counters(&fixture);
+                if panic {
+                    fixture.memory.engine.backend.panic_currentness_at = Some(before[0] + ordinal);
+                } else {
+                    fixture.memory.engine.backend.fail_currentness_at = Some(before[0] + ordinal);
+                }
+                let mut root = Root::new_public_v1();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    prepare(&mut fixture, &mut root, 4097, 4096)
+                }));
+                assert!(if panic {
+                    result.is_err()
+                } else {
+                    result.unwrap().is_err()
+                });
+                assert_eq!(
+                    fixture.memory.engine.backend.flags[1],
+                    KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC.bits()
+                );
+                if ordinal > 2 {
+                    assert_actual_lease(&fixture, &root, false, 4097);
+                }
+                assert_usage(&fixture, 12_288, 2, 0);
+                retain_failure(&mut fixture, root);
+            }
         }
     }
 }

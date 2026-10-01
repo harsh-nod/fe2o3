@@ -49,7 +49,9 @@ pub(crate) use host_pool_policy::{
 
 pub(crate) mod creation;
 use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
+mod compute_xgmi;
 mod xgmi_creation;
+pub(crate) use compute_xgmi::ComputeXgmiCopyCustodyV1;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;
 mod retained_pair;
 mod retained_pair_cadence;
@@ -695,6 +697,13 @@ impl Gfx942SdmaBufferV1 {
         match &self.storage {
             Gfx942SdmaBufferStorageV1::Host(_) => crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
             Gfx942SdmaBufferStorageV1::Device(lease) => lease.layout().alignment(),
+        }
+    }
+
+    pub(crate) const fn device_allocation_flags_v1(&self) -> Option<u32> {
+        match &self.storage {
+            Gfx942SdmaBufferStorageV1::Host(_) => None,
+            Gfx942SdmaBufferStorageV1::Device(lease) => Some(lease.layout().uapi_flags()),
         }
     }
 
@@ -6358,7 +6367,7 @@ pub(crate) fn persistent_sdma_buffers_for_test(
 ) -> (Gfx942SdmaBufferV1, Gfx942SdmaBufferV1) {
     let device = Gfx942SdmaBufferV1 {
         storage: Gfx942SdmaBufferStorageV1::Device(
-            crate::shared_memory::local_mapping_for_persistent_sdma_test(id),
+            crate::shared_memory::private_local_mapping_for_sdma_pool_test(id),
         ),
         owner,
         pool_generation: 1,
