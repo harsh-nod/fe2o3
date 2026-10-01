@@ -10,15 +10,25 @@ struct SourceEnumSpillRowV48 {
 /// This record alone grants no initializedness, lifetime or reference authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionSourceEnumSpillOriginV48 {
+    /// Original call-instance ordinal within the owning source root.
     pub instance: usize,
+    /// Original local declaration ordinal in that call instance's function.
     pub local: u32,
+    /// Exact nominal enum type of the original local.
     pub source_type: SemanticTypeIdV1,
+    /// Original variant ordinal, not its logical discriminant or encoded tag.
     pub variant: u32,
+    /// Original field ordinal within that variant.
     pub field: u32,
+    /// Exact original type of the selected field, before component flattening.
     pub field_type: SemanticTypeIdV1,
+    /// Physical component ordinal in the field's checked emission binding.
     pub component: usize,
 }
 
+/// Owner-borrowed locator for one compiler-created enum payload allocation.
+/// Queries retain custody checks; this is not an original source object or a
+/// grant of payload initializedness, lifetime, or reference validity.
 pub struct ProductionSourceEnumSpillV48<'a, 'source> {
     correspondence: &'a ProductionSourceCorrespondenceV18<'source>,
     root: usize,
@@ -137,6 +147,8 @@ impl<'source> ProductionSourceCorrespondenceV18<'source> {
         Ok(&results.enum_spills)
     }
 
+    /// Counts the immutable compiler spill roster for an exact source root.
+    /// Rechecks owner, ledger and retained storage before returning the count.
     pub fn enum_spill_count_v48(
         &self,
         root: usize,
@@ -145,6 +157,8 @@ impl<'source> ProductionSourceCorrespondenceV18<'source> {
         self.retain_query(self.enum_spill_rows_v48(root, budget).map(<[_]>::len))
     }
 
+    /// Borrows one spill by its ordinal in the exact root's retained roster.
+    /// An absent ordinal refuses; no source allocation descriptor is created.
     pub fn enum_spill_v48(
         &self,
         root: usize,
@@ -193,6 +207,9 @@ impl ProductionSourceEnumSpillV48<'_, '_> {
         self.correspondence.retain_query(result)
     }
 
+    /// Returns the original nominal field coordinates after checking the
+    /// borrowed owner and active call instance. Coordinates alone are not
+    /// authority to read a payload or to dereference a stored reference.
     pub fn origin(
         &self,
         budget: &mut ArgumentBudgetV1<'_>,
