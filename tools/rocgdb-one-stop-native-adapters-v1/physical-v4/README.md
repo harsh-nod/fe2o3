@@ -1,5 +1,17 @@
 # Disabled physical-v4 loaded-maintenance source overlay
 
+## Current finish step context successor
+
+Updated 2026-10-01. The current disabled successor adds the reviewed finish-step event-context repair. Its final 63-file selected source stage is 2,195,229 bytes, leaving 227 bytes under the unchanged 2,144 KiB cap. The preceding stage's 2,194,926 bytes and 530-byte margin below are historical.
+
+The first 35 transforms remain unchanged; five context-repair transforms follow them. Reverse application removes those five first, then the observability anchor, loaded-maintenance edits and diagnostic edits. Relative to the preceding physical-v4 package, only the resume implementation and native header change; the complete overlay still replaces five physical-v3 source files.
+
+The public finish-step method has the same code tokens as the reviewed private repair, with different comments. The header uses the equivalent explicit guard-size reservation. This is not whole-file byte equality or evidence of a repaired native run. All selection, capture and publication gates remain false; native caps and authority restrictions are unchanged. The seven added source controls and 16 C++ mock groups require fresh qualification and do not establish GDB or hardware success.
+
+## Historical package description
+
+The remaining sections retain the preceding package's description, source figures, transformation order and declared controls as historical context. They are not current-successor test or runtime results.
+
 This separate GPL-3.0-or-later overlay extends immutable physical-v3 with first-poison commit-group diagnostics and one narrowly owned first-loaded-ACK / pre-first-callback maintenance epoch. All three selection/capture/publication source gates remain false; all four manifest authority flags remain false. Nothing in this package enables capture, imports a private profile, launches GDB, or retries a native attempt.
 
 The five changed source leaves are byte-identical to the separately CPU-qualified private source. The public C++ fixture changes only two include names from that source-qualified fixture. Its 264 groups / 1,033 checks are historical private CPU evidence, not a claim that this relocated package has run. The six first-poison controls likewise await relocated qualification.

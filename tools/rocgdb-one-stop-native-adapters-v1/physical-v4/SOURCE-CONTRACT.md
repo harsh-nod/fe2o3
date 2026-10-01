@@ -1,5 +1,17 @@
 # Source and authority contract
 
+## Current finish step context successor
+
+Updated 2026-10-01. The current contract preserves the original 35-transform prefix and appends five finish-step event-context transforms. Inversion now removes those five before the observability anchor, loaded-maintenance edits and diagnostic edits. Both runtime changes are limited to the resume implementation and native header; the other 61 selected final-stage source pins and all 63 physical-v3 stage pins remain unchanged.
+
+The final selected stage contains 2,195,229 source bytes, 303 more than the preceding 2,194,926-byte stage. Its remaining margin is 227 bytes under the unchanged 2,195,456-byte cap. Per-file and metadata caps are unchanged. These figures cover one selected source stage, not package metadata reads, a build closure or process memory.
+
+The public method preserves the reviewed private repair's code tokens, not its comment bytes. The header separately reserves the same optional context guard using explicit sizeof expressions. The original stop and owner predicate remains intact; this repair grants no additional selection, capture or publication authority. Source checks and mocked controls still require fresh qualification and do not establish native success.
+
+## Historical contract description
+
+The remaining text records the preceding 35-transform contract. Its original authority and resource restrictions still apply; the current totals, inverse order and private-source equivalence are the ones stated above.
+
 The parent physical-v3 directory is immutable. The final source consists of its exact 63-row selected projection plus five existing-file replacements; 58 rows remain byte-identical. The patch changes no selection, snapshot-capture or publication availability function. The manifest fixes all four authority flags false.
 
 The 35 reversible edits retain three explicit stages: the unchanged 13 diagnostic edits over four leaves, the unchanged 21 loaded-maintenance edits over five leaves, then one213-byte debug-type observability anchor in the native header. This is not a claim that the earlier failed native attempt proved every hypothetical guard path. Diagnostic group 7 identified the existing full maintenance guard, not its individual conjunct. The private source successor permits only a prospective first-loaded-success ACK whose same original owner, inferior, host, process/base/top targets and strong references are authenticated. Original entry retirement and ACK update/flush order stay intact. The first subsequent callback permanently retires this maintenance epoch. No added resume credit, ACK, MI command, stop, capture or retry is created.
