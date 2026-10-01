@@ -1,0 +1,106 @@
+struct InvocationSourceDescriptorSnapshotV53 {
+    value: MemoryValueV30,
+    reference: InvocationSourceDescriptorReferenceV51,
+}
+
+open spec fn invocation_source_descriptor_snapshot_current_v53(
+    source: InvocationSourceByteStateV36, snapshot: InvocationSourceDescriptorSnapshotV53,
+    recipe: InvocationSourceDescriptorRecipeV51,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && invocation_source_descriptor_reference_shape_v51(snapshot.reference, source.machine.values.len())
+        && ({ let reference = snapshot.reference;
+            reference.loan.origin == recipe.origin
+                && reference.loan.source_type == recipe.source_type
+                && reference.loan.origin_generation == recipe.generation
+                && reference.loan.borrow_instance == recipe.instance
+                && reference.loan.borrow_block == recipe.block
+                && reference.loan.borrow_statement == recipe.statement
+                && reference.reference_type == recipe.reference_type
+                && reference.mutable == recipe.mutable
+                && reference.metadata_bits == recipe.metadata_bits && reference.width == recipe.width
+                && source.logical.versions[recipe.origin] == reference.loan.version
+                && snapshot.value == source.machine.values[recipe.origin]
+                && invocation_source_descriptor_carrier_v51(source, snapshot.value,
+                    recipe.metadata_bits, recipe.width)
+                && exists|i: int| 0 <= i < source.machine.frames.active.len()
+                    && source.machine.frames.active[i] == reference.loan.frame })
+}
+
+open spec fn invocation_source_descriptor_snapshot_v53(
+    source: InvocationSourceByteStateV36, local: int,
+    recipe: InvocationSourceDescriptorRecipeV51,
+) -> Option<InvocationSourceDescriptorSnapshotV53> {
+    if !invocation_source_descriptor_reference_current_v51(source, local, recipe) {
+        None
+    } else {
+        Some(InvocationSourceDescriptorSnapshotV53 {
+            value: source.machine.values[local],
+            reference: source.logical.descriptor_references[local],
+        })
+    }
+}
+
+open spec fn invocation_source_descriptor_snapshot_install_v53(
+    source: InvocationSourceByteStateV36, local: int,
+    recipe: InvocationSourceDescriptorRecipeV51, snapshot: InvocationSourceDescriptorSnapshotV53,
+) -> InvocationSourceByteStateV36 {
+    if local == recipe.origin || !(0 <= local < source.machine.values.len())
+        || source.objects.contains_key(local)
+        || !invocation_source_descriptor_snapshot_current_v53(source, snapshot, recipe) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        invocation_source_descriptor_install_v51(source, local, snapshot.value, snapshot.reference)
+    }
+}
+
+open spec fn invocation_source_descriptor_snapshot_escapes_frame_v53(
+    snapshot: InvocationSourceDescriptorSnapshotV53, frame: MemoryDynamicFrameV30,
+) -> bool {
+    snapshot.reference.loan.frame == frame
+        || invocation_source_value_escapes_frame_v36(snapshot.value, frame)
+}
+
+open spec fn invocation_source_descriptor_evaluate_v53(
+    source: InvocationSourceByteStateV36, local: int,
+    recipe: InvocationSourceDescriptorRecipeV51, moved: bool,
+) -> InvocationSourceValueEvaluationV42 {
+    if recipe.mutable && !moved {
+        InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+            value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+    } else { match invocation_source_descriptor_snapshot_v53(source, local, recipe) {
+        Some(snapshot) => {
+            let consumed = if moved {
+                invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined)
+            } else { source };
+            if invocation_source_descriptor_snapshot_current_v53(consumed, snapshot, recipe) {
+                InvocationSourceValueEvaluationV42 { source: consumed,
+                    value: InvocationSourceValueV42::Descriptor(snapshot) }
+            } else {
+                InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(consumed),
+                    value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+            }
+        },
+        None => InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+            value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) },
+    } }
+}
+
+proof fn descriptor_snapshot_does_not_rebind_a_replaced_origin_v53(
+    source: InvocationSourceByteStateV36, snapshot: InvocationSourceDescriptorSnapshotV53,
+    recipe: InvocationSourceDescriptorRecipeV51, destination: int,
+)
+    requires invocation_source_descriptor_snapshot_current_v53(source, snapshot, recipe),
+    ensures !invocation_source_descriptor_snapshot_install_v53(
+        invocation_source_byte_put_local_v36(source, recipe.origin, source.machine.values[recipe.origin]),
+        destination, recipe, snapshot).machine.valid,
+{}
+
+proof fn descriptor_snapshot_requires_original_frame_after_return_v53(
+    source: InvocationSourceByteStateV36, snapshot: InvocationSourceDescriptorSnapshotV53,
+    recipe: InvocationSourceDescriptorRecipeV51, destination: int,
+)
+    requires forall|i: int| 0 <= i < source.machine.frames.active.len() ==>
+        source.machine.frames.active[i] != snapshot.reference.loan.frame,
+    ensures !invocation_source_descriptor_snapshot_install_v53(source, destination, recipe, snapshot).machine.valid,
+{}

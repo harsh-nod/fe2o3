@@ -3,6 +3,9 @@ use super::*;
 use fe2o3_lower_mir_kernel::ProductionSourceReferenceCarrierV38;
 use fe2o3_pliron::ProductionSemanticSsaOperandRoleV1 as Role;
 
+#[path = "original_semantic_mir_descriptor_helpers_v53_tests.rs"]
+mod descriptor_helpers_v53_tests;
+
 fn loans_fixture(
     types: &mut Vec<Type>,
     functions: &mut Vec<Function>,

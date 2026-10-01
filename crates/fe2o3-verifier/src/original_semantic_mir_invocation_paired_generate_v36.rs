@@ -313,6 +313,17 @@ fn snapshot_binding(
     row: &Binding,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
+    if let LogicalBinding::DescriptorReference(recipe) = row.logical {
+        emit!(
+            out,
+            "match original {{ InvocationSourceValueV42::Descriptor(snapshot) => invocation_source_descriptor_snapshot_current_v53(source, snapshot, "
+        );
+        recipe.emit(out)?;
+        emit!(out, ") && ({{ let original = snapshot.value; ");
+        actual_value(model, row, out)?;
+        emit!(out, " }}), _ => false }}");
+        return Ok(());
+    }
     if let SourceValue::Enum(index) = row.source {
         let binding = model.enums.get(index).ok_or_else(mismatch)?;
         emit!(
