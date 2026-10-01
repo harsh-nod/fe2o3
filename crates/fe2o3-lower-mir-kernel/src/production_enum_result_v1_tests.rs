@@ -325,6 +325,10 @@ mod scalar_enum_result_tests {
     }
 
     fn owner() -> ProductionSemanticSsaOwnerV1 {
+        owner_with_result_join(false)
+    }
+
+    fn owner_with_result_join(joined: bool) -> ProductionSemanticSsaOwnerV1 {
         let seed = scalar_transmute_semantic_owner();
         let semantic = seed.semantic();
         let root = &semantic.functions()[0];
@@ -333,42 +337,115 @@ mod scalar_enum_result_tests {
             source,
             SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                 SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], U32).unwrap(),
-                SemanticRvalueV1::new(U32, SemanticRvalueKindV1::Discriminant(whole(1))),
+                SemanticRvalueV1::new(
+                    U32,
+                    SemanticRvalueKindV1::Discriminant(whole(if joined { 3 } else { 1 })),
+                ),
             )),
         );
-        let blocks = vec![
+        let edge = |role, target| {
+            SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
+        };
+        let block = |tag, statements, terminator| {
             SemanticBasicBlockV1::new(
-                SemanticBlockIdentityV1::from_sha256([161; 32]),
+                SemanticBlockIdentityV1::from_sha256([tag; 32]),
                 source,
-                vec![],
-                SemanticTerminatorV1::new(
-                    source,
-                    SemanticTerminatorKindV1::Call(
-                        SemanticDirectCallV1::new_callable(
-                            SemanticCallableIdV1::from_index(1),
-                            vec![],
-                            Some(SemanticCallDestinationV1::new(
-                                whole(1),
-                                SemanticControlFlowEdgeV1::new(
-                                    SemanticEdgeRoleV1::CallReturn,
-                                    SemanticBlockIdV1::from_index(1),
-                                ),
-                            )),
-                            SemanticUnwindActionV1::Unreachable,
+                statements,
+                SemanticTerminatorV1::new(source, terminator),
+            )
+            .unwrap()
+        };
+        let call = |target| {
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(1),
+                    vec![],
+                    Some(SemanticCallDestinationV1::new(
+                        whole(1),
+                        edge(SemanticEdgeRoleV1::CallReturn, target),
+                    )),
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            )
+        };
+        let assign = |local, value| {
+            SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    whole(local),
+                    SemanticRvalueV1::new(ENUM, value),
+                )),
+            )
+        };
+        let blocks = if joined {
+            vec![
+                block(
+                    161,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: scalar(0),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                            )],
+                            edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
                         )
                         .unwrap(),
-                    ),
+                    },
                 ),
-            )
-            .unwrap(),
-            SemanticBasicBlockV1::new(
-                SemanticBlockIdentityV1::from_sha256([162; 32]),
+                block(162, vec![], call(3)),
+                block(
+                    163,
+                    vec![assign(
+                        1,
+                        SemanticRvalueKindV1::aggregate(
+                            SemanticAggregateKindV1::EnumVariant(0),
+                            vec![],
+                        )
+                        .unwrap(),
+                    )],
+                    SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    164,
+                    vec![
+                        assign(3, SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(whole(1)))),
+                        statement,
+                    ],
+                    SemanticTerminatorKindV1::Return,
+                ),
+            ]
+        } else {
+            vec![
+                block(161, vec![], call(1)),
+                block(162, vec![statement], SemanticTerminatorKindV1::Return),
+            ]
+        };
+        let mut locals = vec![
+            root.locals()[0].clone(),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([163; 32]),
+                ENUM,
+                SemanticLocalRoleV1::Temporary,
                 source,
-                vec![statement],
-                SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
-            )
-            .unwrap(),
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([164; 32]),
+                U32,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
         ];
+        if joined {
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([165; 32]),
+                ENUM,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ));
+        }
         let root = SemanticFunctionDeclV1::new(
             root.identity(),
             root.role(),
@@ -378,21 +455,7 @@ mod scalar_enum_result_tests {
             root.const_generic_arguments_identity(),
             source,
             root.abi().clone(),
-            vec![
-                root.locals()[0].clone(),
-                SemanticLocalDeclV1::new(
-                    SemanticLocalIdentityV1::from_sha256([163; 32]),
-                    ENUM,
-                    SemanticLocalRoleV1::Temporary,
-                    source,
-                ),
-                SemanticLocalDeclV1::new(
-                    SemanticLocalIdentityV1::from_sha256([164; 32]),
-                    U32,
-                    SemanticLocalRoleV1::Temporary,
-                    source,
-                ),
-            ],
+            locals,
             SemanticBlockIdV1::from_index(0),
             blocks,
         )
@@ -710,73 +773,79 @@ mod scalar_enum_result_tests {
 
     #[test]
     fn actual_owner_call_result_view_preserves_all_slots_without_private_memory() {
-        let source = owner();
-        let roster = roster(&source);
-        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
-        let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
-        let lowered = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-            source,
-            roster,
-            ProductionSemanticKirLimitsV1::default(),
-            &mut budget,
-        )
-        .unwrap();
-        let root = SemanticFunctionIdV1::from_index(0);
-        lowered
-            .with_checked_call_v1(
-                root,
-                root,
-                SemanticBlockIdV1::from_index(0),
+        for (joined, call_block) in [(false, 0), (true, 1)] {
+            let source = owner_with_result_join(joined);
+            let roster = roster(&source);
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+            let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+            let lowered = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                source,
+                roster,
+                ProductionSemanticKirLimitsV1::default(),
                 &mut budget,
-                |view| {
-                    assert_eq!(view.result_count(), 6);
-                    for slot in 0..6 {
-                        assert!(view.result_component(slot).is_none());
-                        let component = view.enum_result_component(slot).unwrap();
-                        assert_eq!(component.value(), &view.operation().results[slot]);
-                        assert_eq!(
-                            view.result_transport(slot).unwrap().value(),
-                            component.value().id
-                        );
-                    }
-                    assert_eq!(
-                        view.enum_result_component(0).unwrap().slot(),
-                        ProductionCallEnumResultSlotV1::Tag
-                    );
-                    assert!(view.enum_result_component(6).is_none());
-                    assert!(view.visit_result_nodes(|_| Ok(())).is_err());
-                    Ok(())
-                },
             )
             .unwrap();
-        let module = lowered.executable().module();
-        for function in &module.functions {
-            for block in &function.body.as_ref().unwrap().blocks {
-                assert!(!block.operations.iter().any(|operation| matches!(operation.kind,
-                    OperationKind::Load { ref access, .. } | OperationKind::Store { ref access, .. }
-                    if access.address_space == AddressSpace::Private
-                )));
+            let root = SemanticFunctionIdV1::from_index(0);
+            lowered
+                .with_checked_call_v1(
+                    root,
+                    root,
+                    SemanticBlockIdV1::from_index(call_block),
+                    &mut budget,
+                    |view| {
+                        assert_eq!(view.result_count(), 6);
+                        for slot in 0..6 {
+                            assert!(view.result_component(slot).is_none());
+                            let component = view.enum_result_component(slot).unwrap();
+                            assert_eq!(component.value(), &view.operation().results[slot]);
+                            if joined {
+                                let transport = view.result_transport(slot).unwrap();
+                                assert_eq!(transport.value(), component.value().id);
+                                assert!(transport.conversion().is_none());
+                            } else {
+                                assert!(view.result_transport(slot).is_none());
+                            }
+                        }
+                        assert_eq!(
+                            view.enum_result_component(0).unwrap().slot(),
+                            ProductionCallEnumResultSlotV1::Tag
+                        );
+                        assert!(view.enum_result_component(6).is_none());
+                        assert!(view.result_transport(6).is_none());
+                        assert!(view.visit_result_nodes(|_| Ok(())).is_err());
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            let module = lowered.executable().module();
+            for function in &module.functions {
+                for block in &function.body.as_ref().unwrap().blocks {
+                    assert!(!block.operations.iter().any(|operation| matches!(operation.kind,
+                        OperationKind::Load { ref access, .. } | OperationKind::Store { ref access, .. }
+                        if access.address_space == AddressSpace::Private
+                    )));
+                }
             }
-        }
-        let helper = module
-            .functions
-            .iter()
-            .find(|function| function.role == fe2o3_kernel_ir::FunctionRole::InternalHelper)
-            .unwrap();
-        assert_eq!(helper.signature.results.len(), 6);
-        assert!(
-            helper
-                .body
-                .as_ref()
-                .unwrap()
-                .blocks
+            let helper = module
+                .functions
                 .iter()
-                .flat_map(|block| &block.operations)
-                .any(|operation| matches!(
-                    operation.kind,
-                    OperationKind::Constant(Constant::U8(0))
-                ))
-        );
+                .find(|function| function.role == fe2o3_kernel_ir::FunctionRole::InternalHelper)
+                .unwrap();
+            assert_eq!(helper.signature.results.len(), 6);
+            assert!(
+                helper
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.operations)
+                    .any(|operation| matches!(
+                        operation.kind,
+                        OperationKind::Constant(Constant::U8(0))
+                    ))
+            );
+        }
     }
 
     #[test]

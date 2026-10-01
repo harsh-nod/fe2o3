@@ -26628,7 +26628,7 @@ mod resource_tests {
                 BTreeSet::new(),
                 1,
                 false,
-                max_operations.max(2),
+                ProductionSemanticKirLimitsV1::default().max_operations,
             )
             .unwrap();
             lowering.max_operations = max_operations;
