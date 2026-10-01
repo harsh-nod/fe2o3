@@ -3,9 +3,7 @@ use super::*;
 use fe2o3_kernel_analysis::{
     CanonicalKirInventoryV18 as Inventory, check_canonical_kir_transition_v18,
 };
-use fe2o3_kernel_ir::{
-    EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth, StorageLayoutLimitsV1,
-};
+use fe2o3_kernel_ir::{EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth};
 use fe2o3_mir_model::semantic_mir_v1::*;
 
 const LIMIT: usize = 512 * 1024 * 1024;
@@ -38,13 +36,15 @@ fn run_mode(
     consensus: bool,
     examine: impl FnOnce(&str),
 ) -> (Result<()>, usize, usize, usize) {
-    let consume = |plan: &InvocationPlan<'_, '_>, out: &mut Writer<'_, '_>| {
+    let consume = |plan: &mut InvocationPlan<'_, '_>, out: &mut Writer<'_, '_>| {
         source_function::tests::with_slots(plan, out, |slots, out| {
             let relation = slots.correspondence(out)?;
             let original = relation.inventory(out.budget)?;
+            let layouts = fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default()
+                .storage_layout_limits();
             let optimized = fe2o3_pliron::optimize_neutral_kernel_ir_mixed_fixedpoint_v18(
                 original.owner(),
-                StorageLayoutLimitsV1::default(),
+                layouts,
                 out.budget,
             )
             .map_err(fixture_error)?;
@@ -60,12 +60,9 @@ fn run_mode(
                 out.budget,
             )?;
             out.budget.reserve_storage(receipt.retained_storage())?;
-            let prepared = fe2o3_kernel_opt::prepare_owned_licm_v18(
-                optimized.owner(),
-                StorageLayoutLimitsV1::default(),
-                out.budget,
-            )
-            .map_err(fixture_error)?;
+            let prepared =
+                fe2o3_kernel_opt::prepare_owned_licm_v18(optimized.owner(), layouts, out.budget)
+                    .map_err(fixture_error)?;
             out.budget.reserve_storage(prepared.retained_storage())?;
             let (licm, receipt) = prepared
                 .replay_against(optimized.owner(), out.budget)
@@ -76,7 +73,7 @@ fn run_mode(
             let prepared_forwarding = fe2o3_kernel_opt::prepare_owned_cross_block_forwarding_v18(
                 licm.output(),
                 Default::default(),
-                StorageLayoutLimitsV1::default(),
+                layouts,
                 out.budget,
             )
             .map_err(fixture_error)?;

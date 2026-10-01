@@ -8,6 +8,12 @@ use fe2o3_kernel_ir::{
 };
 
 const LIMIT: usize = 256 * 1024 * 1024;
+const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
+    rows: 0,
+    edges: 0,
+    containment_depth: 0,
+    object_bytes: 0,
+};
 
 #[path = "mixed_optimizer_typed_prefix_v49_tests.rs"]
 mod prefix_tests;
@@ -137,19 +143,12 @@ fn with_chain_module(
 ) {
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
-    let (owner, retained) = Owner::from_module_ref_with_verification_budget_v18(
-        module,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let (owner, retained) =
+        Owner::from_module_ref_with_verification_budget_v18(module, LAYOUTS, &mut budget).unwrap();
     budget.reserve_storage(retained.retained_storage()).unwrap();
-    let optimized = fe2o3_pliron::optimize_neutral_kernel_ir_mixed_fixedpoint_v18(
-        &owner,
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let optimized =
+        fe2o3_pliron::optimize_neutral_kernel_ir_mixed_fixedpoint_v18(&owner, LAYOUTS, &mut budget)
+            .unwrap();
     budget
         .reserve_storage(optimized.storage().retained_storage())
         .unwrap();
@@ -167,12 +166,8 @@ fn with_chain_module(
     )
     .unwrap();
     budget.reserve_storage(retained.retained_storage()).unwrap();
-    let licm = fe2o3_kernel_opt::prepare_owned_licm_v18(
-        optimized.owner(),
-        StorageLayoutLimitsV1::default(),
-        &mut budget,
-    )
-    .unwrap();
+    let licm =
+        fe2o3_kernel_opt::prepare_owned_licm_v18(optimized.owner(), LAYOUTS, &mut budget).unwrap();
     budget.reserve_storage(licm.retained_storage()).unwrap();
     let (pair, retained) = licm.replay_against(optimized.owner(), &mut budget).unwrap();
     budget.reserve_storage(retained.retained_storage()).unwrap();

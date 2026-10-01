@@ -12,7 +12,7 @@ fn call_fixture(
     let word = SemanticTypeIdV1::from_index(0);
     let declaration = &types[enumeration.index() as usize];
     let layout = declaration.layout();
-    let SemanticTypeLayoutDetailsV1::Enum(enumerated_layout) = layout.details() else {
+    let SemanticRustcVariantsV1::Multiple(enumerated_layout) = layout.variants() else {
         panic!("genuine enum layout");
     };
     let tag = SemanticBackendScalarV1::initialized(
