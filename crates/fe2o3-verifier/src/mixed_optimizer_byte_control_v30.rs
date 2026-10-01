@@ -226,11 +226,7 @@ pub(super) fn emit_block<R: ByteAllocationResolverV30>(
             emit_switch_prefix(model, uses[0].definition, out)?;
             for (ordinal, case) in cases.iter().enumerate() {
                 out.budget.charge_work(1)?;
-                emit!(
-                    out,
-                    " if selector == {} ",
-                    super::super::super::bits(&case.value)
-                );
+                emit!(out, " if selector == {} ", super::super::bits(&case.value));
                 emit_edge(model, row.edges.start + ordinal, out)?;
                 emit!(out, " else ");
             }

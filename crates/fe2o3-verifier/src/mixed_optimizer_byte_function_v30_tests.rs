@@ -17,6 +17,68 @@ const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
 include!("mixed_optimizer_index_byte_operations_v37_tests.rs");
 
 #[test]
+fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
+    use fe2o3_kernel_ir::{Constant, IntegerSwitchCase};
+    for (scalar, value, bits) in [
+        (ScalarType::I8, Constant::I8(-1), 255u128),
+        (ScalarType::I16, Constant::I16(-1), u16::MAX as u128),
+        (ScalarType::I32, Constant::I32(-1), u32::MAX as u128),
+        (ScalarType::I64, Constant::I64(-1), u64::MAX as u128),
+    ] {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.terminator = Some(Terminator::IntegerSwitch {
+            selector: ValueId(0),
+            cases: vec![IntegerSwitchCase {
+                value,
+                target: BlockId(1),
+                arguments: vec![],
+            }],
+            default_target: BlockId(2),
+            default_arguments: vec![],
+        });
+        let mut selected = BasicBlock::new(BlockId(1));
+        selected.terminator = Some(Terminator::Return { values: vec![] });
+        let mut otherwise = BasicBlock::new(BlockId(2));
+        otherwise.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("byte-integer-switch-signed-raw-bits");
+        module.functions.push(KirFunction::internal_helper(
+            "switch",
+            Signature::new(vec![Type::Scalar(scalar)], vec![]),
+            vec![ValueId(0)],
+            vec![entry, selected, otherwise],
+        ));
+        with_inventory(&module, |inventory, floor| {
+            let allocations = NoAllocations(inventory.owner());
+            let emit = |out: &mut Writer<'_, '_>| {
+                ByteFunctionV30::derive(
+                    inventory,
+                    Function(0),
+                    FormalIndexWidth::Bits64,
+                    &allocations,
+                    out,
+                )?
+                .emit(38, out)
+            };
+            let measured = run(floor, LIMIT, LIMIT, emit);
+            let text = measured.0.unwrap();
+            assert!(text.contains(&format!("if selector == {bits} ")));
+            assert!(!text.contains("if selector == -1"));
+            assert!(text.contains("pc: 1"));
+            assert!(text.contains("pc: 2"));
+            assert_eq!(run(floor, measured.1, measured.2, emit).0.unwrap(), text);
+            assert!(matches!(
+                run(floor, measured.1 - 1, measured.2, emit).0,
+                Err(Error::Resource(_))
+            ));
+            assert!(matches!(
+                run(floor, measured.1, measured.2 - 1, emit).0,
+                Err(Error::Resource(_))
+            ));
+        });
+    }
+}
+
+#[test]
 fn byte_function_private_generic_cast_preserves_tag_without_allocating_or_ending_lifetime() {
     let private = Type::pointer(
         Type::Scalar(ScalarType::U32),
