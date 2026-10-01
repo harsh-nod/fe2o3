@@ -210,11 +210,11 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092",
     "18abd61218886753068c38294931388e53e90f17b85cd8660b83ec93280bc824",
 )];
-// The complete workspace tree includes nested fixture lockfiles and the
-// reviewed nullary typed-kernel changes in c65aebe0d and the standalone fixture
-// lock reconciliation in e70740b18 (fe2o3-kernel-descriptor dependency).
+// The complete reviewed workspace tree includes macro source, the manifest and
+// nested fixture lockfiles. Source changes require review and a fresh tree pin;
+// they do not change the independent external-source admission below.
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "337a78a6b1515c28ade525a30cb5b069d77d13436b767d3299822634df6221d4";
+    "75126894190217b5aae4b5c7be51104808a06d9236122f1d035040c0b97fe7bc";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
