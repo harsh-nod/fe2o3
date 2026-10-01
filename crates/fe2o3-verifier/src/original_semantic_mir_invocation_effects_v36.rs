@@ -168,6 +168,12 @@ open spec fn invocation_source_operands_effects_v36(
             InvocationSourceOperandV36::Pointer { .. }
             | InvocationSourceOperandV36::Slice { .. }
             | InvocationSourceOperandV36::Aggregate { .. } => seq![],
+            InvocationSourceOperandV36::Enum { .. } => {
+                let evaluated = invocation_source_value_evaluate_v42(head.before, head.operand,
+                    head.root, head.instance, little_endian);
+                if evaluated.source == head.after && evaluated.value == head.value { seq![] }
+                else { seq![MemoryOperationEffectV30::Refused] }
+            },
         } };
         effects + invocation_source_operands_effects_v36(observations.drop_first(), little_endian)
     }

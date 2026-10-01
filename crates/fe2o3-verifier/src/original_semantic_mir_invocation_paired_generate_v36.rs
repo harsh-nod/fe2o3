@@ -170,7 +170,6 @@ fn enum_binding(
     index: usize,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
-    use super::enum_bindings::FieldCarrier;
     let row = model.enums.get(index).ok_or_else(mismatch)?;
     emit!(
         out,
@@ -178,6 +177,18 @@ fn enum_binding(
         row.local,
         row.source_type.index()
     );
+    enum_payload_binding(model, index, out)?;
+    emit!(out, " }}, None => false }})");
+    Ok(())
+}
+
+fn enum_payload_binding(
+    model: &PairedInvocations<'_, '_, '_>,
+    index: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use super::enum_bindings::FieldCarrier;
+    let row = model.enums.get(index).ok_or_else(mismatch)?;
     if let Some(variant) = row.known_variant {
         emit!(out, "value.variant == {variant} && ");
     }
@@ -247,7 +258,7 @@ fn enum_binding(
         }
         emit!(out, " }} else ");
     }
-    emit!(out, "{{ false }}) }}, None => false }})");
+    emit!(out, "{{ false }})");
     Ok(())
 }
 
@@ -294,10 +305,16 @@ fn snapshot_binding(
     row: &Binding,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
-    if matches!(row.source, SourceValue::Enum(_)) {
-        return Err(Error::Statement(
-            "original enum call/return requires a complete nominal payload snapshot",
-        ));
+    if let SourceValue::Enum(index) = row.source {
+        let binding = model.enums.get(index).ok_or_else(mismatch)?;
+        emit!(
+            out,
+            "match original {{ InvocationSourceValueV42::Enum(value) => value.source_type == {} && invocation_source_enum_snapshot_current_v50(source, value, invocation_runtime_little_endian_v36()) && (",
+            binding.source_type.index()
+        );
+        enum_payload_binding(model, index, out)?;
+        emit!(out, "), _ => false }}");
+        return Ok(());
     }
     if let SourceValue::Aggregate(index) = row.source {
         let aggregate = model.aggregates.get(index).ok_or_else(mismatch)?;

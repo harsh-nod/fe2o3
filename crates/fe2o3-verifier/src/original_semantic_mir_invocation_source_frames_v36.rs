@@ -18,6 +18,7 @@ enum ReturnClass {
     Pointer,
     Slice(u32),
     Aggregate(u32),
+    Enum(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +82,13 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             .map(|ty| ty.shape())
         {
             Some(Shape::Unit) => ReturnClass::Unit,
+            Some(Shape::Enum { .. }) => {
+                out.budget.charge_work(2)?;
+                if instance == 0 || row.incoming.is_none() {
+                    return Err(mismatch());
+                }
+                ReturnClass::Enum(ty.index())
+            }
             Some(Shape::Pointer(pointer)) => match pointer.metadata() {
                 Metadata::None => ReturnClass::Pointer,
                 Metadata::SliceLength => {
@@ -230,6 +238,9 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                         return Err(mismatch());
                     }
                 } else {
+                    if matches!(class, ReturnClass::Enum(_)) {
+                        return Err(mismatch());
+                    }
                     let (range, result_type) = slots
                         .aggregate_component_range(
                             root_type,
@@ -345,7 +356,9 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             write!(out, " || source.machine.pc == {block}").map_err(|_| out.error())?;
         }
         write!(out, ")").map_err(|_| out.error())?;
-        if self.class != ReturnClass::Unit && !matches!(self.class, ReturnClass::Aggregate(_)) {
+        if self.class != ReturnClass::Unit
+            && !matches!(self.class, ReturnClass::Aggregate(_) | ReturnClass::Enum(_))
+        {
             let local = self.returned.ok_or_else(mismatch)?;
             write!(out, " || source.machine.values.len() <= {local} || !(")
                 .map_err(|_| out.error())?;
@@ -354,7 +367,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 ReturnClass::Pointer => write!(out, "match source.machine.values[{local}] {{ MemoryValueV30::Pointer(_) => true, _ => false }}"),
                 ReturnClass::Slice(bits) => write!(out, "match source.machine.values[{local}] {{ MemoryValueV30::Slice(slice) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
                 ReturnClass::Unit => unreachable!(),
-                ReturnClass::Aggregate(_) => unreachable!(),
+                ReturnClass::Aggregate(_) | ReturnClass::Enum(_) => unreachable!(),
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
@@ -371,6 +384,8 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             .map_err(|_| out.error())?;
         } else if let ReturnClass::Aggregate(ty) = self.class {
             write!(out, "match invocation_source_aggregate_snapshot_v42(source, {}, {ty}, seq![], {ty}) {{ Some(value) => InvocationSourceValueV42::Aggregate(value), None => InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }}", self.returned.ok_or_else(mismatch)?).map_err(|_| out.error())?;
+        } else if let ReturnClass::Enum(ty) = self.class {
+            write!(out, "match invocation_source_enum_snapshot_v50(source, {}, {ty}, little_endian) {{ Some(value) => InvocationSourceValueV42::Enum(value), None => InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }}", self.returned.ok_or_else(mismatch)?).map_err(|_| out.error())?;
         } else {
             write!(
                 out,
@@ -482,6 +497,7 @@ open spec fn invocation_source_return_value_defined_v42(value: InvocationSourceV
         InvocationSourceValueV42::Carrier(value) => match value {
             MemoryValueV30::Undefined => false, _ => true },
         InvocationSourceValueV42::Aggregate(value) => invocation_source_aggregate_complete_v42(value),
+        InvocationSourceValueV42::Enum(value) => invocation_source_enum_complete_v47(value),
     }
 }
 
@@ -508,20 +524,28 @@ open spec fn invocation_source_return_install_v42(
     } else { match destination.component {
         Some((root_type, result_type, path)) => {
             let aggregate = match value {
-                InvocationSourceValueV42::Carrier(value) => InvocationSourceAggregateV42 {
-                    source_type: result_type, leaves: Map::empty().insert(seq![], value) },
-                InvocationSourceValueV42::Aggregate(value) => value,
+                InvocationSourceValueV42::Carrier(value) => Some(InvocationSourceAggregateV42 {
+                    source_type: result_type, leaves: Map::empty().insert(seq![], value) }),
+                InvocationSourceValueV42::Aggregate(value) => Some(value),
+                InvocationSourceValueV42::Enum(_) => None,
             };
-            if aggregate.source_type != result_type {
-                invocation_source_byte_refused_v36(source)
-            } else { invocation_source_aggregate_replace_v42(source, destination.local,
-                root_type, path, aggregate) }
+            match aggregate {
+                Some(aggregate) => if aggregate.source_type == result_type {
+                    invocation_source_aggregate_replace_v42(source, destination.local,
+                        root_type, path, aggregate)
+                } else { invocation_source_byte_refused_v36(source) },
+                None => invocation_source_byte_refused_v36(source),
+            }
         },
         None => match value {
             InvocationSourceValueV42::Carrier(value) =>
                 invocation_source_byte_put_local_v36(source, destination.local, value),
             InvocationSourceValueV42::Aggregate(value) =>
                 invocation_source_aggregate_install_v42(source, destination.local, value),
+            InvocationSourceValueV42::Enum(value) =>
+                if invocation_source_enum_snapshot_current_v50(source, value, little_endian) {
+                    invocation_source_enum_install_v47(source, destination.local, value)
+                } else { invocation_source_byte_refused_v36(source) },
         },
     } }
 }
@@ -533,6 +557,8 @@ open spec fn invocation_source_snapshot_escapes_frame_v42(
         InvocationSourceValueV42::Carrier(value) => invocation_source_value_escapes_frame_v36(value, frame),
         InvocationSourceValueV42::Aggregate(value) => exists|path: Seq<int>|
             value.leaves.contains_key(path) && invocation_source_value_escapes_frame_v36(value.leaves[path], frame),
+        InvocationSourceValueV42::Enum(value) => exists|field: int|
+            value.fields.contains_key(field) && invocation_source_value_escapes_frame_v36(value.fields[field], frame),
     }
 }
 
@@ -544,6 +570,20 @@ open spec fn invocation_source_value_escapes_frame_v36(
         MemoryValueV30::Slice(slice) => byte_allocation_in_frame_v30(slice.pointer.allocation, frame),
         _ => false,
     }
+}
+
+proof fn invocation_source_enum_return_cannot_hide_a_callee_pointer_v50(
+    value: InvocationSourceEnumV47, field: int, pointer: MemoryPointerV30,
+    frame: MemoryDynamicFrameV30,
+)
+    requires
+        value.fields.contains_key(field),
+        value.fields[field] == MemoryValueV30::Pointer(pointer),
+        byte_allocation_in_frame_v30(pointer.allocation, frame),
+    ensures
+        invocation_source_snapshot_escapes_frame_v42(InvocationSourceValueV42::Enum(value), frame),
+{
+    assert(invocation_source_value_escapes_frame_v36(value.fields[field], frame));
 }
 
 // Initialized pointer fragments retain nominal provenance even when they do

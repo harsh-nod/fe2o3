@@ -415,9 +415,8 @@ mod tests {
         let generate = include_str!("original_semantic_mir_invocation_paired_generate_v36.rs");
         assert!(generate.contains("FieldCarrier::Missing => emit!(out, \"false\")"));
         assert!(generate.contains("!value.fields.contains_key({field})"));
-        assert!(
-            generate
-                .contains("original enum call/return requires a complete nominal payload snapshot")
-        );
+        assert!(generate.contains("InvocationSourceValueV42::Enum(value) => value.source_type"));
+        assert!(generate.contains("invocation_source_enum_snapshot_current_v50(source, value"));
+        assert!(generate.contains("enum_payload_binding(model, index, out)?"));
     }
 }

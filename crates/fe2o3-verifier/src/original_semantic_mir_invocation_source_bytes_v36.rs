@@ -160,6 +160,11 @@ pub(super) enum Value {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperandKind {
+    Enum {
+        local: usize,
+        source_type: TypeId,
+        moved: bool,
+    },
     Aggregate {
         place: aggregates::AggregatePlace,
         moved: bool,
@@ -1131,6 +1136,29 @@ impl Context<'_, '_, '_> {
                 moved: matches!(operand, Operand::Move(_)),
                 metadata_bits,
             }
+        } else if matches!(declaration.shape(), Shape::Enum { .. }) {
+            out.budget.charge_work(3)?;
+            let (Operand::Copy(place) | Operand::Move(place)) = operand else {
+                return Err(unsupported());
+            };
+            if !place.projections().is_empty()
+                || self
+                    .function
+                    .locals()
+                    .get(place.local().index() as usize)
+                    .map(|local| local.ty())
+                    != Some(ty)
+            {
+                return Err(unsupported());
+            }
+            let Destination::Local(local) = self.destination(place, out)? else {
+                return Err(unsupported());
+            };
+            OperandKind::Enum {
+                local,
+                source_type: ty,
+                moved: matches!(operand, Operand::Move(_)),
+            }
         } else if matches!(
             declaration.shape(),
             Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. }
@@ -1333,6 +1361,9 @@ impl TypedOperand {
     pub(super) fn emit(self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.charge_work(1)?;
         match self.kind {
+            OperandKind::Enum { local, source_type, moved } => write!(out,
+                "InvocationSourceOperandV36::Enum {{ local: {local}int, source_type: {}int, moved: {moved} }}",
+                source_type.index()).map_err(|_| out.error()),
             OperandKind::Aggregate { place, moved } => {
                 write!(out, "InvocationSourceOperandV36::Aggregate {{ place: ").map_err(|_| out.error())?;
                 place.emit(out)?;
@@ -1661,6 +1692,7 @@ enum InvocationSourceByteValueV36 {
 }
 
 enum InvocationSourceOperandV36 {
+    Enum { local: int, source_type: int, moved: bool },
     Aggregate { place: InvocationSourceAggregatePlaceV42, moved: bool },
     Scalar { value: InvocationSourceByteValueV36, bits: int },
     Pointer { local: int, moved: bool },
@@ -1910,7 +1942,7 @@ open spec fn invocation_source_operand_evaluate_v36(
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteEvaluationV36 {
     match operand {
-        InvocationSourceOperandV36::Aggregate { .. } => InvocationSourceByteEvaluationV36 {
+        InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. } => InvocationSourceByteEvaluationV36 {
             source: invocation_source_byte_refused_v36(source), value: MemoryValueV30::Undefined },
         InvocationSourceOperandV36::Scalar { value, bits } =>
             invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian),

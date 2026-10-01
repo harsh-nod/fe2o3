@@ -2,6 +2,9 @@ use super::super::super::slots::{SourceTagFixtureV40 as Fixture, source_tag_fixt
 use super::*;
 use fe2o3_mir_model::semantic_mir_v1::*;
 
+#[path = "original_semantic_mir_source_enum_calls_v50_tests.rs"]
+mod calls;
+
 const LIMIT: usize = 256 * 1024 * 1024;
 
 fn logical_fixture(

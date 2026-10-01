@@ -151,6 +151,89 @@ open spec fn invocation_source_enum_local_v47(
     } else { None }
 }
 
+open spec fn invocation_source_enum_snapshot_current_v50(
+    source: InvocationSourceByteStateV36, value: InvocationSourceEnumV47, little_endian: bool,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && invocation_source_enum_complete_v47(value)
+        && (forall|field: int| value.fields.contains_key(field) ==>
+            match invocation_source_enum_field_type_v47(value.source_type, value.variant, field) {
+                Some(ty) => invocation_source_enum_field_current_v47(
+                    source, ty, value.fields[field], little_endian),
+                None => false,
+            })
+}
+
+open spec fn invocation_source_enum_snapshot_v50(
+    source: InvocationSourceByteStateV36, local: int, source_type: int, little_endian: bool,
+) -> Option<InvocationSourceEnumV47> {
+    match invocation_source_enum_local_v47(source, local, source_type) {
+        Some(value) => if invocation_source_enum_snapshot_current_v50(source, value, little_endian) {
+            Some(value)
+        } else { None },
+        None => None,
+    }
+}
+
+open spec fn invocation_source_enum_evaluate_v50(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+    moved: bool, little_endian: bool,
+) -> InvocationSourceValueEvaluationV42 {
+    match invocation_source_enum_snapshot_v50(source, local, source_type, little_endian) {
+        Some(value) => {
+            if !moved && !invocation_source_enum_type_copyable_v47(source_type) {
+                InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+                    value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+            } else {
+                // The original snapshot survives consuming the caller local.
+                InvocationSourceValueEvaluationV42 {
+                    source: if moved {
+                        invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined)
+                    } else { source },
+                    value: InvocationSourceValueV42::Enum(value),
+                }
+            }
+        },
+        None => InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+            value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) },
+    }
+}
+
+proof fn invocation_source_enum_argument_move_preserves_original_snapshot_v50(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+    value: InvocationSourceEnumV47, little_endian: bool,
+)
+    requires
+        invocation_source_enum_snapshot_v50(source, local, source_type, little_endian) == Some(value),
+    ensures
+        invocation_source_enum_evaluate_v50(source, local, source_type, true, little_endian).value
+            == InvocationSourceValueV42::Enum(value),
+        invocation_source_enum_evaluate_v50(source, local, source_type, true, little_endian).source
+            == invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined),
+{}
+
+proof fn invocation_source_enum_argument_copy_requires_whole_nominal_copyability_v50(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+    value: InvocationSourceEnumV47, little_endian: bool,
+)
+    requires
+        invocation_source_enum_snapshot_v50(source, local, source_type, little_endian) == Some(value),
+        !invocation_source_enum_type_copyable_v47(source_type),
+    ensures
+        !invocation_source_enum_evaluate_v50(source, local, source_type, false, little_endian).source.machine.valid,
+{}
+
+proof fn invocation_source_enum_incomplete_payload_cannot_be_an_argument_v50(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+    value: InvocationSourceEnumV47, little_endian: bool,
+)
+    requires
+        invocation_source_enum_local_v47(source, local, source_type) == Some(value),
+        !invocation_source_enum_complete_v47(value),
+    ensures
+        invocation_source_enum_snapshot_v50(source, local, source_type, little_endian).is_none(),
+{}
+
 open spec fn invocation_source_enum_install_v47(
     source: InvocationSourceByteStateV36, local: int, value: InvocationSourceEnumV47,
 ) -> InvocationSourceByteStateV36 {

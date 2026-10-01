@@ -11,6 +11,7 @@ enum Class {
     Pointer,
     Slice(u32),
     Aggregate(u32),
+    Enum(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -177,6 +178,13 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 .get(declaration.ty().index() as usize)
                 .ok_or_else(mismatch)?;
             let class = match ty.shape() {
+                Shape::Enum { .. } => {
+                    out.budget.charge_work(2)?;
+                    if instance == 0 || row.incoming.is_none() {
+                        return Err(unsupported());
+                    }
+                    Class::Enum(declaration.ty().index())
+                }
                 Shape::Pointer(pointer) => {
                     if slots.witness_class(pointer.pointee(), out)?.is_some() {
                         return Err(unsupported());
@@ -363,6 +371,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 Class::Pointer => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Pointer(_)) => true, _ => false }}"),
                 Class::Slice(bits) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Slice(slice)) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
                 Class::Aggregate(ty) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Aggregate(value) => value.source_type == {ty} && invocation_source_aggregate_complete_v42(value), _ => false }}"),
+                Class::Enum(ty) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Enum(value) => value.source_type == {ty} && invocation_source_enum_snapshot_current_v50(source, value, little_endian), _ => false }}"),
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
@@ -391,6 +400,10 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         for (i, argument) in self.arguments.iter().enumerate() {
             out.budget.charge_work(1)?;
             let argument = argument.ok_or_else(mismatch)?;
+            if matches!(argument.class, Class::Enum(_)) {
+                write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Enum(value) => if invocation_source_enum_snapshot_current_v50(entered, value, little_endian) {{ invocation_source_enum_install_v47(entered, {}, value) }} else {{ invocation_source_byte_refused_v36(entered) }}, _ => invocation_source_byte_refused_v36(entered) }};\n", argument.local).map_err(|_| out.error())?;
+                continue;
+            }
             if matches!(argument.class, Class::Aggregate(_)) {
                 write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Aggregate(value) => invocation_source_aggregate_install_v42(entered, {}, value), _ => invocation_source_byte_refused_v36(entered) }};\n", argument.local).map_err(|_| out.error())?;
                 continue;
