@@ -44,6 +44,71 @@ struct OriginalObservation {
     witness_protocol: [bool; 6],
 }
 
+fn original_witness_event_protocol(source: &str, roots: usize) -> [bool; 3] {
+    let mut found = vec![[false; 3]; roots];
+    for definition in source
+        .split("open spec fn invocation_source_byte_event_")
+        .skip(1)
+    {
+        let Some((name, body)) = definition
+            .split_once("(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {\n")
+        else {
+            continue;
+        };
+        let Some((root, instance)) = name
+            .strip_suffix("_v36")
+            .and_then(|name| name.split_once('_'))
+        else {
+            continue;
+        };
+        let (Ok(root), Ok(_)) = (root.parse::<usize>(), instance.parse::<usize>()) else {
+            continue;
+        };
+        let Some(events) = found.get_mut(root) else {
+            continue;
+        };
+        let Some((body, _)) = body.split_once("\n}\n") else {
+            continue;
+        };
+        events[0] |= body.contains("Some(InvocationSourceByteEventV36::WitnessBorrow {");
+        for transfer in body
+            .split("Some(InvocationSourceByteEventV36::WitnessTransfer {")
+            .skip(1)
+        {
+            let Some((fields, _)) = transfer.split_once('}') else {
+                continue;
+            };
+            events[1] |= fields.contains("reference: false, moved: true");
+            events[2] |= fields.contains("reference: true, moved: false");
+        }
+    }
+    std::array::from_fn(|event| roots > 0 && found.iter().all(|root| root[event]))
+}
+
+#[test]
+fn original_witness_event_oracle_requires_actual_rows_in_every_root() {
+    let helper = "open spec fn generic_dispatch(event: Option<InvocationSourceByteEventV36>) {\n match event { Some(InvocationSourceByteEventV36::WitnessBorrow { destination, .. }) => destination, Some(InvocationSourceByteEventV36::WitnessTransfer { reference: false, moved: true, .. }) => 0, _ => 1 }\n}\n";
+    assert_eq!(original_witness_event_protocol(helper, 2), [false; 3]);
+    let root = |root| {
+        format!(
+            "open spec fn invocation_source_byte_event_{root}_0_v36(block: int, statement: int) -> Option<InvocationSourceByteEventV36> {{\n if block == 0 && statement == 0 {{ Some(InvocationSourceByteEventV36::WitnessBorrow {{ destination: 1 }}) }} else if block == 0 && statement == 1 {{ Some(InvocationSourceByteEventV36::WitnessTransfer {{ destination: 2, reference: false, moved: true }}) }} else if block == 0 && statement == 2 {{ Some(InvocationSourceByteEventV36::WitnessTransfer {{ destination: 3, reference: true, moved: false }}) }} else {{ None }}\n}}\n"
+        )
+    };
+    let first = format!("{helper}{}", root(0));
+    assert_eq!(original_witness_event_protocol(&first, 2), [false; 3]);
+    let both = format!("{first}{}", root(1));
+    assert_eq!(original_witness_event_protocol(&both, 2), [true; 3]);
+    let no_copy = both.replace(
+        "reference: true, moved: false",
+        "reference: true, moved: true",
+    );
+    assert_eq!(
+        original_witness_event_protocol(&no_copy, 2),
+        [true, true, false]
+    );
+    assert_eq!(original_witness_event_protocol(&both, 0), [false; 3]);
+}
+
 fn original_observe(
     candidate: PreparedMixedPublicationV28<'_, '_, '_>,
     budget: &mut Budget<'_>,
@@ -110,6 +175,7 @@ fn original_observe(
     );
     assert_eq!(budget.storage(), floor);
     assert!(budget.work_ledger_identity_v1() == ledger);
+    let witness_events = original_witness_event_protocol(source, subject.census()[0]);
     Ok(OriginalObservation {
         census: subject.census(),
         statement: subject.statement_identity(),
@@ -117,17 +183,11 @@ fn original_observe(
         peak: budget.peak_storage(),
         witness_protocol: [
             source.contains("invocation_source_issue_witness_v38(cursor.source"),
-            source.contains("Some(InvocationSourceByteEventV36::WitnessBorrow {"),
+            witness_events[0],
             source.contains("invocation_source_read_witness_v38(cursor.source"),
             source.contains("invocation_source_convert_witness_v38(cursor.source"),
-            source.lines().any(|line| {
-                line.contains("Some(InvocationSourceByteEventV36::WitnessTransfer {")
-                    && line.contains("reference: false, moved: true")
-            }),
-            source.lines().any(|line| {
-                line.contains("Some(InvocationSourceByteEventV36::WitnessTransfer {")
-                    && line.contains("reference: true, moved: false")
-            }),
+            witness_events[1],
+            witness_events[2],
         ],
     })
 }
