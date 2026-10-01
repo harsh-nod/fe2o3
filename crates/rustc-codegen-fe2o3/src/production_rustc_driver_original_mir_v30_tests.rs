@@ -45,6 +45,7 @@ struct OriginalObservation {
     work: usize,
     peak: usize,
     witness_protocol: [bool; 6],
+    reference_enums: reference_enum_tests::ReferenceEnumCensus,
 }
 
 fn original_witness_event_protocol(source: &str, roots: usize) -> [bool; 3] {
@@ -179,6 +180,10 @@ fn original_observe(
     assert_eq!(budget.storage(), floor);
     assert!(budget.work_ledger_identity_v1() == ledger);
     let witness_events = original_witness_event_protocol(source, subject.census()[0]);
+    let reference_enums =
+        reference_enum_tests::observe_reference_enums(candidate.source(budget)?, source, budget)?;
+    assert_eq!(budget.storage(), floor);
+    assert!(budget.work_ledger_identity_v1() == ledger);
     Ok(OriginalObservation {
         census: subject.census(),
         statement: subject.statement_identity(),
@@ -192,6 +197,7 @@ fn original_observe(
             witness_events[1],
             witness_events[2],
         ],
+        reference_enums,
     })
 }
 
@@ -246,6 +252,7 @@ impl Callbacks for OriginalCallbacks {
                 exact.map_err(|error| format!("exact original MIR Worker request: {error:?}"))?;
             assert_eq!(entered, 1);
             assert_eq!(exact.statement, measured.statement);
+            assert_eq!(exact.reference_enums, measured.reference_enums);
             assert_eq!((exact_work, exact_peak), (work, peak));
             for short_work in [true, false] {
                 let (short, _, _, _) = run(
