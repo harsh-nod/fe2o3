@@ -1,18 +1,22 @@
 //! Scalar expressions retain ordered byte reads and moves before their write.
 use super::super::super::OperatorV30;
 use super::*;
-use fe2o3_mir_model::semantic_mir_v1::{SemanticAssignmentV1, SemanticUnaryOpV1};
+use fe2o3_mir_model::semantic_mir_v1::{
+    SemanticAssignmentV1, SemanticBinaryOpV1, SemanticUnaryOpV1,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Operator {
     Not,
     Binary(OperatorV30),
+    Float(u8),
 }
 
 impl Operator {
     fn code(self) -> u8 {
         match self {
             Self::Not => 0,
+            Self::Float(code) => code,
             Self::Binary(operator) => match operator {
                 OperatorV30::And => 1,
                 OperatorV30::Or => 2,
@@ -28,13 +32,36 @@ impl Operator {
     }
 
     fn result(self, input: ScalarV30) -> Result<ScalarV30> {
-        if input == ScalarV30::Unit {
+        if let Self::Float(code) = self {
+            if !matches!(input, ScalarV30::Float { width: 32 | 64 }) || !(10..=21).contains(&code) {
+                return Err(unsupported());
+            }
+            return Ok(if code >= 16 { ScalarV30::Bool } else { input });
+        }
+        if matches!(input, ScalarV30::Unit | ScalarV30::Float { .. }) {
             return Err(unsupported());
         }
         Ok(match self {
             Self::Binary(operator) if operator.comparison() => ScalarV30::Bool,
             _ => input,
         })
+    }
+
+    fn float_binary(operation: SemanticBinaryOpV1) -> Result<Self> {
+        Ok(Self::Float(match operation {
+            SemanticBinaryOpV1::Add => 11,
+            SemanticBinaryOpV1::Subtract => 12,
+            SemanticBinaryOpV1::Multiply => 13,
+            SemanticBinaryOpV1::Divide => 14,
+            SemanticBinaryOpV1::Remainder => 15,
+            SemanticBinaryOpV1::Equal => 16,
+            SemanticBinaryOpV1::NotEqual => 17,
+            SemanticBinaryOpV1::LessThan => 18,
+            SemanticBinaryOpV1::LessOrEqual => 19,
+            SemanticBinaryOpV1::GreaterThan => 20,
+            SemanticBinaryOpV1::GreaterOrEqual => 21,
+            _ => return Err(unsupported()),
+        }))
     }
 }
 
@@ -64,12 +91,22 @@ impl Operation {
                 operation: SemanticUnaryOpV1::Not,
                 operand,
             } => (Operator::Not, operand, None),
+            Rvalue::Unary {
+                operation: SemanticUnaryOpV1::Negate,
+                operand,
+            } if matches!(context.scalar(operand.ty(), out)?, ScalarV30::Float { .. }) => {
+                (Operator::Float(10), operand, None)
+            }
             Rvalue::Binary {
                 operation,
                 left,
                 right,
             } => (
-                Operator::Binary(OperatorV30::from_source(*operation)?),
+                if matches!(context.scalar(left.ty(), out)?, ScalarV30::Float { .. }) {
+                    Operator::float_binary(*operation)?
+                } else {
+                    Operator::Binary(OperatorV30::from_source(*operation)?)
+                },
                 left,
                 Some(right),
             ),
@@ -90,7 +127,8 @@ impl Operation {
             })
             .transpose()?;
         let is_local_value = |value| matches!(value, Value::Constant(_) | Value::Local { .. });
-        if matches!(destination, Destination::Local(_))
+        if !matches!(input, ScalarV30::Float { .. })
+            && matches!(destination, Destination::Local(_))
             && is_local_value(left)
             && right.is_none_or(is_local_value)
         {
@@ -148,3 +186,7 @@ pub(super) fn headers() -> usize {
 #[cfg(test)]
 #[path = "original_semantic_mir_source_scalar_operands_v48_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_float_operators_v52_tests.rs"]
+mod float_tests;

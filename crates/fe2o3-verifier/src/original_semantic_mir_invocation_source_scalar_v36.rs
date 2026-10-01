@@ -174,7 +174,7 @@ impl<'slots, 'view, 'source> SourceScalarStatements<'slots, 'view, 'source> {
         let bytes = match scalar {
             ScalarV30::Unit => 0,
             ScalarV30::Bool => 1,
-            ScalarV30::Integer { width, .. } => u64::from(width / 8),
+            ScalarV30::Integer { width, .. } | ScalarV30::Float { width } => u64::from(width / 8),
         };
         if layout.size_bytes() != Some(bytes) {
             return Err(mismatch());

@@ -37,6 +37,8 @@ pub(super) fn scalar_matches(
     };
     match (source, *actual) {
         (ScalarV30::Bool, PhysicalScalar::Bool) => true,
+        (ScalarV30::Float { width: 32 }, PhysicalScalar::F32)
+        | (ScalarV30::Float { width: 64 }, PhysicalScalar::F64) => true,
         (
             ScalarV30::Integer {
                 width: 8,

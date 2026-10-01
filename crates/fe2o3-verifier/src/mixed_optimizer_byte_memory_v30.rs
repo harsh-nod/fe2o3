@@ -40,6 +40,9 @@ struct MemoryExecutionContextV37 {
     workgroup: Seq<int>,
     group: Seq<int>,
     local: Seq<int>,
+    // Universally quantified exact-operator interpretation, never a supplied
+    // proof premise or an integer arithmetic substitute for floating values.
+    ieee_operators: spec_fn(int, int, int, int, int, int) -> int,
 }
 
 struct MemoryFrameRuntimeV30 {
@@ -581,5 +584,6 @@ open spec fn byte_state_memory_well_formed_v30(state: MemoryStateV30) -> bool {
 }
 "#,
     include_str!("mixed_optimizer_byte_relocations_v37.vrs"),
-    include_str!("mixed_optimizer_byte_views_v38.vrs")
+    include_str!("mixed_optimizer_byte_views_v38.vrs"),
+    include_str!("mixed_optimizer_float_values_v52.vrs")
 );

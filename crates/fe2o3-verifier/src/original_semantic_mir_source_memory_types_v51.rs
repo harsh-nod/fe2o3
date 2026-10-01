@@ -63,6 +63,12 @@ fn scalar_validity(scalar: BackendScalar, offset: u64) -> Option<Validity> {
             bits: 8 | 16 | 32 | 64,
             ..
         } => (scalar.primitive().size_bytes()?, false),
+        Primitive::Float {
+            bits: bits @ (32 | 64),
+            ..
+        } if range.start() == 0 && range.end() == (1u128 << bits) - 1 => {
+            (scalar.primitive().size_bytes()?, false)
+        }
         Primitive::Pointer {
             address_space: 0,
             size_bytes: 8,
@@ -475,3 +481,46 @@ fn headers() -> usize {
 #[cfg(test)]
 #[path = "original_semantic_mir_source_memory_types_v51_tests.rs"]
 mod tests;
+
+#[test]
+fn float_memory_validity_requires_the_complete_exact_bit_domain() {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticScalarValidityRangeV1 as Range;
+    for bits in [32u16, 64] {
+        let maximum = (1u128 << bits) - 1;
+        let primitive = Primitive::float(bits, u64::from(bits / 8));
+        let scalar = BackendScalar::initialized(primitive, Range::new(0, maximum));
+        let valid = scalar_validity(scalar, 3).unwrap();
+        assert_eq!(
+            valid,
+            Validity {
+                offset: 3,
+                bytes: u64::from(bits / 8),
+                start: 0,
+                end: maximum,
+                pointer: false
+            }
+        );
+        for (start, end) in [(1, maximum), (0, maximum - 1)] {
+            assert!(
+                scalar_validity(
+                    BackendScalar::initialized(primitive, Range::new(start, end)),
+                    0
+                )
+                .is_none()
+            );
+        }
+    }
+    for bits in [16u16, 128] {
+        let maximum = u128::MAX >> (128 - bits);
+        assert!(
+            scalar_validity(
+                BackendScalar::initialized(
+                    Primitive::float(bits, u64::from(bits / 8)),
+                    Range::new(0, maximum)
+                ),
+                0
+            )
+            .is_none()
+        );
+    }
+}

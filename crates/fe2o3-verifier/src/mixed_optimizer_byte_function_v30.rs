@@ -45,6 +45,10 @@ use integral::IntegralByteCastV40;
 mod checked;
 use checked::CheckedByteOperationV48;
 
+#[path = "mixed_optimizer_float_byte_operations_v52.rs"]
+mod floating;
+use floating::FloatByteOperationV52;
+
 #[path = "mixed_optimizer_byte_trap_v40.rs"]
 mod trap;
 use trap::TrapByteOperationV40;
@@ -74,6 +78,7 @@ enum ByteOperationV30<'inventory, 'owner> {
     View(StorageViewByteOperationV39),
     IntegralCast(IntegralByteCastV40),
     Checked(CheckedByteOperationV48),
+    Float(FloatByteOperationV52),
     Index(IndexByteOperationV37),
     Scalar(CanonicalByteScalarV30<'inventory, 'owner>),
     Trap(TrapByteOperationV40),
@@ -251,6 +256,8 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 ByteOperationV30::Index(index)
             } else if let Some(trap) = TrapByteOperationV40::derive(inventory, operation, out)? {
                 ByteOperationV30::Trap(trap)
+            } else if let Some(float) = FloatByteOperationV52::derive(inventory, operation, out)? {
+                ByteOperationV30::Float(float)
             } else {
                 ByteOperationV30::Scalar(CanonicalByteScalarV30::derive(
                     inventory, operation, width, out,
@@ -558,6 +565,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 checked.emit_step(before, after, out)?;
                 PointerByteEffectV30::None
             }
+            ByteOperationV30::Float(float) => {
+                float.emit_step(before, after, out)?;
+                PointerByteEffectV30::None
+            }
             ByteOperationV30::Pointer(pointer) => {
                 pointer.emit_step(
                     before,
@@ -714,6 +725,7 @@ fn headers<R>() -> usize {
         + views::headers()
         + integral::headers()
         + checked::headers()
+        + floating::headers()
         + trap::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()
