@@ -47,6 +47,11 @@ impl<'inventory, 'owner> CanonicalByteScalarV30<'inventory, 'owner> {
         out.budget.charge_work(2)?;
         let row = inventory.operations().get(operation).ok_or_else(mismatch)?;
         if row.results.len() != 1 || !row.effects.is_empty() || row.operands.len() > 2 {
+            #[cfg(test)]
+            eprintln!(
+                "canonical byte scalar rejected operation {operation} at {:?}: kind {:?}, results {:?}, operands {:?}, effects {:?}",
+                row.coordinate, row.operation.kind, row.results, row.operands, row.effects
+            );
             return Err(Error::Statement(
                 "canonical byte scalar effect or arity is not modeled",
             ));
