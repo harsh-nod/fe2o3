@@ -137,18 +137,23 @@ fn source_enum_construction_location_v43(
             let ty = *fields
                 .get(operand as usize)
                 .ok_or_else(scoped_object_error_v29)?;
-            if aggregate
+            let value = aggregate
                 .operands()
                 .get(operand as usize)
-                .map(|value| value.ty())
-                != Some(ty)
-                || !matches!(
-                    types
-                        .get(ty.index() as usize)
-                        .map(SemanticTypeDeclV1::shape),
-                    Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
-                )
-            {
+                .ok_or_else(scoped_object_error_v29)?;
+            let declaration = types
+                .get(ty.index() as usize)
+                .ok_or_else(scoped_object_error_v29)?;
+            let scalar = matches!(
+                declaration.shape(),
+                SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
+            );
+            let reference = source_object_reference_field_v44(declaration)
+                && matches!(
+                    value,
+                    SemanticOperandV1::Copy(_) | SemanticOperandV1::Move(_)
+                );
+            if value.ty() != ty || !(scalar || reference) {
                 return Err(scoped_object_error_v29());
             }
             ty

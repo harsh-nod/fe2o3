@@ -75,10 +75,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 .ok_or(ArgumentResourceV1::Accounting)?;
             let references = cursor.references.ok_or(ArgumentResourceV1::Accounting)?;
             references.check(budget)?;
-            if !std::ptr::eq(references.plan, plan)
-                || scoped_payload_occurrence_v29(cursor, site, role, original, budget)?
-                    != Some(occurrence)
-            {
+            if !std::ptr::eq(references.plan, plan) {
                 return Err(source_object_reference_payload_error_v44());
             }
             let (ty, copied, definition) = source_object_reference_operand_v44(
@@ -90,6 +87,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                 occurrence,
                 budget,
             )?;
+            cursor.check_claimed_original_operand_v46(site, role, original, definition, budget)?;
             charge_execution_cfg_lookup_v29(self.semantic_ssa_bindings.len(), budget)?;
             let value = self
                 .semantic_ssa_bindings

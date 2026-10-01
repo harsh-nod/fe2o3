@@ -640,6 +640,65 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         Err(execution_availability_error_v29())
     }
 
+    fn check_claimed_original_operand_v46(
+        &self,
+        site: ExecutionSiteV29,
+        operand: ExecutionOperandV29,
+        place: &SemanticPlaceV1,
+        definition: SsaValueV1,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.check_claimed_original_use_v29(site, operand, place, definition, budget)?;
+        budget.charge_work(7)?;
+        let moved = match scoped_source_operand_v29(self.function, site, operand) {
+            Some(SemanticOperandV1::Copy(original)) if std::ptr::eq(original, place) => false,
+            Some(SemanticOperandV1::Move(original)) if std::ptr::eq(original, place) => true,
+            _ => return Err(execution_availability_error_v29()),
+        };
+        let local = place.local().index() as usize;
+        if !moved || !place.projections().is_empty() {
+            return if self.current.get(local) == Some(&Some(definition)) {
+                Ok(())
+            } else {
+                Err(execution_availability_error_v29())
+            };
+        }
+        // The source Move was consumed before the payload was emitted. Reopen
+        // its exact claimed kill instead of requiring the consumed SSA value.
+        if self.current.get(local) != Some(&None) {
+            return Err(execution_availability_error_v29());
+        }
+        let key = unit_local_source_key_v1(site, operand, Some(ExecutionEventV29::MoveKill));
+        let (mut left, mut right) = (0, self.index.len());
+        while left < right {
+            budget.charge_work(8)?;
+            let middle = left + (right - left) / 2;
+            match self.index[middle].key.cmp(&key) {
+                std::cmp::Ordering::Less => left = middle + 1,
+                std::cmp::Ordering::Greater => right = middle,
+                std::cmp::Ordering::Equal => {
+                    let index = self.index[middle].index;
+                    let event = &self.occurrences.events()[index];
+                    if self.claimed[index]
+                        && event.is_promoted()
+                        && event.is_reachable()
+                        && event.resolved()
+                            == Some(SsaResolvedEventV1::Kill {
+                                variable: fe2o3_mir_model::SsaVariableIdV1::new(
+                                    place.local().index(),
+                                ),
+                                previous: Some(definition),
+                            })
+                    {
+                        return Ok(());
+                    }
+                    return Err(execution_availability_error_v29());
+                }
+            }
+        }
+        Err(execution_availability_error_v29())
+    }
+
     fn define(
         &mut self,
         site: ExecutionSiteV29,

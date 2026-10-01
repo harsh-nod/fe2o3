@@ -173,9 +173,6 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         self.with_emission_budget_v1(|_, budget| {
             references.check_raw_formation_source_v29(site, place, result_type, *mutability, budget)
         })?;
-        // A projected address still consumes its promoted pointer holder, not
-        // the pointee. Retained storage has no SSA holder use to invent.
-        self.use_source_place_v29(block, statement, place)?;
         let formation_first = operations.len();
         if let Some((endpoint, base, _)) = self.source_object_leaf_address_v29(
             block,
@@ -184,6 +181,12 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             SourceReferenceAccessV29::Address,
             operations,
         )? {
+            // Only a reference-backed endpoint consumes a promoted pointer
+            // holder. A retained local may contain reference payloads without
+            // having a promoted BaseUse of its own.
+            if matches!(endpoint.object, ScopedObjectIdentityV29::Reference { .. }) {
+                self.use_source_place_v29(block, statement, place)?;
+            }
             let (expected, base_access) = self.with_emission_budget_v1(|this, budget| {
                 source_reference_owned_prepay_v29::<(Type, AccessMode)>(references.plan, budget)?;
                 let original = this
