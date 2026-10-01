@@ -9,6 +9,48 @@ examples as qualified through the new production path.
 
 ## Latest Verified Checkpoint
 
+At 10:19 UTC, r303 passed **75 selected descriptor, KFD and host tests** at
+`aa7780fc31e692e64bb1896824f9aa26dce1c418`: descriptor 29, KFD 26 and host 20,
+with zero failures or ignored tests and 625 filtered tests. These are component
+tests, not GPU runs, complete crate suites or protected-proof execution.
+
+Ordinary pointer formation and its eventual memory access now retain separate
+source coordinates and address envelopes in the V28 contract. Shared formation,
+type and link requirements remain checked. Both envelopes are checked against
+the live mapping, including zero-access formations and independent overflow
+cases. The codec itself does not authenticate source correspondence or grant
+compiler, artifact or launch authority.
+
+The preceding r302 selection had 74 passes and one failure: a newly authored
+test incorrectly expected an unchanged formation identity when another contract
+row changed. The existing hash intentionally binds each row to the whole
+contract. Only that assertion was corrected; production hashing was unchanged,
+and the test still requires the decoded formation row to remain identical.
+
+The primary independently checked both runs' source/tool inventories and raw
+log hashes:
+
+- r302: `95ffeef3b43586390dbf52c031a8775392fedaf7628f97d7e875da5465ebf2b7`
+- r303: `adf15b3b6b30c79c9b58f5063b00d8f67b8cb2e5a657cf41925b071cf2610918`
+
+The broader compiler integration is not yet validated. The r300 lowerer-test
+build exhausted its unchanged 16 GiB virtual-memory allowance; no tests ran.
+The r301 native-backend build then stopped with three invalid block-ID method
+calls in source-control verification; no tests ran. Those calls were corrected
+to use the original source block ordinals. New original-formation, borrowed
+proof-client and target-consumer integration requires its own build and actual
+Rust fill/vecadd execution; the component pass above does not validate it.
+
+Protected execution still needs the complete original compiler/proof connection
+and continuous enforcement. Provisioning, endpoint association, process parking
+and ordinary proof-text diagnostics are not protected proof results. No required
+missing source obligation is waived. Both public mains were read back at
+`978379990f45c126c6191ed9517288ee695ba4a6` before this documentation update;
+the unfinished compiler integration remains local. Full-range publication gates
+also remain unresolved. **M0 alone is complete; strict coverage remains 0/47.**
+
+## Earlier Compiler Checkpoint
+
 The completed r294/r295 runs used the local candidate
 `0d4f37f1e2b8d963aeb28891dc6c872c52d980fd`. The primary independently checked
 the source/tool inventories and raw logs. Neither run executed a GPU kernel
