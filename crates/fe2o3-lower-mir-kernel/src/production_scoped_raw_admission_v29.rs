@@ -1239,15 +1239,15 @@ fn check_immutable_source_memory_v29(
         .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
             "final object access coordinate",
         ))?;
-        let value = source_address_value_access_v29(actual)
+        let footprint = source_address_footprint_v33(actual, access.footprint, budget)
             .map_err(immutable_memory_error_v29)?
             .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
                 "final object access effect",
             ))?;
-        let location = if value.object {
+        let location = if footprint.typed {
             Some(
                 graph
-                    .object_location(value.pointer, budget)
+                    .object_location(footprint.pointer, budget)
                     .map_err(immutable_memory_error_v29)?,
             )
         } else {
@@ -2693,10 +2693,10 @@ fn retain_pending_memory_v29(
             .operations
             .get(source.physical.operation)
             .ok_or_else(source_raw_physical_error_v29)?;
-        let value =
-            source_address_value_access_v29(actual)?.ok_or_else(source_raw_physical_error_v29)?;
-        let object_location = if value.object {
-            Some(graph.object_location(value.pointer, budget)?)
+        let footprint = source_address_footprint_v33(actual, source.physical.footprint, budget)?
+            .ok_or_else(source_raw_physical_error_v29)?;
+        let object_location = if footprint.typed {
+            Some(graph.object_location(footprint.pointer, budget)?)
         } else {
             None
         };
