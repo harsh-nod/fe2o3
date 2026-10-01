@@ -88,16 +88,32 @@ fn original_mir_call_transfer_direct_work_and_backing_have_independent_oracles()
 #[test]
 fn original_mir_call_transfer_census_pays_leaf_and_inactive_instance_scans() {
     run(LIMIT, LIMIT, |plan, out| {
-        assert_eq!(plan.root(0, out)?.instances.len(), 4);
-        assert_eq!(plan.root(1, out)?.instances.len(), 4);
+        // Each root retains two reachable leaf invocations. The unreachable
+        // original call remains a census row without inventing a child instance.
+        assert_eq!(plan.root(0, out)?.instances.len(), 3);
+        assert_eq!(plan.root(1, out)?.instances.len(), 3);
+        for root in 0..2 {
+            let calls = plan.calls(root, 0, out)?;
+            assert_eq!(calls.len(), 3);
+            assert!(!calls[2].ssa_reachable);
+            assert_eq!(calls[2].child, None);
+        }
         let before = out.budget.work();
         let transfers = CallTransfers::derive(plan, out)?;
         // Two source queries, two root passes, two per-instance scans, six
         // call-site checks, and four independently costed direct transfers.
-        let expected = 2 + 2 * 2 + 8 * (1 + 2) + 6 * 5 + 4 * 55;
-        assert_eq!(expected, 280);
+        let expected = 2 + 2 * 2 + 6 * (1 + 2) + 6 * 5 + 4 * 55;
+        assert_eq!(expected, 274);
         assert_eq!(out.budget.work() - before, expected);
         assert_eq!(transfers.rows(out)?.len(), 6);
+        assert_eq!(
+            transfers
+                .rows(out)?
+                .iter()
+                .filter(|row| matches!(row.transfer, Transfer::Inactive))
+                .count(),
+            2
+        );
         Ok(())
     })
     .0

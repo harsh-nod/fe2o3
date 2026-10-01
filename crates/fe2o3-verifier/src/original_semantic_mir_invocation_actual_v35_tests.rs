@@ -185,7 +185,9 @@ fn original_mir_invocation_request_consumes_the_complete_retained_source() {
                 )
                 .is_err()
         );
-        assert_eq!(&request.subject(out.budget)?.census()[..4], &[2, 8, 28, 28]);
+        // Two roots, each with two reachable helper invocations. Unreachable
+        // original calls remain in the control census, not as synthetic children.
+        assert_eq!(&request.subject(out.budget)?.census()[..4], &[2, 6, 28, 28]);
         let text = std::str::from_utf8(request.generated_source(out.budget)?).unwrap();
         assert!(text.starts_with("use vstd::prelude::*;"));
         assert!(text.contains("struct MemoryFrameRuntimeV30"));
@@ -434,7 +436,7 @@ fn original_mir_actual_segment_capacity_has_independent_many_root_arithmetic() {
     let mut paid = Vec::new();
     for root_count in [2, 4, 8] {
         run_root_case(LIMIT, LIMIT, false, true, root_count, |actual, out| {
-            assert_eq!(actual.original.locals, 16 * root_count as usize);
+            assert_eq!(actual.original.locals, 3 * 4 * root_count as usize);
             let mut counts = [0usize; 4];
             let mut total = 0;
             for range in &actual.original.roots {
@@ -698,7 +700,7 @@ fn original_mir_actual_call_segments_refuse_funded_foreign_ledger_before_work() 
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work,
     };
-    run_case(LIMIT, LIMIT, false, |actual, out| {
+    let result = run_case(LIMIT, LIMIT, false, |actual, out| {
         let mut work = Work::new(LIMIT);
         let mut budget = Budget::new(&mut work, LIMIT);
         budget.reserve_storage(out.budget.storage())?;
@@ -721,10 +723,19 @@ fn original_mir_actual_call_segments_refuse_funded_foreign_ledger_before_work() 
             before
         );
         assert!(foreign.text.is_empty());
-        Ok(())
-    })
-    .0
-    .unwrap();
+        let original_before = (out.budget.work(), out.budget.storage());
+        let retry = actual.check_segments(out);
+        assert!(matches!(
+            retry,
+            Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+        ));
+        assert_eq!((out.budget.work(), out.budget.storage()), original_before);
+        retry
+    });
+    assert!(matches!(
+        result.0,
+        Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+    ));
 }
 
 #[test]

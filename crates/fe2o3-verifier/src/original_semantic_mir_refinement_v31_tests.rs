@@ -426,12 +426,23 @@ fn original_mir_cfg_request_uses_exact_generic_field_and_result_frames() {
     );
     assert_eq!(size_of::<V31>(), size_of::<Fields>());
     assert_eq!(size_of::<V30>(), size_of::<V31>());
+    type RuntimeFields = (
+        &'static [ExplicitLaunchExtent],
+        FormalIndexWidth,
+        EndiannessV2,
+    );
     let queries = 3 * size_of::<&()>()
         + size_of::<OriginalSemanticMirRefinementSubjectV31>()
         + size_of::<Result<OriginalSemanticMirRefinementSubjectV31>>()
         + size_of::<Result<&[u8]>>()
         + 3 * size_of::<Result<()>>()
-        + size_of::<std::result::Result<(), SourceError>>();
+        + size_of::<std::result::Result<(), SourceError>>()
+        + size_of::<RuntimeFields>()
+        + size_of::<Sha256>()
+        + size_of::<Result<[u8; 32]>>()
+        + size_of::<std::slice::Iter<'_, ExplicitLaunchExtent>>()
+        + size_of::<std::slice::Iter<'_, u64>>()
+        + 8 * size_of::<usize>();
     assert_eq!(query_headers::<31>().unwrap(), queries);
     assert_eq!(
         original_mir_headers::<31>().unwrap(),

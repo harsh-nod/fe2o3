@@ -342,8 +342,9 @@ fn original_mir_execution_domain_preserves_original_required_and_maximum_workgro
     .unwrap();
 }
 
-#[test]
-fn original_mir_paired_root_abi_keeps_ignored_unit_arguments_out_of_physical_parameters() {
+fn ignored_unit_case(
+    ownership: fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1,
+) -> (Result<()>, usize, usize, usize) {
     use fe2o3_mir_model::semantic_mir_v1::*;
     super::super::super::invocations::tests::run_source_transform(
         LIMIT,
@@ -359,6 +360,8 @@ fn original_mir_paired_root_abi_keeps_ignored_unit_arguments_out_of_physical_par
                     .collect();
                 let argument = parameters.len() as u32;
                 parameters.push(SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore));
+                let mut ownerships = function.abi().source_argument_ownership().to_vec();
+                ownerships.push(ownership);
                 let abi = SemanticFunctionAbiV1::new(
                     SemanticAbiIdentityV1::from_sha256([210 + root as u8; 32]),
                     SemanticLayoutIdentityV1::from_sha256([212 + root as u8; 32]),
@@ -368,6 +371,8 @@ fn original_mir_paired_root_abi_keeps_ignored_unit_arguments_out_of_physical_par
                     parameters,
                     SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
                 )
+                .unwrap()
+                .with_source_argument_ownership(ownerships)
                 .unwrap();
                 let mut locals = function.locals().to_vec();
                 locals.push(SemanticLocalDeclV1::new(
@@ -422,6 +427,26 @@ fn original_mir_paired_root_abi_keeps_ignored_unit_arguments_out_of_physical_par
             })
         },
     )
+}
+
+#[test]
+fn original_mir_paired_root_abi_keeps_ignored_unit_arguments_out_of_physical_parameters() {
+    ignored_unit_case(fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::ByValue)
+        .0
+        .unwrap();
+}
+
+#[test]
+fn original_mir_paired_root_abi_refuses_ignored_unit_without_source_ownership() {
+    let error = ignored_unit_case(
+        fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::Unspecified,
+    )
     .0
-    .unwrap();
+    .unwrap_err();
+    assert!(matches!(error, Error::Source(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("by-value kernel argument requires exact component lowering")
+    );
 }
