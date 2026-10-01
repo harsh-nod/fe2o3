@@ -160,13 +160,22 @@ def make_loader(fixture_tests, root):
             document, runtime = self.document()
             fixture_id = "gfx950-kda-decode"
             fixture = next(row for row in document["compilerFixtures"] if row["fixtureId"] == fixture_id)
+            baseline = next(row for row in self.original["compilerFixtures"]
+                            if row["fixtureId"] == "gfx950-kda-decode-baseline")
+            self.assertEqual(fixture["compilerInput"]["kernelSymbols"], ["gfx950_kda_decode"])
+            self.assertEqual(baseline["compilerInput"]["kernelSymbols"], ["gfx950_kda_decode"])
+            self.assertEqual(fixture["compilerInput"]["sourcePaths"],
+                             ["examples/gfx950_advanced_attention/src/kernel.rs"])
+            self.assertEqual(baseline["compilerInput"]["sourcePaths"],
+                             ["examples/gfx950_advanced_attention/src/kda_baseline.rs"])
             fixture["compilerInput"]["features"] = ["kernel-kda-decode-baseline-v1"]
             fixture["compilerInput"]["contractSha256"] = self.parent.fixture_input_contract_sha256(fixture)
             kernel = next(row for row in document["kernelInventory"]["kernels"]
                           if row["kernelId"] == f"fixture:{fixture_id}:gfx950_kda_decode")
             for variant in kernel["variants"]:
                 variant.update(status="pending", source=None)
-            with self.assertRaisesRegex(SystemExit, "feature-selected fixture kernel roster differs"):
+            with self.assertRaisesRegex(
+                    SystemExit, "fixture display differs from the exact current source occurrence"):
                 self.check(document, runtime)
 
         def test_exact_display_component_rejects_changed_runtime_bytes(self):
