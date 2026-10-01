@@ -528,7 +528,9 @@ fn source_reference_select_backing_v29(
                 SourceBackingWriteIndexV29::Assignment(ordinal),
                 budget,
             )?;
-            if source_backing_original_request_v29(requests, instance, local, budget)? {
+            if source_backing_original_request_v29(requests, instance, local, budget)?
+                && !source_existing_receiver_v29(&existing_receivers, instance, local, budget)?
+            {
                 equations.ensure_cell(plan, cells, instance, local, generation, budget)?;
             }
         }

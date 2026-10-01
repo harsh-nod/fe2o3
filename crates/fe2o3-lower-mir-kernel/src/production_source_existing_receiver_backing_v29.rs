@@ -40,6 +40,115 @@ fn source_reference_existing_value_loan_v29(
 
 type SourceExistingReceiverRowV29 = ((usize, u32), bool);
 
+fn source_existing_receiver_write_v53(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    access: &SourceReferenceAccessRecordV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    budget.charge_work(20)?;
+    if access.key.access != SourceReferenceAccessV29::Write
+        || access.key.site.instance != access.instance
+        || access.source_local != access.local
+        || !access.projections.is_empty()
+        || access.loan.is_some()
+        || !access.traversed.is_empty()
+        || access.shared_path
+    {
+        return Ok(false);
+    }
+    let function = plan
+        .instances
+        .instance(access.instance)
+        .ok_or_else(source_backing_error_v29)?
+        .declaration();
+    let Some(statement) = access.key.site.statement.and_then(|statement| {
+        function
+            .blocks()
+            .get(access.key.site.block.index() as usize)
+            .and_then(|block| block.statements().get(statement))
+    }) else {
+        return Ok(false);
+    };
+    let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+        return Ok(false);
+    };
+    let destination = assignment.destination();
+    let SemanticRvalueKindV1::Use(SemanticOperandV1::Move(input)) = assignment.value().kind()
+    else {
+        return Ok(false);
+    };
+    Ok(
+        destination as *const SemanticPlaceV1 as usize == access.key.source
+            && destination.local() == access.local
+            && destination.ty() == access.ty
+            && destination.projections().is_empty()
+            && input.projections().is_empty()
+            && input.ty() == access.ty
+            && assignment.value().result_type() == access.ty,
+    )
+}
+
+fn source_existing_receiver_value_v53(
+    plan: &SourceReferencePlanV29<'_, '_>,
+    source: &SourceReferenceRepresentationDemandV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    budget.charge_work(10)?;
+    if !source.projections.is_empty() || source.selector_source.is_some() {
+        return Ok(false);
+    }
+    let declaration = plan
+        .instances
+        .instance(source.instance)
+        .and_then(|instance| {
+            instance
+                .declaration()
+                .locals()
+                .get(source.local.index() as usize)
+        })
+        .ok_or_else(source_backing_error_v29)?;
+    let node = plan
+        .nodes
+        .get(source.node)
+        .ok_or_else(source_backing_error_v29)?;
+    let SourceReferenceNodeKindV29::Plain(Some(anchor)) = node.kind else {
+        return Ok(false);
+    };
+    if node.ty != declaration.ty() || anchor.ty != node.ty {
+        return Ok(false);
+    }
+    let semantic = plan.instances.owner().source_semantic();
+    let root = plan
+        .instances
+        .instance(plan.root)
+        .ok_or_else(source_backing_error_v29)?;
+    let Some(SemanticTypeShapeV1::Aggregate(fields)) = semantic
+        .types()
+        .get(anchor.ty.index() as usize)
+        .map(SemanticTypeDeclV1::shape)
+    else {
+        return Ok(false);
+    };
+    prepay_argument_shape_v1(semantic, anchor.ty, budget)?;
+    budget.charge_work(argument_sum_v1(&[
+        argument_product_v1(semantic.callables().len(), 4)?,
+        argument_product_v1(fields.fields().len(), 20)?,
+        32,
+    ])?)?;
+    budget.reserve_storage(std::mem::size_of::<Type>())?;
+    let physical = authenticated_disjoint_slice_parameter(
+        semantic.types(),
+        semantic.callables(),
+        root.declaration(),
+        anchor.argument,
+        anchor.ty,
+    );
+    let supported = matches!(physical, Some(Type::Slice(_)));
+    drop(physical);
+    budget.release_storage(std::mem::size_of::<Type>())?;
+    Ok(supported)
+}
+
 fn source_existing_receiver_rows_v29(
     plan: &SourceReferencePlanV29<'_, '_>,
     budget: &mut ArgumentBudgetV1<'_>,
@@ -48,6 +157,9 @@ fn source_existing_receiver_rows_v29(
     budget.reserve_storage(argument_sum_v1(&[
         std::mem::size_of::<Vec<SourceExistingReceiverRowV29>>(),
         std::mem::size_of::<Result<Vec<SourceExistingReceiverRowV29>, ProductionSemanticKirErrorV1>>(),
+        std::mem::size_of::<(&SourceReferenceAccessRecordV29, &SemanticFunctionDeclV1, &SemanticAssignmentV1, &SemanticPlaceV1, &SemanticPlaceV1)>(),
+        std::mem::size_of::<(&SourceReferenceRepresentationDemandV29, &SemanticLocalDeclV1, &SourceReferenceNodeV29, SourceReferenceAnchorV29, Option<Type>, bool)>(),
+        std::mem::size_of::<Result<bool, ProductionSemanticKirErrorV1>>(),
     ])?)?;
     let mut rows = emission_vec_v1(plan.loans.len(), budget)?;
     for (index, loan) in plan.loans.iter().enumerate() {
@@ -89,17 +201,27 @@ fn source_existing_receiver_rows_v29(
             continue;
         };
         // Whole-value transport and original borrows do not observe wrapper
-        // layout. A field, write, raw address or tag observation still demands
-        // normal source-bound object storage/materialization.
+        // layout. Exact whole-owner moves can replace the carrier, but a
+        // projected write, field, raw address or tag still needs object storage.
         let whole = access.projections.is_empty()
-            && matches!(
+            && (matches!(
                 access.key.access,
                 SourceReferenceAccessV29::Read
                     | SourceReferenceAccessV29::Borrow(
                         SemanticBorrowKindV1::Shared | SemanticBorrowKindV1::Mutable
                     )
-            );
+            ) || source_existing_receiver_write_v53(plan, access, budget)?);
         rows[index].1 &= whole;
+    }
+    // Authenticate every replacement's original nominal ABI anchor before
+    // allowing any entry/write in this local to keep its existing Slice value.
+    for source in &plan.representation_demands {
+        budget.charge_work(2)?;
+        let key = (source.instance.index(), source.local.index());
+        charge_execution_cfg_lookup_v29(rows.len(), budget)?;
+        if let Ok(index) = rows.binary_search_by_key(&key, |row| row.0) {
+            rows[index].1 &= source_existing_receiver_value_v53(plan, source, budget)?;
+        }
     }
     Ok(rows)
 }
