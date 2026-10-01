@@ -148,7 +148,7 @@ fn selected_pointer_niche_records_v42(
     {
         return Err(selected_pointer_niche_error_v42());
     }
-    let mut terminal = None;
+    let mut terminal: Option<SemanticTypeIdV1> = None;
     let mut offset = 0_u64;
     for part in niche.source().path() {
         budget.charge_work(8)?;
