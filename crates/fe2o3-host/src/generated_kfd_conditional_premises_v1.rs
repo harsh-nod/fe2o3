@@ -41,7 +41,19 @@ impl fmt::Display for GeneratedConditionalPremiseErrorV1 {
         write!(f, "{self:?}")
     }
 }
-impl std::error::Error for GeneratedConditionalPremiseErrorV1 {}
+impl std::error::Error for GeneratedConditionalPremiseErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Contract(error) => Some(error),
+            Self::MixedContract(error) => Some(error),
+            Self::Descriptor(error) => Some(error),
+            Self::Runtime(error) => Some(error),
+            Self::Packing(error) => Some(error),
+            Self::Binding(_) => None,
+        }
+    }
+}
 impl From<Resource> for GeneratedConditionalPremiseErrorV1 {
     fn from(e: Resource) -> Self {
         Self::Resource(e)
