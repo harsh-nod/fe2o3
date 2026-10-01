@@ -62,6 +62,9 @@ pub use relocation_plan_v28::{
     prepare_mixed_fixedpoint_relocation_expressions_v29, prepare_mixed_relocation_expressions_v28,
     prepare_typed_source_tail_v50,
 };
+#[cfg(test)]
+#[path = "mixed_optimizer_memory_error_v52_tests.rs"]
+mod memory_error_v52_tests;
 #[path = "mixed_optimizer_semantics_v26.rs"]
 mod semantics;
 pub use cfg_v27::{
@@ -107,6 +110,8 @@ pub enum MixedOptimizerRefinementErrorV26 {
     Source(SourceError),
     Resource(Resource),
     Inventory(CanonicalKirInventoryErrorV1),
+    /// Exact-owner MemorySSA analysis or query failed, retaining its cause.
+    MemorySsa(fe2o3_kernel_analysis::CanonicalKirMemorySsaErrorV1),
     /// Exact-owner physical byte geometry or initialization analysis failed.
     PrivateMemory(fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1),
     /// Bounded control-flow analysis failed while generating CFG obligations.
@@ -154,6 +159,11 @@ impl From<CanonicalKirInventoryErrorV1> for Error {
         Self::Inventory(value)
     }
 }
+impl From<fe2o3_kernel_analysis::CanonicalKirMemorySsaErrorV1> for Error {
+    fn from(value: fe2o3_kernel_analysis::CanonicalKirMemorySsaErrorV1) -> Self {
+        Self::MemorySsa(value)
+    }
+}
 impl From<fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1> for Error {
     fn from(value: fe2o3_kernel_analysis::CanonicalKirPrivateMemoryErrorV1) -> Self {
         Self::PrivateMemory(value)
@@ -185,6 +195,7 @@ impl std::error::Error for Error {
             Self::Source(error) => Some(error),
             Self::Resource(error) => Some(error),
             Self::Inventory(error) => Some(error),
+            Self::MemorySsa(error) => Some(error),
             Self::PrivateMemory(error) => Some(error),
             Self::Flow(error) => Some(error),
             Self::Transition(error) => Some(error),

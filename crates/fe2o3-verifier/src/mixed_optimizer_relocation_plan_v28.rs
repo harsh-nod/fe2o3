@@ -23,6 +23,8 @@ use std::{
 mod binding;
 #[path = "mixed_optimizer_relocation_plan_check_v28.rs"]
 mod check;
+#[path = "mixed_optimizer_typed_relocation_expressions_v48.rs"]
+mod typed_expressions_v48;
 pub use binding::{
     ExecutedMixedComposedRefinementV29, ExecutedTypedSourceTailV50,
     MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,

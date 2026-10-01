@@ -235,7 +235,7 @@ fn produce<'h, 'n, 'p, 'v, 's>(
     }
     relocation.replay(budget)?;
     let prefix = relocation.prefix(budget)?.checked_prefix_v29(budget)?;
-    let execution = prefix.execution();
+    let execution = relocation.prefix(budget)?.output(budget)?.execution();
     if execution.policy_version() != 11 || !(1..=32).contains(&execution.rounds()) {
         return Err(Error::Binding(
             "typed request complete fixed Policy11 execution",
@@ -310,7 +310,7 @@ fn produce<'h, 'n, 'p, 'v, 's>(
         *final_owner.identity(),
     ];
     budget.charge_work(execution.canonical_bytes().len())?;
-    let prefix_execution = Sha256::digest(execution.canonical_bytes()).into();
+    let prefix_execution: [u8; 32] = Sha256::digest(execution.canonical_bytes()).into();
     let mut hash = Sha256::new();
     for bytes in [DOMAIN, &semantic, &ssa, &prefix_execution, &runtime] {
         charge_hash(budget, &mut hash, bytes)?;
