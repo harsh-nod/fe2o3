@@ -251,8 +251,14 @@ class CargoTestJsonTests(unittest.TestCase):
         self.assertEqual(kinds, ["rlib", "dylib"])
         self.assertEqual(manifest["lib"]["name"], "rustc_codegen_fe2o3")
         pipeline = (root / "scripts/ci-generic-core.sh").read_text()
+        parents = (
+            "production_rustc_driver_v1::checked_output_source_v1_tests::formal_memory_diagnostic::ordinary_lds_source_retains_owner_bound_execution_discharge",
+            "production_semantic_body_v1::slice_constant_index_source_v1_tests::genuine_slice_constant_indices_preserve_retained_mir",
+        )
         self.assertEqual(pipeline.count(
-            "bash scripts/ci-cargo-test-json.sh --lib " + ",".join(kinds)), 1)
+            "bash scripts/ci-cargo-test-json.sh --lib " + ",".join(kinds)), len(parents))
+        for parent in parents:
+            self.assertEqual(pipeline.count(parent), 1)
 
 
 if __name__ == "__main__":

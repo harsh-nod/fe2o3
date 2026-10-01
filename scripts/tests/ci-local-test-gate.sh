@@ -792,6 +792,7 @@ assert_equals \
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
 assert_step_count source-formal-execution-discharge 0 'integration shard ran a library source parent'
+assert_step_count source-slice-constant-index 0 'integration shard ran the slice-pattern library parent'
 for shard_step in "${STEP_NAMES[@]}"; do
   if [[ "${shard_step}" == rustc-codegen-test-* ]] &&
     [[ "${shard_step}" != rustc-codegen-test-production_pipeline ]]; then
@@ -866,6 +867,7 @@ for core_step in \
   cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
   source-formal-execution-discharge \
+  source-slice-constant-index \
   core-doc-tests \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
