@@ -50,6 +50,58 @@ The independent source/tool/runner audit passed; raw log SHA-256 is
 `db38606b5571598655d7bb8b4ec23484f7524bd267330ae833ae71aaef6840d7`.
 This verifies descriptor behavior, not source proof or launch authority.
 
+The new original-input DATA codec run **r353 passed all 12 selected tests**,
+none failed or ignored, at local candidate
+`45a03c1ccb17e55bed024f8c2dc082dbe12c7f1e`. It covers complete context,
+ABI-component and launch-field round trips, malformed records, exact work and
+storage limits, and the unchanged combined 4 MiB correspondence/DATA ceiling.
+Its independent source/tool/runner audit passed; raw log SHA-256 is
+`7cf366c24eee1c79b5b14ce96acf6aff77e3a275bfd907406bb59e62a6e52a3d`.
+These are allocation-free DATA transport checks, not authenticated original
+source recovery or semantic proof. The owning MIR/SSA constructors still need
+complete allocation prepayment before parent recovery can be admitted.
+
+Three interim isolated verifier attempts stopped before executing tests:
+
+- Recovered G44 stopped at a missing test import and an error-conversion compile
+  error. Both were repaired. Its original run was collected without restarting;
+  raw log `84063649f53968f1ac13b90a5eec7a015306e448ad58878b5d3159274b599dc8`.
+- Gc937 and local lowerer r352 then found three missing lifetime bounds in the
+  shared descriptor-plan borrowing interfaces. Those bounds were added without
+  changing ownership or budgets. Raw logs respectively:
+  `ef29d4a3233e15f52267e49844c18ae3a90bf871bb9484f009fec87ced37265b` and
+  `b583bc19c92130879ee17510421dfddcbd9da71563673c11ab8ea661f3b246a2`.
+- G45 cleared those errors but stopped on an extra reference when iterating an
+  already-borrowed function slice. A one-character correction is integrated
+  locally; raw log `c75cfd0091f3e18e1125747226459f8fc8ee91c91694c24c9a6cbcb574e83f42`.
+  Local actual-source r354 confirmed the same compile failure, with no test
+  execution; raw log
+  `a649b1fa0a2e50a0aeba69652578633ae4357959930365e0d3eee660e9f61744`.
+
+Source, tool manifests, raw logs, terminal states and cleanup evidence were
+independently audited. All three remote containers and their private scratch
+directories were removed. These compiler failures receive no test or proof
+credit. Reviewed follow-on work preserves original bodyless import identities,
+uses original SSA reachability for the activation roster, and checks aggregate
+helper-return control transport while retaining its missing value-proof
+obligation.
+
+The corrected candidate `b44357ecf14370d73fc29bd95cc1eecf9c6a8b35` then compiled
+and ran the focused verifier suite on isolated MI350: **57 passed, 10 failed,
+none ignored and 830 filtered**. All eight selected groups executed, including
+five passing source-diagnostic tests. Six failures occur before replay because
+the fixtures use an invalid receipt header; one expects the wrong foreign-account
+error variant; three supply an invalid SSA edge role before their reachability
+checks. These failures still count as failures until the repaired tests run.
+No production check or resource limit is being relaxed to accommodate them.
+
+The independent exact-source, tool-manifest, archive, result and cleanup audit
+passed; raw log SHA-256 is
+`9030714446a48c1b30c0e47ad658f3bff15d36d8f83bb535cdbd67ce51c6b490`.
+The container and its 3,437,182,976-byte private scratch directory were removed.
+This was CPU verifier testing, not protected proof or GPU execution. The updated
+actual-source matrix and repaired verifier tests remain to be executed.
+
 Local source-capture runs r349 and r350 receive **no test credit**: disk
 exhaustion interrupted r349's report, and an execution-environment interruption
 left r350 without a final report. The incomplete logs are preserved. Storage
