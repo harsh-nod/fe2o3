@@ -174,41 +174,46 @@ fn production_index_reader_correspondence_accepts_witness_moves_and_shared_refer
         let completed = std::cell::Cell::new(false);
         let (result, _, _, retained) =
             index_relation_probe_owner_v40(owner, 1_000_000_000, 256 << 20, |relation, budget| {
-                source_scalar_normalization_scratch_v18(budget, |budget| {
-                    let retained = relation
-                        .source
-                        .root_row(0)?
-                        .rvalue_results
-                        .as_ref()
-                        .unwrap();
-                    assert_eq!(retained.index_readers.len(), 2);
-                    for block in [1, 3] {
-                        let reader = relation
-                            .index_reader_computation_v35(
-                                0,
-                                0,
-                                SemanticBlockIdV1::from_index(block),
-                                budget,
-                            )?
+                source_scalar_normalization_scratch_v18(
+                    relation.source.cleanup,
+                    budget,
+                    0,
+                    |budget| {
+                        let retained = relation
+                            .source
+                            .root_row(0)?
+                            .rvalue_results
+                            .as_ref()
                             .unwrap();
-                        assert_eq!(
-                            reader.expression(budget)?,
-                            ProductionSemanticExpressionV2::GlobalInvocation1d {
-                                scalar: ProductionSemanticScalarTypeV2::Integer {
-                                    signed: false,
-                                    bits: 64,
-                                },
-                            }
-                        );
-                        let definition = reader.original_definition(budget)?;
-                        assert_eq!(
-                            relation.inventory.definitions()[definition].ty,
-                            &Type::INDEX
-                        );
-                    }
-                    completed.set(true);
-                    Ok(())
-                })
+                        assert_eq!(retained.index_readers.len(), 2);
+                        for block in [1, 3] {
+                            let reader = relation
+                                .index_reader_computation_v35(
+                                    0,
+                                    0,
+                                    SemanticBlockIdV1::from_index(block),
+                                    budget,
+                                )?
+                                .unwrap();
+                            assert_eq!(
+                                reader.expression(budget)?,
+                                ProductionSemanticExpressionV2::GlobalInvocation1d {
+                                    scalar: ProductionSemanticScalarTypeV2::Integer {
+                                        signed: false,
+                                        bits: 64,
+                                    },
+                                }
+                            );
+                            let definition = reader.original_definition(budget)?;
+                            assert_eq!(
+                                relation.inventory.definitions()[definition].ty,
+                                &Type::INDEX
+                            );
+                        }
+                        completed.set(true);
+                        Ok(())
+                    },
+                )
             });
         result.unwrap_or_else(|error| panic!("moves={moves} copies={copies}: {error:?}"));
         assert!(completed.get());
