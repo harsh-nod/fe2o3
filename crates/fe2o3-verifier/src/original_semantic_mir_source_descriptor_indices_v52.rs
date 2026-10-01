@@ -144,6 +144,8 @@ impl DescriptorIndexCall {
             .ok_or_else(unsupported)?;
         let scalar = ScalarV30::from_source(semantic.types(), element)?;
         let scalar_type = match scalar {
+            ScalarV30::Float { width: 32 } => ScalarType::F32,
+            ScalarV30::Float { width: 64 } => ScalarType::F64,
             ScalarV30::Bool => ScalarType::Bool,
             ScalarV30::Integer {
                 width: 8,
