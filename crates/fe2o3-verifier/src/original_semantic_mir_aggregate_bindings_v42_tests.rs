@@ -690,7 +690,10 @@ fn original_mir_root_census_keeps_helpers_distinct_and_requires_every_kernel_ent
                 assert_eq!(out.budget.storage(), storage);
                 let kernel = seen.iter().position(|&selected| selected).unwrap();
                 let helper = seen.iter().position(|&selected| !selected).unwrap();
-                assert_eq!(functions[helper].function.role, FunctionRole::InternalHelper);
+                // The helper is inlined into both roots; its retained declaration
+                // is an import, not an additional executable kernel entry.
+                assert_eq!(functions[helper].function.role, FunctionRole::ExternalImport);
+                assert!(functions[helper].function.body.is_none());
                 for (index, selected) in [(kernel, false), (helper, true)] {
                     let old = seen[index];
                     seen[index] = selected;
@@ -1037,7 +1040,16 @@ fn original_mir_aggregate_cuts_preserve_partial_move_payload_across_join_and_bac
                         program.emit(out)?;
                         paired.emit(out)?;
                         assert!(out.text.contains("invocation_source_aggregate_leaf_v42("));
-                        assert!(out.text.contains("MemoryOperationEffectV30::Trap"));
+                        assert!(out.text.contains("InvocationSourceOperandRoleV36::AssertCondition"));
+                        assert!(out.text.contains("source: invocation_source_byte_trap_v40(source)"));
+                        assert!(out.text.contains("events: invocation_source_observations_v39(next, invocation_runtime_little_endian_v36())"));
+                        assert!(out.text.contains("source.machine.pc == -2 && target.pc == -2"));
+                        assert!(out.text.contains("source.machine.pc == -1 && target.pc == -1"));
+                        let effects = super::super::effects::INVOCATION_EFFECTS_V36;
+                        assert!(effects.contains("+ invocation_source_trap_observations_v40(result)"));
+                        assert!(effects.contains("result.source == invocation_source_byte_trap_v40(before)"));
+                        assert!(effects.contains("seq![if authentic { MemoryOperationEffectV30::Trap } else { MemoryOperationEffectV30::Refused }]"));
+                        assert!(effects.contains("(MemoryOperationEffectV30::Trap, MemoryOperationEffectV30::Trap)"));
                         Ok(())
                     })
                 },
