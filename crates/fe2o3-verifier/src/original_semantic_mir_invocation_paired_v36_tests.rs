@@ -278,9 +278,16 @@ fn original_mir_paired_source_readiness_is_an_independent_native_input_obligatio
             assert!(consequence.contains(&format!(
                 "invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid"
             )));
-            assert!(out.text.contains(&format!(
-                "valid: invocation_paired_native_inputs_{root}_v38(arguments, external, execution)"
-            )));
+            let initial = out.text.split(&format!(
+                "open spec fn invocation_paired_raw_initial_{root}_v36("
+            )).nth(1).unwrap().split("open spec fn").next().unwrap();
+            let gate = format!("let admitted = invocation_paired_native_inputs_{root}_v38(arguments, external, execution);");
+            assert_eq!(initial.matches("let admitted =").count(), 1);
+            let gated = initial.find(&gate).unwrap();
+            let installed = initial.find("let memory = if admitted { ByteMemoryV30 { view_contracts: byte_target_view_contracts_1_v38(invocation_runtime_little_endian_v36()), ..external } } else { external };").unwrap();
+            let validity = initial.find("valid: admitted").unwrap();
+            assert!(gated < installed && installed < validity);
+            assert!(!initial.contains("valid: true"));
             for theorem in ["initial", "initial_trace"] {
                 let theorem = out
                     .text

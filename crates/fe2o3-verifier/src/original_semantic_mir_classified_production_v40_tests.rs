@@ -60,9 +60,29 @@ fn original_mir_production_installs_one_checked_registry_pair_for_every_root() {
                 assert!(initial.contains("valid: admitted"));
                 assert!(text.contains(&format!("open spec fn byte_block_step_{root}_v30(")));
             }
-            assert!(
-                text.contains("byte_target_view_contracts_match_1_v38(s.memory, little_endian)")
-            );
+            let operations: Vec<_> = text
+                .split("open spec fn byte_operation_")
+                .skip(1)
+                .map(|body| body.split("open spec fn").next().unwrap())
+                .collect();
+            assert_eq!(operations.len(), census[4]);
+            for operation in operations {
+                let gate = "|| !byte_target_view_contracts_match_1_v38(s.memory, little_endian)";
+                let refused = "effect: MemoryOperationEffectV30::Refused";
+                assert!(operation.find(gate).unwrap() < operation.find(refused).unwrap());
+                assert!(operation.contains("let state = MemoryStateV30 { valid: false, ..s }"));
+            }
+            let controls: Vec<_> = text
+                .split("open spec fn byte_control_")
+                .skip(1)
+                .map(|body| body.split("open spec fn").next().unwrap())
+                .collect();
+            assert!(!controls.is_empty());
+            for control in controls {
+                let gate = "|| !(byte_target_view_contracts_match_1_v38(done.memory, true) || byte_target_view_contracts_match_1_v38(done.memory, false))";
+                let refused = "state: MemoryStateV30 { valid: false, ..done }";
+                assert!(control.find(gate).unwrap() < control.find(refused).unwrap());
+            }
             assert!(text.contains("invocation_view_registries_related_v40(source, target)"));
             assert!(text.contains("invocation_guard_pair_never_refreshes_stale_source_v40"));
             assert!(!text.contains("assume("));
