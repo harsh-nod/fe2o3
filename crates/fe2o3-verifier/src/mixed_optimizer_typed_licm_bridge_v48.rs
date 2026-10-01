@@ -236,7 +236,7 @@ impl<'a, 'owner, 'rows, R: ByteAllocationResolverV30> AllocationBridgeV48<'a, 'o
             return Err(mismatch());
         }
         let floor = out.budget.storage();
-        let result = (|| {
+        let result: Result<()> = (|| {
             out.budget.reserve_storage(size_of::<(
                 [usize; 8],
                 [&(); 12],
