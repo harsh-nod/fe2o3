@@ -322,7 +322,7 @@ fn prepare_source_inputs_v29<'a, 'scope>(
             // Preserve emission order; the checked order also indexes instances.
             if prefixes
                 .last()
-                .is_some_and(|prefix| prefix.instance >= row.instance)
+                .is_some_and(|prefix| prefix.instance.index() >= row.instance.index())
             {
                 return Err(invalid());
             }

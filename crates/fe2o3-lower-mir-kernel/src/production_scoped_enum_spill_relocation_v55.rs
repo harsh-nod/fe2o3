@@ -285,7 +285,7 @@ impl RelocationV29 {
         instance: ProductionCallInstanceIdV1,
     ) -> Result<&PrefixV29, ProductionSemanticKirErrorV1> {
         self.prefixes
-            .binary_search_by_key(&instance, |prefix| prefix.instance)
+            .binary_search_by_key(&instance.index(), |prefix| prefix.instance.index())
             .ok()
             .map(|index| &self.prefixes[index])
             .ok_or_else(invalid)
