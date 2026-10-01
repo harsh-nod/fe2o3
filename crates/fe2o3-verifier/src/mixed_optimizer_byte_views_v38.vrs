@@ -5,7 +5,17 @@
 enum MemoryTagEncodingV38 {
     Direct { tags: Seq<int> },
     Niche { untagged: int, first: int, last: int, start: int },
+    PointerNullNiche { nonnull: int, null: int },
     Unsupported,
+}
+
+// A nominal pointer has no integer representation in this model. Reference
+// validity and referent lifetime are separate source obligations, not a claim
+// made by observing a complete stored pointer cell.
+enum MemoryTagObservationV39 {
+    Scalar { bits: int },
+    Null,
+    Pointer { pointer: MemoryPointerV30 },
 }
 
 struct MemoryTagContractV38 {
@@ -79,6 +89,10 @@ open spec fn byte_tag_contract_shape_v38(contract: MemoryTagContractV38) -> bool
             && !(first <= untagged <= last)
             && last - first < memory_value_modulus_v30(contract.tag_width)
             && 0 <= start < memory_value_modulus_v30(contract.tag_width),
+        MemoryTagEncodingV38::PointerNullNiche { nonnull, null } =>
+            0 <= nonnull < contract.inhabited.len()
+            && 0 <= null < contract.inhabited.len() && nonnull != null
+            && contract.untagged_valid_bits.len() == 0,
         MemoryTagEncodingV38::Unsupported => true,
     }
 }
@@ -102,6 +116,7 @@ open spec fn byte_tag_selects_v38(contract: MemoryTagContractV38, bits: int, var
             else { variant == untagged && exists|i: int| 0 <= i < contract.untagged_valid_bits.len()
                 && contract.untagged_valid_bits[i].0 <= bits <= contract.untagged_valid_bits[i].1 }
         },
+        MemoryTagEncodingV38::PointerNullNiche { .. } => false,
         MemoryTagEncodingV38::Unsupported => false,
     }
 }
@@ -145,6 +160,70 @@ open spec fn byte_tag_bits_v38(
         + byte_tag_term_v38(object, offset, width, little_endian, 15)
 }
 
+open spec fn byte_raw_tag_initialized_v39(object: MemoryBytesV30, offset: int, width: int) -> bool {
+    ordinary_memory_width_v30(width) && 0 <= offset && offset + width <= object.bytes.len()
+    && object.initialized.len() == object.bytes.len()
+    && forall|i: int| 0 <= i < width ==> object.initialized[offset + i]
+}
+
+// This raw representation reader deliberately does not call byte_range_live:
+// guards need to inspect their own tags without recursively checking themselves.
+open spec fn byte_pointer_tag_observation_v39(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool,
+) -> Option<MemoryTagObservationV39> {
+    if !byte_raw_tag_initialized_v39(object, offset, width) { None }
+    else if forall|i: int| 0 <= i < width ==>
+        object.bytes[offset + i] == MemoryByteV37::Octet(0) {
+        Some(MemoryTagObservationV39::Null)
+    } else if !object.relocations.contains_key(offset) { None }
+    else {
+        let relocation = object.relocations[offset];
+        if relocation.width != width || relocation.little_endian != little_endian
+            || relocation.pointer.byte_offset < 0 || !byte_pointer_view_shape_v38(relocation.pointer)
+            || !(forall|i: int| 0 <= i < width ==>
+                object.bytes[offset + i] == byte_relocation_fragment_v37(relocation, i)) { None }
+        else { Some(MemoryTagObservationV39::Pointer { pointer: relocation.pointer }) }
+    }
+}
+
+open spec fn byte_tag_observation_v39(
+    object: MemoryBytesV30, offset: int, contract: MemoryTagContractV38,
+) -> Option<MemoryTagObservationV39> {
+    if !byte_tag_contract_shape_v38(contract)
+        || !byte_raw_tag_initialized_v39(object, offset, contract.tag_width) { None }
+    else {
+        match contract.encoding {
+            MemoryTagEncodingV38::PointerNullNiche { .. } =>
+                byte_pointer_tag_observation_v39(object, offset, contract.tag_width, contract.little_endian),
+            MemoryTagEncodingV38::Unsupported => None,
+            _ => {
+                if forall|i: int| 0 <= i < contract.tag_width ==>
+                    matches!(object.bytes[offset + i], MemoryByteV37::Octet(_))
+                    && byte_token_well_formed_v37(object.bytes[offset + i]) {
+                    Some(MemoryTagObservationV39::Scalar { bits: byte_tag_bits_v38(
+                        object, offset, contract.tag_width, contract.little_endian) })
+                } else { None }
+            },
+        }
+    }
+}
+
+open spec fn byte_tag_observation_selects_v39(
+    contract: MemoryTagContractV38, observation: MemoryTagObservationV39, variant: int,
+) -> bool {
+    byte_tag_contract_shape_v38(contract)
+    && 0 <= variant < contract.inhabited.len() && contract.inhabited[variant]
+    && match (contract.encoding, observation) {
+        (MemoryTagEncodingV38::PointerNullNiche { nonnull, .. },
+            MemoryTagObservationV39::Pointer { pointer }) =>
+                variant == nonnull && 0 <= pointer.byte_offset && byte_pointer_view_shape_v38(pointer),
+        (MemoryTagEncodingV38::PointerNullNiche { null, .. }, MemoryTagObservationV39::Null) =>
+            variant == null,
+        (_, MemoryTagObservationV39::Scalar { bits }) => byte_tag_selects_v38(contract, bits, variant),
+        _ => false,
+    }
+}
+
 open spec fn byte_tag_guard_current_v38(memory: ByteMemoryV30, guard: MemoryTagGuardV38) -> bool {
     guard.owner == memory.view_contracts.owner
     && memory.view_contracts.rows.contains_key(guard.contract)
@@ -158,10 +237,11 @@ open spec fn byte_tag_guard_current_v38(memory: ByteMemoryV30, guard: MemoryTagG
         && memory.live[guard.allocation].write_epochs.len() == memory.live[guard.allocation].bytes.len()
         && (forall|i: int| 0 <= i < contract.tag_width ==>
             memory.live[guard.allocation].initialized[tag + i]
-            && matches!(memory.live[guard.allocation].bytes[tag + i], MemoryByteV37::Octet(_))
             && memory.live[guard.allocation].write_epochs[tag + i] == guard.epochs[i])
-        && byte_tag_selects_v38(contract, byte_tag_bits_v38(memory.live[guard.allocation],
-            tag, contract.tag_width, contract.little_endian), guard.variant)
+        && match byte_tag_observation_v39(memory.live[guard.allocation], tag, contract) {
+            Some(observation) => byte_tag_observation_selects_v39(contract, observation, guard.variant),
+            None => false,
+        }
     }
 }
 

@@ -1,0 +1,174 @@
+// Unexecuted qualification obligations, not axioms or admission evidence.
+// Prepend BYTE_MEMORY_V30 inside one verus! block. Width/endian parameters cover
+// every supported stored representation without conflating it with INDEX.
+
+proof fn pointer_niche_null_is_initialized_zero_for_every_width_and_endian_v39(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool,
+)
+    requires byte_raw_tag_initialized_v39(object, offset, width),
+        forall|i: int| 0 <= i < width ==> object.bytes[offset + i] == MemoryByteV37::Octet(0),
+    ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian)
+        == Some(MemoryTagObservationV39::Null),
+{}
+
+proof fn pointer_niche_complete_cell_is_nominal_for_every_width_and_endian_v39(
+    object: MemoryBytesV30, offset: int, relocation: MemoryRelocationV37,
+)
+    requires byte_raw_tag_initialized_v39(object, offset, relocation.width),
+        object.relocations.contains_key(offset), object.relocations[offset] == relocation,
+        0 <= relocation.pointer.byte_offset, byte_pointer_view_shape_v38(relocation.pointer),
+        forall|i: int| 0 <= i < relocation.width ==>
+            object.bytes[offset + i] == byte_relocation_fragment_v37(relocation, i),
+    ensures byte_pointer_tag_observation_v39(object, offset, relocation.width, relocation.little_endian)
+        == Some(MemoryTagObservationV39::Pointer { pointer: relocation.pointer }),
+{
+    assert(0 < relocation.width);
+    assert(object.bytes[offset] == byte_relocation_fragment_v37(relocation, 0));
+    assert(object.bytes[offset] != MemoryByteV37::Octet(0));
+}
+
+proof fn pointer_niche_missing_complete_cell_does_not_reconstruct_fragments_v39(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool, index: int,
+)
+    requires byte_raw_tag_initialized_v39(object, offset, width),
+        !object.relocations.contains_key(offset), 0 <= index < width,
+        matches!(object.bytes[offset + index], MemoryByteV37::PointerFragment { .. }),
+    ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian) == None,
+{}
+
+proof fn pointer_niche_incorrect_cell_width_or_endian_is_not_a_reference_v39(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool, index: int,
+)
+    requires byte_raw_tag_initialized_v39(object, offset, width),
+        object.relocations.contains_key(offset), 0 <= index < width,
+        matches!(object.bytes[offset + index], MemoryByteV37::PointerFragment { .. }),
+        object.relocations[offset].width != width
+            || object.relocations[offset].little_endian != little_endian,
+    ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian) == None,
+{}
+
+proof fn pointer_niche_mixed_write_fragments_cannot_reconstruct_a_reference_v39(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool,
+    fragment: int, mismatch: int,
+)
+    requires byte_raw_tag_initialized_v39(object, offset, width),
+        object.relocations.contains_key(offset), 0 <= fragment < width, 0 <= mismatch < width,
+        matches!(object.bytes[offset + fragment], MemoryByteV37::PointerFragment { .. }),
+        object.relocations[offset].width == width,
+        object.bytes[offset + mismatch]
+            != byte_relocation_fragment_v37(object.relocations[offset], mismatch),
+    ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian) == None,
+{}
+
+proof fn pointer_niche_uninitialized_byte_never_selects_null_or_reference_v39(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool, index: int,
+)
+    requires 0 <= index < width, 0 <= offset + index < object.initialized.len(),
+        !object.initialized[offset + index],
+    ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian) == None,
+{}
+
+proof fn pointer_niche_nonzero_octets_are_not_nominal_references_v39(
+    object: MemoryBytesV30, offset: int, width: int, little_endian: bool, index: int,
+)
+    requires byte_raw_tag_initialized_v39(object, offset, width),
+        byte_object_relocations_well_formed_v37(object), 0 <= index < width,
+        forall|i: int| 0 <= i < width ==> matches!(object.bytes[offset + i], MemoryByteV37::Octet(_)),
+        object.bytes[offset + index] != MemoryByteV37::Octet(0),
+    ensures byte_pointer_tag_observation_v39(object, offset, width, little_endian) == None,
+{
+    if object.relocations.contains_key(offset) {
+        assert(0 < object.relocations[offset].width);
+        assert(object.bytes[offset] == byte_relocation_fragment_v37(object.relocations[offset], 0));
+        assert(false);
+    }
+}
+
+proof fn pointer_niche_scalar_observations_cannot_select_either_variant_v39(
+    contract: MemoryTagContractV38, bits: int, variant: int,
+)
+    requires matches!(contract.encoding, MemoryTagEncodingV38::PointerNullNiche { .. }),
+    ensures !byte_tag_observation_selects_v39(contract, MemoryTagObservationV39::Scalar { bits }, variant),
+{}
+
+proof fn pointer_niche_uninhabited_variant_is_not_selected_v39(
+    contract: MemoryTagContractV38, observation: MemoryTagObservationV39, variant: int,
+)
+    requires 0 <= variant < contract.inhabited.len(), !contract.inhabited[variant],
+    ensures !byte_tag_observation_selects_v39(contract, observation, variant),
+{}
+
+proof fn pointer_niche_equal_pointer_overwrite_invalidates_the_old_guard_v39(
+    memory: ByteMemoryV30, guard: MemoryTagGuardV38, address: MemoryPointerV30,
+    width: int, pointer: MemoryPointerV30, little_endian: bool,
+)
+    requires byte_memory_well_formed_v30(memory), byte_tag_guard_current_v38(memory, guard),
+        ordinary_memory_width_v30(width), byte_range_live_v30(memory, address, width),
+        0 <= pointer.byte_offset, address.allocation == guard.allocation,
+        guard.object_start + memory.view_contracts.rows[guard.contract].tag_offset <= address.byte_offset
+            < guard.object_start + memory.view_contracts.rows[guard.contract].tag_offset
+                + memory.view_contracts.rows[guard.contract].tag_width,
+    ensures !byte_tag_guard_current_v38(
+        byte_pointer_store_v37(memory, address, width, pointer, little_endian), guard),
+{
+    let tag = guard.object_start + memory.view_contracts.rows[guard.contract].tag_offset;
+    let index = address.byte_offset - tag;
+    assert(guard.epochs[index] <= memory.live[guard.allocation].write_clock);
+    assert(byte_pointer_store_v37(memory, address, width, pointer, little_endian)
+        .live[guard.allocation].write_epochs[address.byte_offset]
+            == memory.live[guard.allocation].write_clock + 1);
+}
+
+proof fn pointer_niche_complete_copy_preserves_nominal_observation_including_overlap_v39(
+    memory: ByteMemoryV30, source: MemoryPointerV30, destination: MemoryPointerV30,
+    width: int, little_endian: bool, pointer: MemoryPointerV30,
+)
+    requires byte_memory_well_formed_v30(memory),
+        byte_range_live_v30(memory, source, width), byte_range_live_v30(memory, destination, width),
+        byte_pointer_tag_observation_v39(memory.live[source.allocation], source.byte_offset, width, little_endian)
+            == Some(MemoryTagObservationV39::Pointer { pointer }),
+    ensures byte_pointer_tag_observation_v39(
+        byte_copy_object_v37(memory, source, destination, width).live[destination.allocation],
+        destination.byte_offset, width, little_endian)
+            == Some(MemoryTagObservationV39::Pointer { pointer }),
+{}
+
+proof fn pointer_niche_partial_copy_preserves_fragments_but_not_a_reference_v39(
+    memory: ByteMemoryV30, source: MemoryPointerV30, destination: MemoryPointerV30,
+    width: int, copied: int, little_endian: bool, pointer: MemoryPointerV30,
+)
+    requires byte_memory_well_formed_v30(memory), 0 < copied < width,
+        byte_range_live_v30(memory, source, width), byte_range_live_v30(memory, destination, width),
+        byte_pointer_tag_observation_v39(memory.live[source.allocation], source.byte_offset, width, little_endian)
+            == Some(MemoryTagObservationV39::Pointer { pointer }),
+    ensures byte_pointer_tag_observation_v39(
+        byte_copy_object_v37(memory, source, destination, copied).live[destination.allocation],
+        destination.byte_offset, width, little_endian) == None,
+{}
+
+proof fn pointer_niche_copy_does_not_import_source_epochs_or_preserve_old_destination_guard_v39(
+    memory: ByteMemoryV30, source: MemoryPointerV30, destination: MemoryPointerV30,
+    width: int, guard: MemoryTagGuardV38,
+)
+    requires byte_memory_well_formed_v30(memory), byte_tag_guard_current_v38(memory, guard),
+        0 < width, byte_range_live_v30(memory, source, width), byte_range_live_v30(memory, destination, width),
+        destination.allocation == guard.allocation,
+        guard.object_start + memory.view_contracts.rows[guard.contract].tag_offset <= destination.byte_offset
+            < guard.object_start + memory.view_contracts.rows[guard.contract].tag_offset
+                + memory.view_contracts.rows[guard.contract].tag_width,
+    ensures !byte_tag_guard_current_v38(byte_copy_object_v37(memory, source, destination, width), guard),
+        byte_copy_object_v37(memory, source, destination, width).live[destination.allocation]
+            .write_epochs[destination.byte_offset] == memory.live[destination.allocation].write_clock + 1,
+{
+    let tag = guard.object_start + memory.view_contracts.rows[guard.contract].tag_offset;
+    assert(guard.epochs[destination.byte_offset - tag] <= memory.live[guard.allocation].write_clock);
+}
+
+proof fn pointer_niche_stale_guard_also_refuses_zero_sized_payload_v39(
+    memory: ByteMemoryV30, pointer: MemoryPointerV30, view: MemoryStorageViewV38, index: int,
+)
+    requires pointer.view == Some(view), 0 <= index < view.guards.len(),
+        !byte_tag_guard_current_v38(memory, view.guards[index]),
+    ensures !byte_range_live_v30(memory, pointer, 0),
+        byte_project_view_v38(memory, pointer, 0, 0) == None,
+{}

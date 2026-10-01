@@ -88,9 +88,9 @@ fn byte_view_guards_require_actual_tag_bytes_owner_and_captured_epochs() {
         "guard.owner == memory.view_contracts.owner",
         "memory.view_contracts.rows.contains_key(guard.contract)",
         "memory.live[guard.allocation].initialized[tag + i]",
-        "MemoryByteV37::Octet(_)",
         "memory.live[guard.allocation].write_epochs[tag + i] == guard.epochs[i]",
-        "byte_tag_selects_v38(contract, byte_tag_bits_v38(",
+        "byte_tag_observation_v39(memory.live[guard.allocation], tag, contract)",
+        "byte_tag_observation_selects_v39(contract, observation, guard.variant)",
     ] {
         assert!(guard.contains(required), "{required}");
     }
@@ -100,6 +100,62 @@ fn byte_view_guards_require_actual_tag_bytes_owner_and_captured_epochs() {
     assert!(selector.contains(
         "contract.untagged_valid_bits[i].0 <= bits <= contract.untagged_valid_bits[i].1"
     ));
+}
+
+#[test]
+fn byte_pointer_niche_observation_requires_initialized_null_or_complete_nominal_fragments() {
+    let raw = view_spec_body_v38("byte_pointer_tag_observation_v39");
+    for required in [
+        "!byte_raw_tag_initialized_v39(object, offset, width)",
+        "object.bytes[offset + i] == MemoryByteV37::Octet(0)",
+        "Some(MemoryTagObservationV39::Null)",
+        "!object.relocations.contains_key(offset)",
+        "relocation.width != width || relocation.little_endian != little_endian",
+        "!byte_pointer_view_shape_v38(relocation.pointer)",
+        "object.bytes[offset + i] == byte_relocation_fragment_v37(relocation, i)",
+        "Some(MemoryTagObservationV39::Pointer { pointer: relocation.pointer })",
+    ] {
+        assert!(raw.contains(required), "{required}");
+    }
+    for forbidden in ["byte_tag_bits", "byte_octet", "byte_range_live", "as int"] {
+        assert!(!raw.contains(forbidden), "{forbidden}");
+    }
+    let initialized = view_spec_body_v38("byte_raw_tag_initialized_v39");
+    for required in [
+        "ordinary_memory_width_v30(width)",
+        "0 <= offset && offset + width <= object.bytes.len()",
+        "object.initialized.len() == object.bytes.len()",
+        "0 <= i < width ==> object.initialized[offset + i]",
+    ] {
+        assert!(initialized.contains(required), "{required}");
+    }
+}
+
+#[test]
+fn byte_pointer_niche_selection_keeps_scalar_bits_and_reference_validity_separate() {
+    let reader = view_spec_body_v38("byte_tag_observation_v39");
+    assert!(reader.contains("MemoryTagEncodingV38::PointerNullNiche { .. } =>"));
+    assert!(reader.contains(
+        "byte_pointer_tag_observation_v39(object, offset, contract.tag_width, contract.little_endian)"
+    ));
+    assert!(reader.contains("byte_token_well_formed_v37(object.bytes[offset + i])"));
+    let selector = view_spec_body_v38("byte_tag_observation_selects_v39");
+    for required in [
+        "contract.inhabited[variant]",
+        "MemoryTagObservationV39::Pointer { pointer }",
+        "variant == nonnull",
+        "MemoryTagObservationV39::Null",
+        "variant == null",
+        "byte_tag_selects_v38(contract, bits, variant)",
+    ] {
+        assert!(selector.contains(required), "{required}");
+    }
+    assert!(
+        view_spec_body_v38("byte_tag_selects_v38")
+            .contains("MemoryTagEncodingV38::PointerNullNiche { .. } => false")
+    );
+    assert!(!selector.contains("memory.live"));
+    assert!(!selector.contains("byte_range_live"));
 }
 
 #[test]

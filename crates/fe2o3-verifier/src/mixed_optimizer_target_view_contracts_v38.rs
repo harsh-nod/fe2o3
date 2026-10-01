@@ -21,6 +21,8 @@ pub(super) enum TargetByteTagClassV38 {
     DirectScalar,
     /// Physical scalar decoding only; original source validity is still required.
     ScalarNiche,
+    /// Null octets versus a complete nominal pointer; not source reference validity.
+    PointerNullNiche,
     /// Nominal pointer tokens cannot be inspected as arbitrary numerical bytes.
     UnsupportedPointerNiche,
 }
@@ -73,8 +75,28 @@ fn classify(
         .get(encoding.tag().layout.0 as usize)
         .ok_or(Error::Statement("target tag layout owner"))?;
     match (&tag.kind, encoding) {
-        (Kind::Pointer(_), Encoding::Niche { .. }) => {
-            Ok(TargetByteTagClassV38::UnsupportedPointerNiche)
+        (
+            Kind::Pointer(pointer),
+            Encoding::Niche {
+                first_niche_variant,
+                last_niche_variant,
+                niche_start,
+                ..
+            },
+        ) => {
+            out.budget.charge_work(4)?;
+            if !matches!(pointer.stored_bits, 8 | 16 | 32 | 64 | 128)
+                || tag.size != u64::from(pointer.stored_bits / 8)
+            {
+                return Err(Error::Statement("target pointer tag width"));
+            }
+            Ok(
+                if *niche_start == 0 && first_niche_variant == last_niche_variant {
+                    TargetByteTagClassV38::PointerNullNiche
+                } else {
+                    TargetByteTagClassV38::UnsupportedPointerNiche
+                },
+            )
         }
         (Kind::Scalar(scalar), _) => {
             if tag.size != scalar_bytes(*scalar, width)? as u64
@@ -236,10 +258,17 @@ impl<'a, 'owner> TargetByteViewContractsV38<'a, 'owner> {
                     niche_start,
                     ..
                 } => {
-                    emit!(
-                        out,
-                        "MemoryTagEncodingV38::Niche {{ untagged: {untagged_variant}, first: {first_niche_variant}, last: {last_niche_variant}, start: {niche_start}int }}"
-                    );
+                    if class == TargetByteTagClassV38::PointerNullNiche {
+                        emit!(
+                            out,
+                            "MemoryTagEncodingV38::PointerNullNiche {{ nonnull: {untagged_variant}, null: {first_niche_variant} }}"
+                        );
+                    } else {
+                        emit!(
+                            out,
+                            "MemoryTagEncodingV38::Niche {{ untagged: {untagged_variant}, first: {first_niche_variant}, last: {last_niche_variant}, start: {niche_start}int }}"
+                        );
+                    }
                 }
             }
             emit!(out, " }})");

@@ -171,7 +171,18 @@ fn byte_target_scalar_niches_are_physical_only_and_pointer_niches_are_explicitly
         Some(ScalarType::U128),
         None,
     ] {
-        with_inventory(&tag_module_v38(1, scalar, true), |inventory, _, floor| {
+        let mut module = tag_module_v38(1, scalar, true);
+        if scalar.is_none() {
+            let TagKind::Variants {
+                encoding: TagEncoding::Niche { niche_start, .. },
+                ..
+            } = &mut module.storage_layouts[2].kind
+            else {
+                unreachable!()
+            };
+            *niche_start = 1;
+        }
+        with_inventory(&module, |inventory, _, floor| {
             let text = run(floor, LIMIT, LIMIT, |out| {
                 let contracts = Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
                 assert_eq!(
@@ -202,6 +213,120 @@ fn byte_target_scalar_niches_are_physical_only_and_pointer_niches_are_explicitly
                 assert!(!text.contains("MemoryTagEncodingV38::Niche"));
             }
         });
+    }
+}
+
+#[test]
+fn byte_target_null_pointer_niches_use_stored_width_and_no_integer_validity_range() {
+    for bits in [8u16, 16, 32, 64, 128] {
+        for index in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
+            let mut module = tag_module_v38(1, None, true);
+            let TagKind::Pointer(pointer) = &mut module.storage_layouts[0].kind else {
+                unreachable!()
+            };
+            pointer.stored_bits = bits;
+            module.storage_layouts[0].size = u64::from(bits / 8);
+            module.storage_layouts[2].size = u64::from(bits / 8) + 3;
+            let TagKind::Variants { variants, .. } = &mut module.storage_layouts[2].kind else {
+                unreachable!()
+            };
+            variants[1].uninhabited = false;
+            with_inventory(&module, |inventory, _, floor| {
+                let text = run(floor, LIMIT, LIMIT, |out| {
+                    let contracts = Contracts::derive(inventory, index, out)?;
+                    assert_eq!(
+                        contracts.row_class(TagId(2), out)?,
+                        TagClass::PointerNullNiche
+                    );
+                    contracts.emit(82, out)
+                })
+                .0
+                .unwrap();
+                assert_eq!(text.matches(".insert(").count(), 1);
+                assert!(text.contains(&format!(
+                    "tag_offset: 3, tag_width: {}, little_endian",
+                    bits / 8
+                )));
+                assert!(text.contains("inhabited: seq![true,true,]"));
+                assert!(text.contains("untagged_valid_bits: seq![]"));
+                assert!(
+                    text.contains("MemoryTagEncodingV38::PointerNullNiche { nonnull: 0, null: 1 }")
+                );
+                assert!(!text.contains("MemoryTagEncodingV38::Niche {"));
+                assert!(!text.contains("memory_value_modulus"));
+            });
+        }
+    }
+}
+
+#[test]
+fn byte_target_pointer_niche_rejects_multi_value_niches_without_approximating_null() {
+    let mut module = tag_module_v38(1, None, true);
+    let TagKind::Variants { encoding, variants } = &mut module.storage_layouts[2].kind else {
+        unreachable!()
+    };
+    let TagEncoding::Niche {
+        last_niche_variant, ..
+    } = encoding
+    else {
+        unreachable!()
+    };
+    *last_niche_variant = 2;
+    let mut entries = variants.to_vec();
+    entries.push(TagVariant {
+        discriminant: 2,
+        direct_tag_bits: None,
+        uninhabited: false,
+        layout: TagId(1),
+    });
+    *variants = entries.into_boxed_slice();
+    with_inventory(&module, |inventory, _, floor| {
+        let text = run(floor, LIMIT, LIMIT, |out| {
+            let contracts = Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+            assert_eq!(
+                contracts.row_class(TagId(2), out)?,
+                TagClass::UnsupportedPointerNiche
+            );
+            contracts.emit(84, out)
+        })
+        .0
+        .unwrap();
+        assert!(!text.contains(".insert("));
+        assert!(!text.contains("PointerNullNiche"));
+    });
+}
+
+#[test]
+fn byte_target_pointer_niche_resources_have_independent_width_and_linear_row_oracles() {
+    for copies in [1, 4, 16] {
+        with_inventory(
+            &tag_module_v38(copies, None, true),
+            |inventory, _, floor| {
+                let storage = floor + super::super::super::SOURCE_LIMIT + tag_header_oracle_v38();
+                let work = 3 + 6 * (3 * copies) + 2 * (2 * copies) + 4 * copies;
+                let derive = |out: &mut Writer<'_, '_>| {
+                    Contracts::derive(inventory, FormalIndexWidth::Bits64, out).map(|_| ())
+                };
+                let exact = run(floor, work, storage, derive);
+                assert!(exact.0.unwrap().is_empty());
+                assert_eq!((exact.1, exact.2), (work, storage));
+                assert!(matches!(run(floor, work - 1, storage, derive).0,
+                Err(Error::Resource(Resource::Work(error))) if error.limit() == work - 1 && error.actual() == work));
+                assert!(matches!(run(floor, work, storage - 1, derive).0,
+                Err(Error::Resource(Resource::Storage(error))) if error.limit() == storage - 1 && error.actual() == storage));
+                let emit = |out: &mut Writer<'_, '_>| {
+                    Contracts::derive(inventory, FormalIndexWidth::Bits64, out)?.emit(86, out)
+                };
+                let measured = run(floor, LIMIT, storage, emit);
+                let text = measured.0.unwrap();
+                let emitted =
+                    work + 1 + 6 * (3 * copies) + 4 * copies + 2 * (2 * copies) + text.len();
+                assert_eq!((measured.1, measured.2), (emitted, storage));
+                assert_eq!(run(floor, emitted, storage, emit).0.unwrap(), text);
+                assert!(matches!(run(floor, emitted - 1, storage, emit).0,
+                Err(Error::Resource(Resource::Work(error))) if error.limit() == emitted - 1 && error.actual() == emitted));
+            },
+        );
     }
 }
 
