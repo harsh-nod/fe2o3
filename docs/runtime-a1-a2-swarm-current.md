@@ -6,8 +6,7 @@ Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
 refreshed on 2026-10-01: the issue remained Open, with 33 comments and its latest
 update at 2026-10-01 02:01:40 UTC. Both runtime branch refs were confirmed through
-signed commit `1110974e4`, including the composition evidence publication and
-the subsequent draft-status checkpoint.
+signed commit `987c3e8a9`, including the qualified field-codec integration.
 The [published checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5923229932)
 records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
@@ -52,22 +51,23 @@ The separate wait-cadence draft retains ordinary 1 ms behavior and adds an
 explicit 25 microsecond sleep-ceiling experiment, preserving the existing
 64-spin/16-yield prefix, deadline and custody checks. Its full three-input
 selector proof measures 2/0, including a derived Clone obligation; this does not
-prove cursor construction or scheduling. The first CPU attempt stopped before
-compilation because sparse workspace example manifests were missing. Exactly
+prove cursor construction or scheduling. Earlier CPU preparations failed for
+a missing temporary directory and sparse workspace example manifests. Exactly
 119 signed files in 26 example directories were restored, with all preexisting
 files unchanged. Both new locked/offline workspace metadata checks and the
 no-default non-test library check pass. The fresh full no-default suite passes
 all 1,831 tests with no failures, ignores or filtering; the fresh all-feature
 suite also passes all 1,837 tests. All nineteen CPU stages and owned groups now
 close, including both strict Clippy modes, source controls and the example
-build. A six-stage raw
-selector capture now completes all three mutations and process closures. All
-three report full 1/1 summaries; the short-ceiling mutations each produce two
-postcondition diagnostics. Exact per-case diagnostic calibration remains
-pending qualification; macro anchors establish source association, not branch
-execution. Earlier rejected captures remain preserved.
-No signed selector qualification, cadence GPU measurement or performance gain
-is accepted. Original preparation and CPU failures remain retained.
+build. Signed candidate `3527956b6` has seventeen changed paths and binds all
+6,088 CPU source inputs to its signed tree. Its fresh six-stage selector qualification now passes:
+the relocated full 2/0 positive, all three full 1/1 actual-body negatives with
+the exact one/two/two diagnostic calibration, both tool-release checks and all
+six owned group closures. Macro anchors establish source association, not branch
+execution. Earlier rejected captures remain preserved. This candidate is not
+yet integrated; no cursor-construction proof, scheduler proof, cadence GPU
+measurement or performance gain is accepted. Original preparation and CPU
+failures remain retained.
 
 The [distributed codec primitives](evidence/dev-distributed-codec-primitives-2026-10-01/README.md)
 are integrated at `a8a908878` and `8fd3b7ddb`. Signed candidate `e02b7229a`
@@ -111,7 +111,11 @@ remain zero; the signed fresh campaign supplies the qualification. Integration
 preserves the nine field proof inputs, seven primitive proof inputs and 36
 queued-query inputs. Four whole-model guards and two helper pins are rebound;
 the primitive guard also checks the new field forwarding chain with eighteen
-broken-edge controls. Public raw-archive packaging is pending. Whole-wire,
+broken-edge controls. All 22 source-workflow commands pass on signed integration
+`987c3e8a9`. The public packet now includes the complete 2,168-file campaign,
+support and integration records, per-member hashes and the signed source bundle;
+every archived original was rechecked. External CPU/tool/history prerequisites
+and three retained packaging rejections are disclosed. Whole-wire,
 native GPU, distributed authority and performance equivalence remain open.
 
 The [A2 producer-input composition](runtime-producer-input-composition.md)

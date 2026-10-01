@@ -19,8 +19,23 @@ compiler inputs and twelve retained original/prior executables. The complete
 local campaign packet is 139,677,896 bytes. Its original owner, preparation,
 raw streams, input projections and process records are retained at
 `/home/harsh/.codex-tmp/fe2o3-distributed-codec-fields-records-20260930-qualified/`.
-Public raw-archive packaging remains pending; this document is not a portable
-or self-contained rerunner, and some CPU/tool/history prerequisites are local.
+The [public archive](campaign-records.tar.gz) contains all 2,168 campaign files,
+the reviewed support files and the rejected/worktree/signed integration records.
+Every archive member was reread and compared with its retained original.
+The [manifest](manifest.json) records each member's original path, size and
+SHA-256. The archive contains 145,621,142 uncompressed bytes and is 36,566,056
+bytes compressed (SHA-256 `e391dcd01e1746715aad8137dfca3bb41a436cf3f2ca695878d60219785ab2b8`).
+
+The [signed source bundle](signed-source.bundle) contains the candidate over
+public prerequisite `0c38a20c65452ee34cd97f2015b1f70da8211b18`; its SHA-256 is
+`14f778d8b1e4cfcd5ab63675557e4b6ab524a1efd64bf1ce87b46da5361c465a`.
+The bundle and candidate signature were verified. This is not a self-contained
+rerunner: original/prior CPU executables, toolchain files and some historical
+helper/capture prerequisites remain local. Packaging ran no compiler, solver
+or GPU command. Three rejected packaging attempts remain retained and disclosed
+in the manifest: USTAR path limits, a literal-header scanner false positive,
+and Git's requirement for a named bundle revision. They do not change campaign
+qualification.
 
 | Record | SHA-256 |
 | --- | --- |
@@ -34,6 +49,7 @@ guards and two helper hashes are rebound. The primitive guard follows the
 actual new field forwarding chain, with eighteen broken-edge controls; this
 is a structural change, not merely a hash refresh. The field source controls
 are added to the runtime component CI workflow.
+All 22 source-workflow commands passed on signed integration `987c3e8a9`.
 
 This is not complete wire-codec verification, distributed authority, native GPU
 qualification, HIP/HSA parity, performance equivalence or a milestone exit.
