@@ -3177,6 +3177,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                     continue;
                 }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_branch_hint_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_checked_add_helper_v1(
                         self.tcx,
                         function.instance,
