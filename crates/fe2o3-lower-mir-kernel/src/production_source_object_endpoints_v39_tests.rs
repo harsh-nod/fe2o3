@@ -1,3 +1,5 @@
+include!("production_source_object_lifetimes_v40_tests.rs");
+
 fn source_object_endpoints_run_v39(
     work: usize,
     storage: usize,

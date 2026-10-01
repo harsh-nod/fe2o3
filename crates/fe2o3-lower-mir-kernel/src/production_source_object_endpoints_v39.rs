@@ -1,3 +1,5 @@
+include!("production_source_object_lifetimes_v40.rs");
+
 /// Original object category. A category is not allocation or lifetime authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionSourceObjectClassV39 {

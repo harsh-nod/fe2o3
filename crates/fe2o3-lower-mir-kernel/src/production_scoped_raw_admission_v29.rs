@@ -241,6 +241,9 @@ pub(super) struct PendingSourceMemoryV29 {
     accesses: Vec<PendingSourceMemoryAccessV29>,
     projects: Vec<PendingSourceObjectProjectV29>,
     alternatives: Vec<PendingSourceMemoryAlternativeV29>,
+    object_lifetimes: Vec<PendingSourceObjectLifetimeV40>,
+    object_activation_members: Vec<usize>,
+    object_activations: Vec<SourceReferenceStorageActivationV29>,
     effects: Vec<PendingSourceMemoryEffectV29>,
     initial: Vec<bool>,
     lifetimes: Vec<SourceAddressLifetimeV29>,
@@ -251,6 +254,8 @@ pub(super) struct PendingSourceMemoryV29 {
     index_guards: Vec<PendingSourceIndexGuardV29>,
     retained_storage: usize,
 }
+
+include!("production_source_object_activation_roster_v40.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceMemoryActivationV29 {
@@ -311,11 +316,14 @@ pub(super) fn pending_memory_matches_v29(
         (Some(left), Some(right)) => (left, right),
         _ => return Ok(false),
     };
-    budget.charge_work(12)?;
+    budget.charge_work(15)?;
     if left.source != right.source
         || left.accesses.len() != right.accesses.len()
         || left.projects.len() != right.projects.len()
         || left.alternatives.len() != right.alternatives.len()
+        || left.object_lifetimes.len() != right.object_lifetimes.len()
+        || left.object_activation_members.len() != right.object_activation_members.len()
+        || left.object_activations.len() != right.object_activations.len()
         || left.effects.len() != right.effects.len()
         || left.initial.len() != right.initial.len()
         || left.lifetimes.len() != right.lifetimes.len()
@@ -334,6 +342,18 @@ pub(super) fn pending_memory_matches_v29(
     // reconstruction compares these, but final physical checks still run on
     // the immutable canonical function. This is not another executable graph.
     budget.charge_work(argument_sum_v1(&[
+        argument_product_v1(
+            left.object_lifetimes.len(),
+            std::mem::size_of::<PendingSourceObjectLifetimeV40>(),
+        )?,
+        argument_product_v1(
+            left.object_activation_members.len(),
+            std::mem::size_of::<usize>(),
+        )?,
+        argument_product_v1(
+            left.object_activations.len(),
+            std::mem::size_of::<SourceReferenceStorageActivationV29>(),
+        )?,
         argument_product_v1(
             left.projects.len(),
             std::mem::size_of::<PendingSourceObjectProjectV29>(),
@@ -377,6 +397,9 @@ pub(super) fn pending_memory_matches_v29(
         )?,
     ])?)?;
     Ok(left.accesses == right.accesses
+        && left.object_lifetimes == right.object_lifetimes
+        && left.object_activation_members == right.object_activation_members
+        && left.object_activations == right.object_activations
         && left.projects == right.projects
         && left.alternatives == right.alternatives
         && left.effects == right.effects
@@ -2451,12 +2474,17 @@ fn retain_pending_memory_v29(
         ordinary_indices,
         budget,
     )?;
+    let object_activations =
+        capture_object_activations_v40(instances, plan, slots, &limits, budget)?;
     let mut output = PendingSourceMemoryV29 {
         source: ExecutionCallSourceV29::from_instances(instances, budget)?,
         issued,
         accesses: emission_vec_v1(sources.len(), budget)?,
         projects,
         alternatives: emission_vec_v1(alternative_capacity, budget)?,
+        object_lifetimes: object_activations.lifetimes,
+        object_activation_members: object_activations.members,
+        object_activations: object_activations.activations,
         effects: Vec::new(),
         initial: lifetimes.initial,
         lifetimes: lifetimes.lifetimes,
@@ -2748,6 +2776,18 @@ fn retain_pending_memory_v29(
         output.alternatives.len(),
     ));
     output.retained_storage = argument_sum_v1(&[
+        argument_product_v1(
+            output.object_lifetimes.capacity(),
+            std::mem::size_of::<PendingSourceObjectLifetimeV40>(),
+        )?,
+        argument_product_v1(
+            output.object_activation_members.capacity(),
+            std::mem::size_of::<usize>(),
+        )?,
+        argument_product_v1(
+            output.object_activations.capacity(),
+            std::mem::size_of::<SourceReferenceStorageActivationV29>(),
+        )?,
         output.issued.retained_storage(budget)?,
         argument_product_v1(
             output.projects.capacity(),
