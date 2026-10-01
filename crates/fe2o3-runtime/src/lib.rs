@@ -5,6 +5,7 @@ mod async_engine;
 #[allow(unsafe_code)]
 mod authorized_execution;
 mod context;
+mod distributed_receipt_ingress;
 mod generated_source;
 #[allow(unsafe_code)]
 mod kfd_backend;
@@ -38,6 +39,11 @@ pub use authorized_execution::{
     execute_authorized_gfx942_runtime_dispatch_v1,
 };
 pub use context::*;
+pub use distributed_receipt_ingress::{
+    DISTRIBUTED_RECEIPT_ORIGIN_MESSAGE_BYTES_V1, DISTRIBUTED_RECEIPT_ORIGIN_SIGNING_DOMAIN_V1,
+    DistributedReceiptChallengeV1, DistributedReceiptIngressErrorV1, DistributedReceiptIngressV1,
+    DistributedReceiptPeerKeyV1, OriginAuthenticatedDistributedReceiptV1,
+};
 pub use fe2o3_completion as completion;
 pub use fe2o3_host_api as contract;
 pub use fe2o3_profiler_protocol as profiler;

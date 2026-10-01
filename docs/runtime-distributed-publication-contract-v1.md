@@ -1,8 +1,10 @@
 # Distributed Publication Description Contract V1
 
 This is a qualified, production-neutral A0 component for issue #182. It is not an A4 session,
-transport, receipt authentication or distributed execution implementation. No
-runtime, Worker, Context or KFD path consumes these model values. The shared
+transport, receipt authentication or distributed execution implementation. The
+[runtime origin ingress](runtime-distributed-receipt-origin-ingress-v1.md) now
+consumes these values as descriptive peer claims; no Worker, Context or KFD
+execution-authority path is established by that ingress. The shared
 declaration implementation passed nine focused CPU tests on a fresh 1,123-test
 model executable, with no warnings. Signed candidate `b6b9fed3a` subsequently
 passed the full retained executable: 1,104 passed, 19 existing manual benchmarks
