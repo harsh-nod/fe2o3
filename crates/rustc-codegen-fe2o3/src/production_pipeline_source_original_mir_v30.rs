@@ -87,7 +87,7 @@ fn target_byte_order(
     }
     let payload = bytes.checked_mul(2).ok_or(Resource::Arithmetic)?;
     budget.reserve_storage(payload)?;
-    let observed = crate::rustc_semantic_adapter_v1::canonical_target_layout_v1(target).identity;
+    let observed = crate::rustc_semantic_adapter_v1::canonical_target_layout_v1(target).identity();
     budget.release_storage(payload)?;
     if observed != source {
         return Err(runtime_mismatch());
@@ -343,7 +343,7 @@ mod runtime_tests {
         let layout = crate::production_target_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1;
         let exact = target(Profile::Gfx942, layout);
         let identity =
-            crate::rustc_semantic_adapter_v1::canonical_target_layout_v1(&exact).identity;
+            crate::rustc_semantic_adapter_v1::canonical_target_layout_v1(&exact).identity();
         let run = |candidate: &SemanticLayoutTargetV1| {
             let mut work = Work::new(1_000_000);
             let mut budget = Budget::new(&mut work, 1_000_000);
