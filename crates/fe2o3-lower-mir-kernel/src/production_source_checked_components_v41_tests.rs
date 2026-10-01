@@ -385,7 +385,7 @@ fn promoted_failure_components_do_not_bypass_real_retained_aggregate_history() {
                 .unwrap();
             let consumed = std::cell::Cell::new(false);
             let error = prepared
-                .with_source_consumer_v18(budget, |_, _| {
+                .with_source_consumer_v18(budget, |_, _| -> SourceOwnedResultV18<()> {
                     consumed.set(true);
                     Ok(())
                 })

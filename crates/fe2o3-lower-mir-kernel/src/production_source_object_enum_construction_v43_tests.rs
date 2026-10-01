@@ -297,7 +297,7 @@ fn original_retained_enum_construction_commits_scalar_payloads_before_the_tag() 
     for fields in [0, 1, 3] {
         ENUM_CONSTRUCTION_FIELDS_V43.set(fields);
         ENUM_CONSTRUCTION_OBSERVED_V43.set(0);
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(COMPLETE_OBJECT_SOURCE_WORK_LIMIT_V43);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let prepared =

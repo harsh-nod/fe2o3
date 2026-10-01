@@ -1,5 +1,7 @@
 use fe2o3_mir_model::semantic_mir_v1::*;
 
+const COMPLETE_OBJECT_SOURCE_WORK_LIMIT_V43: usize = 500_000_000;
+
 #[test]
 fn object_operand_locator_keeps_exact_copy_move_store_roles_and_original_place_identity() {
     let owners = [
@@ -2489,7 +2491,7 @@ fn observed_tag_only_object_emission_requires_and_completes_actual_currentness()
         TAG_EMISSION_CONTINUE.replace(true),
     );
     TAG_EMISSION_OBSERVED.set(0);
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(COMPLETE_OBJECT_SOURCE_WORK_LIMIT_V43);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
     let prepared = scalar_payload_prepared_from_v18(original_tag_emission_owner, &mut budget);

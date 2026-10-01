@@ -79,7 +79,7 @@ fn run_tag_census_case_v43(factory: fn() -> ProductionSemanticSsaOwnerV1, fault:
         TAG_CENSUS_FAULT_V43.replace(fault),
     );
     TAG_CENSUS_VISITS_V43.set(0);
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(COMPLETE_OBJECT_SOURCE_WORK_LIMIT_V43);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     budget.reserve_storage(MODULE_FLOOR).unwrap();
     let prepared = scalar_payload_prepared_from_v18(factory, &mut budget);

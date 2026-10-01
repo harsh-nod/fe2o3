@@ -305,7 +305,9 @@ fn original_static_raw_holders_refuse_cloned_changed_sites_and_wrong_crossings_s
                 original.projections().len() - if fault == 3 { 2 } else { 1 },
                 budget,
             );
-            let first = queried.unwrap_err();
+            let first = queried
+                .err()
+                .expect("foreign source holder must be refused");
             assert!(matches!(
                 first,
                 ProductionSemanticKirErrorV1::Unsupported { .. }
@@ -319,7 +321,8 @@ fn original_static_raw_holders_refuse_cloned_changed_sites_and_wrong_crossings_s
                 original.projections().len() - 1,
                 budget,
             )
-            .unwrap_err();
+            .err()
+            .expect("the first source holder refusal must remain sticky");
             assert_eq!(format!("{repeated:?}"), format!("{first:?}"));
             assert_eq!((budget.work(), budget.storage()), after_failure);
             assert_eq!(
@@ -436,7 +439,8 @@ fn original_static_raw_holders_refuse_changed_static_types_bounds_and_pointer_cr
                 2,
                 budget,
             )
-            .unwrap_err();
+            .err()
+            .expect("changed source holder shape must be refused");
             assert!(
                 matches!(first, ProductionSemanticKirErrorV1::Unsupported { detail, .. } if detail == expected)
             );
@@ -450,7 +454,8 @@ fn original_static_raw_holders_refuse_changed_static_types_bounds_and_pointer_cr
                 2,
                 budget,
             )
-            .unwrap_err();
+            .err()
+            .expect("the first source holder shape refusal must remain sticky");
             assert_eq!(format!("{repeated:?}"), format!("{first:?}"));
             assert_eq!(budget.work(), after_failure);
             assert_eq!(budget.storage(), floor);
