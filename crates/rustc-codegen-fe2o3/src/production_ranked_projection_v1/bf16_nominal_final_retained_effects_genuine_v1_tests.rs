@@ -129,6 +129,7 @@ pub(in crate::production_ranked_projection_v1) fn observe(
         counts[2],
         counts[3],
     );
+    prepared_control_flow::observe(owner, source, inventory, budget)?;
     Ok(())
 }
 fn with_headers<'w>(
@@ -269,7 +270,8 @@ pub(in crate::production_ranked_projection_v1) fn controls(
             }
             Ok(())
         })
-    })
+    })?;
+    prepared_control_flow::controls(owner, source, inventory, inventory_storage, original)
 }
 #[test]
 fn retained_genuine_control_frames_fit_the_prepaid_header() {
@@ -341,3 +343,6 @@ fn observe_prepared_tensor_effects(
     );
     Ok(())
 }
+
+#[path = "bf16_nominal_prepared_control_flow_genuine_v1_tests.rs"]
+mod prepared_control_flow;
