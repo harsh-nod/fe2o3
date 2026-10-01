@@ -164,6 +164,7 @@ fn source_stable_referent_endpoint_replay_rejects_class_function_type_and_genera
                 rows: original.rows.clone(),
                 values: original.values.clone(),
                 index_readers: original.index_readers.clone(),
+                enum_spills: original.enum_spills.clone(),
                 carriers: original.carriers.clone(),
             };
             let loan = changed

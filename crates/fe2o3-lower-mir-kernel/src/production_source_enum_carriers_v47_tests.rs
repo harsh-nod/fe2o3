@@ -410,6 +410,7 @@ fn original_promoted_enum_replay_rejects_same_type_tag_and_payload_substitutions
                     rows: original.rows.clone(),
                     values: original.values.clone(),
                     index_readers: original.index_readers.clone(),
+                    enum_spills: original.enum_spills.clone(),
                     carriers: original.carriers.clone(),
                 };
                 match fault {

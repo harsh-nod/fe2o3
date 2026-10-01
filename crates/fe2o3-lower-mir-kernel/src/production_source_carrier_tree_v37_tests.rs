@@ -3,6 +3,10 @@ use super::*;
 mod enum_carriers_v47_tests {
     use super::*;
     include!("production_source_enum_carriers_v47_tests.rs");
+    mod spill_origins_v48_tests {
+        use super::*;
+        include!("production_source_enum_spills_v48_tests.rs");
+    }
 }
 
 fn nested_owner() -> ProductionSemanticSsaOwnerV1 {
@@ -193,6 +197,7 @@ fn source_typed_carrier_tree_replay_rejects_field_order_type_and_child_range_cha
                     rows: original.rows.clone(),
                     values: original.values.clone(),
                     index_readers: original.index_readers.clone(),
+                    enum_spills: original.enum_spills.clone(),
                     carriers: original.carriers.clone(),
                 };
                 match fault {

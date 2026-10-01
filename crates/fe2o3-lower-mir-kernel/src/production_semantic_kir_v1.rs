@@ -11829,8 +11829,9 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
     }
     let direct_call_inputs = lowering
         .with_emission_budget_v1(|this, budget| this.take_direct_call_inputs_v26(budget))?;
-    let execution_observation =
-        lowering.with_emission_budget_v1(|this, budget| this.take_execution_archive_v29(budget))?;
+    let execution_observation = lowering.with_emission_budget_v1(|this, budget| {
+        this.take_execution_archive_v29(&target_blocks, &synthetic_operation_spans, budget)
+    })?;
     drop(lowering.emission_work.take());
     let retained_local_slots = lowering.retained_local_slots;
     let initialized_at_entry = lowering.control_flow_ssa.retained_initialized_at_entry;

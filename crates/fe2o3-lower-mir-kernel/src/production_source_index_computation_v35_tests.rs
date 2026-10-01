@@ -431,6 +431,7 @@ fn source_index_computation_replay_rejects_callee_loan_origin_and_index_substitu
                 rows: original.rows.clone(),
                 values: original.values.clone(),
                 index_readers: original.index_readers.clone(),
+                enum_spills: original.enum_spills.clone(),
                 carriers: original.carriers.clone(),
                 storage: original.storage,
             };

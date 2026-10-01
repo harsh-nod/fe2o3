@@ -251,6 +251,7 @@ fn source_typed_endpoint_replay_detects_local_type_carrier_loan_and_instance_mut
                     values: original.values.clone(),
                     carriers: original.carriers.clone(),
                     index_readers: original.index_readers.clone(),
+                    enum_spills: original.enum_spills.clone(),
                 };
                 let row = &mut altered.values[at];
                 match fault {

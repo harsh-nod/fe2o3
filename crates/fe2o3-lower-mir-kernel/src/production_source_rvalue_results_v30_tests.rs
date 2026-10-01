@@ -106,6 +106,7 @@ fn retained_source_rvalue_replay_detects_type_endpoint_omission_and_source_chang
                     values: original.values.clone(),
                     carriers: original.carriers.clone(),
                     index_readers: original.index_readers.clone(),
+                    enum_spills: original.enum_spills.clone(),
                     storage: original.storage,
                 };
                 match fault {
@@ -218,10 +219,31 @@ fn retained_rvalue_header_oracle_covers_capture_and_query_envelopes() {
         + descriptor_operand_header_oracle_v30()
         + index_reader_header_oracle_v35()
         + typed_endpoint_header_oracle_v36()
+        + enum_spill_header_oracle_v48()
         + h::<std::slice::Iter<'_, SourceRvalueRowV30>>()
         + 8 * h::<usize>()
         + h::<()>();
     assert_eq!(source_rvalue_headers_v30().unwrap(), expected);
+}
+
+fn enum_spill_header_oracle_v48() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    h::<Vec<SourceEnumSpillRowV48>>()
+        + h::<SourceEnumSpillRowV48>()
+        + h::<ExecutionEnumSpillV48>()
+        + h::<ProductionSourceEnumSpillOriginV48>()
+        + h::<ProductionSourceEnumSpillV48<'_, '_>>()
+        + h::<&[SourceEnumSpillRowV48]>()
+        + h::<std::slice::Iter<'_, SourceEnumSpillRowV48>>()
+        + h::<(&ExecutionEnumSpillV48, &ExecutionEnumSpillV48)>()
+        + h::<(&Type, &Type)>()
+        + h::<&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>>()
+        + h::<&fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1<'_>>()
+        + h::<[usize; 6]>()
 }
 
 fn typed_endpoint_header_oracle_v36() -> usize {

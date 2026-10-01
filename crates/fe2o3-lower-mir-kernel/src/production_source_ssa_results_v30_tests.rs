@@ -136,6 +136,7 @@ fn retained_source_ssa_replay_rejects_omission_value_instance_and_endpoint_chang
                         values: original.values.clone(),
                         carriers: original.carriers.clone(),
                         index_readers: original.index_readers.clone(),
+                        enum_spills: original.enum_spills.clone(),
                         storage: original.storage,
                     };
                     match fault {

@@ -4,6 +4,7 @@ include!("production_source_descriptor_operand_v30.rs");
 include!("production_source_index_computation_v35.rs");
 include!("production_source_typed_endpoints_v36.rs");
 include!("production_source_checked_results_v44.rs");
+include!("production_source_enum_spills_v48.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceRvalueEndpointV30 {
@@ -38,6 +39,7 @@ struct OwnedSourceRvaluesV30 {
     values: Vec<SourceSsaRowV30>,
     carriers: Vec<SourceSsaComponentV37>,
     index_readers: Vec<SourceIndexReaderRowV35>,
+    enum_spills: Vec<SourceEnumSpillRowV48>,
     storage: usize,
 }
 
@@ -101,6 +103,7 @@ fn source_rvalue_headers_v30() -> Result<usize, ArgumentResourceV1> {
         source_descriptor_operand_headers_v30()?,
         source_index_reader_headers_v35()?,
         source_typed_endpoint_headers_v36()?,
+        source_enum_spill_headers_v48()?,
         h::<std::slice::Iter<'_, SourceRvalueRowV30>>()?,
         argument_product_v1(8, h::<usize>()?)?,
         h::<()>()?,
@@ -123,6 +126,7 @@ fn retain_source_rvalues_v30(
     let source = ExecutionCallSourceV29::from_instances(instances, budget)?;
     let mut count = 0;
     let mut value_count = 0;
+    let mut spill_count = 0;
     for selected in &pending.active_instances.rows {
         budget.charge_work(1)?;
         let Some(selected) = *selected else { continue };
@@ -134,10 +138,12 @@ fn retain_source_rvalues_v30(
             .ok_or_else(execution_archive_error_v29)?;
         count = argument_sum_v1(&[count, archive.rvalues.len()])?;
         value_count = argument_sum_v1(&[value_count, archive.bindings.len()])?;
+        spill_count = argument_sum_v1(&[spill_count, archive.enum_spills.len()])?;
     }
     let mut rows = emission_vec_v1(count, budget)?;
     let mut values = emission_vec_v1(value_count, budget)?;
     let mut carriers = emission_vec_v1(0, budget)?;
+    let mut enum_spills = emission_vec_v1(spill_count, budget)?;
     for (ordinal, selected) in pending.active_instances.rows.iter().enumerate() {
         budget.charge_work(1)?;
         let Some(selected) = *selected else { continue };
@@ -158,6 +164,9 @@ fn retain_source_rvalues_v30(
         // definition-site checks. Preserve its exact sorted SSA identities
         // before the temporary owning bindings are destroyed.
         archive.check_original_v29(instances, instance, budget)?;
+        for spill in &archive.enum_spills {
+            retain_source_enum_spill_v48(ordinal, spill, &mut enum_spills, budget)?;
+        }
         let definitions = source_ssa_definition_locals_v36(instances, instance, budget)?;
         for (original, binding) in &archive.bindings.owned {
             budget.charge_work(3)?;
@@ -235,7 +244,7 @@ fn retain_source_rvalues_v30(
             return Err(execution_archive_error_v29());
         }
     }
-    if rows.len() != count || values.len() != value_count {
+    if rows.len() != count || values.len() != value_count || enum_spills.len() != spill_count {
         return Err(execution_archive_error_v29());
     }
     let index_readers = retain_source_index_readers_v35(pending, instances, references, budget)?;
@@ -251,6 +260,7 @@ fn retain_source_rvalues_v30(
         values,
         carriers,
         index_readers,
+        enum_spills,
         storage,
     });
     pending.additional_storage_bytes = total;
@@ -287,7 +297,10 @@ impl OwnedSourceRvaluesV30 {
             )?,
             4,
         ])?)?;
-        Ok(self.source == other.source
+        let spills_match =
+            source_enum_spills_equal_v48(&self.enum_spills, &other.enum_spills, budget)?;
+        Ok(spills_match
+            && self.source == other.source
             && self.ledger == other.ledger
             && self.rows == other.rows
             && self.values == other.values

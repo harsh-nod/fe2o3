@@ -79,6 +79,7 @@ impl std::ops::Index<&SsaValueV1> for SemanticSsaBindingsV1 {
 // This owns emitted locators, not source-value or pointer-provenance proofs.
 // The original map moves once from the emitter through expanded-root checking.
 include!("production_execution_rvalue_archive_v30.rs");
+include!("production_execution_enum_spills_v48.rs");
 
 struct ExecutionArchiveV29 {
     subject: ScopedInitializationSubjectV29,
@@ -86,6 +87,7 @@ struct ExecutionArchiveV29 {
     credit: ExecutionArchiveCreditV29,
     bindings: SemanticSsaBindingsV1,
     rvalues: ExecutionRvalueBindingsV30,
+    enum_spills: Vec<ExecutionEnumSpillV48>,
     #[cfg(test)]
     locals: Vec<Option<SemanticValueBindingV1>>,
     #[cfg(test)]
@@ -364,6 +366,8 @@ fn archive_owned_binding_v29(
 impl SemanticFunctionLoweringV1<'_, '_> {
     fn take_execution_archive_v29(
         &mut self,
+        blocks: &[BasicBlock],
+        synthetic: &[SemanticKirSyntheticOperationSpanV1],
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<Option<ExecutionArchiveV29>, ProductionSemanticKirErrorV1> {
         let Some(cursor) = self.execution.as_ref() else {
@@ -393,6 +397,13 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             }
             None => return Err(execution_archive_error_v29()),
         };
+        let before_spills = budget.storage();
+        let enum_spills = capture_execution_enum_spills_v48(self, blocks, synthetic, budget)?;
+        let spill_storage = budget
+            .storage()
+            .checked_sub(before_spills)
+            .ok_or(ArgumentResourceV1::Accounting)?;
+        credit.bytes = argument_sum_v1(&[credit.bytes, spill_storage])?;
         let header = std::mem::size_of::<ExecutionArchiveV29>();
         let bytes = argument_sum_v1(&[credit.bytes, header])?;
         budget.charge_work(8)?;
@@ -407,6 +418,7 @@ impl SemanticFunctionLoweringV1<'_, '_> {
             credit,
             bindings: std::mem::take(&mut self.semantic_ssa_bindings),
             rvalues: std::mem::take(&mut self.semantic_rvalue_bindings),
+            enum_spills,
             #[cfg(test)]
             locals: std::mem::take(&mut self.locals),
             #[cfg(test)]
@@ -528,6 +540,7 @@ fn check_execution_archive_instance_v29(
             budget.charge_work(argument_sum_v1(&[
                 archive.bindings.len(),
                 archive.rvalues.len(),
+                archive.enum_spills.len(),
             ])?)?;
             Ok(archive.credit.bytes)
         }

@@ -1241,8 +1241,9 @@ impl<'source> PreparedFunctionFrameV1<'source, '_> {
         }
         let direct_call_inputs = lowering
             .with_emission_budget_v1(|this, budget| this.take_direct_call_inputs_v26(budget))?;
-        let execution_observation = lowering
-            .with_emission_budget_v1(|this, budget| this.take_execution_archive_v29(budget))?;
+        let execution_observation = lowering.with_emission_budget_v1(|this, budget| {
+            this.take_execution_archive_v29(&target_blocks, &synthetic_operation_spans, budget)
+        })?;
         let infallible_asserts = lowering.infallible_asserts;
         let result_types = lowering.result_types;
         drop(lowering.emission_work.take());
