@@ -9,6 +9,8 @@ use crate::production_ranked_projection_v1::root_checked_reference_use_preparati
 use crate::production_ranked_projection_v1::root_local_contracts_v1::{
     BorrowedLocalContractsV1, SourceLocalContractPartsV1,
 };
+#[path = "bf16_nominal_ranked_consumer_v1.rs"]
+mod consumer;
 #[path = "bf16_nominal_block_stream_emit_v1.rs"]
 mod emission;
 #[path = "bf16_nominal_block_stream_uses_v1.rs"]
@@ -37,6 +39,7 @@ pub(super) struct BlockStream {
     source_sites: usize,
     emitted_items: usize,
     emitted: emission::Emitted,
+    consumer: consumer::Pending,
 }
 impl BlockStream {
     pub(super) const fn empty() -> Self {
@@ -51,6 +54,7 @@ impl BlockStream {
             source_sites: 0,
             emitted_items: 0,
             emitted: emission::Emitted::empty(),
+            consumer: consumer::Pending::new(),
         }
     }
 }
@@ -61,7 +65,9 @@ pub(in crate::production_ranked_projection_v1) struct ActualRootBlockStreamV1<'a
     flow: &'a NominalPreparedControlFlowV1<'a, 'g>,
     prefix: ActualRootPrefixIndicesV1<'a>,
     rows: &'a [ProjectedSemanticBlockV1],
-    emitted: &'a emission::Emitted,
+    emitted: &'a mut emission::Emitted,
+    consumer: &'a mut consumer::Pending,
+    ledger: Ledger,
     guarded: &'a RootGuardedAccessStorageV1,
     origins: &'a UnjoinedReferenceOriginPayloadV1,
 }
@@ -825,9 +831,22 @@ impl NominalRecipeResourcesV1<'_, '_, '_, '_, '_, '_> {
                 inspect(
                     ActualRootBlockStreamV1 {
                         flow,
-                        prefix: parts.prefix_view(),
+                        prefix: ActualRootPrefixIndicesV1 {
+                            graph: parts.graph,
+                            source_root: parts.source_root,
+                            function: parts.function,
+                            input: parts.input,
+                            references: parts.references,
+                            prefix: parts.prefix,
+                            indices: parts.indices,
+                        },
                         rows: &parts.stream.rows,
-                        emitted: &parts.stream.emitted,
+                        emitted: &mut parts.stream.emitted,
+                        consumer: &mut parts.stream.consumer,
+                        ledger: parts
+                            .stream
+                            .ledger
+                            .ok_or_else(|| resource(Resource::Accounting))?,
                         guarded: parts.guarded,
                         origins: parts
                             .origins

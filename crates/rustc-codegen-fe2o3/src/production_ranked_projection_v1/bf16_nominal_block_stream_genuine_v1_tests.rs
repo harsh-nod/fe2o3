@@ -868,8 +868,11 @@ pub(crate) fn observe_actual_root_block_stream_for_test_v1(
         observed.tensors,
         observed.reads
     );
+    ranked_consumer_genuine::observe(owner, source, inventory, actual_inputs, budget)?;
     Ok(())
 }
+#[path = "bf16_nominal_ranked_consumer_genuine_v1_tests.rs"]
+mod ranked_consumer_genuine;
 #[test]
 fn genuine_block_stream_oracle_rejects_changed_target_not_only_counts() {
     let row = ExpectedRow::branch(3, 4);

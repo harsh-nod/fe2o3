@@ -324,7 +324,13 @@ mod tests {
                 "if {condition} {{\n        engineering_capture_v1::require_generic_v2_route(capture, \"{route}\")?;\n        return {dispatch}::extract_handoff("
             );
             let expected: String = expected.split_whitespace().collect();
-            assert!(compact.contains(&expected), "{route}");
+            // rustfmt adds a trailing comma when the guard call wraps.
+            // Keep the condition, guard and immediately following dispatch exact.
+            let with_trailing_comma = expected.replacen("\")?;", "\",)?;", 1);
+            assert!(
+                compact.contains(&expected) || compact.contains(&with_trailing_comma),
+                "{route}"
+            );
         }
         assert_eq!(
             generic
