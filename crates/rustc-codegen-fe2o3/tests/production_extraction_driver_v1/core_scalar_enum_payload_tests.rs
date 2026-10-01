@@ -5,10 +5,14 @@ mod core_scalar_enum_payload_tests {
         analyze_interprocedural_effects_v1, decode_module_v7,
     };
     use serde_json::json;
+    use std::io::Read;
     use std::path::Path;
     use std::process::Command;
 
     const CRATE: &str = "fe2o3_production_source_safety_fixture";
+    const FINAL_MIR_FILE: &str =
+        "fe2o3_production_source_safety_fixture.choose_scalar_payload.runtime-optimized.after.mir";
+    const MAX_FINAL_MIR_BYTES: u64 = 64 * 1024;
     const SOURCE: &str = r#"#![no_std]
 use fe2o3_device::{kernel, thread, DisjointSlice};
 
@@ -75,6 +79,60 @@ pub fn scalar_enum_payload(flag: u64, value: u64, mut output: DisjointSlice<u64>
         command
     }
 
+    fn final_runtime_mir(target: &ScratchTarget, directory: &Path) -> String {
+        let read = || -> Result<String, String> {
+            if directory.parent() != Some(target.path()) {
+                return Err("dump directory is not a direct ScratchTarget child".into());
+            }
+            let metadata = std::fs::symlink_metadata(directory).map_err(|e| e.to_string())?;
+            if !metadata.file_type().is_dir() {
+                return Err("dump directory is not a regular non-symlink directory".into());
+            }
+            let owner = target.path().canonicalize().map_err(|e| e.to_string())?;
+            if directory
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .parent()
+                != Some(owner.as_path())
+            {
+                return Err("dump directory escaped ScratchTarget".into());
+            }
+            let path = directory.join(FINAL_MIR_FILE);
+            if !std::fs::symlink_metadata(&path)
+                .map_err(|e| e.to_string())?
+                .file_type()
+                .is_file()
+            {
+                return Err("final MIR is not a regular non-symlink file".into());
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+            let file = options.open(path).map_err(|e| e.to_string())?;
+            let metadata = file.metadata().map_err(|e| e.to_string())?;
+            if !metadata.is_file() || metadata.len() > MAX_FINAL_MIR_BYTES {
+                return Err("final MIR is not regular or exceeds the 64 KiB byte cap".into());
+            }
+            let mut bytes = Vec::new();
+            file.take(MAX_FINAL_MIR_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            if bytes.len() as u64 > MAX_FINAL_MIR_BYTES {
+                return Err("final MIR exceeded the 64 KiB byte cap while reading".into());
+            }
+            let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+            Ok(format!(
+                "actual {FINAL_MIR_FILE} ({} bytes):\n{text}",
+                text.len()
+            ))
+        };
+        read().unwrap_or_else(|error| format!("final runtime-optimized MIR unavailable: {error}"))
+    }
+
     fn export(
         fixture: &Path,
         target: &ScratchTarget,
@@ -87,6 +145,8 @@ pub fn scalar_enum_payload(flag: u64, value: u64, mut output: DisjointSlice<u64>
             !path.exists(),
             "actual export must not reuse an earlier bundle"
         );
+        let mir_directory = target.path().join(format!("{case}-mir"));
+        std::fs::create_dir(&mir_directory).expect("create this export's fresh MIR dump directory");
         let output = clean_command(fixture)
             .env(
                 "RUSTC_WORKSPACE_WRAPPER",
@@ -116,6 +176,11 @@ pub fn scalar_enum_payload(flag: u64, value: u64, mut output: DisjointSlice<u64>
             .arg(target.path().join("cargo"))
             .args(["--", "--cfg"])
             .arg(format!("scalar_enum_payload_case=\"{case}\""))
+            .args([
+                "-Zdump-mir=choose_scalar_payload&runtime-optimized",
+                "-Zdump-mir-exclude-pass-number",
+            ])
+            .arg(format!("-Zdump-mir-dir={}", mir_directory.display()))
             .output()
             .expect("run genuine scalar enum source extraction");
         assert_eq!(
@@ -124,8 +189,9 @@ pub fn scalar_enum_payload(flag: u64, value: u64, mut output: DisjointSlice<u64>
         );
         assert!(
             output.status.success(),
-            "{case}: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "{case}: {}\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            final_runtime_mir(target, &mir_directory),
         );
         let bundle =
             VerifiedSimulationBundleV1::from_canonical_bytes(std::fs::read(&path).unwrap())
