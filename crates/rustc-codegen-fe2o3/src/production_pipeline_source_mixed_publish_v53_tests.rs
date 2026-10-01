@@ -91,3 +91,22 @@ fn mixed_publication_preserves_nested_resource_failure_cause() {
     ));
     assert!(matches!(error, Error::Resource(Resource::Accounting)));
 }
+
+#[test]
+fn mixed_target_publication_uses_shared_unchanged_v18_selection_not_legacy_transformation() {
+    let source = include_str!("production_pipeline_source_mixed_publish_v53.rs");
+    let helper = source
+        .split_once("fn target_receipts_v53(")
+        .unwrap()
+        .1
+        .split_once("fn with_module_v53")
+        .unwrap()
+        .0;
+    assert!(helper.contains("with_mixed_target_selection_v53("));
+    assert!(helper.contains("MixedTargetSelectionSubjectV53"));
+    assert!(helper.contains("profile.rustc_features() != features"));
+    assert!(helper.contains("profile.rustc_target() != layout.llvm_target()"));
+    assert!(!helper.contains("MultiRootTargetBindingTranscriptV2"));
+    assert!(!helper.contains("MultiRootTargetBindingTranscriptV3"));
+    assert!(!helper.contains("target_bound_kir:"));
+}
