@@ -107,7 +107,19 @@ fn direct(ty: SemanticTypeIdV1) -> SemanticAbiValueV1 {
         if ty == UNIT {
             SemanticAbiPassModeV1::Ignore
         } else {
-            SemanticAbiPassModeV1::Direct(SemanticAbiValueAttributesV1::plain())
+            SemanticAbiPassModeV1::Direct(
+                SemanticAbiValueAttributesV1::new(
+                    SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                    if ty == BOOL {
+                        SemanticAbiExtensionV1::ZeroExtend
+                    } else {
+                        SemanticAbiExtensionV1::None
+                    },
+                    0,
+                    None,
+                )
+                .unwrap(),
+            )
         },
     )
 }
@@ -300,6 +312,20 @@ impl Fixture {
     }
 }
 fn fixture(change: Change, bits: u16, signed: bool) -> Fixture {
+    fixture_with_operation(change, bits, signed, SemanticCheckedBinaryOpV1::Add)
+}
+
+fn fixture_with_operation(
+    change: Change,
+    bits: u16,
+    signed: bool,
+    operation: SemanticCheckedBinaryOpV1,
+) -> Fixture {
+    let unchecked_operation = match operation {
+        SemanticCheckedBinaryOpV1::Add => SemanticUncheckedBinaryOpV1::Add,
+        SemanticCheckedBinaryOpV1::Subtract => SemanticUncheckedBinaryOpV1::Subtract,
+        SemanticCheckedBinaryOpV1::Multiply => SemanticUncheckedBinaryOpV1::Multiply,
+    };
     let read = if change == Change::Moves { moved } else { copy };
     let same_operands = matches!(
         change,
@@ -319,7 +345,7 @@ fn fixture(change: Change, bits: u16, signed: bool) -> Fixture {
             5,
             PAIR,
             SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
-                SemanticCheckedBinaryOpV1::Add,
+                operation,
                 if change == Change::CheckedSameLocationMove {
                     moved(3, INT)
                 } else {
@@ -439,7 +465,7 @@ fn fixture(change: Change, bits: u16, signed: bool) -> Fixture {
             if change == Change::WrongOperation {
                 SemanticUncheckedBinaryOpV1::Subtract
             } else {
-                SemanticUncheckedBinaryOpV1::Add
+                unchecked_operation
             },
             if change == Change::SameLocationMove {
                 moved(8, INT)
@@ -474,7 +500,7 @@ fn fixture(change: Change, bits: u16, signed: bool) -> Fixture {
             12,
             INT,
             SemanticRvalueKindV1::UncheckedBinary(SemanticUncheckedBinaryRvalueV1::new(
-                SemanticUncheckedBinaryOpV1::Add,
+                unchecked_operation,
                 copy(8, INT),
                 copy(9, INT),
             )),
@@ -652,21 +678,31 @@ fn actual_shaped_bool_call_and_distinct_scalar_copies_preserve_all_integer_width
                 Change::SnapshotMove,
                 Change::ProjectedMove,
             ] {
-                let fixture = fixture(change, bits, signed);
-                assert!(
-                    super::super::semantic_unchecked_arithmetic_violation_v1(&fixture.functions[0])
+                for operation in [
+                    SemanticCheckedBinaryOpV1::Add,
+                    SemanticCheckedBinaryOpV1::Subtract,
+                    SemanticCheckedBinaryOpV1::Multiply,
+                ] {
+                    let fixture = fixture_with_operation(change, bits, signed, operation);
+                    assert!(
+                        super::super::semantic_unchecked_arithmetic_violation_v1(
+                            &fixture.functions[0]
+                        )
                         .unwrap()
                         .is_some()
-                );
-                assert_eq!(
-                    fixture.result().unwrap(),
-                    None,
-                    "{change:?}/{signed}/{bits}"
-                );
-                fixture
-                    .request()
-                    .admit(SemanticMirLimitsV1::default())
-                    .unwrap();
+                    );
+                    assert_eq!(
+                        fixture.result().unwrap(),
+                        None,
+                        "{operation:?}/{change:?}/{signed}/{bits}"
+                    );
+                    fixture
+                        .request()
+                        .admit(SemanticMirLimitsV1::default())
+                        .unwrap_or_else(|error| {
+                            panic!("{operation:?}/{change:?}/{signed}/{bits}: {error:?}")
+                        });
+                }
             }
         }
     }
