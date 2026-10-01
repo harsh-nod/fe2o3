@@ -364,9 +364,16 @@ fn promoted_failure_components_do_not_bypass_real_retained_aggregate_history() {
                 .any(|row| matches!(row.kind(), SemanticStatementKindV1::Assign(assignment)
                     if matches!(assignment.value().kind(), SemanticRvalueKindV1::AddressOf { place, .. }
                         if place.local().index() == 4 && place.projections().is_empty()))));
+            assert!(
+                !owner.plans()[0]
+                    .plan()
+                    .promoted_variables()
+                    .iter()
+                    .any(|local| local.get() == 4)
+            );
             let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
             let roots = fixture.roots();
-            let result =
+            let prepared =
                 ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
                     owner,
                     launch,
@@ -374,10 +381,17 @@ fn promoted_failure_components_do_not_bypass_real_retained_aggregate_history() {
                     ProductionKernelArgumentAbiInputV18 { roots: &roots },
                     ProductionSemanticKirLimitsV1::default(),
                     budget,
-                );
-            let error = result
+                )
+                .unwrap();
+            let consumed = std::cell::Cell::new(false);
+            let error = prepared
+                .with_source_consumer_v18(budget, |_, _| {
+                    consumed.set(true);
+                    Ok(())
+                })
                 .err()
                 .expect("memory-backed diagnostics need their exact history");
+            assert!(!consumed.get());
             assert!(
                 error
                     .to_string()
