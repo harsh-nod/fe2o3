@@ -455,3 +455,22 @@ fn default_phase_limits_are_not_widened() {
 
 #[path = "retained_ranked_allowance_v1_tests.rs"]
 mod ranked_allowance_tests;
+
+// Test-only terminal custody check for the real ordinary target continuation.
+// It does not construct source/bindings and propagates the original error.
+pub(super) fn with_terminal_account_audit_v1<T, E>(
+    run: impl FnOnce() -> std::result::Result<(T, (usize, usize, usize)), E>,
+) -> std::result::Result<T, E> {
+    let (events, _scope) = audit();
+    let (result, (address, work, storage)) = run()?;
+    let rows = events.borrow();
+    let [Event::Account(actual)] = rows.as_slice() else {
+        panic!("exactly one original materialization account must drop");
+    };
+    assert_eq!(
+        (actual.address, actual.work, actual.storage),
+        (address, work, storage)
+    );
+    assert_eq!((actual.failed_work, actual.failed_storage), (None, None));
+    Ok(result)
+}

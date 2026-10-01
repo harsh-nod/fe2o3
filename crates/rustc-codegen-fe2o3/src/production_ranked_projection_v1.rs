@@ -3248,6 +3248,20 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+    project_and_verify_ranked_materialized_with_compile_v1(
+        materialized,
+        root_inputs,
+        reference_bindings,
+        &mut paid_ranked_compile_v1::Selection::Legacy,
+    )
+}
+
+fn project_and_verify_ranked_materialized_with_compile_v1(
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     #[cfg(test)]
     crate::production_reference_effect_join_v2::prepared_observation_v1::observe_source(
         &materialized,
@@ -3256,7 +3270,19 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
         let source = RankedProjectionSourceV1::from_materialized_checked(&materialized)?;
         let mut ledger = ranked_projection_source_v1::projection_source_ledger_v1(&source)?;
         let roots = ledger.with_budget(|budget| {
-            project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
+            if compiler.is_legacy() {
+                project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
+            } else {
+                project_ranked_roots_with_progress_and_compile_v1(
+                    &source,
+                    root_inputs,
+                    reference_bindings,
+                    budget,
+                    None,
+                    compiler,
+                )?
+                .finish(&source, budget)
+            }
         })?;
         (
             roots,
@@ -3297,7 +3323,25 @@ fn project_ranked_roots_with_progress_v1(
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    progress: Option<&mut guarded_source_progress_v1::GuardedSourceProgressV1<'_, '_>>,
+) -> Result<ProjectedReferenceRootsV1, ProductionRankedProjectionErrorV1> {
+    project_ranked_roots_with_progress_and_compile_v1(
+        source,
+        root_inputs,
+        reference_bindings,
+        budget,
+        progress,
+        &mut paid_ranked_compile_v1::Selection::Legacy,
+    )
+}
+
+fn project_ranked_roots_with_progress_and_compile_v1(
+    source: &RankedProjectionSourceV1<'_>,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     mut progress: Option<&mut guarded_source_progress_v1::GuardedSourceProgressV1<'_, '_>>,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProjectedReferenceRootsV1, ProductionRankedProjectionErrorV1> {
     source.require_floor(budget)?;
     source
@@ -3377,6 +3421,7 @@ fn project_ranked_roots_with_progress_v1(
                                     *source_root,
                                     root_references,
                                     facts,
+                                    compiler,
                                 )
                             },
                         ),
@@ -3389,6 +3434,7 @@ fn project_ranked_roots_with_progress_v1(
                             *source_root,
                             root_references,
                             facts,
+                            compiler,
                         ),
                     }
                 })
@@ -3442,6 +3488,7 @@ fn project_and_verify_ranked_root_ssa_v1(
     source_root: ProductionSourceLaunchRootV1,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     shared_value_reads_projection_v1::with_reads(
         owner,
@@ -3457,6 +3504,7 @@ fn project_and_verify_ranked_root_ssa_v1(
                 reference_bindings,
                 facts,
                 Some(reads),
+                compiler,
             )
         },
     )
@@ -3481,6 +3529,7 @@ fn project_and_verify_ranked_root_v1(
         reference_bindings,
         assertion_facts,
         None,
+        &mut paid_ranked_compile_v1::Selection::Legacy,
     )
 }
 
@@ -3493,6 +3542,7 @@ fn project_and_verify_ranked_root_with_shared_reads_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let function = semantic
         .functions()
@@ -3522,6 +3572,7 @@ fn project_and_verify_ranked_root_with_shared_reads_v1(
                         singletons,
                         borrows,
                         shared_reads,
+                        compiler,
                     )
                 },
             )
@@ -3541,6 +3592,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
     singletons: &[u8],
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     multi_entry_induction_v1::with_scope(assertion_facts, |scope, facts| {
         project_and_verify_ranked_root_with_induction_scope_v1(
@@ -3555,6 +3607,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
             borrows,
             shared_reads,
             scope,
+            compiler,
         )
     })
 }
@@ -3574,6 +3627,7 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
     borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
     shared_reads: Option<&fe2o3_pliron::ProductionSemanticSharedReadsV1<'_>>,
     induction_scope: &mut multi_entry_induction_v1::Scope,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     with_prepared_ranked_root_recipe_with_shared_reads_v1(
         semantic,
@@ -3588,14 +3642,26 @@ fn project_and_verify_ranked_root_with_induction_scope_v1(
         shared_reads,
         induction_scope,
         |recipe, assertion_facts| {
-            verify_prepared_ranked_root_recipe_v1(
-                recipe,
-                selection,
-                input,
-                source_root,
-                reference_bindings,
-                assertion_facts,
-            )
+            if compiler.is_legacy() {
+                verify_prepared_ranked_root_recipe_v1(
+                    recipe,
+                    selection,
+                    input,
+                    source_root,
+                    reference_bindings,
+                    assertion_facts,
+                )
+            } else {
+                verify_prepared_ranked_root_recipe_with_compile_v1(
+                    recipe,
+                    selection,
+                    input,
+                    source_root,
+                    reference_bindings,
+                    assertion_facts,
+                    compiler,
+                )
+            }
         },
     )
 }
@@ -40324,3 +40390,6 @@ mod root_cfg_terminator_resources_v1;
 
 #[cfg(test)]
 pub(crate) use canonical_assertion_facts_v1::observe_actual_root_block_stream_for_test_v1;
+
+#[path = "production_ranked_projection_v1/paid_ranked_compile_v1.rs"]
+pub(crate) mod paid_ranked_compile_v1;

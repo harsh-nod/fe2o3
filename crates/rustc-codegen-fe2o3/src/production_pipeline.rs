@@ -3713,18 +3713,10 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             materialized,
             ranked_roots,
             bindings,
-        } = self.materialize_prepared_v29(use_root, |semantic_ssa, launch, budget| {
-            let owner =
-                fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-                    semantic_ssa,
-                    launch,
-                    fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-                    budget,
-                )
-                .map_err(ProductionPipelineError::PreRankedMaterialization)?;
-            let retained = owner.retained_analysis_storage_v1();
-            Ok((owner, retained))
-        })?;
+        } = self.materialize_prepared_v29(
+            use_root,
+            retained_materialization_phase_v1::retained_target_pipeline_v1::materialize_ordinary_owner_with_budget_v1,
+        )?;
         Ok(MaterializedNeutralProductionCompilation {
             materialized,
             ranked_roots,
