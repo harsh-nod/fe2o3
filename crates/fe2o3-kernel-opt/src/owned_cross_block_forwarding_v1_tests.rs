@@ -347,6 +347,27 @@ fn cross_block_owned_escaping_volatile_and_unequal_alignment_cells_are_not_selec
     // the allocation even if it is unreachable or has no memory effect.
     assert_count(module, 0);
 }
+
+#[test]
+fn cross_block_owned_access_alignments_are_bounded_by_the_actual_allocation() {
+    for store_alignment in [1, 2, 4, 8] {
+        for load_alignment in [1, 2, 4, 8] {
+            let mut module = fixture(ScalarType::U32);
+            let Kind::Store { access, .. } = &mut blocks(&mut module)[0].operations[1].kind else {
+                panic!("store")
+            };
+            access.alignment = store_alignment;
+            let Kind::Load { access, .. } = &mut blocks(&mut module)[3].operations[0].kind else {
+                panic!("load")
+            };
+            access.alignment = load_alignment;
+            assert_count(
+                module,
+                usize::from(store_alignment <= 4 && load_alignment <= 4),
+            );
+        }
+    }
+}
 #[test]
 fn cross_block_owned_replay_requires_actual_input_and_stored_receipt() {
     with_input(fixture(ScalarType::U32), |input, budget| {
