@@ -2,6 +2,12 @@ use std::{error::Error, fmt};
 
 use fe2o3_kernel_descriptor::KernelId;
 
+#[path = "production_mixed_application_v53.rs"]
+mod mixed_v53;
+pub use mixed_v53::{
+    ProductionMixedWorkerV53ApplicationError, prepare_inherited_mixed_worker_v53_application,
+};
+
 use crate::{
     AqlDispatchGeometryV1, AuthenticatedWorkerV3ExecutableV1, CheckedGfx942XnackMinusDevice,
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKfdArguments,

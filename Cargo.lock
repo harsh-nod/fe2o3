@@ -1196,6 +1196,7 @@ dependencies = [
  "fe2o3-artifacts",
  "fe2o3-compiler-execution-client",
  "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-external-anchor-protocol",

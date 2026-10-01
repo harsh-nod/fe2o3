@@ -10,7 +10,9 @@ use crate::{
     RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
     admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
 };
+use crate::{RecoveredMixedWorkerV53PinnedRoster, admit_recovered_mixed_worker_v53_roster};
 use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
+use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as MixedReceiptBudgetV53;
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
     RecoveredWorkerV3LoadEnvelopeV2, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
@@ -201,6 +203,45 @@ impl<R> WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3PinnedRosterV
     ) -> Self {
         RecoveredWorkerV3PinnedRosterV1::retain_application_descriptors(self, descriptors)
     }
+}
+
+impl<R> WorkerV3ApplicationHandoffAdmissionV1 for RecoveredMixedWorkerV53PinnedRoster<R> {
+    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        RecoveredMixedWorkerV53PinnedRoster::revalidate_currentness(self)
+    }
+    fn retain_application_descriptors(
+        self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        RecoveredMixedWorkerV53PinnedRoster::retain_application_descriptors(self, descriptors)
+    }
+}
+
+/// Consumes the same protected Cargo handoff into the complete V53 roster.
+/// V26 contracts and V50 source execution content remain mandatory; there is no
+/// retry through V1, V3 or V5 descriptor admission. This transition does not
+/// substitute for protected compiler/native verification or authorize a load.
+///
+/// # Safety
+/// Call only during cooperative single-threaded startup, before signal handlers,
+/// descendants or unrelated descriptor/environment mutation can race recovery.
+pub unsafe fn consume_inherited_mixed_worker_v53_application_handoff<R>(
+    budget: &mut MixedReceiptBudgetV53<'_>,
+) -> Result<RecoveredMixedWorkerV53PinnedRoster<R>, WorkerV3ApplicationDescriptorHandoffErrorV1>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    // SAFETY: the public entry has the same startup contract as the claim.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_handoff_with_admission_v1(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+        |envelope| admit_recovered_mixed_worker_v53_roster::<R>(envelope, budget),
+    )
 }
 
 struct ClaimedInheritedWorkerV3ApplicationHandoffV1 {
