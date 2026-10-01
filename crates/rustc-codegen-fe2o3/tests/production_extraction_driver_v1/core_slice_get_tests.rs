@@ -249,7 +249,7 @@ pub fn slice_get_shared(input: &[{element}], index: u64, mut output: DisjointSli
                 "arguments": [
                     {"kind": "buffer", "element": element, "access": "read_only",
                      "alignment": element_bytes, "bytes": encoded},
-                    {"kind": "scalar", "type": "u64", "value": index},
+                    {"kind": "scalar", "type": "u64", "bits": format!("0x{index:016x}")},
                     {"kind": "buffer", "element": "u64", "access": "read_write",
                      "alignment": 8, "bytes": format!("0x{}", "a5".repeat(64 * 8))},
                     {"kind": "buffer", "element": "u8", "access": "read_write",

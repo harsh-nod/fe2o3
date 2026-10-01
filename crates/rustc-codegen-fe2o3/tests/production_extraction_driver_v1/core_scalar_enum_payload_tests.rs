@@ -269,8 +269,8 @@ pub fn scalar_enum_payload(flag: u64, value: u64, mut output: DisjointSlice<u64>
                 "grid": [64, 1, 1],
                 "workgroup": [64, 1, 1],
                 "arguments": [
-                    {"kind": "scalar", "type": "u64", "value": flag},
-                    {"kind": "scalar", "type": "u64", "value": value},
+                    {"kind": "scalar", "type": "u64", "bits": format!("0x{flag:016x}")},
+                    {"kind": "scalar", "type": "u64", "bits": format!("0x{value:016x}")},
                     {"kind": "buffer", "element": "u64", "access": "read_write",
                      "alignment": 8, "bytes": format!("0x{}", "a5".repeat(64 * 8))},
                     {"kind": "buffer", "element": "u8", "access": "read_write",
