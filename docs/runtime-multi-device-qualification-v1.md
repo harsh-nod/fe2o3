@@ -107,11 +107,30 @@ owner-local mappings, then return data only after both foundation restorations.
 Partial mappings, timeout tickets and uncertain results must remain owned.
 Initialization may survive the transfer; stale content-digest authority must not.
 
-The existing vecadd authority requires HostVisible memory and exact initial
-digests. A native compute-to-XGMI-to-compute witness therefore needs a separate
-bounded qualification authority, not a relaxation of that fixture. Async
-submission custody, runtime routing and dependency readiness follow the typed
-data transition; host-staged transfers remain the fallback.
+The original vecadd authority still requires HostVisible memory and exact
+initial digests. The existing separate DeviceLocal R57 N3 V2 authority can
+support the native pipeline without relaxing that fixture. The new
+`KfdMultiDeviceRuntimeBackendV1::open_gfx942_r57_n3_qualification_v2` constructor
+admits an independent unchanged R57 V2 authority for each selected device;
+it does not share authority state or local allocation identities. Five focused
+CPU tests pass, covering roster rejection, admission failure, routing and
+independent authority advancement with identical local handles on three GPUs.
+This constructor does not by itself enable native peer routing or PUBLIC storage.
+
+The planned native witness runs `A+B -> C` on each GPU, releases both producers,
+overwrites the destination's existing C allocation with a full-buffer `-1.0`
+sentinel, and verifies that sentinel before the peer copy. Copying the source C
+back into that same destination allocation must restore every expected byte;
+the destination then runs its existing `C+B -> D` second phase. This preserves
+the authority's exact local C/B identities while ensuring a no-op copy fails.
+Transfer completion must dirty the destination shadow, clear both its content
+digest and last-host-write evidence, and restore initialized native custody.
+Ordinary runtime SDMA DeviceLocal allocations are not PUBLIC, whereas the
+direct fixed-dispatch initializer already is; runtime integration must address
+that difference explicitly, not retag private allocations.
+
+Async submission custody, runtime routing and dependency readiness follow the
+typed data transition; host-staged transfers remain the fallback.
 
 Only after full-byte native compute/transfer pipelines pass should qualification
 expand to real workload partitioning, all admitted devices, partial failures,

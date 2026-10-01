@@ -33,6 +33,122 @@ fn qualification_constructor_rejects_every_invalid_roster_before_native_open() {
         let error = KfdMultiDeviceRuntimeBackendV1::open_gfx942_vecadd_qualification_v1(&devices)
             .unwrap_err();
         assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::InvalidLaunch);
+        let error = KfdMultiDeviceRuntimeBackendV1::open_gfx942_r57_n3_qualification_v2(&devices)
+            .unwrap_err();
+        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::InvalidLaunch);
+    }
+}
+
+#[test]
+fn qualification_admission_preserves_order_and_stops_at_first_failure() {
+    let mut calls = 0;
+    assert!(
+        super::admit_qualification_devices_v1(&[1, 1], || {
+            calls += 1;
+            Ok(KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly)
+        })
+        .is_err()
+    );
+    assert_eq!(calls, 0);
+
+    let devices = [30, 10, 20];
+    let admitted = super::admit_qualification_devices_v1(&devices, || {
+        calls += 1;
+        Ok(KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly)
+    })
+    .unwrap();
+    assert_eq!(calls, 3);
+    assert_eq!(
+        admitted.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        devices
+    );
+
+    calls = 0;
+    let error = super::admit_qualification_devices_v1(&devices, || {
+        calls += 1;
+        if calls == 2 {
+            Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "fixture admission failed",
+            ))
+        } else {
+            Ok(KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly)
+        }
+    })
+    .unwrap_err();
+    assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::InvalidLaunch);
+    assert_eq!(calls, 2);
+}
+
+#[test]
+fn r57_device_authorities_keep_identical_local_handles_isolated() {
+    use crate::qualification_gfx942_r57_n3_v1::*;
+
+    let devices = [30, 10, 20];
+    let gates = super::admit_qualification_devices_v1(&devices, super::admit_r57_n3_v2).unwrap();
+    let observations: Vec<_> = gates
+        .iter()
+        .map(|(_, gate)| match gate {
+            KfdRuntimeLaunchGateV1::ExactGfx942R57N3V2(admitted) => admitted.observation_v1(),
+            _ => panic!("exact independent V2 authority required"),
+        })
+        .collect();
+    let buffers = gfx942_r57_n3_qualification_host_buffers_v1().unwrap();
+    let kernarg = gfx942_r57_n3_qualification_explicit_kernarg_v1();
+    let ids = [10, 20, 30];
+    let contents = [buffers.a(), buffers.b(), buffers.c_initial()];
+    let allocations = core::array::from_fn::<_, 3, _>(|index| KfdRuntimeAuthorityAllocationV1 {
+        allocation: ids[index],
+        kind: RuntimeMemoryKindV1::DeviceLocal,
+        alignment: GFX942_R57_N3_QUALIFICATION_BUFFER_ALIGNMENT_V1,
+        byte_offset: 0,
+        bytes: contents[index],
+        content_sha256: Some(Sha256::digest(contents[index]).into()),
+    });
+    let bindings = core::array::from_fn::<_, 3, _>(|index| BackendBindingV1 {
+        kernarg_byte_offset: GFX942_R57_N3_QUALIFICATION_ARGUMENTS_V1[index].pointer_offset,
+        region: BackendMemoryRegionV1 {
+            allocation: ids[index],
+            access: GFX942_R57_N3_QUALIFICATION_ARGUMENTS_V1[index].access,
+            byte_offset: 0,
+            byte_len: GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+        },
+    });
+    let abi =
+        GFX942_R57_N3_QUALIFICATION_ARGUMENTS_V1.map(|policy| KfdRuntimeAuthorityGlobalBufferV1 {
+            explicit_argument_index: policy.explicit_argument_index,
+            name: policy.name,
+            kernarg_byte_offset: u64::from(policy.pointer_offset),
+            pointee_alignment: policy.reconciled_pointee_alignment,
+            access: if policy.access == RuntimeAccessV1::Read {
+                ArgumentAccess::ReadOnly
+            } else {
+                ArgumentAccess::WriteOnly
+            },
+        });
+    let request = KfdRuntimeAuthorityRequestV1 {
+        module_image: gfx942_r57_n3_qualification_hsaco_v1(),
+        module_sha256: GFX942_R57_N3_QUALIFICATION_HSACO_SHA256_V1,
+        kernel_name: GFX942_R57_N3_QUALIFICATION_KERNEL_V1,
+        signature: GFX942_R57_N3_QUALIFICATION_SIGNATURE_V2,
+        explicit_kernarg: &kernarg,
+        complete_kernarg_template: &kernarg,
+        bindings: &bindings,
+        dispatch_abi: &abi,
+        allocations: &allocations,
+        geometry: GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
+        semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+    };
+    for (index, (uid, gate)) in gates.iter().enumerate() {
+        assert_eq!(*uid, devices[index]);
+        assert!(gate.authorize_launch_v1(request));
+        assert!(!gate.authorize_launch_v1(request));
+        for (child, observation) in observations.iter().enumerate() {
+            assert_eq!(
+                observation.authorization_calls_v1(),
+                if child <= index { 2 } else { 0 }
+            );
+        }
     }
 }
 

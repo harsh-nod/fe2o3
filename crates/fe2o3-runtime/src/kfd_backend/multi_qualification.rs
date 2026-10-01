@@ -7,6 +7,35 @@ use super::{
 
 const MAX_QUALIFICATION_DEVICES_V1: usize = 8;
 
+fn admit_qualification_devices_v1(
+    unique_ids: &[u64],
+    mut admit: impl FnMut() -> Result<KfdRuntimeLaunchGateV1, KfdRuntimeBackendErrorV1>,
+) -> Result<Vec<(u64, KfdRuntimeLaunchGateV1)>, KfdRuntimeBackendErrorV1> {
+    validate_qualification_devices_v1(unique_ids)?;
+    let mut gates = Vec::new();
+    gates.try_reserve_exact(unique_ids.len()).map_err(|_| {
+        KfdRuntimeBackendErrorV1::new(
+            KfdRuntimeBackendErrorKindV1::Capacity,
+            "multi-device qualification gate roster allocation failed",
+        )
+    })?;
+    for unique_id in unique_ids {
+        gates.push((*unique_id, admit()?));
+    }
+    Ok(gates)
+}
+
+fn admit_r57_n3_v2() -> Result<KfdRuntimeLaunchGateV1, KfdRuntimeBackendErrorV1> {
+    crate::qualification_gfx942_r57_n3_v1::admit_gfx942_r57_n3_qualification_v2()
+        .map(KfdRuntimeLaunchGateV1::ExactGfx942R57N3V2)
+        .map_err(|error| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                error.to_string(),
+            )
+        })
+}
+
 pub(super) fn validate_qualification_devices_v1(
     unique_ids: &[u64],
 ) -> Result<(), KfdRuntimeBackendErrorV1> {
@@ -37,28 +66,33 @@ impl KfdMultiDeviceRuntimeBackendV1 {
     pub fn open_gfx942_vecadd_qualification_v1(
         unique_ids: &[u64],
     ) -> Result<Self, KfdRuntimeBackendErrorV1> {
-        validate_qualification_devices_v1(unique_ids)?;
-        let mut gates = Vec::new();
-        gates.try_reserve_exact(unique_ids.len()).map_err(|_| {
-            KfdRuntimeBackendErrorV1::new(
-                KfdRuntimeBackendErrorKindV1::Capacity,
-                "multi-device qualification gate roster allocation failed",
-            )
+        let gates = admit_qualification_devices_v1(unique_ids, || {
+            crate::qualification_gfx942_vecadd_v1::admit_gfx942_vecadd_qualification_v1()
+                .map(KfdRuntimeLaunchGateV1::ExactGfx942Vecadd)
+                .map_err(|error| {
+                    KfdRuntimeBackendErrorV1::new(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        error.to_string(),
+                    )
+                })
         })?;
-        for unique_id in unique_ids {
-            let admitted =
-                crate::qualification_gfx942_vecadd_v1::admit_gfx942_vecadd_qualification_v1()
-                    .map_err(|error| {
-                        KfdRuntimeBackendErrorV1::new(
-                            KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                            error.to_string(),
-                        )
-                    })?;
-            gates.push((
-                *unique_id,
-                KfdRuntimeLaunchGateV1::ExactGfx942Vecadd(admitted),
-            ));
-        }
+        Self::open_default_with_gates_v1(gates)
+    }
+
+    /// Opens two to eight devices for independent exact DeviceLocal R57 N3 V2 sequences.
+    ///
+    /// Each child retains its own unchanged two-launch authority: `A+B -> C`,
+    /// then `C+B -> D` using that child's exact local allocation identities.
+    /// No authority state or allocation identity is shared between devices.
+    /// All fixtures are admitted before native device admission begins.
+    ///
+    /// This constructor does not enable PUBLIC allocation, native XGMI routing
+    /// or general kernel authority. Peer copies retain the ordinary bounded
+    /// host-staging implementation; this is not a native pipeline witness.
+    pub fn open_gfx942_r57_n3_qualification_v2(
+        unique_ids: &[u64],
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        let gates = admit_qualification_devices_v1(unique_ids, admit_r57_n3_v2)?;
         Self::open_default_with_gates_v1(gates)
     }
 }
