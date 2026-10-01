@@ -6,7 +6,8 @@ Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
 refreshed on 2026-10-01: the issue remained Open, with 33 comments and its latest
 update at 2026-10-01 02:01:40 UTC. Both runtime branch refs were confirmed through
-signed commit `987c3e8a9`, including the qualified field-codec integration.
+signed commit `69c98bd50`, including the qualified field-codec integration,
+public raw evidence and opt-in wait-cadence experiment.
 The [published checkpoint](https://github.com/harsh-nod/fe2o3/issues/182#issuecomment-5923229932)
 records the accepted components without closing any milestone. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
@@ -156,11 +157,19 @@ The separate nine-case raw
 capture completes all fifteen stages and owned group closures with full 165/0
 proof brackets. Eight mutations fail actual result-equality contracts; the
 eager-status mutation fails only the wrapper's ghost-trace contract. That trace
-counts wrapper invocations, not inner native journal calls. All nine remain
-unqualified observations pending fresh signed qualification.
+counts wrapper invocations, not inner native journal calls. Those historical
+captures remain unqualified observations. Signed candidate `441cef8c7` now
+passes its separate 23-stage campaign: three full 165/0 positives, all nine
+fresh full 164/1 actual-body negatives, seven source/diagnostic suites and both
+signature/tool-release brackets. All 23 groups close, and independent agent/root
+readbacks agree on the complete 705-file packet and ten projected source trees.
+The [integrated wrappers](runtime-producer-journal-observers.md) preserve the
+exact native bodies, 38 proof inputs, fixtures and classifiers. The inherited
+queued-query helper hash and two runtime source inventories are refreshed.
+All 26 local source-workflow commands pass on the integrated worktree.
 Direct validator/fold composition, live-allocation checks, fresh credit locks,
-interior-state refinement and A2 closure remain open; these draft sources and
-raw discovery records are not yet integrated or published.
+interior-state refinement and A2 closure remain open. Combined-runtime CPU
+regression and public raw campaign packaging remain pending.
 
 The [retained host-diagnostic CPU qualification](evidence/dev-xgmi-retained-host-diagnostic-cpu-2026-09-30/README.md)
 is integrated at `841c06b73`, with portable campaign helpers at `4ad64047b`.

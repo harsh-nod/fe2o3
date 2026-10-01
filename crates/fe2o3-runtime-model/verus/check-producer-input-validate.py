@@ -22,6 +22,7 @@ SRC = Path("crates/fe2o3-runtime/src")
 MODEL = Path("crates/fe2o3-runtime-model/src")
 OWNER = SRC / "context/versions/producer_readers.rs"
 BODY = SRC / "context/versions/producer_input_fold_body.rs"
+JOURNAL_BODY = SRC / "context/versions/producer_journal_observer_bodies.rs"
 PROOF = V / "context_producer_input_validate_v1.rs"
 DEFINITIONS = V / "producer_input_validate_definitions_v1.rs"
 FILES = [PROOF, DEFINITIONS, BODY]
@@ -34,8 +35,8 @@ DECLARATIONS = [MODEL / name for name in (
 )]
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "74c99e4ce41f591fe74e6ed9af89c5b24883af40efda7546ba62531714f476bf"
-SOURCE_FILES = 332
+SOURCE_TREE_SHA = "c0bca8b621147063de1af629ea7b525c718a91562f8f3bf853586840c64bdbac"
+SOURCE_FILES = 333
 PROOF_SHA = "750a1ae6be20bed3c6dc9b3ebaa6cca4a869713b3187da8dabe32091b8fa5817"
 DEFINITIONS_SHA = "18628bbcab588eeae7302fe39f2ade8bbc27f8506cc9ee440bc35381e17aa58b"
 EXPECTED_VERIFIED = 42
@@ -149,11 +150,13 @@ def audit(sources):
     need(sha(sources[DEFINITIONS]) == DEFINITIONS_SHA, "reviewed complete shared validator definitions")
     schemas(sources)
     scan_bridges(sources)
+    need(sha(sources[JOURNAL_BODY]) == "5fb7f1572c41a6f2c6dffa74f040e870bb4ae874133c127ee5ae87d52c3fce59",
+         "exact extracted journal forwarding bodies; this leaf theorem remains conditional")
     forwarders = {
-        "observe_active_lookup": "self.versions.journal.lookup_producer_read(reference)",
-        "observe_active_status": "self.versions.journal.producer_read_status(reference)",
-        "observe_queued_lookup": "self.versions.journal.lookup_queued_producer_read(reference)",
-        "observe_queued_status": "self.versions.journal.queued_producer_read_status(reference)",
+        "observe_active_lookup": "producer_observe_active_lookup_body_v1!(self, reference)",
+        "observe_active_status": "producer_observe_active_status_body_v1!(self, reference)",
+        "observe_queued_lookup": "producer_observe_queued_lookup_body_v1!(self, reference)",
+        "observe_queued_status": "producer_observe_queued_status_body_v1!(self, reference)",
         "observe_live": "self.versions.validate_live(id, record)",
         "observe_expected_credit": "self.context.allocation_admission.has_expected_credit(id, device, byte_len)",
     }

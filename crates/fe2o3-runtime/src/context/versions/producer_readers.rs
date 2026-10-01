@@ -11,6 +11,7 @@ use fe2o3_runtime_model::{
 
 include!("producer_input_preflight_body.rs");
 include!("producer_input_fold_body.rs");
+include!("producer_journal_observer_bodies.rs");
 
 #[cfg(test)]
 #[path = "producer_input_preflight_tests.rs"]
@@ -160,28 +161,28 @@ impl<B: RuntimeBackendV1> ProducerInputObservationsV1<'_, B> {
         &mut self,
         reference: ContextProducerReadReferenceV1,
     ) -> Result<ContextProducerReadV1, ContextVersionJournalErrorV1> {
-        self.versions.journal.lookup_producer_read(reference)
+        producer_observe_active_lookup_body_v1!(self, reference)
     }
 
     fn observe_active_status(
         &mut self,
         reference: ContextProducerReadReferenceV1,
     ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
-        self.versions.journal.producer_read_status(reference)
+        producer_observe_active_status_body_v1!(self, reference)
     }
 
     fn observe_queued_lookup(
         &mut self,
         reference: ContextQueuedProducerReadReferenceV1,
     ) -> Result<ContextQueuedProducerReadV1, ContextVersionJournalErrorV1> {
-        self.versions.journal.lookup_queued_producer_read(reference)
+        producer_observe_queued_lookup_body_v1!(self, reference)
     }
 
     fn observe_queued_status(
         &mut self,
         reference: ContextQueuedProducerReadReferenceV1,
     ) -> Result<ContextProducerReadStatusV1, ContextVersionJournalErrorV1> {
-        self.versions.journal.queued_producer_read_status(reference)
+        producer_observe_queued_status_body_v1!(self, reference)
     }
 
     fn observe_live(
