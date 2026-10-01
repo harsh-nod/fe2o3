@@ -3,7 +3,10 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 
 const LIMIT: usize = 256 * 1024 * 1024;
 
-fn append_reference_option(types: &mut Vec<Declaration>, mutable: bool) -> (TypeId, TypeId) {
+pub(super) fn append_reference_option(
+    types: &mut Vec<Declaration>,
+    mutable: bool,
+) -> (TypeId, TypeId) {
     let reference = TypeId::from_index(types.len() as u32);
     let option = TypeId::from_index(types.len() as u32 + 1);
     let primitive = Primitive::pointer(0, 8, 8);

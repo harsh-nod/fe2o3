@@ -19,6 +19,14 @@ macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
 
+#[path = "original_semantic_mir_source_tag_pairs_v40.rs"]
+mod pairs;
+pub(in super::super) use pairs::SourceTagPairsV40;
+#[cfg(test)]
+pub(in super::super) use pairs::tests::{
+    Fixture as SourceTagFixtureV40, transform as source_tag_fixture_v40,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in super::super) enum SourceTagClassV39 {
     NotTagged,

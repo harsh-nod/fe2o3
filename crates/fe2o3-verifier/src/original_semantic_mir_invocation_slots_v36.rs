@@ -23,7 +23,9 @@ mod source_abi;
 
 #[path = "original_semantic_mir_source_tag_contracts_v39.rs"]
 mod source_tags;
-pub(super) use source_tags::{SourceTagClassV39, SourceTagRecipeV39};
+pub(super) use source_tags::{SourceTagClassV39, SourceTagPairsV40, SourceTagRecipeV39};
+#[cfg(test)]
+pub(super) use source_tags::{SourceTagFixtureV40, source_tag_fixture_v40};
 
 #[path = "original_semantic_mir_source_object_activations_v40.rs"]
 mod source_objects;
