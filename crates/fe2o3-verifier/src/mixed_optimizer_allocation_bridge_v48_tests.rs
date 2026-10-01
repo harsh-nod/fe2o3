@@ -18,6 +18,18 @@ const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
 #[path = "mixed_optimizer_typed_prefix_v49_tests.rs"]
 mod prefix_tests;
 
+fn assert_closed_float_execution_context_v53(text: &str) {
+    let prelude = super::super::byte_memory_v30::BYTE_MEMORY_V30;
+    let field = "ieee_operators: spec_fn(int, int, int, int, int, int) -> int,";
+    assert_eq!(prelude.matches(field).count(), 1);
+    assert_eq!(prelude.matches("spec_fn(").count(), 1);
+    assert!(prelude.contains("(input_bits == 32 || input_bits == 64) && 10 <= operation <= 21"));
+    assert!(prelude.contains("(execution.ieee_operators)("));
+    assert!(prelude.contains("operation, input_bits, output_bits, a, b, 0int"));
+    assert!(text.contains("before.frames == after.frames"));
+    assert!(!text.contains("op: spec_fn(int, int, Seq<int>, int) -> int"));
+}
+
 fn block(id: u32, operations: Vec<Instruction>, terminator: Terminator) -> BasicBlock {
     let mut block = BasicBlock::new(BlockId(id));
     block.operations = operations;
@@ -316,11 +328,11 @@ fn typed_licm_bridge_uses_actual_operations_and_preserves_both_checked_results()
         assert!(text.contains("typed_licm_input_defined_0_v48(before, little_endian, fuel)"));
         assert!(
             text.contains(
-                "struct MemoryStateV30 {\n    pc: int,\n    values: Seq<MemoryValueV30>,"
+                "typed_licm_related_0_v48(before: MemoryStateV30, after: MemoryStateV30,"
             )
         );
         assert!(!text.contains("base: Seq<int>, initial: int, op:"));
-        assert!(!text.contains("spec_fn("));
+        assert_closed_float_execution_context_v53(&text);
         assert!(!text.contains("assume("));
         assert!(!text.contains("external_body"));
         let exact = run(floor, measured.1, measured.2, generate);

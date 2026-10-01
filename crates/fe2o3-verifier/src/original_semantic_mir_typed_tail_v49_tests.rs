@@ -102,7 +102,8 @@ fn run_transform(
                     .count();
                 assert!(
                     replaced >= 4,
-                    "each genuine root/helper instance must forward its joined load"
+                    "each genuine root/helper instance must forward its joined load: replaced {replaced}; input {:#?}",
+                    forwarding.input().module()
                 );
                 assert_ne!(
                     forwarding.input().identity(),
@@ -395,16 +396,18 @@ fn original_source_typed_tail_rejects_the_prefix_owner_as_the_licm_output() {
 #[test]
 fn original_source_typed_tail_full_generation_is_deterministic_and_exactly_budgeted() {
     use sha2::Digest as _;
-    let fingerprint = |text: &str| -> (usize, [u8; 32]) {
-        (text.len(), sha2::Sha256::digest(text.as_bytes()).into())
+    let observe = |work, storage, fingerprint: &mut (usize, [u8; 32])| {
+        run(work, storage, false, |text| {
+            *fingerprint = (text.len(), sha2::Sha256::digest(text.as_bytes()).into());
+        })
     };
     let mut first = (0, [0; 32]);
-    let measured = run(LIMIT, LIMIT, false, |text| first = fingerprint(text));
+    let measured = observe(LIMIT, LIMIT, &mut first);
     measured.0.unwrap();
-    let repeated = run(measured.1, measured.3, false, |text| {
-        assert_eq!(fingerprint(text), first)
-    });
+    let mut second = (0, [0; 32]);
+    let repeated = observe(measured.1, measured.3, &mut second);
     repeated.0.unwrap();
+    assert_eq!(first, second);
     assert_eq!(
         (repeated.1, repeated.2, repeated.3),
         (measured.1, measured.2, measured.3)
@@ -412,7 +415,8 @@ fn original_source_typed_tail_full_generation_is_deterministic_and_exactly_budge
     for work_short in [false, true] {
         let work = measured.1 - usize::from(work_short);
         let storage = measured.3 - usize::from(!work_short);
-        let denied = run(work, storage, false, |_| {});
+        let mut rejected = (0, [0; 32]);
+        let denied = observe(work, storage, &mut rejected);
         let error = denied.0.expect_err("one-short generation must refuse");
         let mut chain: &(dyn std::error::Error + 'static) = &error;
         let resource = loop {
