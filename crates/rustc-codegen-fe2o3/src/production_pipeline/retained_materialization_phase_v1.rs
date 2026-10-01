@@ -178,3 +178,6 @@ mod tests;
 #[allow(dead_code)]
 #[path = "retained_ranked_allowance_v1.rs"]
 mod ranked_allowance;
+
+#[path = "retained_target_pipeline_v1.rs"]
+pub(super) mod retained_target_pipeline_v1;
