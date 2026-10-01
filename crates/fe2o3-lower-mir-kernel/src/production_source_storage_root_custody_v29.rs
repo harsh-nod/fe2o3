@@ -133,6 +133,11 @@ impl<'root> SourceReferenceFailureV29<'root> {
         self.cell().record(resource.into());
     }
 
+    pub(super) fn record_query_failure(&self, error: &Error) {
+        self.cell()
+            .record(SourceStorageFailureObservationV29::from_error(error).error());
+    }
+
     pub(super) fn into_owned_first(self) -> Option<Error> {
         match self.binding {
             SourceReferenceFailureBindingV29::Owned(cell) => cell.into_first(),

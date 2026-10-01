@@ -192,6 +192,8 @@ fn source_static_raw_holder_v42(
         result = Some(raw);
         Ok(())
     })
-    .inspect_err(|error| source_reference_record_failure_v29(plan, error))?;
-    result.ok_or(ArgumentResourceV1::Accounting.into())
+    .inspect_err(|error| plan.failure.record_query_failure(error))?;
+    result
+        .ok_or(ArgumentResourceV1::Accounting.into())
+        .inspect_err(|error| plan.failure.record_query_failure(error))
 }

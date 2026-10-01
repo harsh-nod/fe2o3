@@ -305,20 +305,33 @@ fn original_static_raw_holders_refuse_cloned_changed_sites_and_wrong_crossings_s
                 original.projections().len() - if fault == 3 { 2 } else { 1 },
                 budget,
             );
-            assert!(queried.is_err());
-            assert!(
-                source_static_raw_holder_v42(
-                    plan,
-                    site,
-                    original,
-                    SourceReferenceAccessV29::Read,
-                    original.projections().len() - 1,
-                    budget
-                )
-                .is_err()
+            let first = queried.unwrap_err();
+            assert!(matches!(
+                first,
+                ProductionSemanticKirErrorV1::Unsupported { .. }
+            ));
+            let after_failure = (budget.work(), budget.storage());
+            let repeated = source_static_raw_holder_v42(
+                plan,
+                site,
+                original,
+                SourceReferenceAccessV29::Read,
+                original.projections().len() - 1,
+                budget,
+            )
+            .unwrap_err();
+            assert_eq!(format!("{repeated:?}"), format!("{first:?}"));
+            assert_eq!((budget.work(), budget.storage()), after_failure);
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    plan.check_owner(plan.instances, budget).unwrap_err()
+                ),
+                format!("{first:?}")
             );
+            assert_eq!((budget.work(), budget.storage()), after_failure);
             completed = true;
-            Err(scoped_object_error_v29())
+            Err(first)
         });
         assert!(completed && result.is_err(), "fault={fault}");
     }
@@ -415,31 +428,34 @@ fn original_static_raw_holders_refuse_changed_static_types_bounds_and_pointer_cr
                 pointer_type,
                 "a failed pure shape query cannot poison or authorize an occurrence"
             );
+            let first = source_static_raw_holder_v42(
+                plan,
+                site,
+                &changed,
+                SourceReferenceAccessV29::Read,
+                2,
+                budget,
+            )
+            .unwrap_err();
             assert!(
-                source_static_raw_holder_v42(
-                    plan,
-                    site,
-                    &changed,
-                    SourceReferenceAccessV29::Read,
-                    2,
-                    budget,
-                )
-                .is_err()
+                matches!(first, ProductionSemanticKirErrorV1::Unsupported { detail, .. } if detail == expected)
             );
             assert_eq!(budget.storage(), floor);
-            assert!(
-                source_static_raw_holder_v42(
-                    plan,
-                    site,
-                    original,
-                    SourceReferenceAccessV29::Read,
-                    2,
-                    budget,
-                )
-                .is_err()
-            );
+            let after_failure = budget.work();
+            let repeated = source_static_raw_holder_v42(
+                plan,
+                site,
+                original,
+                SourceReferenceAccessV29::Read,
+                2,
+                budget,
+            )
+            .unwrap_err();
+            assert_eq!(format!("{repeated:?}"), format!("{first:?}"));
+            assert_eq!(budget.work(), after_failure);
+            assert_eq!(budget.storage(), floor);
             completed = true;
-            Err(scoped_object_error_v29())
+            Err(first)
         });
         assert!(completed && result.is_err(), "fault={fault}");
     }
