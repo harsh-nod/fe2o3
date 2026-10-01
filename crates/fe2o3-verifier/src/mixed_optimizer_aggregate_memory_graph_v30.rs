@@ -3,18 +3,7 @@
 use super::*;
 use fe2o3_kernel_ir::Terminator;
 
-pub(super) const STATE: &str = r#"
-struct AggregateStateV30 {
-    pc: int,
-    values: Seq<int>,
-    cells: Seq<int>,
-    initialized: Seq<bool>,
-    external: int,
-}
-// Values are exact typed logical payloads; scalar bits/Select use the common
-// emitter. Selected private leaves have concrete state, while unchanged external
-// operations retain their shared interpretation and explicit effect order.
-"#;
+pub(super) use super::super::structured_state_v30::STATE;
 
 fn value(
     inv: &Inventory<'_>,

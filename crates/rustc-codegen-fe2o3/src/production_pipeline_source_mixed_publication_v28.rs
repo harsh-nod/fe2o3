@@ -8,6 +8,10 @@ use crate::protected_rustc_invocation::{
 };
 use fe2o3_artifact_transaction::BuildAttempt;
 use fe2o3_verifier::MixedOptimizerRelocationCfgSubjectV28 as Subject;
+use fe2o3_verifier::PreparedOriginalSemanticMirRefinementV31 as OriginalMir;
+
+#[path = "production_pipeline_source_original_mir_v30.rs"]
+mod original_mir_v30;
 
 #[path = "production_pipeline_source_mixed_publication_execution_v29.rs"]
 mod execution;
@@ -63,6 +67,7 @@ impl From<MixedPublicationErrorV28> for Error {
 #[must_use = "consume under original source custody or abandon the candidate"]
 pub(crate) struct PreparedMixedPublicationV28<'a, 'v, 's> {
     inputs: FinalInputs<'a, 'a, 'v, 's>,
+    original_mir: &'a OriginalMir<'v, 's>,
     required: usize,
 }
 
@@ -97,11 +102,36 @@ impl<'a, 'v, 's> PreparedMixedPublicationV28<'a, 'v, 's> {
             .retained_storage(budget)
             .map_err(Error::MixedRelocationExpressions)?;
         self.inputs.worker.root_count(budget)?;
+        self.original_mir
+            .check_original_source(self.inputs.source, budget)
+            .map_err(Error::OriginalMir)?;
         Ok(())
     }
 
     pub(crate) fn replay(&self, budget: &mut Budget<'_>) -> Result<(), Error> {
         self.check(budget)?;
+        let original = self
+            .original_mir
+            .subject(budget)
+            .map_err(Error::OriginalMir)?;
+        let composed = self
+            .inputs
+            .composed
+            .subject(budget)
+            .map_err(Error::MixedRelocationExpressions)?
+            .expressions();
+        budget
+            .charge_work(3 * 32 + 8)
+            .map_err(|error| self.inputs.source.retain_query_resource_error_v18(error))?;
+        if original.semantic_identity() != composed.source_semantic_identity()
+            || original.ssa_identity() != composed.source_ssa_identity()
+            || original.canonical_identity() != composed.input()
+        {
+            return Err(MixedPublicationErrorV28::Binding(
+                "original MIR proof endpoint differs from the retained optimizer input",
+            )
+            .into());
+        }
         self.inputs
             .composed
             .check_original_source(self.inputs.source.source_ssa(budget)?, budget)
@@ -136,6 +166,16 @@ impl<'a, 'v, 's> PreparedMixedPublicationV28<'a, 'v, 's> {
             .composed
             .generated_source(budget)
             .map_err(Error::MixedRelocationExpressions)
+    }
+
+    /// Inert whole-source request, retained beside the executed optimizer chain.
+    /// This is not an original-MIR runtime receipt and closes no execution gate.
+    pub(crate) fn original_mir_request(
+        &self,
+        budget: &Budget<'_>,
+    ) -> Result<&OriginalMir<'v, 's>, Error> {
+        self.check(budget)?;
+        Ok(self.original_mir)
     }
 
     pub(crate) fn worker(
@@ -263,9 +303,11 @@ where
     ) -> Result<R, Error>,
 {
     fn headers() -> Result<usize, Resource> {
+        let original = original_mir_v30::headers::<R, F>()?;
         headers()?
             .checked_add(size_of::<Pending<F>>())
             .and_then(|n| n.checked_add(align_of::<Pending<F>>()))
+            .and_then(|n| n.checked_add(original))
             .ok_or(Resource::Arithmetic)
     }
     fn consume(
@@ -273,13 +315,7 @@ where
         budget: &mut Budget<'_>,
         consume: F,
     ) -> Result<R, Error> {
-        let mut consume = Pending::new(consume);
-        let prepared = PreparedMixedPublicationV28 {
-            inputs,
-            required: budget.storage(),
-        };
-        prepared.check(budget)?;
-        consume.take()(prepared, budget)
+        original_mir_v30::consume(inputs, budget, consume)
     }
 }
 

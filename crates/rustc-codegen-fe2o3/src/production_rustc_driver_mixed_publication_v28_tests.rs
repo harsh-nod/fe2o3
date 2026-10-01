@@ -2,6 +2,8 @@
 //! Worker pipeline. Extraction custody cannot become protected custody.
 
 use super::*;
+#[path = "production_rustc_driver_original_mir_v30_tests.rs"]
+mod original_mir_v30_tests;
 use crate::production_pipeline::source_owned_v29::mixed_worker_v28::publication::{
     MixedPublicationErrorV28, MixedPublicationOpenGateV28, PreparedMixedPublicationV28,
 };

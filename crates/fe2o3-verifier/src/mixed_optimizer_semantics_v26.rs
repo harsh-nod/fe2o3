@@ -18,6 +18,12 @@ use std::{
 #[path = "mixed_optimizer_cfg_trace_v26.rs"]
 mod cfg_trace;
 
+#[path = "mixed_optimizer_structured_state_v30.rs"]
+mod structured_state_v30;
+
+#[path = "original_semantic_mir_scalar_v30.rs"]
+pub(super) mod original_scalar_v30;
+
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => {
         write!($out, $($arg)*).map_err(|_| $out.error())?

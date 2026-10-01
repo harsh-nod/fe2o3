@@ -1,9 +1,11 @@
-//! Source-owned V18 Policy9 block-simulation statements.
+//! Source-owned V18 optimizer and original-MIR refinement statements.
 //!
 //! The modeled boundary is N -> O, not Rust/MIR -> N. Unchanged operations use
 //! one shared interpretation; calls, allocation and device semantics are not
 //! proved by replacing them with that interpretation. A generated statement is
 //! not an executed theorem, a signed receipt, or Worker authority.
+//! The separate V30 original-MIR child independently models the original source
+//! and canonical endpoint; optimizer equations do not establish that boundary.
 
 use std::{fmt, mem::size_of};
 
@@ -28,6 +30,13 @@ use crate::{
 
 #[path = "mixed_optimizer_aggregate_refinement_v30.rs"]
 mod aggregate_v30;
+#[path = "original_semantic_mir_refinement_v30.rs"]
+mod original_mir_v30;
+pub use original_mir_v30::{
+    OriginalSemanticMirRefinementSubjectV30, OriginalSemanticMirRefinementSubjectV31,
+    PreparedOriginalSemanticMirRefinementV30, PreparedOriginalSemanticMirRefinementV31,
+    prepare_original_semantic_mir_refinement_v30, prepare_original_semantic_mir_refinement_v31,
+};
 #[path = "mixed_optimizer_cfg_refinement_v27.rs"]
 mod cfg_v27;
 pub use aggregate_v30::{
