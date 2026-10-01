@@ -133,7 +133,21 @@ fn mismatch() -> Error {
 fn statement_kind(statement: &Statement) -> &'static str {
     match statement {
         Statement::Assign(assignment) => match assignment.value().kind() {
-            Rvalue::Use(_) => "Assign.Use",
+            Rvalue::Use(Operand::Copy(place)) if place.projections().is_empty() => {
+                "Assign.Use.Copy.Local"
+            }
+            Rvalue::Use(Operand::Copy(_)) => "Assign.Use.Copy.Projected",
+            Rvalue::Use(Operand::Move(place)) if place.projections().is_empty() => {
+                "Assign.Use.Move.Local"
+            }
+            Rvalue::Use(Operand::Move(_)) => "Assign.Use.Move.Projected",
+            Rvalue::Use(Operand::Constant(value)) => match value.value() {
+                Constant::ZeroSized => "Assign.Use.Constant.ZeroSized",
+                Constant::Scalar(_) => "Assign.Use.Constant.Scalar",
+                Constant::Bytes(_) => "Assign.Use.Constant.Bytes",
+                Constant::Pointer(_) => "Assign.Use.Constant.Pointer",
+                Constant::Callable(_) => "Assign.Use.Constant.Callable",
+            },
             Rvalue::Unary { .. } => "Assign.Unary",
             Rvalue::Binary { .. } => "Assign.Binary",
             Rvalue::CheckedBinary(_) => "Assign.CheckedBinary",
@@ -533,7 +547,9 @@ impl Context<'_, '_, '_> {
             let (descriptor, frame) = self
                 .slots
                 .legacy_descriptor_by_source(self.root, self.instance, place.local().index(), out)?
-                .ok_or_else(unsupported)?;
+                .ok_or(Error::Statement(
+                    "original MIR byte access has no retained source allocation",
+                ))?;
             let layout = self
                 .types
                 .get(ty.index() as usize)
@@ -594,7 +610,11 @@ impl Context<'_, '_, '_> {
                         ordinal.checked_mul(stride).ok_or(Resource::Arithmetic)?,
                     )
                 }
-                _ => return Err(unsupported()),
+                _ => {
+                    return Err(Error::Statement(
+                        "original MIR byte projection kind is not modeled",
+                    ));
+                }
             };
             let child = self.types.get(next.index() as usize).ok_or_else(mismatch)?;
             let extent = child.layout().size_bytes().ok_or_else(unsupported)?;
@@ -663,7 +683,11 @@ impl Context<'_, '_, '_> {
                         }
                         value.bits()
                     }
-                    _ => return Err(unsupported()),
+                    _ => {
+                        return Err(Error::Statement(
+                            "original MIR scalar byte constant kind is not modeled",
+                        ));
+                    }
                 };
                 if bits >= (1u128 << scalar.width()) {
                     return Err(mismatch());

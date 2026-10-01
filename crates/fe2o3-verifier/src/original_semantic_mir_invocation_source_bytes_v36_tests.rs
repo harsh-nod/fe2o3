@@ -2,6 +2,64 @@ use super::*;
 use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
 
 #[test]
+fn original_mir_use_diagnostics_distinguish_projected_carriers_and_all_constant_kinds() {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    let ty = SemanticTypeIdV1::from_index(0);
+    let local = SemanticLocalIdV1::from_index(1);
+    let plain = Place::new(local, vec![], ty).unwrap();
+    let projected = Place::new(
+        local,
+        vec![SemanticProjectionV1::new(Projection::Field(0), ty).unwrap()],
+        ty,
+    )
+    .unwrap();
+    let use_kind = |operand| {
+        statement_kind(&Statement::Assign(SemanticAssignmentV1::new(
+            plain.clone(),
+            SemanticRvalueV1::new(ty, Rvalue::Use(operand)),
+        )))
+    };
+    for (operand, expected) in [
+        (Operand::Copy(plain.clone()), "Assign.Use.Copy.Local"),
+        (
+            Operand::Copy(projected.clone()),
+            "Assign.Use.Copy.Projected",
+        ),
+        (Operand::Move(plain.clone()), "Assign.Use.Move.Local"),
+        (Operand::Move(projected), "Assign.Use.Move.Projected"),
+    ] {
+        assert_eq!(use_kind(operand), expected);
+    }
+    for (value, expected) in [
+        (Constant::ZeroSized, "Assign.Use.Constant.ZeroSized"),
+        (
+            Constant::Scalar(SemanticScalarValueV1::new(1, 1).unwrap()),
+            "Assign.Use.Constant.Scalar",
+        ),
+        (
+            Constant::Bytes(SemanticConstantBytesV1::new(vec![1]).unwrap()),
+            "Assign.Use.Constant.Bytes",
+        ),
+        (
+            Constant::Pointer(SemanticPointerValueV1::new(
+                0,
+                SemanticPointerProvenanceV1::ExposedAddress,
+            )),
+            "Assign.Use.Constant.Pointer",
+        ),
+        (
+            Constant::Callable(SemanticCallableIdV1::from_index(0)),
+            "Assign.Use.Constant.Callable",
+        ),
+    ] {
+        assert_eq!(
+            use_kind(Operand::Constant(SemanticConstantV1::new(ty, value))),
+            expected
+        );
+    }
+}
+
+#[test]
 fn original_mir_stable_reference_currentness_requires_version_frame_and_exact_borrow_site() {
     let text = SOURCE_BYTES_V36;
     for required in [
