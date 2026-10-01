@@ -30,7 +30,18 @@ fn check_enum_census_mutations_v55(
     let spills = archive.enum_spills.clone();
     let subject = archive.subject;
     let plan = archive.plan;
-    assert_eq!(spills.len(), 4);
+    let merge_local = (instances.owner().source_semantic().functions()[0]
+        .locals()
+        .len()
+        - 3) as u32;
+    assert_eq!(spills.len(), 2, "one enum merge with two non-Unit leaves");
+    assert_eq!(
+        spills
+            .iter()
+            .map(|spill| (spill.local, spill.variant, spill.field, spill.component))
+            .collect::<Vec<_>>(),
+        vec![(merge_local, 1, 0, 0), (merge_local, 1, 2, 0)]
+    );
     let span = *spans
         .iter()
         .find(|row| row.rule == SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage)
