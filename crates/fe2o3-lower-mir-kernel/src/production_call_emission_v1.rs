@@ -56,10 +56,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "aggregate helper return requires a whole SSA local",
             ));
         }
+        if self.scalar_enum_result_local_v1(return_local as u32)
+            && let Some(budget) = self.emission_work.as_deref_mut()
+        {
+            prepay_scalar_enum_emission_shape_v1(
+                self.types,
+                self.function.locals()[return_local].ty(),
+                budget,
+            )?;
+        }
         let inputs = if self.result_types.is_empty() {
             Vec::new()
         } else {
-            self.locals
+            let binding = self
+                .locals
                 .get(return_local)
                 .and_then(Option::as_ref)
                 .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
@@ -67,16 +77,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     block: block.index(),
                     statement: None,
                     local: return_local as u32,
-                })?
-                .values()
-                .map_err(|detail| {
-                    unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        detail,
-                    )
-                })?
+                })?;
+            if self.scalar_enum_result_local_v1(return_local as u32) {
+                scalar_enum_result_values_v1(
+                    self.types,
+                    self.function.locals()[return_local].ty(),
+                    binding,
+                    &self.result_types,
+                )
+            } else {
+                binding.values()
+            }
+            .map_err(|detail| {
+                unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    detail,
+                )
+            })?
         };
         if inputs.len() != self.result_types.len() {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -527,8 +546,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 arguments,
             },
         )?;
-        let binding =
-            binding_from_value_defs(self.types, signature.result_semantic_type, &results)?;
+        let binding = if matches!(
+            self.types[signature.result_semantic_type.index() as usize].shape(),
+            SemanticTypeShapeV1::Enum { .. }
+        ) {
+            if let Some(budget) = self.emission_work.as_deref_mut() {
+                prepay_scalar_enum_emission_shape_v1(
+                    self.types,
+                    signature.result_semantic_type,
+                    budget,
+                )?;
+            }
+            scalar_enum_result_binding_v1(self.types, signature.result_semantic_type, &results)?
+        } else {
+            binding_from_value_defs(self.types, signature.result_semantic_type, &results)?
+        };
         let watch = matches!(destination_witness, SemanticKirCallDestinationV1::Local)
             .then_some((destination.place().local(), results.as_slice()));
         self.finish_call_destination_v1(

@@ -68,17 +68,22 @@ phase separately as well as retaining the existing per-step deadlines; do not
 apply the per-step timeout as a deadline for an entire multi-step phase. The
 existing opt-in runtime/export subtarget lifecycle remains unchanged.
 
-The required `source-simulation` phase also selects eight ignored production
+The required `source-simulation` phase also selects ten ignored production
 source-compiler controls explicitly: checked unsigned addition, core branch
 hints, and shared-slice `get`, with genuine-source and source-safety refusal
 parents for each family, plus ordinary scalar enum payload transport and typed
-indirect constants. The enum
+indirect constants, scalar-data enum helper returns, and their pointer/capability
+return refusals. The enum
 parent checks a non-Option enum with an immutable entry scalar and an absent
 variant on both AMD targets at opt0/opt3, inspects the actual exported helper's
 purity, and compares CPU results with an independent flag/value oracle.
 The typed-constant parent covers nested tuple/array padding, noncontiguous signed
 enum discriminants, and scalar niches with absent and active payloads on both
 targets at opt0/opt3, comparing all output lanes to an independent scalar oracle.
+The helper-return parent requires joined constructors and copied results with
+distinct scalar payload variants to compile and match an independent CPU oracle.
+The separate refusal parent checks the unsupported pointer/capability result
+boundary; it does not replace the required shared-slice `get` positive.
 Optional failure-only MIR replays are diagnostic observations, not proof that
 the original source export succeeded or that a source shape survived optimization.
 These use the existing pinned nightly `rust-src`

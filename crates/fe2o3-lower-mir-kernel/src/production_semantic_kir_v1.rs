@@ -198,6 +198,8 @@ include!("production_private_array_consumers_v1.rs");
 include!("production_argument_shapes_v1.rs");
 include!("production_argument_structure_v1.rs");
 include!("production_call_correspondence_v1.rs");
+include!("production_enum_result_v1.rs");
+include!("production_enum_result_emission_v1.rs");
 include!("production_call_emission_v1.rs");
 include!("production_call_storage_v1.rs");
 include!("production_call_validation_v1.rs");
@@ -12253,6 +12255,15 @@ fn lower_single_root_module(
         closure_budget,
     )?);
     for function_id in closure.iter().copied().skip(1) {
+        let output = semantic.functions()[function_id.index() as usize]
+            .abi()
+            .source_output_type();
+        if matches!(
+            semantic.types()[output.index() as usize].shape(),
+            SemanticTypeShapeV1::Enum { .. }
+        ) {
+            prepay_helper_result_shape_v1(semantic.types(), output, call_budget)?;
+        }
         let plan = match admission {
             HelperLoweringAdmissionV1::PendingBf16Nominal(state) => bf16_parameter_plan_v1(
                 state.source,
@@ -12977,6 +12988,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         for (local, parameters) in parameters {
             let promoted = &self.control_flow_ssa.promoted[&local];
+            if promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult
+                && let Some(budget) = self.emission_work.as_deref_mut()
+            {
+                prepay_scalar_enum_emission_shape_v1(self.types, promoted.semantic_type, budget)?;
+            }
             if promoted.transport == SemanticPromotedTransportV1::Execution {
                 self.with_emission_budget_v1(|_, budget| {
                     for value in parameters {
@@ -13045,6 +13061,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .is_some_and(|cursor| cursor.cfg.nominal_locals[*local as usize] != 0)
             {
                 continue;
+            }
+            if self
+                .control_flow_ssa
+                .promoted
+                .get(local)
+                .is_some_and(|promoted| {
+                    promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult
+                })
+                && let Some(budget) = self.emission_work.as_deref_mut()
+            {
+                prepay_scalar_enum_emission_shape_v1(
+                    self.types,
+                    self.function.locals()[*local as usize].ty(),
+                    budget,
+                )?;
             }
             let binding = self
                 .semantic_ssa_bindings
@@ -13219,9 +13250,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let Some(promoted) = self.control_flow_ssa.promoted.get(&local) else {
             return Ok(());
         };
-        if !promoted.transport.uses_structural_enum_transport() {
+        if !promoted.transport.tracks_enum_variant_v1() {
             return Ok(());
         }
+        let scalar_enum_result =
+            promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult;
         let Some(declaration) = self.types.get(promoted.semantic_type.index() as usize) else {
             return Err(unsupported(
                 0,
@@ -13263,6 +13296,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             discriminant,
             discriminant_ty,
             semantic_type,
+            payloads,
             ..
         } = binding
         else {
@@ -13273,6 +13307,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "variant-refined local is not an enum SSA binding",
             ));
         };
+        if scalar_enum_result {
+            self.locals[local as usize] = Some(SemanticValueBindingV1::Enum {
+                discriminant,
+                discriminant_ty,
+                semantic_type,
+                variant: Some(variant),
+                payloads,
+            });
+            return Ok(());
+        }
         let variant_definition = variants.get(variant as usize).ok_or_else(|| {
             unsupported(
                 0,
@@ -13623,10 +13667,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         )
                     })?;
                 let promoted = &self.control_flow_ssa.promoted[&local];
-                let values = promoted
-                    .transport
-                    .transport_values(binding, &promoted.kernel_types)
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                if promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult
+                    && let Some(budget) = self.emission_work.as_deref_mut()
+                {
+                    prepay_scalar_enum_emission_shape_v1(
+                        self.types,
+                        promoted.semantic_type,
+                        budget,
+                    )?;
+                }
+                let values = if promoted.transport == SemanticPromotedTransportV1::ScalarEnumResult
+                {
+                    scalar_enum_result_values_v1(
+                        self.types,
+                        promoted.semantic_type,
+                        binding,
+                        &promoted.kernel_types,
+                    )
+                } else {
+                    promoted
+                        .transport
+                        .transport_values(binding, &promoted.kernel_types)
+                }
+                .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
                 (values, promoted.kernel_types.len())
             };
             if values.len() != expected_count {
@@ -21848,6 +21911,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         volatility: SemanticVolatilityV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.scalar_enum_result_local_v1(destination.local().index()) {
+            if !destination.projections().is_empty() {
+                return Err(scalar_enum_result_producer_error_v1());
+            }
+            let value = self.complete_scalar_enum_result_v1(destination.ty(), value, operations)?;
+            return self.bind_destination(block, statement, destination, value);
+        }
         if self.retained_array_slot_v1(destination.local()).is_some() {
             self.store_retained_array_place_v1(
                 block,
@@ -25887,6 +25957,7 @@ mod shared_slice_helper_parameter_tests {
 
 #[cfg(test)]
 mod resource_tests {
+    include!("production_enum_result_v1_tests.rs");
     mod scalar_enum_payload_tests_v1 {
         include!("production_scalar_enum_payload_v1_tests.rs");
     }

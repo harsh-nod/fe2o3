@@ -101,6 +101,31 @@ struct HelperResultShapeV1 {
     source_type: SemanticTypeIdV1,
     aggregate: bool,
     components: Vec<ByValueKernelParameterComponentV1>,
+    scalar_enum: Option<ScalarEnumResultShapeV1>,
+}
+
+impl HelperResultShapeV1 {
+    fn component_count(&self) -> usize {
+        self.scalar_enum
+            .as_ref()
+            .map_or(self.components.len(), |shape| shape.components.len())
+    }
+
+    fn component_types(&self) -> impl Iterator<Item = &Type> {
+        self.components
+            .iter()
+            .map(|(_, _, ty, _, _)| ty)
+            .chain(self.scalar_enum.iter().flat_map(|shape| {
+                shape
+                    .components
+                    .iter()
+                    .map(|component| &component.kernel_type)
+            }))
+    }
+
+    fn kernel_types(&self) -> Vec<Type> {
+        self.component_types().cloned().collect()
+    }
 }
 
 fn helper_result_components_v1(
@@ -138,12 +163,22 @@ fn helper_result_components_v1(
         types[abi.source_output_type().index() as usize].shape(),
         SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
     );
-    let components = lower_by_value_abi_components_v1(
-        types,
-        function,
-        abi.return_value(),
-        ParameterLeafPolicyV1::PointerFree,
-    )?;
+    let scalar_enum = matches!(
+        types[abi.source_output_type().index() as usize].shape(),
+        SemanticTypeShapeV1::Enum { .. }
+    )
+    .then(|| scalar_enum_result_shape_v1(types, abi.source_output_type()))
+    .transpose()?;
+    let components = if scalar_enum.is_some() {
+        Vec::new()
+    } else {
+        lower_by_value_abi_components_v1(
+            types,
+            function,
+            abi.return_value(),
+            ParameterLeafPolicyV1::PointerFree,
+        )?
+    };
     let local =
         u32::try_from(local).map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
     Ok(HelperResultShapeV1 {
@@ -151,6 +186,7 @@ fn helper_result_components_v1(
         source_type: abi.source_output_type(),
         aggregate,
         components,
+        scalar_enum,
     })
 }
 

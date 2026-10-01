@@ -71,6 +71,12 @@ run_generic_core_source_simulation() {
   run_step source-core-typed-indirect-constants \
     bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
       typed_indirect_constant_tests::genuine_typed_indirect_constants_preserve_source_semantics
+  run_step source-core-scalar-enum-returns \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_scalar_enum_return_tests::genuine_scalar_enum_helper_returns_preserve_source_semantics
+  run_step source-core-scalar-enum-return-refusals \
+    bash scripts/ci-cargo-test-json.sh rustc-codegen-fe2o3 production_extraction_driver_v1 \
+      core_scalar_enum_return_tests::pointer_and_capability_enum_returns_remain_refused
   run_step kir-sim-capability-matrix \
     cargo test --locked -p fe2o3-kir-sim --test capability_matrix
   run_step kir-sim-scalar-differential \

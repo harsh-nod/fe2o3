@@ -394,17 +394,16 @@ fn build_execution_function_layout_v29(
     }
     budget.charge_work(function.locals().len())?;
     let floor = budget.storage();
-    prepay_typed_shape_v1(
+    prepay_helper_result_shape_v1(
         semantic.types(),
         function.abi().source_output_type(),
-        0,
         budget,
     )?;
     let scratch = budget.storage() - floor;
     let result_types = (|| {
         let shape = helper_result_components_v1(semantic.types(), function, row.function())?;
-        let mut result = emission_vec_v1(shape.components.len(), budget)?;
-        for (_, _, ty, _, _) in &shape.components {
+        let mut result = emission_vec_v1(shape.component_count(), budget)?;
+        for ty in shape.component_types() {
             result.push(execution_cfg_clone_type_v29(ty, budget)?);
         }
         Ok::<_, ProductionSemanticKirErrorV1>(result)

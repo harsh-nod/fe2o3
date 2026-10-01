@@ -11,6 +11,7 @@ enum SemanticPromotedTransportV1 {
     Semantic(SemanticPromotedBindingV1),
     DirectParameter { parameter_local: u32 },
     Execution,
+    ScalarEnumResult,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -754,6 +755,10 @@ impl SemanticPromotedTransportV1 {
         matches!(self, Self::Semantic(SemanticPromotedBindingV1::Ordinary))
     }
 
+    const fn tracks_enum_variant_v1(self) -> bool {
+        self.uses_structural_enum_transport() || matches!(self, Self::ScalarEnumResult)
+    }
+
     fn transport_types(
         self,
         types: &[SemanticTypeDeclV1],
@@ -762,6 +767,11 @@ impl SemanticPromotedTransportV1 {
     ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
         match self {
             Self::Semantic(binding) => binding.transport_types(types, semantic_type),
+            Self::ScalarEnumResult => Ok(scalar_enum_result_shape_v1(types, semantic_type)?
+                .components
+                .into_iter()
+                .map(|component| component.kernel_type)
+                .collect()),
             Self::Execution => Err(execution_cfg_error_v29()),
             Self::DirectParameter { parameter_local } => direct_parameters
                 .get(&parameter_local)
@@ -778,6 +788,9 @@ impl SemanticPromotedTransportV1 {
     ) -> Result<Vec<(ValueId, Type)>, &'static str> {
         match self {
             Self::Semantic(semantic) => semantic.transport_values(binding),
+            Self::ScalarEnumResult => {
+                Err("scalar enum result transport requires its semantic shape")
+            }
             Self::Execution => Err("execution transport requires its captured CFG state"),
             Self::DirectParameter { .. } => match (binding, expected) {
                 (SemanticValueBindingV1::Value { id, ty }, [expected]) if ty == expected => {
@@ -799,6 +812,7 @@ impl SemanticPromotedTransportV1 {
             Self::Semantic(semantic) => {
                 semantic.binding_from_transport(types, semantic_type, values)
             }
+            Self::ScalarEnumResult => scalar_enum_result_binding_v1(types, semantic_type, values),
             Self::Execution => Err(execution_cfg_error_v29()),
             Self::DirectParameter { .. }
                 if values.len() == 1 && expected.len() == 1 && values[0].ty == expected[0] =>

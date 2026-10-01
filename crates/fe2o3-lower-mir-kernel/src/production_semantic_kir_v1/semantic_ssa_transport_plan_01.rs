@@ -334,6 +334,16 @@ impl SemanticControlFlowSsaPlanV1 {
             max_analysis_work,
             max_analysis_storage,
         )?;
+        let scalar_enum_results = scalar_enum_result_locals_v1(
+            types,
+            callables,
+            function,
+            semantic_ssa,
+            max_analysis_work,
+            max_analysis_storage,
+            emission_work.as_deref_mut(),
+        )?;
+        transported.extend(scalar_enum_results.iter().copied());
         let mut promoted = BTreeMap::new();
         for local in transported {
             let declaration = function
@@ -344,6 +354,11 @@ impl SemanticControlFlowSsaPlanV1 {
                 execution.is_some_and(|cursor| cursor.cfg.nominal_locals[local as usize] != 0);
             let (transport_semantic_type, binding) = if nominal {
                 (declaration.ty(), SemanticPromotedTransportV1::Execution)
+            } else if scalar_enum_results.contains(&local) {
+                (
+                    declaration.ty(),
+                    SemanticPromotedTransportV1::ScalarEnumResult,
+                )
             } else {
                 promoted_transport_descriptor_v1(
                     types,

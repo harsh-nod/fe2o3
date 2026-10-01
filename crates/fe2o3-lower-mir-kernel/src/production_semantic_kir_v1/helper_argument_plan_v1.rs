@@ -199,11 +199,14 @@ fn direct_scalar_helper_plan_v1(
         parameter_local_bindings.push(binding);
     }
 
-    let result_types = helper_result_components_v1(types, function, function_id)?
-        .components
-        .into_iter()
-        .map(|(_, _, ty, _, _)| ty)
-        .collect();
+    if matches!(
+        types[abi.source_output_type().index() as usize].shape(),
+        SemanticTypeShapeV1::Enum { .. }
+    ) {
+        let nodes = visit_scalar_enum_result_v1(types, abi.source_output_type(), |_, _, _| Ok(()))?;
+        closure_budget.charge_arguments(nodes, max_argument_rows)?;
+    }
+    let result_types = helper_result_components_v1(types, function, function_id)?.kernel_types();
     Ok(LoweredFunctionPlanV1 {
         correspondence_owner,
         semantic_function: function_id,
