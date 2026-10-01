@@ -1,35 +1,90 @@
 #[cfg(test)]
 mod scalar_enum_result_tests {
     use super::*;
-    use fe2o3_mir_model::semantic_mir_v1::SemanticAbiValueAttributesV1;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAbiExtensionV1, SemanticAbiPointerCaptureV1, SemanticAbiRegularAttributesV1,
+        SemanticAbiValueAttributesV1, SemanticDirectEnumEncodingV1, SemanticEnumEncodingV1,
+        SemanticEnumLayoutV1, SemanticEnumVariantLayoutV1,
+    };
 
     const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
     const U8: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
     const ENUM: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
 
     fn types() -> Vec<SemanticTypeDeclV1> {
-        let declaration = |tag, size, alignment, shape| {
+        let declaration = |tag, layout, shape| {
             SemanticTypeDeclV1::new(
                 SemanticTypeIdentityV1::from_sha256([tag; 32]),
                 SemanticLayoutIdentityV1::from_sha256([tag + 1; 32]),
-                SemanticTypeLayoutV1::new(Some(size), alignment).unwrap(),
+                layout,
                 shape,
             )
         };
+        let variant = |index, size, offsets: Vec<u64>| {
+            let order = (0..offsets.len() as u32).collect();
+            SemanticEnumVariantLayoutV1::from_rustc(
+                index,
+                size,
+                4,
+                SemanticFieldsShapeV1::arbitrary(offsets.clone(), order).unwrap(),
+                SemanticBackendReprV1::memory(true),
+                None,
+                false,
+                None,
+                4,
+                0,
+                SemanticAggregateLayoutV1::new(offsets, vec![]).unwrap(),
+            )
+            .unwrap()
+        };
+        let tag = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 32, 4),
+            SemanticScalarValidityRangeV1::new(3, 29),
+        );
         vec![
             unit_type(),
-            unsigned_scalar_type(91, 32),
-            unsigned_scalar_type(93, 8),
+            plain_bit_scalar_type(
+                91,
+                SemanticBackendPrimitiveV1::integer(false, 32, 4),
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            plain_bit_scalar_type(
+                93,
+                SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 8,
+                },
+            ),
             declaration(
                 95,
-                8,
-                4,
+                SemanticTypeLayoutV1::aggregate(
+                    Some(8),
+                    4,
+                    SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap(),
+                )
+                .unwrap(),
                 SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![U32, U8]).unwrap()),
             ),
             declaration(
                 97,
-                2,
-                1,
+                SemanticTypeLayoutV1::with_exact_rustc_layout(
+                    2,
+                    1,
+                    SemanticFieldsShapeV1::array(1, 2),
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::memory(true),
+                    None,
+                    false,
+                    None,
+                    1,
+                    0,
+                    SemanticTypeLayoutDetailsV1::None,
+                )
+                .unwrap(),
                 SemanticTypeShapeV1::Array {
                     element: U8,
                     length: 2,
@@ -37,8 +92,22 @@ mod scalar_enum_result_tests {
             ),
             declaration(
                 99,
-                16,
-                4,
+                SemanticTypeLayoutV1::enum_layout(
+                    16,
+                    4,
+                    SemanticEnumLayoutV1::new(
+                        vec![
+                            variant(0, 4, vec![]),
+                            variant(1, 8, vec![4]),
+                            variant(2, 16, vec![4, 12]),
+                        ],
+                        SemanticEnumEncodingV1::Direct(SemanticDirectEnumEncodingV1::new(
+                            0, 0, tag,
+                        )),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
                 SemanticTypeShapeV1::Enum {
                     discriminant: U32,
                     variants: vec![
@@ -180,7 +249,20 @@ mod scalar_enum_result_tests {
             SemanticAbiValueV1::new(
                 ENUM,
                 SemanticAbiPassModeV1::Indirect {
-                    attributes: SemanticAbiValueAttributesV1::plain(),
+                    attributes: SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(
+                            true,
+                            Some(SemanticAbiPointerCaptureV1::CapturesNone),
+                            true,
+                            false,
+                            false,
+                            true,
+                        ),
+                        SemanticAbiExtensionV1::None,
+                        16,
+                        Some(4),
+                    )
+                    .unwrap(),
                     metadata_attributes: None,
                     on_stack: false,
                 },
