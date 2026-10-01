@@ -480,7 +480,25 @@ impl ProductionPlironSessionV1 {
         registrations: impl IntoIterator<Item = DialectRegistration>,
         analysis_resource_limits: ProductionAnalysisResourceLimitsV1,
     ) -> Result<Self, ContextBuildError> {
-        let inner = PlironSession::new(limits.shell(), registrations)?;
+        Self::new_with_analysis_and_snapshot_policy_v1(
+            limits,
+            registrations,
+            analysis_resource_limits,
+            None,
+        )
+    }
+
+    pub(super) fn new_with_analysis_and_snapshot_policy_v1(
+        limits: ProductionSessionLimitsV1,
+        registrations: impl IntoIterator<Item = DialectRegistration>,
+        analysis_resource_limits: ProductionAnalysisResourceLimitsV1,
+        snapshot_policy: Option<crate::graph_analysis_v1::snapshot_policy_v1::SnapshotPolicyV1>,
+    ) -> Result<Self, ContextBuildError> {
+        let inner = PlironSession::new_with_snapshot_policy_v1(
+            limits.shell(),
+            registrations,
+            snapshot_policy,
+        )?;
         Ok(Self {
             inner,
             atomic_target: None,

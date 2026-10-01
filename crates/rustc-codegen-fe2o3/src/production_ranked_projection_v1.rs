@@ -19687,8 +19687,14 @@ fn projected_cfg_terminator(
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
 ) -> Result<ProjectedCfgTerminatorV1, ProductionRankedProjectionErrorV1> {
     root_cfg_terminator_resources_v1::project(
-        function, block_index, callables, non_bounds_assert_proved,
-        assertion_facts, switch_predicates, deterministic_switches, None,
+        function,
+        block_index,
+        callables,
+        non_bounds_assert_proved,
+        assertion_facts,
+        switch_predicates,
+        deterministic_switches,
+        None,
     )
 }
 

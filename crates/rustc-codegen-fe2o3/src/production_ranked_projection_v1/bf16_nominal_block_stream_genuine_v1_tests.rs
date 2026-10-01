@@ -844,7 +844,7 @@ pub(crate) fn observe_actual_root_block_stream_for_test_v1(
             || budget.work() < work
             || budget.peak_storage() < peak
         {
-            drop(result);
+            let _ = result;
             return Err(QueryError::Resource(Resource::Accounting));
         }
         budget.release_storage(owned)?;

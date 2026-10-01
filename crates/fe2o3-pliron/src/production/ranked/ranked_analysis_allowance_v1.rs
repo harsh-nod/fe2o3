@@ -151,3 +151,107 @@ pub fn compile_ranked_kernel_for_gfx942_lowering_with_analysis_allowance_v1(
 #[cfg(test)]
 #[path = "ranked_analysis_allowance_v1_tests.rs"]
 mod tests;
+
+impl ProductionRankedAnalysisAllowanceV1 {
+    /// Returns the existing analysis ceiling, without changing any default.
+    /// This is a scalar allowance, not prepaid work or storage.
+    pub fn production_hard_ceiling() -> Self {
+        Self {
+            limits: ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+        }
+    }
+}
+
+/// Caller-selected bounds for the existing two-pass presentation sink/hash.
+/// These do not cover Display traversal/allocation, constructors, or Context.
+/// A caller's separate account must prepay max_work before the session starts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionRankedSnapshotAllowanceV1 {
+    max_bytes: usize,
+    max_work: usize,
+}
+
+impl ProductionRankedSnapshotAllowanceV1 {
+    pub fn new(
+        max_bytes: usize,
+        max_work: usize,
+    ) -> Result<Self, ProductionRankedSnapshotAllowanceErrorV1> {
+        if max_bytes > crate::HARD_MAX_OPERATION_IMPORT_BYTES {
+            return Err(ProductionRankedSnapshotAllowanceErrorV1::BytesAboveHardCeiling);
+        }
+        if max_work > ProductionAnalysisResourceLimitsV1::production_hard_ceiling().max_work() {
+            return Err(ProductionRankedSnapshotAllowanceErrorV1::WorkAboveHardCeiling);
+        }
+        Ok(Self {
+            max_bytes,
+            max_work,
+        })
+    }
+
+    /// Existing policy ceilings, not a new memory envelope.
+    pub fn production_hard_ceiling() -> Self {
+        Self {
+            max_bytes: crate::HARD_MAX_OPERATION_IMPORT_BYTES,
+            max_work: ProductionAnalysisResourceLimitsV1::production_hard_ceiling().max_work(),
+        }
+    }
+
+    pub const fn max_bytes(self) -> usize {
+        self.max_bytes
+    }
+    pub const fn max_work(self) -> usize {
+        self.max_work
+    }
+
+    fn into_policy(self) -> crate::graph_analysis_v1::snapshot_policy_v1::SnapshotPolicyV1 {
+        crate::graph_analysis_v1::snapshot_policy_v1::SnapshotPolicyV1::new(
+            self.max_bytes,
+            self.max_work,
+        )
+        .expect("checked snapshot allowance preserves the existing ceilings")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionRankedSnapshotAllowanceErrorV1 {
+    BytesAboveHardCeiling,
+    WorkAboveHardCeiling,
+}
+impl std::fmt::Display for ProductionRankedSnapshotAllowanceErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::BytesAboveHardCeiling => {
+                "ranked snapshot byte allowance exceeds the hard ceiling"
+            }
+            Self::WorkAboveHardCeiling => "ranked snapshot work allowance exceeds the hard ceiling",
+        })
+    }
+}
+impl std::error::Error for ProductionRankedSnapshotAllowanceErrorV1 {}
+
+/// Selects both existing resource policies on the unchanged target-neutral engine.
+///
+/// Callers with an enclosing account must precharge analysis.max_work() plus
+/// snapshot.max_work() and retain at least analysis.max_peak_storage() while the
+/// returned lowering input/session remains live. No unused work is refunded by
+/// this endpoint. The snapshot byte limit bounds each presentation's emitted
+/// UTF8, not a retained String or a reservation for all printer allocations.
+///
+/// The supplied construction already exists. Its constructor/transforms, initial
+/// recipe hashing, Context/dialect allocation and Display internals are excluded
+/// and require separate caller admission. This endpoint does not establish BF16
+/// normal readiness or artifact/launch authority. Defaults and targets are unchanged.
+pub fn compile_ranked_kernel_for_lowering_with_analysis_and_snapshot_allowances_v1(
+    construction: ProductionConstructionV1,
+    limits: ProductionSessionLimitsV1,
+    analysis: ProductionRankedAnalysisAllowanceV1,
+    snapshot: ProductionRankedSnapshotAllowanceV1,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    super::compile_ranked_kernel_for_lowering_with_resource_policy_v1(
+        construction,
+        limits,
+        None,
+        analysis.limits,
+        Some(snapshot.into_policy()),
+    )
+}

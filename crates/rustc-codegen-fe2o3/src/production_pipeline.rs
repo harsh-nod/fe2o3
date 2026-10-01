@@ -3761,23 +3761,7 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
         ) -> Result<R, Box<ProductionPipelineError>>,
     ) -> Result<R, Box<ProductionPipelineError>> {
-        let prepared = self.prepare_materialization_inputs_v29(|typed_roots| {
-            typed_roots
-                .iter()
-                .map(|typed_root| {
-                    let source_launch = typed_root.source_launch().ok_or(
-                        ProductionPipelineError::Geometry(
-                            crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-                        ),
-                    )?;
-                    Ok(crate::production_ranked_projection_v1::ProductionRankedRootInputV1::new(
-                        typed_root.logical_name(),
-                        typed_root.kernel_binding_bytes(),
-                        source_launch,
-                    ))
-                })
-                .collect::<Result<Vec<_>, ProductionPipelineError>>()
-        })?;
+        let prepared = self.prepare_materialization_roster_v1()?;
         let resource_error = materialization_resource_error_v29;
         let work_limit = usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
             .map_err(|_| {
@@ -4913,3 +4897,6 @@ pub(crate) mod bindings_retained_storage_v1;
 
 #[path = "production_pipeline/bf16_tile_source_promotion_v1.rs"]
 mod bf16_tile_source_promotion_v1;
+
+#[path = "production_pipeline/retained_materialization_phase_v1.rs"]
+mod retained_materialization_phase_v1;
