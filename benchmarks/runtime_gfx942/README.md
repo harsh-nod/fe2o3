@@ -481,6 +481,71 @@ currently fail closed.
 HSA/HIP results remain qualification/oracle evidence and do not identify
 production backend alternatives.
 
+### Retained-pair Cadence Experiment
+
+`xgmi_retained_wait_cadence_transport.py` is a separate bounded 36-trial
+experiment. It uses `kfd-xgmi-retained-cadence-experiment` with the closed
+`ordinary-1ms` and `ceiling-25us` policies, each in ordinary and profiled modes.
+The existing default wait policy, native24 controllers, producer, and parser
+remain unchanged. The new schema is `fe2o3.xgmi-retained-wait-cadence.v1` and
+cannot be substituted for the existing ordinary or diagnostic schemas.
+
+For each depth (1, 16, 32), the fixed order is ordinary-1ms ordinary/profiled,
+ceiling-25us ordinary/profiled, HSA, HIP, HIP, HSA, then the four KFD cases in
+reverse order. Each invocation copies 1 MiB per slot, runs both directions,
+uses one prime batch and two warmups, and retains ten samples per direction.
+All 36 invocations, including 24 ordinary and 12 profiled trials, must pass
+exact output and receipt joins. Payload staging, scope entry/finish, and final canary/readback
+validation are outside samples; operational checks remain inside samples.
+
+The KFD 1 ms control is the separately named
+`wait_batch_for_cadence_experiment_v1` method, not a fresh measurement of the
+unchanged `kfd-series` producer. The latter is built only for query/admission.
+The cadence producer has no query-only mode: its UID, GPU ID, and directional
+engine output must join the current query admission. All four ELFs (query KFD,
+cadence KFD, HSA, HIP) have separate authenticated build/dependency identities;
+the same cadence ELF runs both policies and modes.
+
+Use a reviewed signed source, fresh external output directory, and currently
+free gfx942:xnack- pair. Device arguments are physical index, canonical UID,
+and PCI BDF; no example pair is an exclusive reservation:
+
+```sh
+python3 -I -B benchmarks/runtime_gfx942/xgmi_retained_wait_cadence_transport.py \
+  prepare --commit "$SIGNED_SHA" --output "$PREPARED" \
+  --device "$INDEX0" "$UID0" "$BDF0" \
+  --device "$INDEX1" "$UID1" "$BDF1"
+# Review the exact selected objects, payload, entrypoint, and prepared binding.
+python3 -I -B "$PREPARED/source/benchmarks/runtime_gfx942/xgmi_retained_wait_cadence_transport.py" \
+  execute --prepared "$PREPARED"
+```
+
+Transport retains the existing shared build lock, point-in-time physical/API
+admission, fixed query settling and postflight observations, original foreground
+owner, and resource monitor. Bounds remain 12 GiB private remote storage,
+40 GiB disk and 64 GiB available-memory reserves, 900 seconds for the lock,
+5,400 seconds for the campaign, and 7,200 seconds for its SSH owner. No retry or
+foreign cleanup occurs. Exact-owned cleanup requires known original closure,
+authenticated local archive readback and replay, followed by absence checking.
+
+Report ordinary and profiled results separately. The ordinary comparison uses
+the mean of two invocation-level nearest-rank p50 values; for ten raw KFD
+samples, each p50 is the fifth sorted sample. Profiled phase distributions and
+missing counts are diagnostic only. Do not sum independent medians or treat
+requested sleep or wall-minus-thread-CPU as measured avoidable latency. Host
+instrumentation perturbs readiness, HIP/HSA engine choice is unobserved, and
+point-idle admission does not prove exclusivity. The shared selector proof
+covers ceiling selection, not cursor construction, scheduling, hardware timing,
+or performance parity.
+
+Source-only controls, including bounded Python helper relocation without any
+SSH, build, or GPU command:
+
+```sh
+python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942 \
+  -p 'test_xgmi_retained_wait_cadence*.py'
+```
+
 ## Persistent In-place Compute Qualification
 
 R26 compares one exact persistent-buffer workload across direct KFD, raw HSA

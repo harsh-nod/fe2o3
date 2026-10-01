@@ -111,4 +111,4 @@ jobs:
       - name: Retained cadence controls (no GPU or network)
         run: >-
           python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
-          -p 'test_xgmi_retained_wait_cadence.py'
+          -p 'test_xgmi_retained_wait_cadence*.py'
