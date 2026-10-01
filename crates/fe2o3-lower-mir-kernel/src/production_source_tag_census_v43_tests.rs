@@ -1,3 +1,5 @@
+include!("production_source_object_completion_gate_v44_tests.rs");
+
 thread_local! {
     static TAG_CENSUS_FAULT_V43: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static TAG_CENSUS_VISITS_V43: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

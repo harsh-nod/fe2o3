@@ -228,6 +228,24 @@ fn scoped_object_requires_completion_v29(operation: &Operation) -> bool {
     )
 }
 
+fn scoped_object_completion_shape_v44(operation: ScopedObjectOperationV29) -> bool {
+    // Shape eligibility is not currentness: complete_candidate must still run
+    // the exact original tag census and same-candidate physical equations.
+    matches!(
+        operation,
+        ScopedObjectOperationV29::ReadValue { .. }
+            | ScopedObjectOperationV29::WriteValue { .. }
+            | ScopedObjectOperationV29::ReadDiscriminant { .. }
+            | ScopedObjectOperationV29::SetDiscriminant { .. }
+            | ScopedObjectOperationV29::Project {
+                step: ScopedObjectProjectionV29::Field(_)
+                    | ScopedObjectProjectionV29::ArrayIndex(_)
+                    | ScopedObjectProjectionV29::VariantForWrite { .. },
+                ..
+            }
+    )
+}
+
 fn check_pending_object_completion_v29(
     pending: &PendingScopedRootEmissionV29,
     instances: &ExecutionInstancesV29<'_>,
@@ -249,16 +267,7 @@ fn check_pending_object_completion_v29(
             }
             for payload in &anchors.objects {
                 budget.charge_work(1)?;
-                if !matches!(
-                    payload.operation,
-                    ScopedObjectOperationV29::ReadValue { .. }
-                        | ScopedObjectOperationV29::WriteValue { .. }
-                        | ScopedObjectOperationV29::Project {
-                            step: ScopedObjectProjectionV29::Field(_)
-                                | ScopedObjectProjectionV29::ArrayIndex(_),
-                            ..
-                        }
-                ) {
+                if !scoped_object_completion_shape_v44(payload.operation) {
                     return Err(scoped_object_pending_v29());
                 }
             }
