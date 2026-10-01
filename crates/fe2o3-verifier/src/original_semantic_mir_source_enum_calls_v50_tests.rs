@@ -504,6 +504,114 @@ fn original_enum_call_operand_classification_rejects_wrong_local_type_and_projec
 }
 
 #[test]
+fn original_enum_call_storage_does_not_initialize_moved_or_inactive_payloads() {
+    for moved in [false, true] {
+        call_program(moved, LIMIT, LIMIT).0.unwrap();
+        for inactive in [false, true] {
+            let reached = std::cell::Cell::new(false);
+            let result =
+                super::super::super::super::super::invocations::tests::run_source_transform(
+                    LIMIT,
+                    LIMIT,
+                    |types, functions| {
+                        let enumeration = call_fixture(types, functions, moved);
+                        for root in 0..functions.len() - 1 {
+                            let old = &functions[root];
+                            let word = old.locals()[3].ty();
+                            let variant = u32::try_from(root).unwrap();
+                            let field = SemanticPlaceV1::new(
+                                SemanticLocalIdV1::from_index(4),
+                                vec![
+                                    SemanticProjectionV1::new(
+                                        SemanticProjectionKindV1::Downcast(if inactive {
+                                            1 - variant
+                                        } else {
+                                            variant
+                                        }),
+                                        enumeration,
+                                    )
+                                    .unwrap(),
+                                    SemanticProjectionV1::new(
+                                        SemanticProjectionKindV1::Field(0),
+                                        word,
+                                    )
+                                    .unwrap(),
+                                ],
+                                word,
+                            )
+                            .unwrap();
+                            let selected = if inactive { 2 } else { 1 };
+                            let mut blocks = old.blocks().to_vec();
+                            let block = &blocks[selected];
+                            let statements = if inactive {
+                                let mut statements = block.statements().to_vec();
+                                let SemanticStatementKindV1::Assign(original) =
+                                    statements[1].kind()
+                                else {
+                                    panic!("original payload read");
+                                };
+                                statements[1] = SemanticStatementV1::new(
+                                    block.source(),
+                                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                                        original.destination().clone(),
+                                        SemanticRvalueV1::new(
+                                            word,
+                                            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(
+                                                field,
+                                            )),
+                                        ),
+                                    )),
+                                );
+                                statements
+                            } else {
+                                assert!(block.statements().is_empty());
+                                vec![SemanticStatementV1::new(
+                                    block.source(),
+                                    SemanticStatementKindV1::Deinitialize(field),
+                                )]
+                            };
+                            blocks[selected] = SemanticBasicBlockV1::new(
+                                block.identity(),
+                                block.source(),
+                                statements,
+                                block.terminator().clone(),
+                            )
+                            .unwrap();
+                            functions[root] = SemanticFunctionDeclV1::new(
+                                old.identity(),
+                                old.role(),
+                                old.item_definition_identity(),
+                                old.monomorphization_identity(),
+                                old.generic_type_arguments_identity(),
+                                old.const_generic_arguments_identity(),
+                                old.source(),
+                                old.abi().clone(),
+                                old.locals().to_vec(),
+                                old.entry(),
+                                blocks,
+                            )
+                            .unwrap()
+                            .with_kernel_entry(old.kernel_entry().unwrap().clone());
+                        }
+                    },
+                    |_, _| {
+                        reached.set(true);
+                        Ok(())
+                    },
+                );
+            let error = result.0.unwrap_err();
+            let expected = if inactive {
+                "source enum payload differs from its original guarded value"
+            } else {
+                "source reference reads an uninitialized partial holder"
+            };
+            assert!(format!("{error:?}").contains(expected), "{error:?}");
+            assert!(!reached.get(), "invalid source must not reach the callback");
+        }
+    }
+}
+
+#[test]
 fn original_enum_snapshots_preserve_source_completeness_and_pointer_escape_guards() {
     let values = include_str!("original_semantic_mir_source_enum_values_v47.vrs");
     let frames = include_str!("original_semantic_mir_invocation_source_frames_v36.rs");

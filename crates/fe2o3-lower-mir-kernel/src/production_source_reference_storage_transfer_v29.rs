@@ -177,14 +177,61 @@ impl<'a, 'root, 'source> SourceReferenceBuilderV29<'a, 'root, 'source> {
         instance: ProductionCallInstanceIdV1,
         local: SemanticLocalIdV1,
         initialized: bool,
+        argument: Option<usize>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Option<usize>, ProductionSemanticKirErrorV1> {
         let Some(root) = &self.storage_root else {
             return Ok(None);
         };
+        budget.charge_work(3)?;
+        let source = argument
+            .map(|node| {
+                self.plan
+                    .nodes
+                    .get(node)
+                    .map(|node| node.storage)
+                    .ok_or(ArgumentResourceV1::Accounting)
+            })
+            .transpose()?
+            .flatten();
+        if argument.is_some() && !initialized {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
         let snapshot = root
-            .snapshot_local(instance, local, initialized, budget)
+            .snapshot_local(instance, local, initialized && source.is_none(), budget)
             .map_err(|error| self.storage_error(error))?;
+        // A call transfers the captured value, including its active variant and
+        // partial-object state, into a fresh callee object. A generic initialized
+        // parameter fact would discard these facts at every helper boundary.
+        let snapshot = match (snapshot, source) {
+            (Some(destination), Some(source)) => {
+                let end = argument_sum_v1(&[source.first, source.count])?;
+                let path = self
+                    .plan
+                    .projections
+                    .get(source.first..end)
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                let original = self.storage_snapshot(source.snapshot)?;
+                let copied = if source.selector_source.is_some() {
+                    root.snapshot_selected_copy_from(
+                        destination,
+                        &[],
+                        None,
+                        original,
+                        path,
+                        source.selector_source,
+                        &self.plan,
+                        budget,
+                    )
+                } else {
+                    root.snapshot_copy_from(destination, &[], original, path, budget)
+                }
+                .map_err(|error| self.storage_error(error))?;
+                Some(copied)
+            }
+            (None, Some(_)) => return Err(ArgumentResourceV1::Accounting.into()),
+            (snapshot, None) => snapshot,
+        };
         snapshot
             .map(|snapshot| self.retain_storage_snapshot(snapshot, budget))
             .transpose()

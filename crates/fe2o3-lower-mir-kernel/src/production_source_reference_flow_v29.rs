@@ -128,6 +128,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 instance,
                 id,
                 declaration.role().is_entry_argument(),
+                arguments.and(locals[local].node),
                 budget,
             )?;
         }
