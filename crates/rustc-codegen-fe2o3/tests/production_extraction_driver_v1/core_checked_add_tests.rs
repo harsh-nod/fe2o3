@@ -221,6 +221,199 @@ pub fn checked_add_unsigned(a: u64, b: u64, mut output: DisjointSlice<u64>,
         }
     }
 
+    fn branch_hint_source(expression: &str, declarations: &str) -> String {
+        kernel_source(
+            &format!("if {expression} {{ Some(b) }} else {{ None }}"),
+            declarations,
+        )
+    }
+
+    #[test]
+    #[ignore = "requires pinned nightly rust-src and AMD target; CPU execution only"]
+    fn genuine_core_branch_hints_preserve_boolean_values() {
+        let target = ScratchTarget::new();
+        let fixture = materialize_source_safety_fixture(&target, "");
+        resolve_fixture(&fixture);
+        for hint in ["likely", "unlikely"] {
+            for cpu in ["gfx942", "gfx950"] {
+                for opt in [0, 3] {
+                    let source = format!(
+                        "#![feature(core_intrinsics)]\n{}",
+                        branch_hint_source(&format!("core::intrinsics::{hint}(a != 0)"), ""),
+                    );
+                    std::fs::write(fixture.join("src/lib.rs"), source).unwrap();
+                    let case = format!("branch-{hint}-{cpu}-opt{opt}");
+                    let bundle = target.path().join(format!("{case}.fe2sim"));
+                    let output = extract(&fixture, &target, cpu, opt, &case, &bundle);
+                    assert!(
+                        output.status.success(),
+                        "{case}: {}",
+                        String::from_utf8_lossy(&output.stderr),
+                    );
+                    for condition in [0, 1] {
+                        simulate(
+                            &target,
+                            &bundle,
+                            &case,
+                            condition,
+                            17,
+                            (condition != 0).then_some(17),
+                        );
+                    }
+                }
+            }
+            // A safe same-spelling user function keeps its opposite behavior.
+            let declarations = format!(
+                "mod impostor {{ #[inline(never)] pub fn {hint}(value: bool) -> bool {{ !value }} }}"
+            );
+            std::fs::write(
+                fixture.join("src/lib.rs"),
+                branch_hint_source(&format!("impostor::{hint}(a != 0)"), &declarations),
+            )
+            .unwrap();
+            let case = format!("local-inverted-{hint}");
+            let bundle = target.path().join(format!("{case}.fe2sim"));
+            let output = extract(&fixture, &target, "gfx942", 0, &case, &bundle);
+            assert!(
+                output.status.success(),
+                "{case}: {}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            for condition in [0, 1] {
+                simulate(
+                    &target,
+                    &bundle,
+                    &case,
+                    condition,
+                    17,
+                    (condition == 0).then_some(17),
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires pinned nightly rust-src and AMD target"]
+    fn branch_hint_lookalikes_do_not_bypass_source_safety() {
+        let target = ScratchTarget::new();
+        let fixture = materialize_source_safety_fixture(&target, "");
+        let provider = fixture.join("hint-lookalike");
+        std::fs::create_dir_all(provider.join("src")).unwrap();
+        std::fs::write(
+            provider.join("Cargo.toml"),
+            "[package]\nname = \"branch-hint-lookalike\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        ).unwrap();
+        let manifest_path = fixture.join("Cargo.toml");
+        let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace(
+            "[dependencies]\n",
+            "[dependencies]\nhint_lookalike = { package = \"branch-hint-lookalike\", path = \"hint-lookalike\" }\n",
+        );
+        std::fs::write(&manifest_path, manifest).unwrap();
+        std::fs::write(provider.join("src/lib.rs"), "#![no_std]\n").unwrap();
+        resolve_fixture(&fixture);
+        for hint in ["likely", "unlikely"] {
+            for (shape, definition, expression) in [
+                (
+                    "bool",
+                    format!("pub fn {hint}(value: bool) -> bool {{ value }}"),
+                    format!("hint_lookalike::{hint}(a != 0)"),
+                ),
+                (
+                    "wrong-input",
+                    format!("pub fn {hint}(value: u8) -> bool {{ value != 0 }}"),
+                    format!("hint_lookalike::{hint}(a as u8)"),
+                ),
+                (
+                    "wrong-output",
+                    format!("pub fn {hint}(value: bool) -> u8 {{ value as u8 }}"),
+                    format!("hint_lookalike::{hint}(a != 0) != 0"),
+                ),
+                (
+                    "wrong-arity",
+                    format!("pub fn {hint}(value: bool, _: bool) -> bool {{ value }}"),
+                    format!("hint_lookalike::{hint}(a != 0, false)"),
+                ),
+                (
+                    "wrong-abi",
+                    format!("pub extern \"C\" fn {hint}(value: bool) -> bool {{ value }}"),
+                    format!("hint_lookalike::{hint}(a != 0)"),
+                ),
+                (
+                    "generic",
+                    format!("pub fn {hint}<T>(value: bool) -> bool {{ value }}"),
+                    format!("hint_lookalike::{hint}::<u8>(a != 0)"),
+                ),
+            ] {
+                std::fs::write(
+                    provider.join("src/lib.rs"),
+                    format!("#![no_std]\n#[inline(never)]\n{definition}\n"),
+                )
+                .unwrap();
+                std::fs::write(
+                    fixture.join("src/lib.rs"),
+                    branch_hint_source(&expression, ""),
+                )
+                .unwrap();
+                let case = format!("external-{hint}-{shape}");
+                let bundle = target.path().join(format!("{case}.fe2sim"));
+                let output = extract(&fixture, &target, "gfx942", 0, &case, &bundle);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    !output.status.success(),
+                    "{case}: lookalike unexpectedly admitted"
+                );
+                assert!(
+                    stderr
+                        .contains("cannot authenticate the absence of user-provided unsafe blocks")
+                        && stderr.contains(&format!("branch_hint_lookalike::{hint}")),
+                    "{case}: not the source-safety refusal: {stderr}",
+                );
+                assert!(
+                    !bundle.exists(),
+                    "{case}: refused source published a bundle"
+                );
+            }
+            std::fs::write(provider.join("src/lib.rs"), "#![no_std]\n").unwrap();
+            for (shape, definition, expression, diagnostic) in [
+                (
+                    "unsafe-body",
+                    format!("pub fn {hint}(value: bool) -> bool {{ unsafe {{ value }} }}"),
+                    format!("impostor::{hint}(a != 0)"),
+                    "containing a user-provided unsafe block",
+                ),
+                (
+                    "unsafe-signature",
+                    format!("pub unsafe fn {hint}(value: bool) -> bool {{ value }}"),
+                    format!("unsafe {{ impostor::{hint}(a != 0) }}"),
+                    "reaches unsafe function instance",
+                ),
+            ] {
+                let declarations = format!("mod impostor {{ #[inline(never)] {definition} }}");
+                std::fs::write(
+                    fixture.join("src/lib.rs"),
+                    branch_hint_source(&expression, &declarations),
+                )
+                .unwrap();
+                let case = format!("local-{hint}-{shape}");
+                let bundle = target.path().join(format!("{case}.fe2sim"));
+                let output = extract(&fixture, &target, "gfx942", 0, &case, &bundle);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    !output.status.success(),
+                    "{case}: unsafe source unexpectedly admitted"
+                );
+                assert!(
+                    stderr.contains(diagnostic),
+                    "{case}: wrong refusal: {stderr}"
+                );
+                assert!(
+                    !bundle.exists(),
+                    "{case}: refused source published a bundle"
+                );
+            }
+        }
+    }
+
     fn simulate(
         target: &ScratchTarget,
         bundle: &Path,
