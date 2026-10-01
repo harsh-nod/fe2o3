@@ -4,7 +4,10 @@
 use super::super::super::byte_function_v30::{ByteAllocationResolverV30, ByteAllocationSiteV30};
 use super::super::invocations::InvocationPlan;
 use super::{Error, Resource, Result, Writer, vector};
-use fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 as Operation;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKirOperationCoordinateV1 as Operation,
+};
 use fe2o3_lower_mir_kernel::{
     ProductionSourceAllocationFrameV32 as Frame,
     ProductionSourceCorrespondenceV18 as Correspondence,
@@ -43,7 +46,7 @@ fn source_key(root: usize, instance: usize, local: u32, generation: Option<u32>)
 fn locate<T: Ord>(
     keys: &[T],
     key: &T,
-    budget: &mut super::super::super::Budget<'_>,
+    budget: &mut Budget<'_>,
 ) -> std::result::Result<usize, SourceError> {
     let (mut lo, mut hi) = (0, keys.len());
     while lo < hi {
@@ -535,6 +538,7 @@ pub(super) fn headers() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work,
@@ -956,10 +960,8 @@ mod tests {
                 (source_key(2, 0, 0, None), 20),
             ];
             let mut work = Work::new(limit);
-            let mut budget = Budget::new(&mut work, super::super::super::super::SOURCE_LIMIT + 17);
-            budget
-                .reserve_storage(super::super::super::super::SOURCE_LIMIT + 17)
-                .unwrap();
+            let mut budget = Budget::new(&mut work, SOURCE_LIMIT + 17);
+            budget.reserve_storage(SOURCE_LIMIT + 17).unwrap();
             let mut writer = Writer::new(&mut budget).unwrap();
             let before = writer.budget.storage();
             let result = sort_source(&mut rows, &mut writer);

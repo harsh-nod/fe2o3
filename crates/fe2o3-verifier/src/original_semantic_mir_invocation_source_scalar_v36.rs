@@ -413,6 +413,7 @@ fn headers() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
     use fe2o3_mir_model::semantic_mir_v1::*;
 
     const LIMIT: usize = 100_000_000;
@@ -615,11 +616,8 @@ mod tests {
                     statements.program.locals.capacity(),
                 );
                 let mut work = Work::new(limit);
-                let mut budget =
-                    Budget::new(&mut work, super::super::super::super::SOURCE_LIMIT + 17);
-                budget
-                    .reserve_storage(super::super::super::super::SOURCE_LIMIT + 17)
-                    .unwrap();
+                let mut budget = Budget::new(&mut work, SOURCE_LIMIT + 17);
+                budget.reserve_storage(SOURCE_LIMIT + 17).unwrap();
                 let mut writer = Writer::new(&mut budget).unwrap();
                 let before = writer.budget.storage();
                 let result = statements.reset(&mut writer);

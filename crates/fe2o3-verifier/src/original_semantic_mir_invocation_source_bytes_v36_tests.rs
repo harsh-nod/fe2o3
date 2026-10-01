@@ -1,4 +1,5 @@
 use super::*;
+use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
 
 #[test]
 fn original_mir_stable_reference_currentness_requires_version_frame_and_exact_borrow_site() {
@@ -264,7 +265,7 @@ fn original_mir_slice_operand_metadata_uses_unsigned_archived_scalar_pair() {
                 };
                 for limit in [2, 1] {
                     let mut work = Work::new(limit);
-                    let storage = super::super::super::super::SOURCE_LIMIT + 17;
+                    let storage = SOURCE_LIMIT + 17;
                     let mut budget = Budget::new(&mut work, storage);
                     budget.reserve_storage(storage).unwrap();
                     let mut writer = Writer::new(&mut budget).unwrap();

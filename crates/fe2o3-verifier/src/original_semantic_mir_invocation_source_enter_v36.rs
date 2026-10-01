@@ -381,6 +381,7 @@ fn headers() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
     const LIMIT: usize = 100_000_000;
 
     fn run(
@@ -505,7 +506,7 @@ mod tests {
                 for (work_limit, extra, succeeds) in [(13, 5, true), (12, 5, false), (13, 4, false)]
                 {
                     let mut work = Work::new(work_limit);
-                    let floor = super::super::super::super::SOURCE_LIMIT + headers();
+                    let floor = SOURCE_LIMIT + headers();
                     let mut budget = Budget::new(&mut work, floor + extra);
                     budget.reserve_storage(floor).unwrap();
                     let mut writer = Writer::new(&mut budget).unwrap();
