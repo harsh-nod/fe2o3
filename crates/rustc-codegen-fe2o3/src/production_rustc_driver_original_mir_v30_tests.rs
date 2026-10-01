@@ -207,18 +207,33 @@ impl Callbacks for OriginalCallbacks {
                             ProductionSourceOwnedViewErrorV18::Resource(Resource::Accounting)
                         )
                     ));
+                    let before = (original.work(), original.storage(), original.peak_storage());
+                    assert!(matches!(
+                        request.generated_source(original),
+                        Err(fe2o3_verifier::MixedOptimizerRefinementErrorV26::Source(
+                            ProductionSourceOwnedViewErrorV18::Resource(Resource::Accounting)
+                        ))
+                    ));
+                    assert_eq!(
+                        (original.work(), original.storage(), original.peak_storage()),
+                        before
+                    );
                     Err(Error::OriginalMir(error))
                 },
             );
             assert_eq!(foreign_calls, 1);
-            assert!(matches!(
-                foreign,
-                Err(Error::OriginalMir(
-                    fe2o3_verifier::MixedOptimizerRefinementErrorV26::Source(
-                        ProductionSourceOwnedViewErrorV18::Resource(Resource::Accounting)
-                    )
-                ))
-            ));
+            // The outer source scope retains its first custody failure before
+            // the callback's later OriginalMir error wrapper is considered.
+            assert!(
+                matches!(
+                    foreign,
+                    Err(Error::Source(ProductionSourceOwnedViewErrorV18::Resource(
+                        Resource::Accounting
+                    )))
+                ),
+                "outer original MIR custody refusal: {:?}",
+                foreign.as_ref().err()
+            );
             let mut work = Work::new(500_000_000);
             let mut budget = Budget::new(&mut work, 64_000_000);
             budget.reserve_storage(41).unwrap();
