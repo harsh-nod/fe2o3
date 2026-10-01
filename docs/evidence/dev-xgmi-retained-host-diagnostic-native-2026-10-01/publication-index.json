@@ -1,0 +1,167 @@
+{
+  "README.md": {
+    "bytes": 4482,
+    "mode": 420,
+    "sha256": "e58fbe54ee4cf77653d76b7c2574c557b7e935052c8ac803ce45d889cfc6db3b"
+  },
+  "allowed-signers": {
+    "bytes": 98,
+    "mode": 384,
+    "sha256": "ea67b34912b272ccbb46a4a83d8e00eb1a83e87832f089c1c134eed1786b560b"
+  },
+  "analysis.json": {
+    "bytes": 87252,
+    "mode": 420,
+    "sha256": "ed6cd5bcb90fd32b4a5c61e80180a3010cdb49a01d025fb87439aee887e07d30"
+  },
+  "analysis.md": {
+    "bytes": 3942,
+    "mode": 420,
+    "sha256": "6194468eff3d45d36ab93c0356e9e8765e2d8b13aa55e4e065c4f132c9af536b"
+  },
+  "analysis.py": {
+    "bytes": 18867,
+    "mode": 420,
+    "sha256": "93bda8d3973aa939fa04dd5ef6b1f9469c813b9ea0cb17e3c833c47559e54ebc"
+  },
+  "package.py": {
+    "bytes": 14698,
+    "mode": 420,
+    "sha256": "d688e46dcb1c7d083454d3df3fb86ccebfde405478fb491320a06d4cfd069511"
+  },
+  "raw-index.json": {
+    "bytes": 24430,
+    "mode": 420,
+    "sha256": "38c95ce6dc0fc14a775f171c6654f60db8b252c8fdccbd612098c67e95373650"
+  },
+  "raw.tar.xz": {
+    "bytes": 4344500,
+    "mode": 420,
+    "sha256": "02c247a483e66625527cf35edd575eb53377a42f2a21b7c1006106f1c3fa2342"
+  },
+  "root-preflight.json": {
+    "bytes": 789,
+    "mode": 420,
+    "sha256": "54e6662a91d85504852d8d06f352bcd277ce285153296dba585ad3189bba3b0c"
+  },
+  "root-preflight.py": {
+    "bytes": 4911,
+    "mode": 420,
+    "sha256": "896f2fcb43b914293161074013e2bfa4778eb2f1afffadb4fc2cfdae2904b2cf"
+  },
+  "root-readback.json": {
+    "bytes": 1953,
+    "mode": 420,
+    "sha256": "3bd1fdabdcd8a65bc726835f9184a6ffaac63118a1bf1ac75d46bb015d9f9f84"
+  },
+  "root-readback.py": {
+    "bytes": 7250,
+    "mode": 420,
+    "sha256": "e28243692bbfcc79556d9c7618a89221d9ed8a2498faac610f9b2a0f2e803451"
+  },
+  "signature-census.json": {
+    "bytes": 2914,
+    "mode": 420,
+    "sha256": "71164f4545d910d200687a9c68469bb70ca87144f305ddeaaf2e0ffac0ea6a93"
+  },
+  "signature-records/bundle-create/receipt.json": {
+    "bytes": 903,
+    "mode": 420,
+    "sha256": "f020528385ffe85bbdcfda540bca75a47e747611df8ce111cc03dc7810b29726"
+  },
+  "signature-records/bundle-create/stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signature-records/bundle-create/stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signature-records/bundle-heads/receipt.json": {
+    "bytes": 845,
+    "mode": 420,
+    "sha256": "dcc465cb8280807982f2a6f2629aeb0a545c6588747efdb0d1ebfa70febf2e77"
+  },
+  "signature-records/bundle-heads/stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signature-records/bundle-heads/stdout": {
+    "bytes": 46,
+    "mode": 420,
+    "sha256": "f5212b8840c3313526a51f09bf419ad11bfc871eedabc78e125eaae526a97b55"
+  },
+  "signature-records/bundle-verify/receipt.json": {
+    "bytes": 841,
+    "mode": 420,
+    "sha256": "2808812caa62ce65076350049b510f77ae4d81ea19f4f460c1596d08d2a0fa39"
+  },
+  "signature-records/bundle-verify/stderr": {
+    "bytes": 99,
+    "mode": 420,
+    "sha256": "24faff85e51c3831bd582cb894191eb6887843be44cc28af74b0675f7e403fc5"
+  },
+  "signature-records/bundle-verify/stdout": {
+    "bytes": 190,
+    "mode": 420,
+    "sha256": "e3fc6f174cfb32120ae6bcc00a517323e0d9e9495cd5b56e6091d24a89465dbc"
+  },
+  "signature-records/commit/receipt.json": {
+    "bytes": 793,
+    "mode": 420,
+    "sha256": "914dea259e4678ca8b3e86d1d9ebaff4abcdef44f11e4b750422b991adf55a98"
+  },
+  "signature-records/commit/stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signature-records/commit/stdout": {
+    "bytes": 693,
+    "mode": 420,
+    "sha256": "1d3b768b5d7a6f14d1c49ea1e208e87a0a7005a844c8d1d11b1aa5d18bd0f1b3"
+  },
+  "signature-records/signature/receipt.json": {
+    "bytes": 946,
+    "mode": 420,
+    "sha256": "98aeb22a8dd5b99cced0c5242c860c1d4468d2e77dd7f24cf84df302d83bc11e"
+  },
+  "signature-records/signature/stderr": {
+    "bytes": 110,
+    "mode": 420,
+    "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+  },
+  "signature-records/signature/stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signature-records/source-head/receipt.json": {
+    "bytes": 744,
+    "mode": 420,
+    "sha256": "a3cf8e58f9e97eac5aae8151c5050953038a2598eea7d7c1c8ab3f1a0f78cf65"
+  },
+  "signature-records/source-head/stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "signature-records/source-head/stdout": {
+    "bytes": 41,
+    "mode": 420,
+    "sha256": "3b4fc6cb8ccaa54a86b1a77f971505c7aa267701681e637af7497610f0369be8"
+  },
+  "signed-source.bundle": {
+    "bytes": 1789348,
+    "mode": 420,
+    "sha256": "0014112ca92fac62ccae042334b05dbb4faa3a35868d398114a9726bf0454223"
+  },
+  "summary.json": {
+    "bytes": 2341,
+    "mode": 420,
+    "sha256": "2961d5b50994d81c3ebf724eb528b505bce58d5c37cb49975b3c46fa56528f7b"
+  }
+}

@@ -4,9 +4,9 @@
 
 Local qualification snapshot: 2026-10-01 UTC.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API and comments were
-refreshed on 2026-09-30: the issue remained Open, with 32 comments and its latest
-update at 19:46:57 UTC. Both runtime branch refs were confirmed through signed
-commit `a26dbebb5` before the following primitive-codec integration. GitHub and MI300X
+refreshed on 2026-10-01: the issue remained Open, with 32 comments and its latest
+update at 2026-09-30 19:46:57 UTC. Both runtime branch refs were confirmed through
+signed commit `7d7a688c7` before the following native evidence publication. GitHub and MI300X
 SSH access have recovered; access alone does not qualify a hardware run.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
@@ -29,6 +29,22 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [24-trial retained XGMI diagnostic campaign](evidence/dev-xgmi-retained-host-diagnostic-native-2026-10-01/README.md)
+is complete at signed source `a26dbebb5`: eighteen ordinary and six profiled
+invocations, all 327 native and six transport groups closed, four fresh ELFs,
+complete independent readback and verified owned remote cleanup. The original
+native archive and signed source bundle are public. Comparing means of two
+ordinary invocation p50s, KFD is 9.02-26.71% slower than HSA and 2.66-31.34%
+slower than HIP. All 120 profiled samples have complete observations. The four
+operational checks total about 24-25 microseconds per sample at the median;
+depths 16 and 32 consistently reach four and five sleeps, respectively.
+Scan time includes overlapping GPU progress and requested sleep is not actual
+sleep duration, so these observations do not quantify avoidable latency.
+Wait cadence is the next bounded experiment, not an accepted optimization.
+Point-idle checks are not exclusive reservations, comparator engine identities
+are unknown, and no A7 or parity exit follows. The compact packet discloses
+its retained local source-payload prerequisites and both packaging rejections.
+
 The [distributed codec primitives](evidence/dev-distributed-codec-primitives-2026-10-01/README.md)
 are integrated at `a8a908878` and `8fd3b7ddb`. Signed candidate `e02b7229a`
 completes all 38 qualification stages: three full 54/0 positives, including
@@ -43,12 +59,14 @@ self-contained portable campaign. Three model source guards and two helper pins
 are explicitly rebound with their actual proof closures unchanged. All eighteen
 local CI commands pass. Whole-wire and distributed authority remain open.
 
-The next field-codec draft passes fresh CPU qualification: 1,123 debug tests,
-19 existing ignores, and all fourteen selected release codec tests, with both
-complete 1,142-test rosters and thirteen closed groups independently checked.
-Its initial unfiltered proof reports 57 verified and two errors, so no field
-proof is qualified. A successor is addressing actual byte-equality semantics
-and writer frame composition without adding a trusted equality assumption.
+The equality-successor field-codec draft passes fresh CPU qualification:
+1,125 debug tests, 19 existing ignores, all sixteen selected release codec
+tests and strict Clippy, with both complete 1,144-test rosters and thirteen
+closed groups independently checked. Its unfiltered proof reports 59 verified
+and two errors: the shared byte-equality helper verifies, but the header success
+postcondition and writer suffix composition remain open. The earlier 57/2
+attempt remains rejected. A proof-only successor is under review; no trusted
+equality assumption or field-proof qualification is added.
 These draft results do not qualify the integrated primitive component anew.
 
 The A2 producer-input composition candidate `6b9e5d87c` has entered its fresh
@@ -71,8 +89,8 @@ every archived original and signed source blob. Integration refreshes four
 reviewed source guards without changing their executable proof closures or
 claiming new solver acceptance. All seventeen local CI commands pass, including
 64 ordinary and 40 diagnostic harness tests. The matched 24-invocation native
-campaign is running; instrumentation is host-observed and supplies no
-device timeline, performance gain, HIP/HSA parity or milestone exit.
+campaign is complete as recorded above; instrumentation is host-observed and
+supplies no device timeline, performance gain, HIP/HSA parity or milestone exit.
 
 The [native retained XGMI comparison](evidence/dev-xgmi-retained-series-2026-09-30/README.md)
 is integrated through `1c589082e`. Signed candidate `d5cfd8779` completes all
@@ -101,16 +119,19 @@ composition and six actual journal/live/credit observer refinements remain open;
 no native freshness, composed Context theorem or milestone exit follows. The
 signed campaign's broader evidence packet remains local.
 
-The [compiler-owner update at 00:03:50 UTC on October 1](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5921934769)
-reports r234 component suites passing 726 analysis and 1,437 IR tests, with
-eight new IR controls and no failures or ignores. These overlap earlier suites
-and are not independent coverage to sum. Genuine-source r227 reports 35 passes
-and 27 optimizer failures at the internal `Option<&mut u32>` helper ABI gap;
-downstream consumer controls are not verified. Genuine Rust fill/vector-add
-optimizer validation and the existing bounded MI350 build remain in progress.
+The [compiler-owner update at 00:33:26 UTC on October 1](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5922288509)
+reports all 411 MIR-model tests passing in r237, including six new Option
+producer/dominance controls. The actual-source optimizer run r233 failed its
+fill parent and timed out during vector-add dependency compilation; it supplies
+no actual-source positive or intended-negative credit. The integrated r238
+lowerer/verifier run remains in progress. Completed-source, target/Worker,
+composed evidence, finalizer and generated-host handoffs remain incomplete.
+These component results overlap earlier suites and are not coverage to sum.
+The narrow MI350 portability repair passes five actual-module tests on each
+of GNU and musl; its new bounded full bundle build remains in progress.
 The strict production/proof/safe-GPU chain remains 0/47, compiler M0 is complete
-and M1-M7 remain incomplete. Evidence-only public commit `1f28ee0d7` grants no
-new protected runtime launch authority.
+and M1-M7 remain incomplete. Public commit `16b76d786`, containing that narrow
+portability repair and evidence, grants no new protected runtime launch authority.
 
 The [retained KFD CPU regression](evidence/dev-kfd-retained-regression-2026-09-30/README.md)
 now passes all 1,824 tests with two test threads, zero failures, ignores or

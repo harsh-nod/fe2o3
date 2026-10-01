@@ -88,8 +88,9 @@ command/source/binary joins. No runner execution is authorized by this document.
 ## Proof Boundaries
 
 Shared retained post-catch operation macros and policy bytes are unchanged.
-The new observer wrappers and executable wait body still need fresh native
-tests; this change does not extend a Verus theorem to diagnostic timing.
+The observer wrappers and executable wait body require separate fresh native
+tests; the completed campaign below supplies that bounded qualification, not
+an extension of a Verus theorem to diagnostic timing.
 The whole-KFD closures in `check-retained-pair-post-catch.py` and
 `check-retained-pair-owned-storage.py`, the runtime/accounting/KFD closure in
 `check-retained-credit-dispatch.py`, and the build-file closure in
@@ -161,3 +162,38 @@ Before any remote launch, review the signed source closure, additional ELF and
 dependency inventory, exact 24-stage joins, malformed-output stop behavior and
 archive/cleanup extension. The helper integration and synthetic controls do not
 constitute native qualification, a performance result or a formal refinement.
+
+## Completed Native Campaign
+
+The [October 1 evidence packet](evidence/dev-xgmi-retained-host-diagnostic-native-2026-10-01/README.md)
+records the exact 24-invocation plan at signed source `a26dbebb5`, on the
+independently admitted MI300X pair with UIDs `ab83d2ffef0d3cdf` and
+`d2e26fef80cf5c33` (SMI indices 1 and 2). All fourteen preparation, 327 native
+and six transport stages close. Four fresh ELF identities, loader inventories,
+physical/API joins, complete-output canaries, postflights and independent replay
+pass. Collection precedes removal of the exact owned remote directory; a final
+absence check passes. No foreign files or processes were removed.
+
+[Ordinary timings and separate host distributions](evidence/dev-xgmi-retained-host-diagnostic-native-2026-10-01/analysis.md)
+show KFD slower in every measured cell: 9.02-26.71% versus HSA and 2.66-31.34%
+versus HIP, using the mean of two invocation p50 batch latencies. All 120
+profiled samples are complete. Four operational checks total median
+23.991-24.702 microseconds per sample. Depth 16 consistently records four
+sleeps totaling 375 requested microseconds; depth 32 records five totaling
+775 requested microseconds. This motivates a bounded wait-cadence experiment.
+It does not establish that those requested sleep times are recoverable latency:
+instrumentation perturbs observations, GPU progress overlaps the scan, and
+actual sleep duration is unobserved.
+
+The original 1,040-file collection archive, including all four ELFs, is retained
+byte-identically once in the public archive. Agent/root readbacks agree; a
+separate root publication audit checks all 79 outer members against originals
+and the six closed signature/bundle stages. The signed-source bundle requires
+the already-public `4ad64047b` parent. Full original-controller replay still
+requires the retained source payload/checkout or a byte-exact verified
+reconstruction, as the packet explicitly documents. Both failed packaging
+preparations remain recorded and do not imply workload retries.
+
+This is nonexclusive shared-host characterization of the native retained API,
+not Context-facade qualification, matched comparator engine placement, a device
+timeline, source-to-device refinement, an A7 threshold or HIP/HSA parity.

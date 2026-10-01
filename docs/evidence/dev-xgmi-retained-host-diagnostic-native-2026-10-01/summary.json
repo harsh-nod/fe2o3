@@ -1,0 +1,55 @@
+{
+  "bundle_prerequisite": "4ad64047b0887a747a41aa7b0b9fa2f4206279c1",
+  "independent_replay": {
+    "accepted": true,
+    "four_elf_dependency_identity": true,
+    "ordinary_trials": 18,
+    "performance_acceptance": false,
+    "profiled_binary_query_performed": false,
+    "profiled_trials": 6,
+    "replay_sha256": "c03c9b1ddea8bdc55713a501e7952aebc91c7780bb3753ef1ba1cd78c2f49c4b",
+    "trials": 24
+  },
+  "marker": {
+    "binding_sha256": "b4d89265c8861e3bcf39517e4c96cd2a7885e0753f688051451082eb0bf38e82",
+    "commit": "a26dbebb57f948439a2e813c7a17c1142014ba1e",
+    "path": "/home/harsh/fe2o3-xgmi-series-20260930.0b26c1f6eb613ac2"
+  },
+  "native_collection": {
+    "archive_bytes": 3578669,
+    "archive_member": "native24/remote-commands/pull/stdout",
+    "archive_sha256": "1375a5d7dd8968bd905a0a1ce74add0b3a2c38bf5336f44f63dc28a0592f2227",
+    "files": 1040,
+    "four_elf_sha256": {
+      "hip": "0478b276eaa2ebb8ee1623f64deff3193d0140aa489f83337829d52bab5eaa1e",
+      "hsa": "8377832ae058b3b9a6bc17f5ce03414acf88d498b4df614b96ff0c7ece296d90",
+      "kfd": "5f4e033ff064fa73b8a394e8d0b016f4d1b3263c5415668f431ea664d6ff3c41",
+      "kfd-profiled": "9f4ad9f132aa51a23c77104692a3aa26fe711807159aeff940a63f120ef6a70a"
+    }
+  },
+  "new_gpu_execution": false,
+  "original_execution_session": 1309,
+  "originals_deleted": false,
+  "performance_acceptance": false,
+  "raw_archive": {
+    "bytes": 4344500,
+    "mode": 420,
+    "sha256": "02c247a483e66625527cf35edd575eb53377a42f2a21b7c1006106f1c3fa2342"
+  },
+  "raw_files": 79,
+  "raw_logical_bytes": 8659938,
+  "runtime_source_changes": false,
+  "schema": "fe2o3.native24-compact-publication.v1",
+  "self_contained_full_replay": false,
+  "source_binding": {
+    "binding_sha256": "b4d89265c8861e3bcf39517e4c96cd2a7885e0753f688051451082eb0bf38e82",
+    "selected_objects": 6482,
+    "signed_bundle_sha256": "0014112ca92fac62ccae042334b05dbb4faa3a35868d398114a9726bf0454223",
+    "source_payload_bytes": 33171355,
+    "source_payload_published": false,
+    "source_payload_retained_at": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/source.tar.gz",
+    "source_payload_sha256": "105053772f7c8b0081ff3975c879e5ad9fbcbb0d5e8b9dff591c82ef60fd7922",
+    "transport_files": 6497
+  },
+  "source_commit": "a26dbebb57f948439a2e813c7a17c1142014ba1e"
+}

@@ -1,0 +1,28 @@
+{
+  "command": [
+    "/usr/bin/git",
+    "bundle",
+    "verify",
+    "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001-revision-2/signed-source.bundle"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native-20260930",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790816555788327182,
+  "group_absent": true,
+  "pid": 849400,
+  "started_ns": 1790816555750227946,
+  "stderr_sha256": "24faff85e51c3831bd582cb894191eb6887843be44cc28af74b0675f7e403fc5",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3fc6f174cfb32120ae6bcc00a517323e0d9e9495cd5b56e6091d24a89465dbc",
+  "timeout_seconds": 60
+}

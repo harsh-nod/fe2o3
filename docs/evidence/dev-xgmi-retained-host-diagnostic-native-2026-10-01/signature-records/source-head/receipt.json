@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/usr/bin/git",
+    "rev-parse",
+    "HEAD"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native-20260930",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1790816555576353721,
+  "group_absent": true,
+  "pid": 849383,
+  "started_ns": 1790816555568858967,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "3b4fc6cb8ccaa54a86b1a77f971505c7aa267701681e637af7497610f0369be8",
+  "timeout_seconds": 60
+}

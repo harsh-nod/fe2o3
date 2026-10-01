@@ -1,0 +1,14 @@
+tree 4abe3af2612f93b038b04643a818b8ce04c12273
+parent 4ad64047b0887a747a41aa7b0b9fa2f4206279c1
+author harsh-nod <3144552+harsh-nod@users.noreply.github.com> 1790813408 -0700
+committer harsh-nod <3144552+harsh-nod@users.noreply.github.com> 1790813408 -0700
+gpgsig -----BEGIN SSH SIGNATURE-----
+ U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgIhPOhXrjN3i1h5mG86L6afBBrE
+ QjisW9d4LcfGKV4FIAAAADZ2l0AAAAAAAAAAZzaGE1MTIAAABTAAAAC3NzaC1lZDI1NTE5
+ AAAAQFOIPd6aMfGoxdWk9AO1A5JMZHnmC7oCwQ4jor0pFd53tyPgPDR821OwRPYJDhRB5o
+ V7keONlw6eXQRRE43PnwI=
+ -----END SSH SIGNATURE-----
+
+runtime: publish retained host diagnostic CPU qualification
+
+Signed-off-by: harsh-nod <3144552+harsh-nod@users.noreply.github.com>

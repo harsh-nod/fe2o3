@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "historical_pid_probe": false,
+  "native_archive_unchanged": true,
+  "native_workload_rerun": false,
+  "originals_deleted": false,
+  "outer_raw_members": 79,
+  "public_files": 33,
+  "publication_pins": {
+    "analysis.json": "ed6cd5bcb90fd32b4a5c61e80180a3010cdb49a01d025fb87439aee887e07d30",
+    "package.py": "d688e46dcb1c7d083454d3df3fb86ccebfde405478fb491320a06d4cfd069511",
+    "publication-index.json": "f29c02ac47517e76cd142e74475808e0cd1bb145dd54dfce1749e187152d5b80",
+    "raw.tar.xz": "02c247a483e66625527cf35edd575eb53377a42f2a21b7c1006106f1c3fa2342",
+    "root-readback.json": "3bd1fdabdcd8a65bc726835f9184a6ffaac63118a1bf1ac75d46bb015d9f9f84",
+    "signed-source.bundle": "0014112ca92fac62ccae042334b05dbb4faa3a35868d398114a9726bf0454223",
+    "summary.json": "2961d5b50994d81c3ebf724eb528b505bce58d5c37cb49975b3c46fa56528f7b"
+  },
+  "signature_groups_closed": 6
+}

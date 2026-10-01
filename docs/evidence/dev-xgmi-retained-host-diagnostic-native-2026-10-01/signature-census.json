@@ -1,0 +1,76 @@
+{
+  "attempt_order": [
+    "signature",
+    "commit",
+    "source-head",
+    "bundle-create",
+    "bundle-verify",
+    "bundle-heads"
+  ],
+  "namespace": "pid:[4026532221]",
+  "raw_sha256": {
+    "bundle-create": {
+      "receipt.json": "f020528385ffe85bbdcfda540bca75a47e747611df8ce111cc03dc7810b29726",
+      "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "bundle-heads": {
+      "receipt.json": "dcc465cb8280807982f2a6f2629aeb0a545c6588747efdb0d1ebfa70febf2e77",
+      "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "f5212b8840c3313526a51f09bf419ad11bfc871eedabc78e125eaae526a97b55"
+    },
+    "bundle-verify": {
+      "receipt.json": "2808812caa62ce65076350049b510f77ae4d81ea19f4f460c1596d08d2a0fa39",
+      "stderr": "24faff85e51c3831bd582cb894191eb6887843be44cc28af74b0675f7e403fc5",
+      "stdout": "e3fc6f174cfb32120ae6bcc00a517323e0d9e9495cd5b56e6091d24a89465dbc"
+    },
+    "commit": {
+      "receipt.json": "914dea259e4678ca8b3e86d1d9ebaff4abcdef44f11e4b750422b991adf55a98",
+      "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "1d3b768b5d7a6f14d1c49ea1e208e87a0a7005a844c8d1d11b1aa5d18bd0f1b3"
+    },
+    "signature": {
+      "receipt.json": "98aeb22a8dd5b99cced0c5242c860c1d4468d2e77dd7f24cf84df302d83bc11e",
+      "stderr": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+      "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "source-head": {
+      "receipt.json": "a3cf8e58f9e97eac5aae8151c5050953038a2598eea7d7c1c8ab3f1a0f78cf65",
+      "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "3b4fc6cb8ccaa54a86b1a77f971505c7aa267701681e637af7497610f0369be8"
+    }
+  },
+  "records": [
+    {
+      "name": "bundle-create",
+      "pid": 849384,
+      "receipt_sha256": "f020528385ffe85bbdcfda540bca75a47e747611df8ce111cc03dc7810b29726"
+    },
+    {
+      "name": "bundle-heads",
+      "pid": 849403,
+      "receipt_sha256": "dcc465cb8280807982f2a6f2629aeb0a545c6588747efdb0d1ebfa70febf2e77"
+    },
+    {
+      "name": "bundle-verify",
+      "pid": 849400,
+      "receipt_sha256": "2808812caa62ce65076350049b510f77ae4d81ea19f4f460c1596d08d2a0fa39"
+    },
+    {
+      "name": "commit",
+      "pid": 849382,
+      "receipt_sha256": "914dea259e4678ca8b3e86d1d9ebaff4abcdef44f11e4b750422b991adf55a98"
+    },
+    {
+      "name": "signature",
+      "pid": 849368,
+      "receipt_sha256": "98aeb22a8dd5b99cced0c5242c860c1d4468d2e77dd7f24cf84df302d83bc11e"
+    },
+    {
+      "name": "source-head",
+      "pid": 849383,
+      "receipt_sha256": "a3cf8e58f9e97eac5aae8151c5050953038a2598eea7d7c1c8ab3f1a0f78cf65"
+    }
+  ],
+  "scope": "fresh-recorder-closed-groups-no-historical-pid-probes"
+}

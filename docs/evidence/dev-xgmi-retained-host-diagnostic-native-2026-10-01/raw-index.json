@@ -1,0 +1,476 @@
+{
+  "native24/allowed-signers": {
+    "bytes": 98,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/allowed-signers",
+    "sha256": "ea67b34912b272ccbb46a4a83d8e00eb1a83e87832f089c1c134eed1786b560b"
+  },
+  "native24/binding.json": {
+    "bytes": 1896106,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/binding.json",
+    "sha256": "b4d89265c8861e3bcf39517e4c96cd2a7885e0753f688051451082eb0bf38e82"
+  },
+  "native24/commands/detached-head/receipt.json": {
+    "bytes": 1604,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/detached-head/receipt.json",
+    "sha256": "667e6d198d2a024eac307e8db2c8229cbb3278ca0c33dc34ede28ca00e4e0405"
+  },
+  "native24/commands/detached-head/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/detached-head/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/detached-head/stdout": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/detached-head/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/filter-capability/receipt.json": {
+    "bytes": 1670,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/filter-capability/receipt.json",
+    "sha256": "9efb705a6089b88077a4e71dda6b877d81d6560eb4b1abd28ef55425da2591b7"
+  },
+  "native24/commands/filter-capability/stderr": {
+    "bytes": 106780,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/filter-capability/stderr",
+    "sha256": "cdcbb0ed0d4cc937185b1eec5a4baf5ac72b7d293a1ba78aba597d455a4b44df"
+  },
+  "native24/commands/filter-capability/stdout": {
+    "bytes": 30812,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/filter-capability/stdout",
+    "sha256": "2afc88be9cd9e2ff3d90381e3d3452fae3b3e5cd3931f87a5e69ab3bd5b96513"
+  },
+  "native24/commands/filtered-fetch/receipt.json": {
+    "bytes": 2052,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/filtered-fetch/receipt.json",
+    "sha256": "5b52f4c144e634c749faab32ad70c431148d9d2a6f6ae40b200bfc0a15258a04"
+  },
+  "native24/commands/filtered-fetch/stderr": {
+    "bytes": 4088,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/filtered-fetch/stderr",
+    "sha256": "be5d4347a2ddc8cfb1d90d7d1efee27d71e982d8506a017e00640dba4318a9b9"
+  },
+  "native24/commands/filtered-fetch/stdout": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/filtered-fetch/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/init/receipt.json": {
+    "bytes": 1525,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/init/receipt.json",
+    "sha256": "0db63d1de49a5da84e4c5b6dcea295c7e09fb4567291e3055a652019e6eac8da"
+  },
+  "native24/commands/init/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/init/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/init/stdout": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/init/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/initial-objects/receipt.json": {
+    "bytes": 1614,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/initial-objects/receipt.json",
+    "sha256": "a019d42dfc1b9c24b760be55bc1830ca81ca5e0556e5fe81902d87e6397501ae"
+  },
+  "native24/commands/initial-objects/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/initial-objects/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/initial-objects/stdout": {
+    "bytes": 449372,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/initial-objects/stdout",
+    "sha256": "b11a804c5582933bf27588503dc3be244a233a5200d528c7355b871ca2fb1943"
+  },
+  "native24/commands/populated-objects/receipt.json": {
+    "bytes": 1614,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/populated-objects/receipt.json",
+    "sha256": "9953144c09f67bcac4dd4e15cc89a68e03acc4a8b8bb7c8e375c8a052b3b9678"
+  },
+  "native24/commands/populated-objects/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/populated-objects/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/populated-objects/stdout": {
+    "bytes": 775299,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/populated-objects/stdout",
+    "sha256": "e2f75884331b1a8c646de7db70e94ccf6b4c7a5c72bb96d0fba16b28d0beaa19"
+  },
+  "native24/commands/relocated-tree/receipt.json": {
+    "bytes": 1936,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/relocated-tree/receipt.json",
+    "sha256": "1d258c449f19fb956547eef12033df025e403ecca1700fba7c84a5198d7731ce"
+  },
+  "native24/commands/relocated-tree/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/relocated-tree/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/relocated-tree/stdout": {
+    "bytes": 785515,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/relocated-tree/stdout",
+    "sha256": "172e249a810e817ca2186e51e4052c283224a739018dd340405f75ec6bf73b28"
+  },
+  "native24/commands/selected-checkout/receipt.json": {
+    "bytes": 1965,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/selected-checkout/receipt.json",
+    "sha256": "3838ea445bd5b117ad5c8d69c120b8f044a113e32aafd8f8c512d376db0666e7"
+  },
+  "native24/commands/selected-checkout/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/selected-checkout/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/selected-checkout/stdout": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/selected-checkout/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/selected-tree/receipt.json": {
+    "bytes": 1825,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/selected-tree/receipt.json",
+    "sha256": "ea849161fee504c391d2548f160c38ca014ff5670260a0a3c49cf888882232dc"
+  },
+  "native24/commands/selected-tree/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/selected-tree/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/selected-tree/stdout": {
+    "bytes": 785515,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/selected-tree/stdout",
+    "sha256": "172e249a810e817ca2186e51e4052c283224a739018dd340405f75ec6bf73b28"
+  },
+  "native24/commands/signature-before/receipt.json": {
+    "bytes": 1645,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/signature-before/receipt.json",
+    "sha256": "2ce530b7d86cd0e6515a56e364d7a631ab50f5a6494e4c5a05b5446b88ccbbc4"
+  },
+  "native24/commands/signature-before/stderr": {
+    "bytes": 110,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/signature-before/stderr",
+    "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+  },
+  "native24/commands/signature-before/stdout": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/signature-before/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/signature-relocated/receipt.json": {
+    "bytes": 1756,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/signature-relocated/receipt.json",
+    "sha256": "257b37fd2f2c7c4bd31dba1b0afd5fee6d1b5aac0848651b2cb66499938daace"
+  },
+  "native24/commands/signature-relocated/stderr": {
+    "bytes": 110,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/signature-relocated/stderr",
+    "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+  },
+  "native24/commands/signature-relocated/stdout": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/signature-relocated/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/source-head/receipt.json": {
+    "bytes": 1426,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/source-head/receipt.json",
+    "sha256": "38f419511c003139f9995b2ec783a652ce00fdef302fa725ffa221c6ba035438"
+  },
+  "native24/commands/source-head/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/source-head/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/source-head/stdout": {
+    "bytes": 41,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/source-head/stdout",
+    "sha256": "3b4fc6cb8ccaa54a86b1a77f971505c7aa267701681e637af7497610f0369be8"
+  },
+  "native24/commands/sparse-enable/receipt.json": {
+    "bytes": 1561,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/sparse-enable/receipt.json",
+    "sha256": "4839146635d8d4e2298f82f0421cc1967589e91f8bed1eb82cc05ccda810eb26"
+  },
+  "native24/commands/sparse-enable/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/sparse-enable/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/sparse-enable/stdout": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/sparse-enable/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/sparse-noncone/receipt.json": {
+    "bytes": 1566,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/sparse-noncone/receipt.json",
+    "sha256": "2a8560aea9760352f3b036d2eb9e5b7b8118395b9de67d8c547d6a35552e0f8b"
+  },
+  "native24/commands/sparse-noncone/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/sparse-noncone/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/commands/sparse-noncone/stdout": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/commands/sparse-noncone/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/independent-replay.json": {
+    "bytes": 261,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/independent-replay.json",
+    "sha256": "221181ff119db8e325120a1b9f5e83bae399d101f0f3c74e7b69e9d706f05906"
+  },
+  "native24/owner.json": {
+    "bytes": 203,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/owner.json",
+    "sha256": "8bff335f0d81274d17455741b4cffa951c0ea0c1626bccf50de72962a610b95d"
+  },
+  "native24/prepare-census.json": {
+    "bytes": 5647,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/prepare-census.json",
+    "sha256": "c733978ab1bcff9e7092400e689060c71a40c36ed4d7e92cad231cbee64501ee"
+  },
+  "native24/remote-commands/absence/receipt.json": {
+    "bytes": 1182,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/absence/receipt.json",
+    "sha256": "33d599399dd67ef0b71e0e158a6b21628d0521c976558135f6c3ddef59f2a534"
+  },
+  "native24/remote-commands/absence/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/absence/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/remote-commands/absence/stdout": {
+    "bytes": 75,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/absence/stdout",
+    "sha256": "f588666e567725e23892f065d945126e4c198f5b697ffcf654b8d40adcaff833"
+  },
+  "native24/remote-commands/cleanup/receipt.json": {
+    "bytes": 1248,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/cleanup/receipt.json",
+    "sha256": "409c68d165a5e885fb434639b277410b3851a6e50f2471292a34ba327a54218a"
+  },
+  "native24/remote-commands/cleanup/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/cleanup/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/remote-commands/cleanup/stdout": {
+    "bytes": 157,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/cleanup/stdout",
+    "sha256": "2942732527a69484bfdc6045bc3fc639d9ed79ba2cf13d0e62b7a8d8a4999ba0"
+  },
+  "native24/remote-commands/collect/receipt.json": {
+    "bytes": 1183,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/collect/receipt.json",
+    "sha256": "bd41743c3d715c0f8be345064483f25408a8f53ab84f715dfe1a870a301ecaeb"
+  },
+  "native24/remote-commands/collect/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/collect/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/remote-commands/collect/stdout": {
+    "bytes": 161603,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/collect/stdout",
+    "sha256": "17b84628d0959f99d8f87bb33f6bd7427d78087bd0b4a63c8fc4c62e0c21cf1a"
+  },
+  "native24/remote-commands/pull/receipt.json": {
+    "bytes": 1180,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/pull/receipt.json",
+    "sha256": "c8bd833b2b60bdbe80d2a4e2f0ac43d6b90de9fb4d708427e7480a17fe164bc3"
+  },
+  "native24/remote-commands/pull/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/pull/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/remote-commands/pull/stdout": {
+    "bytes": 3578669,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/pull/stdout",
+    "sha256": "1375a5d7dd8968bd905a0a1ce74add0b3a2c38bf5336f44f63dc28a0592f2227"
+  },
+  "native24/remote-commands/receive/receipt.json": {
+    "bytes": 1183,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/receive/receipt.json",
+    "sha256": "48bed140c3cfad6bea9dc2b603e91b853cd2dbbb81fa95bb34bccc1df6175a46"
+  },
+  "native24/remote-commands/receive/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/receive/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/remote-commands/receive/stdout": {
+    "bytes": 323,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/receive/stdout",
+    "sha256": "a6e73d99fe91f04b68947bdc0f6cdf5c9038a81f1de74754661ba8cf63dcea82"
+  },
+  "native24/remote-commands/remote-run/receipt.json": {
+    "bytes": 1081,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/remote-run/receipt.json",
+    "sha256": "6d8171f18b5bd5873f98029e16ba5c021a12926aea4685be937bfa9319ca181d"
+  },
+  "native24/remote-commands/remote-run/stderr": {
+    "bytes": 0,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/remote-run/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "native24/remote-commands/remote-run/stdout": {
+    "bytes": 27871,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/remote-commands/remote-run/stdout",
+    "sha256": "9ac09691aae77db98499f838aed496abc9c849ab6f572e304b699dd2008ce2d6"
+  },
+  "native24/transport-census.json": {
+    "bytes": 2374,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/transport-census.json",
+    "sha256": "25760c795aa10a4894a02413ab70221aa81ba3f632a7b88862200481d81246b8"
+  },
+  "native24/transport-finished.json": {
+    "bytes": 319,
+    "mode": 384,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-xgmi-retained-host-diagnostic-native24-20260930-attempt-1/transport-finished.json",
+    "sha256": "b76d8af281e88f3eb46d29ccde3a488e4839cad61baa49d29c7d2d7e3650c0cb"
+  },
+  "publication-rejection-1/package.py": {
+    "bytes": 13361,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/package.py",
+    "sha256": "edb614dafb8cfd6b8e84eda13bbd78d28556b650da890d252a160f380e1743af"
+  },
+  "publication-rejection-1/rejected.json": {
+    "bytes": 460,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/rejected.json",
+    "sha256": "689f8058ccddb11a9c59d7dd06e3d96ca3d6a0f3356b73e3cac300d5fb9d8563"
+  },
+  "publication-rejection-1/signature-records/bundle-create/receipt.json": {
+    "bytes": 923,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/bundle-create/receipt.json",
+    "sha256": "1fb1042888700ec4609ca14093eca855cf65da00bf1d933b66dc6f2b6767d6b3"
+  },
+  "publication-rejection-1/signature-records/bundle-create/stderr": {
+    "bytes": 40,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/bundle-create/stderr",
+    "sha256": "e10b60ffe1b96e56da335725e21f1dab3e0d5f291d6ecd18383ec3c7ccce80ac"
+  },
+  "publication-rejection-1/signature-records/bundle-create/stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/bundle-create/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "publication-rejection-1/signature-records/commit/receipt.json": {
+    "bytes": 793,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/commit/receipt.json",
+    "sha256": "1486a04e92d643dc90f8e593670fced37ac65f9b92332f726f2e7a9f26cf736c"
+  },
+  "publication-rejection-1/signature-records/commit/stderr": {
+    "bytes": 0,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/commit/stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "publication-rejection-1/signature-records/commit/stdout": {
+    "bytes": 693,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/commit/stdout",
+    "sha256": "1d3b768b5d7a6f14d1c49ea1e208e87a0a7005a844c8d1d11b1aa5d18bd0f1b3"
+  },
+  "publication-rejection-1/signature-records/signature/receipt.json": {
+    "bytes": 935,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/signature/receipt.json",
+    "sha256": "a7c3a8d6c7abcd4820242b2597e5642c6c23f7a773eb74f05c13be06d66e9478"
+  },
+  "publication-rejection-1/signature-records/signature/stderr": {
+    "bytes": 110,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/signature/stderr",
+    "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22"
+  },
+  "publication-rejection-1/signature-records/signature/stdout": {
+    "bytes": 0,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001/signature-records/signature/stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "publication-resource-rejection-2.json": {
+    "bytes": 459,
+    "mode": 420,
+    "original_path": "/home/harsh/.codex-tmp/fe2o3-native24-publication-20261001-revision-2-floor-rejection.json",
+    "sha256": "9aa453cd9ccf1c4ceccc9312ae19a922782a3091f9153ca3e7b673325492afaf"
+  }
+}

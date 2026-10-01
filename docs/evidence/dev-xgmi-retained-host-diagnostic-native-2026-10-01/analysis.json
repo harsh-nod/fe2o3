@@ -1,0 +1,2934 @@
+{
+  "analysis": {
+    "derived_sum_terms": {
+      "all_named_phases_ns": [
+        "submit_open_ns",
+        "prepare_ns",
+        "publish_ns",
+        "submit_close_ns",
+        "wait_open_ns",
+        "validation_ns",
+        "scan_ns",
+        "retirement_ns",
+        "wait_close_ns"
+      ],
+      "both_call_totals_ns": [
+        "submit_total_ns",
+        "wait_total_ns"
+      ],
+      "operational_checks_ns": [
+        "submit_open_ns",
+        "submit_close_ns",
+        "wait_open_ns",
+        "wait_close_ns"
+      ],
+      "submit_named_phases_ns": [
+        "submit_open_ns",
+        "prepare_ns",
+        "publish_ns",
+        "submit_close_ns"
+      ],
+      "wait_named_phases_ns": [
+        "wait_open_ns",
+        "validation_ns",
+        "scan_ns",
+        "retirement_ns",
+        "wait_close_ns"
+      ]
+    },
+    "missing_by_field": {
+      "all_observed_ns": 0,
+      "elapsed_ns": 0,
+      "first_observed_ns": 0,
+      "involuntary_switches": 0,
+      "max_requested_sleep_ns": 0,
+      "observations": 0,
+      "prepare_ns": 0,
+      "publish_ns": 0,
+      "requested_sleep_ns": 0,
+      "retirement_ns": 0,
+      "rounds": 0,
+      "scan_ns": 0,
+      "sleeps": 0,
+      "spins": 0,
+      "submit_close_ns": 0,
+      "submit_open_ns": 0,
+      "submit_total_ns": 0,
+      "thread_cpu_ns": 0,
+      "validation_ns": 0,
+      "voluntary_switches": 0,
+      "wait_close_ns": 0,
+      "wait_open_ns": 0,
+      "wait_total_ns": 0,
+      "yields": 0
+    },
+    "ordinary": [
+      {
+        "backends": {
+          "hip": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "ecdc74f4e3e0fa1fb7d3c6ae96a346b292ca389fa9969f1045c4c2697aa6035e",
+                "name": "d01-t03-hip",
+                "p50_ns": 39138,
+                "p95_ns": 41312,
+                "stdout_sha256": "4b0301bdcfd882347600738a8aed22a58ad7536cad277aa3a9a215d35fdf6c7a"
+              },
+              {
+                "execution_receipt_sha256": "2b2138dce9b2eeceb76bab3ff69a64d3746ae794e35a2b3959a394d6d9787be3",
+                "name": "d01-t04-hip",
+                "p50_ns": 39459,
+                "p95_ns": 41712,
+                "stdout_sha256": "76c94c002f3f00c6fd72e7f0b5142a64cd30f3ed29cc817032189f0f58105a9b"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 39298.5
+          },
+          "hsa": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "96681269543bd5f65eccee2494f23ff073c5177a7d23b9ac2c7ea4ed7ab97498",
+                "name": "d01-t02-hsa",
+                "p50_ns": 33791,
+                "p95_ns": 34041,
+                "stdout_sha256": "0b05cbf8d0cd387b4904b83caa43030d86012dccfdc8d24be2080255023096fb"
+              },
+              {
+                "execution_receipt_sha256": "73976d662a9f7859ae2813f184e28557bebd54e63642bcd7d663c59c04b63b70",
+                "name": "d01-t05-hsa",
+                "p50_ns": 33370,
+                "p95_ns": 33841,
+                "stdout_sha256": "af8f029dd3703c7bdefdd6ed3b5c20259a117e517ec167c76676a46298b1c650"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 33580.5
+          },
+          "kfd": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "415ada1344c786bf199a36c232b252a34401eb5f5cdb7a6f2de24d3849371300",
+                "name": "d01-t01-kfd",
+                "p50_ns": 40841,
+                "p95_ns": 41111,
+                "scope_entry_ns": 6534921,
+                "scope_finish_ns": 6670,
+                "stdout_sha256": "53144cc00442e52fc868960149b828139c4a6707b146e8f275d69bf063577213"
+              },
+              {
+                "execution_receipt_sha256": "823f494596cfaddb19423177ad12ee4afa2f44de8248c22c9e3bda405c4d9a2f",
+                "name": "d01-t06-kfd",
+                "p50_ns": 39849,
+                "p95_ns": 40611,
+                "scope_entry_ns": 6532125,
+                "scope_finish_ns": 11768,
+                "stdout_sha256": "250653ea081633590ef59c22d86cd609ea8d6af307513f26e463e558c34ee182"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 40345
+          }
+        },
+        "depth": 1,
+        "direction": "forward",
+        "kfd_over_hip_percent": 2.6629515121442404,
+        "kfd_over_hsa_percent": 20.144131266657727
+      },
+      {
+        "backends": {
+          "hip": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "ecdc74f4e3e0fa1fb7d3c6ae96a346b292ca389fa9969f1045c4c2697aa6035e",
+                "name": "d01-t03-hip",
+                "p50_ns": 39189,
+                "p95_ns": 39729,
+                "stdout_sha256": "4b0301bdcfd882347600738a8aed22a58ad7536cad277aa3a9a215d35fdf6c7a"
+              },
+              {
+                "execution_receipt_sha256": "2b2138dce9b2eeceb76bab3ff69a64d3746ae794e35a2b3959a394d6d9787be3",
+                "name": "d01-t04-hip",
+                "p50_ns": 38678,
+                "p95_ns": 44286,
+                "stdout_sha256": "76c94c002f3f00c6fd72e7f0b5142a64cd30f3ed29cc817032189f0f58105a9b"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 38933.5
+          },
+          "hsa": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "96681269543bd5f65eccee2494f23ff073c5177a7d23b9ac2c7ea4ed7ab97498",
+                "name": "d01-t02-hsa",
+                "p50_ns": 34010,
+                "p95_ns": 34522,
+                "stdout_sha256": "0b05cbf8d0cd387b4904b83caa43030d86012dccfdc8d24be2080255023096fb"
+              },
+              {
+                "execution_receipt_sha256": "73976d662a9f7859ae2813f184e28557bebd54e63642bcd7d663c59c04b63b70",
+                "name": "d01-t05-hsa",
+                "p50_ns": 33450,
+                "p95_ns": 33560,
+                "stdout_sha256": "af8f029dd3703c7bdefdd6ed3b5c20259a117e517ec167c76676a46298b1c650"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 33730
+          },
+          "kfd": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "415ada1344c786bf199a36c232b252a34401eb5f5cdb7a6f2de24d3849371300",
+                "name": "d01-t01-kfd",
+                "p50_ns": 40881,
+                "p95_ns": 41241,
+                "scope_entry_ns": 6598697,
+                "scope_finish_ns": 6340,
+                "stdout_sha256": "53144cc00442e52fc868960149b828139c4a6707b146e8f275d69bf063577213"
+              },
+              {
+                "execution_receipt_sha256": "823f494596cfaddb19423177ad12ee4afa2f44de8248c22c9e3bda405c4d9a2f",
+                "name": "d01-t06-kfd",
+                "p50_ns": 40090,
+                "p95_ns": 45488,
+                "scope_entry_ns": 6549221,
+                "scope_finish_ns": 6399,
+                "stdout_sha256": "250653ea081633590ef59c22d86cd609ea8d6af307513f26e463e558c34ee182"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 40485.5
+          }
+        },
+        "depth": 1,
+        "direction": "reverse",
+        "kfd_over_hip_percent": 3.9862843052898,
+        "kfd_over_hsa_percent": 20.02816483842278
+      },
+      {
+        "backends": {
+          "hip": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "12c61dfabd62c21aaaea1a5d8e4996429fabdc65f39165f9759d6807336f677d",
+                "name": "d16-t03-hip",
+                "p50_ns": 513698,
+                "p95_ns": 520277,
+                "stdout_sha256": "6cf1a31d46705944dd1e0cbe96a1497acc4d05247e167037c6c181d83d4f4004"
+              },
+              {
+                "execution_receipt_sha256": "7fa04f6a891dcbd70ce9e616e07d8b800a408dc0c0db976df0cb31a990665781",
+                "name": "d16-t04-hip",
+                "p50_ns": 512606,
+                "p95_ns": 517284,
+                "stdout_sha256": "ffd612c5a0646c268c70f98885ae4321ea185c6d0be7161b8e68c4e2a409e406"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 513152
+          },
+          "hsa": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "9828e745f943250aa8100f17d3225f79c4d4596608e74d7073b509d7b21e36f9",
+                "name": "d16-t02-hsa",
+                "p50_ns": 530483,
+                "p95_ns": 534199,
+                "stdout_sha256": "1d2c616a05725d55bbbb5c06710750edcfb04feb22d689fad36314fbacb495cd"
+              },
+              {
+                "execution_receipt_sha256": "6fcf06f683fc6d905e5bc94129965f9d5dec2e9a567ee227a6062bb6e5f78cd1",
+                "name": "d16-t05-hsa",
+                "p50_ns": 533337,
+                "p95_ns": 538084,
+                "stdout_sha256": "9605f4560584d98156b61d14a2ee23bfa4a4da9157443be25e313dcf5f92e531"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 531910
+          },
+          "kfd": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "dafd0bb6262be4b1536e68129c84b29a8921b8dc9e795f154d2e68d6695a3596",
+                "name": "d16-t01-kfd",
+                "p50_ns": 673077,
+                "p95_ns": 679516,
+                "scope_entry_ns": 6581710,
+                "scope_finish_ns": 6690,
+                "stdout_sha256": "f0d46a2391619a2f85733bc45b23764dfb17d41a2e481237dfbcfa453d359cce"
+              },
+              {
+                "execution_receipt_sha256": "ff3445de694d05e2427437aa749716e2688313a9c92f022364c59567c5f0640a",
+                "name": "d16-t06-kfd",
+                "p50_ns": 674869,
+                "p95_ns": 677803,
+                "scope_entry_ns": 6553306,
+                "scope_finish_ns": 6891,
+                "stdout_sha256": "e35bb70bb08d293884479760817121dd3ab35f4379de66f7c0316f8474a7f593"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 673973
+          }
+        },
+        "depth": 16,
+        "direction": "forward",
+        "kfd_over_hip_percent": 31.339836929408825,
+        "kfd_over_hsa_percent": 26.708089714425377
+      },
+      {
+        "backends": {
+          "hip": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "12c61dfabd62c21aaaea1a5d8e4996429fabdc65f39165f9759d6807336f677d",
+                "name": "d16-t03-hip",
+                "p50_ns": 518615,
+                "p95_ns": 525115,
+                "stdout_sha256": "6cf1a31d46705944dd1e0cbe96a1497acc4d05247e167037c6c181d83d4f4004"
+              },
+              {
+                "execution_receipt_sha256": "7fa04f6a891dcbd70ce9e616e07d8b800a408dc0c0db976df0cb31a990665781",
+                "name": "d16-t04-hip",
+                "p50_ns": 514910,
+                "p95_ns": 520868,
+                "stdout_sha256": "ffd612c5a0646c268c70f98885ae4321ea185c6d0be7161b8e68c4e2a409e406"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 516762.5
+          },
+          "hsa": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "9828e745f943250aa8100f17d3225f79c4d4596608e74d7073b509d7b21e36f9",
+                "name": "d16-t02-hsa",
+                "p50_ns": 530633,
+                "p95_ns": 534219,
+                "stdout_sha256": "1d2c616a05725d55bbbb5c06710750edcfb04feb22d689fad36314fbacb495cd"
+              },
+              {
+                "execution_receipt_sha256": "6fcf06f683fc6d905e5bc94129965f9d5dec2e9a567ee227a6062bb6e5f78cd1",
+                "name": "d16-t05-hsa",
+                "p50_ns": 533958,
+                "p95_ns": 537704,
+                "stdout_sha256": "9605f4560584d98156b61d14a2ee23bfa4a4da9157443be25e313dcf5f92e531"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 532295.5
+          },
+          "kfd": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "dafd0bb6262be4b1536e68129c84b29a8921b8dc9e795f154d2e68d6695a3596",
+                "name": "d16-t01-kfd",
+                "p50_ns": 674719,
+                "p95_ns": 678404,
+                "scope_entry_ns": 6672014,
+                "scope_finish_ns": 6530,
+                "stdout_sha256": "f0d46a2391619a2f85733bc45b23764dfb17d41a2e481237dfbcfa453d359cce"
+              },
+              {
+                "execution_receipt_sha256": "ff3445de694d05e2427437aa749716e2688313a9c92f022364c59567c5f0640a",
+                "name": "d16-t06-kfd",
+                "p50_ns": 673407,
+                "p95_ns": 676662,
+                "scope_entry_ns": 6660816,
+                "scope_finish_ns": 6860,
+                "stdout_sha256": "e35bb70bb08d293884479760817121dd3ab35f4379de66f7c0316f8474a7f593"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 674063
+          }
+        },
+        "depth": 16,
+        "direction": "reverse",
+        "kfd_over_hip_percent": 30.439612007450222,
+        "kfd_over_hsa_percent": 26.633232856561804
+      },
+      {
+        "backends": {
+          "hip": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "a985479fc3811777d649f94fce77c4d5823ad6f768762da80a574c60f991bfd5",
+                "name": "d32-t03-hip",
+                "p50_ns": 1016910,
+                "p95_ns": 1022038,
+                "stdout_sha256": "6e633c25a4ed6c3f2a1e99ec411b8a60bc047a837b14a1bbd02572b04cdec004"
+              },
+              {
+                "execution_receipt_sha256": "66d537aca8e3611b6e7abbab49e7eb6f101fa2b1f97634c4c95ef12220df21dd",
+                "name": "d32-t04-hip",
+                "p50_ns": 966415,
+                "p95_ns": 972133,
+                "stdout_sha256": "7ad23b62f8f49ed54d087cabf34a30911cd9949c3bcc55131e1fe4c7d861f1cd"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 991662.5
+          },
+          "hsa": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "309d83e1347e158182b0202de09827b5f5e3208acf1d9a356f8e7a50e4eaa54a",
+                "name": "d32-t02-hsa",
+                "p50_ns": 1067275,
+                "p95_ns": 1071101,
+                "stdout_sha256": "6e544ce0921a2953a7a890e310f583eab8fadc32d070470d15e77c2acb937868"
+              },
+              {
+                "execution_receipt_sha256": "47b66a3d6631cdb6c484ebd1e32006ba8bf0f8a9d071a5b72ac9d58d33d56aa6",
+                "name": "d32-t05-hsa",
+                "p50_ns": 1066464,
+                "p95_ns": 1069388,
+                "stdout_sha256": "b63342282a885f1d155a542e0191c3ee711d5e8c1e943b343646ded735c9b38c"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 1066869.5
+          },
+          "kfd": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "009706e20238baa3c32e97404a53d341ec4f59db89d8af204c375379673e7653",
+                "name": "d32-t01-kfd",
+                "p50_ns": 1168616,
+                "p95_ns": 1173313,
+                "scope_entry_ns": 6495650,
+                "scope_finish_ns": 6470,
+                "stdout_sha256": "792478e93c7428f85d4db53daee1cc7d1719bae41f25d56b98210471a5e6c6df"
+              },
+              {
+                "execution_receipt_sha256": "d16327e571374e63fedc04d227f3bc7a55b7d884f32836a884b7373cfec81063",
+                "name": "d32-t06-kfd",
+                "p50_ns": 1170450,
+                "p95_ns": 1179172,
+                "scope_entry_ns": 6518343,
+                "scope_finish_ns": 6530,
+                "stdout_sha256": "f04ff86a6eccca43cd0127e13803638dcf0d4f3b890989391c721b22e8e260ad"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 1169533
+          }
+        },
+        "depth": 32,
+        "direction": "forward",
+        "kfd_over_hip_percent": 17.936596372253668,
+        "kfd_over_hsa_percent": 9.622873275503707
+      },
+      {
+        "backends": {
+          "hip": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "a985479fc3811777d649f94fce77c4d5823ad6f768762da80a574c60f991bfd5",
+                "name": "d32-t03-hip",
+                "p50_ns": 1026905,
+                "p95_ns": 1037591,
+                "stdout_sha256": "6e633c25a4ed6c3f2a1e99ec411b8a60bc047a837b14a1bbd02572b04cdec004"
+              },
+              {
+                "execution_receipt_sha256": "66d537aca8e3611b6e7abbab49e7eb6f101fa2b1f97634c4c95ef12220df21dd",
+                "name": "d32-t04-hip",
+                "p50_ns": 963330,
+                "p95_ns": 970180,
+                "stdout_sha256": "7ad23b62f8f49ed54d087cabf34a30911cd9949c3bcc55131e1fe4c7d861f1cd"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 995117.5
+          },
+          "hsa": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "309d83e1347e158182b0202de09827b5f5e3208acf1d9a356f8e7a50e4eaa54a",
+                "name": "d32-t02-hsa",
+                "p50_ns": 1069828,
+                "p95_ns": 1071913,
+                "stdout_sha256": "6e544ce0921a2953a7a890e310f583eab8fadc32d070470d15e77c2acb937868"
+              },
+              {
+                "execution_receipt_sha256": "47b66a3d6631cdb6c484ebd1e32006ba8bf0f8a9d071a5b72ac9d58d33d56aa6",
+                "name": "d32-t05-hsa",
+                "p50_ns": 1073494,
+                "p95_ns": 1077571,
+                "stdout_sha256": "b63342282a885f1d155a542e0191c3ee711d5e8c1e943b343646ded735c9b38c"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 1071661
+          },
+          "kfd": {
+            "invocations": [
+              {
+                "execution_receipt_sha256": "009706e20238baa3c32e97404a53d341ec4f59db89d8af204c375379673e7653",
+                "name": "d32-t01-kfd",
+                "p50_ns": 1168626,
+                "p95_ns": 1175427,
+                "scope_entry_ns": 6687456,
+                "scope_finish_ns": 6399,
+                "stdout_sha256": "792478e93c7428f85d4db53daee1cc7d1719bae41f25d56b98210471a5e6c6df"
+              },
+              {
+                "execution_receipt_sha256": "d16327e571374e63fedc04d227f3bc7a55b7d884f32836a884b7373cfec81063",
+                "name": "d32-t06-kfd",
+                "p50_ns": 1167986,
+                "p95_ns": 1173635,
+                "scope_entry_ns": 6716259,
+                "scope_finish_ns": 6780,
+                "stdout_sha256": "f04ff86a6eccca43cd0127e13803638dcf0d4f3b890989391c721b22e8e260ad"
+              }
+            ],
+            "mean_of_two_invocation_p50_ns": 1168306
+          }
+        },
+        "depth": 32,
+        "direction": "reverse",
+        "kfd_over_hip_percent": 17.403824171517424,
+        "kfd_over_hsa_percent": 9.018243642345848
+      }
+    ],
+    "profiled": [
+      {
+        "counters_status_counts": {
+          "available": 20
+        },
+        "cpu_status_counts": {
+          "available": 20
+        },
+        "depth": 1,
+        "derived_checks_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.5738421274010376,
+          "mean": 0.5619458884417611,
+          "median": 0.5628412887157838,
+          "min": 0.5492960970584869,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.5680355319098401
+        },
+        "direction": "forward",
+        "distributions": {
+          "all_named_phases_ns": {
+            "available": 20,
+            "max": 42994,
+            "mean": 42039.75,
+            "median": 41973.0,
+            "min": 41382,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 42904
+          },
+          "all_observed_ns": {
+            "available": 20,
+            "max": 16384,
+            "mean": 15384.15,
+            "median": 15188.0,
+            "min": 14953,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 15893
+          },
+          "both_call_totals_ns": {
+            "available": 20,
+            "max": 43555,
+            "mean": 42639.25,
+            "median": 42568.5,
+            "min": 41983,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 43505
+          },
+          "elapsed_ns": {
+            "available": 20,
+            "max": 43685,
+            "mean": 42763,
+            "median": 42694.5,
+            "min": 42103,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 43636
+          },
+          "first_observed_ns": {
+            "available": 20,
+            "max": 16354,
+            "mean": 15346.5,
+            "median": 15143.0,
+            "min": 14922,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 15864
+          },
+          "involuntary_switches": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "max_requested_sleep_ns": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "observations": {
+            "available": 20,
+            "max": 74,
+            "mean": 73.05,
+            "median": 73.0,
+            "min": 67,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 74
+          },
+          "operational_checks_ns": {
+            "available": 20,
+            "max": 24557,
+            "mean": 24028.55,
+            "median": 23991.0,
+            "min": 23866,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 24426
+          },
+          "prepare_ns": {
+            "available": 20,
+            "max": 501,
+            "mean": 374.65,
+            "median": 350.5,
+            "min": 320,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 501
+          },
+          "publish_ns": {
+            "available": 20,
+            "max": 1042,
+            "mean": 713.1,
+            "median": 651.0,
+            "min": 610,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1002
+          },
+          "requested_sleep_ns": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "retirement_ns": {
+            "available": 20,
+            "max": 90,
+            "mean": 73.1,
+            "median": 70.0,
+            "min": 60,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 90
+          },
+          "rounds": {
+            "available": 20,
+            "max": 74,
+            "mean": 73.05,
+            "median": 73.0,
+            "min": 67,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 74
+          },
+          "scan_ns": {
+            "available": 20,
+            "max": 17726,
+            "mean": 16746.6,
+            "median": 16525.0,
+            "min": 16304,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 17265
+          },
+          "sleeps": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "spins": {
+            "available": 20,
+            "max": 64,
+            "mean": 64,
+            "median": 64.0,
+            "min": 64,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 64
+          },
+          "submit_close_ns": {
+            "available": 20,
+            "max": 6018,
+            "mean": 5987.5,
+            "median": 5988.5,
+            "min": 5949,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6009
+          },
+          "submit_named_phases_ns": {
+            "available": 20,
+            "max": 13420,
+            "mean": 13140.85,
+            "median": 13104.5,
+            "min": 12949,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 13420
+          },
+          "submit_open_ns": {
+            "available": 20,
+            "max": 6099,
+            "mean": 6065.6,
+            "median": 6064.0,
+            "min": 6039,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6099
+          },
+          "submit_total_ns": {
+            "available": 20,
+            "max": 13801,
+            "mean": 13505.65,
+            "median": 13470.0,
+            "min": 13320,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 13780
+          },
+          "thread_cpu_ns": {
+            "available": 20,
+            "max": 16364,
+            "mean": 15373.95,
+            "median": 15182.5,
+            "min": 14943,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 15894
+          },
+          "validation_ns": {
+            "available": 20,
+            "max": 170,
+            "mean": 103.75,
+            "median": 95.5,
+            "min": 81,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 140
+          },
+          "voluntary_switches": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "wait_close_ns": {
+            "available": 20,
+            "max": 6539,
+            "mean": 6097.65,
+            "median": 6054.0,
+            "min": 6019,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6250
+          },
+          "wait_named_phases_ns": {
+            "available": 20,
+            "max": 29833,
+            "mean": 28898.9,
+            "median": 28748.0,
+            "min": 28392,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 29824
+          },
+          "wait_open_ns": {
+            "available": 20,
+            "max": 6289,
+            "mean": 5877.8,
+            "median": 5853.5,
+            "min": 5828,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5899
+          },
+          "wait_total_ns": {
+            "available": 20,
+            "max": 30065,
+            "mean": 29133.6,
+            "median": 28994.0,
+            "min": 28623,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 30045
+          },
+          "yields": {
+            "available": 20,
+            "max": 9,
+            "mean": 8.05,
+            "median": 8.0,
+            "min": 2,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 9
+          }
+        },
+        "histograms": {
+          "involuntary_switches": {
+            "0": 20
+          },
+          "max_requested_sleep_ns": {
+            "0": 20
+          },
+          "observations": {
+            "67": 1,
+            "73": 12,
+            "74": 7
+          },
+          "requested_sleep_ns": {
+            "0": 20
+          },
+          "rounds": {
+            "67": 1,
+            "73": 12,
+            "74": 7
+          },
+          "sleeps": {
+            "0": 20
+          },
+          "spins": {
+            "64": 20
+          },
+          "voluntary_switches": {
+            "0": 20
+          },
+          "yields": {
+            "2": 1,
+            "8": 12,
+            "9": 7
+          }
+        },
+        "invocations": [
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 43024,
+              "mean": 42480.6,
+              "median": 42458.5,
+              "min": 42103,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 43024
+            },
+            "execution_receipt_sha256": "66e77390d7bec947e2e704d798fdc58591bf7baa85dc8c9ab98335f10a687389",
+            "name": "d01-profiled-01",
+            "scope_entry_ns": 6560800,
+            "scope_finish_ns": 7091,
+            "stdout_sha256": "f37b39f2f8a0f6d5cf37859bb198bf8e24f447649e64c00a05c3cc3e97821399"
+          },
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 43685,
+              "mean": 43045.4,
+              "median": 43069.5,
+              "min": 42463,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 43685
+            },
+            "execution_receipt_sha256": "253ec9f7476af43795d3a0802cc0d4781a99af429db3c016de40548bf2bd5fd6",
+            "name": "d01-profiled-02",
+            "scope_entry_ns": 6795069,
+            "scope_finish_ns": 6840,
+            "stdout_sha256": "02e559c2e967f4efad9d4845b7972f622f52bed6e710cea4447236ad67b84e2e"
+          }
+        ],
+        "scan_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.405768570447522,
+          "mean": 0.39157063422673427,
+          "median": 0.389888632065834,
+          "min": 0.38145534420713184,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.4005903681666047
+        }
+      },
+      {
+        "counters_status_counts": {
+          "available": 20
+        },
+        "cpu_status_counts": {
+          "available": 20
+        },
+        "depth": 1,
+        "derived_checks_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.5692423600320196,
+          "mean": 0.5583938673579247,
+          "median": 0.5569399843494723,
+          "min": 0.5526950925181013,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.5692152634539659
+        },
+        "direction": "reverse",
+        "distributions": {
+          "all_named_phases_ns": {
+            "available": 20,
+            "max": 42794,
+            "mean": 42313.15,
+            "median": 42324.0,
+            "min": 41721,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 42694
+          },
+          "all_observed_ns": {
+            "available": 20,
+            "max": 16044,
+            "mean": 15690.4,
+            "median": 15808.5,
+            "min": 14982,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16024
+          },
+          "both_call_totals_ns": {
+            "available": 20,
+            "max": 43395,
+            "mean": 42902.6,
+            "median": 42939.0,
+            "min": 42293,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 43285
+          },
+          "elapsed_ns": {
+            "available": 20,
+            "max": 43505,
+            "mean": 43027.55,
+            "median": 43049.5,
+            "min": 42433,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 43405
+          },
+          "first_observed_ns": {
+            "available": 20,
+            "max": 16014,
+            "mean": 15659.3,
+            "median": 15778.0,
+            "min": 14952,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 15994
+          },
+          "involuntary_switches": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "max_requested_sleep_ns": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "observations": {
+            "available": 20,
+            "max": 74,
+            "mean": 73.75,
+            "median": 74.0,
+            "min": 73,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 74
+          },
+          "operational_checks_ns": {
+            "available": 20,
+            "max": 24285,
+            "mean": 24024.95,
+            "median": 24001.5,
+            "min": 23926,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 24178
+          },
+          "prepare_ns": {
+            "available": 20,
+            "max": 541,
+            "mean": 398.4,
+            "median": 370.5,
+            "min": 341,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 541
+          },
+          "publish_ns": {
+            "available": 20,
+            "max": 862,
+            "mean": 680.05,
+            "median": 650.5,
+            "min": 611,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 852
+          },
+          "requested_sleep_ns": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "retirement_ns": {
+            "available": 20,
+            "max": 80,
+            "mean": 69.6,
+            "median": 70.0,
+            "min": 60,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 80
+          },
+          "rounds": {
+            "available": 20,
+            "max": 74,
+            "mean": 73.75,
+            "median": 74.0,
+            "min": 73,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 74
+          },
+          "scan_ns": {
+            "available": 20,
+            "max": 17406,
+            "mean": 17043.85,
+            "median": 17165.0,
+            "min": 16324,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 17376
+          },
+          "sleeps": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "spins": {
+            "available": 20,
+            "max": 64,
+            "mean": 64,
+            "median": 64.0,
+            "min": 64,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 64
+          },
+          "submit_close_ns": {
+            "available": 20,
+            "max": 6349,
+            "mean": 6036.45,
+            "median": 5999.5,
+            "min": 5968,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6270
+          },
+          "submit_named_phases_ns": {
+            "available": 20,
+            "max": 13429,
+            "mean": 13163.9,
+            "median": 13154.0,
+            "min": 13000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 13330
+          },
+          "submit_open_ns": {
+            "available": 20,
+            "max": 6089,
+            "mean": 6049,
+            "median": 6079.0,
+            "min": 5839,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6089
+          },
+          "submit_total_ns": {
+            "available": 20,
+            "max": 13791,
+            "mean": 13527.9,
+            "median": 13515.5,
+            "min": 13350,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 13691
+          },
+          "thread_cpu_ns": {
+            "available": 20,
+            "max": 16034,
+            "mean": 15674.95,
+            "median": 15793.5,
+            "min": 14983,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 15995
+          },
+          "validation_ns": {
+            "available": 20,
+            "max": 111,
+            "mean": 96.3,
+            "median": 91.0,
+            "min": 81,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 110
+          },
+          "voluntary_switches": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "wait_close_ns": {
+            "available": 20,
+            "max": 6189,
+            "mean": 6075.6,
+            "median": 6074.0,
+            "min": 6039,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6109
+          },
+          "wait_named_phases_ns": {
+            "available": 20,
+            "max": 29525,
+            "mean": 29149.25,
+            "median": 29264.5,
+            "min": 28511,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 29495
+          },
+          "wait_open_ns": {
+            "available": 20,
+            "max": 6009,
+            "mean": 5863.9,
+            "median": 5859.0,
+            "min": 5829,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5879
+          },
+          "wait_total_ns": {
+            "available": 20,
+            "max": 29744,
+            "mean": 29374.7,
+            "median": 29504.0,
+            "min": 28723,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 29734
+          },
+          "yields": {
+            "available": 20,
+            "max": 9,
+            "mean": 8.75,
+            "median": 9.0,
+            "min": 8,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 9
+          }
+        },
+        "histograms": {
+          "involuntary_switches": {
+            "0": 20
+          },
+          "max_requested_sleep_ns": {
+            "0": 20
+          },
+          "observations": {
+            "73": 5,
+            "74": 15
+          },
+          "requested_sleep_ns": {
+            "0": 20
+          },
+          "rounds": {
+            "73": 5,
+            "74": 15
+          },
+          "sleeps": {
+            "0": 20
+          },
+          "spins": {
+            "64": 20
+          },
+          "voluntary_switches": {
+            "0": 20
+          },
+          "yields": {
+            "8": 5,
+            "9": 15
+          }
+        },
+        "invocations": [
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 43505,
+              "mean": 43163.7,
+              "median": 43250.0,
+              "min": 42474,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 43505
+            },
+            "execution_receipt_sha256": "66e77390d7bec947e2e704d798fdc58591bf7baa85dc8c9ab98335f10a687389",
+            "name": "d01-profiled-01",
+            "scope_entry_ns": 6647990,
+            "scope_finish_ns": 6791,
+            "stdout_sha256": "f37b39f2f8a0f6d5cf37859bb198bf8e24f447649e64c00a05c3cc3e97821399"
+          },
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 43355,
+              "mean": 42891.4,
+              "median": 42899.5,
+              "min": 42433,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 43355
+            },
+            "execution_receipt_sha256": "253ec9f7476af43795d3a0802cc0d4781a99af429db3c016de40548bf2bd5fd6",
+            "name": "d01-profiled-02",
+            "scope_entry_ns": 6821078,
+            "scope_finish_ns": 6519,
+            "stdout_sha256": "02e559c2e967f4efad9d4845b7972f622f52bed6e710cea4447236ad67b84e2e"
+          }
+        ],
+        "scan_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.4028283296626869,
+          "mean": 0.39608952774133266,
+          "median": 0.3970925901999972,
+          "min": 0.3843292367095164,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.40125130344108445
+        }
+      },
+      {
+        "counters_status_counts": {
+          "available": 20
+        },
+        "cpu_status_counts": {
+          "available": 20
+        },
+        "depth": 16,
+        "derived_checks_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.03810379723892094,
+          "mean": 0.036281139736694494,
+          "median": 0.036061280490952016,
+          "min": 0.03553323298926162,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.03754381617973925
+        },
+        "direction": "forward",
+        "distributions": {
+          "all_named_phases_ns": {
+            "available": 20,
+            "max": 695911,
+            "mean": 681712.85,
+            "median": 683292.5,
+            "min": 661188,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 686415
+          },
+          "all_observed_ns": {
+            "available": 20,
+            "max": 664964,
+            "mean": 650749.9,
+            "median": 652545.5,
+            "min": 629311,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 654829
+          },
+          "both_call_totals_ns": {
+            "available": 20,
+            "max": 696721,
+            "mean": 682203.95,
+            "median": 683707.5,
+            "min": 661919,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 686878
+          },
+          "elapsed_ns": {
+            "available": 20,
+            "max": 696852,
+            "mean": 682336.9,
+            "median": 683837.5,
+            "min": 662060,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 686977
+          },
+          "first_observed_ns": {
+            "available": 20,
+            "max": 16194,
+            "mean": 15584.6,
+            "median": 15613.5,
+            "min": 15023,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16125
+          },
+          "involuntary_switches": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "max_requested_sleep_ns": {
+            "available": 20,
+            "max": 200000,
+            "mean": 200000,
+            "median": 200000.0,
+            "min": 200000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 200000
+          },
+          "observations": {
+            "available": 20,
+            "max": 1266,
+            "mean": 1263.5,
+            "median": 1263.5,
+            "min": 1261,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1266
+          },
+          "operational_checks_ns": {
+            "available": 20,
+            "max": 25759,
+            "mean": 24752.75,
+            "median": 24646.5,
+            "min": 24245,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 25329
+          },
+          "prepare_ns": {
+            "available": 20,
+            "max": 2454,
+            "mean": 1842.75,
+            "median": 1812.5,
+            "min": 1622,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 2163
+          },
+          "publish_ns": {
+            "available": 20,
+            "max": 2564,
+            "mean": 2085.7,
+            "median": 2053.0,
+            "min": 1943,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 2344
+          },
+          "requested_sleep_ns": {
+            "available": 20,
+            "max": 375000,
+            "mean": 375000,
+            "median": 375000.0,
+            "min": 375000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 375000
+          },
+          "retirement_ns": {
+            "available": 20,
+            "max": 731,
+            "mean": 480.2,
+            "median": 445.5,
+            "min": 411,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 621
+          },
+          "rounds": {
+            "available": 20,
+            "max": 85,
+            "mean": 85,
+            "median": 85.0,
+            "min": 85,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 85
+          },
+          "scan_ns": {
+            "available": 20,
+            "max": 666396,
+            "mean": 652289.2,
+            "median": 653988.5,
+            "min": 631054,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 656261
+          },
+          "sleeps": {
+            "available": 20,
+            "max": 4,
+            "mean": 4,
+            "median": 4.0,
+            "min": 4,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 4
+          },
+          "spins": {
+            "available": 20,
+            "max": 64,
+            "mean": 64,
+            "median": 64.0,
+            "min": 64,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 64
+          },
+          "submit_close_ns": {
+            "available": 20,
+            "max": 6420,
+            "mean": 6099.2,
+            "median": 6039.5,
+            "min": 6019,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6390
+          },
+          "submit_named_phases_ns": {
+            "available": 20,
+            "max": 16736,
+            "mean": 16007.7,
+            "median": 15879.0,
+            "min": 15573,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16655
+          },
+          "submit_open_ns": {
+            "available": 20,
+            "max": 6519,
+            "mean": 5980.05,
+            "median": 5934.0,
+            "min": 5889,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6199
+          },
+          "submit_total_ns": {
+            "available": 20,
+            "max": 17316,
+            "mean": 16260.9,
+            "median": 16084.0,
+            "min": 15754,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16855
+          },
+          "thread_cpu_ns": {
+            "available": 20,
+            "max": 86339,
+            "mean": 74651.3,
+            "median": 73956.0,
+            "min": 72479,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 77547
+          },
+          "validation_ns": {
+            "available": 20,
+            "max": 751,
+            "mean": 262.25,
+            "median": 210.0,
+            "min": 160,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 520
+          },
+          "voluntary_switches": {
+            "available": 20,
+            "max": 4,
+            "mean": 4,
+            "median": 4.0,
+            "min": 4,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 4
+          },
+          "wait_close_ns": {
+            "available": 20,
+            "max": 7151,
+            "mean": 6767.7,
+            "median": 6760.0,
+            "min": 6359,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 7131
+          },
+          "wait_named_phases_ns": {
+            "available": 20,
+            "max": 679686,
+            "mean": 665705.15,
+            "median": 667288.0,
+            "min": 644884,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 670161
+          },
+          "wait_open_ns": {
+            "available": 20,
+            "max": 6189,
+            "mean": 5905.8,
+            "median": 5889.0,
+            "min": 5849,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5949
+          },
+          "wait_total_ns": {
+            "available": 20,
+            "max": 679896,
+            "mean": 665943.05,
+            "median": 667533.0,
+            "min": 645104,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 670413
+          },
+          "yields": {
+            "available": 20,
+            "max": 16,
+            "mean": 16,
+            "median": 16.0,
+            "min": 16,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16
+          }
+        },
+        "histograms": {
+          "involuntary_switches": {
+            "0": 20
+          },
+          "max_requested_sleep_ns": {
+            "200000": 20
+          },
+          "observations": {
+            "1261": 2,
+            "1262": 2,
+            "1263": 6,
+            "1264": 6,
+            "1265": 2,
+            "1266": 2
+          },
+          "requested_sleep_ns": {
+            "375000": 20
+          },
+          "rounds": {
+            "85": 20
+          },
+          "sleeps": {
+            "4": 20
+          },
+          "spins": {
+            "64": 20
+          },
+          "voluntary_switches": {
+            "4": 20
+          },
+          "yields": {
+            "16": 20
+          }
+        },
+        "invocations": [
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 696852,
+              "mean": 683938.4,
+              "median": 683426.5,
+              "min": 675540,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 696852
+            },
+            "execution_receipt_sha256": "0365cdd03072d08b77ac1a95eb7108ea573b21b714af11a9bd7fecdda810cf9a",
+            "name": "d16-profiled-01",
+            "scope_entry_ns": 6553717,
+            "scope_finish_ns": 6850,
+            "stdout_sha256": "ef3e1449f327c7fa61af6a9fdda6a3fe07369d6d4050f754301d022370b839f2"
+          },
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 686977,
+              "mean": 680735.4,
+              "median": 684042.0,
+              "min": 662060,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 686977
+            },
+            "execution_receipt_sha256": "747c70056fb8a434917ee2d155c0d95eb00d3d8a6f51807b49b288fd6aa487d5",
+            "name": "d16-profiled-02",
+            "scope_entry_ns": 6562670,
+            "scope_finish_ns": 6369,
+            "stdout_sha256": "9bf06182ff9a63dfa4127e1240808935d5bec7a538e25d3ebfc69b95258865ec"
+          }
+        ],
+        "scan_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.9570391561718199,
+          "mean": 0.9559577084687915,
+          "median": 0.9562551781385251,
+          "min": 0.9531673866416941,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.9569092063603795
+        }
+      },
+      {
+        "counters_status_counts": {
+          "available": 20
+        },
+        "cpu_status_counts": {
+          "available": 20
+        },
+        "depth": 16,
+        "derived_checks_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.03861089865710027,
+          "mean": 0.036377757876529804,
+          "median": 0.03616558412533587,
+          "min": 0.03551639049149521,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.037388640703053574
+        },
+        "direction": "reverse",
+        "distributions": {
+          "all_named_phases_ns": {
+            "available": 20,
+            "max": 687998,
+            "mean": 679960.85,
+            "median": 682870.5,
+            "min": 641460,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 687297
+          },
+          "all_observed_ns": {
+            "available": 20,
+            "max": 656671,
+            "mean": 648953.65,
+            "median": 651985.0,
+            "min": 610393,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 655550
+          },
+          "both_call_totals_ns": {
+            "available": 20,
+            "max": 688419,
+            "mean": 680410.5,
+            "median": 683445.5,
+            "min": 641860,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 687708
+          },
+          "elapsed_ns": {
+            "available": 20,
+            "max": 688539,
+            "mean": 680534.7,
+            "median": 683561.5,
+            "min": 641969,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 687828
+          },
+          "first_observed_ns": {
+            "available": 20,
+            "max": 15944,
+            "mean": 15700.05,
+            "median": 15718.5,
+            "min": 15142,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 15914
+          },
+          "involuntary_switches": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "max_requested_sleep_ns": {
+            "available": 20,
+            "max": 200000,
+            "mean": 200000,
+            "median": 200000.0,
+            "min": 200000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 200000
+          },
+          "observations": {
+            "available": 20,
+            "max": 1269,
+            "mean": 1263.7,
+            "median": 1264.0,
+            "min": 1261,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1266
+          },
+          "operational_checks_ns": {
+            "available": 20,
+            "max": 25509,
+            "mean": 24750.5,
+            "median": 24702.0,
+            "min": 24267,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 25216
+          },
+          "prepare_ns": {
+            "available": 20,
+            "max": 3254,
+            "mean": 1924.75,
+            "median": 1788.0,
+            "min": 1652,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 2604
+          },
+          "publish_ns": {
+            "available": 20,
+            "max": 2774,
+            "mean": 2097.6,
+            "median": 2038.0,
+            "min": 1902,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 2544
+          },
+          "requested_sleep_ns": {
+            "available": 20,
+            "max": 375000,
+            "mean": 375000,
+            "median": 375000.0,
+            "min": 375000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 375000
+          },
+          "retirement_ns": {
+            "available": 20,
+            "max": 842,
+            "mean": 488.3,
+            "median": 460.5,
+            "min": 411,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 681
+          },
+          "rounds": {
+            "available": 20,
+            "max": 85,
+            "mean": 85,
+            "median": 85.0,
+            "min": 85,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 85
+          },
+          "scan_ns": {
+            "available": 20,
+            "max": 658103,
+            "mean": 650469.9,
+            "median": 653527.5,
+            "min": 611845,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 657723
+          },
+          "sleeps": {
+            "available": 20,
+            "max": 4,
+            "mean": 4,
+            "median": 4.0,
+            "min": 4,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 4
+          },
+          "spins": {
+            "available": 20,
+            "max": 64,
+            "mean": 64,
+            "median": 64.0,
+            "min": 64,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 64
+          },
+          "submit_close_ns": {
+            "available": 20,
+            "max": 6089,
+            "mean": 6056.55,
+            "median": 6059.0,
+            "min": 6019,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6079
+          },
+          "submit_named_phases_ns": {
+            "available": 20,
+            "max": 18096,
+            "mean": 16036.85,
+            "median": 15898.0,
+            "min": 15532,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16515
+          },
+          "submit_open_ns": {
+            "available": 20,
+            "max": 6060,
+            "mean": 5957.95,
+            "median": 5949.0,
+            "min": 5908,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6009
+          },
+          "submit_total_ns": {
+            "available": 20,
+            "max": 18267,
+            "mean": 16236.6,
+            "median": 16079.0,
+            "min": 15713,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16685
+          },
+          "thread_cpu_ns": {
+            "available": 20,
+            "max": 77696,
+            "mean": 74221.9,
+            "median": 73581.5,
+            "min": 71857,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 77013
+          },
+          "validation_ns": {
+            "available": 20,
+            "max": 421,
+            "mean": 229.8,
+            "median": 205.0,
+            "min": 160,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 400
+          },
+          "voluntary_switches": {
+            "available": 20,
+            "max": 4,
+            "mean": 4,
+            "median": 4.0,
+            "min": 4,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 4
+          },
+          "wait_close_ns": {
+            "available": 20,
+            "max": 7562,
+            "mean": 6822.7,
+            "median": 6725.0,
+            "min": 6390,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 7340
+          },
+          "wait_named_phases_ns": {
+            "available": 20,
+            "max": 672044,
+            "mean": 663924,
+            "median": 666967.0,
+            "min": 625476,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 671444
+          },
+          "wait_open_ns": {
+            "available": 20,
+            "max": 5959,
+            "mean": 5913.3,
+            "median": 5928.5,
+            "min": 5868,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5949
+          },
+          "wait_total_ns": {
+            "available": 20,
+            "max": 672275,
+            "mean": 664173.9,
+            "median": 667237.5,
+            "min": 625696,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 671664
+          },
+          "yields": {
+            "available": 20,
+            "max": 16,
+            "mean": 16,
+            "median": 16.0,
+            "min": 16,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16
+          }
+        },
+        "histograms": {
+          "involuntary_switches": {
+            "0": 20
+          },
+          "max_requested_sleep_ns": {
+            "200000": 20
+          },
+          "observations": {
+            "1261": 2,
+            "1262": 1,
+            "1263": 5,
+            "1264": 10,
+            "1266": 1,
+            "1269": 1
+          },
+          "requested_sleep_ns": {
+            "375000": 20
+          },
+          "rounds": {
+            "85": 20
+          },
+          "sleeps": {
+            "4": 20
+          },
+          "spins": {
+            "64": 20
+          },
+          "voluntary_switches": {
+            "4": 20
+          },
+          "yields": {
+            "16": 20
+          }
+        },
+        "invocations": [
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 687297,
+              "mean": 680376.1,
+              "median": 683076.0,
+              "min": 655199,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 687297
+            },
+            "execution_receipt_sha256": "0365cdd03072d08b77ac1a95eb7108ea573b21b714af11a9bd7fecdda810cf9a",
+            "name": "d16-profiled-01",
+            "scope_entry_ns": 6732704,
+            "scope_finish_ns": 6650,
+            "stdout_sha256": "ef3e1449f327c7fa61af6a9fdda6a3fe07369d6d4050f754301d022370b839f2"
+          },
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 688539,
+              "mean": 680693.3,
+              "median": 684137.5,
+              "min": 641969,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 688539
+            },
+            "execution_receipt_sha256": "747c70056fb8a434917ee2d155c0d95eb00d3d8a6f51807b49b288fd6aa487d5",
+            "name": "d16-profiled-02",
+            "scope_entry_ns": 6642890,
+            "scope_finish_ns": 6850,
+            "stdout_sha256": "9bf06182ff9a63dfa4127e1240808935d5bec7a538e25d3ebfc69b95258865ec"
+          }
+        ],
+        "scan_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.9572142187017465,
+          "mean": 0.9558121063099037,
+          "median": 0.9560999256934299,
+          "min": 0.9530756158007629,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.9572075873821535
+        }
+      },
+      {
+        "counters_status_counts": {
+          "available": 20
+        },
+        "cpu_status_counts": {
+          "available": 20
+        },
+        "depth": 32,
+        "derived_checks_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.023773822681079332,
+          "mean": 0.02098557492180465,
+          "median": 0.020830176352992582,
+          "min": 0.020289572755260627,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.021842044458398078
+        },
+        "direction": "forward",
+        "distributions": {
+          "all_named_phases_ns": {
+            "available": 20,
+            "max": 1190802,
+            "mean": 1176695.6,
+            "median": 1181996.0,
+            "min": 1133274,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1190450
+          },
+          "all_observed_ns": {
+            "available": 20,
+            "max": 1157010,
+            "mean": 1142522.8,
+            "median": 1147885.5,
+            "min": 1099954,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1156990
+          },
+          "both_call_totals_ns": {
+            "available": 20,
+            "max": 1191281,
+            "mean": 1177228.75,
+            "median": 1182532.5,
+            "min": 1133784,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1190930
+          },
+          "elapsed_ns": {
+            "available": 20,
+            "max": 1191381,
+            "mean": 1177378.25,
+            "median": 1182657.5,
+            "min": 1133914,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1191070
+          },
+          "first_observed_ns": {
+            "available": 20,
+            "max": 18227,
+            "mean": 17126.6,
+            "median": 17121.0,
+            "min": 16265,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 18087
+          },
+          "involuntary_switches": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "max_requested_sleep_ns": {
+            "available": 20,
+            "max": 400000,
+            "mean": 400000,
+            "median": 400000.0,
+            "min": 400000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 400000
+          },
+          "observations": {
+            "available": 20,
+            "max": 2581,
+            "mean": 2571.5,
+            "median": 2571.0,
+            "min": 2562,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 2578
+          },
+          "operational_checks_ns": {
+            "available": 20,
+            "max": 28222,
+            "mean": 24705.25,
+            "median": 24622.0,
+            "min": 23956,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 25046
+          },
+          "prepare_ns": {
+            "available": 20,
+            "max": 4496,
+            "mean": 3380.5,
+            "median": 3245.0,
+            "min": 2974,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 4026
+          },
+          "publish_ns": {
+            "available": 20,
+            "max": 8814,
+            "mean": 3425.65,
+            "median": 3080.0,
+            "min": 2934,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 3675
+          },
+          "requested_sleep_ns": {
+            "available": 20,
+            "max": 775000,
+            "mean": 775000,
+            "median": 775000.0,
+            "min": 775000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 775000
+          },
+          "retirement_ns": {
+            "available": 20,
+            "max": 1483,
+            "mean": 751.6,
+            "median": 681.0,
+            "min": 641,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 911
+          },
+          "rounds": {
+            "available": 20,
+            "max": 86,
+            "mean": 86,
+            "median": 86.0,
+            "min": 86,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 86
+          },
+          "scan_ns": {
+            "available": 20,
+            "max": 1158582,
+            "mean": 1144058.55,
+            "median": 1149397.5,
+            "min": 1101427,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1158492
+          },
+          "sleeps": {
+            "available": 20,
+            "max": 5,
+            "mean": 5,
+            "median": 5.0,
+            "min": 5,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5
+          },
+          "spins": {
+            "available": 20,
+            "max": 64,
+            "mean": 64,
+            "median": 64.0,
+            "min": 64,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 64
+          },
+          "submit_close_ns": {
+            "available": 20,
+            "max": 6399,
+            "mean": 6093.1,
+            "median": 6059.0,
+            "min": 6009,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6250
+          },
+          "submit_named_phases_ns": {
+            "available": 20,
+            "max": 23946,
+            "mean": 19010.25,
+            "median": 18477.0,
+            "min": 17936,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 22614
+          },
+          "submit_open_ns": {
+            "available": 20,
+            "max": 9524,
+            "mean": 6111,
+            "median": 5928.5,
+            "min": 5879,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6029
+          },
+          "submit_total_ns": {
+            "available": 20,
+            "max": 24166,
+            "mean": 19221.8,
+            "median": 18673.0,
+            "min": 18167,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 22794
+          },
+          "thread_cpu_ns": {
+            "available": 20,
+            "max": 127323,
+            "mean": 119870.05,
+            "median": 118979.5,
+            "min": 116985,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 126120
+          },
+          "validation_ns": {
+            "available": 20,
+            "max": 471,
+            "mean": 374.05,
+            "median": 370.5,
+            "min": 250,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 460
+          },
+          "voluntary_switches": {
+            "available": 20,
+            "max": 5,
+            "mean": 5,
+            "median": 5.0,
+            "min": 5,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5
+          },
+          "wait_close_ns": {
+            "available": 20,
+            "max": 6980,
+            "mean": 6619.35,
+            "median": 6725.0,
+            "min": 6139,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6980
+          },
+          "wait_named_phases_ns": {
+            "available": 20,
+            "max": 1172633,
+            "mean": 1157685.35,
+            "median": 1163243.0,
+            "min": 1115167,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1171912
+          },
+          "wait_open_ns": {
+            "available": 20,
+            "max": 5959,
+            "mean": 5881.8,
+            "median": 5874.0,
+            "min": 5838,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5939
+          },
+          "wait_total_ns": {
+            "available": 20,
+            "max": 1172923,
+            "mean": 1158006.95,
+            "median": 1163629.5,
+            "min": 1115487,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1172192
+          },
+          "yields": {
+            "available": 20,
+            "max": 16,
+            "mean": 16,
+            "median": 16.0,
+            "min": 16,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16
+          }
+        },
+        "histograms": {
+          "involuntary_switches": {
+            "0": 20
+          },
+          "max_requested_sleep_ns": {
+            "400000": 20
+          },
+          "observations": {
+            "2562": 1,
+            "2565": 3,
+            "2567": 3,
+            "2568": 1,
+            "2569": 1,
+            "2570": 1,
+            "2572": 1,
+            "2575": 2,
+            "2576": 2,
+            "2577": 2,
+            "2578": 2,
+            "2581": 1
+          },
+          "requested_sleep_ns": {
+            "775000": 20
+          },
+          "rounds": {
+            "86": 20
+          },
+          "sleeps": {
+            "5": 20
+          },
+          "spins": {
+            "64": 20
+          },
+          "voluntary_switches": {
+            "5": 20
+          },
+          "yields": {
+            "16": 20
+          }
+        },
+        "invocations": [
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 1191381,
+              "mean": 1177809.4,
+              "median": 1182657.5,
+              "min": 1152572,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 1191381
+            },
+            "execution_receipt_sha256": "c6702055e145ceb8d7c52f15a44fa76a1e80153eb46a9443b22c2187dc3d125f",
+            "name": "d32-profiled-01",
+            "scope_entry_ns": 6539976,
+            "scope_finish_ns": 6430,
+            "stdout_sha256": "38a2f8d15b5a53744996a08c4a03fc8ca56f217771c6b9a6ff469c9d6b10cfe3"
+          },
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 1191070,
+              "mean": 1176947.1,
+              "median": 1182853.5,
+              "min": 1133914,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 1191070
+            },
+            "execution_receipt_sha256": "4c43d6346495a7797ba1acc2464a66f4f99896c4eedef8b4824233eed7d61efc",
+            "name": "d32-profiled-02",
+            "scope_entry_ns": 6605723,
+            "scope_finish_ns": 6670,
+            "stdout_sha256": "32ff9e2046690d49560e81e85760985a3ccd73ebe9c64d83f7acd32fadae5ac4"
+          }
+        ],
+        "scan_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.9731118272557497,
+          "mean": 0.9716988131708788,
+          "median": 0.9719986186149687,
+          "min": 0.9680655928144216,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.9729225054927955
+        }
+      },
+      {
+        "counters_status_counts": {
+          "available": 20
+        },
+        "cpu_status_counts": {
+          "available": 20
+        },
+        "depth": 32,
+        "derived_checks_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.024267144506882683,
+          "mean": 0.020906881207758764,
+          "median": 0.020698926002198324,
+          "min": 0.020211816735849788,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.021399626959931067
+        },
+        "direction": "reverse",
+        "distributions": {
+          "all_named_phases_ns": {
+            "available": 20,
+            "max": 1188426,
+            "mean": 1179979,
+            "median": 1181736.5,
+            "min": 1153515,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1188337
+          },
+          "all_observed_ns": {
+            "available": 20,
+            "max": 1152803,
+            "mean": 1145568.3,
+            "median": 1147149.0,
+            "min": 1120535,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1152112
+          },
+          "both_call_totals_ns": {
+            "available": 20,
+            "max": 1189488,
+            "mean": 1180555.55,
+            "median": 1182357.5,
+            "min": 1154135,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1189138
+          },
+          "elapsed_ns": {
+            "available": 20,
+            "max": 1189798,
+            "mean": 1180710.7,
+            "median": 1182572.5,
+            "min": 1154486,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1189248
+          },
+          "first_observed_ns": {
+            "available": 20,
+            "max": 17346,
+            "mean": 16701,
+            "median": 16910.5,
+            "min": 12318,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 17236
+          },
+          "involuntary_switches": {
+            "available": 20,
+            "max": 0,
+            "mean": 0,
+            "median": 0.0,
+            "min": 0,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 0
+          },
+          "max_requested_sleep_ns": {
+            "available": 20,
+            "max": 400000,
+            "mean": 400000,
+            "median": 400000.0,
+            "min": 400000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 400000
+          },
+          "observations": {
+            "available": 20,
+            "max": 2577,
+            "mean": 2572.35,
+            "median": 2573.0,
+            "min": 2556,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 2577
+          },
+          "operational_checks_ns": {
+            "available": 20,
+            "max": 28873,
+            "mean": 24685.3,
+            "median": 24407.5,
+            "min": 23966,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 25348
+          },
+          "prepare_ns": {
+            "available": 20,
+            "max": 11438,
+            "mean": 3875.1,
+            "median": 3350.0,
+            "min": 3074,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 4727
+          },
+          "publish_ns": {
+            "available": 20,
+            "max": 3465,
+            "mean": 3172.65,
+            "median": 3120.0,
+            "min": 2954,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 3435
+          },
+          "requested_sleep_ns": {
+            "available": 20,
+            "max": 775000,
+            "mean": 775000,
+            "median": 775000.0,
+            "min": 775000,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 775000
+          },
+          "retirement_ns": {
+            "available": 20,
+            "max": 1352,
+            "mean": 774.7,
+            "median": 715.5,
+            "min": 641,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1122
+          },
+          "rounds": {
+            "available": 20,
+            "max": 86,
+            "mean": 86,
+            "median": 86.0,
+            "min": 86,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 86
+          },
+          "scan_ns": {
+            "available": 20,
+            "max": 1154225,
+            "mean": 1147104,
+            "median": 1148626.0,
+            "min": 1121997,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1153584
+          },
+          "sleeps": {
+            "available": 20,
+            "max": 5,
+            "mean": 5,
+            "median": 5.0,
+            "min": 5,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5
+          },
+          "spins": {
+            "available": 20,
+            "max": 64,
+            "mean": 64,
+            "median": 64.0,
+            "min": 64,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 64
+          },
+          "submit_close_ns": {
+            "available": 20,
+            "max": 6299,
+            "mean": 6063.1,
+            "median": 6049.0,
+            "min": 6009,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6139
+          },
+          "submit_named_phases_ns": {
+            "available": 20,
+            "max": 26551,
+            "mean": 19053.15,
+            "median": 18522.0,
+            "min": 18066,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 19719
+          },
+          "submit_open_ns": {
+            "available": 20,
+            "max": 6019,
+            "mean": 5942.3,
+            "median": 5939.0,
+            "min": 5898,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5999
+          },
+          "submit_total_ns": {
+            "available": 20,
+            "max": 26750,
+            "mean": 19271.3,
+            "median": 18728.0,
+            "min": 18257,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 19900
+          },
+          "thread_cpu_ns": {
+            "available": 20,
+            "max": 122543,
+            "mean": 118457.35,
+            "median": 117341.0,
+            "min": 116326,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 122284
+          },
+          "validation_ns": {
+            "available": 20,
+            "max": 712,
+            "mean": 367.25,
+            "median": 341.0,
+            "min": 300,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 471
+          },
+          "voluntary_switches": {
+            "available": 20,
+            "max": 5,
+            "mean": 5,
+            "median": 5.0,
+            "min": 5,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 5
+          },
+          "wait_close_ns": {
+            "available": 20,
+            "max": 7331,
+            "mean": 6571.35,
+            "median": 6495.0,
+            "min": 6149,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 7091
+          },
+          "wait_named_phases_ns": {
+            "available": 20,
+            "max": 1169118,
+            "mean": 1160925.85,
+            "median": 1162397.0,
+            "min": 1135278,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1167624
+          },
+          "wait_open_ns": {
+            "available": 20,
+            "max": 10055,
+            "mean": 6108.55,
+            "median": 5888.0,
+            "min": 5858,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 6169
+          },
+          "wait_total_ns": {
+            "available": 20,
+            "max": 1169598,
+            "mean": 1161284.25,
+            "median": 1162763.0,
+            "min": 1135597,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 1167955
+          },
+          "yields": {
+            "available": 20,
+            "max": 16,
+            "mean": 16,
+            "median": 16.0,
+            "min": 16,
+            "missing": 0,
+            "n": 20,
+            "p95_nearest_rank": 16
+          }
+        },
+        "histograms": {
+          "involuntary_switches": {
+            "0": 20
+          },
+          "max_requested_sleep_ns": {
+            "400000": 20
+          },
+          "observations": {
+            "2556": 1,
+            "2569": 2,
+            "2570": 2,
+            "2571": 1,
+            "2572": 1,
+            "2573": 4,
+            "2574": 3,
+            "2575": 3,
+            "2577": 3
+          },
+          "requested_sleep_ns": {
+            "775000": 20
+          },
+          "rounds": {
+            "86": 20
+          },
+          "sleeps": {
+            "5": 20
+          },
+          "spins": {
+            "64": 20
+          },
+          "voluntary_switches": {
+            "5": 20
+          },
+          "yields": {
+            "16": 20
+          }
+        },
+        "invocations": [
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 1189798,
+              "mean": 1181953.6,
+              "median": 1183884.5,
+              "min": 1155908,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 1189798
+            },
+            "execution_receipt_sha256": "c6702055e145ceb8d7c52f15a44fa76a1e80153eb46a9443b22c2187dc3d125f",
+            "name": "d32-profiled-01",
+            "scope_entry_ns": 6767125,
+            "scope_finish_ns": 6981,
+            "stdout_sha256": "38a2f8d15b5a53744996a08c4a03fc8ca56f217771c6b9a6ff469c9d6b10cfe3"
+          },
+          {
+            "elapsed_ns": {
+              "available": 10,
+              "max": 1189248,
+              "mean": 1179467.8,
+              "median": 1180844.5,
+              "min": 1154486,
+              "missing": 0,
+              "n": 10,
+              "p95_nearest_rank": 1189248
+            },
+            "execution_receipt_sha256": "4c43d6346495a7797ba1acc2464a66f4f99896c4eedef8b4824233eed7d61efc",
+            "name": "d32-profiled-02",
+            "scope_entry_ns": 6808085,
+            "scope_finish_ns": 6500,
+            "stdout_sha256": "32ff9e2046690d49560e81e85760985a3ccd73ebe9c64d83f7acd32fadae5ac4"
+          }
+        ],
+        "scan_fraction_of_elapsed": {
+          "available": 20,
+          "max": 0.9729642278736625,
+          "mean": 0.9715397668707735,
+          "median": 0.9719535058828757,
+          "min": 0.9658086454633517,
+          "missing": 0,
+          "n": 20,
+          "p95_nearest_rank": 0.9728372613941313
+        }
+      }
+    ],
+    "profiled_sample_count": 120,
+    "statistical_conventions": {
+      "cpu": "Thread CPU and switches bracket only the scan, not the full call or measured batch.",
+      "diagnostic": "Descriptive distributions over twenty instrumented samples per depth/direction, with two invocation distributions retained.",
+      "median": "Middle value for odd n, arithmetic mean of two central values for even n.",
+      "missing": "None excluded from quantiles and means, counted explicitly; never replaced with zero.",
+      "ordinary": "Arithmetic mean of the two recorded invocation p50s; not a pooled raw-sample median.",
+      "p95": "Nearest rank: sorted present observations at one-based index ceil(0.95*n).",
+      "sleep": "Requested sleep is a policy counter, not measured asleep time or avoidable delay.",
+      "sums": "Named nonoverlapping phases summed within each sample before distribution; never sum marginal medians."
+    }
+  },
+  "analysis_controller_sha256": "93bda8d3973aa939fa04dd5ef6b1f9469c813b9ea0cb17e3c833c47559e54ebc",
+  "archive": {
+    "bytes": 3578669,
+    "files": 1040,
+    "sha256": "1375a5d7dd8968bd905a0a1ce74add0b3a2c38bf5336f44f63dc28a0592f2227",
+    "uncompressed_bytes": 14305791
+  },
+  "binaries_sha256": {
+    "hip": "0478b276eaa2ebb8ee1623f64deff3193d0140aa489f83337829d52bab5eaa1e",
+    "hsa": "8377832ae058b3b9a6bc17f5ce03414acf88d498b4df614b96ff0c7ece296d90",
+    "kfd": "5f4e033ff064fa73b8a394e8d0b016f4d1b3263c5415668f431ea664d6ff3c41",
+    "kfd-profiled": "9f4ad9f132aa51a23c77104692a3aa26fe711807159aeff940a63f120ef6a70a"
+  },
+  "censuses": {
+    "native": {
+      "count": 327,
+      "historical_pid_probes_performed": false,
+      "raw_hashes_verified": true,
+      "recorded_groups_closed": true,
+      "recorded_namespace": "pid:[4026531836]"
+    },
+    "prepare": {
+      "count": 14,
+      "historical_pid_probes_performed": false,
+      "raw_hashes_verified": true,
+      "recorded_groups_closed": true,
+      "recorded_namespace": "pid:[4026532221]"
+    },
+    "transport": {
+      "count": 6,
+      "historical_pid_probes_performed": false,
+      "raw_hashes_verified": true,
+      "recorded_groups_closed": true,
+      "recorded_namespace": "pid:[4026532221]"
+    }
+  },
+  "engine_matching": false,
+  "exclusive_reservation": false,
+  "formal_refinement": false,
+  "historical_pid_probes": false,
+  "independent_replay": {
+    "accepted": true,
+    "four_elf_dependency_identity": true,
+    "ordinary_trials": 18,
+    "performance_acceptance": false,
+    "profiled_binary_query_performed": false,
+    "profiled_trials": 6,
+    "replay_sha256": "c03c9b1ddea8bdc55713a501e7952aebc91c7780bb3753ef1ba1cd78c2f49c4b",
+    "trials": 24
+  },
+  "input_sha256": {
+    "binding.json": "b4d89265c8861e3bcf39517e4c96cd2a7885e0753f688051451082eb0bf38e82",
+    "independent-replay.json": "221181ff119db8e325120a1b9f5e83bae399d101f0f3c74e7b69e9d706f05906",
+    "owner.json": "8bff335f0d81274d17455741b4cffa951c0ea0c1626bccf50de72962a610b95d",
+    "prepare-census.json": "c733978ab1bcff9e7092400e689060c71a40c36ed4d7e92cad231cbee64501ee",
+    "readback/campaign-1/binaries-after.json": "9af4998574c0eb08b85b9afc3b8359e1359c4186c043646c8d31846cd8f1f886",
+    "readback/campaign-1/binaries-before.json": "9af4998574c0eb08b85b9afc3b8359e1359c4186c043646c8d31846cd8f1f886",
+    "readback/campaign-1/finished.json": "62dcd998d17653326204eedc6cd9113a77e77ed27e6b99bb736ead74b67e299f",
+    "readback/campaign-1/fresh-census.json": "7d447988b38a4776db40bdab9a542794a601ec6a48098eed4ec799f004f2a708",
+    "readback/campaign-1/replay.json": "a571ab168935c83010caf16cdb7f6731adc45739298be41103ddf977b4531c03",
+    "readback/launch.json": "4264ce80cfd51f9700cc71068c54f162404d3f8e582b09192a17718714a12b5e",
+    "readback/monitor/receipt.json": "667f5fa8884f14ccbc33fb159e5e8d8a3840b867387272d7f2a2ec0aaf132f27",
+    "remote-commands/absence/receipt.json": "33d599399dd67ef0b71e0e158a6b21628d0521c976558135f6c3ddef59f2a534",
+    "remote-commands/cleanup/receipt.json": "409c68d165a5e885fb434639b277410b3851a6e50f2471292a34ba327a54218a",
+    "remote-commands/collect/stdout": "17b84628d0959f99d8f87bb33f6bd7427d78087bd0b4a63c8fc4c62e0c21cf1a",
+    "remote-commands/pull/stdout": "1375a5d7dd8968bd905a0a1ce74add0b3a2c38bf5336f44f63dc28a0592f2227",
+    "transport-census.json": "25760c795aa10a4894a02413ab70221aa81ba3f632a7b88862200481d81246b8",
+    "transport-finished.json": "b76d8af281e88f3eb46d29ccde3a488e4839cad61baa49d29c7d2d7e3650c0cb"
+  },
+  "marker": {
+    "binding_sha256": "b4d89265c8861e3bcf39517e4c96cd2a7885e0753f688051451082eb0bf38e82",
+    "commit": "a26dbebb57f948439a2e813c7a17c1142014ba1e",
+    "path": "/home/harsh/fe2o3-xgmi-series-20260930.0b26c1f6eb613ac2"
+  },
+  "new_gpu_execution": false,
+  "original_session": 1309,
+  "performance_acceptance": false,
+  "schema": "fe2o3.native24-offline-descriptive-analysis.v1",
+  "source_commit": "a26dbebb57f948439a2e813c7a17c1142014ba1e"
+}

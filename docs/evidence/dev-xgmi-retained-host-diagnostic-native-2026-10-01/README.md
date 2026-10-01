@@ -1,0 +1,22 @@
+# MI300X Native24 Retained-Host Diagnostic Evidence
+
+The original session `1309` completed with exit 0 at signed source `a26dbebb57f948439a2e813c7a17c1142014ba1e`. All 24 trials (18 ordinary, 6 profiled), 327 native stages and 6 transport stages closed successfully. Independent replay passed. The exact owned remote directory was collected, removed and checked absent. No additional GPU run is represented here.
+
+`analysis.md` contains the ordinary comparison and separate host diagnostic distributions. `analysis.json` contains every phase/counter distribution, missing-value count and invocation identity. All 120 profiled samples have complete observations. This run does not establish performance acceptance, engine equivalence, formal source-to-device refinement, full HIP/HSA parity or exclusive GPU reservation.
+
+## Contents and Binding
+
+- `raw.tar.xz` preserves all 14 preparation stages and all 6 transport stages, their original stdout/stderr/receipts, ownership/source binding, and censuses. `raw-index.json` pins each original byte stream and mode.
+- The byte-identical original 3,578,669-byte native collection archive occurs exactly once inside that archive, at `native24/remote-commands/pull/stdout`. It contains all 1,040 native collection files, including the four original unmodified ELFs in `campaign-1/binaries`, the 327 command records, source/tool/loader identities, observer records, monitor and final replay. Its SHA-256 is `1375a5d7dd8968bd905a0a1ce74add0b3a2c38bf5336f44f63dc28a0592f2227`.
+- `signed-source.bundle` retains exactly the signed a26 commit over prerequisite `4ad64047b0887a747a41aa7b0b9fa2f4206279c1`, already public in both repositories. It is not a standalone repository. `signature-records/`, `signature-census.json` and `allowed-signers` retain fresh bounded signature/bundle checks and the exact signed commit bytes. The signer key is the reviewed project key; the included allowed-signers file is evidence of that reviewed identity, not an independent trust anchor.
+- `root-preflight.*` and `root-readback.*` preserve independent source/signature/preparation and final all-member/command/stdin/cleanup audits. `analysis.py` and `package.py` are retained exact controllers, not runtime source changes.
+- `publication-rejection-1/` inside the raw archive preserves the first packaging controller and all three closed Git records. That attempt stopped when Git refused a literal-hash bundle tip; the corrected attempt binds `HEAD` to the same signed a26 commit. The packaging rejection did not change native acceptance, rerun a workload, or alter original evidence.
+- `publication-resource-rejection-2.json` records a later preparation rejected by the unchanged local reserve guard before any output directory or subprocess existed. A separately authorized preparation proceeded only after the reserve recovered; no GPU workload was retried.
+
+## Replay Limits
+
+This compact publication is intentionally not self-contained for full original-controller replay. The 33,171,355-byte source transport payload, materialized selected checkout/Git object closure, and repository ancestors are not duplicated here. Their hashes, selected Git objects, modes and source-byte mappings remain in the archived binding and preparation records. The original payload and checkout remain retained at the local path recorded in `summary.json`; no original evidence or ELF was deleted.
+
+An external reviewer can independently authenticate the commit using a separately trusted project signing key and the public repository, inspect/reparse every ordinary/profiled native output, validate all nested archive hashes and inspect every original ELF and recorded receipt. Repeating the exact full analysis/root audit additionally requires the byte-identical original source payload and prepared source closure, or an independently verified reconstruction matching all recorded hashes. Repacking an equivalent Git tree does not reproduce the original gzip payload identity or receive-stdin hash. The original root controllers also retain their absolute original paths; this packet makes no claim that copying them elsewhere is sufficient to run them unchanged.
+
+The source already includes the previously published CPU qualification and its preserved rejections. This accepted native packet does not relabel those rejections or the preliminary misindexed availability observation as native admission. Actual campaign admission is in the 327 native command records.

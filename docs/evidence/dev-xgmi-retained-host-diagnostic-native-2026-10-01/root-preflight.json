@@ -1,0 +1,18 @@
+{
+  "archive_files": 6497,
+  "auditor_sha256": "896f2fcb43b914293161074013e2bfa4778eb2f1afffadb4fc2cfdae2904b2cf",
+  "binding_sha256": "b4d89265c8861e3bcf39517e4c96cd2a7885e0753f688051451082eb0bf38e82",
+  "commit": "a26dbebb57f948439a2e813c7a17c1142014ba1e",
+  "cpu_or_solver_execution": false,
+  "historical_pid_probes": false,
+  "marker": {
+    "binding_sha256": "b4d89265c8861e3bcf39517e4c96cd2a7885e0753f688051451082eb0bf38e82",
+    "commit": "a26dbebb57f948439a2e813c7a17c1142014ba1e",
+    "path": "/home/harsh/fe2o3-xgmi-series-20260930.0b26c1f6eb613ac2"
+  },
+  "payload_sha256": "105053772f7c8b0081ff3975c879e5ad9fbcbb0d5e8b9dff591c82ef60fd7922",
+  "preparation_stages": 14,
+  "remote_execution": false,
+  "signed_source_files": 6482,
+  "source_archive_and_signature_match": true
+}
