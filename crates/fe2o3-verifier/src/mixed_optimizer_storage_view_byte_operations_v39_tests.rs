@@ -102,13 +102,13 @@ fn storage_view_module_v39(
                 },
                 variants: vec![
                     TagVariant {
-                        discriminant: 41,
+                        discriminant: if niche { 0 } else { 41 },
                         direct_tag_bits: (!niche).then_some(17),
                         uninhabited: false,
                         layout: TagId(2),
                     },
                     TagVariant {
-                        discriminant: 73,
+                        discriminant: if niche { 1 } else { 73 },
                         direct_tag_bits: (!niche).then_some(23),
                         uninhabited: false,
                         layout: TagId(3),
@@ -212,7 +212,11 @@ fn byte_storage_views_dispatch_pointer_null_and_scalar_tags_with_logical_discrim
                     })
                     .0
                     .unwrap();
-                    assert!(text.contains("discriminants: seq![41int,73int,]"));
+                    assert!(text.contains(if niche {
+                        "discriminants: seq![0int,1int,]"
+                    } else {
+                        "discriminants: seq![41int,73int,]"
+                    }));
                     assert!(text.contains(".discriminants[variant]"));
                     assert!(text.contains("MemoryTagReadPurposeV39::VariantValidation"));
                     assert!(text.contains("MemoryTagReadPurposeV39::DiscriminantRead"));
