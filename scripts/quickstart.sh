@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
+source "${SCRIPT_DIR}/ci-phase-target.sh"
 readonly DEFAULT_MANIFEST="${REPO_ROOT}/examples/vecadd/Cargo.toml"
 readonly FILL_REQUEST="${REPO_ROOT}/scripts/quickstart/fill-canary-request.json"
 readonly FILL_EXPECTATION="${REPO_ROOT}/scripts/quickstart/fill-canary-expectation.json"
@@ -72,8 +73,17 @@ require_prerequisites() {
 
 cargo_workspace() {
   (
-    cd -- "${REPO_ROOT}"
+    cd -- "${REPO_ROOT}" || return
     FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
+      "${CARGO_COMMAND}" "$@"
+  )
+}
+
+quickstart_phase_clean() {
+  (
+    cd -- "${REPO_ROOT}" || return
+    timeout --signal=TERM --kill-after=15s 300s \
+      env FE2O3_HIP_SYS_DISABLE=1 FE2O3_HSA_RUNTIME_DISABLE=1 \
       "${CARGO_COMMAND}" "$@"
   )
 }
@@ -194,6 +204,12 @@ run_simulate_source() {
 
   cargo_workspace build --locked --quiet -p rustc-codegen-fe2o3 \
     --bin fe2o3-rustc-extract >&2
+  local -a cache_ticket=()
+  local export_target="${EXPORT_TARGET_DIR}"
+  ci_phase_target_begin cache_ticket "${CARGO_TARGET_DIR:-${REPO_ROOT}/target}" export || return
+  if ((${#cache_ticket[@]})); then
+    export_target="${cache_ticket[2]}"
+  fi
   local simulator_input=--bundle
   if [[ "${bundle_version}" == 5 ]]; then
     simulator_input=--bundle-v5
@@ -201,8 +217,9 @@ run_simulate_source() {
   cargo_workspace run --locked --quiet -p rustc-codegen-fe2o3 \
     --bin fe2o3-export-sim -- \
     --crate "${crate_name}" --output "${bundle}" --target "${target}" \
-    --bundle-version "${bundle_version}" --target-dir "${EXPORT_TARGET_DIR}" -- \
-    "${cargo_args[@]}" >&2
+    --bundle-version "${bundle_version}" --target-dir "${export_target}" -- \
+    "${cargo_args[@]}" >&2 || return
+  ci_phase_target_finish cache_ticket quickstart_phase_clean >&2 || return
   if [[ -n "${expectation}" ]]; then
     local result="${temporary_root}/result.json"
     cargo_workspace run --locked --quiet -p fe2o3-kir-sim-cli \
@@ -241,6 +258,7 @@ run_gfx942_preflight() {
 }
 
 main() {
+  ci_phase_target_validate_mode || return
   require_prerequisites
   local command="${1:-}"
   [[ -n "${command}" ]] || {

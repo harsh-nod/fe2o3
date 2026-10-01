@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+export FE2O3_CI_EPHEMERAL_SUBTARGETS=0
 
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${TEST_SCRIPT_DIR}/../ci-local.sh"
@@ -12,6 +13,55 @@ cleanup_timeout_test_root() {
   rm -rf -- "${TIMEOUT_TEST_ROOT}"
 }
 trap cleanup_timeout_test_root EXIT
+
+bash "${TEST_SCRIPT_DIR}/ci-phase-target.sh"
+(
+  export CARGO_TARGET_DIR="${TIMEOUT_TEST_ROOT}/phase-cargo"
+  mkdir -m 700 "${CARGO_TARGET_DIR}"
+  phase_log="${TIMEOUT_TEST_ROOT}/phase-default.log"
+  fail_step=''
+  observed_target=''
+  cargo() {
+    [[ "$*" == "clean --locked --offline --target-dir ${runtime_target}" ]] || return
+    rm -rf -- "${runtime_target}"
+  }
+  run_step() {
+    local step="$1" argument
+    shift
+    observed_target="${runtime_target}"
+    printf '%s' "${step}" >>"${phase_log}"
+    for argument in "$@"; do
+      printf ' %q' "${argument//"${runtime_target}"/"${RUNTIME_PURE_RUST_TARGET_DIR}"}" >>"${phase_log}"
+    done
+    printf '\n' >>"${phase_log}"
+    [[ "${step}" != "${fail_step}" ]] || return 37
+    if [[ "${step}" == runtime-pure-rust-cache-clean ]]; then
+      [[ -d "${runtime_target}" ]]
+      "$@"
+    fi
+  }
+  run_runtime_pure_rust_policy
+  [[ "$(wc -l <"${phase_log}")" == 21 ]]
+  [[ "${observed_target}" == "${RUNTIME_PURE_RUST_TARGET_DIR}" ]]
+  [[ -z "$(find "${CARGO_TARGET_DIR}" -mindepth 1 -print -quit)" ]]
+  export FE2O3_CI_EPHEMERAL_SUBTARGETS=1
+  phase_log="${TIMEOUT_TEST_ROOT}/phase-enabled.log"
+  run_runtime_pure_rust_policy
+  [[ "$(wc -l <"${phase_log}")" == 22 && ! -e "${observed_target}" ]]
+  cmp "${TIMEOUT_TEST_ROOT}/phase-default.log" <(head -n 21 "${phase_log}")
+  [[ "$(tail -n 1 "${phase_log}")" == 'runtime-pure-rust-cache-clean cargo clean --locked --offline --target-dir '* ]]
+  [[ "$(sed -n '21p' "${phase_log}")" == runtime-pure-rust-kfd-compute-aql-queue-elf* ]]
+  [[ "${CARGO_TARGET_DIR}" == "${TIMEOUT_TEST_ROOT}/phase-cargo" ]]
+  for fail_step in virtual-runtime-no-gpu-build runtime-pure-rust-kfd-compute-aql-queue-elf runtime-pure-rust-cache-clean; do
+    phase_log="${TIMEOUT_TEST_ROOT}/${fail_step}-failed.log"
+    status=0
+    run_runtime_pure_rust_policy || status=$?
+    [[ "${status}" == 37 && -d "${observed_target}" ]]
+    if [[ "${fail_step}" != runtime-pure-rust-cache-clean ]]; then
+      ! rg -q '^runtime-pure-rust-cache-clean' "${phase_log}"
+    fi
+  done
+)
 
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
 python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
