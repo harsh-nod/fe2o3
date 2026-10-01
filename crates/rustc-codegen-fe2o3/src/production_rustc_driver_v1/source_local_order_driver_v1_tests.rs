@@ -301,3 +301,6 @@ fn actual_source_local_order_feasibility_ladder() {
     assert!(report.len() <= 512 * 1024);
     paths::write_new(&directory.join("observation.json"), &report);
 }
+
+#[path = "source_local_order_recipe_series_prepare_v1_tests.rs"]
+mod series_prepare;
