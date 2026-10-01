@@ -88,6 +88,12 @@ prerequisites remain explicit; this is not self-contained controller replay.
 
 ## Remaining Work
 
+The [shared numeric wait helpers](runtime-monotonic-wait-arithmetic-v1.md) now
+have a separately qualified two-input proof at signed source `a7d110af1`:
+four full 7/0 positives and seventeen intended 6/1 negatives. This covers the
+actual numeric bodies, not the Duration/Instant adapter or complete cursor.
+The earlier hardware measurement is not a benchmark of this arithmetic revision.
+
 This is one point-admitted, nonexclusive shared-host campaign. Comparator
 engine identities are unknown, and no device timeline or scheduler/cursor
 refinement is established. Broader sizes, repeated campaigns, host CPU/tail

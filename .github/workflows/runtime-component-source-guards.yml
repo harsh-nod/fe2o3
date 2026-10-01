@@ -17,6 +17,7 @@ on:
       - "benchmarks/runtime_gfx942/**"
       - "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/**"
       - "docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/native.py"
+      - "docs/evidence/dev-monotonic-wait-arithmetic-2026-10-01/**"
   push:
     branches: [main]
     paths:
@@ -34,6 +35,7 @@ on:
       - "benchmarks/runtime_gfx942/**"
       - "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/**"
       - "docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/native.py"
+      - "docs/evidence/dev-monotonic-wait-arithmetic-2026-10-01/**"
   workflow_dispatch:
 
 permissions:
@@ -116,3 +118,8 @@ jobs:
         run: >-
           python3 -I -B -m unittest discover -s benchmarks/runtime_gfx942
           -p 'test_xgmi_retained_wait_cadence*.py'
+
+      - name: Recorded wait arithmetic diagnostics (no fresh proof)
+        run: |
+          python3 -I -B docs/evidence/dev-monotonic-wait-arithmetic-2026-10-01/check-recorded-diagnostics.py
+          python3 -I -B docs/evidence/dev-monotonic-wait-arithmetic-2026-10-01/test_recorded_diagnostics.py

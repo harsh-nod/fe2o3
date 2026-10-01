@@ -33,6 +33,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Latest Qualification
 
+The [monotonic wait arithmetic component](runtime-monotonic-wait-arithmetic-v1.md)
+is qualified at signed source `a7d110af1`: four complete two-input 7/0 positives,
+seventeen calibrated actual-body negatives and all four metadata plus 23 proof
+groups closed. Its exact native source passes 1,841 no-default and 1,847
+all-feature KFD tests with strict Clippy. Complete remote CPU evidence was
+recovered after a failed SSH transport; that transport remains rejected.
+The proof covers four shared numeric helpers, not the std adapter, whole cursor,
+scheduler, hardware or performance. No milestone exit or default-policy change
+follows. The linked packet includes portable recorded-diagnostic inspection.
+
 The [combined runtime CPU regression](evidence/dev-integrated-runtime-cpu-2026-10-01/README.md)
 passes at signed source `1cfb7580f`: all fifteen stages and owned groups close,
 with 1,901 passing tests, 32 existing hardware ignores, no failures or filtering,
