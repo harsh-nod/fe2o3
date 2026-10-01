@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
+source "${SCRIPT_DIR}/ci-phase-target.sh"
 DEFAULT_CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
 if [[ "${DEFAULT_CARGO_TARGET_ROOT}" != /* ]]; then
   DEFAULT_CARGO_TARGET_ROOT="${REPO_ROOT}/${DEFAULT_CARGO_TARGET_ROOT}"
@@ -835,32 +836,38 @@ run_standalone_lockfiles() {
 }
 
 run_runtime_pure_rust_policy() {
+  local -a cache_ticket=()
+  local runtime_target="${RUNTIME_PURE_RUST_TARGET_DIR}"
+  ci_phase_target_begin cache_ticket "${CARGO_TARGET_DIR:-${REPO_ROOT}/target}" runtime || return
+  if ((${#cache_ticket[@]})); then
+    runtime_target="${cache_ticket[2]}"
+  fi
   run_step runtime-pure-rust-audit-tests \
-    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}"
+    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_PURE_RUST_AUDIT_TESTS}" || return
   run_step runtime-identity-oracle-parser-tests \
-    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_IDENTITY_ORACLE_TESTS}"
+    env PYTHONDONTWRITEBYTECODE=1 python3 "${RUNTIME_IDENTITY_ORACLE_TESTS}" || return
   run_step virtual-runtime-no-gpu-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
       --root fe2o3-virtual-runtime \
       --root fe2o3-virtual-runtime-cli \
-      --root fe2o3-sim-differential
+      --root fe2o3-sim-differential || return
   run_step virtual-runtime-no-gpu-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-virtual-runtime-cli \
-        --bin fe2o3-virtual-runtime
+        --bin fe2o3-virtual-runtime || return
   run_step virtual-runtime-no-gpu-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-virtual-runtime"
+      --input "${runtime_target}/debug/fe2o3-virtual-runtime" || return
   run_step sim-differential-no-gpu-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-sim-differential \
-        --bin fe2o3-sim-differential
+        --bin fe2o3-sim-differential || return
   run_step sim-differential-no-gpu-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${VIRTUAL_RUNTIME_NO_GPU_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/fe2o3-sim-differential"
+      --input "${runtime_target}/debug/fe2o3-sim-differential" || return
   run_step runtime-pure-rust-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" metadata --cargo \
@@ -871,17 +878,17 @@ run_runtime_pure_rust_policy() {
       --root fe2o3-aql \
       --root fe2o3-runtime \
       --root fe2o3-runtime-model \
-      --root fe2o3-sim-runtime
+      --root fe2o3-sim-runtime || return
   run_step sim-runtime-no-gpu-metadata \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${SIM_RUNTIME_NO_GPU_POLICY}" metadata --cargo \
-      --root fe2o3-sim-runtime
+      --root fe2o3-sim-runtime || return
   run_step sim-runtime-no-gpu-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-sim-runtime \
-        --example sim-runtime-evidence
+        --example sim-runtime-evidence || return
   run_step runtime-pure-rust-kfd-examples-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-kfd \
         --example kfd-version \
         --example kfd-topology \
@@ -889,47 +896,48 @@ run_runtime_pure_rust_policy() {
         --example kfd-host-visible-memory-policy \
         --example kfd-shared-gtt-memory-policy \
         --example kfd-queue-resources \
-        --example kfd-compute-aql-queue-policy
+        --example kfd-compute-aql-queue-policy || return
   run_step runtime-pure-rust-dispatch-diagnostic-build \
-    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+    env CARGO_TARGET_DIR="${runtime_target}" \
       cargo build --locked -p fe2o3-runtime --features hardware-diagnostic \
-        --example gfx942-lds-diagnostic
+        --example gfx942-lds-diagnostic || return
   run_step runtime-pure-rust-kfd-version-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-version"
+      --input "${runtime_target}/debug/examples/kfd-version" || return
   run_step runtime-pure-rust-kfd-topology-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-topology"
+      --input "${runtime_target}/debug/examples/kfd-topology" || return
   run_step runtime-pure-rust-kfd-device-identity-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-device-identity"
+      --input "${runtime_target}/debug/examples/kfd-device-identity" || return
   run_step runtime-pure-rust-dispatch-diagnostic-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/gfx942-lds-diagnostic"
+      --input "${runtime_target}/debug/examples/gfx942-lds-diagnostic" || return
   run_step sim-runtime-no-gpu-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${SIM_RUNTIME_NO_GPU_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/sim-runtime-evidence"
+      --input "${runtime_target}/debug/examples/sim-runtime-evidence" || return
   run_step runtime-pure-rust-kfd-memory-policy-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-host-visible-memory-policy"
+      --input "${runtime_target}/debug/examples/kfd-host-visible-memory-policy" || return
   run_step runtime-pure-rust-kfd-shared-memory-policy-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-shared-gtt-memory-policy"
+      --input "${runtime_target}/debug/examples/kfd-shared-gtt-memory-policy" || return
   run_step runtime-pure-rust-kfd-queue-resources-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-queue-resources"
+      --input "${runtime_target}/debug/examples/kfd-queue-resources" || return
   run_step runtime-pure-rust-kfd-compute-aql-queue-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
-      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-compute-aql-queue-policy"
+      --input "${runtime_target}/debug/examples/kfd-compute-aql-queue-policy" || return
+  ci_phase_target_finish cache_ticket run_step runtime-pure-rust-cache-clean cargo || return
 }
 
 run_runtime_identity_oracle() {
@@ -1597,6 +1605,7 @@ run_parity_production_immutable() {
 }
 
 main() {
+  ci_phase_target_validate_mode || return
   cd "${REPO_ROOT}"
   mkdir -p "${LOG_DIR}"
   validate_private_directory 'CI log directory' "${LOG_DIR}"
