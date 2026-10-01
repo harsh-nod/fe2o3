@@ -9,6 +9,84 @@ examples as qualified through the new production path.
 
 ## Latest Compiler Checkpoint
 
+On 2026-10-01, M0 alone remains complete and strict coverage is
+**0/47**. The following results supersede the earlier checkpoint below.
+
+The full four-library run r327 at local candidate
+`82fb970729526d946e9a1df28d0b9d42ddd39485` passed **893 top-level tests** with
+zero failures and 17 ignored: artifact transaction 355, compiler-execution
+coordinator 317, compiler FFI 152, and lineage 69. Nested subprocess
+summaries are not added again. Ignored protected-runtime/process tests remain
+unrun. These component results do not establish successful kernel compilation,
+protected proof execution or safe GPU launch.
+
+The actual-source run r328 at local candidate
+`7fc6303e129a95b4698764baefb5aae1e5c27c6c` built the backend but failed all
+24 ordinary case/configuration/repeat attempts:
+
+- Fill and coordinate-guarded fill: all 16 attempts lacked an authenticated
+  source presence predicate.
+- Vecadd at opt0/MIR0: all four attempts rejected invocation cleanup in the
+  assertion failure block.
+- Vecadd at opt3/MIR2: all four attempts rejected descriptor/index/extent
+  correspondence.
+
+The parent result was zero passed, one failed, none ignored and 4,262 filtered.
+No source-clause frame, protected proof or GPU execution was reached; later
+negative modes are not credited. Local repairs cover predicate namespaces,
+optimized predicate replay and checked assertion cleanup. Descriptor correspondence,
+full source-role composition, protected source-input enforcement and artifact
+publication remain active implementation work, not completed acceptance.
+
+The focused lowerer run r331 at local candidate
+`8632b80ed9c0335a4a93d881030bc72042d1e47e` built the full library test harness
+within the unchanged 16 GiB virtual-memory limit using 256 codegen units. The
+selected tests then completed with **11 passed and six failed**, none ignored
+and 4,731 filtered. This clears r330's missing-helper compile error, not the
+remaining test failures or a general build-memory guarantee.
+
+Two failures reach the assertion-cleanup check repaired in the newer local
+candidate. Two normal-edge controls used the wrong scalar namespace; another
+control incorrectly expected different content hashes for identical source.
+Reviewed test corrections preserve original-instance and rejection checks.
+The sixth failure exposes missing original Option-predicate transport across
+an ordinary helper return; that compiler repair remains in progress. The
+actual-source rerun r332 has started at local candidate
+`c13567f2f876bc4ed9b0c5edc1e4d1017a94f904`, including assertion/descriptor repairs
+and actual Worker target-owner retention controls; no result is credited yet.
+
+The earlier r329 stopped before Cargo because the shared filesystem was full.
+Cleaning an inactive owned Cargo cache recovered 2.5 GiB without removing source
+or reports.
+
+Administrator access was verified on MI350 and MI350-2. The runtime agent then
+completed a fresh isolated V3 service-profile installation, native readback and
+revalidation on MI350; all three stages exited zero. All three containers and
+their supervisor were confirmed absent afterward. The genuine protected output
+is retained privately; no host configuration or service activation changed.
+The primary independently rehashed and read the terminal and cleanup evidence.
+Separately, the existing pinned Verus closure on MI350-2 passed the unchanged
+installed-runtime inventory audit, without executing Verus. These are prerequisite
+results: the current compiler/helper release still needs packaging, independent
+policy review, installation and actual protected execution. Neither service
+provisioning nor an inventory audit counts as a proof or GPU run.
+Both public mains were independently read at
+`74914888be4b6351e72171d8b69853d18682548e`; the newer compiler candidate is local.
+That concurrent retained-account implementation and its reported tests are not
+credited as validation of this candidate.
+
+The primary independently audited source inventories, actual tool identities,
+runner, raw logs and frozen revisions. Raw log SHA-256 values:
+
+- r327: `5b28c830f6229449492f400e3644a3b41f3ca5a6fb84a6ae5721d4e36906c2ef`
+- r328: `bf9cb0dec50e48b31723c02ac30c6ca7e38f7974caf9e707937489c404b96656`
+- r330: `6ce2336aac013e1d94412d25e17562d310280f6d96ee558360f024f4c4fb9dbe`
+- r331: `c845d92a6acc35ee216548bbdc3d12b1cc2c5e50b709290ac7ac484d94d58256`
+- V3 terminal report: `3bbfcb7c6cc9c9d1279530d96cebc167e4fde035a7d95066522a2c7f31a76404`
+- V3 independent cleanup observation: `6b8771cf96d8aadcb798159bb4a6979132eb0a0306de1ae7c24af3671e594e14`
+
+## Earlier Compiler Checkpoint: 13:00 UTC
+
 The latest completed six-package `cargo check --tests`, r319 at local candidate
 `c66e5f30a6f7624ee3aa3b507bd045b5bad339bd`, **passed** at 12:48 UTC. This
 checks the backend, lowerer, verifier, compiler-execution client/coordinator and
