@@ -656,7 +656,18 @@ pub(super) mod tests {
                 assert!(out.text.contains("let arguments = seq![evaluated_0.value, evaluated_1.value]"));
                 assert!(out.text.contains("role: InvocationSourceOperandRoleV36::CallArgument(0)"));
                 assert!(out.text.contains("before: evaluated_0.source, after: evaluated_1.source, value: evaluated_1.value"));
-                assert!(out.text.contains("invocation_source_scalar_0_0_0_0_v36(cursor.source)"));
+                // This fixture has empty root blocks and one unit assignment
+                // in each of the two active helper instances per root.
+                for root in 0..2 {
+                    assert!(!out.text.contains(&format!(
+                        "invocation_source_scalar_{root}_0_0_0_v36(cursor.source)"
+                    )));
+                    for instance in 1..=2 {
+                        assert_eq!(out.text.matches(&format!(
+                            "invocation_source_scalar_{root}_{instance}_0_0_v36(cursor.source)"
+                        )).count(), 1);
+                    }
+                }
                 assert!(out.text.contains("cursor.next_statement != cursor.observations.len()"));
                 assert!(out.text.contains("let result = invocation_source_return_0_1_v36(cursor.source)"));
                 assert!(!out.text.contains("assume("));
