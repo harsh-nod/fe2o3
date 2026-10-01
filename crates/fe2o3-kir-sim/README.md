@@ -21,6 +21,21 @@ changing the source owner's canonical bytes. It does not add a simulation-bundle
 CLI, or debugger import route. Its canonical/resident limits retain the existing
 post-decode accounting contract, not an allocator/RSS cap on rejected attempts.
 
+`admit_v18_with_verification_budget` borrows exact move-only
+`VerifiedCanonicalKernelIrModuleV18` custody and constructs an independent
+CPU view on the supplied original verification budget. The full layout table,
+explicit function roles and V18 canonical identity survive admission. Keep the
+original owner's reservation live, immediately reserve the returned
+`SimulationViewStorageV18` receipt, and release that payment only after
+dropping the view. Failed admission restores the incoming storage floor without
+resetting cumulative work, peak storage or first-denial history.
+
+Ordinary supported scalar instructions can execute with inert layout metadata;
+storage operations and storage-object types still produce explicit
+`InertStorage` preflight refusals. Existing simulation limits remain unchanged.
+This library route adds no V18 CLI, bundle import, persisted-schedule format,
+capability-matrix version, source authority or GPU execution authority.
+
 `admit_v20` borrows exact verified V20 custody for the separate
 `gfx942:xnack-` / Wave64 / `physical_entry_u32_out_v1` profile.
 Each physical instruction is an actual canonical SSA operation and the existing

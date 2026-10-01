@@ -3,11 +3,13 @@
 
 mod budgeted_v12;
 mod budgeted_v12_observation;
+mod budgeted_v18;
 pub use budgeted_v12::{SimulationViewAdmissionErrorV12, SimulationViewStorageV12};
 pub use budgeted_v12_observation::{
     Bf16CallCpuObservationOptionsV1, V12CpuObservationErrorV1, V12CpuObservationInputV1,
     V12CpuObservationOptionsV1, V12CpuObservationProfileErrorV1,
 };
+pub use budgeted_v18::{SimulationViewAdmissionErrorV18, SimulationViewStorageV18};
 mod matrix_bf16_exact_v1;
 pub use matrix_bf16_exact_v1::MatrixInputRoleV1;
 mod capability;
