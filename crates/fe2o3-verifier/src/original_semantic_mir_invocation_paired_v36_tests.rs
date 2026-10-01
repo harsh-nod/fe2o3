@@ -5,6 +5,56 @@ use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInt
 const LIMIT: usize = 256 * 1024 * 1024;
 
 #[test]
+fn original_mir_paired_descriptor_entry_headers_have_an_independent_layout_oracle() {
+    fn envelope<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<std::result::Result<T, Error>>()
+    }
+    let expected = envelope::<PairedInvocations<'_, '_, '_>>()
+        + envelope::<Root>()
+        + envelope::<RootArgument>()
+        + envelope::<Instance>()
+        + envelope::<Cut>()
+        + envelope::<Binding>()
+        + envelope::<ComponentCut>()
+        + envelope::<AggregateBindingV42>()
+        + envelope::<Vec<AggregateBindingV42>>()
+        + envelope::<Vec<EnumBinding>>()
+        + enum_bindings::headers()
+        + envelope::<Vec<Option<ComponentDemandsV42<'_, '_, '_>>>>()
+        + aggregate_bindings::headers()
+        + object_returns::headers()
+        + logical::headers()
+        + envelope::<SourceValue>()
+        + envelope::<End>()
+        + envelope::<Vec<Root>>()
+        + envelope::<Vec<RootArgument>>()
+        + envelope::<Vec<Option<Instance>>>()
+        + envelope::<Vec<Option<Cut>>>()
+        + envelope::<Vec<Binding>>()
+        + envelope::<Vec<Option<Binding>>>()
+        + envelope::<Vec<Option<Value>>>()
+        + envelope::<Vec<u32>>()
+        + envelope::<Vec<bool>>()
+        + envelope::<Vec<Vec<Block>>>()
+        + envelope::<Vec<Block>>()
+        + envelope::<Boundaries<'_>>()
+        + envelope::<ControlInput<'_>>()
+        + envelope::<&[fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>]>()
+        + envelope::<&[bool]>()
+        + envelope::<FunctionRole>()
+        + envelope::<Range<usize>>()
+        + envelope::<Option<usize>>()
+        + envelope::<Option<fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1>>()
+        + envelope::<std::result::Result<usize, usize>>()
+        + envelope::<Value>()
+        + envelope::<Variable>()
+        + envelope::<Edge>()
+        + 64 * size_of::<usize>()
+        + 48 * size_of::<&()>();
+    assert_eq!(headers(), expected);
+}
+
+#[test]
 fn original_mir_paired_trace_joins_every_observation_at_its_own_allocation_generation() {
     run(LIMIT, LIMIT, |paired, out| {
         paired.emit(out)?;
