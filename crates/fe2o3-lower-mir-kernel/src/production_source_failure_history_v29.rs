@@ -1,5 +1,77 @@
 // Diagnostic reads have no physical load. Their original read and optional
 // move are checked in a failure-only shadow, never in the successful CFG state.
+type SourceFailureScalarPathFrameV43<'a> = (
+    &'a SemanticFunctionDeclV1,
+    &'a [SemanticTypeDeclV1],
+    &'a SemanticPlaceV1,
+    SemanticTypeIdV1,
+    std::slice::Iter<'a, SemanticProjectionV1>,
+    &'a SemanticProjectionV1,
+    &'a SemanticTypeDeclV1,
+    Option<SemanticTypeIdV1>,
+);
+
+fn source_failure_scalar_path_v43(
+    original: &SemanticFunctionDeclV1,
+    types: &[SemanticTypeDeclV1],
+    place: &SemanticPlaceV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    with_canonical_call_scratch_v1(budget, |budget| {
+        budget.reserve_storage(source_reference_emission_headers_v29::<
+            SourceFailureScalarPathFrameV43<'_>,
+        >()?)?;
+        budget.charge_work(3)?;
+        let mut ty = original
+            .locals()
+            .get(place.local().index() as usize)
+            .ok_or_else(scoped_memory_error_v29)?
+            .ty();
+        for projection in place.projections() {
+            budget.charge_work(5)?;
+            let declaration = types
+                .get(ty.index() as usize)
+                .ok_or_else(scoped_memory_error_v29)?;
+            ty = match (declaration.shape(), projection.kind()) {
+                (
+                    SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields),
+                    SemanticProjectionKindV1::Field(field),
+                ) => *fields
+                    .fields()
+                    .get(field as usize)
+                    .ok_or_else(scoped_memory_error_v29)?,
+                (
+                    SemanticTypeShapeV1::Array { element, length },
+                    SemanticProjectionKindV1::ConstantIndex {
+                        offset,
+                        minimum_length,
+                        from_end,
+                    },
+                ) => {
+                    source_static_constant_index_v29(*length, offset, minimum_length, from_end)?;
+                    *element
+                }
+                // These paths can observe a pointer, tag, or dynamic selector.
+                // A promoted base alone does not make that observation scalar SSA.
+                _ => return Ok(false),
+            };
+            if ty != projection.result_type() {
+                return Err(scoped_memory_error_v29());
+            }
+        }
+        budget.charge_work(2)?;
+        if ty != place.ty() {
+            return Err(scoped_memory_error_v29());
+        }
+        Ok(matches!(
+            types
+                .get(ty.index() as usize)
+                .map(SemanticTypeDeclV1::shape),
+            Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
+        ))
+    })
+}
+
 fn source_failure_operand_moved_v29(
     original: &SemanticFunctionDeclV1,
     row: &ScopedMemoryAnchorV29,

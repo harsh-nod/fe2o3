@@ -839,8 +839,7 @@ fn source_failure_is_promoted_scalar_v29(
         .events()
         .get(event)
         .ok_or_else(source_raw_physical_error_v29)?;
-    if !place.projections().is_empty()
-        || !event.is_promoted()
+    if !event.is_promoted()
         || event.resolved().is_none()
         || !matches!(
             scoped_source_operand_v29(original, frame.site, role),
@@ -855,6 +854,16 @@ fn source_failure_is_promoted_scalar_v29(
                 .map(|ty| ty.shape()),
             Some(SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_))
         )
+    {
+        return Ok(false);
+    }
+    if !place.projections().is_empty()
+        && !source_failure_scalar_path_v43(
+            original,
+            instances.owner().source_semantic().types(),
+            place,
+            budget,
+        )?
     {
         return Ok(false);
     }

@@ -193,6 +193,411 @@ fn moved_loop() -> ProductionSemanticSsaOwnerV1 {
     transported_loop(true)
 }
 
+fn projected_failure_loop(moved: bool, retained: bool) -> ProductionSemanticSsaOwnerV1 {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    let base = add_loop();
+    let source = base.source_semantic();
+    let old = &source.functions()[0];
+    let pair = old.locals()[4].ty();
+    let projected = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(4),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U32).unwrap()],
+        U32,
+    )
+    .unwrap();
+    let mut assertion = old.blocks()[2].terminator().kind().clone();
+    let SemanticTerminatorKindV1::Assert { message, .. } = &mut assertion else {
+        unreachable!()
+    };
+    *message = SemanticAssertMessageV1::DivisionByZero(if moved {
+        SemanticOperandV1::Move(projected)
+    } else {
+        SemanticOperandV1::Copy(projected)
+    });
+    let mut types = source.types().to_vec();
+    let mut locals = old.locals().to_vec();
+    let mut statements = old.blocks()[2].statements().to_vec();
+    if retained {
+        let pointer = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([245; 32]),
+            SemanticLayoutIdentityV1::from_sha256([245; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                    SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    pair,
+                    SemanticPointerKindV1::Raw,
+                    SemanticMutabilityV1::Immutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        ));
+        locals.push(local(212, pointer, SemanticLocalRoleV1::Temporary));
+        statements.push(assign(
+            place(5, pointer),
+            SemanticRvalueKindV1::AddressOf {
+                place: place(4, pair),
+                mutability: SemanticMutabilityV1::Immutable,
+            },
+        ));
+    }
+    let mut blocks = old.blocks().to_vec();
+    blocks[2] = block(192, statements, assertion);
+    let mut functions = source.functions().to_vec();
+    functions[0] = rebuild_root(old, locals, blocks);
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        source.target(),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        source.callables().to_vec(),
+        source.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn projected_copy_failure_loop() -> ProductionSemanticSsaOwnerV1 {
+    projected_failure_loop(false, false)
+}
+
+fn projected_move_failure_loop() -> ProductionSemanticSsaOwnerV1 {
+    projected_failure_loop(true, false)
+}
+
+fn retained_projected_failure_loop() -> ProductionSemanticSsaOwnerV1 {
+    projected_failure_loop(true, true)
+}
+
+#[test]
+fn promoted_failure_components_preserve_copy_and_failure_only_move_in_production() {
+    for factory in [
+        projected_copy_failure_loop as fn() -> _,
+        projected_move_failure_loop,
+    ] {
+        let reached = std::cell::Cell::new(false);
+        with_policy11(factory, |original, optimized, budget| {
+            original.with_optimized_scalar_leaf_namespace_v18(
+                optimized,
+                0,
+                &SourceScalarNamespaceV18::PrivateSourceWritesV22,
+                budget,
+                |leaves, budget| {
+                    let semantic = original.source.source_semantic(budget)?;
+                    let function = &semantic.functions()[0];
+                    let SemanticTerminatorKindV1::Assert {
+                        message: SemanticAssertMessageV1::DivisionByZero(operand),
+                        ..
+                    } = function.blocks()[2].terminator().kind()
+                    else {
+                        panic!("diagnostic");
+                    };
+                    let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand
+                    else {
+                        panic!("original projected operand");
+                    };
+                    assert_eq!(place.local().index(), 4);
+                    assert_eq!(
+                        place.projections()[0].kind(),
+                        SemanticProjectionKindV1::Field(0)
+                    );
+                    // The success continuation still reads the same component;
+                    // the diagnostic Move cannot kill it on that path.
+                    assert!(
+                        matches!(function.blocks().last().unwrap().statements()[0].kind(),
+                        SemanticStatementKindV1::Assign(assignment)
+                        if matches!(assignment.value().kind(), SemanticRvalueKindV1::Use(
+                            SemanticOperandV1::Copy(success)) if success == place))
+                    );
+                    leaves
+                        .original
+                        .leaves
+                        .check_boundary_equations_v31(budget)?;
+                    leaves
+                        .original
+                        .leaves
+                        .check_boundary_actual_v31(Some(leaves), budget)?;
+                    reached.set(true);
+                    Ok(())
+                },
+            )
+        })
+        .unwrap();
+        assert!(reached.get());
+    }
+}
+
+#[test]
+fn promoted_failure_components_do_not_bypass_real_retained_aggregate_history() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let reached = std::cell::Cell::new(false);
+    with_pending_api_owner_v18(
+        ModuleFixture::Ordinary,
+        false,
+        &mut budget,
+        retained_projected_failure_loop,
+        |owner, launch, input, _, budget| {
+            assert!(owner.source_semantic().functions()[0].blocks()[2].statements().iter()
+                .any(|row| matches!(row.kind(), SemanticStatementKindV1::Assign(assignment)
+                    if matches!(assignment.value().kind(), SemanticRvalueKindV1::AddressOf { place, .. }
+                        if place.local().index() == 4 && place.projections().is_empty()))));
+            let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
+            let roots = fixture.roots();
+            let result =
+                ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
+                    owner,
+                    launch,
+                    input,
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                );
+            let error = result
+                .err()
+                .expect("memory-backed diagnostics need their exact history");
+            assert!(
+                error
+                    .to_string()
+                    .contains("failure history requires an exact whole scalar diagnostic"),
+                "{error:?}"
+            );
+            reached.set(true);
+        },
+    );
+    assert!(reached.get());
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
+#[test]
+fn promoted_failure_scalar_paths_reject_bad_fields_types_bounds_and_pointer_crossings() {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    let owner = add_loop();
+    let source = owner.source_semantic();
+    let old = &source.functions()[0];
+    let boolean = old.locals()[3].ty();
+    let mut types = source.types().to_vec();
+    let array = SemanticTypeIdV1::from_index(types.len() as u32);
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256([246; 32]),
+        SemanticLayoutIdentityV1::from_sha256([246; 32]),
+        SemanticTypeLayoutV1::new(Some(16), 4).unwrap(),
+        SemanticTypeShapeV1::Array {
+            element: old.locals()[4].ty(),
+            length: 2,
+        },
+    ));
+    let mut locals = old.locals().to_vec();
+    locals.push(local(212, array, SemanticLocalRoleV1::Temporary));
+    let function = rebuild_root(old, locals, old.blocks().to_vec());
+    let make = |path: Vec<(SemanticProjectionKindV1, SemanticTypeIdV1)>| {
+        let ty = path.last().map_or(array, |(_, ty)| *ty);
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(5),
+            path.into_iter()
+                .map(|(kind, ty)| SemanticProjectionV1::new(kind, ty).unwrap())
+                .collect(),
+            ty,
+        )
+        .unwrap()
+    };
+    let index = |offset, minimum_length, from_end| {
+        (
+            SemanticProjectionKindV1::ConstantIndex {
+                offset,
+                minimum_length,
+                from_end,
+            },
+            old.locals()[4].ty(),
+        )
+    };
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(100_000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+    budget.reserve_storage(17).unwrap();
+    for from_end in [false, true] {
+        let place = make(vec![
+            index(1, 2, from_end),
+            (SemanticProjectionKindV1::Field(0), U32),
+        ]);
+        assert!(source_failure_scalar_path_v43(&function, &types, &place, &mut budget).unwrap());
+        assert_eq!(budget.storage(), 17);
+    }
+    for path in [
+        vec![
+            index(1, 2, false),
+            (SemanticProjectionKindV1::Field(2), U32),
+        ],
+        vec![
+            index(1, 2, false),
+            (SemanticProjectionKindV1::Field(0), boolean),
+        ],
+        vec![
+            index(2, 3, false),
+            (SemanticProjectionKindV1::Field(0), U32),
+        ],
+        vec![index(3, 3, true), (SemanticProjectionKindV1::Field(0), U32)],
+        vec![(
+            SemanticProjectionKindV1::ConstantIndex {
+                offset: 1,
+                minimum_length: 2,
+                from_end: false,
+            },
+            U32,
+        )],
+    ] {
+        assert!(
+            source_failure_scalar_path_v43(&function, &types, &make(path), &mut budget).is_err()
+        );
+        assert_eq!(budget.storage(), 17);
+    }
+    for path in [
+        vec![(SemanticProjectionKindV1::Dereference, U32)],
+        vec![(
+            SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(1)),
+            U32,
+        )],
+        vec![index(1, 2, false)],
+    ] {
+        assert!(
+            !source_failure_scalar_path_v43(&function, &types, &make(path), &mut budget).unwrap()
+        );
+        assert_eq!(budget.storage(), 17);
+    }
+    // These malformed offsets cannot reach the owner-backed path walker:
+    // the original projection constructor rejects them first.
+    for (offset, minimum_length, from_end) in [(2, 2, false), (3, 2, true), (0, 2, true)] {
+        assert!(
+            SemanticProjectionV1::new(
+                SemanticProjectionKindV1::ConstantIndex {
+                    offset,
+                    minimum_length,
+                    from_end
+                },
+                old.locals()[4].ty(),
+            )
+            .is_err()
+        );
+    }
+    assert!(source_static_constant_index_v29(2, 2, 2, false).is_err());
+    assert!(source_static_constant_index_v29(2, 3, 2, true).is_err());
+    assert!(source_static_constant_index_v29(2, 0, 2, true).is_err());
+    types[array.index() as usize] = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256([246; 32]),
+        SemanticLayoutIdentityV1::from_sha256([246; 32]),
+        SemanticTypeLayoutV1::new(Some(32), 4).unwrap(),
+        SemanticTypeShapeV1::Array {
+            element: old.locals()[4].ty(),
+            length: 4,
+        },
+    );
+    for (from_end, expected_index) in [(false, 1), (true, 3)] {
+        assert_eq!(
+            source_static_constant_index_v29(4, 1, 4, from_end).unwrap(),
+            expected_index
+        );
+        let place = make(vec![
+            index(1, 4, from_end),
+            (SemanticProjectionKindV1::Field(0), U32),
+        ]);
+        assert!(source_failure_scalar_path_v43(&function, &types, &place, &mut budget).unwrap());
+        assert_eq!(budget.storage(), 17);
+    }
+}
+
+#[test]
+fn promoted_failure_scalar_path_has_exact_paid_work_and_scratch_boundaries() {
+    let owner = add_loop();
+    let source = owner.source_semantic();
+    let function = &source.functions()[0];
+    let projected = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(4),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U32).unwrap()],
+        U32,
+    )
+    .unwrap();
+    type Fields<'a> = (
+        &'a SemanticFunctionDeclV1,
+        &'a [SemanticTypeDeclV1],
+        &'a SemanticPlaceV1,
+        SemanticTypeIdV1,
+        std::slice::Iter<'a, SemanticProjectionV1>,
+        &'a SemanticProjectionV1,
+        &'a SemanticTypeDeclV1,
+        Option<SemanticTypeIdV1>,
+    );
+    let header =
+        size_of::<Fields<'_>>() + 2 * size_of::<Result<Fields<'_>, ProductionSemanticKirErrorV1>>();
+    assert_eq!(
+        header,
+        source_reference_emission_headers_v29::<SourceFailureScalarPathFrameV43<'_>>().unwrap()
+    );
+    for (work_limit, storage_limit, expected) in [
+        (12, 17 + header, None),
+        (11, 17 + header, Some(true)),
+        (12, 16 + header, Some(false)),
+    ] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+        budget.reserve_storage(17).unwrap();
+        let result =
+            source_failure_scalar_path_v43(function, source.types(), &projected, &mut budget);
+        match expected {
+            None => {
+                assert!(result.unwrap());
+                assert_eq!(budget.work(), 12);
+                assert_eq!(budget.peak_storage(), 17 + header);
+            }
+            Some(work) => {
+                let error = result.unwrap_err();
+                match (work, error) {
+                    (
+                        true,
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            ArgumentResourceV1::Work(limit),
+                        ),
+                    ) => {
+                        assert_eq!(limit.limit(), 11);
+                        assert_eq!(limit.actual(), 12);
+                    }
+                    (
+                        false,
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            ArgumentResourceV1::Storage(limit),
+                        ),
+                    ) => {
+                        assert_eq!(limit.limit(), 16 + header);
+                        assert_eq!(limit.actual(), 17 + header);
+                    }
+                    (_, error) => panic!("exact resource refusal: {error:?}"),
+                }
+            }
+        }
+        assert_eq!(budget.storage(), 17);
+    }
+}
+
 #[test]
 fn source_checked_tuple_components_bind_original_and_optimized_assert_and_backedge() {
     for factory in [
