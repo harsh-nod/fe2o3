@@ -21,12 +21,17 @@ type SourceKey = [usize; 5];
 #[path = "original_semantic_mir_invocation_source_abi_v36.rs"]
 mod source_abi;
 
+#[path = "original_semantic_mir_source_tag_contracts_v39.rs"]
+mod source_tags;
+pub(super) use source_tags::{SourceTagClassV39, SourceTagRecipeV39};
+
 pub(super) struct SourceSlots<'a, 'source> {
     relation: &'a Correspondence<'source>,
     operations: Vec<Operation>,
     frames: Vec<Option<Frame>>,
     source_order: Vec<(SourceKey, usize)>,
     abi: source_abi::SourceAbi,
+    tags: source_tags::SourceTagIndexV39,
     required: usize,
 }
 
@@ -214,12 +219,14 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         }
         sort_source(&mut source_order, out)?;
         let abi = source_abi::SourceAbi::derive(plan, relation, out)?;
+        let tags = source_tags::SourceTagIndexV39::derive(semantic.types(), out)?;
         Ok(Self {
             relation,
             operations,
             frames,
             source_order,
             abi,
+            tags,
             required: out.budget.storage(),
         })
     }
@@ -988,6 +995,7 @@ mod tests {
             Vec<Option<Frame>>,
             Vec<(SourceKey, usize)>,
             source_abi::SourceAbi,
+            source_tags::SourceTagIndexV39,
             usize,
         );
         fn h<T>() -> usize {
