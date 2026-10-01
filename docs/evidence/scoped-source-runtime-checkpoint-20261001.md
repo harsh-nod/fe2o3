@@ -7,6 +7,43 @@ Strict production compiler -> required proof -> safe GPU launch coverage remains
 not advance that count. This does not reclassify independently runnable legacy
 examples as qualified through the new production path.
 
+## Latest Verified Checkpoint
+
+The latest completed full kernel-IR library run, r283, passed **1,480 tests**,
+with zero failures, ignored tests or filtered tests. Its candidate was
+`d7b40521fc828f7eba1f5e95a02e5725de9a3c67`. Source/tool inventories stayed
+unchanged, and the primary independently checked the raw log digest:
+`db444eee35f7f11014c6862aa0b7d45cf107124026570ac6b4c0cba498eb1cee`.
+
+This implements scoped pointer forwarding through exact SSA block arguments,
+retaining the original producer and scope lifetime. Presence guards
+propagate in the direction of actual CFG edges. Mixed origins, unconstrained
+entry parameters, closed scopes and unsupported escapes remain rejected. This
+is a canonical-IR result, not a genuine Rust frontend or GPU result.
+
+The preceding combined compiler run, r279, finished at
+`af11b1f931ee622dfb2029e551660fbf05ae79b6` with **402 passed and 93 failed**:
+lowerer 357/93, Pliron 20/0 and verifier 25/0. No tests were ignored. Remaining
+failures included scoped-pointer CFG transport, transient enum projection and
+test observers that did not handle the emitted Switch terminator. Its log digest
+is `8d6510fe6aa2c3c10ac0b9c4089bdb765cf2fe0d9f4b1548e48b4f84ad3f5de9`.
+The successor integration at `820f953e1f4598ac967b3c55963ad2f2e730cedb`
+includes repairs for those boundaries. Its r284 build stopped with **no space
+left on device** while compiling the lowerer library test; **no tests ran**.
+The runner also failed to write its final inventory/report, so this run has no
+source/tool-stability attestation. The retained partial log digest is
+`167a3f163c46a107a72f2437b7c2804083170764e9ccad3df2d25c69005184ae`.
+The latest genuine Rust fill/vecadd results remain the failed r272/r273 runs
+described below. Disk recovery is not validation of the new candidate.
+
+Both public main branches were independently read back at
+`3c1205861765a99459f9a4b4513760ff17bcceac` before this documentation update.
+That publication fixes target-scoped dependency policy, the missing codegen test
+shard assignment, and workspace formatting. All five codegen shards passed in
+the [CI run](https://github.com/harsh-nod/fe2o3/actions/runs/36826853167);
+generic-core was still running at the latest status check. This is not a
+passing release gate or publication of the local compiler candidate.
+
 ## Compiler Evidence
 
 The guarded runs used pinned nightly-2026-04-03, locked/offline dependencies,
@@ -88,6 +125,39 @@ are absent; protected records and reports remain retained. No secrets were expor
 compiler/proof execution, simulator qualification or GPU validation. The image
 recipe, fixed production pin and regression tests still require source integration.
 The experiment does not establish a bit-identical Docker rebuild.
+
+## Subsequent Runtime Evidence
+
+The actual static proof-helper build from exact
+`3c505a13f780c0f8703f5128bb724edefe0644c3` completed on MI350. Preparation,
+build and actual ELF inspection returned zero. The 7,193,784-byte executable
+has the expected secure entry, a nonexecutable stack, no dynamic dependencies
+and no undefined symbols. Artifact SHA-256:
+`f548930c6a3cce88c1974c08f48e6f82df20ca7b2f375481ae08c9d0e436a8be`.
+
+All 42 public archive payload hashes were independently verified. Owned build
+processes were drained and disposable caches removed; the artifact and reports
+remain. **The helper was not executed or admitted as a production runtime role.**
+Protected proof requests, compiler enforcement and complete runtime assembly
+remain unfinished. Successful helper compilation grants no kernel coverage.
+
+The committed image-admission gates at the same source revision also passed
+for the admitted base and derived image, and rejected the old base-as-executable
+substitution. This supersedes the earlier image-integration-pending note for
+that local candidate only; it does not establish service or compiler activation.
+
+## Milestone Status
+
+| Milestone | Status | Remaining acceptance |
+| --- | --- | --- |
+| M0: Contracts | Complete | None |
+| M1: Minimal production slice | In progress | Genuine vecadd through source verification, protected proof, artifact binding and safe launch, with required negatives |
+| M2: Hierarchy and synchronization | Incomplete | Wave/LDS reductions and scan, atomics, barriers, convergence and reuse-epoch matrices |
+| M3: General memory and control | In progress | Integrated memory semantics, loops, helpers, cross-crate generics, dynamic layouts and multiple kernels |
+| M4: Structured compute and targets | Incomplete | Generic GEMM, numerical/resource checks and target-matched validation |
+| M5: Advanced kernels | Incomplete | Softmax, attention, MoE and remaining entries through the complete path and test matrices |
+| M6: Authority and migration | In progress | Complete source/optimized/artifact evidence composition and retirement of superseded paths after validation |
+| M7: Documentation and release | In progress | Complete coverage gates, qualified manifest, accurate tutorials and identical final implementation on both mains |
 
 ## Remaining Acceptance Work
 
