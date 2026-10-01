@@ -8,7 +8,7 @@ use std::ops::Range;
 
 // A second live CFG scope would invalidate the first scope's exact storage
 // floor. Retain only prepaid dominance bits, then query the first CFG alone.
-pub(super) struct Dominance<'a, 'owner> {
+pub(in super::super) struct Dominance<'a, 'owner> {
     inventory: &'a Inventory<'owner>,
     blocks: Range<usize>,
     bits: Vec<usize>,
@@ -19,7 +19,7 @@ pub(super) struct Dominance<'a, 'owner> {
     cleanup: Cell<bool>,
 }
 
-pub(super) fn with_dominance<T>(
+pub(in super::super) fn with_dominance<T>(
     inventory: &Inventory<'_>,
     function: usize,
     out: &mut Writer<'_, '_>,
@@ -115,7 +115,7 @@ impl Dominance<'_, '_> {
         Ok(())
     }
 
-    pub(super) fn available(
+    pub(in super::super) fn available(
         &self,
         definition: Definition,
         block: usize,
@@ -155,7 +155,7 @@ impl Dominance<'_, '_> {
     }
 }
 
-pub(super) fn available(
+pub(in super::super) fn available(
     inventory: &Inventory<'_>,
     flow: &mut Flow<'_, '_>,
     definition: Definition,

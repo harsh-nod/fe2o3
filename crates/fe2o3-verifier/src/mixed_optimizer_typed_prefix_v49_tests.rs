@@ -162,7 +162,7 @@ fn typed_prefix_prepaid_dominance_does_not_refund_rejected_cfg_callback_storage(
 
 #[test]
 fn typed_prefix_checked_segments_partition_merged_operations_and_keep_empty_cuts() {
-    with_chain(|prefix, licm, output, floor| {
+    with_cfg_chain_module(&fixture(), |prefix, licm, output, floor| {
         let origins = Origins {
             inventory: prefix.input(),
             duplicate: false,
@@ -294,7 +294,7 @@ fn typed_prefix_removed_original_block_has_no_fabricated_cursor_or_runtime_state
                 values: vec![ValueId(20)],
             },
         ));
-    with_chain_module(&module, |prefix, licm, output, floor| {
+    with_cfg_chain_module(&module, |prefix, licm, output, floor| {
         let origins = Origins {
             inventory: prefix.input(),
             duplicate: false,
@@ -542,7 +542,17 @@ fn typed_prefix_segment_interpreter_preserves_event_suffixes_and_exact_entry_res
         ] {
             assert!(expected.contains(text), "missing {text}");
         }
-        for forbidden in ["Seq<int>", "spec_fn(", "assume(", "external_body"] {
+        assert!(
+            expected.contains(
+                "struct MemoryStateV30 {\n    pc: int,\n    values: Seq<MemoryValueV30>,"
+            )
+        );
+        for forbidden in [
+            "base: Seq<int>, initial: int, op:",
+            "spec_fn(",
+            "assume(",
+            "external_body",
+        ] {
             assert!(!expected.contains(forbidden), "unexpected {forbidden}");
         }
         let exact = run(floor, measured.1, measured.2, generate);

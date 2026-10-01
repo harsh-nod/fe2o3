@@ -141,40 +141,73 @@ fn with_chain_module(
     module: &Module,
     consume: impl FnOnce(&Prefix<'_, '_, '_, '_>, &Licm<'_>, &Inventory<'_>, usize),
 ) {
+    with_chain_policy(module, false, consume);
+}
+
+fn with_cfg_chain_module(
+    module: &Module,
+    consume: impl FnOnce(&Prefix<'_, '_, '_, '_>, &Licm<'_>, &Inventory<'_>, usize),
+) {
+    with_chain_policy(module, true, consume);
+}
+
+fn with_chain_policy(
+    module: &Module,
+    simplify_cfg: bool,
+    consume: impl FnOnce(&Prefix<'_, '_, '_, '_>, &Licm<'_>, &Inventory<'_>, usize),
+) {
     let mut work = Work::new(LIMIT);
     let mut budget = Budget::new(&mut work, LIMIT);
     let (owner, retained) =
         Owner::from_module_ref_with_verification_budget_v18(module, LAYOUTS, &mut budget).unwrap();
     budget.reserve_storage(retained.retained_storage()).unwrap();
-    let optimized =
-        fe2o3_pliron::optimize_neutral_kernel_ir_mixed_fixedpoint_v18(&owner, LAYOUTS, &mut budget)
+    let continue_chain = |optimized: &Owner, occurrences, budget: &mut Budget<'_>| {
+        let (original, retained) = Inventory::derive_v18(&owner, budget).unwrap();
+        budget.reserve_storage(retained.retained_storage()).unwrap();
+        let (prefix, retained) = Inventory::derive_v18(optimized, budget).unwrap();
+        budget.reserve_storage(retained.retained_storage()).unwrap();
+        assert!(original.operations().len() > prefix.operations().len());
+        let (checked, retained) =
+            check_canonical_kir_transition_v18(&original, &prefix, occurrences, budget).unwrap();
+        budget.reserve_storage(retained.retained_storage()).unwrap();
+        let licm = fe2o3_kernel_opt::prepare_owned_licm_v18(optimized, LAYOUTS, budget).unwrap();
+        budget.reserve_storage(licm.retained_storage()).unwrap();
+        let (pair, retained) = licm.replay_against(optimized, budget).unwrap();
+        budget.reserve_storage(retained.retained_storage()).unwrap();
+        assert!(pair.origins().iter().any(|row| row.hoist.is_some()));
+        let (output, retained) = Inventory::derive_v18(pair.output(), budget).unwrap();
+        budget.reserve_storage(retained.retained_storage()).unwrap();
+        consume(&checked, &pair, &output, budget.storage());
+    };
+    if simplify_cfg {
+        let optimized =
+            fe2o3_pliron::optimize_neutral_kernel_ir_v18(&owner, LAYOUTS, &mut budget).unwrap();
+        budget
+            .reserve_storage(optimized.storage().retained_storage())
             .unwrap();
-    budget
-        .reserve_storage(optimized.storage().retained_storage())
+        assert_eq!(optimized.execution().policy_version(), 3);
+        continue_chain(
+            optimized.owner(),
+            optimized.occurrences().candidate(),
+            &mut budget,
+        );
+    } else {
+        let optimized = fe2o3_pliron::optimize_neutral_kernel_ir_mixed_fixedpoint_v18(
+            &owner,
+            LAYOUTS,
+            &mut budget,
+        )
         .unwrap();
-    assert_eq!(optimized.execution().policy_version(), 11);
-    let (original, retained) = Inventory::derive_v18(&owner, &mut budget).unwrap();
-    budget.reserve_storage(retained.retained_storage()).unwrap();
-    let (prefix, retained) = Inventory::derive_v18(optimized.owner(), &mut budget).unwrap();
-    budget.reserve_storage(retained.retained_storage()).unwrap();
-    assert!(original.operations().len() > prefix.operations().len());
-    let (checked, retained) = check_canonical_kir_transition_v18(
-        &original,
-        &prefix,
-        optimized.occurrences().candidate(),
-        &mut budget,
-    )
-    .unwrap();
-    budget.reserve_storage(retained.retained_storage()).unwrap();
-    let licm =
-        fe2o3_kernel_opt::prepare_owned_licm_v18(optimized.owner(), LAYOUTS, &mut budget).unwrap();
-    budget.reserve_storage(licm.retained_storage()).unwrap();
-    let (pair, retained) = licm.replay_against(optimized.owner(), &mut budget).unwrap();
-    budget.reserve_storage(retained.retained_storage()).unwrap();
-    assert!(pair.origins().iter().any(|row| row.hoist.is_some()));
-    let (output, retained) = Inventory::derive_v18(pair.output(), &mut budget).unwrap();
-    budget.reserve_storage(retained.retained_storage()).unwrap();
-    consume(&checked, &pair, &output, budget.storage());
+        budget
+            .reserve_storage(optimized.storage().retained_storage())
+            .unwrap();
+        assert_eq!(optimized.execution().policy_version(), 11);
+        continue_chain(
+            optimized.owner(),
+            optimized.occurrences().candidate(),
+            &mut budget,
+        );
+    }
 }
 
 #[test]
@@ -281,7 +314,12 @@ fn typed_licm_bridge_uses_actual_operations_and_preserves_both_checked_results()
         );
         assert!(text.contains("else if result.state.pc == -2 { -2 }"));
         assert!(text.contains("typed_licm_input_defined_0_v48(before, little_endian, fuel)"));
-        assert!(!text.contains("Seq<int>"));
+        assert!(
+            text.contains(
+                "struct MemoryStateV30 {\n    pc: int,\n    values: Seq<MemoryValueV30>,"
+            )
+        );
+        assert!(!text.contains("base: Seq<int>, initial: int, op:"));
         assert!(!text.contains("spec_fn("));
         assert!(!text.contains("assume("));
         assert!(!text.contains("external_body"));
