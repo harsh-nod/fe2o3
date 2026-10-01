@@ -36,6 +36,8 @@ mod pointer_byte_operations_v30;
 mod private_byte_operations_v30;
 #[path = "mixed_optimizer_storage_byte_operations_v37.rs"]
 mod storage_byte_operations_v37;
+#[path = "mixed_optimizer_target_view_contracts_v38.rs"]
+mod target_view_contracts_v38;
 
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => {
