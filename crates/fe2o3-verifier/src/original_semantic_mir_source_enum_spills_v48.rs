@@ -3,12 +3,12 @@ use super::*;
 use fe2o3_lower_mir_kernel::ProductionSourceEnumSpillOriginV48 as Origin;
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Spill {
-    pub(super) root: usize,
-    pub(super) origin: Origin,
-    pub(super) operation: Operation,
-    pub(super) definition: usize,
-    pub(super) physical_owner: usize,
+pub(in super::super) struct Spill {
+    pub(in super::super) root: usize,
+    pub(in super::super) origin: Origin,
+    pub(in super::super) operation: Operation,
+    pub(in super::super) definition: usize,
+    pub(in super::super) physical_owner: usize,
 }
 
 type Key = [usize; 6];
