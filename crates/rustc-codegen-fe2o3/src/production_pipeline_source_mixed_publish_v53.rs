@@ -375,7 +375,7 @@ impl ExecutedProtectedMixedPublicationV29<'_, '_, '_, '_, '_> {
             let semantic =
                 InertCanonicalSemanticMirReceiptV3::from_canonical_preimage(semantic_bytes)
                     .map_err(|_| mismatch("mixed semantic encoding"))?;
-            let middle_end = InertMiddleEndReceiptV3::from_canonical_preimage(&middle)
+            let middle_end = InertMiddleEndReceiptV3::from_canonical_preimage(middle.as_slice())
                 .map_err(|_| mismatch("typed middle-end encoding"))?;
             let kir = InertKernelIrReceiptV3::from_canonical_preimage(owner.canonical_bytes())
                 .map_err(|_| mismatch("final mixed KIR encoding"))?;
