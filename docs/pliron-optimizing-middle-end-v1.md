@@ -379,6 +379,43 @@ complete conflict-free extraction and exact graph/root/witness binding. These
 changes do not activate the candidate optimizer as the default pipeline or
 establish full-corpus, protected-proof, artifact or hardware qualification.
 
+## Invocation-execution discharge
+
+The formal-memory owner retains raw inter-invocation conflicts even when the
+same verified graph proves that both accesses can execute only in the same
+single global invocation. The current rule recognizes the existing rank-one,
+64-bit checked `GlobalX < 1` dominating true-edge proof. It is not a restriction
+of the launch envelope or a claim that a workgroup-local leader is globally
+unique. Unknown predicates and unproved access pairs still reject admission.
+
+All existing collective, ranked, bounds and incomplete-extraction checks run
+before this discharge. Every remaining raw conflict needs an exact record of
+its ordinal, access pair, allocation and both singleton witnesses. Owner
+revalidation freshly derives and compares the complete record roster. It never
+removes an access or rewrites the raw conflict report to appear conflict-free.
+
+`F2FMA5` formal-admission evidence version 5, validation policy 1, binds the
+current canonical KIR identity, kernel and entry, structural launch witness,
+unchanged nested obligation receipt and explicit discharge records. This is a
+different namespace from optimizer policies and compiler-lineage versions.
+Conflict-free singleton owners retain the exact existing `F2FMA4` format;
+legacy codecs and policy meanings are unchanged. Both singleton and multi-root
+consumers preserve the complete new envelope when a discharge is present.
+
+Decoded evidence is inert. Production consumers must rederive the raw report
+and execution conditions against the actual supplied current graph, including
+after transformation. A stale graph, changed guard, wrong root, missing or
+extra discharge, or stripping the envelope to a conflicting legacy raw receipt
+must fail replay. This replay is not the source-specific proof for other
+incomplete reasons, and supplies no artifact, target or launch authorization.
+
+Execution-condition analysis retains its existing fixed work/storage bounds.
+This component does not claim to debit the optimizer's original allowance or
+meter all compiler allocations. The ordinary-source regression requires actual
+owner admission, preserved raw conflict and exact discharge, while separately
+asserting that the diagnostic produced no native artifact. Whole-corpus native
+and hardware qualification remain separate requirements.
+
 ## Local helper call coverage
 
 `ProductionPreRankedKirOwnerV1::with_checked_unit_local_ranked_stage_v1`

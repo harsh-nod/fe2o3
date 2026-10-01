@@ -420,6 +420,74 @@ fn conflict_json(
     })
 }
 
+fn execution_witness_json(
+    witness: fe2o3_lower_mir_kernel::ProductionFormalMemoryExecutionWitnessV1,
+) -> Value {
+    let path = match witness.path() {
+        fe2o3_kernel_ir::FormalGuardedPathV1::ExplicitPredicate => {
+            json!({"kind": "explicitPredicate"})
+        }
+        fe2o3_kernel_ir::FormalGuardedPathV1::TrueEdge {
+            source,
+            ordinal,
+            target,
+        } => {
+            json!({"kind": "trueEdge", "sourceBlock": source.0,
+                "successorOrdinal": ordinal, "targetBlock": target.0})
+        }
+    };
+    json!({"invocation": witness.invocation(), "index": witness.index().0,
+        "threshold": witness.threshold().0, "predicate": witness.predicate().0,
+        "path": path})
+}
+
+fn admitted_execution_json(
+    owner: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    operations: &[PhysicalOperation],
+    layout_is_exact: bool,
+) -> Value {
+    let mut rows = Vec::new();
+    let mut charged = 0_usize;
+    let operation_work = operations.iter().fold(0_usize, |work, operation| {
+        work.saturating_add(1)
+            .saturating_add(operation.owners.len())
+    });
+    for kernel in owner.kernels() {
+        let obligations = kernel.obligations();
+        let conflicts = obligations.inter_invocation_conflicts();
+        let discharges = kernel.execution_discharges();
+        charged = charged
+            .saturating_add(1)
+            .saturating_add(
+                conflicts
+                    .len()
+                    .saturating_mul(operation_work.saturating_mul(2)),
+            )
+            .saturating_add(discharges.len());
+        if charged > ROW_LIMIT {
+            return json!({"unavailable": "diagnostic execution-discharge row bound exceeded"});
+        }
+        let location = |value: fe2o3_kernel_ir::FunctionOperationLocation| json!({"blockId": value.block.0, "operationOrdinal": value.operation_index});
+        rows.push(json!({
+            "kernel": obligations.kernel().as_str(), "entry": obligations.entry().as_str(),
+            "rawConflicts": conflicts.iter().map(|conflict| conflict_json(
+                operations, layout_is_exact, conflict.left(), conflict.right(),
+                conflict.allocation().parameter_index(),
+            )).collect::<Vec<_>>(),
+            "executionDischarges": discharges.iter().map(|discharge| json!({
+                "conflictOrdinal": discharge.conflict_ordinal(),
+                "left": location(discharge.left()), "right": location(discharge.right()),
+                "allocationParameter": discharge.allocation_parameter(),
+                "leftWitness": execution_witness_json(discharge.left_witness()),
+                "rightWitness": execution_witness_json(discharge.right_witness()),
+            })).collect::<Vec<_>>(),
+            "rankedDischargedReasonCount": kernel.ranked_discharged_reasons().len(),
+            "compilerDischargedReasonCount": kernel.compiler_discharged_reasons().len(),
+        }));
+    }
+    json!({"kernels": rows, "observationGrantsAuthority": false})
+}
+
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn observe_pre_formal_memory_v1(
         self,
@@ -490,7 +558,12 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         // No diagnostic limitation turns a genuine refusal into a different
         // compiler result, and no second owner or optimizer is constructed.
         report["formalAdmission"] = match neutral.admit_formal_memory() {
-            Ok(_) => json!({"status": "admitted", "nativeLowering": "not attempted"}),
+            Ok(admitted) => json!({
+                "status": "admitted", "nativeLowering": "not attempted",
+                "execution": admitted_execution_json(
+                    &admitted.admitted, operations.as_deref().unwrap_or(&[]), layouts.is_ok(),
+                ),
+            }),
             Err(error) => {
                 let conflicts = match &error {
                     ProductionPipelineError::FormalMemoryAdmission(

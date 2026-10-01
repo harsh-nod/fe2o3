@@ -404,7 +404,7 @@ fn formal_memory_diagnostic_child() {
 
 #[test]
 #[ignore = "requires pinned nightly rust-src and real AMD source capture; never launches a GPU"]
-fn ordinary_lds_source_retains_actual_pre_formal_refusal() {
+fn ordinary_lds_source_retains_owner_bound_execution_discharge() {
     let directory = env::var_os(DIRECTORY)
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -538,17 +538,37 @@ fn ordinary_lds_source_retains_actual_pre_formal_refusal() {
     let report =
         result.unwrap_or_else(|error| panic!("earlier genuine compiler refusal: {error:?}"));
     assert_eq!(
-        report["formalAdmission"]["status"], "refused",
-        "diagnostic does not grant native success"
+        report["formalAdmission"]["status"], "admitted",
+        "the exact singleton proof must discharge the retained raw conflict"
     );
-    assert!(
-        report["formalAdmission"]["conflicts"]
-            .as_array()
-            .is_some_and(|rows| !rows.is_empty())
-    );
+    let execution = &report["formalAdmission"]["execution"];
+    assert_eq!(execution["observationGrantsAuthority"], false);
+    let [kernel] = execution["kernels"].as_array().unwrap().as_slice() else {
+        panic!("exactly one actual kernel execution report is required");
+    };
+    let [conflict] = kernel["rawConflicts"].as_array().unwrap().as_slice() else {
+        panic!("the original self-conflict must remain visible");
+    };
+    let [discharge] = kernel["executionDischarges"].as_array().unwrap().as_slice() else {
+        panic!("the exact raw conflict requires one explicit discharge");
+    };
+    assert_eq!(discharge["conflictOrdinal"], 0);
+    for field in ["left", "right", "allocationParameter"] {
+        assert_eq!(discharge[field], conflict[field], "wrong discharge {field}");
+    }
+    assert_eq!(conflict["left"], conflict["right"]);
+    assert_eq!(conflict["ownershipStatus"], "unique-live-owner");
+    assert_eq!(kernel["kernel"], report["kernels"][0]);
+    assert_eq!(kernel["entry"], conflict["uniqueOwner"]["function"]);
+    assert_eq!(discharge["leftWitness"], discharge["rightWitness"]);
+    assert_eq!(discharge["leftWitness"]["invocation"], 0);
+    assert_eq!(discharge["leftWitness"]["path"]["kind"], "trueEdge");
+    assert!(kernel["rankedDischargedReasonCount"].as_u64().unwrap() > 0);
+    assert!(kernel["compilerDischargedReasonCount"].as_u64().unwrap() > 0);
+    assert_eq!(report["formalAdmission"]["nativeLowering"], "not attempted");
     assert_eq!(
         report["optimized"]["status"],
-        "unavailable_before_formal_admission"
+        "unavailable_not_executed_by_diagnostic"
     );
     assert_eq!(
         report["canonicalOwner"]["capture"]["path"],
